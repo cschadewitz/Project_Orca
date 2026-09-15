@@ -1,0 +1,74 @@
+# ORCA — Orchestration Runtime for Coding Agents
+
+ORCA sits **one level above** individual coding agents. It accepts a large feature or
+system request, breaks it into work items, and drives each item through the
+[AI‑native SDLC](https://academy.claude.com/courses/ai-native-sdlc-playbook/introduction)
+loop — Plan → Design → Build → Test → Review → Deploy — by handing **artifacts**
+(intent.md, spec.md, plan.md, test report, review, …) from one agent to the next.
+Each step's prompt is rendered from a **template + the previous artifacts**; the
+orchestrator watches the agent, picks up the artifact it produced, validates it,
+and routes to the next node of a **user‑defined workflow graph** with decisions,
+loops, parallel branches, sub‑workflows and human gates.
+
+Agents are anything that speaks the [Agent Client Protocol (ACP)](https://agentclientprotocol.com)
+— Claude Code, Codex, Gemini CLI, OpenCode, … — running **locally or on another
+machine over SSH**. ORCA itself can be exposed **as an ACP agent**, so GitKraken
+Kepler, Zed, T3 Code or any ACP client can drive it like a single agent (proxy mode).
+
+```
+                    ┌──────────────────────────── ORCA ─────────────────────────────┐
+  Request ───────▶  │ program workflow: decompose → work items → dispatch (deps)     │
+  (issue, Kepler    │                                     │                          │
+   task, ACP prompt)│      ai-sdlc workflow per item:     ▼                          │
+                    │   plan ─▶ design ─▶ gate ─▶ build ─▶ test ─▶ review ─▶ deploy │
+                    │     │        │              ▲  │       │  ▲     │              │
+                    │  intent.md  spec.md         └──┘ retry  └──┘ changes-requested │
+                    └────────┬──────────────────────┬──────────────────────┬─────────┘
+                             │ ACP over stdio       │ ACP over ssh -T      │ (T3 Code threads)
+                          local agent            remote agent           t3code server
+```
+
+## Quick start
+
+```bash
+mise install            # or use Node >= 22 yourself
+npm install
+npm test                # unit + end-to-end tests (scripted ACP agent, no LLM needed)
+npm run demo            # full program run with scripted agents; prints the run tree
+npm run orca -- validate --mermaid        # validate + draw the shipped workflows
+npm run orca -- run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'
+```
+
+To use real agents, create `orca.config.yaml` (see `examples/orca.config.yaml`),
+list your hosts/agents/roles, then `orca ping <agent>` to verify the ACP
+handshake (works over SSH too) and `orca submit "Add SSO" --body-file req.md`.
+
+To run **inside Kepler / Zed / any ACP client**, register `orca acp` as an agent
+command; prompts sent to it become Requests and progress streams back as ACP
+plan/tool‑call updates (see `docs/INTEGRATIONS.md`).
+
+## Repository map
+
+| Path | What lives there |
+| --- | --- |
+| `packages/core` | Domain model (Request, WorkItem, Artifact, Workflow, Run), event schema + reducer, expression language, template renderer, config schema. Pure; no I/O. |
+| `packages/store` | Persistence ports and implementations: event log (memory / JSONL), artifact store (content‑addressed), document stores. |
+| `packages/agents` | Hosts (local, SSH), ACP client sessions, permission policies. |
+| `packages/engine` | The orchestrator (graph interpreter), node executors (agent, decision, gate, loop, parallel, subworkflow, set, custom), program service, workspace providers, plugin API. |
+| `packages/integrations` | ORCA as an ACP agent (proxy mode), Kepler task awareness, T3 Code adapter (groundwork). |
+| `packages/cli` | `orca` command line and config bootstrap. |
+| `packages/testing` | A deterministic scripted ACP agent used by tests and the demo. |
+| `workflows/` | Shipped workflow definitions: `ai-sdlc.yaml`, `program.yaml`. |
+| `templates/` | Prompt templates per SDLC stage (markdown + front matter). |
+| `docs/` | Architecture, data model, workflow authoring, integrations, extensibility, ADRs. |
+
+Start reading at `docs/ARCHITECTURE.md`, then `workflows/ai-sdlc.yaml` next to
+`templates/sdlc/*.md`, then `packages/engine/src/orchestrator.ts` and
+`packages/engine/src/executors/agent-step.ts`.
+
+## Status
+
+Groundwork release: the data model, event‑sourced engine, ACP transport (local +
+SSH), workflow language, SDLC templates and CLI are implemented and tested
+end‑to‑end against a real ACP subprocess. See `docs/ROADMAP.md` for what is
+deliberately left open (T3 Code WebSocket transport, daemon mode, UI).

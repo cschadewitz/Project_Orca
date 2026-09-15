@@ -1,0 +1,67 @@
+/**
+ * `orca.config.yaml` - project-level configuration.
+ *
+ * Everything the engine needs to know about *where* agents run and *which*
+ * agents fill which roles lives here, so workflow definitions stay portable
+ * between machines and teams.
+ */
+import { z } from "zod";
+import { AgentSpecSchema, HostSpecSchema, LOCAL_HOST_ID } from "./model/agent.js";
+
+export const WorkspaceProviderConfigSchema = z.discriminatedUnion("provider", [
+  /** Use `root` (or the current directory) as-is for every run. */
+  z.object({ provider: z.literal("local"), root: z.string().optional(), hostId: z.string().default(LOCAL_HOST_ID) }),
+  /** One git worktree + branch per work item under `worktreeRoot`. */
+  z.object({
+    provider: z.literal("git-worktree"),
+    repo: z.string(),
+    worktreeRoot: z.string().optional(),
+    baseBranch: z.string().default("main"),
+    branchPrefix: z.string().default("orca/"),
+    hostId: z.string().default(LOCAL_HOST_ID),
+  }),
+  /** Inside a Kepler task: reuse the task's worktrees. */
+  z.object({ provider: z.literal("kepler"), taskDir: z.string().optional(), hostId: z.string().default(LOCAL_HOST_ID) }),
+]);
+export type WorkspaceProviderConfig = z.infer<typeof WorkspaceProviderConfigSchema>;
+
+export const HumanInputConfigSchema = z.discriminatedUnion("mode", [
+  /** Gates/decisions needing a human answer pause the run until `orca answer` is called. */
+  z.object({ mode: z.literal("pause") }),
+  /** Interactive prompt on the terminal (CLI). */
+  z.object({ mode: z.literal("cli") }),
+  /** Always pick the first option / allow every permission. For unattended demos and tests. */
+  z.object({ mode: z.literal("auto"), option: z.string().optional() }),
+]);
+export type HumanInputConfig = z.infer<typeof HumanInputConfigSchema>;
+
+export const OrcaConfigSchema = z.object({
+  version: z.literal(1).default(1),
+  /** Where event logs, artifacts and indexes are stored (relative to the config file). */
+  storeDir: z.string().default(".orca"),
+  hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),
+  agents: z.array(AgentSpecSchema).default([]),
+  /** Explicit role -> agent id mapping. Falls back to the first agent listing the role. */
+  roles: z.record(z.string(), z.string()).default({}),
+  /** Glob patterns (relative to the config file) for workflow YAML files. */
+  workflows: z.array(z.string()).default(["workflows/**/*.yaml", "workflows/**/*.yml"]),
+  /** Glob patterns for prompt template markdown files. */
+  templates: z.array(z.string()).default(["templates/**/*.md"]),
+  program: z
+    .object({
+      /** Workflow that accepts a Request and decomposes it. */
+      workflow: z.string().default("program"),
+      /** Workflow run per work item. */
+      itemWorkflow: z.string().default("ai-sdlc"),
+    })
+    .default({ workflow: "program", itemWorkflow: "ai-sdlc" }),
+  workspace: WorkspaceProviderConfigSchema.default({ provider: "local", hostId: LOCAL_HOST_ID }),
+  humanInput: HumanInputConfigSchema.default({ mode: "pause" }),
+  /** Plugin module specifiers (ESM) loaded at startup; see docs/EXTENSIBILITY.md. */
+  plugins: z.array(z.string()).default([]),
+});
+export type OrcaConfig = z.infer<typeof OrcaConfigSchema>;
+
+export function parseOrcaConfig(raw: unknown): OrcaConfig {
+  return OrcaConfigSchema.parse(raw ?? {});
+}

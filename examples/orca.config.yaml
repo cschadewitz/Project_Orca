@@ -1,0 +1,58 @@
+# Example configuration - copy to your repository root as orca.config.yaml.
+version: 1
+storeDir: .orca                      # event logs, artifacts index, requests, work items
+
+hosts:
+  - id: local
+    type: local
+  - id: buildbox                      # remote agents over SSH (ACP over stdio through ssh -T)
+    type: ssh
+    host: build.internal
+    user: ci
+    identityFile: ~/.ssh/orca
+    workspaceRoot: /srv/work
+
+agents:
+  - id: claude-local
+    command: claude-code-acp          # any ACP agent binary; args are passed through
+    args: []
+    hostId: local
+    roles: [planner, designer, reviewer, decomposer]
+    sessionMode: per-step
+    permissions:
+      default: allow
+      rules:
+        - { match: { kind: execute, titlePattern: "rm -rf|git push --force" }, decision: deny }
+        - { match: { pathPrefix: /etc }, decision: ask }
+  - id: codex-remote
+    command: codex
+    args: [acp]
+    hostId: buildbox
+    roles: [builder, tester, deployer]
+    turnTimeoutMs: 1800000
+    mcpServers:
+      - name: kepler-workspace          # hand sub-agents the same MCP servers Kepler gives you
+        command: kepler
+        args: [mcp]
+
+roles:                                # explicit overrides; otherwise first agent with the role wins
+  reviewer: claude-local
+
+workflows: ["workflows/**/*.yaml"]
+templates: ["templates/**/*.md"]
+
+program:
+  workflow: program                   # accepts a Request, decomposes, dispatches
+  itemWorkflow: ai-sdlc               # run per work item
+
+workspace:
+  provider: git-worktree              # local | git-worktree | kepler
+  repo: .
+  baseBranch: main
+  branchPrefix: orca/
+  hostId: local
+
+humanInput:
+  mode: cli                           # cli | auto | pause (pause needs an embedding host, e.g. orca acp)
+
+plugins: []                           # e.g. ["./plugins/jira.js"]

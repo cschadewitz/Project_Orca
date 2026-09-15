@@ -1,0 +1,29 @@
+{
+  "name": "orca",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ORCA - Orchestration Runtime for Coding Agents. A workflow engine that sits above AI-SDLC agent steps, passing artifacts between agents over ACP.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json",
+    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "orca": "tsx packages/cli/src/main.ts",
+    "demo": "tsx packages/cli/src/main.ts demo",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.5",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

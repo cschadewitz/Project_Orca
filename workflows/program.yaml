@@ -1,0 +1,65 @@
+# The level above: accept a large request, decompose it, and run the SDLC loop
+# per work item (respecting dependencies), then summarise.
+id: program
+name: Program (request -> work items -> SDLC runs)
+version: "1"
+description: Decompose a feature/system request and drive each piece through ai-sdlc.
+inputs:
+  request: The Request record (title, body).
+vars:
+  itemWorkflow: ai-sdlc
+  concurrency: 2
+start: start
+nodes:
+  start: { type: start }
+
+  decompose:
+    type: agent
+    name: "Decompose request into work items"
+    agent: { role: decomposer }
+    template: program/decompose
+    produces:
+      - kind: decomposition
+        path: ".orca/program/{{ request.id }}/decomposition.md"
+        validate: { requiredFields: [items] }
+
+  materialize:
+    type: "custom:materialize-work-items"
+    name: "Create work items"
+
+  plan-gate:
+    type: gate
+    name: "Approve the breakdown"
+    question: "Approve {{ len(vars.workItems) }} work items for '{{ request.title }}'?"
+    options: [approve, reject]
+    autoApproveWhen: "len(vars.workItems) <= 12"
+    autoOption: approve
+
+  dispatch:
+    type: "custom:dispatch-work-items"
+    name: "Run SDLC per work item"
+    workflow: ai-sdlc
+    concurrency: 2
+
+  summarize:
+    type: agent
+    name: "Summarise the program"
+    agent: { role: planner }
+    template: program/summary
+    inputs: [{ kind: decomposition }]
+    produces:
+      - kind: generic
+        name: programSummary
+        path: ".orca/program/{{ request.id }}/summary.md"
+
+  done: { type: end, outcome: success }
+  rejected: { type: end, outcome: failure, message: "Breakdown rejected." }
+
+edges:
+  - { from: start, to: decompose }
+  - { from: decompose, to: materialize }
+  - { from: materialize, to: plan-gate }
+  - { from: plan-gate, to: dispatch, when: "choice == 'approve'" }
+  - { from: plan-gate, to: rejected }
+  - { from: dispatch, to: summarize }
+  - { from: summarize, to: done }

@@ -1,0 +1,58 @@
+/**
+ * @orca/testing - a scripted ACP agent plus helpers to configure it as an
+ * AgentSpec. Used by ORCA's own tests and by `orca demo`.
+ */
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { AgentSpec } from "@orca/core";
+import { AgentSpecSchema } from "@orca/core";
+
+export { ScriptedAgent, type ScriptedAgentOptions } from "./scripted-agent/agent.js";
+export { parsePlaybook, PlaybookSchema, PlaybookEntrySchema, type Playbook, type PlaybookEntry, type PlaybookInput } from "./scripted-agent/playbook.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const runningFromSource = import.meta.url.endsWith(".ts");
+
+/**
+ * Build an AgentSpec that launches the scripted agent. When ORCA itself runs
+ * from TypeScript sources (tests, `npm run orca`), the agent is started through
+ * `tsx`; when built, the compiled entry point is used directly.
+ */
+export function scriptedAgentSpec(options: {
+  id?: string;
+  playbookFile?: string;
+  playbookJson?: unknown;
+  stateFile?: string;
+  promptLog?: string;
+  roles?: string[];
+  hostId?: string;
+  sessionMode?: "per-step" | "per-run";
+  permissions?: AgentSpec["permissions"];
+}): AgentSpec {
+  const entry = join(here, "scripted-agent", runningFromSource ? "main.ts" : "main.js");
+  const args: string[] = [];
+  let command = process.execPath;
+  if (runningFromSource) {
+    // Route through tsx with the repo tsconfig so `@orca/*` imports resolve to sources (paths mapping).
+    const require = createRequire(import.meta.url);
+    args.push(require.resolve("tsx/cli"), "--tsconfig", join(here, "..", "..", "..", "tsconfig.json"));
+  }
+  args.push(entry);
+  if (options.playbookFile) args.push("--playbook", options.playbookFile);
+  if (options.stateFile) args.push("--state", options.stateFile);
+  if (options.promptLog) args.push("--log", options.promptLog);
+  const env: Record<string, string> = {};
+  if (options.playbookJson !== undefined) env.ORCA_PLAYBOOK_JSON = JSON.stringify(options.playbookJson);
+  return AgentSpecSchema.parse({
+    id: options.id ?? "scripted",
+    name: "Scripted test agent",
+    command,
+    args,
+    env,
+    hostId: options.hostId ?? "local",
+    roles: options.roles ?? ["planner", "designer", "builder", "tester", "reviewer", "deployer", "decomposer"],
+    sessionMode: options.sessionMode ?? "per-step",
+    ...(options.permissions ? { permissions: options.permissions } : {}),
+  });
+}

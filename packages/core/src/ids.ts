@@ -1,0 +1,52 @@
+/**
+ * Identifier helpers.
+ *
+ * ORCA identifiers are opaque strings with a readable prefix so that a log line
+ * or a JSON dump can be understood at a glance (e.g. `run_01J...`, `art_01J...`).
+ * They are ULID-like: time-ordered and random, without an external dependency.
+ */
+import { randomBytes } from "node:crypto";
+
+const ENCODING = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford base32
+
+function encodeTime(ms: number, len: number): string {
+  let out = "";
+  for (let i = len - 1; i >= 0; i--) {
+    out = ENCODING[ms % 32] + out;
+    ms = Math.floor(ms / 32);
+  }
+  return out;
+}
+
+function encodeRandom(len: number): string {
+  const bytes = randomBytes(len);
+  let out = "";
+  for (let i = 0; i < len; i++) out += ENCODING[(bytes[i] ?? 0) % 32];
+  return out;
+}
+
+/** Time-ordered unique id. */
+export function ulid(now: number = Date.now()): string {
+  return encodeTime(now, 10) + encodeRandom(16);
+}
+
+export type IdPrefix =
+  | "req" // Request
+  | "wi" // WorkItem
+  | "wf" // WorkflowDefinition
+  | "run" // Run
+  | "step" // StepRun
+  | "art" // Artifact
+  | "evt" // Event
+  | "sess" // AgentSession
+  | "tpl" // PromptTemplate
+  | "host" // AgentHost
+  | "hi"; // HumanInput request
+
+export function newId(prefix: IdPrefix, now?: number): string {
+  return `${prefix}_${ulid(now)}`;
+}
+
+export function hasPrefix(id: string, prefix: IdPrefix): boolean {
+  return id.startsWith(`${prefix}_`);
+}

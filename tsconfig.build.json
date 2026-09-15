@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/store" },
+    { "path": "packages/agents" },
+    { "path": "packages/engine" },
+    { "path": "packages/testing" },
+    { "path": "packages/integrations" },
+    { "path": "packages/cli" }
+  ]
+}

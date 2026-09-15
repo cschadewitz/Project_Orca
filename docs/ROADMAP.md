@@ -1,0 +1,22 @@
+# Roadmap / open items
+
+Groundwork is complete and tested end‑to‑end. Deliberately left for follow‑up:
+
+1. **Daemon mode** — a long‑lived `orca serve` (HTTP/WebSocket) so `pause` human input can be
+   answered from another process (`orca answer <requestId> <option>`), runs can be watched by
+   several clients, and Kepler/T3 UIs can attach. `PausingHumanInput` and the event
+   subscription API are already in place.
+2. **T3 Code WebSocket transport** — implement `T3CodeRpc` over T3's Effect‑RPC envelope and
+   depend on `@t3tools/contracts`; map `thread.meta-updated.worktreePath` into the workspace.
+3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore` over `node:sqlite` for
+   large histories; JSONL remains the reviewable default.
+4. **Maintain stage** — a `custom:metrics-watch` node (or a scheduled trigger) that turns
+   breached production controls into new Requests, closing the playbook's loop.
+5. **Remote workspace sync** — optional rsync/`git push` step for SSH hosts that do not share
+   a filesystem with the orchestrator.
+6. **ACP terminal capability** — serve `terminal/*` so agents that require it can run tests
+   through ORCA (currently `terminal: false`).
+7. **Session resume** — use `session/load` for agents that support it so a retried step can
+   continue the same conversation.
+8. **Visual editor** — the graph model and `toMermaid` are UI‑ready; a web editor for
+   nodes/edges/conditions is the natural next surface.

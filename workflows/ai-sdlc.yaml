@@ -1,0 +1,144 @@
+# The per-work-item loop, modelled on the AI-native SDLC playbook:
+#   Plan (intent.md) -> Design (spec.md) -> Build (plan + code) -> Test -> Review -> Deploy
+# Every stage is an agent step whose artifact feeds the next stage's prompt.
+# Decision nodes route on artifact front matter; loops are bounded by vars.
+id: ai-sdlc
+name: AI-native SDLC loop
+version: "1"
+description: Drive one work item from intent to a reviewed, deployable change.
+inputs:
+  workItem: The work item (title, description, acceptance criteria) this run implements.
+vars:
+  maxBuildAttempts: 3
+  maxReviewRounds: 2
+  buildAttempt: 0
+  reviewRound: 0
+start: start
+nodes:
+  start: { type: start }
+
+  plan:
+    type: agent
+    name: "Plan: capture intent"
+    agent: { role: planner }
+    template: sdlc/plan
+    produces:
+      - kind: intent
+        path: ".orca/work/{{ workItem.slug }}/intent.md"
+        validate: { requiredFields: [status], minBodyLength: 40 }
+
+  design:
+    type: agent
+    name: "Design: requirements + design spec"
+    agent: { role: designer }
+    template: sdlc/design
+    inputs: [{ kind: intent }]
+    produces:
+      - kind: spec
+        path: ".orca/work/{{ workItem.slug }}/spec.md"
+        validate: { requiredFields: [status, risk], fieldValues: { risk: [low, medium, high] }, minBodyLength: 80 }
+
+  spec-gate:
+    type: gate
+    name: "Approve spec"
+    question: "Approve the spec for {{ workItem.title }} (risk: {{ artifacts.spec.data.risk }})?"
+    options: [approve, reject]
+    # Humans concentrate on high-risk gates; low/medium risk auto-approves.
+    autoApproveWhen: "artifacts.spec.data.risk != 'high'"
+    autoOption: approve
+
+  bump-build:
+    type: set
+    vars: { buildAttempt: "=vars.buildAttempt + 1" }
+
+  build:
+    type: agent
+    name: "Build: plan and implement"
+    agent: { role: builder }
+    template: sdlc/build
+    inputs:
+      - { kind: spec }
+      - { name: testReport, required: false }
+      - { name: review, required: false }
+    produces:
+      - kind: plan
+        path: ".orca/work/{{ workItem.slug }}/plan.md"
+      - kind: implementation
+        path: ".orca/work/{{ workItem.slug }}/implementation.md"
+        validate: { requiredFields: [status, branch] }
+    completion: { mode: turn-end, maxFollowUps: 2, maxAttempts: 2 }
+
+  test:
+    type: agent
+    name: "Test: run and report"
+    agent: { role: tester }
+    template: sdlc/test
+    inputs: [{ kind: spec }, { kind: implementation }]
+    produces:
+      - kind: test-report
+        name: testReport
+        path: ".orca/work/{{ workItem.slug }}/test-report.md"
+        validate: { requiredFields: [status, passed] }
+
+  tests-passed:
+    type: decision
+    name: "Did tests pass?"
+    source: { kind: artifact, artifact: testReport, field: passed }
+    options: ["true", "false"]
+    defaultOption: "false"
+
+  bump-review:
+    type: set
+    vars: { reviewRound: "=vars.reviewRound + 1" }
+
+  review:
+    type: agent
+    name: "Review: agentic PR review"
+    agent: { role: reviewer }
+    template: sdlc/review
+    inputs: [{ kind: spec }, { kind: implementation }, { name: testReport }]
+    produces:
+      - kind: review
+        path: ".orca/work/{{ workItem.slug }}/review.md"
+        validate: { requiredFields: [status, verdict], fieldValues: { verdict: [approve, changes-requested] } }
+
+  review-verdict:
+    type: decision
+    name: "Review verdict"
+    source: { kind: artifact, artifact: review, field: verdict }
+    options: [approve, changes-requested]
+
+  deploy:
+    type: agent
+    name: "Deploy: open PR / ship"
+    agent: { role: deployer }
+    template: sdlc/deploy
+    inputs: [{ kind: implementation }, { kind: review }]
+    produces:
+      - kind: deploy-report
+        name: deployReport
+        path: ".orca/work/{{ workItem.slug }}/deploy-report.md"
+        validate: { requiredFields: [status] }
+
+  done: { type: end, outcome: success, message: "Work item delivered." }
+  rejected: { type: end, outcome: failure, message: "Spec rejected at gate." }
+  exhausted: { type: end, outcome: failure, message: "Build/review budget exhausted." }
+
+edges:
+  - { from: start, to: plan }
+  - { from: plan, to: design }
+  - { from: design, to: spec-gate }
+  - { from: spec-gate, to: bump-build, when: "choice == 'approve'" }
+  - { from: spec-gate, to: rejected, when: "choice == 'reject'" }
+  - { from: bump-build, to: build }
+  - { from: build, to: test }
+  - { from: test, to: tests-passed }
+  - { from: tests-passed, to: bump-review, when: "choice == 'true'", label: "passed" }
+  - { from: tests-passed, to: bump-build, when: "choice == 'false' && vars.buildAttempt < vars.maxBuildAttempts", label: "failed, retry" }
+  - { from: tests-passed, to: exhausted, label: "failed, give up" }
+  - { from: bump-review, to: review }
+  - { from: review, to: review-verdict }
+  - { from: review-verdict, to: deploy, when: "choice == 'approve'" }
+  - { from: review-verdict, to: bump-build, when: "choice == 'changes-requested' && vars.reviewRound < vars.maxReviewRounds && vars.buildAttempt < vars.maxBuildAttempts", label: "changes requested" }
+  - { from: review-verdict, to: exhausted, label: "give up" }
+  - { from: deploy, to: done }
