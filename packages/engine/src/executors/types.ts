@@ -40,8 +40,13 @@ export interface StepContext {
   evaluate(expr: string, extra?: Record<string, unknown>): Promise<unknown>;
   /** Render a template body against the step context. */
   render(body: string, extra?: Record<string, unknown>): Promise<string>;
-  /** Resolve input artifact refs (own run + ancestors + descendants). */
-  resolveInputs(refs: ArtifactRef[]): Promise<ResolvedArtifact[]>;
+  /**
+   * Resolve input artifact refs (own run + ancestors + descendants). The result
+   * is aligned with `refs`: entry `i` is the artifact for `refs[i]`, or
+   * `undefined` when an optional ref did not resolve. Required refs that are
+   * missing throw ARTIFACT_MISSING.
+   */
+  resolveInputs(refs: ArtifactRef[]): Promise<(ResolvedArtifact | undefined)[]>;
   /** Record a produced artifact (stores content, emits artifact.recorded). */
   recordArtifact(spec: ArtifactSpec, content: string, extra?: { path?: string; parents?: string[]; agentSessionId?: string; agentId?: string }): Promise<Artifact>;
   /** Spawn a child run for a nested graph or registered workflow and wait for it. */

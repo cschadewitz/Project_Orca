@@ -40,7 +40,7 @@ import { reduceRun } from "@orca/core";
 import type { EventFilter, EventListener, Stores } from "@orca/store";
 import { builtinExecutors } from "./executors/index.js";
 import { NodeExecutorRegistry, type ResolvedArtifact, type StepContext, type StepOutcome } from "./executors/types.js";
-import { autoHumanInput, PausingHumanInput, type HumanInputPort, type HumanInputQuery } from "./human-input.js";
+import { abortableHumanInput, autoHumanInput, PausingHumanInput, type HumanInputPort, type HumanInputQuery } from "./human-input.js";
 import { RunContext } from "./run-context.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
@@ -160,7 +160,9 @@ export class Orchestrator {
       for (const s of Object.values(rc.state.steps)) for (const c of s.childRunIds) await this.cancel(c, reason);
     } else {
       const state = await this.getState(runId);
-      if (!isTerminal(state)) await this.stores.events.append({ type: "run.cancelled", runId, payload: reason ? { reason } : {} });
+      if (isTerminal(state)) return;
+      for (const s of openSteps(state)) await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
+      await this.stores.events.append({ type: "run.cancelled", runId, payload: reason ? { reason } : {} });
     }
   }
 
@@ -282,10 +284,7 @@ export class Orchestrator {
         const step = rc.state.steps[stepRunId]!;
         log.info("step", { node: nodeId, type: node.type, attempt });
         const outcome = await this.executeStep(rc, step, node);
-        if (rc.abort.signal.aborted) {
-          await rc.emit({ type: "step.cancelled", payload: { stepRunId } });
-          throw new OrcaError("CANCELLED", String(rc.abort.signal.reason ?? "cancelled"));
-        }
+        if (rc.abort.signal.aborted) throw new OrcaError("CANCELLED", String(rc.abort.signal.reason ?? "cancelled"));
 
         if (outcome.kind === "failed") {
           const maxAttempts = node.type === "agent" ? node.completion.maxAttempts : 1;
@@ -317,6 +316,8 @@ export class Orchestrator {
     } catch (e) {
       const err = describeError(e);
       if (err.code === "CANCELLED" || rc.abort.signal.aborted) {
+        // A step interrupted mid-flight (an agent turn, a parked human question) never reports back; close it here.
+        for (const s of openSteps(rc.state)) await rc.emit({ type: "step.cancelled", payload: { stepRunId: s.id } });
         await rc.emit({ type: "run.cancelled", payload: { reason: err.message } });
       } else {
         log.error("run failed", { error: err });
@@ -367,7 +368,7 @@ export class Orchestrator {
       agents: this.agents,
       templates: this.templates,
       workflows: this.workflows,
-      humanInput: this.humanInput,
+      humanInput: abortableHumanInput(this.humanInput, rc.abort.signal),
 
       async emit(event) {
         await rc.emit(event as Omit<OrcaEventInput, "runId">);
@@ -409,9 +410,10 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- artifacts
 
-  private async resolveInputs(rc: RunContext, refs: ArtifactRef[]): Promise<ResolvedArtifact[]> {
+  /** Returns one entry per ref (undefined for unresolved optional refs) so callers can pair results with refs by position. */
+  private async resolveInputs(rc: RunContext, refs: ArtifactRef[]): Promise<(ResolvedArtifact | undefined)[]> {
     const visible = await rc.visibleArtifacts();
-    const out: ResolvedArtifact[] = [];
+    const out: (ResolvedArtifact | undefined)[] = [];
     for (const ref of refs) {
       let found: Artifact | undefined;
       if (ref.fromNode) {
@@ -428,6 +430,7 @@ export class Orchestrator {
       }
       if (!found) {
         if (ref.required) throw new OrcaError("ARTIFACT_MISSING", `required input artifact not found: ${JSON.stringify(ref)}`);
+        out.push(undefined);
         continue;
       }
       out.push({ ...found, content: await this.stores.artifacts.content(found.id) });
@@ -477,6 +480,7 @@ export class Orchestrator {
     }
     const current = { step };
     let pendingAsks = 0;
+    const humanInput = abortableHumanInput(this.humanInput, rc.abort.signal);
     const session = await this.sessionFactory({
       host,
       agent,
@@ -501,7 +505,7 @@ export class Orchestrator {
         pendingAsks++;
         await rc.emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
         try {
-          const answer = await this.humanInput.ask(query);
+          const answer = await humanInput.ask(query);
           await rc.emit({ type: "human.answered", payload: { stepRunId, requestId: query.requestId, answer: answer ?? "" } });
           return answer;
         } finally {
@@ -536,4 +540,9 @@ export class Orchestrator {
 
 export function isTerminal(state: RunState): boolean {
   return state.run.status === "completed" || state.run.status === "failed" || state.run.status === "cancelled";
+}
+
+/** Steps that have been scheduled but not yet settled (scheduled, running or waiting). */
+function openSteps(state: RunState): StepRun[] {
+  return state.stepOrder.map((id) => state.steps[id]!).filter((s) => s.status === "scheduled" || s.status === "running" || s.status === "waiting");
 }
