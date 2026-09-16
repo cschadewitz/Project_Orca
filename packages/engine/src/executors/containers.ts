@@ -2,6 +2,11 @@
  * Container executors: loop, parallel, subworkflow. Each iteration/branch is a
  * child run with its own event log; the parent step records child.spawned /
  * child.finished so the whole tree is traversable.
+ *
+ * Every child is spawned under a stable `branch` key (iteration index, branch
+ * name) so that when an interrupted container step is re-attempted on resume,
+ * `ctx.runChild` re-attaches to the children the interrupted attempt already
+ * spawned instead of starting them again (see Orchestrator.runChild).
  */
 import { INLINE_SEP } from "../orchestrator.js";
 import type { LoopNode, ParallelNode, RunState, SubworkflowNode, SubworkflowRef } from "@orca/core";
@@ -32,7 +37,7 @@ export const loopExecutor: NodeExecutor<LoopNode> = {
       if (n.mode === "forEach") scope[n.itemVar] = list![i];
       if (n.mode === "while" && !(await ctx.evaluate(n.condition!, scope))) break;
       await ctx.emit({ type: "loop.iteration", payload: { stepRunId: ctx.step.id, iteration: i, ...(n.mode === "forEach" ? { item: list![i] } : {}) } });
-      const state = await ctx.runChild(target(ctx, n.body, []), { vars: scope });
+      const state = await ctx.runChild(target(ctx, n.body, []), { branch: String(i), vars: scope });
       results.push(state);
       const failedChild = state.run.status !== "completed" || state.run.outcome !== "success";
       if (failedChild && n.breakOnFailure) return failed("RUN_STATE", `loop iteration ${i} ${state.run.status} (${state.run.outcome ?? state.run.error?.message ?? ""})`, { childRunId: state.run.id });

@@ -57,6 +57,9 @@ See `docs/WORKFLOWS.md` for the authoring guide.
 outcome, `workspace` (host id + cwd + repo/branch), `vars`, and parent links.
 `StepRun` is one execution attempt of one node: attempt number, iteration, agent session id,
 input artifact ids, `result` (`choice`, `outcome`, `artifactIds`, `data`), error, child run ids.
+`children` lists the same child runs with their `branch` key (loop index, branch name, work‑item
+slug), last known status/outcome, and `resumed: true` when a re‑attempted step re‑attached to a
+child spawned by the interrupted attempt instead of spawning a new one.
 `RunState` is the projection: run, steps (+ order), artifacts, human‑input requests, last seq.
 
 ## Events (`events/events.ts`)

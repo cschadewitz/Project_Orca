@@ -25,6 +25,22 @@ describe("reduceRun", () => {
     expect(Object.keys(s.artifacts)).toEqual(["art_1"]);
     expect(s.lastSeq).toBe(8);
   });
+  it("tracks child runs per branch with their final status", () => {
+    const events: OrcaEvent[] = [
+      ev("run.created", { workflowId: "wf", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars: {} }),
+      ev("run.started", {}),
+      ev("step.scheduled", { stepRunId: "step_1", nodeId: "par", nodeType: "parallel", attempt: 2 }),
+      ev("child.spawned", { stepRunId: "step_1", childRunId: "run_a", branch: "a", resumed: true }),
+      ev("child.spawned", { stepRunId: "step_1", childRunId: "run_b", branch: "b" }),
+      ev("child.finished", { stepRunId: "step_1", childRunId: "run_a", status: "completed", outcome: "success" }),
+    ];
+    const s = reduceRun(events);
+    expect(s.steps.step_1?.childRunIds).toEqual(["run_a", "run_b"]);
+    expect(s.steps.step_1?.children).toEqual([
+      { runId: "run_a", branch: "a", resumed: true, status: "completed", outcome: "success" },
+      { runId: "run_b", branch: "b" },
+    ]);
+  });
   it("rejects logs that do not start with run.created", () => {
     expect(() => reduceRun([ev("run.started", {})])).toThrow(/run.created/);
   });

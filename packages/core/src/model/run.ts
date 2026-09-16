@@ -47,6 +47,17 @@ export const ErrorInfoSchema = z.object({
 });
 export type ErrorInfo = z.infer<typeof ErrorInfoSchema>;
 
+/** A child run spawned by a container step, keyed by branch (loop index, branch name, work-item slug). */
+export const ChildRunLinkSchema = z.object({
+  runId: z.string(),
+  branch: z.string().optional(),
+  /** True when a resumed attempt re-attached to a child spawned by an interrupted attempt. */
+  resumed: z.boolean().optional(),
+  status: RunStatusSchema.optional(),
+  outcome: RunOutcomeSchema.optional(),
+});
+export type ChildRunLink = z.infer<typeof ChildRunLinkSchema>;
+
 export const StepRunSchema = z.object({
   id: z.string(),
   runId: z.string(),
@@ -61,6 +72,8 @@ export const StepRunSchema = z.object({
   result: StepResultSchema.optional(),
   error: ErrorInfoSchema.optional(),
   childRunIds: z.array(z.string()).default([]),
+  /** Same children as `childRunIds`, with their branch key and last known status. */
+  children: z.array(ChildRunLinkSchema).default([]),
   scheduledAt: z.string(),
   startedAt: z.string().optional(),
   completedAt: z.string().optional(),
