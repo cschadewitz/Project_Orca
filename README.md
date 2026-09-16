@@ -37,6 +37,7 @@ npm test                # unit + end-to-end tests (scripted ACP agent, no LLM ne
 npm run demo            # full program run with scripted agents; prints the run tree
 npm run orca -- validate --mermaid        # validate + draw the shipped workflows
 npm run orca -- run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'
+npm run orca -- answer <requestId> approve   # when a run pauses at a human gate (default humanInput mode)
 ```
 
 To use real agents, create `orca.config.yaml` (see `examples/orca.config.yaml`),

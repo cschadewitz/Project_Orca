@@ -59,6 +59,22 @@ edges:
   retries `build`; bound them with vars and a `set` node. `loop` *nodes* are for
   repeating a whole sub‑graph as isolated child runs.
 
+## Human gates
+
+`gate` nodes and `decision` nodes with `source: { kind: human }` go through the configured
+`humanInput` channel (`orca.config.yaml`):
+
+- `pause` (default): the run is parked — `human.requested`, `step.waiting`, `run.paused` — and
+  the process exits with code 3, printing the request id. Parents park with their children, so a
+  gate inside a work item's `ai-sdlc` run pauses the whole program run. `orca answer <requestId>
+  <option>` (any process with access to the store) appends `human.answered`, resumes the topmost
+  paused run and re‑attaches to the same child runs; the gate is re‑attempted and picks the
+  recorded answer up. `orca answer` with no arguments lists open questions; `orca status <runId>`
+  shows them too. Agent `ask` permissions cannot be parked and are cancelled in this mode.
+- `cli`: prompt on the terminal running ORCA.
+- `auto`: pick the first option (or `option:`) — demos and tests.
+- Inside an ACP host (`orca acp`) gates are forwarded as `session/request_permission`.
+
 ## Completion policies (agent steps)
 
 - `mode: turn-end` (default): wait for the agent's prompt turn to finish, then collect.

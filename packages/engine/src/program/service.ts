@@ -4,7 +4,7 @@
  * decomposes it and drives each work item through the SDLC workflow.
  */
 import { newId, RequestSchema, type Request, type RequestSource, type RunState } from "@orca/core";
-import type { Orchestrator } from "../orchestrator.js";
+import { isTerminal, type Orchestrator } from "../orchestrator.js";
 
 export interface SubmitRequestInput {
   title: string;
@@ -43,9 +43,23 @@ export class ProgramService {
   async submitAndRun(input: SubmitRequestInput): Promise<{ request: Request; state: RunState }> {
     const { request, runId } = await this.submit(input);
     const state = await this.orchestrator.run(runId);
+    return { request: (await this.settle(state)) ?? request, state };
+  }
+
+  /** Continue a parked run tree (see Orchestrator.resume) and record the outcome on its Request. */
+  async resume(runId: string): Promise<RunState> {
+    const state = await this.orchestrator.resume(runId);
+    await this.settle(state);
+    return state;
+  }
+
+  /** Mirror a finished program run onto its Request; paused or live runs leave it untouched. */
+  async settle(state: RunState): Promise<Request | undefined> {
+    if (!state.run.requestId) return undefined;
+    const cur = await this.orchestrator.stores.requests.get(state.run.requestId);
+    if (!cur || cur.programRunId !== state.run.id || !isTerminal(state)) return cur;
     const status = state.run.status === "completed" ? "completed" : state.run.status === "cancelled" ? "cancelled" : "failed";
-    const cur = (await this.orchestrator.stores.requests.get(request.id)) ?? request;
     await this.orchestrator.stores.requests.put({ ...cur, status, updatedAt: this.orchestrator.clock.isoNow() });
-    return { request: cur, state };
+    return cur;
   }
 }

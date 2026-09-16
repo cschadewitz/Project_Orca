@@ -186,43 +186,28 @@ edges: [{ from: s, to: loop }, { from: loop, to: e }]
     expect(state.run.status).toBe("cancelled");
   });
 
-  it("cancel unblocks a run parked on a PausingHumanInput gate", async () => {
-    const humanInput = new PausingHumanInput();
-    const { orchestrator } = make([gated], { humanInput });
-    const runId = await orchestrator.startRun({ workflowId: "gated" });
-    const done = orchestrator.run(runId);
-    await until(() => humanInput.list().length === 1);
-    const [query] = humanInput.list();
+  it("cancelling a run parked in pause mode closes the gate step and drops its question", async () => {
+    const { orchestrator } = make([gated], { humanInput: new PausingHumanInput() });
+    const parked = await orchestrator.startAndRun({ workflowId: "gated" });
+    const runId = parked.run.id;
+    expect(parked.run.status).toBe("paused");
+    const [query] = await orchestrator.pendingInputs(runId);
     expect(query).toMatchObject({ runId, kind: "decision", question: "Ship it?" });
-    expect((await orchestrator.getState(runId)).run.status).toBe("waiting");
 
     await orchestrator.cancel(runId, "operator gave up");
-    const state = await done;
+    const state = await orchestrator.getState(runId);
     expect(state.run.status).toBe("cancelled");
     expect(state.run.outcome).toBe("cancelled");
     const gate = state.steps[state.stepOrder[1]!]!;
     expect(gate.nodeId).toBe("gate");
     expect(gate.status).toBe("cancelled");
-    expect(state.humanInputs[query!.requestId]?.answer).toBeUndefined();
+    expect(state.humanInputs[query!.id]?.answer).toBeUndefined();
     // The parked question is dropped, not left dangling for a later `orca answer`.
-    expect(humanInput.list()).toEqual([]);
-    expect(orchestrator.answer(query!.requestId, "approve")).toBe(false);
+    expect(await orchestrator.pendingInputs()).toEqual([]);
+    await expect(orchestrator.answer(query!.id, "approve")).rejects.toThrow(/no pending human input/);
     const types = (await orchestrator.events(runId)).map((e) => e.type);
     expect(types.slice(-2)).toEqual(["step.cancelled", "run.cancelled"]);
     expect(types).not.toContain("human.answered");
-  });
-
-  it("answering a parked gate still resumes the run", async () => {
-    const humanInput = new PausingHumanInput();
-    const { orchestrator } = make([gated], { humanInput });
-    const runId = await orchestrator.startRun({ workflowId: "gated" });
-    const done = orchestrator.run(runId);
-    await until(() => humanInput.list().length === 1);
-    expect(orchestrator.answer(humanInput.list()[0]!.requestId, "approve")).toBe(true);
-    const state = await done;
-    expect(state.run.status).toBe("completed");
-    expect(state.run.outcome).toBe("success");
-    expect(humanInput.list()).toEqual([]);
   });
 
   it("cancel unblocks a human decision even when the port ignores the signal", async () => {

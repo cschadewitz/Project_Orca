@@ -12,6 +12,7 @@
  * extends the node vocabulary without touching the core schema.
  */
 import { DecompositionSchema, newId, OrcaError, type CustomNode, type RunState, type WorkItem } from "@orca/core";
+import { pausedByChildren } from "../executors/containers.js";
 import { completed, failed, type NodeExecutor, type StepOutcome } from "../executors/types.js";
 
 export interface MaterializeWorkItemsNode extends CustomNode {
@@ -91,6 +92,8 @@ export const dispatchWorkItemsExecutor: NodeExecutor<DispatchWorkItemsNode> = {
     const depKey = (d: string) => bySlug.get(d)?.id ?? d;
 
     const done = new Map<string, RunState>();
+    /** Items whose run parked at a human gate: neither done nor failed, and their dependants stay unscheduled. */
+    const parked = new Map<string, RunState>();
     const failedIds = new Set<string>();
     const inFlight = new Map<string, Promise<void>>();
     const concurrency = Math.max(1, n.concurrency ?? 2);
@@ -105,6 +108,11 @@ export const dispatchWorkItemsExecutor: NodeExecutor<DispatchWorkItemsNode> = {
       const p = (async () => {
         await touch(w, { status: "in-progress" });
         const state = await ctx.runChild({ workflow: w.workflowId ?? n.workflow }, { workItemId: w.id, branch: w.slug, vars: { workItem: w } });
+        if (state.run.status === "paused") {
+          parked.set(w.id, state);
+          await touch(w, { runId: state.run.id });
+          return;
+        }
         done.set(w.id, state);
         const ok = state.run.status === "completed" && state.run.outcome === "success";
         await touch(w, { status: ok ? "done" : "failed", runId: state.run.id });
@@ -116,7 +124,7 @@ export const dispatchWorkItemsExecutor: NodeExecutor<DispatchWorkItemsNode> = {
       inFlight.set(w.id, p);
     };
 
-    const settled = (w: WorkItem) => done.has(w.id) || failedIds.has(w.id);
+    const settled = (w: WorkItem) => done.has(w.id) || failedIds.has(w.id) || parked.has(w.id);
     for (;;) {
       if (ctx.signal.aborted) return failed("CANCELLED", "cancelled");
       // Items whose prerequisites failed (or are unknown) can never run.
@@ -134,6 +142,8 @@ export const dispatchWorkItemsExecutor: NodeExecutor<DispatchWorkItemsNode> = {
       await Promise.race(inFlight.values());
     }
 
+    const paused = await pausedByChildren(ctx, [...parked.values()]);
+    if (paused) return paused;
     const summary = items.map((w) => ({ id: w.id, slug: w.slug, status: done.has(w.id) && !failedIds.has(w.id) ? "done" : failedIds.has(w.id) ? "failed" : "skipped", runId: done.get(w.id)?.run.id }));
     await ctx.emit({ type: "vars.set", payload: { vars: { dispatched: summary } } });
     const failedCount = summary.filter((s) => s.status !== "done").length;

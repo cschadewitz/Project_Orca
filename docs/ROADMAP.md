@@ -2,10 +2,11 @@
 
 Groundwork is complete and tested end‑to‑end. Deliberately left for follow‑up:
 
-1. **Daemon mode** — a long‑lived `orca serve` (HTTP/WebSocket) so `pause` human input can be
-   answered from another process (`orca answer <requestId> <option>`), runs can be watched by
-   several clients, and Kepler/T3 UIs can attach. `PausingHumanInput` and the event
-   subscription API are already in place.
+1. **Daemon mode** — a long‑lived `orca serve` (HTTP/WebSocket) so runs can be watched by
+   several clients and Kepler/T3 UIs can attach. Human input already survives process
+   boundaries: `pause` mode parks the run in its event log and `orca answer <requestId>
+   <option>` resumes it; a daemon would expose the same `Orchestrator.answer()` / `resume()`
+   over the wire and keep agent sessions alive across the wait.
 2. **T3 Code WebSocket transport** — implement `T3CodeRpc` over T3's Effect‑RPC envelope and
    depend on `@t3tools/contracts`; map `thread.meta-updated.worktreePath` into the workspace.
 3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore` over `node:sqlite` for
