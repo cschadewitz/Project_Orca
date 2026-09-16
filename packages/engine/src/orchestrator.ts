@@ -42,7 +42,7 @@ import { reduceRun } from "@orca/core";
 import type { EventFilter, EventListener, Stores } from "@orca/store";
 import { builtinExecutors } from "./executors/index.js";
 import { NodeExecutorRegistry, paused, type ResolvedArtifact, type StepContext, type StepOutcome } from "./executors/types.js";
-import { abortableHumanInput, autoHumanInput, isHumanInputPending, type HumanInputPort } from "./human-input.js";
+import { abortableHumanInput, autoHumanInput, isHumanInputPending, type HumanInputPort, type HumanInputQuery } from "./human-input.js";
 import { RunContext } from "./run-context.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
@@ -89,7 +89,8 @@ export class Orchestrator {
 
   private readonly live = new Map<string, RunContext>();
   private readonly running = new Map<string, Promise<RunState>>();
-  private readonly sessions = new Map<string, AgentSession>();
+  /** Per-run pooled sessions. `current.step` is the step using the session right now, so events from a long-lived session are attributed correctly. */
+  private readonly sessions = new Map<string, { session: AgentSession; current: { step: StepRun } }>();
 
   constructor(o: OrchestratorOptions) {
     this.stores = o.stores;
@@ -542,8 +543,12 @@ export class Orchestrator {
     const { agent, host } = this.agents.resolve(selector);
     const key = `${rc.id}:${agent.id}`;
     const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
-    if (pooled) return { session: pooled, release: async () => {} };
-    const requestId = newId("hi", this.clock.now());
+    if (pooled) {
+      pooled.current.step = step;
+      return { session: pooled.session, release: async () => {} };
+    }
+    const current = { step };
+    let pendingAsks = 0;
     const humanInput = abortableHumanInput(this.humanInput, rc.abort.signal);
     const session = await this.sessionFactory({
       host,
@@ -551,25 +556,42 @@ export class Orchestrator {
       cwd: rc.workspace.cwd,
       logger: rc.logger,
       clock: this.clock,
-      askPermission: async (req) =>
-        humanInput.ask({
+      // Each `ask` permission is its own human-input request: an agent may block on
+      // several tool calls at once, and every one must be listed, answerable and
+      // logged independently (one id per session made concurrent asks collide).
+      askPermission: async (req) => {
+        const stepRunId = current.step.id;
+        const query: HumanInputQuery = {
           runId: rc.id,
-          stepRunId: step.id,
-          requestId,
+          stepRunId,
+          requestId: newId("hi", this.clock.now()),
           kind: "permission",
           question: req.toolCall.title ?? "Allow tool call?",
           options: req.options.map((o) => o.optionId),
           context: { toolCall: req.toolCall },
-        }),
-      onPermission: (info) => void rc.emit({ type: "agent.permission", payload: { stepRunId: step.id, sessionId: session.id, title: info.title, decision: info.decision, ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}) } }),
+        };
+        await rc.emit({ type: "human.requested", payload: { stepRunId, requestId: query.requestId, kind: query.kind, question: query.question, options: query.options, context: query.context } });
+        pendingAsks++;
+        await rc.emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
+        try {
+          const answer = await humanInput.ask(query);
+          await rc.emit({ type: "human.answered", payload: { stepRunId, requestId: query.requestId, answer: answer ?? "" } });
+          return answer;
+        } finally {
+          pendingAsks--;
+          // The agent turn is still in flight; go back to waiting on it once no ask is pending.
+          if (pendingAsks === 0) await rc.emit({ type: "step.waiting", payload: { stepRunId, on: "agent-turn" } }).catch(() => undefined);
+        }
+      },
+      onPermission: (info) => void rc.emit({ type: "agent.permission", payload: { stepRunId: current.step.id, sessionId: session.id, title: info.title, decision: info.decision, ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}) } }),
     });
     await rc.emit({ type: "agent.session.opened", payload: { stepRunId: step.id, sessionId: session.id, agentId: agent.id, hostId: host.id, cwd: rc.workspace.cwd } });
     const close = async () => {
       await session.close();
-      await rc.emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: session.id } }).catch(() => undefined);
+      await rc.emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } }).catch(() => undefined);
     };
     if (agent.sessionMode === "per-run") {
-      this.sessions.set(key, session);
+      this.sessions.set(key, { session, current });
       return { session, release: async () => {} };
     }
     return { session, release: close };
@@ -579,7 +601,7 @@ export class Orchestrator {
     for (const [key, s] of this.sessions) {
       if (key.startsWith(`${runId}:`)) {
         this.sessions.delete(key);
-        await s.close().catch(() => undefined);
+        await s.session.close().catch(() => undefined);
       }
     }
   }
