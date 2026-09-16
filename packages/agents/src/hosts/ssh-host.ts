@@ -16,7 +16,7 @@ import { posix } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { OrcaError, type AgentSpec, type SshHost as SshHostSpec } from "@orca/core";
-import { shellQuote, StderrTail, type AgentHost, type AgentProcessHandle, type ExecResult, type HostFileSystem, type SpawnAgentOptions } from "../host.js";
+import { killIfRunning, shellQuote, StderrTail, type AgentHost, type AgentProcessHandle, type ExecResult, type HostFileSystem, type SpawnAgentOptions } from "../host.js";
 
 export class SshHost implements AgentHost {
   readonly fs: HostFileSystem;
@@ -72,9 +72,7 @@ export class SshHost implements AgentHost {
       pid: child.pid,
       exited,
       stderrTail: () => tail.text(),
-      kill: (signal = "SIGTERM") => {
-        if (child.exitCode === null && !child.killed) child.kill(signal);
-      },
+      kill: (signal = "SIGTERM") => killIfRunning(child, signal),
     };
   }
 

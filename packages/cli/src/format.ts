@@ -1,5 +1,5 @@
 /** Human-readable rendering of events and run state for the terminal. */
-import type { OrcaEvent, RunState } from "@orca/core";
+import { pendingHumanInputs, type HumanInputRequest, type OrcaEvent, type RunState } from "@orca/core";
 
 export function formatEvent(e: OrcaEvent): string {
   const t = e.at.slice(11, 19);
@@ -13,6 +13,10 @@ export function formatEvent(e: OrcaEvent): string {
       return `${t} run ${e.runId} FAILED: ${(p.error as { message: string }).message}`;
     case "run.cancelled":
       return `${t} run ${e.runId} cancelled`;
+    case "run.paused":
+      return `${t} run ${e.runId} paused${p.reason ? `: ${String(p.reason)}` : ""}`;
+    case "run.resumed":
+      return `${t} run ${e.runId} resumed`;
     case "step.scheduled":
       return `${t}   ▶ ${String(p.nodeId)} (${String(p.nodeType)}, attempt ${String(p.attempt)})`;
     case "step.completed": {
@@ -81,10 +85,23 @@ export function formatRunState(s: RunState): string {
     lines.push("", "artifacts:");
     for (const a of arts.sort((x, y) => x.createdAt.localeCompare(y.createdAt))) lines.push(`  ${a.name.padEnd(16)} ${a.kind.padEnd(14)} v${a.version}  ${a.path ?? a.id}`);
   }
-  const pending = Object.values(s.humanInputs).filter((h) => h.answer === undefined);
+  const pending = pendingHumanInputs(s);
   if (pending.length) {
     lines.push("", "waiting for humans:");
-    for (const h of pending) lines.push(`  ${h.id}: ${h.question} [${h.options.join(" | ")}]`);
+    for (const h of pending) lines.push(`  ${formatPendingInput(h)}`);
   }
+  return lines.join("\n");
+}
+
+export function formatPendingInput(h: HumanInputRequest): string {
+  return `${h.id}  run=${h.runId}  ${h.question} [${h.options.join(" | ")}]`;
+}
+
+/** What a user sees when a run parks at a human gate: the open questions (across the run tree) and how to answer them. */
+export function formatPaused(runId: string, pending: HumanInputRequest[]): string {
+  const lines = [`run ${runId} is paused, waiting for a human:`];
+  for (const h of pending) lines.push(`  ${formatPendingInput(h)}`);
+  const example = pending[0];
+  lines.push(`answer with: orca answer ${example?.id ?? "<requestId>"} ${example?.options.length ? `<${example.options.join("|")}>` : "<answer>"}   (records the answer and resumes the run)`);
   return lines.join("\n");
 }

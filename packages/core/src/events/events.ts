@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 import { ArtifactSchema } from "../model/artifact.js";
-import { ErrorInfoSchema, RunOutcomeSchema, StepResultSchema, WorkspaceSchema } from "../model/run.js";
+import { ErrorInfoSchema, RunOutcomeSchema, RunStatusSchema, StepResultSchema, WorkspaceSchema } from "../model/run.js";
 
 const base = <T extends string, P extends z.ZodTypeAny>(type: T, payload: P) =>
   z.object({
@@ -94,8 +94,8 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
 
   base("decision.resolved", z.object({ stepRunId: z.string(), choice: z.string(), source: z.string(), raw: z.unknown().optional() })),
   base("loop.iteration", z.object({ stepRunId: z.string(), iteration: z.number().int().nonnegative(), childRunId: z.string().optional(), item: z.unknown().optional() })),
-  base("child.spawned", z.object({ stepRunId: z.string(), childRunId: z.string(), branch: z.string().optional() })),
-  base("child.finished", z.object({ stepRunId: z.string(), childRunId: z.string(), status: z.string(), outcome: RunOutcomeSchema.optional() })),
+  base("child.spawned", z.object({ stepRunId: z.string(), childRunId: z.string(), branch: z.string().optional(), resumed: z.boolean().optional() })),
+  base("child.finished", z.object({ stepRunId: z.string(), childRunId: z.string(), status: RunStatusSchema, outcome: RunOutcomeSchema.optional() })),
 
   base(
     "human.requested",

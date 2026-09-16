@@ -26,6 +26,15 @@ describe("expression language", () => {
     expect(evaluateExpression("'attempt ' + vars.buildAttempt", ctx)).toBe("attempt 2");
     expect(evaluateExpression("artifacts['review'].data.verdict", ctx)).toBe("approve");
   });
+  it("does not treat '-' as part of an identifier (#8)", () => {
+    expect(evaluateExpression("vars.buildAttempt-1", ctx)).toBe(1);
+    expect(evaluateExpression("vars.buildAttempt - 1", ctx)).toBe(1);
+    expect(evaluateExpression("vars.maxBuildAttempts-vars.buildAttempt", ctx)).toBe(1);
+    expect(evaluateExpression("iteration-1", { iteration: 5 })).toBe(4);
+    expect(evaluateCondition("vars.buildAttempt-1 < vars.maxBuildAttempts", ctx)).toBe(true);
+    // Hyphenated keys remain reachable via bracket access.
+    expect(evaluateExpression("steps['review-verdict'].result", { steps: { "review-verdict": { result: "ok" } } })).toBe("ok");
+  });
   it("is sandboxed", () => {
     expect(evaluateExpression("vars.__proto__", ctx)).toBeUndefined();
     expect(evaluateExpression("constructor", {})).toBeUndefined();

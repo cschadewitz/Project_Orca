@@ -80,6 +80,7 @@ function validateGraph(graph: WorkflowGraph, path: string, ctx: ValidationContex
 
 function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, ctx: ValidationContext, errors: ValidationIssue[], warnings: ValidationIssue[]): void {
   const err = (message: string, sub = "") => errors.push({ path: p + sub, message });
+  const warn = (message: string, sub = "") => warnings.push({ path: p + sub, message });
   const checkRef = (ref: { workflow: string } | { graph: WorkflowGraph }, sub: string) => {
     if ("workflow" in ref) {
       if (ctx.hasWorkflow && !ctx.hasWorkflow(ref.workflow)) err(`referenced workflow '${ref.workflow}' is not registered`, sub);
@@ -106,6 +107,11 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
         const m = checkTemplate(s.path);
         if (m) err(m, `.produces[${i}].path`);
       });
+      // artifact-present only ever waits for *required* deliverables; with none there is nothing to
+      // watch and the step silently behaves like turn-end.
+      if (n.completion.mode === "artifact-present" && !n.produces.some((s) => s.required)) {
+        warn("completion.mode 'artifact-present' has no required deliverable to wait for; the step behaves like 'turn-end' (mark a deliverable required: true or use mode: turn-end)", ".completion.mode");
+      }
       break;
     case "decision": {
       const s = n.source;

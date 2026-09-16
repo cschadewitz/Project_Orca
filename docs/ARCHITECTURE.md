@@ -53,7 +53,12 @@ can always be re‑resolved from its parent definition on resume.
 Every transition is an **event** (`packages/core/src/events/events.ts`); run
 state is a pure projection (`reduce.ts`). A crashed process resumes by
 re‑reducing the log: a completed last step is routed onward, an interrupted one
-is re‑attempted.
+is re‑attempted. When the interrupted step is a container (`loop`, `parallel`,
+`subworkflow`, `custom:dispatch-work-items`) the new attempt does not start over:
+`ctx.runChild` re‑attaches to the child runs the interrupted attempt recorded
+(`child.spawned` carries a per‑branch key), reuses the ones that already finished
+and resumes the unfinished ones from their own logs, recursively. Only branches
+that never started get a fresh child run.
 
 ## The hand‑off (agent step)
 
@@ -69,6 +74,9 @@ is re‑attempted.
    host. ORCA is the ACP *client*: it serves `fs/read_text_file`,
    `fs/write_text_file` from the host file system (scoped to the workspace) and
    answers `session/request_permission` through the agent's permission policy.
+   An `ask` decision becomes its own human‑input request (`human.requested` /
+   `human.answered`, one `hi_*` id per ask), so several pending tool calls can be
+   listed and answered independently.
 4. `session/prompt`. Session updates stream into the event log as
    `agent.update` (text chunks are coalesced; tool calls, plans and locations are
    kept verbatim).

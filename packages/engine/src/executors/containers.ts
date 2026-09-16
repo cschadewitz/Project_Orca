@@ -2,10 +2,15 @@
  * Container executors: loop, parallel, subworkflow. Each iteration/branch is a
  * child run with its own event log; the parent step records child.spawned /
  * child.finished so the whole tree is traversable.
+ *
+ * Every child is spawned under a stable `branch` key (iteration index, branch
+ * name) so that when an interrupted container step is re-attempted on resume,
+ * `ctx.runChild` re-attaches to the children the interrupted attempt already
+ * spawned instead of starting them again (see Orchestrator.runChild).
  */
 import { INLINE_SEP } from "../orchestrator.js";
 import type { LoopNode, ParallelNode, RunState, SubworkflowNode, SubworkflowRef } from "@orca/core";
-import { completed, failed, type NodeExecutor, type StepContext, type StepOutcome } from "./types.js";
+import { completed, failed, paused, type NodeExecutor, type StepContext, type StepOutcome } from "./types.js";
 
 function target(ctx: StepContext, ref: SubworkflowRef, suffix: string[]): { workflow: string } | { graph: import("@orca/core").WorkflowGraph; inlineId: string } {
   if ("workflow" in ref) return { workflow: ref.workflow };
@@ -15,6 +20,19 @@ function target(ctx: StepContext, ref: SubworkflowRef, suffix: string[]): { work
 function childOutcome(states: RunState[]): { ok: boolean; data: Record<string, unknown> } {
   const ok = states.every((s) => s.run.status === "completed" && s.run.outcome === "success");
   return { ok, data: { children: states.map((s) => ({ runId: s.run.id, status: s.run.status, outcome: s.run.outcome, vars: s.run.vars })) } };
+}
+
+/**
+ * When any child run parked at a human gate, the parent step parks too: it
+ * records the children it is waiting on and returns a paused outcome. On
+ * resume the node is re-attempted and `runChild` re-attaches to the same
+ * children (finished ones return immediately, parked ones resume).
+ */
+export async function pausedByChildren(ctx: StepContext, states: RunState[]): Promise<StepOutcome | undefined> {
+  const ids = states.filter((s) => s.run.status === "paused").map((s) => s.run.id);
+  if (ids.length === 0) return undefined;
+  await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "child-run", detail: ids.join(",") } });
+  return paused(`${ids.length} child run(s) paused: ${ids.join(", ")}`, { childRunIds: ids });
 }
 
 export const loopExecutor: NodeExecutor<LoopNode> = {
@@ -32,7 +50,9 @@ export const loopExecutor: NodeExecutor<LoopNode> = {
       if (n.mode === "forEach") scope[n.itemVar] = list![i];
       if (n.mode === "while" && !(await ctx.evaluate(n.condition!, scope))) break;
       await ctx.emit({ type: "loop.iteration", payload: { stepRunId: ctx.step.id, iteration: i, ...(n.mode === "forEach" ? { item: list![i] } : {}) } });
-      const state = await ctx.runChild(target(ctx, n.body, []), { vars: scope });
+      const state = await ctx.runChild(target(ctx, n.body, []), { branch: String(i), vars: scope });
+      const parked = await pausedByChildren(ctx, [state]);
+      if (parked) return parked;
       results.push(state);
       const failedChild = state.run.status !== "completed" || state.run.outcome !== "success";
       if (failedChild && n.breakOnFailure) return failed("RUN_STATE", `loop iteration ${i} ${state.run.status} (${state.run.outcome ?? state.run.error?.message ?? ""})`, { childRunId: state.run.id });
@@ -71,6 +91,8 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
       const list = Array.isArray(items) ? items : items && typeof items === "object" ? Object.values(items) : [];
       states = await mapLimit(list, n.concurrency, (item, i) => ctx.runChild(target(ctx, fe.body, []), { branch: String(i), vars: { [fe.itemVar]: item, [fe.indexVar]: i } }));
     }
+    const parked = await pausedByChildren(ctx, states);
+    if (parked) return parked;
     const { ok, data } = childOutcome(states);
     const anyOk = states.some((s) => s.run.status === "completed" && s.run.outcome === "success");
     if ((n.join === "all" && !ok) || (n.join === "any" && !anyOk)) return failed("RUN_STATE", `parallel '${ctx.nodeId}': ${states.filter((s) => s.run.outcome !== "success").length} of ${states.length} branches did not succeed`, data);
@@ -84,6 +106,8 @@ export const subworkflowExecutor: NodeExecutor<SubworkflowNode> = {
     const vars: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(ctx.node.vars)) vars[k] = typeof v === "string" && v.startsWith("=") ? await ctx.evaluate(v.slice(1)) : v;
     const state = await ctx.runChild({ workflow: ctx.node.workflow }, { vars });
+    const parked = await pausedByChildren(ctx, [state]);
+    if (parked) return parked;
     const { ok, data } = childOutcome([state]);
     if (!ok) return failed("RUN_STATE", `subworkflow '${ctx.node.workflow}' ${state.run.status}: ${state.run.error?.message ?? state.run.outcome ?? ""}`, { childRunId: state.run.id });
     return completed({ data: { ...data, ok, childRunId: state.run.id, childVars: state.run.vars } });
