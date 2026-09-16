@@ -19,6 +19,7 @@ export type OrcaErrorCode =
   | "RUN_STATE"
   | "STEP_TIMEOUT"
   | "CANCELLED"
+  | "HUMAN_INPUT_PENDING"
   | "NOT_SUPPORTED"
   | "CONFIG_INVALID"
   | "INTERNAL";

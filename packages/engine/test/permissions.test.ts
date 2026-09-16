@@ -7,8 +7,46 @@ import { describe, expect, it, vi } from "vitest";
 import * as acp from "@agentclientprotocol/sdk";
 import { AgentRegistry, LocalHost, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import { AgentSpecSchema, FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, type SessionFactory } from "@orca/engine";
+import { humanInputCancelled, LocalWorkspaceProvider, Orchestrator, type HumanInputPort, type HumanInputQuery, type SessionFactory } from "@orca/engine";
 import { memoryStores } from "@orca/store";
+
+/**
+ * In-process port that parks questions until the test answers them. `ask`
+ * permissions cannot outlive the agent session that raised them, so they are
+ * never persisted (PausingHumanInput cancels them); a live port like this one
+ * is how a host answers them while the run is in flight.
+ */
+class InProcessHumanInput implements HumanInputPort {
+  private readonly pending = new Map<string, { query: HumanInputQuery; settle: (v: string | undefined) => void }>();
+  ask(query: HumanInputQuery): Promise<string | undefined> {
+    const { signal } = query;
+    if (signal?.aborted) return Promise.reject(humanInputCancelled(signal));
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        this.pending.delete(query.requestId);
+        reject(humanInputCancelled(signal));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pending.set(query.requestId, {
+        query,
+        settle: (v) => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve(v);
+        },
+      });
+    });
+  }
+  list(): HumanInputQuery[] {
+    return [...this.pending.values()].map((p) => p.query);
+  }
+  answer(requestId: string, value: string | undefined): boolean {
+    const p = this.pending.get(requestId);
+    if (!p) return false;
+    this.pending.delete(requestId);
+    p.settle(value);
+    return true;
+  }
+}
 
 const permissionRequest = (id: string): acp.RequestPermissionRequest => ({
   sessionId: "acp",
@@ -55,7 +93,7 @@ function make(yaml: string, sessionFactory: SessionFactory, opts: { sessionMode?
   const agents = new AgentRegistry()
     .addHost(new LocalHost({ id: "local", type: "local" }))
     .addAgent(AgentSpecSchema.parse({ id: "fake", command: "x", roles: ["builder"], permissions: { default: "ask" }, ...(opts.sessionMode ? { sessionMode: opts.sessionMode } : {}) }));
-  const humanInput = new PausingHumanInput();
+  const humanInput = new InProcessHumanInput();
   const orchestrator = new Orchestrator({ stores: memoryStores(), agents, workflows, templates: new TemplateRegistry(), workspaceProvider: new LocalWorkspaceProvider("/tmp"), clock: new FakeClock(), humanInput, sessionFactory });
   return { orchestrator, humanInput };
 }
@@ -102,8 +140,8 @@ describe("ask permissions as human input", () => {
     expect(mid.steps[a!.stepRunId]).toMatchObject({ nodeId: "work", status: "waiting", waitingOn: "human-input" });
     expect(mid.run.status).toBe("waiting");
 
-    expect(orchestrator.answer(a!.requestId, "allow")).toBe(true);
-    expect(orchestrator.answer(b!.requestId, "deny")).toBe(true);
+    expect(humanInput.answer(a!.requestId, "allow")).toBe(true);
+    expect(humanInput.answer(b!.requestId, "deny")).toBe(true);
     const state = await done;
 
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
@@ -128,11 +166,11 @@ describe("ask permissions as human input", () => {
 
     await vi.waitFor(() => expect(humanInput.list()).toHaveLength(1));
     const first = humanInput.list()[0]!;
-    orchestrator.answer(first.requestId, "allow");
+    humanInput.answer(first.requestId, "allow");
     await vi.waitFor(() => expect(humanInput.list()).toHaveLength(1));
     const second = humanInput.list()[0]!;
     expect(second.requestId).not.toBe(first.requestId);
-    orchestrator.answer(second.requestId, "allow");
+    humanInput.answer(second.requestId, "allow");
     const state = await done;
 
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");

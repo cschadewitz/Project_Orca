@@ -6,13 +6,13 @@ import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAcpSession } from "@orca/agents";
-import { toMermaid, validateWorkflow, parseWorkflow, OrcaError, type OrcaConfig, consoleLogger } from "@orca/core";
+import { toMermaid, validateWorkflow, parseWorkflow, OrcaError, type OrcaConfig, type RunState, consoleLogger } from "@orca/core";
 import { readFile } from "node:fs/promises";
 import { autoHumanInput } from "@orca/engine";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { scriptedAgentSpec } from "@orca/testing";
 import { bootstrap, loadConfig, loadTemplates, loadWorkflows, type OrcaApp } from "../bootstrap.js";
-import { formatEvent, formatRunState } from "../format.js";
+import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../format.js";
 
 export interface CommandContext {
   cwd: string;
@@ -37,6 +37,17 @@ function parseVars(values: string[] | undefined): Record<string, unknown> {
     }
   }
   return vars;
+}
+
+/** Print the final state of a followed run and turn it into an exit code: 0 success, 2 failed/rejected, 3 paused at a human gate. */
+async function finish(app: OrcaApp, ctx: CommandContext, state: RunState): Promise<number> {
+  ctx.out(formatRunState(state));
+  if (state.run.status === "paused") {
+    ctx.out("");
+    ctx.out(formatPaused(state.run.id, await app.orchestrator.pendingInputs(state.run.id)));
+    return 3;
+  }
+  return state.run.status === "completed" && state.run.outcome === "success" ? 0 : 2;
 }
 
 function attachEventPrinter(app: OrcaApp, ctx: CommandContext, quiet: boolean): () => void {
@@ -111,7 +122,7 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   run: {
-    help: "run <workflowId> [--var k=v]... [--cwd dir] [--quiet]  Start a workflow run and follow it to completion.",
+    help: "run <workflowId> [--var k=v]... [--cwd dir] [--quiet]  Start a workflow run and follow it until it completes or pauses at a human gate.",
     async run(ctx) {
       const workflowId = ctx.positionals[0];
       if (!workflowId) throw new OrcaError("CONFIG_INVALID", "run needs a workflow id");
@@ -120,8 +131,7 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       try {
         const workspace = ctx.flags.cwd ? { hostId: "local", cwd: String(ctx.flags.cwd) } : undefined;
         const state = await app.orchestrator.startAndRun({ workflowId, vars: parseVars(ctx.flags.var as string[] | undefined), ...(workspace ? { workspace } : {}) });
-        ctx.out(formatRunState(state));
-        return state.run.status === "completed" && state.run.outcome === "success" ? 0 : 2;
+        return await finish(app, ctx, state);
       } finally {
         detach();
       }
@@ -139,13 +149,13 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       try {
         const { request, state } = await app.program.submitAndRun({ title, body, vars: parseVars(ctx.flags.var as string[] | undefined) });
         ctx.out(`request ${request.id}: ${request.status}`);
-        ctx.out(formatRunState(state));
+        const code = await finish(app, ctx, state);
         const items = await app.orchestrator.stores.workItems.list((w) => w.requestId === request.id);
         if (items.length) {
           ctx.out("\nwork items:");
           for (const w of items) ctx.out(`  ${w.status.padEnd(12)} ${w.slug.padEnd(20)} ${w.title}${w.runId ? `  run=${w.runId}` : ""}`);
         }
-        return state.run.status === "completed" && state.run.outcome === "success" ? 0 : 2;
+        return code;
       } finally {
         detach();
       }
@@ -170,7 +180,12 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       const runId = ctx.positionals[0];
       if (!runId) throw new OrcaError("CONFIG_INVALID", "status needs a run id");
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
-      ctx.out(formatRunState(await app.orchestrator.getState(runId)));
+      const state = await app.orchestrator.getState(runId);
+      ctx.out(formatRunState(state));
+      if (state.run.status === "paused") {
+        ctx.out("");
+        ctx.out(formatPaused(runId, await app.orchestrator.pendingInputs(runId)));
+      }
       return 0;
     },
   },
@@ -187,16 +202,39 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   resume: {
-    help: "resume <runId>  Resume an interrupted run from its event log.",
+    help: "resume <runId>  Resume an interrupted or paused run (and the parents waiting on it) from its event log.",
     async run(ctx) {
       const runId = ctx.positionals[0];
       if (!runId) throw new OrcaError("CONFIG_INVALID", "resume needs a run id");
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
-        const state = await app.orchestrator.run(runId);
-        ctx.out(formatRunState(state));
-        return state.run.status === "completed" ? 0 : 2;
+        return await finish(app, ctx, await app.program.resume(runId));
+      } finally {
+        detach();
+      }
+    },
+  },
+
+  answer: {
+    help: "answer [<requestId> <option> [--no-resume]]  Answer a paused run's question and resume it; without arguments, list open questions.",
+    async run(ctx) {
+      const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
+      const [requestId, ...rest] = ctx.positionals;
+      if (!requestId) {
+        const pending = await app.orchestrator.pendingInputs();
+        if (!pending.length) ctx.out("no open questions");
+        for (const h of pending) ctx.out(formatPendingInput(h));
+        return 0;
+      }
+      const value = rest.join(" ");
+      if (!value) throw new OrcaError("CONFIG_INVALID", "answer needs a request id and an answer (orca answer <requestId> <option>)");
+      const request = await app.orchestrator.answer(requestId, value);
+      ctx.out(`answered ${request.id} (run ${request.runId}): ${value}`);
+      if (ctx.flags["no-resume"]) return 0;
+      const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
+      try {
+        return await finish(app, ctx, await app.program.resume(request.runId));
       } finally {
         detach();
       }
@@ -264,12 +302,12 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       try {
         const { request, state } = await app.program.submitAndRun({ title: "Add authentication", body: "Users must be able to log in with email and password." });
         ctx.out("");
-        ctx.out(formatRunState(state));
+        const code = await finish(app, ctx, state);
         const items = await app.orchestrator.stores.workItems.list((w) => w.requestId === request.id);
         ctx.out("\nwork items:");
         for (const w of items) ctx.out(`  ${w.status.padEnd(8)} ${w.slug.padEnd(12)} run=${w.runId ?? "-"}`);
         ctx.out(`\nartifacts and event logs are under ${join(dir, ".orca")}; inspect with: orca runs / orca status <runId> / orca events <runId>  (run from ${dir})`);
-        return state.run.status === "completed" ? 0 : 2;
+        return code;
       } finally {
         detach();
       }

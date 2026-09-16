@@ -7,7 +7,7 @@ import { NodeExecutorRegistry } from "./types.js";
 export * from "./types.js";
 export { agentExecutor, runAgentTurn, validateArtifact, type AgentTurnSpec, type AgentTurnOutcome } from "./agent-step.js";
 export { startExecutor, endExecutor, setExecutor, decisionExecutor, gateExecutor } from "./basic.js";
-export { loopExecutor, parallelExecutor, subworkflowExecutor } from "./containers.js";
+export { loopExecutor, parallelExecutor, subworkflowExecutor, pausedByChildren } from "./containers.js";
 
 /** All node types ORCA ships with, including the program-level custom nodes. */
 export function builtinExecutors(): NodeExecutorRegistry {
