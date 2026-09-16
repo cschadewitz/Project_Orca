@@ -1,14 +1,22 @@
-# CodeQL security scanning, surfaced as a check on every PR.
+# CodeQL security scanning.
+#
+# Disabled on this repository: code scanning on a *private* repo requires paid
+# GitHub Code Security / Advanced Security, so the analyze step's results upload
+# returns 403. Kept here, dispatch-only, so it is ready to turn on.
+#
+# To enable: make the repository public, or add Code Security to the account,
+# then restore the triggers commented out below.
 name: CodeQL
 
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
-  schedule:
-    # Weekly, so advisories published after a PR merges still get caught.
-    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  # pull_request:
+  #   branches: [main]
+  # push:
+  #   branches: [main]
+  # schedule:
+  #   # Weekly, so advisories published after a PR merges still get caught.
+  #   - cron: "17 4 * * 1"
 
 permissions:
   contents: read
