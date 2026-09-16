@@ -7,6 +7,7 @@
  * the orchestrator needs from a host is file access, to pick up artifacts the
  * agent wrote and to serve ACP `fs/*` requests.
  */
+import type { ChildProcess } from "node:child_process";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { AgentSpec, HostSpec } from "@orca/core";
 
@@ -52,6 +53,24 @@ export interface AgentHost {
   exec(command: string, options?: { cwd?: string; stdin?: string; timeoutMs?: number }): Promise<ExecResult>;
   /** Join path segments using the host's conventions. */
   joinPath(...parts: string[]): string;
+}
+
+/**
+ * Send `signal` to `child` unless it has already exited.
+ *
+ * Deliberately does not consult `child.killed`: Node sets that flag as soon as
+ * the first `kill()` call succeeds, so guarding on it would turn a later
+ * SIGTERM -> SIGKILL escalation into a no-op while the process is still alive.
+ * `exitCode`/`signalCode` only become non-null once the process has actually
+ * exited, which is the condition we care about.
+ */
+export function killIfRunning(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    child.kill(signal);
+  } catch {
+    /* process may have exited between the check and the signal */
+  }
 }
 
 /** POSIX single-quote escaping for commands sent through a remote shell. */
