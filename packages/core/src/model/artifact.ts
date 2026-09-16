@@ -22,6 +22,9 @@ export const BUILTIN_ARTIFACT_KINDS = [
   "deploy-report", // Deploy stage
   "metrics-report", // Maintain stage
   "decision", // any agent- or human-made decision (front matter: choice)
+  "risk-register", // planning: risks with likelihood/impact (front matter: risks[])
+  "decision-matrix", // planning: weighted options for one decision (front matter: criteria[], options[])
+  "schedule", // planning: the computed dispatch order with reasons
   "generic",
 ] as const;
 

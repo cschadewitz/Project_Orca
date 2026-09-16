@@ -21,3 +21,13 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    continue the same conversation.
 8. **Visual editor** — the graph model and `toMermaid` are UI‑ready; a web editor for
    nodes/edges/conditions is the natural next surface.
+9. **Planning: capacity and milestones** — the scheduler orders by dependencies, risk and
+   priority but has no notion of agent capacity per host, calendar milestones or due dates
+   beyond `Decision.dueBy`; add `Milestone` records and a capacity model per host/agent.
+10. **Planning: realised risks reopen work** — `risk.status: realized` is recorded but does
+    not yet create a follow‑up Request (ties into the Maintain stage, item 4).
+11. **Planning: matrix confidence gates** — the shipped program auto‑decides from the matrix;
+    a `decision` node with `source: matrix` plus a gate on `confidence == 'close'` would
+    route close calls to a human. All inputs exist.
+12. **Planning: cross‑plan dependencies and indexes** — one plan per product is assumed and
+    the scheduler re‑reads the whole plan per pass.

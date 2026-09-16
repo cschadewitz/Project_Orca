@@ -20,7 +20,7 @@ describe("glob loaders", () => {
 
   it("loads the shipped workflows and templates with the default patterns", async () => {
     const config = parseOrcaConfig({});
-    expect((await loadWorkflows(config.workflows, repoRoot)).list().map((d) => d.id).sort()).toEqual(["ai-sdlc", "program"]);
+    expect((await loadWorkflows(config.workflows, repoRoot)).list().map((d) => d.id).sort()).toEqual(["ai-sdlc", "plan-resume", "program"]);
     expect((await loadTemplates(config.templates, repoRoot)).list().length).toBeGreaterThan(0);
   });
 

@@ -22,6 +22,9 @@ export type OrcaErrorCode =
   | "HUMAN_INPUT_PENDING"
   | "NOT_SUPPORTED"
   | "CONFIG_INVALID"
+  | "PLAN_NOT_FOUND"
+  | "PLAN_INVALID"
+  | "DEPENDENCY_CYCLE"
   | "INTERNAL";
 
 export class OrcaError extends Error {

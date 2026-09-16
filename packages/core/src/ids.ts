@@ -41,7 +41,12 @@ export type IdPrefix =
   | "sess" // AgentSession
   | "tpl" // PromptTemplate
   | "host" // AgentHost
-  | "hi"; // HumanInput request
+  | "hi" // HumanInput request
+  | "plan" // Plan
+  | "dep" // Dependency
+  | "risk" // Risk
+  | "dec" // Decision
+  | "pev"; // Plan journal event
 
 export function newId(prefix: IdPrefix, now?: number): string {
   return `${prefix}_${ulid(now)}`;

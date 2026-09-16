@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, definePlugin, builtinExecutors, completed, type HumanInputPort, type OrchestratorOptions } from "@orca/engine";
+import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, PlanService, definePlugin, builtinExecutors, completed, type HumanInputPort, type OrchestratorOptions } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
 /** How often each custom node ran, across every orchestrator created by `make`. Reset per `make`. */
@@ -20,6 +20,7 @@ function make(yaml: string[], overrides: Partial<OrchestratorOptions> = {}) {
   const workflows = new WorkflowRegistry();
   for (const y of yaml) workflows.register(parseWorkflow(y));
   const executors = builtinExecutors();
+  const stores = overrides.stores ?? memoryStores();
   // Custom node types registered through the plugin API.
   definePlugin({
     name: "test",
@@ -45,8 +46,7 @@ function make(yaml: string[], overrides: Partial<OrchestratorOptions> = {}) {
         },
       });
     },
-  }).register({ executors, templates: new TemplateRegistry(), workflows, agents: new AgentRegistry(), setHumanInput() {}, setWorkspaceProvider() {} });
-  const stores = overrides.stores ?? memoryStores();
+  }).register({ executors, templates: new TemplateRegistry(), workflows, agents: new AgentRegistry(), plan: new PlanService({ stores }), setHumanInput() {}, setWorkspaceProvider() {} });
   const orchestrator = new Orchestrator({ stores, agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })), workflows, templates: new TemplateRegistry(), executors, workspaceProvider: new LocalWorkspaceProvider("/tmp"), clock: new FakeClock(), ...overrides });
   return { orchestrator, stores, hung };
 }

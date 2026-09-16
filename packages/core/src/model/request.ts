@@ -6,6 +6,7 @@
  * driven through an SDLC workflow run.
  */
 import { z } from "zod";
+import { DecisionInputSchema, DependencyRefSchema, RiskInputSchema, WorkItemPrioritySchema } from "./plan.js";
 
 export const RequestSourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("manual") }),
@@ -50,8 +51,11 @@ export const WorkItemSchema = z.object({
   description: z.string().default(""),
   kind: WorkItemKindSchema.default("task"),
   acceptanceCriteria: z.array(z.string()).default([]),
-  /** Slugs (or ids) of work items that must be done first. */
-  dependsOn: z.array(z.string()).default([]),
+  /**
+   * Dependency references as written in the decomposition (see `parseDependencyRef`).
+   * Once the item is registered in a Plan, `Dependency` records are the source of truth.
+   */
+  dependsOn: z.array(DependencyRefSchema).default([]),
   /** Workflow to run for this item; defaults to the program's `itemWorkflow`. */
   workflowId: z.string().optional(),
   /** Repository / workspace hints for the workspace provider. */
@@ -59,6 +63,13 @@ export const WorkItemSchema = z.object({
   status: WorkItemStatusSchema.default("pending"),
   runId: z.string().optional(),
   estimate: z.string().optional(),
+  /** Plan this item is tracked in (set by `custom:plan-register`). */
+  planId: z.string().optional(),
+  priority: WorkItemPrioritySchema.default("normal"),
+  /** Artifact kind -> newest artifact id produced by this item's runs. Drives stage-level dependencies. */
+  produced: z.record(z.string(), z.string()).default({}),
+  /** Why the item is not being dispatched right now (waiting on another request, held for risk, ...). */
+  deferredReason: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -71,16 +82,24 @@ export const DecompositionItemSchema = z.object({
   description: z.string().default(""),
   kind: WorkItemKindSchema.default("task"),
   acceptanceCriteria: z.array(z.string()).default([]),
-  dependsOn: z.array(z.string()).default([]),
+  dependsOn: z.array(DependencyRefSchema).default([]),
   parent: z.string().optional(),
   repo: z.string().optional(),
   workflow: z.string().optional(),
   estimate: z.string().optional(),
+  priority: WorkItemPrioritySchema.default("normal"),
+  /** Risk keys (declared in `risks`) this item is exposed to. */
+  risks: z.array(z.string()).default([]),
 });
 export type DecompositionItem = z.infer<typeof DecompositionItemSchema>;
+export type DecompositionItemInput = z.input<typeof DecompositionItemSchema>;
 
 export const DecompositionSchema = z.object({
   items: z.array(DecompositionItemSchema).min(1),
   rationale: z.string().optional(),
+  /** Risks the planner already sees; refined later by the risk assessment step. */
+  risks: z.array(RiskInputSchema).default([]),
+  /** Decisions that must be made before some items can start (`blocks` lists their slugs). */
+  decisions: z.array(DecisionInputSchema).default([]),
 });
 export type Decomposition = z.infer<typeof DecompositionSchema>;
