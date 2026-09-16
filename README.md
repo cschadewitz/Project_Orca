@@ -68,6 +68,8 @@ Start reading at `docs/ARCHITECTURE.md`, then `workflows/ai-sdlc.yaml` next to
 
 ## Status
 
+[![CI](https://github.com/cschadewitz/Project_Orca/actions/workflows/ci.yml/badge.svg)](https://github.com/cschadewitz/Project_Orca/actions/workflows/ci.yml)
+
 Groundwork release: the data model, event‑sourced engine, ACP transport (local +
 SSH), workflow language, SDLC templates and CLI are implemented and tested
 end‑to‑end against a real ACP subprocess. See `docs/ROADMAP.md` for what is
