@@ -107,7 +107,14 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
     case "step.completed": {
       const s = step(e.payload.stepRunId);
       s.status = "completed";
-      s.result = e.payload.result;
+      // Keep the union of artifact ids already recorded during the step (via
+      // artifact.recorded) and those the executor's result repeats. Executors
+      // such as decision nodes or plugins may record artifacts and then return
+      // a result whose artifactIds is empty; the recorded ones must survive.
+      const recorded = s.result?.artifactIds ?? [];
+      const artifactIds = [...recorded];
+      for (const id of e.payload.result.artifactIds) if (!artifactIds.includes(id)) artifactIds.push(id);
+      s.result = { ...e.payload.result, artifactIds };
       s.completedAt = e.at;
       delete s.waitingOn;
       if (state.run.status === "waiting") state.run.status = "running";
