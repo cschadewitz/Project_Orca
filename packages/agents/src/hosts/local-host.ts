@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { OrcaError, type AgentSpec, type LocalHost as LocalHostSpec } from "@orca/core";
-import { StderrTail, type AgentHost, type AgentProcessHandle, type ExecResult, type HostFileSystem, type SpawnAgentOptions } from "../host.js";
+import { killIfRunning, StderrTail, type AgentHost, type AgentProcessHandle, type ExecResult, type HostFileSystem, type SpawnAgentOptions } from "../host.js";
 
 export const localFileSystem: HostFileSystem = {
   readFile: (p) => readFile(p, "utf8"),
@@ -61,9 +61,7 @@ export class LocalHost implements AgentHost {
       pid: child.pid,
       exited,
       stderrTail: () => tail.text(),
-      kill: (signal = "SIGTERM") => {
-        if (child.exitCode === null && !child.killed) child.kill(signal);
-      },
+      kill: (signal = "SIGTERM") => killIfRunning(child, signal),
     };
   }
 

@@ -179,8 +179,13 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
         /* ignore */
       }
       proc.kill();
-      await Promise.race([proc.exited, new Promise((r) => setTimeout(r, 2000))]);
-      if (proc.pid) proc.kill("SIGKILL");
+      const exitedInTime = await Promise.race([proc.exited.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 2000))]);
+      if (!exitedInTime) {
+        // Escalate: the agent ignored SIGTERM (or is wedged). The handle's kill()
+        // is a no-op once the process has exited, so this is safe to call blindly.
+        proc.kill("SIGKILL");
+        await proc.exited;
+      }
     },
   };
   return session;

@@ -15,6 +15,24 @@ describe("hosts", () => {
     expect(r.stdout.trim()).toBe("hi");
     expect(await host.fs.exists("/definitely/not/here")).toBe(false);
   });
+  it("escalates SIGTERM to SIGKILL on a process that ignores SIGTERM", async () => {
+    const host = new LocalHost({ id: "local", type: "local" });
+    // SIG_IGN survives exec, so `sleep` inherits the ignored SIGTERM and no orphan is left behind.
+    const agent = AgentSpecSchema.parse({ id: "stubborn", command: "sh", args: ["-c", 'trap "" TERM; exec sleep 30'] });
+    const proc = await host.spawnAgent(agent, { cwd: process.cwd() });
+    const pending = Symbol("pending");
+    const settled = () => Promise.race([proc.exited, new Promise<typeof pending>((r) => setTimeout(() => r(pending), 300))]);
+
+    proc.kill(); // SIGTERM: ignored by the child; this also flips child.killed=true
+    expect(await settled()).toBe(pending);
+
+    proc.kill("SIGKILL"); // must not be short-circuited by child.killed
+    const exit = await settled();
+    expect(exit).not.toBe(pending);
+    expect((exit as { signal: string | null }).signal).toBe("SIGKILL");
+
+    expect(() => proc.kill("SIGKILL")).not.toThrow(); // no-op after exit
+  });
   it("resolves agents by id and role", () => {
     const reg = new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })).addAgent(AgentSpecSchema.parse({ id: "a", command: "x", roles: ["builder"] })).addAgent(AgentSpecSchema.parse({ id: "b", command: "y", roles: ["builder", "reviewer"] })).mapRole("reviewer", "a");
     expect(reg.resolve("b").agent.id).toBe("b");
