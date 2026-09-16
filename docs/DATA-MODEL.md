@@ -53,7 +53,8 @@ See `docs/WORKFLOWS.md` for the authoring guide.
 
 ## Run / StepRun / RunState (`model/run.ts`)
 
-`Run` carries workflow id+version, status (`created → running ⇄ waiting → completed | failed | cancelled`),
+`Run` carries workflow id+version, status (`created → running ⇄ waiting → completed | failed | cancelled`,
+plus `paused` while parked at a human gate awaiting `orca answer`),
 outcome, `workspace` (host id + cwd + repo/branch), `vars`, and parent links.
 `StepRun` is one execution attempt of one node: attempt number, iteration, agent session id,
 input artifact ids, `result` (`choice`, `outcome`, `artifactIds`, `data`), error, child run ids.

@@ -26,7 +26,11 @@ export const WorkspaceProviderConfigSchema = z.discriminatedUnion("provider", [
 export type WorkspaceProviderConfig = z.infer<typeof WorkspaceProviderConfigSchema>;
 
 export const HumanInputConfigSchema = z.discriminatedUnion("mode", [
-  /** Gates/decisions needing a human answer pause the run until `orca answer` is called. */
+  /**
+   * Gates/decisions needing a human answer park the run (`run.paused`, the process exits);
+   * `orca answer <requestId> <option>` records the answer from any process and resumes it.
+   * Agent `ask` permissions cannot be parked and are cancelled.
+   */
   z.object({ mode: z.literal("pause") }),
   /** Interactive prompt on the terminal (CLI). */
   z.object({ mode: z.literal("cli") }),

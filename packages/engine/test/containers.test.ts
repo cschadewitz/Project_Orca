@@ -2,17 +2,17 @@
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, definePlugin, builtinExecutors, completed } from "@orca/engine";
-import { memoryStores, type Stores } from "@orca/store";
+import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, definePlugin, builtinExecutors, completed, type HumanInputPort, type OrchestratorOptions } from "@orca/engine";
+import { memoryStores } from "@orca/store";
 
 /** How often each custom node ran, across every orchestrator created by `make`. Reset per `make`. */
 const calls = { record: 0, hang: 0 };
 
 /**
- * `stores` may be shared with an earlier orchestrator to simulate a process that died and was
- * replaced: the old orchestrator's promises simply never settle, the new one resumes from the log.
+ * `overrides.stores` may be shared with an earlier orchestrator to simulate a process that died and
+ * was replaced: the old orchestrator's promises simply never settle, the new one resumes from the log.
  */
-function make(yaml: string[], stores: Stores = memoryStores()) {
+function make(yaml: string[], overrides: Partial<OrchestratorOptions> = {}) {
   calls.record = 0;
   calls.hang = 0;
   let onHang = () => {};
@@ -46,11 +46,35 @@ function make(yaml: string[], stores: Stores = memoryStores()) {
       });
     },
   }).register({ executors, templates: new TemplateRegistry(), workflows, agents: new AgentRegistry(), setHumanInput() {}, setWorkspaceProvider() {} });
-  const orchestrator = new Orchestrator({ stores, agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })), workflows, templates: new TemplateRegistry(), executors, workspaceProvider: new LocalWorkspaceProvider("/tmp"), clock: new FakeClock() });
+  const stores = overrides.stores ?? memoryStores();
+  const orchestrator = new Orchestrator({ stores, agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })), workflows, templates: new TemplateRegistry(), executors, workspaceProvider: new LocalWorkspaceProvider("/tmp"), clock: new FakeClock(), ...overrides });
   return { orchestrator, stores, hung };
 }
 
 const stepSummary = (s: { stepOrder: string[]; steps: Record<string, { nodeId: string; attempt: number; status: string }> }) => s.stepOrder.map((id) => `${s.steps[id]!.nodeId}:${s.steps[id]!.attempt}:${s.steps[id]!.status}`);
+
+async function until(cond: () => boolean, ms = 2000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+const gated = `
+id: gated
+name: gated
+start: s
+nodes:
+  s: { type: start }
+  gate: { type: gate, question: "Ship it?" }
+  ok: { type: end, outcome: success }
+  no: { type: end, outcome: failure }
+edges:
+  - { from: s, to: gate }
+  - { from: gate, to: ok, when: "choice == 'approve'" }
+  - { from: gate, to: no }
+`;
 
 describe("container nodes", () => {
   it("while loop runs a nested graph as child runs and exposes iteration vars", async () => {
@@ -201,7 +225,7 @@ edges: [{ from: s, to: loop }, { from: loop, to: e }]
     const recordsBeforeResume = calls.record;
 
     // Process 2: a fresh orchestrator over the same logs resumes the parent.
-    const second = make(yaml, first.stores);
+    const second = make(yaml, { stores: first.stores });
     const state = await second.orchestrator.run(runId);
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(stepSummary(state)).toEqual(["s:1:completed", "loop:1:cancelled", "loop:2:completed", "e:1:completed"]);
@@ -252,7 +276,7 @@ edges: [{ from: s, to: par }, { from: par, to: e }]
     const interruptedStep = (await first.orchestrator.getState(runId)).steps[(await first.orchestrator.getState(runId)).stepOrder[1]!]!;
     expect(interruptedStep.children.map((c) => c.branch)).toEqual(["a", "b"]);
 
-    const second = make(yaml, first.stores);
+    const second = make(yaml, { stores: first.stores });
     const state = await second.orchestrator.run(runId);
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(stepSummary(state)).toEqual(["s:1:completed", "par:1:cancelled", "par:2:completed", "e:1:completed"]);
@@ -327,5 +351,71 @@ edges: [{ from: s, to: loop }, { from: loop, to: e }]
     await orchestrator.cancel(runId, "test");
     const state = await done;
     expect(state.run.status).toBe("cancelled");
+  });
+
+  it("cancelling a run parked in pause mode closes the gate step and drops its question", async () => {
+    const { orchestrator } = make([gated], { humanInput: new PausingHumanInput() });
+    const parked = await orchestrator.startAndRun({ workflowId: "gated" });
+    const runId = parked.run.id;
+    expect(parked.run.status).toBe("paused");
+    const [query] = await orchestrator.pendingInputs(runId);
+    expect(query).toMatchObject({ runId, kind: "decision", question: "Ship it?" });
+
+    await orchestrator.cancel(runId, "operator gave up");
+    const state = await orchestrator.getState(runId);
+    expect(state.run.status).toBe("cancelled");
+    expect(state.run.outcome).toBe("cancelled");
+    const gate = state.steps[state.stepOrder[1]!]!;
+    expect(gate.nodeId).toBe("gate");
+    expect(gate.status).toBe("cancelled");
+    expect(state.humanInputs[query!.id]?.answer).toBeUndefined();
+    // The parked question is dropped, not left dangling for a later `orca answer`.
+    expect(await orchestrator.pendingInputs()).toEqual([]);
+    await expect(orchestrator.answer(query!.id, "approve")).rejects.toThrow(/no pending human input/);
+    const types = (await orchestrator.events(runId)).map((e) => e.type);
+    expect(types.slice(-2)).toEqual(["step.cancelled", "run.cancelled"]);
+    expect(types).not.toContain("human.answered");
+  });
+
+  it("cancel unblocks a human decision even when the port ignores the signal", async () => {
+    let asked = 0;
+    const neverAnswers: HumanInputPort = { ask: () => new Promise(() => void asked++) };
+    const { orchestrator } = make([`
+id: ask
+name: ask
+start: s
+nodes:
+  s: { type: start }
+  d:
+    type: decision
+    source: { kind: human, question: "Which way?" }
+    options: [left, right]
+  e: { type: end }
+edges: [{ from: s, to: d }, { from: d, to: e }]
+`], { humanInput: neverAnswers });
+    const runId = await orchestrator.startRun({ workflowId: "ask" });
+    const done = orchestrator.run(runId);
+    await until(() => asked === 1);
+    await orchestrator.cancel(runId);
+    const state = await done;
+    expect(state.run.status).toBe("cancelled");
+    expect(state.steps[state.stepOrder[1]!]?.status).toBe("cancelled");
+  });
+
+  it("cancelling a run that is not live closes its open step too", async () => {
+    const { orchestrator, stores } = make([gated]);
+    const runId = await orchestrator.startRun({ workflowId: "gated" });
+    await stores.events.append({ type: "run.started", runId, payload: {} });
+    await stores.events.append({ type: "step.scheduled", runId, payload: { stepRunId: "step_g", nodeId: "gate", nodeType: "gate", attempt: 1 } });
+    await stores.events.append({ type: "step.started", runId, payload: { stepRunId: "step_g", inputArtifactIds: [] } });
+    await stores.events.append({ type: "step.waiting", runId, payload: { stepRunId: "step_g", on: "human-input", detail: "hi_1" } });
+    await orchestrator.cancel(runId, "offline");
+    const state = await orchestrator.getState(runId);
+    expect(state.run.status).toBe("cancelled");
+    expect(state.steps.step_g?.status).toBe("cancelled");
+    // Idempotent: a second cancel on a terminal run appends nothing.
+    const n = (await orchestrator.events(runId)).length;
+    await orchestrator.cancel(runId);
+    expect((await orchestrator.events(runId)).length).toBe(n);
   });
 });

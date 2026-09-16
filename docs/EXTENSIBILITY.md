@@ -46,3 +46,6 @@ Conventions that keep extensions reviewable:
   not into side channels.
 - Custom node types are `custom:<kebab-name>`; validation of their fields is the plugin's job
   (use zod and throw `OrcaError("WORKFLOW_INVALID", …)` from a validation hook if needed).
+- A `HumanInputPort` receives `query.signal`, which fires when the run is cancelled while the
+  question is open. Drop the request and reject with `humanInputCancelled(signal)`; the engine
+  stops waiting on `cancel()` regardless, but a cooperative port avoids stranded questions.

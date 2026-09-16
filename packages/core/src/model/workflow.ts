@@ -40,6 +40,8 @@ export const CompletionPolicySchema = z.object({
    *   the required artifacts exist (the orchestrator checks after the turn).
    * `artifact-present`: the step is done as soon as the required artifacts
    *   appear on disk, even mid-turn (the orchestrator then cancels the turn).
+   *   Only `required: true` deliverables are watched; with none the mode is
+   *   equivalent to `turn-end` (validation warns about that).
    */
   mode: z.enum(["turn-end", "artifact-present"]).default("turn-end"),
   /** If artifacts are missing/invalid after a turn, re-prompt this many times. */
