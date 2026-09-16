@@ -4,15 +4,14 @@
     "composite": false,
     "noEmit": true,
     "rootDir": ".",
-    "baseUrl": ".",
     "paths": {
-      "@orca/core": ["packages/core/src/index.ts"],
-      "@orca/store": ["packages/store/src/index.ts"],
-      "@orca/agents": ["packages/agents/src/index.ts"],
-      "@orca/engine": ["packages/engine/src/index.ts"],
-      "@orca/testing": ["packages/testing/src/index.ts"],
-      "@orca/integrations": ["packages/integrations/src/index.ts"],
-      "@orca/cli": ["packages/cli/src/index.ts"]
+      "@orca/core": ["./packages/core/src/index.ts"],
+      "@orca/store": ["./packages/store/src/index.ts"],
+      "@orca/agents": ["./packages/agents/src/index.ts"],
+      "@orca/engine": ["./packages/engine/src/index.ts"],
+      "@orca/testing": ["./packages/testing/src/index.ts"],
+      "@orca/integrations": ["./packages/integrations/src/index.ts"],
+      "@orca/cli": ["./packages/cli/src/index.ts"]
     }
   },
   "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "vitest.config.ts"]
