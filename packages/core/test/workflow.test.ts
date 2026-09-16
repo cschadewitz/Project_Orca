@@ -52,6 +52,36 @@ describe("workflow definitions", () => {
     );
     expect(r.warnings.map((w) => w.message)).toEqual(expect.arrayContaining([expect.stringMatching(/'orphan' is unreachable/)]));
   });
+  it("warns when artifact-present has no required deliverable to wait for", () => {
+    const def = parseWorkflow(`
+id: optional-only
+name: optional-only
+start: s
+nodes:
+  s: { type: start }
+  a:
+    type: agent
+    agent: x
+    prompt: "write a plan if you like"
+    produces: [{ kind: plan, path: plan.md, required: false }]
+    completion: { mode: artifact-present }
+  e: { type: end }
+edges: [{ from: s, to: a }, { from: a, to: e }]
+`);
+    const r = validateWorkflow(def);
+    expect(r.ok).toBe(true);
+    expect(r.warnings).toEqual([{ path: "workflow(optional-only).nodes.a.completion.mode", message: expect.stringMatching(/no required deliverable/) }]);
+
+    // Marking one deliverable required (the default) clears the warning.
+    const a = def.nodes.a;
+    if (a?.type !== "agent") throw new Error("expected agent node");
+    a.produces[0]!.required = true;
+    expect(validateWorkflow(def).warnings).toEqual([]);
+    // turn-end mode with only optional deliverables is fine: nothing is watched.
+    a.produces[0]!.required = false;
+    a.completion.mode = "turn-end";
+    expect(validateWorkflow(def).warnings).toEqual([]);
+  });
   it("parses nested loop bodies and custom nodes", () => {
     const def = parseWorkflow(`
 id: nested
