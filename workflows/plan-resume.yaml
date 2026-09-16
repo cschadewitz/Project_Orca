@@ -1,0 +1,43 @@
+# Resume a long-lived plan: re-schedule everything ORCA is tracking (across
+# requests), gate, and dispatch whatever became ready - items that were deferred
+# because they waited on another request, an external, or a decision.
+# Run with: orca plan dispatch <planKey>   (or: orca run plan-resume --var plan=<key>)
+id: plan-resume
+name: Plan resume (schedule -> gate -> dispatch across the plan)
+version: "1"
+inputs:
+  plan: Plan key to resume.
+vars:
+  maxAutoApproveItems: 12
+start: start
+nodes:
+  start: { type: start }
+
+  schedule:
+    type: "custom:plan-schedule"
+    name: "Compute the schedule"
+
+  plan-gate:
+    type: gate
+    name: "Approve dispatch"
+    question: "Dispatch {{ len(vars.schedule.ready) }} ready work item(s) in plan '{{ vars.plan }}' ({{ join(pluck(vars.schedule.ready, 'slug'), ', ') }})? Waiting: {{ len(vars.schedule.waiting) }}. Held for risk: {{ len(vars.schedule.held) }}."
+    options: [approve, reject]
+    autoApproveWhen: "len(vars.schedule.ready) <= vars.maxAutoApproveItems && vars.schedule.risk.highestLevel != 'critical'"
+    autoOption: approve
+
+  dispatch:
+    type: "custom:plan-dispatch"
+    name: "Dispatch ready work across the plan"
+    workflow: ai-sdlc
+    scope: plan
+    onWaiting: defer
+
+  done: { type: end, outcome: success }
+  rejected: { type: end, outcome: failure, message: "Dispatch rejected." }
+
+edges:
+  - { from: start, to: schedule }
+  - { from: schedule, to: plan-gate }
+  - { from: plan-gate, to: dispatch, when: "choice == 'approve'" }
+  - { from: plan-gate, to: rejected }
+  - { from: dispatch, to: done }

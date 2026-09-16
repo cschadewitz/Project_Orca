@@ -21,6 +21,9 @@ export type OrcaErrorCode =
   | "CANCELLED"
   | "NOT_SUPPORTED"
   | "CONFIG_INVALID"
+  | "PLAN_NOT_FOUND"
+  | "PLAN_INVALID"
+  | "DEPENDENCY_CYCLE"
   | "INTERNAL";
 
 export class OrcaError extends Error {

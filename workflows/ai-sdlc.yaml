@@ -2,6 +2,9 @@
 #   Plan (intent.md) -> Design (spec.md) -> Build (plan + code) -> Test -> Review -> Deploy
 # Every stage is an agent step whose artifact feeds the next stage's prompt.
 # Decision nodes route on artifact front matter; loops are bounded by vars.
+# When the work item belongs to a plan, `await-deps` holds the build until the
+# item's build-phase dependencies are satisfied and `vars.upstream` carries the
+# upstream items' artifacts into the build prompt.
 id: ai-sdlc
 name: AI-native SDLC loop
 version: "1"
@@ -46,6 +49,13 @@ nodes:
     # Humans concentrate on high-risk gates; low/medium risk auto-approves.
     autoApproveWhen: "artifacts.spec.data.risk != 'high'"
     autoOption: approve
+
+  await-deps:
+    type: "custom:plan-await"
+    name: "Wait for upstream work this build needs"
+    # Dependencies written as `other-item#build` (or `other-item@implementation#build`)
+    # are awaited here; items without a plan pass straight through.
+    phase: build
 
   bump-build:
     type: set
@@ -128,8 +138,9 @@ edges:
   - { from: start, to: plan }
   - { from: plan, to: design }
   - { from: design, to: spec-gate }
-  - { from: spec-gate, to: bump-build, when: "choice == 'approve'" }
+  - { from: spec-gate, to: await-deps, when: "choice == 'approve'" }
   - { from: spec-gate, to: rejected, when: "choice == 'reject'" }
+  - { from: await-deps, to: bump-build }
   - { from: bump-build, to: build }
   - { from: build, to: test }
   - { from: test, to: tests-passed }

@@ -7,6 +7,7 @@ import type { AgentRegistry, AgentSession } from "@orca/agents";
 import type { Artifact, ArtifactRef, ArtifactSpec, Clock, Logger, NodeDef, OrcaEventInput, StepResult, StepRun, TemplateRegistry, WorkflowDefinition, WorkflowGraph, WorkflowRegistry, Workspace } from "@orca/core";
 import type { Stores } from "@orca/store";
 import type { HumanInputPort } from "../human-input.js";
+import type { PlanService } from "../plan/service.js";
 import type { RunContext } from "../run-context.js";
 
 export interface ResolvedArtifact extends Artifact {
@@ -31,6 +32,8 @@ export interface StepContext {
   readonly templates: TemplateRegistry;
   readonly workflows: WorkflowRegistry;
   readonly humanInput: HumanInputPort;
+  /** Long-term plan: dependencies, risks, decisions, schedule. */
+  readonly plan: PlanService;
 
   /** Append an event for this run (id/seq/at assigned by the store). */
   emit<E extends OrcaEventInput>(event: Omit<E, "runId">): Promise<void>;

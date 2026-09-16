@@ -3,7 +3,7 @@ id: program/summary
 name: Program - final summary
 requires: [decomposition]
 ---
-Summarise the program for the requester. Use the dispatch results below; for each work item state whether it was delivered, link the PR from its deploy report if present, and list open follow-ups.
+Summarise the program for the requester. Use the dispatch results below; for each work item state whether it was delivered, link the PR from its deploy report if present, and list open follow-ups. Call out work that was deferred (waiting on another request, an external, or held for risk) and what would unblock it.
 
 ## Request
 
@@ -12,8 +12,26 @@ Summarise the program for the requester. Use the dispatch results below; for eac
 ## Work items
 
 {{#each vars.dispatched as d}}
-- `{{ d.slug }}`: {{ d.status }}{{#if d.runId}} (run {{ d.runId }}){{/if}}
+- `{{ d.slug }}`: {{ d.status }}{{#if d.runId}} (run {{ d.runId }}){{/if}}{{#if d.reason}} - {{ d.reason }}{{/if}}
 {{/each}}
+
+Dispatch outcome: {{ vars.dispatchOutcome }}
+{{#if vars.schedule}}
+
+## Plan status when dispatch started
+
+- Critical path: {{ join(vars.schedule.criticalPath, " -> ") }}
+- Open risks: {{ vars.schedule.risk.open }} (highest: {{ vars.schedule.risk.highestLevel }})
+{{#if vars.schedule.openDecisions}}
+- Open decisions: {{ join(pluck(vars.schedule.openDecisions, "key"), ", ") }}
+{{/if}}
+{{/if}}
+{{#if inputs.riskRegister}}
+
+## Risk register
+
+{{ inputs.riskRegister.data.summary }}
+{{/if}}
 
 ## Decomposition rationale
 

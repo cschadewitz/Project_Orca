@@ -13,6 +13,7 @@ import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { scriptedAgentSpec } from "@orca/testing";
 import { bootstrap, loadConfig, loadTemplates, loadWorkflows, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatRunState } from "../format.js";
+import { planCommand } from "./plan.js";
 
 export interface CommandContext {
   cwd: string;
@@ -152,6 +153,11 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
     },
   },
 
+  plan: {
+    help: "plan [list|show|schedule|explain|graph|risks|decisions|journal|depend|waive|satisfy|decide|risk|dispatch] ...  Inspect and steer the long-term plan (see docs/PLANNING.md).",
+    run: planCommand,
+  },
+
   runs: {
     help: "runs  List runs in the store.",
     async run(ctx) {
@@ -233,11 +239,18 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       const playbook = {
         greeting: "Scripted demo agent reporting for duty.",
         kinds: {
-          decomposition: [{ data: { items: [
-            { slug: "schema", title: "Database schema", kind: "task", description: "Add users table", dependsOn: [] },
-            { slug: "login-api", title: "Login API", kind: "feature", description: "POST /login", dependsOn: ["schema"] },
-            { slug: "docs", title: "Docs", kind: "task", description: "Document auth", dependsOn: [] },
-          ], rationale: "Vertical slices with one shared prerequisite." }, body: "Demo breakdown." }],
+          decomposition: [{ data: {
+            items: [
+              { slug: "schema", title: "Database schema", kind: "task", description: "Add users table", estimate: "S", dependsOn: [], risks: ["migration-downtime"] },
+              { slug: "login-api", title: "Login API", kind: "feature", description: "POST /login", estimate: "M", priority: "high", dependsOn: ["schema", "decision:session-store"] },
+              { slug: "docs", title: "Docs", kind: "task", description: "Document auth", estimate: "XS", dependsOn: ["informs:login-api@spec"] },
+            ],
+            risks: [{ key: "migration-downtime", title: "Schema migration locks the users table", category: "operational", likelihood: 2, impact: 4, mitigation: "Run the migration online", affects: ["schema"] }],
+            decisions: [{ key: "session-store", title: "Where do sessions live?", question: "Signed cookies or a server-side store?", options: [{ key: "cookie", name: "Signed cookie" }, { key: "redis", name: "Redis session store" }], blocks: ["login-api"] }],
+            rationale: "Vertical slices with one shared prerequisite and one architectural decision.",
+          }, body: "Demo breakdown." }],
+          "risk-register": [{ data: { status: "done", risks: [{ key: "token-leak", title: "Tokens logged in plaintext", category: "security", likelihood: 2, impact: 5, mitigation: "Redact in logger", affects: ["login-api"] }], summary: "Two open risks, none critical." }, body: "Risk narrative." }],
+          "decision-matrix": [{ data: { key: "session-store", title: "Where do sessions live?", scale: 10, criteria: [{ key: "simplicity", name: "Simplicity", weight: 3 }, { key: "revocation", name: "Revocation support", weight: 1 }], options: [{ key: "cookie", name: "Signed cookie", scores: { simplicity: 9, revocation: 3 } }, { key: "redis", name: "Redis", scores: { simplicity: 5, revocation: 9 } }], rationale: "Simplicity wins for v1." }, body: "Matrix reasoning." }],
           spec: [{ data: { status: "ready", risk: "low" }, body: "# Spec\n\nDemo specification with enough prose to pass the design step's minimum body length validation rule." }],
           implementation: [{ data: { status: "done", branch: "orca/demo" }, body: "Demo implementation." }],
           "test-report": [{ data: { status: "done", passed: false, failures: 1 }, body: "First run fails." }, { data: { status: "done", passed: true, failures: 0 }, body: "All green." }],
@@ -253,6 +266,7 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         workflows: [join(repoRoot, "workflows", "*.yaml")],
         templates: [join(repoRoot, "templates", "**", "*.md")],
         program: { workflow: "program", itemWorkflow: "ai-sdlc" },
+        planning: { plan: "demo", planName: "Demo plan", policy: {}, riskMatrix: {} },
         workspace: { provider: "local", root: dir, hostId: "local" },
         humanInput: { mode: "auto" },
         plugins: [],
@@ -268,7 +282,13 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         const items = await app.orchestrator.stores.workItems.list((w) => w.requestId === request.id);
         ctx.out("\nwork items:");
         for (const w of items) ctx.out(`  ${w.status.padEnd(8)} ${w.slug.padEnd(12)} run=${w.runId ?? "-"}`);
-        ctx.out(`\nartifacts and event logs are under ${join(dir, ".orca")}; inspect with: orca runs / orca status <runId> / orca events <runId>  (run from ${dir})`);
+        const plan = await app.plan.getPlan("demo");
+        if (plan) {
+          const snap = await app.plan.snapshot(plan.id);
+          ctx.out(`\nplan '${plan.key}': ${snap.dependencies.length} dependencies, ${snap.risks.length} risks, ${snap.decisions.length} decisions (${snap.decisions.filter((d) => d.status === "decided").map((d) => `${d.key}=${d.chosen}`).join(", ")})`);
+          for (const line of await app.plan.explain(plan.id, "login-api")) ctx.out(`  ${line}`);
+        }
+        ctx.out(`\nartifacts and event logs are under ${join(dir, ".orca")}; inspect with: orca runs / orca status <runId> / orca plan show demo / orca plan journal demo  (run from ${dir})`);
         return state.run.status === "completed" ? 0 : 2;
       } finally {
         detach();

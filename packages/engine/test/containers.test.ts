@@ -2,21 +2,21 @@
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, definePlugin, builtinExecutors, completed } from "@orca/engine";
+import { LocalWorkspaceProvider, Orchestrator, PlanService, definePlugin, builtinExecutors, completed } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
 function make(yaml: string[]) {
   const workflows = new WorkflowRegistry();
   for (const y of yaml) workflows.register(parseWorkflow(y));
   const executors = builtinExecutors();
+  const stores = memoryStores();
   // A custom node type registered through the plugin API.
   definePlugin({
     name: "test",
     register: (api) => {
       api.executors.register({ type: "custom:record", execute: async (ctx) => { await ctx.emit({ type: "vars.set", payload: { vars: { log: [...(((ctx.run.state.run.vars.log as unknown[]) ?? [])), (ctx.node as unknown as { value: string }).value] } } }); return completed(); } });
     },
-  }).register({ executors, templates: new TemplateRegistry(), workflows, agents: new AgentRegistry(), setHumanInput() {}, setWorkspaceProvider() {} });
-  const stores = memoryStores();
+  }).register({ executors, templates: new TemplateRegistry(), workflows, agents: new AgentRegistry(), plan: new PlanService({ stores }), setHumanInput() {}, setWorkspaceProvider() {} });
   const orchestrator = new Orchestrator({ stores, agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })), workflows, templates: new TemplateRegistry(), executors, workspaceProvider: new LocalWorkspaceProvider("/tmp"), clock: new FakeClock() });
   return { orchestrator, stores };
 }

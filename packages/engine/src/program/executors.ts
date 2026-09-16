@@ -10,8 +10,13 @@
  *
  * They are implemented as `custom:*` nodes on purpose: they show how a plugin
  * extends the node vocabulary without touching the core schema.
+ *
+ * These are the *request-scoped* originals. The plan-aware successors
+ * (`custom:plan-register`, `custom:plan-dispatch`, ...) in `../plan/executors.ts`
+ * track dependencies, risks and decisions across requests; the shipped
+ * `program.yaml` uses those.
  */
-import { DecompositionSchema, newId, OrcaError, type CustomNode, type RunState, type WorkItem } from "@orca/core";
+import { DecompositionSchema, newId, OrcaError, parseDependencyRef, type CustomNode, type RunState, type WorkItem } from "@orca/core";
 import { completed, failed, type NodeExecutor, type StepOutcome } from "../executors/types.js";
 
 export interface MaterializeWorkItemsNode extends CustomNode {
@@ -42,6 +47,8 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
         kind: item.kind,
         acceptanceCriteria: item.acceptanceCriteria,
         dependsOn: item.dependsOn,
+        priority: item.priority,
+        produced: {},
         status: "pending",
         createdAt: now,
         updatedAt: now,
@@ -56,7 +63,10 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
         const parent = bySlug.get(item.parent);
         if (parent) bySlug.get(item.slug)!.parentId = parent.id;
       }
-      for (const dep of item.dependsOn) if (!bySlug.has(dep)) return failed("ARTIFACT_INVALID", `work item '${item.slug}' depends on unknown '${dep}'`, {}, false);
+      for (const dep of item.dependsOn) {
+        const key = parseDependencyRef(dep).key;
+        if (!bySlug.has(key)) return failed("ARTIFACT_INVALID", `work item '${item.slug}' depends on unknown '${key}'`, {}, false);
+      }
     }
     for (const wi of bySlug.values()) await ctx.stores.workItems.put(wi);
     if (request) await ctx.stores.requests.put({ ...request, status: "in-progress", updatedAt: now });
@@ -88,7 +98,10 @@ export const dispatchWorkItemsExecutor: NodeExecutor<DispatchWorkItemsNode> = {
     if (n.leavesOnly !== false) items = items.filter((w) => !parents.has(w.id));
     const bySlug = new Map(items.map((w) => [w.slug, w]));
     const byId = new Map(items.map((w) => [w.id, w]));
-    const depKey = (d: string) => bySlug.get(d)?.id ?? d;
+    const depKey = (ref: WorkItem["dependsOn"][number]) => {
+      const key = parseDependencyRef(ref).key;
+      return bySlug.get(key)?.id ?? key;
+    };
 
     const done = new Map<string, RunState>();
     const failedIds = new Set<string>();

@@ -8,3 +8,5 @@ export * from "./workspace/provider.js";
 export * from "./workspace/git-worktree.js";
 export * from "./program/executors.js";
 export * from "./program/service.js";
+export * from "./plan/service.js";
+export * from "./plan/executors.js";

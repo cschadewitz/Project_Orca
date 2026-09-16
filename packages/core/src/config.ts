@@ -7,6 +7,7 @@
  */
 import { z } from "zod";
 import { AgentSpecSchema, HostSpecSchema, LOCAL_HOST_ID } from "./model/agent.js";
+import { RiskMatrixConfigSchema, SchedulingPolicySchema } from "./model/plan.js";
 
 export const WorkspaceProviderConfigSchema = z.discriminatedUnion("provider", [
   /** Use `root` (or the current directory) as-is for every run. */
@@ -55,6 +56,16 @@ export const OrcaConfigSchema = z.object({
       itemWorkflow: z.string().default("ai-sdlc"),
     })
     .default({ workflow: "program", itemWorkflow: "ai-sdlc" }),
+  /** Long-term planning defaults applied to plans created by ORCA (see docs/PLANNING.md). */
+  planning: z
+    .object({
+      /** Plan requests join unless the request says otherwise (`--var plan=<key>`). */
+      plan: z.string().default("default"),
+      planName: z.string().default("Default plan"),
+      policy: SchedulingPolicySchema.partial().default({}),
+      riskMatrix: RiskMatrixConfigSchema.partial().default({}),
+    })
+    .default({ plan: "default", planName: "Default plan", policy: {}, riskMatrix: {} }),
   workspace: WorkspaceProviderConfigSchema.default({ provider: "local", hostId: LOCAL_HOST_ID }),
   humanInput: HumanInputConfigSchema.default({ mode: "pause" }),
   /** Plugin module specifiers (ESM) loaded at startup; see docs/EXTENSIBILITY.md. */

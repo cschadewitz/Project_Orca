@@ -35,6 +35,10 @@ export default definePlugin({
 | Human channel (Slack, web UI, upstream ACP) | `HumanInputPort` → `api.setHumanInput()` | `engine/human-input.ts` |
 | Persistence (SQLite, Postgres) | `EventStore`, `ArtifactStore`, `DocumentStore` | `store/*.ts` |
 | Expression functions | `evaluateExpression(src, ctx, { functions })` | `core/expr/evaluate.ts` |
+| Planning signals from custom artifacts | `SignalExtractor` → `api.plan.addSignalExtractor()` | `core/plan/signals.ts` |
+| Scheduling behaviour | `policy.weights` / `strategy`, or rank from `computeSchedule().priorities` | `core/plan/schedule.ts` |
+| Plan persistence | `PlanStores` (four `DocumentStore`s + `PlanJournal`) | `store/plan-store.ts` |
+| Plan mutations from nodes / UIs | `PlanService` via `ctx.plan` or `api.plan` | `engine/plan/service.ts` |
 | Observability | `orchestrator.subscribe()` on the event stream | `store/event-store.ts` |
 
 Conventions that keep extensions reviewable:

@@ -11,6 +11,7 @@ import { RequestSchema, WorkItemSchema } from "@orca/core";
 import { InMemoryEventStore, type EventStore } from "./event-store.js";
 import { JsonlEventStore } from "./jsonl-event-store.js";
 import { FileArtifactStore, InMemoryArtifactStore, type ArtifactStore } from "./artifact-store.js";
+import { filePlanStores, memoryPlanStores, type PlanStores } from "./plan-store.js";
 
 export interface DocumentStore<T extends { id: string }> {
   get(id: string): Promise<T | undefined>;
@@ -93,6 +94,8 @@ export interface Stores {
   artifacts: ArtifactStore;
   requests: DocumentStore<Request>;
   workItems: DocumentStore<WorkItem>;
+  /** Long-term planning: plans, dependencies, risks, decisions and their journal. */
+  plan: PlanStores;
 }
 
 export function fileStores(dir: string, clock?: Clock): Stores {
@@ -101,6 +104,7 @@ export function fileStores(dir: string, clock?: Clock): Stores {
     artifacts: new FileArtifactStore(dir),
     requests: new JsonFileDocumentStore<Request>(join(dir, "requests.json"), RequestSchema as unknown as ZodType<Request>),
     workItems: new JsonFileDocumentStore<WorkItem>(join(dir, "work-items.json"), WorkItemSchema as unknown as ZodType<WorkItem>),
+    plan: filePlanStores(dir, clock),
   };
 }
 
@@ -110,5 +114,6 @@ export function memoryStores(clock?: Clock): Stores {
     artifacts: new InMemoryArtifactStore(),
     requests: new InMemoryDocumentStore<Request>(),
     workItems: new InMemoryDocumentStore<WorkItem>(),
+    plan: memoryPlanStores(clock),
   };
 }
