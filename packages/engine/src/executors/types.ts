@@ -13,7 +13,11 @@ export interface ResolvedArtifact extends Artifact {
   content: string;
 }
 
-export type StepOutcome = { kind: "completed"; result: StepResult } | { kind: "failed"; error: { code: string; message: string; details?: Record<string, unknown> }; retryable?: boolean };
+export type StepOutcome =
+  | { kind: "completed"; result: StepResult }
+  | { kind: "failed"; error: { code: string; message: string; details?: Record<string, unknown> }; retryable?: boolean }
+  /** The step cannot finish in this process (a human must answer, or a child run parked); the run is paused and re-attempts the node on resume. */
+  | { kind: "paused"; reason: string; details?: Record<string, unknown> };
 
 /** Everything an executor may need. Kept as an interface so tests can stub it. */
 export interface StepContext {
@@ -71,3 +75,4 @@ export class NodeExecutorRegistry {
 
 export const completed = (result: Partial<StepResult> = {}): StepOutcome => ({ kind: "completed", result: { artifactIds: [], data: {}, ...result } });
 export const failed = (code: string, message: string, details?: Record<string, unknown>, retryable = false): StepOutcome => ({ kind: "failed", error: details ? { code, message, details } : { code, message }, retryable });
+export const paused = (reason: string, details?: Record<string, unknown>): StepOutcome => ({ kind: "paused", reason, ...(details ? { details } : {}) });

@@ -24,6 +24,32 @@ export const setExecutor: NodeExecutor<SetNode> = {
   },
 };
 
+/**
+ * Ask a human, or reuse the answer already recorded for this node's previous
+ * attempt. In pause mode the port throws HumanInputPending: the run is parked
+ * with the request pending, `orca answer` appends `human.answered`, and the
+ * resumed run re-schedules the node as a new attempt, which lands here and
+ * picks that answer up instead of asking again.
+ */
+async function askHuman(ctx: StepContext, question: string, options: string[]): Promise<string | undefined> {
+  const recorded = answerFromPreviousAttempt(ctx);
+  if (recorded !== undefined) return recorded;
+  const requestId = newId("hi", ctx.clock.now());
+  await ctx.emit({ type: "human.requested", payload: { stepRunId: ctx.step.id, requestId, kind: "decision", question, options, context: {} } });
+  await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "human-input", detail: requestId } });
+  const answer = await ctx.humanInput.ask({ runId: ctx.run.id, stepRunId: ctx.step.id, requestId, kind: "decision", question, options, context: {} });
+  await ctx.emit({ type: "human.answered", payload: { stepRunId: ctx.step.id, requestId, answer: answer ?? "" } });
+  return answer;
+}
+
+/** The answer given to the immediately preceding, cancelled attempt of this node (a resumed pause), if any. */
+function answerFromPreviousAttempt(ctx: StepContext): string | undefined {
+  const { stepOrder, steps, humanInputs } = ctx.run.state;
+  const prev = steps[stepOrder[stepOrder.indexOf(ctx.step.id) - 1] ?? ""];
+  if (!prev || prev.nodeId !== ctx.nodeId || prev.status !== "cancelled") return undefined;
+  return Object.values(humanInputs).find((h) => h.stepRunId === prev.id && h.answer !== undefined)?.answer;
+}
+
 async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise<{ raw: unknown; source: string }> {
   const s = ctx.node.source;
   switch (s.kind) {
@@ -49,14 +75,8 @@ async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise
       const art = turn.artifacts[0];
       return { raw: art?.data[s.field], source: `agent:${art?.name ?? "decision"}` };
     }
-    case "human": {
-      const requestId = newId("hi", ctx.clock.now());
-      await ctx.emit({ type: "human.requested", payload: { stepRunId: ctx.step.id, requestId, kind: "decision", question: s.question, options: ctx.node.options, context: {} } });
-      await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "human-input", detail: requestId } });
-      const answer = await ctx.humanInput.ask({ runId: ctx.run.id, stepRunId: ctx.step.id, requestId, kind: "decision", question: s.question, options: ctx.node.options, context: {} });
-      await ctx.emit({ type: "human.answered", payload: { stepRunId: ctx.step.id, requestId, answer: answer ?? "" } });
-      return { raw: answer, source: "human" };
-    }
+    case "human":
+      return { raw: await askHuman(ctx, s.question, ctx.node.options), source: "human" };
   }
 }
 
@@ -83,12 +103,7 @@ export const gateExecutor: NodeExecutor<GateNode> = {
       await ctx.emit({ type: "decision.resolved", payload: { stepRunId: ctx.step.id, choice, source: "gate:auto" } });
       return completed({ choice });
     }
-    const requestId = newId("hi", ctx.clock.now());
-    const question = await ctx.render(n.question);
-    await ctx.emit({ type: "human.requested", payload: { stepRunId: ctx.step.id, requestId, kind: "decision", question, options: n.options, context: {} } });
-    await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "human-input", detail: requestId } });
-    const answer = await ctx.humanInput.ask({ runId: ctx.run.id, stepRunId: ctx.step.id, requestId, kind: "decision", question, options: n.options, context: {} });
-    await ctx.emit({ type: "human.answered", payload: { stepRunId: ctx.step.id, requestId, answer: answer ?? "" } });
+    const answer = await askHuman(ctx, await ctx.render(n.question), n.options);
     if (answer === undefined || !n.options.includes(answer)) return failed("CANCELLED", `gate '${ctx.nodeId}' was not approved (answer: ${String(answer)})`, {}, false);
     await ctx.emit({ type: "decision.resolved", payload: { stepRunId: ctx.step.id, choice: answer, source: "gate:human" } });
     return completed({ choice: answer });

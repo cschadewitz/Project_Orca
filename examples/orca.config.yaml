@@ -53,6 +53,6 @@ workspace:
   hostId: local
 
 humanInput:
-  mode: cli                           # cli | auto | pause (pause needs an embedding host, e.g. orca acp)
+  mode: cli                           # cli | auto | pause (default: pause = park the run; `orca answer <requestId> <option>` resumes it)
 
 plugins: []                           # e.g. ["./plugins/jira.js"]

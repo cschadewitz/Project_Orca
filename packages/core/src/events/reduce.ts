@@ -195,6 +195,18 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
   return state;
 }
 
+/**
+ * Human-input requests still waiting for an answer. A request is no longer
+ * pending once its run finished (e.g. was cancelled while parked) or its step
+ * was cancelled (the run was resumed without an answer and asked again), even
+ * though it never got an answer.
+ */
+export function pendingHumanInputs(state: RunState): HumanInputRequest[] {
+  const { status } = state.run;
+  if (status === "completed" || status === "failed" || status === "cancelled") return [];
+  return Object.values(state.humanInputs).filter((h) => h.answer === undefined && state.steps[h.stepRunId]?.status === "waiting");
+}
+
 /** Latest step run for a node (highest attempt / most recently scheduled). */
 export function latestStepForNode(state: RunState, nodeId: string): StepRun | undefined {
   for (let i = state.stepOrder.length - 1; i >= 0; i--) {
