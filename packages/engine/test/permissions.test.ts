@@ -1,0 +1,146 @@
+/**
+ * `ask` permissions raised by an agent session become human-input requests:
+ * one request id per ask (so concurrent asks can be answered independently),
+ * recorded in the event log and attributed to the step using the session.
+ */
+import { describe, expect, it, vi } from "vitest";
+import * as acp from "@agentclientprotocol/sdk";
+import { AgentRegistry, LocalHost, type AgentSession, type OpenSessionOptions } from "@orca/agents";
+import { AgentSpecSchema, FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, type SessionFactory } from "@orca/engine";
+import { memoryStores } from "@orca/store";
+
+const permissionRequest = (id: string): acp.RequestPermissionRequest => ({
+  sessionId: "acp",
+  toolCall: { toolCallId: id, title: `Write ${id}`, kind: "edit" },
+  options: [
+    { optionId: "allow", name: "Allow", kind: "allow_once" },
+    { optionId: "deny", name: "Deny", kind: "reject_once" },
+  ],
+});
+
+/** A fake ACP session whose prompt turn raises `asksPerTurn` permission requests at once. */
+function fakeSessions(asksPerTurn: number) {
+  const answers: (string | undefined)[] = [];
+  let opened = 0;
+  let calls = 0;
+  const sessionFactory: SessionFactory = async (o: OpenSessionOptions) => {
+    opened++;
+    const session: AgentSession = {
+      id: `sess_${opened}`,
+      agentId: o.agent.id,
+      hostId: o.host.id,
+      cwd: o.cwd,
+      acpSessionId: "acp",
+      closed: new Promise(() => {}),
+      async prompt() {
+        const reqs = Array.from({ length: asksPerTurn }, () => permissionRequest(`tool-${++calls}`));
+        const got = await Promise.all(reqs.map((r) => o.askPermission!(r)));
+        for (const [i, r] of reqs.entries()) o.onPermission?.({ toolCallId: r.toolCall.toolCallId, title: r.toolCall.title ?? "", decision: got[i] ? `ask:${got[i]}` : "ask:cancelled" });
+        answers.push(...got);
+        return { stopReason: "end_turn", durationMs: 1, updateCount: 0 };
+      },
+      onUpdate: () => () => {},
+      cancel: async () => {},
+      close: async () => {},
+    };
+    return session;
+  };
+  return { sessionFactory, answers, opened: () => opened };
+}
+
+function make(yaml: string, sessionFactory: SessionFactory, opts: { sessionMode?: "per-step" | "per-run" } = {}) {
+  const workflows = new WorkflowRegistry();
+  workflows.register(parseWorkflow(yaml));
+  const agents = new AgentRegistry()
+    .addHost(new LocalHost({ id: "local", type: "local" }))
+    .addAgent(AgentSpecSchema.parse({ id: "fake", command: "x", roles: ["builder"], permissions: { default: "ask" }, ...(opts.sessionMode ? { sessionMode: opts.sessionMode } : {}) }));
+  const humanInput = new PausingHumanInput();
+  const orchestrator = new Orchestrator({ stores: memoryStores(), agents, workflows, templates: new TemplateRegistry(), workspaceProvider: new LocalWorkspaceProvider("/tmp"), clock: new FakeClock(), humanInput, sessionFactory });
+  return { orchestrator, humanInput };
+}
+
+const oneStep = `
+id: perm
+name: perm
+start: s
+nodes:
+  s: { type: start }
+  work: { type: agent, agent: fake, prompt: "do it" }
+  e: { type: end }
+edges: [{ from: s, to: work }, { from: work, to: e }]
+`;
+
+const twoSteps = `
+id: perm2
+name: perm2
+start: s
+nodes:
+  s: { type: start }
+  first: { type: agent, agent: fake, prompt: "one" }
+  second: { type: agent, agent: fake, prompt: "two" }
+  e: { type: end }
+edges: [{ from: s, to: first }, { from: first, to: second }, { from: second, to: e }]
+`;
+
+describe("ask permissions as human input", () => {
+  it("gives every concurrent ask its own request id and logs request + answer", async () => {
+    const fake = fakeSessions(2);
+    const { orchestrator, humanInput } = make(oneStep, fake.sessionFactory);
+    const done = orchestrator.startAndRun({ workflowId: "perm" });
+
+    await vi.waitFor(() => expect(humanInput.list()).toHaveLength(2));
+    const [a, b] = humanInput.list();
+    expect(a!.requestId).not.toBe(b!.requestId);
+    expect(a!.kind).toBe("permission");
+    expect(a!.options).toEqual(["allow", "deny"]);
+    expect(a!.context).toMatchObject({ toolCall: { toolCallId: "tool-1" } });
+
+    // Both asks are visible on the run while pending, and the step is waiting on human input.
+    const mid = await orchestrator.getState(a!.runId);
+    expect(Object.values(mid.humanInputs).filter((h) => h.answer === undefined).map((h) => h.id).sort()).toEqual([a!.requestId, b!.requestId].sort());
+    expect(mid.steps[a!.stepRunId]).toMatchObject({ nodeId: "work", status: "waiting", waitingOn: "human-input" });
+    expect(mid.run.status).toBe("waiting");
+
+    expect(orchestrator.answer(a!.requestId, "allow")).toBe(true);
+    expect(orchestrator.answer(b!.requestId, "deny")).toBe(true);
+    const state = await done;
+
+    expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+    expect(fake.answers).toEqual(["allow", "deny"]);
+    expect(state.humanInputs[a!.requestId]).toMatchObject({ kind: "permission", question: "Write tool-1", answer: "allow" });
+    expect(state.humanInputs[b!.requestId]).toMatchObject({ kind: "permission", question: "Write tool-2", answer: "deny" });
+
+    const events = await orchestrator.events(state.run.id);
+    const types = (t: string) => events.filter((e) => e.type === t);
+    expect(types("human.requested").map((e) => (e.payload as { requestId: string }).requestId).sort()).toEqual([a!.requestId, b!.requestId].sort());
+    expect(types("human.answered").map((e) => (e.payload as { answer: string }).answer).sort()).toEqual(["allow", "deny"]);
+    expect(types("agent.permission").map((e) => (e.payload as { decision: string }).decision)).toEqual(["ask:allow", "ask:deny"]);
+    // The step went back to waiting on the agent turn once the last ask was answered.
+    const waits = types("step.waiting").map((e) => (e.payload as { on: string }).on);
+    expect(waits).toEqual(["agent-turn", "human-input", "human-input", "agent-turn"]);
+  });
+
+  it("attributes asks on a pooled per-run session to the step currently using it", async () => {
+    const fake = fakeSessions(1);
+    const { orchestrator, humanInput } = make(twoSteps, fake.sessionFactory, { sessionMode: "per-run" });
+    const done = orchestrator.startAndRun({ workflowId: "perm2" });
+
+    await vi.waitFor(() => expect(humanInput.list()).toHaveLength(1));
+    const first = humanInput.list()[0]!;
+    orchestrator.answer(first.requestId, "allow");
+    await vi.waitFor(() => expect(humanInput.list()).toHaveLength(1));
+    const second = humanInput.list()[0]!;
+    expect(second.requestId).not.toBe(first.requestId);
+    orchestrator.answer(second.requestId, "allow");
+    const state = await done;
+
+    expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+    expect(fake.opened()).toBe(1);
+    expect(state.steps[first.stepRunId]?.nodeId).toBe("first");
+    expect(state.steps[second.stepRunId]?.nodeId).toBe("second");
+    const events = await orchestrator.events(state.run.id);
+    const perms = events.filter((e) => e.type === "agent.permission").map((e) => state.steps[(e.payload as { stepRunId: string }).stepRunId]?.nodeId);
+    expect(perms).toEqual(["first", "second"]);
+  });
+});

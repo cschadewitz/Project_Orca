@@ -69,6 +69,9 @@ is re‑attempted.
    host. ORCA is the ACP *client*: it serves `fs/read_text_file`,
    `fs/write_text_file` from the host file system (scoped to the workspace) and
    answers `session/request_permission` through the agent's permission policy.
+   An `ask` decision becomes its own human‑input request (`human.requested` /
+   `human.answered`, one `hi_*` id per ask), so several pending tool calls can be
+   listed and answered independently.
 4. `session/prompt`. Session updates stream into the event log as
    `agent.update` (text chunks are coalesced; tool calls, plans and locations are
    kept verbatim).
