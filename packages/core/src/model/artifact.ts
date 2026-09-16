@@ -96,7 +96,7 @@ export const ArtifactRefSchema = z.object({
   kind: ArtifactKindSchema.optional(),
   name: z.string().optional(),
   fromNode: z.string().optional(),
-  /** Alias used in the template context (`artifacts.<as>`). Defaults to name ?? kind. */
+  /** Alias used in the template context (`inputs.<as>`). Defaults to the resolved artifact's name. */
   as: z.string().optional(),
   required: z.boolean().default(true),
 });

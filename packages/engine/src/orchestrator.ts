@@ -408,9 +408,10 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- artifacts
 
-  private async resolveInputs(rc: RunContext, refs: ArtifactRef[]): Promise<ResolvedArtifact[]> {
+  /** Returns one entry per ref (undefined for unresolved optional refs) so callers can pair results with refs by position. */
+  private async resolveInputs(rc: RunContext, refs: ArtifactRef[]): Promise<(ResolvedArtifact | undefined)[]> {
     const visible = await rc.visibleArtifacts();
-    const out: ResolvedArtifact[] = [];
+    const out: (ResolvedArtifact | undefined)[] = [];
     for (const ref of refs) {
       let found: Artifact | undefined;
       if (ref.fromNode) {
@@ -427,6 +428,7 @@ export class Orchestrator {
       }
       if (!found) {
         if (ref.required) throw new OrcaError("ARTIFACT_MISSING", `required input artifact not found: ${JSON.stringify(ref)}`);
+        out.push(undefined);
         continue;
       }
       out.push({ ...found, content: await this.stores.artifacts.content(found.id) });
