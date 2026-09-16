@@ -34,8 +34,10 @@ export function absolutize(cwd: string, path: string, join: (...p: string[]) => 
   return isAbsolute(path) || /^[A-Za-z]:[\\/]/.test(path) ? path : join(cwd, path);
 }
 
-async function planDeliverables(ctx: StepContext, produces: ArtifactSpec[], extra: Record<string, unknown>): Promise<PlannedDeliverable[]> {
-  const { host } = ctx.agents.resolve((ctx.node as AgentNode).agent ?? "local");
+async function planDeliverables(ctx: StepContext, agent: AgentSelector, produces: ArtifactSpec[], extra: Record<string, unknown>): Promise<PlannedDeliverable[]> {
+  // Paths are joined with the conventions of the host that will run the turn, so resolve
+  // through the turn's own selector (decision nodes carry it under `source.agent`, not `node.agent`).
+  const { host } = ctx.agents.resolve(agent);
   const out: PlannedDeliverable[] = [];
   for (const spec of produces) {
     const rel = (await ctx.render(spec.path, extra)).trim();
@@ -129,14 +131,17 @@ class UpdateRecorder {
 
 /** Run one agent step (prompt -> artifacts) inside an existing StepContext. Shared by agent and decision nodes. */
 export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promise<AgentTurnOutcome> {
-  const inputs = await ctx.resolveInputs(spec.inputs);
+  // resolved[i] belongs to spec.inputs[i] (undefined when an optional ref did not resolve),
+  // so a missing optional input never shifts an `as` alias onto the next artifact.
+  const resolved = await ctx.resolveInputs(spec.inputs);
+  const inputs = resolved.filter((a): a is ResolvedArtifact => a !== undefined);
   const inputViews: Record<string, ResolvedArtifact> = {};
   spec.inputs.forEach((ref, i) => {
-    const a = inputs[i];
+    const a = resolved[i];
     if (a) inputViews[ref.as ?? a.name] = a;
   });
   const extra = { inputs: inputViews, vars: { ...ctx.run.state.run.vars, ...spec.vars } };
-  const deliverables = await planDeliverables(ctx, spec.produces, extra);
+  const deliverables = await planDeliverables(ctx, spec.agent, spec.produces, extra);
   const body = spec.template ? ctx.templates.get(spec.template).body : (spec.prompt ?? "");
   const basePrompt = (await ctx.render(body, { ...extra, deliverables })).trim() + "\n\n" + renderDeliverablesBlock(deliverables);
 

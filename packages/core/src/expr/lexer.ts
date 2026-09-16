@@ -42,7 +42,9 @@ export function tokenize(src: string): Token[] {
       continue;
     }
     if (/[A-Za-z_$]/.test(c)) {
-      const m = /^[A-Za-z_$][A-Za-z0-9_$-]*/.exec(src.slice(i))!;
+      // `-` is never part of an identifier: `vars.x-1` must lex as `vars.x`, `-`, `1`.
+      // Keys containing a hyphen are reachable via bracket access: `steps['review-verdict']`.
+      const m = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(src.slice(i))!;
       out.push({ kind: "ident", value: m[0], pos: i });
       i += m[0].length;
       continue;
