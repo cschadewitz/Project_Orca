@@ -1,6 +1,6 @@
 /** Terminal implementation of HumanInputPort: asks on stdin/stdout. */
 import readline from "node:readline/promises";
-import type { HumanInputPort } from "@orca/engine";
+import { humanInputCancelled, type HumanInputPort } from "@orca/engine";
 
 export function cliHumanInput(input: NodeJS.ReadableStream = process.stdin, output: NodeJS.WritableStream = process.stdout): HumanInputPort {
   return {
@@ -10,7 +10,11 @@ export function cliHumanInput(input: NodeJS.ReadableStream = process.stdin, outp
         output.write(`\n[orca] ${q.kind} for run ${q.runId} / step ${q.stepRunId}\n${q.question}\n`);
         if (q.options.length) output.write(q.options.map((o, i) => `  ${i + 1}. ${o}`).join("\n") + "\n");
         for (;;) {
-          const answer = (await rl.question("> ")).trim();
+          if (q.signal?.aborted) throw humanInputCancelled(q.signal);
+          const answer = (await rl.question("> ", q.signal ? { signal: q.signal } : {}).catch((e: unknown) => {
+            if (q.signal?.aborted) throw humanInputCancelled(q.signal);
+            throw e;
+          })).trim();
           if (!q.options.length) return answer;
           const idx = Number(answer);
           if (Number.isInteger(idx) && idx >= 1 && idx <= q.options.length) return q.options[idx - 1];
