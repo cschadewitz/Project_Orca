@@ -56,7 +56,7 @@ async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise
     case "expression":
       return { raw: await ctx.evaluate(s.expr), source: "expression" };
     case "artifact": {
-      const [a] = await ctx.resolveInputs([{ name: s.artifact, required: false }, { kind: s.artifact, required: false }].map((r) => ({ ...r })));
+      const a = (await ctx.resolveInputs([{ name: s.artifact, required: false }, { kind: s.artifact, required: false }])).find((r) => r !== undefined);
       if (!a) throw new OrcaError("ARTIFACT_MISSING", `decision '${ctx.nodeId}' needs artifact '${s.artifact}'`);
       return { raw: a.data[s.field], source: `artifact:${a.name}.${s.field}` };
     }

@@ -131,10 +131,13 @@ class UpdateRecorder {
 
 /** Run one agent step (prompt -> artifacts) inside an existing StepContext. Shared by agent and decision nodes. */
 export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promise<AgentTurnOutcome> {
-  const inputs = await ctx.resolveInputs(spec.inputs);
+  // resolved[i] belongs to spec.inputs[i] (undefined when an optional ref did not resolve),
+  // so a missing optional input never shifts an `as` alias onto the next artifact.
+  const resolved = await ctx.resolveInputs(spec.inputs);
+  const inputs = resolved.filter((a): a is ResolvedArtifact => a !== undefined);
   const inputViews: Record<string, ResolvedArtifact> = {};
   spec.inputs.forEach((ref, i) => {
-    const a = inputs[i];
+    const a = resolved[i];
     if (a) inputViews[ref.as ?? a.name] = a;
   });
   const extra = { inputs: inputViews, vars: { ...ctx.run.state.run.vars, ...spec.vars } };
@@ -155,14 +158,28 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
       if (ctx.signal.aborted) throw new OrcaError("CANCELLED", "cancelled");
       await ctx.emit({ type: "agent.turn.started", payload: { stepRunId: ctx.step.id, sessionId: session.id, promptHash: sha256(prompt), promptPreview: prompt.slice(0, 400), followUp } });
 
-      // artifact-present mode: watch the host while the turn runs and cancel once everything exists.
+      // artifact-present mode: watch the host while the turn runs and cancel once every *required*
+      // deliverable exists. With nothing required there is nothing to wait for (`[].every` is
+      // vacuously true and would cancel on the first tick), so the step behaves like turn-end.
       let watcher: ReturnType<typeof setInterval> | undefined;
-      if (spec.completion.mode === "artifact-present" && deliverables.length > 0) {
+      const watched = spec.completion.mode === "artifact-present" ? deliverables.filter((d) => d.required) : [];
+      if (watched.length > 0) {
         const { host } = ctx.agents.resolve(spec.agent);
+        let checking = false;
         watcher = setInterval(() => {
-          void Promise.all(deliverables.filter((d) => d.required).map((d) => host.fs.exists(d.absolutePath))).then((flags) => {
-            if (flags.every(Boolean)) void session.cancel();
-          });
+          if (checking) return;
+          checking = true;
+          void Promise.all(watched.map((d) => host.fs.exists(d.absolutePath)))
+            .then((flags) => {
+              if (!flags.every(Boolean) || !watcher) return;
+              clearInterval(watcher);
+              watcher = undefined;
+              void session.cancel();
+            })
+            .catch(() => undefined)
+            .finally(() => {
+              checking = false;
+            });
         }, 1500);
       }
       let stopReason: string;

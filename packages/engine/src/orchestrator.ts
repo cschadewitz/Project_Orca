@@ -42,7 +42,7 @@ import { reduceRun } from "@orca/core";
 import type { EventFilter, EventListener, Stores } from "@orca/store";
 import { builtinExecutors } from "./executors/index.js";
 import { NodeExecutorRegistry, paused, type ResolvedArtifact, type StepContext, type StepOutcome } from "./executors/types.js";
-import { autoHumanInput, isHumanInputPending, type HumanInputPort } from "./human-input.js";
+import { abortableHumanInput, autoHumanInput, isHumanInputPending, type HumanInputPort } from "./human-input.js";
 import { RunContext } from "./run-context.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
@@ -162,8 +162,9 @@ export class Orchestrator {
     } else {
       const state = await this.getState(runId);
       if (isTerminal(state)) return;
-      // A parked run tree: cancel the children it is waiting on as well.
+      // A parked run tree: cancel the children it is waiting on, then close its own open step.
       for (const s of Object.values(state.steps)) for (const c of s.childRunIds) await this.cancel(c, reason);
+      for (const s of openSteps(state)) await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
       await this.stores.events.append({ type: "run.cancelled", runId, payload: reason ? { reason } : {} });
     }
   }
@@ -331,10 +332,7 @@ export class Orchestrator {
         const step = rc.state.steps[stepRunId]!;
         log.info("step", { node: nodeId, type: node.type, attempt });
         const outcome = await this.executeStep(rc, step, node);
-        if (rc.abort.signal.aborted) {
-          await rc.emit({ type: "step.cancelled", payload: { stepRunId } });
-          throw new OrcaError("CANCELLED", String(rc.abort.signal.reason ?? "cancelled"));
-        }
+        if (rc.abort.signal.aborted) throw new OrcaError("CANCELLED", String(rc.abort.signal.reason ?? "cancelled"));
 
         if (outcome.kind === "paused") {
           log.info("run paused", { node: nodeId, reason: outcome.reason });
@@ -371,6 +369,8 @@ export class Orchestrator {
     } catch (e) {
       const err = describeError(e);
       if (err.code === "CANCELLED" || rc.abort.signal.aborted) {
+        // A step interrupted mid-flight (an agent turn, a parked human question) never reports back; close it here.
+        for (const s of openSteps(rc.state)) await rc.emit({ type: "step.cancelled", payload: { stepRunId: s.id } });
         await rc.emit({ type: "run.cancelled", payload: { reason: err.message } });
       } else {
         log.error("run failed", { error: err });
@@ -422,7 +422,7 @@ export class Orchestrator {
       agents: this.agents,
       templates: this.templates,
       workflows: this.workflows,
-      humanInput: this.humanInput,
+      humanInput: abortableHumanInput(this.humanInput, rc.abort.signal),
 
       async emit(event) {
         await rc.emit(event as Omit<OrcaEventInput, "runId">);
@@ -478,9 +478,10 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- artifacts
 
-  private async resolveInputs(rc: RunContext, refs: ArtifactRef[]): Promise<ResolvedArtifact[]> {
+  /** Returns one entry per ref (undefined for unresolved optional refs) so callers can pair results with refs by position. */
+  private async resolveInputs(rc: RunContext, refs: ArtifactRef[]): Promise<(ResolvedArtifact | undefined)[]> {
     const visible = await rc.visibleArtifacts();
-    const out: ResolvedArtifact[] = [];
+    const out: (ResolvedArtifact | undefined)[] = [];
     for (const ref of refs) {
       let found: Artifact | undefined;
       if (ref.fromNode) {
@@ -497,6 +498,7 @@ export class Orchestrator {
       }
       if (!found) {
         if (ref.required) throw new OrcaError("ARTIFACT_MISSING", `required input artifact not found: ${JSON.stringify(ref)}`);
+        out.push(undefined);
         continue;
       }
       out.push({ ...found, content: await this.stores.artifacts.content(found.id) });
@@ -542,6 +544,7 @@ export class Orchestrator {
     const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
     if (pooled) return { session: pooled, release: async () => {} };
     const requestId = newId("hi", this.clock.now());
+    const humanInput = abortableHumanInput(this.humanInput, rc.abort.signal);
     const session = await this.sessionFactory({
       host,
       agent,
@@ -549,7 +552,7 @@ export class Orchestrator {
       logger: rc.logger,
       clock: this.clock,
       askPermission: async (req) =>
-        this.humanInput.ask({
+        humanInput.ask({
           runId: rc.id,
           stepRunId: step.id,
           requestId,
@@ -584,4 +587,9 @@ export class Orchestrator {
 
 export function isTerminal(state: RunState): boolean {
   return state.run.status === "completed" || state.run.status === "failed" || state.run.status === "cancelled";
+}
+
+/** Steps that have been scheduled but not yet settled (scheduled, running or waiting). */
+function openSteps(state: RunState): StepRun[] {
+  return state.stepOrder.map((id) => state.steps[id]!).filter((s) => s.status === "scheduled" || s.status === "running" || s.status === "waiting");
 }

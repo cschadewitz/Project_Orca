@@ -79,7 +79,9 @@ edges:
 
 - `mode: turn-end` (default): wait for the agent's prompt turn to finish, then collect.
 - `mode: artifact-present`: poll the host while the turn runs and cancel the turn as soon
-  as all required files exist (useful for chatty agents).
+  as all **required** files exist (useful for chatty agents). Optional deliverables are not
+  watched, so a step whose deliverables are all `required: false` behaves like `turn-end`
+  (`orca validate` warns about that combination).
 - `maxFollowUps`: how many "your deliverable is missing/invalid" follow‑ups to send in the
   same session before failing the attempt.
 - `maxAttempts`: whole‑step retries (fresh session each time).

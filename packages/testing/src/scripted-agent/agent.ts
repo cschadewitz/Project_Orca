@@ -3,7 +3,8 @@
  *  1. parses the ORCA deliverables block from the prompt,
  *  2. streams a few session/update notifications (message chunks, tool calls),
  *  3. writes each deliverable from its playbook straight to disk,
- *  4. returns `end_turn`.
+ *  4. returns `end_turn` (or `cancelled` when the client cancelled the turn;
+ *     deliverables not yet written at that point are skipped).
  * It keeps a small state file so per-kind counters survive across processes
  * (ORCA opens a fresh process per step by default).
  */
@@ -27,10 +28,31 @@ interface State {
   counts: Record<string, number>;
 }
 
-const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
+interface SessionState {
+  cwd: string;
+  turns: number;
+  /** Set by `session/cancel`; checked before every write so a cancelled turn stops early. */
+  cancelled: boolean;
+  /** Wakes the sleeping turn so cancellation is honoured promptly. */
+  wake?: () => void;
+}
+
+/** Sleep that returns early when the session is cancelled. */
+const sleep = (ms: number, session: SessionState) =>
+  ms > 0 && !session.cancelled
+    ? new Promise<void>((resolve) => {
+        const timer = setTimeout(done, ms);
+        function done() {
+          clearTimeout(timer);
+          if (session.wake === done) delete session.wake;
+          resolve();
+        }
+        session.wake = done;
+      })
+    : Promise.resolve();
 
 export class ScriptedAgent {
-  private readonly sessions = new Map<string, { cwd: string; turns: number }>();
+  private readonly sessions = new Map<string, SessionState>();
   constructor(private readonly opts: ScriptedAgentOptions) {}
 
   register(app: acp.AgentApp): acp.AgentApp {
@@ -43,10 +65,15 @@ export class ScriptedAgent {
       .onRequest(acp.methods.agent.authenticate, () => ({}))
       .onRequest(acp.methods.agent.session.new, (ctx) => {
         const sessionId = randomUUID();
-        this.sessions.set(sessionId, { cwd: ctx.params.cwd, turns: 0 });
+        this.sessions.set(sessionId, { cwd: ctx.params.cwd, turns: 0, cancelled: false });
         return { sessionId };
       })
-      .onNotification(acp.methods.agent.session.cancel, () => {})
+      .onNotification(acp.methods.agent.session.cancel, (ctx) => {
+        const session = this.sessions.get(ctx.params.sessionId);
+        if (!session) return;
+        session.cancelled = true;
+        session.wake?.();
+      })
       .onRequest(acp.methods.agent.session.prompt, (ctx) => this.prompt(ctx));
   }
 
@@ -75,6 +102,7 @@ export class ScriptedAgent {
     const session = this.sessions.get(sessionId);
     if (!session) throw acp.RequestError.invalidParams({ sessionId, reason: "unknown session" });
     session.turns++;
+    session.cancelled = false;
     const text = prompt.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join("\n");
     if (this.opts.promptLog) {
       await mkdir(dirname(this.opts.promptLog), { recursive: true });
@@ -94,9 +122,15 @@ export class ScriptedAgent {
 
     for (const d of deliverables) {
       const n = (state.counts[d.kind] ?? 0) + 1;
-      state.counts[d.kind] = n;
       const entry = this.pick(d.kind, n);
-      await sleep(entry.delayMs ?? delay);
+      await sleep(entry.delayMs ?? delay, session);
+      if (session.cancelled) {
+        // Leave the counter alone: the entry was never consumed, so a follow-up turn replays it.
+        await say(`Turn cancelled by the client before writing ${d.kind}.\n`);
+        stopReason = "cancelled";
+        break;
+      }
+      state.counts[d.kind] = n;
       if (entry.say) await say(entry.say + "\n");
       if (entry.skip) {
         await say(`Skipping ${d.kind} (playbook says skip).\n`);
