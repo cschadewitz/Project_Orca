@@ -2,6 +2,11 @@
  * Container executors: loop, parallel, subworkflow. Each iteration/branch is a
  * child run with its own event log; the parent step records child.spawned /
  * child.finished so the whole tree is traversable.
+ *
+ * Every child is spawned under a stable `branch` key (iteration index, branch
+ * name) so that when an interrupted container step is re-attempted on resume,
+ * `ctx.runChild` re-attaches to the children the interrupted attempt already
+ * spawned instead of starting them again (see Orchestrator.runChild).
  */
 import { INLINE_SEP } from "../orchestrator.js";
 import type { LoopNode, ParallelNode, RunState, SubworkflowNode, SubworkflowRef } from "@orca/core";

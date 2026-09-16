@@ -311,6 +311,8 @@ export class Orchestrator {
           if (!next) throw new OrcaError("RUN_STATE", `resume: no route from completed step ${last.nodeId}`);
           nodeId = next.to;
         } else {
+          // Re-attempt the interrupted step. Container steps re-attach to the child runs this
+          // attempt already spawned (see runChild) rather than spawning them again.
           if (last.status !== "failed") await rc.emit({ type: "step.cancelled", payload: { stepRunId: last.id } });
           nodeId = last.nodeId;
           attempt = last.attempt + 1;
@@ -438,8 +440,12 @@ export class Orchestrator {
       resolveInputs: (refs) => self.resolveInputs(rc, refs),
       recordArtifact: (spec, content, extra) => self.recordArtifact(rc, step, spec, content, extra ?? {}),
       async runChild(target, options) {
+        // A re-attempted (resumed) container step re-attaches to the children its interrupted
+        // attempt already spawned for this branch: finished ones are reused as-is, unfinished
+        // ones are resumed from their own logs. Only branches never started get a new run.
+        const resumedId = self.interruptedChild(rc, step, options.branch);
         const childId =
-          (await self.reattachChild(rc, step, options.branch)) ??
+          resumedId ??
           (await self.startRun({
             ...("workflow" in target ? { workflowId: target.workflow } : { inline: { graph: target.graph, id: target.inlineId, version: rc.definition.version } }),
             parentRunId: rc.id,
@@ -449,7 +455,8 @@ export class Orchestrator {
             ...(options.workItemId ? { workItemId: options.workItemId } : {}),
             ...(rc.state.run.requestId ? { requestId: rc.state.run.requestId } : {}),
           }));
-        await rc.emit({ type: "child.spawned", payload: { stepRunId: step.id, childRunId: childId, ...(options.branch ? { branch: options.branch } : {}) } });
+        if (resumedId) rc.logger.info("child re-attached", { step: step.nodeId, child: childId, ...(options.branch ? { branch: options.branch } : {}) });
+        await rc.emit({ type: "child.spawned", payload: { stepRunId: step.id, childRunId: childId, ...(options.branch ? { branch: options.branch } : {}), ...(resumedId ? { resumed: true } : {}) } });
         const onAbort = () => void self.cancel(childId, "parent cancelled");
         rc.abort.signal.addEventListener("abort", onAbort, { once: true });
         try {
@@ -466,15 +473,26 @@ export class Orchestrator {
   }
 
   /**
-   * When a step is re-attempted after a pause (or a crash), reuse the child run
-   * its previous attempt spawned for the same branch instead of starting a new
-   * one: `run()` returns finished children as-is and resumes parked ones.
+   * Find the child run that an earlier, interrupted attempt of this step spawned for `branch`.
+   * Prior attempts of a node are its contiguous predecessors in `stepOrder` with descending
+   * attempt numbers; a later visit of the same node through a graph back-edge starts again at
+   * attempt 1, so it never picks up children from an earlier visit. Children already attached
+   * to the current attempt are skipped so one prior child is claimed at most once.
    */
-  private async reattachChild(rc: RunContext, step: StepRun, branch: string | undefined): Promise<string | undefined> {
-    const { stepOrder, steps } = rc.state;
-    const prev = steps[stepOrder[stepOrder.indexOf(step.id) - 1] ?? ""];
-    if (!prev || prev.nodeId !== step.nodeId || prev.status !== "cancelled" || prev.childRunIds.length === 0) return undefined;
-    return (await rc.spawnedChildren(prev.id)).find((c) => c.branch === branch)?.childRunId;
+  private interruptedChild(rc: RunContext, step: StepRun, branch: string | undefined): string | undefined {
+    if (step.attempt <= 1) return undefined;
+    const claimed = new Set(step.childRunIds);
+    const order = rc.state.stepOrder;
+    let i = order.indexOf(step.id) - 1;
+    for (let attempt = step.attempt - 1; i >= 0 && attempt >= 1; i--, attempt--) {
+      const prev = rc.state.steps[order[i]!];
+      if (!prev || prev.nodeId !== step.nodeId || prev.attempt !== attempt) break;
+      for (let c = prev.children.length - 1; c >= 0; c--) {
+        const link = prev.children[c]!;
+        if (link.branch === branch && !claimed.has(link.runId)) return link.runId;
+      }
+    }
+    return undefined;
   }
 
   // ---------------------------------------------------------------- artifacts

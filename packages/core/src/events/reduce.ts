@@ -82,6 +82,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
         status: "scheduled",
         inputArtifactIds: [],
         childRunIds: [],
+        children: [],
         scheduledAt: e.at,
         ...(e.payload.iteration !== undefined ? { iteration: e.payload.iteration } : {}),
       };
@@ -167,11 +168,20 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       s.result.choice = e.payload.choice;
       break;
     }
-    case "child.spawned":
-      step(e.payload.stepRunId).childRunIds.push(e.payload.childRunId);
+    case "child.spawned": {
+      const s = step(e.payload.stepRunId);
+      s.childRunIds.push(e.payload.childRunId);
+      s.children.push({ runId: e.payload.childRunId, ...(e.payload.branch !== undefined ? { branch: e.payload.branch } : {}), ...(e.payload.resumed ? { resumed: true } : {}) });
       break;
-    case "child.finished":
+    }
+    case "child.finished": {
+      const link = step(e.payload.stepRunId).children.find((c) => c.runId === e.payload.childRunId);
+      if (link) {
+        link.status = e.payload.status;
+        if (e.payload.outcome) link.outcome = e.payload.outcome;
+      }
       break;
+    }
     case "human.requested": {
       const r: HumanInputRequest = {
         id: e.payload.requestId,

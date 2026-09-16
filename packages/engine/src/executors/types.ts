@@ -53,7 +53,12 @@ export interface StepContext {
   resolveInputs(refs: ArtifactRef[]): Promise<(ResolvedArtifact | undefined)[]>;
   /** Record a produced artifact (stores content, emits artifact.recorded). */
   recordArtifact(spec: ArtifactSpec, content: string, extra?: { path?: string; parents?: string[]; agentSessionId?: string; agentId?: string }): Promise<Artifact>;
-  /** Spawn a child run for a nested graph or registered workflow and wait for it. */
+  /**
+   * Spawn a child run for a nested graph or registered workflow and wait for it. `branch` is
+   * the child's stable key within the step (iteration index, branch name, work-item slug):
+   * when this step is a re-attempt after an interruption, a child the previous attempt
+   * spawned under the same key is resumed/reused instead of being spawned again.
+   */
   runChild(target: { workflow: string } | { graph: WorkflowGraph; inlineId: string }, options: { vars?: Record<string, unknown>; branch?: string; workspace?: Workspace; workItemId?: string }): Promise<import("@orca/core").RunState>;
   /** Obtain an ACP session for an agent (honours sessionMode). */
   openSession(selector: import("@orca/core").AgentSelector): Promise<{ session: AgentSession; release: () => Promise<void> }>;

@@ -54,16 +54,6 @@ export class RunContext {
     return this.state.run.workItemId ? this.deps.stores.workItems.get(this.state.run.workItemId) : undefined;
   }
 
-  /** Child runs a step spawned, with their branch labels (read from the log; the projection keeps ids only). */
-  async spawnedChildren(stepRunId: string): Promise<{ childRunId: string; branch?: string }[]> {
-    const out: { childRunId: string; branch?: string }[] = [];
-    for (const e of await this.deps.stores.events.read(this.id)) {
-      if (e.type !== "child.spawned" || e.payload.stepRunId !== stepRunId) continue;
-      out.push({ childRunId: e.payload.childRunId, ...(e.payload.branch !== undefined ? { branch: e.payload.branch } : {}) });
-    }
-    return out;
-  }
-
   /** Own artifacts + every ancestor's + every descendant's, newest version per name. */
   async visibleArtifacts(): Promise<Map<string, Artifact>> {
     const all: Artifact[] = [];
