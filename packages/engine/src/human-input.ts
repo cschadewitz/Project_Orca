@@ -3,7 +3,7 @@
  * `ask` permissions, free questions). Implementations: auto (tests/demos),
  * pausing (the run is parked in its event log until `orca answer` records an
  * answer and resumes it), CLI prompt, or an upstream ACP client when ORCA runs
- * as an agent inside Kepler/Zed/T3 Code.
+ * as an agent inside Kepler/Zed.
  */
 import { isOrcaError, OrcaError } from "@orca/core";
 

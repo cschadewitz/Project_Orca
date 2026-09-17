@@ -243,7 +243,7 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   acp: {
-    help: "acp  Serve ORCA as an ACP agent on stdio (register this command in Kepler, Zed, T3 Code, ...).",
+    help: "acp  Serve ORCA as an ACP agent on stdio (register this command in Kepler, Zed, ...).",
     async run(ctx) {
       // stdout is the protocol channel; all logging goes to stderr.
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}), logger: consoleLogger((ctx.flags["log-level"] as never) ?? "info") });

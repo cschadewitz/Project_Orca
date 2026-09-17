@@ -13,7 +13,9 @@ loops, parallel branches, sub‑workflows and human gates.
 Agents are anything that speaks the [Agent Client Protocol (ACP)](https://agentclientprotocol.com)
 — Claude Code, Codex, Gemini CLI, OpenCode, … — running **locally or on another
 machine over SSH**. ORCA itself can be exposed **as an ACP agent**, so GitKraken
-Kepler, Zed, T3 Code or any ACP client can drive it like a single agent (proxy mode).
+Kepler, Zed or any ACP client can drive it like a single agent (proxy mode).
+T3 Code is *not* an ACP client today, so neither direction of the T3 Code
+integration works yet — it is groundwork (see `docs/INTEGRATIONS.md`).
 
 ```
                     ┌──────────────────────────── ORCA ─────────────────────────────┐
@@ -24,8 +26,8 @@ Kepler, Zed, T3 Code or any ACP client can drive it like a single agent (proxy m
                     │     │        │              ▲  │       │  ▲     │              │
                     │  intent.md  spec.md         └──┘ retry  └──┘ changes-requested │
                     └────────┬──────────────────────┬──────────────────────┬─────────┘
-                             │ ACP over stdio       │ ACP over ssh -T      │ (T3 Code threads)
-                          local agent            remote agent           t3code server
+                             │ ACP over stdio       │ ACP over ssh -T      ╎ T3 Code threads
+                          local agent            remote agent       t3code server (groundwork)
 ```
 
 ## Quick start

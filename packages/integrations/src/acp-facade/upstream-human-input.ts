@@ -1,6 +1,6 @@
 /**
  * Routes ORCA's human questions (gate decisions, `ask` permissions) to the
- * upstream ACP client that launched ORCA as an agent - Kepler, Zed, T3 Code or
+ * upstream ACP client that launched ORCA as an agent - Kepler, Zed or
  * any other ACP host. ACP only has `session/request_permission`, so decision
  * options are mapped onto permission options: the first option is presented
  * as "allow", the rest as "reject" variants, all carrying their real labels.

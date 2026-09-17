@@ -1,7 +1,7 @@
 /**
  * ORCA as an ACP *agent* (proxy mode).
  *
- * Any ACP client - GitKraken Kepler, Zed, T3 Code, an IDE - can launch `orca
+ * Any ACP client - GitKraken Kepler, Zed, an IDE - can launch `orca
  * acp` exactly as it would launch Claude Code or Codex. Prompts become
  * Requests (or direct workflow runs); ORCA then fans out to the real coding
  * agents (local or over SSH) and streams progress back as ACP session updates:
