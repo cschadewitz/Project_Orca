@@ -166,9 +166,8 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
     help: "runs  List runs in the store.",
     async run(ctx) {
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
-      for (const id of await app.orchestrator.listRuns()) {
-        const s = await app.orchestrator.getState(id);
-        ctx.out(`${id}  ${s.run.workflowId.padEnd(24)} ${s.run.status.padEnd(10)} ${s.run.outcome ?? ""}  ${s.run.createdAt}${s.run.parentRunId ? `  parent=${s.run.parentRunId}` : ""}`);
+      for (const r of await app.orchestrator.listRunSummaries()) {
+        ctx.out(`${r.id}  ${r.workflowId.padEnd(24)} ${r.status.padEnd(10)} ${r.outcome ?? ""}  ${r.createdAt}${r.parentRunId ? `  parent=${r.parentRunId}` : ""}`);
       }
       return 0;
     },

@@ -14,7 +14,10 @@ import {
   OrcaError,
   outgoing,
   pendingHumanInputs,
+  reduceRunSummary,
   renderTemplate,
+  RUN_SUMMARY_EVENT_TYPES,
+  runSummary,
   sha256,
   silentLogger,
   systemClock,
@@ -32,6 +35,7 @@ import {
   type OrcaEvent,
   type OrcaEventInput,
   type RunState,
+  type RunSummary,
   type StepResult,
   type StepRun,
   type WorkflowDefinition,
@@ -186,6 +190,25 @@ export class Orchestrator {
   }
   listRuns(): Promise<string[]> {
     return this.stores.events.listRuns();
+  }
+
+  /**
+   * One summary per run in the store, oldest first. Unlike `getState` per id
+   * this never replays a run's step or agent events, so listing stays cheap as
+   * logs grow.
+   */
+  async listRunSummaries(): Promise<RunSummary[]> {
+    const out: RunSummary[] = [];
+    for (const id of await this.listRuns()) out.push(await this.getSummary(id));
+    return out;
+  }
+
+  async getSummary(runId: string): Promise<RunSummary> {
+    const live = this.live.get(runId);
+    if (live) return runSummary(live.state);
+    const events = await this.stores.events.readTypes(runId, RUN_SUMMARY_EVENT_TYPES);
+    if (events.length === 0) throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
+    return reduceRunSummary(events);
   }
 
   // ------------------------------------------------------------ human input
