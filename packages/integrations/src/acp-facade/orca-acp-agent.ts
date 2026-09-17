@@ -43,8 +43,20 @@ export class OrcaAcpAgent {
   private readonly sessions = new Map<string, FacadeSession>();
   private readonly humanInput: UpstreamHumanInput;
   constructor(private readonly opts: OrcaAcpAgentOptions) {
-    this.humanInput = opts.humanInput ?? new UpstreamHumanInput(opts.orchestrator.humanInput);
-    opts.orchestrator.humanInput = this.humanInput;
+    const orchestrator = opts.orchestrator;
+    this.humanInput =
+      opts.humanInput ??
+      new UpstreamHumanInput({
+        fallback: orchestrator.humanInput,
+        parentRunId: async (runId) => {
+          try {
+            return (await orchestrator.getState(runId)).run.parentRunId;
+          } catch {
+            return undefined;
+          }
+        },
+      });
+    orchestrator.humanInput = this.humanInput;
   }
 
   register(app: acp.AgentApp): acp.AgentApp {
@@ -97,7 +109,8 @@ export class OrcaAcpAgent {
     }
     session.runIds.push(runId);
     session.active = { runId, abort: new AbortController() };
-    this.humanInput.bind({ sessionId: session.id, request: (m: string, p?: unknown) => ctx.client.request(m, p) });
+    // Bound per run, so concurrent sessions each receive only their own gates and `ask` permissions.
+    const unbindHumanInput = this.humanInput.bind(runId, { sessionId: session.id, request: (m: string, p?: unknown) => ctx.client.request(m, p) });
 
     const state0 = await orchestrator.getState(runId);
     const def = orchestrator.resolveDefinition(state0.run.workflowId);
@@ -110,7 +123,7 @@ export class OrcaAcpAgent {
       return { stopReason: final.run.status === "cancelled" ? "cancelled" : "end_turn" };
     } finally {
       unsubscribe();
-      this.humanInput.bind(undefined);
+      unbindHumanInput();
       delete session.active;
     }
   }
