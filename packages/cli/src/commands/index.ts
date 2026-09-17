@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { openAcpSession } from "@orca/agents";
 import { toMermaid, validateWorkflow, parseWorkflow, OrcaError, type OrcaConfig, type RunState, consoleLogger } from "@orca/core";
 import { readFile } from "node:fs/promises";
+import { stringify as stringifyYaml } from "yaml";
 import { autoHumanInput } from "@orca/engine";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { scriptedAgentSpec } from "@orca/testing";
@@ -281,20 +282,26 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
           review: [{ data: { status: "done", verdict: "approve" }, body: "LGTM" }],
         },
       };
+      const playbookFile = join(dir, "demo-playbook.yaml");
       const config: OrcaConfig = {
         version: 1,
         storeDir: join(dir, ".orca"),
         hosts: [{ id: "local", type: "local" }],
-        agents: [scriptedAgentSpec({ playbookJson: playbook, stateFile: join(dir, ".orca-demo", "state.json"), promptLog: join(dir, ".orca-demo", "prompts.jsonl") })],
+        agents: [scriptedAgentSpec({ playbookFile, stateFile: join(dir, ".orca-demo", "state.json"), promptLog: join(dir, ".orca-demo", "prompts.jsonl") })],
         roles: {},
         workflows: [join(repoRoot, "workflows", "*.yaml")],
         templates: [join(repoRoot, "templates", "**", "*.md")],
         program: { workflow: "program", itemWorkflow: "ai-sdlc" },
         workspace: { provider: "local", root: dir, hostId: "local" },
-        humanInput: { mode: "auto" },
+        humanInput: { mode: "auto", option: "approve" },
         plugins: [],
       };
       await writeFile(join(dir, "README.md"), "# ORCA demo workspace\n", "utf8");
+      await writeFile(playbookFile, stringifyYaml(playbook), "utf8");
+      // Every path in the config is absolute, so the demo workspace doubles as a
+      // working ORCA setup: `orca --config <dir>/orca.config.yaml <cmd>` (or any
+      // orca command run from <dir>) drives the same scripted agents afterwards.
+      await writeFile(join(dir, "orca.config.yaml"), stringifyYaml(config), "utf8");
       const app = await bootstrap({ config, configDir: dir, cwd: dir, humanInput: autoHumanInput("approve"), logLevel: ctx.flags.quiet ? "warn" : "info" });
       ctx.err(`demo workspace: ${dir}`);
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
@@ -306,6 +313,8 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         ctx.out("\nwork items:");
         for (const w of items) ctx.out(`  ${w.status.padEnd(8)} ${w.slug.padEnd(12)} run=${w.runId ?? "-"}`);
         ctx.out(`\nartifacts and event logs are under ${join(dir, ".orca")}; inspect with: orca runs / orca status <runId> / orca events <runId>  (run from ${dir})`);
+        ctx.out(`the workspace also holds a ready-to-use ${join(dir, "orca.config.yaml")} (scripted agents, playbook in demo-playbook.yaml); e.g.`);
+        ctx.out(`  orca --config ${join(dir, "orca.config.yaml")} run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'`);
         return code;
       } finally {
         detach();

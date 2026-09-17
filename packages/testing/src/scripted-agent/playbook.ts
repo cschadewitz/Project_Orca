@@ -22,12 +22,14 @@ export const PlaybookEntrySchema = z.object({
   /** Return this stop reason instead of end_turn. */
   stopReason: z.enum(["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"]).optional(),
   delayMs: z.number().int().nonnegative().optional(),
+  /** Never finish the turn and ignore `session/cancel` (simulates a wedged agent). */
+  hang: z.boolean().default(false),
 });
 export type PlaybookEntry = z.infer<typeof PlaybookEntrySchema>;
 
 export const PlaybookSchema = z.object({
   kinds: z.record(z.string(), z.array(PlaybookEntrySchema)).default({}),
-  default: PlaybookEntrySchema.default({ skip: false, askPermission: false }),
+  default: PlaybookEntrySchema.default({ skip: false, askPermission: false, hang: false }),
   /** Text emitted at the start of every turn. */
   greeting: z.string().default("Scripted agent: reading deliverables."),
   /** Sleep between updates to mimic streaming. */

@@ -69,6 +69,18 @@ describe("reduceRun", () => {
     ];
     expect(reduceRun(events).steps.step_1?.result).toEqual({ artifactIds: ["art_9"], data: {} });
   });
+  it("accumulates step.inputs ids without duplicates", () => {
+    const events: OrcaEvent[] = [
+      ev("run.created", { workflowId: "wf", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars: {} }),
+      ev("step.scheduled", { stepRunId: "step_1", nodeId: "review", nodeType: "agent", attempt: 1 }),
+      ev("step.started", { stepRunId: "step_1", inputArtifactIds: [] }),
+      // A step may resolve inputs more than once (prompt inputs, then a `present` lookup).
+      ev("step.inputs", { stepRunId: "step_1", artifactIds: ["art_1", "art_2"] }),
+      ev("step.inputs", { stepRunId: "step_1", artifactIds: ["art_2", "art_3"] }),
+      ev("step.completed", { stepRunId: "step_1", result: { artifactIds: [], data: {} } }),
+    ];
+    expect(reduceRun(events).steps.step_1?.inputArtifactIds).toEqual(["art_1", "art_2", "art_3"]);
+  });
   it("rejects logs that do not start with run.created", () => {
     expect(() => reduceRun([ev("run.started", {})])).toThrow(/run.created/);
   });

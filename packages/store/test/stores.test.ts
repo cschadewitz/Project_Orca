@@ -2,8 +2,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { FakeClock, type Artifact } from "@orca/core";
-import { FileArtifactStore, InMemoryEventStore, JsonlEventStore } from "@orca/store";
+import { FileArtifactStore, InMemoryDocumentStore, InMemoryEventStore, JsonFileDocumentStore, JsonlEventStore } from "@orca/store";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -76,5 +77,53 @@ describe("file artifact store", () => {
     expect(await new FileArtifactStore(d).content("art_1")).toBe("hello");
     expect((await store.list({ kind: "spec" })).map((x) => x.id)).toEqual(["art_1"]);
     expect(await store.list({ kind: "plan" })).toEqual([]);
+  });
+});
+
+const DocSchema = z.object({ id: z.string(), n: z.number() });
+type Doc = z.infer<typeof DocSchema>;
+
+describe("document stores", () => {
+  const makeFile = async () => {
+    const d = await mkdtemp(join(tmpdir(), "orca-doc-"));
+    dirs.push(d);
+    return join(d, "nested", "docs.json");
+  };
+
+  for (const [name, make] of [
+    ["memory", async () => new InMemoryDocumentStore<Doc>()],
+    ["file", async () => new JsonFileDocumentStore<Doc>(await makeFile(), DocSchema)],
+  ] as const) {
+    it(`${name}: putMany writes every doc and put/delete round-trip`, async () => {
+      const store = await make();
+      await store.putMany([{ id: "a", n: 1 }, { id: "b", n: 2 }, { id: "c", n: 3 }]);
+      await store.put({ id: "b", n: 20 });
+      await store.delete("c");
+      await store.putMany([]);
+      expect((await store.list()).map((d) => d.id).sort()).toEqual(["a", "b"]);
+      expect(await store.get("b")).toEqual({ id: "b", n: 20 });
+      expect(await store.get("c")).toBeUndefined();
+      expect(await store.list((d) => d.n > 10)).toEqual([{ id: "b", n: 20 }]);
+    });
+  }
+
+  it("file store persists across instances and coalesces concurrent writes", async () => {
+    const file = await makeFile();
+    const first = new JsonFileDocumentStore<Doc>(file, DocSchema);
+    // Concurrent puts share one in-flight write plus one coalesced follow-up,
+    // but each must still be durable once its own promise resolves.
+    await Promise.all(Array.from({ length: 25 }, (_, i) => first.put({ id: `d${i}`, n: i })));
+    const reopened = new JsonFileDocumentStore<Doc>(file, DocSchema);
+    expect((await reopened.list()).length).toBe(25);
+    expect(await reopened.get("d24")).toEqual({ id: "d24", n: 24 });
+
+    await first.delete("d0");
+    expect(await new JsonFileDocumentStore<Doc>(file, DocSchema).get("d0")).toBeUndefined();
+  });
+
+  it("file store reads an empty collection when the file is missing", async () => {
+    const store = new JsonFileDocumentStore<Doc>(await makeFile(), DocSchema);
+    expect(await store.list()).toEqual([]);
+    expect(await store.get("nope")).toBeUndefined();
   });
 });

@@ -25,6 +25,11 @@ export interface OpenSessionOptions {
   askPermission?: (req: acp.RequestPermissionRequest) => Promise<string | undefined>;
   onPermission?: (info: { toolCallId?: string; title: string; decision: string }) => void;
   handshakeTimeoutMs?: number;
+  /**
+   * How long a turn may keep running after `session/cancel` before the agent is
+   * treated as wedged and its process killed. Overrides `agent.cancelGraceMs`.
+   */
+  cancelGraceMs?: number;
 }
 
 export const ORCA_CLIENT_INFO = { name: "orca", version: "0.1.0" } as const;
@@ -127,54 +132,30 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   }
 
   const id = newId("sess", clock.now());
-  let activeTurn: AbortController | undefined;
+  const cancelGraceMs = opts.cancelGraceMs ?? opts.agent.cancelGraceMs;
 
-  const session: AgentSession = {
-    id,
-    agentId: opts.agent.id,
-    hostId: opts.host.id,
-    cwd: opts.cwd,
-    acpSessionId,
-    closed,
+  /** The in-flight prompt turn, if any. */
+  interface ActiveTurn {
+    /** Why cancellation was requested; set once, by the first requester. */
+    cancelReason?: string;
+    /** Armed when `session/cancel` is sent; fires if the agent never ends the turn. */
+    grace?: ReturnType<typeof setTimeout>;
+    /** Rejects the turn from outside the ACP request (the agent is wedged). */
+    fail: (e: OrcaError) => void;
+  }
+  let activeTurn: ActiveTurn | undefined;
 
-    async prompt(input, options: PromptOptions = {}): Promise<TurnResult> {
-      if (activeTurn) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");
-      const blocks: acp.ContentBlock[] = typeof input === "string" ? [{ type: "text", text: input }] : input;
-      const started = clock.now();
-      const before = updateCount;
-      activeTurn = new AbortController();
-      const onAbort = () => void session.cancel();
-      options.signal?.addEventListener("abort", onAbort, { once: true });
-      const timer = options.timeoutMs ? setTimeout(() => void session.cancel(), options.timeoutMs) : undefined;
+  /**
+   * Tear the session down: close the connection (which rejects the in-flight
+   * `session/prompt` request) and stop the process, escalating to SIGKILL when
+   * it ignores SIGTERM. Idempotent; concurrent callers share one shutdown.
+   */
+  let terminating: Promise<void> | undefined;
+  const terminate = (reason?: unknown): Promise<void> => {
+    if (terminating) return terminating;
+    terminating = (async () => {
       try {
-        const res = await conn.agent.request(acp.methods.agent.session.prompt, { sessionId: acpSessionId, prompt: blocks });
-        return { stopReason: res.stopReason, durationMs: clock.now() - started, updateCount: updateCount - before };
-      } catch (e) {
-        throw new OrcaError("AGENT_PROTOCOL", `prompt failed: ${(e as Error).message}`, { stderr: proc.stderrTail() }, { cause: e });
-      } finally {
-        if (timer) clearTimeout(timer);
-        options.signal?.removeEventListener("abort", onAbort);
-        activeTurn = undefined;
-      }
-    },
-
-    onUpdate(listener) {
-      listeners.add(listener);
-      return () => void listeners.delete(listener);
-    },
-
-    async cancel() {
-      if (!activeTurn) return;
-      try {
-        await conn.agent.notify(acp.methods.agent.session.cancel, { sessionId: acpSessionId });
-      } catch {
-        /* connection may already be gone */
-      }
-    },
-
-    async close() {
-      try {
-        conn.close();
+        conn.close(reason);
       } catch {
         /* ignore */
       }
@@ -186,6 +167,83 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
         proc.kill("SIGKILL");
         await proc.exited;
       }
+    })();
+    return terminating;
+  };
+
+  /**
+   * Ask the agent to end the current turn, and stop waiting for it if it does not.
+   * `session/cancel` is only a notification: a deadlocked agent (or a stalled
+   * transport) never answers it, and the prompt request would otherwise hang
+   * forever, taking the step, the run and `orchestrator.cancel()` with it.
+   */
+  const requestCancel = (reason: string): void => {
+    const turn = activeTurn;
+    if (!turn || turn.cancelReason) return;
+    turn.cancelReason = reason;
+    logger.debug("cancelling turn", { reason, graceMs: cancelGraceMs });
+    void conn.agent.notify(acp.methods.agent.session.cancel, { sessionId: acpSessionId }).catch(() => undefined /* connection may already be gone */);
+    turn.grace = setTimeout(() => {
+      const err = new OrcaError("AGENT_TRANSPORT", `agent '${opts.agent.id}' did not end its turn within ${cancelGraceMs}ms of session/cancel (${reason}); killing it`, { reason, stderr: proc.stderrTail() });
+      logger.warn("agent wedged after cancel; terminating", { reason });
+      turn.fail(err);
+      void terminate(err);
+    }, cancelGraceMs);
+  };
+
+  const session: AgentSession = {
+    id,
+    agentId: opts.agent.id,
+    hostId: opts.host.id,
+    cwd: opts.cwd,
+    acpSessionId,
+    closed,
+
+    async prompt(input, options: PromptOptions = {}): Promise<TurnResult> {
+      if (activeTurn) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");
+      if (options.signal?.aborted) throw new OrcaError("CANCELLED", String(options.signal.reason ?? "cancelled"));
+      const blocks: acp.ContentBlock[] = typeof input === "string" ? [{ type: "text", text: input }] : input;
+      const started = clock.now();
+      const before = updateCount;
+      // Settles the turn when the agent is wedged and the ACP request itself will never answer.
+      let wedged: OrcaError | undefined;
+      const turn: ActiveTurn = { fail: () => undefined };
+      const failed = new Promise<never>((_, reject) => {
+        turn.fail = (e) => {
+          wedged = e;
+          reject(e);
+        };
+      });
+      failed.catch(() => undefined); // observed through the race below
+      activeTurn = turn;
+      const onAbort = () => requestCancel(`aborted: ${String(options.signal?.reason ?? "cancelled")}`);
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      const timer = options.timeoutMs ? setTimeout(() => requestCancel(`turn timed out after ${options.timeoutMs}ms`), options.timeoutMs) : undefined;
+      try {
+        const res = await Promise.race([conn.agent.request(acp.methods.agent.session.prompt, { sessionId: acpSessionId, prompt: blocks }), failed]);
+        return { stopReason: res.stopReason, durationMs: clock.now() - started, updateCount: updateCount - before };
+      } catch (e) {
+        if (wedged) throw wedged;
+        throw new OrcaError("AGENT_PROTOCOL", `prompt failed: ${(e as Error).message}`, { stderr: proc.stderrTail() }, { cause: e });
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (turn.grace) clearTimeout(turn.grace);
+        options.signal?.removeEventListener("abort", onAbort);
+        activeTurn = undefined;
+      }
+    },
+
+    onUpdate(listener) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+
+    async cancel() {
+      requestCancel("cancel requested");
+    },
+
+    close() {
+      return terminate();
     },
   };
   return session;
