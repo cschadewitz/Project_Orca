@@ -40,11 +40,12 @@ A **run** is one token walking a **graph** from `start` to an `end` node
 2. calls the node's **executor** (`packages/engine/src/executors/`), which appends
    `step.inputs` for every artifact it resolves (that is the audit record of what the
    step read — `step.started` precedes input resolution);
-3. appends `step.completed` / `step.failed` (retrying agent steps up to
-   `completion.maxAttempts`);
+3. appends `step.completed` / `step.failed` (retrying a retryable failure up to the
+   node's `maxAttempts` — agent nodes may instead set `completion.maxAttempts`);
 4. **routes**: evaluates outgoing edges in order, first `when` that is truthy
    wins, else the single unconditional edge;
-5. on an `end` node appends `run.completed` with the node's outcome.
+5. ends the run with `run.completed` whenever the step's result carries an `outcome`
+   (that is what the `end` executor returns, and how a plugin node can be terminal).
 
 Concurrency never happens inside one run. `loop`, `parallel` and `subworkflow`
 nodes **spawn child runs** (each with its own event log and id) and wait for
