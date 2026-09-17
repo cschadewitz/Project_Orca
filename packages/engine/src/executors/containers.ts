@@ -9,7 +9,7 @@
  * spawned instead of starting them again (see Orchestrator.runChild).
  */
 import { INLINE_SEP } from "../orchestrator.js";
-import type { LoopNode, ParallelNode, RunState, SubworkflowNode, SubworkflowRef } from "@orca/core";
+import { evaluateVars, type LoopNode, type ParallelNode, type RunState, type SubworkflowNode, type SubworkflowRef } from "@orca/core";
 import { completed, failed, paused, type NodeExecutor, type StepContext, type StepOutcome } from "./types.js";
 
 function target(ctx: StepContext, ref: SubworkflowRef, suffix: string[]): { workflow: string } | { graph: import("@orca/core").WorkflowGraph; inlineId: string } {
@@ -103,8 +103,7 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
 export const subworkflowExecutor: NodeExecutor<SubworkflowNode> = {
   type: "subworkflow",
   async execute(ctx): Promise<StepOutcome> {
-    const vars: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(ctx.node.vars)) vars[k] = typeof v === "string" && v.startsWith("=") ? await ctx.evaluate(v.slice(1)) : v;
+    const vars = await evaluateVars(ctx.node.vars, (expr) => ctx.evaluate(expr));
     const state = await ctx.runChild({ workflow: ctx.node.workflow }, { vars });
     const parked = await pausedByChildren(ctx, [state]);
     if (parked) return parked;

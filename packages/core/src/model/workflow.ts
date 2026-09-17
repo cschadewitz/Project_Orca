@@ -151,6 +151,7 @@ export interface ParallelNode extends z.infer<typeof NodeBaseSchema> {
 export interface SubworkflowNode extends z.infer<typeof NodeBaseSchema> {
   type: "subworkflow";
   workflow: string;
+  /** Vars seeded into the child run (evaluated as expressions when prefixed with `=`). */
   vars: Record<string, unknown>;
 }
 
