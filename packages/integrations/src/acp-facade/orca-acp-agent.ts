@@ -111,7 +111,7 @@ export class OrcaAcpAgent {
     session.runIds.push(runId);
     session.active = { runId };
     // Bound per run, so concurrent sessions each receive only their own gates and `ask` permissions.
-    const unbindHumanInput = this.humanInput.bind(runId, { sessionId: session.id, request: (m: string, p?: unknown) => ctx.client.request(m, p) });
+    const unbindHumanInput = this.humanInput.bind(runId, { sessionId: session.id, request: (m, p) => ctx.client.request(m, p) });
 
     const state0 = await orchestrator.getState(runId);
     const def = orchestrator.resolveDefinition(state0.run.workflowId);
