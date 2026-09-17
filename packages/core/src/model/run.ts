@@ -101,6 +101,26 @@ export const RunSchema = z.object({
 });
 export type Run = z.infer<typeof RunSchema>;
 
+/**
+ * The cheap projection of a run: what a listing needs (`orca runs`), without
+ * the steps, artifacts and agent chatter. Rebuilt from a handful of lifecycle
+ * events rather than the whole log - see reduceRunSummary.
+ */
+export const RunSummarySchema = RunSchema.pick({
+  id: true,
+  workflowId: true,
+  workflowVersion: true,
+  status: true,
+  outcome: true,
+  requestId: true,
+  workItemId: true,
+  parentRunId: true,
+  createdAt: true,
+  startedAt: true,
+  completedAt: true,
+});
+export type RunSummary = z.infer<typeof RunSummarySchema>;
+
 export const HumanInputRequestSchema = z.object({
   id: z.string(),
   runId: z.string(),
