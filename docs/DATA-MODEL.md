@@ -93,9 +93,12 @@ Built by `RunContext.evalContext()` (`packages/engine/src/run-context.ts`):
 | `request`, `workItem`, `workspace`, `run`, `now` | context records |
 | `deliverables` | (agent steps) the planned outputs with absolute paths |
 
-Visibility of artifacts is own run + all ancestors + all descendants, newest
-`version` per name — so a sub‑workflow sees its caller's spec, and a caller sees
-what its loop body produced.
+Visibility of artifacts is own run + all ancestors + all descendants + each
+ancestor's *earlier siblings* (children of the same container step that were
+spawned before it and had already finished when it was created), newest
+`version` per name — so a sub‑workflow sees its caller's spec, a caller sees what
+its loop body produced, and loop iteration N sees what iteration N‑1 produced.
+Concurrent `parallel` branches do not precede one another, so they stay isolated.
 
 ## Config (`config.ts`)
 
