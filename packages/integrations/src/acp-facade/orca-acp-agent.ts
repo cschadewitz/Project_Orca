@@ -97,7 +97,7 @@ export class OrcaAcpAgent {
     }
     session.runIds.push(runId);
     session.active = { runId, abort: new AbortController() };
-    this.humanInput.bind({ sessionId: session.id, request: (m: string, p?: unknown) => ctx.client.request(m, p) });
+    this.humanInput.bind({ sessionId: session.id, request: (m, p) => ctx.client.request(m, p) });
 
     const state0 = await orchestrator.getState(runId);
     const def = orchestrator.resolveDefinition(state0.run.workflowId);
