@@ -2,12 +2,12 @@
  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
  * The CLI, the ACP facade and embedders all go through here.
  */
-import { glob, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { AgentRegistry } from "@orca/agents";
-import { consoleLogger, OrcaError, parseOrcaConfig, parsePromptTemplate, parseWorkflow, TemplateRegistry, validateWorkflow, WorkflowRegistry, type Logger, type OrcaConfig } from "@orca/core";
+import { consoleLogger, loadTemplates, loadWorkflows, OrcaError, parseOrcaConfig, validateWorkflow, type Logger, type OrcaConfig, type TemplateRegistry, type WorkflowRegistry } from "@orca/core";
 import { autoHumanInput, builtinExecutors, GitWorktreeProvider, LocalWorkspaceProvider, Orchestrator, PausingHumanInput, ProgramService, type HumanInputPort, type OrcaPlugin, type PluginApi, type WorkspaceProvider } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { fileStores, memoryStores } from "@orca/store";
@@ -62,41 +62,6 @@ export async function loadConfig(cwd: string, configPath?: string): Promise<{ co
   } catch (e) {
     throw new OrcaError("CONFIG_INVALID", `${file}: ${(e as Error).message}`, {}, { cause: e });
   }
-}
-
-const GLOB_CHARS = /[*?[{]/;
-
-/** Split an absolute glob into the longest literal directory prefix and the pattern below it. */
-function splitGlob(pattern: string): { cwd: string; rest: string } {
-  const parts = pattern.split(/[\\/]+/);
-  const literal: string[] = [];
-  while (parts.length && !GLOB_CHARS.test(parts[0]!)) literal.push(parts.shift()!);
-  return { cwd: literal.join("/") || "/", rest: parts.join("/") };
-}
-
-async function expand(patterns: string[], baseDir: string): Promise<string[]> {
-  const files = new Set<string>();
-  for (const pattern of patterns) {
-    const { cwd, rest } = isAbsolute(pattern) ? splitGlob(pattern) : { cwd: baseDir, rest: pattern };
-    if (!rest || !GLOB_CHARS.test(rest)) {
-      files.add(join(cwd, rest));
-      continue;
-    }
-    for await (const f of glob(rest, { cwd })) files.add(join(cwd, f));
-  }
-  return [...files].sort();
-}
-
-export async function loadTemplates(patterns: string[], baseDir: string): Promise<TemplateRegistry> {
-  const reg = new TemplateRegistry();
-  for (const f of await expand(patterns, baseDir)) reg.register(parsePromptTemplate(await readFile(f, "utf8"), f));
-  return reg;
-}
-
-export async function loadWorkflows(patterns: string[], baseDir: string): Promise<WorkflowRegistry> {
-  const reg = new WorkflowRegistry();
-  for (const f of await expand(patterns, baseDir)) reg.register(parseWorkflow(await readFile(f, "utf8"), f));
-  return reg;
 }
 
 export function makeWorkspaceProvider(config: OrcaConfig, configDir: string, agents: AgentRegistry): WorkspaceProvider {

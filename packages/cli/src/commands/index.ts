@@ -6,12 +6,12 @@ import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAcpSession } from "@orca/agents";
-import { toMermaid, validateWorkflow, parseWorkflow, OrcaError, type OrcaConfig, type RunState, consoleLogger } from "@orca/core";
+import { toMermaid, validateWorkflow, parseWorkflow, loadTemplates, loadWorkflows, OrcaError, type OrcaConfig, type RunState, consoleLogger } from "@orca/core";
 import { readFile } from "node:fs/promises";
 import { autoHumanInput } from "@orca/engine";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { scriptedAgentSpec } from "@orca/testing";
-import { bootstrap, loadConfig, loadTemplates, loadWorkflows, type OrcaApp } from "../bootstrap.js";
+import { bootstrap, loadConfig, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../format.js";
 
 export interface CommandContext {
