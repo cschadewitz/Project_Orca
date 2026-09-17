@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { OrcaError } from "../errors.js";
 import { WorkflowDefinitionSchema, type WorkflowDefinition } from "../model/workflow.js";
+import { expandPatterns } from "../util/glob.js";
 import { validateWorkflow, type ValidationContext } from "./validate.js";
 
 export function parseWorkflow(text: string, sourceName = "<inline>"): WorkflowDefinition {
@@ -27,6 +28,13 @@ export async function loadWorkflowFile(file: string, ctx?: ValidationContext): P
   const result = validateWorkflow(def, ctx);
   if (!result.ok) throw new OrcaError("WORKFLOW_INVALID", `${file} failed validation`, { errors: result.errors, warnings: result.warnings });
   return def;
+}
+
+/** Load every workflow matched by `patterns` (relative ones resolved against `baseDir`) into a registry. */
+export async function loadWorkflows(patterns: string[], baseDir: string): Promise<WorkflowRegistry> {
+  const reg = new WorkflowRegistry();
+  for (const f of await expandPatterns(patterns, baseDir)) reg.register(parseWorkflow(await readFile(f, "utf8"), f));
+  return reg;
 }
 
 export class WorkflowRegistry {
