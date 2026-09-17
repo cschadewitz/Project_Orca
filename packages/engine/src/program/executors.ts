@@ -59,7 +59,7 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
       }
       for (const dep of item.dependsOn) if (!bySlug.has(dep)) return failed("ARTIFACT_INVALID", `work item '${item.slug}' depends on unknown '${dep}'`, {}, false);
     }
-    for (const wi of bySlug.values()) await ctx.stores.workItems.put(wi);
+    await ctx.stores.workItems.putMany([...bySlug.values()]);
     if (request) await ctx.stores.requests.put({ ...request, status: "in-progress", updatedAt: now });
     const workItems = [...bySlug.values()];
     await ctx.emit({ type: "vars.set", payload: { vars: { workItems, workItemIds: workItems.map((w) => w.id) } } });

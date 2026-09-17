@@ -37,7 +37,9 @@ A **run** is one token walking a **graph** from `start` to an `end` node
 (`packages/engine/src/orchestrator.ts`). For each node the orchestrator:
 
 1. appends `step.scheduled`, builds a `StepContext`, appends `step.started`;
-2. calls the node's **executor** (`packages/engine/src/executors/`);
+2. calls the node's **executor** (`packages/engine/src/executors/`), which appends
+   `step.inputs` for every artifact it resolves (that is the audit record of what the
+   step read — `step.started` precedes input resolution);
 3. appends `step.completed` / `step.failed` (retrying agent steps up to
    `completion.maxAttempts`);
 4. **routes**: evaluates outgoing edges in order, first `when` that is truthy

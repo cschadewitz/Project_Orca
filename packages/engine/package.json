@@ -15,8 +15,11 @@
     "dist"
   ],
   "dependencies": {
-    "@orca/core": "*",
-    "@orca/store": "*",
-    "@orca/agents": "*"
+    "@orca/core": "workspace:*",
+    "@orca/store": "workspace:*",
+    "@orca/agents": "workspace:*"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0"
   }
 }
