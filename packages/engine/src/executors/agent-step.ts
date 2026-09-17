@@ -9,8 +9,8 @@
  *  5. if something is missing, send a follow-up prompt (bounded)
  */
 import { isAbsolute } from "node:path";
-import type { AgentSession, SessionUpdateEvent } from "@orca/agents";
-import { OrcaError, renderDeliverablesBlock, sha256, type AgentNode, type AgentSelector, type Artifact, type ArtifactRef, type ArtifactSpec, type CompletionPolicy, type Deliverable } from "@orca/core";
+import type { AgentSession, HostFileSystem, SessionUpdateEvent } from "@orca/agents";
+import { evaluateVars, OrcaError, renderDeliverablesBlock, sha256, type AgentNode, type AgentSelector, type Artifact, type ArtifactRef, type ArtifactSpec, type CompletionPolicy, type Deliverable } from "@orca/core";
 import { completed, failed, type NodeExecutor, type ResolvedArtifact, type StepContext, type StepOutcome } from "./types.js";
 
 export interface AgentTurnSpec {
@@ -20,6 +20,7 @@ export interface AgentTurnSpec {
   inputs: ArtifactRef[];
   produces: ArtifactSpec[];
   completion: CompletionPolicy;
+  /** Already-evaluated template vars: callers resolve "="-prefixed expressions with evaluateVars first. */
   vars: Record<string, unknown>;
 }
 
@@ -79,12 +80,17 @@ async function collect(ctx: StepContext, planned: PlannedDeliverable[], inputs: 
   const { host } = ctx.agents.resolve(session.agentId);
   const artifacts: Artifact[] = [];
   const problems: string[] = [];
-  for (const d of planned) {
-    if (!(await host.fs.exists(d.absolutePath))) {
+  // One existence round trip for the whole set, then every read in flight at once: on a remote
+  // host each of these is an ssh process, and doing them serially per deliverable showed up as
+  // dead time at the end of every turn.
+  const present = await host.fs.existsMany(planned.map((d) => d.absolutePath));
+  const contents = await Promise.all(planned.map((d, i) => (present[i] ? host.fs.readFile(d.absolutePath) : undefined)));
+  for (const [i, d] of planned.entries()) {
+    const content = contents[i];
+    if (content === undefined) {
       if (d.required) problems.push(`missing ${d.kind} at ${d.absolutePath}`);
       continue;
     }
-    const content = await host.fs.readFile(d.absolutePath);
     const data = extractStructuredData(content, d.mediaType);
     const reason = validateArtifact(d.spec, data, parseFrontMatter(content).body);
     if (reason) {
@@ -129,6 +135,58 @@ class UpdateRecorder {
   }
 }
 
+/** Base delay between two artifact-presence checks. */
+const WATCH_POLL_MS = 1500;
+/** Upper bound for the adaptive delay, so a sick host is still checked occasionally. */
+const WATCH_MAX_POLL_MS = 30_000;
+
+/**
+ * Poll `paths` until all of them exist on the host, then call `onPresent` once.
+ *
+ * Checks never overlap: the next one is scheduled only after the previous has
+ * settled, and it waits at least as long as that check took. A host answering in
+ * 4 s is therefore polled every 4 s rather than accumulating a backlog of
+ * in-flight checks (on an SSH host each check is a process). Errors are transient
+ * by assumption - the turn ends on its own anyway - so they back off exponentially
+ * instead of aborting the watch. Returns a function that stops the watcher.
+ */
+export function watchForArtifacts(fs: HostFileSystem, paths: string[], onPresent: () => void): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let errorDelay = WATCH_POLL_MS;
+
+  const schedule = (delayMs: number): void => {
+    if (stopped) return;
+    timer = setTimeout(() => void tick(), Math.min(delayMs, WATCH_MAX_POLL_MS));
+  };
+
+  const tick = async (): Promise<void> => {
+    const started = Date.now();
+    let flags: boolean[];
+    try {
+      flags = await fs.existsMany(paths);
+      errorDelay = WATCH_POLL_MS;
+    } catch {
+      errorDelay = Math.min(errorDelay * 2, WATCH_MAX_POLL_MS);
+      schedule(errorDelay);
+      return;
+    }
+    if (stopped) return;
+    if (flags.every(Boolean)) {
+      stopped = true;
+      onPresent();
+      return;
+    }
+    schedule(Math.max(WATCH_POLL_MS, Date.now() - started));
+  };
+
+  schedule(WATCH_POLL_MS);
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
+}
+
 /** Run one agent step (prompt -> artifacts) inside an existing StepContext. Shared by agent and decision nodes. */
 export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promise<AgentTurnOutcome> {
   // resolved[i] belongs to spec.inputs[i] (undefined when an optional ref did not resolve),
@@ -161,27 +219,15 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
       // artifact-present mode: watch the host while the turn runs and cancel once every *required*
       // deliverable exists. With nothing required there is nothing to wait for (`[].every` is
       // vacuously true and would cancel on the first tick), so the step behaves like turn-end.
-      let watcher: ReturnType<typeof setInterval> | undefined;
       const watched = spec.completion.mode === "artifact-present" ? deliverables.filter((d) => d.required) : [];
-      if (watched.length > 0) {
-        const { host } = ctx.agents.resolve(spec.agent);
-        let checking = false;
-        watcher = setInterval(() => {
-          if (checking) return;
-          checking = true;
-          void Promise.all(watched.map((d) => host.fs.exists(d.absolutePath)))
-            .then((flags) => {
-              if (!flags.every(Boolean) || !watcher) return;
-              clearInterval(watcher);
-              watcher = undefined;
-              void session.cancel();
-            })
-            .catch(() => undefined)
-            .finally(() => {
-              checking = false;
-            });
-        }, 1500);
-      }
+      const stopWatching =
+        watched.length > 0
+          ? watchForArtifacts(
+              ctx.agents.resolve(spec.agent).host.fs,
+              watched.map((d) => d.absolutePath),
+              () => void session.cancel(),
+            )
+          : undefined;
       let stopReason: string;
       try {
         const turn = await session.prompt(prompt, { signal: ctx.signal, timeoutMs });
@@ -189,7 +235,7 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
         await recorder.flush();
         await ctx.emit({ type: "agent.turn.completed", payload: { stepRunId: ctx.step.id, sessionId: session.id, stopReason, durationMs: turn.durationMs } });
       } finally {
-        if (watcher) clearInterval(watcher);
+        stopWatching?.();
         await recorder.flush();
       }
       if (ctx.signal.aborted) throw new OrcaError("CANCELLED", "cancelled");
@@ -219,7 +265,7 @@ export const agentExecutor: NodeExecutor<AgentNode> = {
       inputs: n.inputs,
       produces: n.produces,
       completion: n.completion,
-      vars: n.vars,
+      vars: await evaluateVars(n.vars, (expr) => ctx.evaluate(expr)),
     });
     if (turn.kind === "failed") return failed(turn.error.code, turn.error.message, turn.error.details, true);
     return completed({ artifactIds: turn.artifacts.map((a) => a.id), data: { stopReason: turn.stopReason } });

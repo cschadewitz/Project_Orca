@@ -67,6 +67,12 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
     }),
   ),
   base("step.started", z.object({ stepRunId: z.string(), inputArtifactIds: z.array(z.string()).default([]) })),
+  /**
+   * Artifacts the step actually read, appended as they resolve (a step may resolve inputs more
+   * than once). Ids accumulate into `StepRun.inputArtifactIds`; `step.started` cannot carry them
+   * because inputs are resolved by the executor, after the step starts.
+   */
+  base("step.inputs", z.object({ stepRunId: z.string(), artifactIds: z.array(z.string()) })),
   base("step.waiting", z.object({ stepRunId: z.string(), on: z.string(), detail: z.string().optional() })),
   base("step.completed", z.object({ stepRunId: z.string(), result: StepResultSchema })),
   base("step.failed", z.object({ stepRunId: z.string(), error: ErrorInfoSchema, willRetry: z.boolean() })),

@@ -4,17 +4,21 @@ import { join } from "node:path";
 import { OrcaError, type AgentSpec, type LocalHost as LocalHostSpec } from "@orca/core";
 import { collectChildProcess, wrapAgentProcess, type AgentHost, type AgentProcessHandle, type ExecResult, type HostFileSystem, type SpawnAgentOptions } from "../host.js";
 
+const exists = (p: string): Promise<boolean> =>
+  access(p).then(
+    () => true,
+    () => false,
+  );
+
 export const localFileSystem: HostFileSystem = {
   readFile: (p) => readFile(p, "utf8"),
   writeFile: async (p, c) => {
     await mkdir(join(p, ".."), { recursive: true });
     await writeFile(p, c, "utf8");
   },
-  exists: (p) =>
-    access(p).then(
-      () => true,
-      () => false,
-    ),
+  exists,
+  // Local stats are cheap; there is nothing to batch beyond issuing them together.
+  existsMany: (paths) => Promise.all(paths.map(exists)),
   mkdirp: async (p) => {
     await mkdir(p, { recursive: true });
   },

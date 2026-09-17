@@ -40,6 +40,14 @@ export interface HostFileSystem {
   readFile(path: string): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
   exists(path: string): Promise<boolean>;
+  /**
+   * Existence of several paths at once, index-aligned with `paths`.
+   *
+   * Remote hosts pay a process (and a TCP handshake) per file-system call, so
+   * anything that checks a set of paths repeatedly - the `artifact-present`
+   * watcher above all - should ask once instead of once per path.
+   */
+  existsMany(paths: string[]): Promise<boolean[]>;
   mkdirp(path: string): Promise<void>;
 }
 

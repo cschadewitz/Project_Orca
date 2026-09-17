@@ -14,6 +14,8 @@ describe("hosts", () => {
     const r = await host.exec("echo hi");
     expect(r.stdout.trim()).toBe("hi");
     expect(await host.fs.exists("/definitely/not/here")).toBe(false);
+    expect(await host.fs.existsMany([process.cwd(), "/definitely/not/here"])).toEqual([true, false]);
+    expect(await host.fs.existsMany([])).toEqual([]);
   });
   it("feeds stdin, survives commands that never read it, and kills on timeout", async () => {
     const host = new LocalHost({ id: "local", type: "local" });

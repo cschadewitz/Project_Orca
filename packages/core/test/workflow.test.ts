@@ -82,6 +82,30 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
     a.completion.mode = "turn-end";
     expect(validateWorkflow(def).warnings).toEqual([]);
   });
+  it("checks '='-prefixed vars on every vars-bearing node, not just set", () => {
+    const def = parseWorkflow(`
+id: bad-vars
+name: bad-vars
+start: s
+nodes:
+  s: { type: start }
+  a:
+    type: agent
+    agent: x
+    prompt: "hi"
+    vars: { slug: "=vars.slug +", ok: "=upper(vars.slug)", plain: "no equals here" }
+  sub: { type: subworkflow, workflow: child, vars: { n: "=1 +" } }
+  st: { type: set, vars: { m: "=2 +" } }
+  e: { type: end }
+edges: [{ from: s, to: a }, { from: a, to: sub }, { from: sub, to: st }, { from: st, to: e }]
+`);
+    const r = validateWorkflow(def, { hasWorkflow: () => true });
+    const paths = r.errors.map((e) => e.path);
+    expect(paths).toEqual(expect.arrayContaining(["workflow(bad-vars).nodes.a.vars.slug", "workflow(bad-vars).nodes.sub.vars.n", "workflow(bad-vars).nodes.st.vars.m"]));
+    // Valid expressions and literals are left alone.
+    expect(paths).not.toContain("workflow(bad-vars).nodes.a.vars.ok");
+    expect(paths).not.toContain("workflow(bad-vars).nodes.a.vars.plain");
+  });
   it("parses nested loop bodies and custom nodes", () => {
     const def = parseWorkflow(`
 id: nested

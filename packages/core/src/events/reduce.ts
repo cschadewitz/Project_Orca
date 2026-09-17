@@ -98,6 +98,11 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       delete s.waitingOn;
       break;
     }
+    case "step.inputs": {
+      const s = step(e.payload.stepRunId);
+      for (const id of e.payload.artifactIds) if (!s.inputArtifactIds.includes(id)) s.inputArtifactIds.push(id);
+      break;
+    }
     case "step.waiting": {
       const s = step(e.payload.stepRunId);
       s.status = "waiting";
