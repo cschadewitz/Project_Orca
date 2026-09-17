@@ -465,7 +465,15 @@ export class Orchestrator {
       async render(body, extra) {
         return renderTemplate(body, await ctx.evalContext(extra), { partials: self.templates.partials });
       },
-      resolveInputs: (refs) => self.resolveInputs(rc, refs),
+      async resolveInputs(refs) {
+        const resolved = await self.resolveInputs(rc, refs);
+        // Record what the step actually read: `step.started` was appended before the executor ran,
+        // so the ids are only known here (see the `step.inputs` event).
+        const ids = resolved.filter((a): a is ResolvedArtifact => a !== undefined).map((a) => a.id);
+        const fresh = [...new Set(ids)].filter((id) => !step.inputArtifactIds.includes(id));
+        if (fresh.length) await rc.emit({ type: "step.inputs", payload: { stepRunId: step.id, artifactIds: fresh } });
+        return resolved;
+      },
       recordArtifact: (spec, content, extra) => self.recordArtifact(rc, step, spec, content, extra ?? {}),
       async runChild(target, options) {
         // A re-attempted (resumed) container step re-attaches to the children its interrupted
@@ -487,12 +495,19 @@ export class Orchestrator {
         await rc.emit({ type: "child.spawned", payload: { stepRunId: step.id, childRunId: childId, ...(options.branch ? { branch: options.branch } : {}), ...(resumedId ? { resumed: true } : {}) } });
         const onAbort = () => void self.cancel(childId, "parent cancelled");
         rc.abort.signal.addEventListener("abort", onAbort, { once: true });
+        // The caller may also cancel this one child on its own (e.g. a fail-fast parallel
+        // abandoning the siblings of a branch that already decided the join).
+        const own = options.signal;
+        const onOwnAbort = () => void self.cancel(childId, typeof own?.reason === "string" ? own.reason : "cancelled by parent step");
+        if (own?.aborted) onOwnAbort();
+        else own?.addEventListener("abort", onOwnAbort, { once: true });
         try {
           const result = await self.run(childId);
           await rc.emit({ type: "child.finished", payload: { stepRunId: step.id, childRunId: childId, status: result.run.status, ...(result.run.outcome ? { outcome: result.run.outcome } : {}) } });
           return result;
         } finally {
           rc.abort.signal.removeEventListener("abort", onAbort);
+          own?.removeEventListener("abort", onOwnAbort);
         }
       },
       openSession: (selector) => self.openSession(rc, step, selector),
@@ -637,7 +652,13 @@ export class Orchestrator {
       await rc.emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } }).catch(() => undefined);
     };
     if (agent.sessionMode === "per-run") {
-      this.sessions.set(key, { session, current });
+      const pooled = { session, current };
+      this.sessions.set(key, pooled);
+      // A pooled session whose connection went away (wedged agent killed after a cancel, or a
+      // crash) must not be handed to the next step; let that step open a fresh one instead.
+      void session.closed.then(() => {
+        if (this.sessions.get(key) === pooled) this.sessions.delete(key);
+      });
       return { session, release: async () => {} };
     }
     return { session, release: close };

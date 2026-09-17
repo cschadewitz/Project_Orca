@@ -1,5 +1,5 @@
 /** Executors for start, end, set, decision and gate nodes. */
-import { newId, OrcaError, type DecisionNode, type EndNode, type GateNode, type SetNode, type StartNode } from "@orca/core";
+import { evaluateVars, newId, OrcaError, type DecisionNode, type EndNode, type GateNode, type SetNode, type StartNode } from "@orca/core";
 import { runAgentTurn } from "./agent-step.js";
 import { completed, failed, type NodeExecutor, type StepContext } from "./types.js";
 
@@ -17,8 +17,7 @@ export const endExecutor: NodeExecutor<EndNode> = {
 export const setExecutor: NodeExecutor<SetNode> = {
   type: "set",
   async execute(ctx) {
-    const vars: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(ctx.node.vars)) vars[k] = typeof v === "string" && v.startsWith("=") ? await ctx.evaluate(v.slice(1)) : v;
+    const vars = await evaluateVars(ctx.node.vars, (expr) => ctx.evaluate(expr));
     await ctx.emit({ type: "vars.set", payload: { vars } });
     return completed({ data: vars });
   },

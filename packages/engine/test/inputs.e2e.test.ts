@@ -79,5 +79,13 @@ describe("optional input aliases", () => {
     const note = Object.values(state.artifacts).find((a) => a.kind === "note")!;
     const parentKinds = note.parents.map((id) => state.artifacts[id]!.kind).sort();
     expect(parentKinds).toEqual(["review", "spec"]);
+
+    // Issue #15: the step records what it actually read, even though `step.started` is
+    // appended before the executor resolves inputs.
+    const consumeStep = Object.values(state.steps).find((s) => s.nodeId === "consume")!;
+    const inputKinds = consumeStep.inputArtifactIds.map((id) => state.artifacts[id]!.kind).sort();
+    expect(inputKinds).toEqual(["review", "spec"]);
+    const seedStep = Object.values(state.steps).find((s) => s.nodeId === "seed")!;
+    expect(seedStep.inputArtifactIds).toEqual([]);
   }, 60_000);
 });

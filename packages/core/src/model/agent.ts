@@ -92,6 +92,12 @@ export const AgentSpecSchema = z.object({
   sessionMode: z.enum(["per-step", "per-run"]).default("per-step"),
   /** Per-turn wall clock limit. */
   turnTimeoutMs: z.number().int().positive().default(30 * 60_000),
+  /**
+   * How long a turn may keep running after `session/cancel` (turn timeout, run
+   * cancellation, artifact-present completion) before the agent is treated as
+   * wedged and its process killed.
+   */
+  cancelGraceMs: z.number().int().positive().default(10_000),
 });
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;
 

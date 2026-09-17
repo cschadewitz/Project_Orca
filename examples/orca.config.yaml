@@ -30,6 +30,7 @@ agents:
     hostId: buildbox
     roles: [builder, tester, deployer]
     turnTimeoutMs: 1800000
+    cancelGraceMs: 10000              # kill the agent if it ignores session/cancel this long
     mcpServers:
       - name: kepler-workspace          # hand sub-agents the same MCP servers Kepler gives you
         command: kepler
