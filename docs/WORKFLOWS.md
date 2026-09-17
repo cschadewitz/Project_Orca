@@ -44,13 +44,23 @@ edges:
 | `gate` | human approval; can auto‑approve | `question`, `options`, `autoApproveWhen`, `autoOption` |
 | `set` | assign run vars | `vars` |
 | `loop` | repeat a nested graph / workflow as child runs | `mode` (`while` \| `until` \| `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
-| `parallel` | fan out child runs | `branches{}` or `forEach{items, body}`, `concurrency`, `join` (`all` \| `any`), `failFast` |
+| `parallel` | fan out child runs | `branches{}` or `forEach{items, body}`, `concurrency`, `join` (`all` \| `any`), `failFast` (default `true`: stop once the join is decided) |
 | `subworkflow` | run a registered workflow as a child | `workflow`, `vars` |
 | `custom:<name>` | anything a plugin registers | free‑form |
 
 Wherever a node takes `vars` (`set`, `agent`, `subworkflow`), a string value starting
 with `=` is evaluated as an expression and anything else is a literal, e.g.
 `vars: { slug: "=vars.workItem.slug", stage: "build" }`.
+
+### Parallel fan-out
+
+`concurrency` bounds how many branches are in flight; `join` decides the node's outcome
+(`all` — every branch must succeed, `any` — one is enough). With `failFast` (the default)
+the node stops as soon as a branch settles the join: the first branch that does not succeed
+under `join: all`, or the first that does under `join: any`. Branches that have not started
+are skipped and branches still running are cancelled, so a doomed fan-out stops burning
+agent turns. A branch parked at a human gate settles nothing — the parent parks with it as
+usual. Set `failFast: false` to always run every branch to completion.
 
 ## Routing rules
 

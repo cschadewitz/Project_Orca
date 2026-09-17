@@ -63,39 +63,74 @@ export const loopExecutor: NodeExecutor<LoopNode> = {
   },
 };
 
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
+/**
+ * Run `tasks` with at most `limit` in flight, in order. When `decided` reports that a
+ * finished task already settled the caller's outcome, the remaining tasks are never
+ * started and the ones still running are asked to stop through the signal they were
+ * handed. Slots for tasks that never started stay `undefined`.
+ */
+async function runBounded<R>(tasks: ((signal: AbortSignal) => Promise<R>)[], limit: number, decided?: (result: R, i: number) => string | undefined): Promise<(R | undefined)[]> {
+  const out: (R | undefined)[] = new Array(tasks.length);
+  const stop = new AbortController();
   let next = 0;
   const worker = async () => {
     for (;;) {
       const i = next++;
-      if (i >= items.length) return;
-      out[i] = await fn(items[i]!, i);
+      if (i >= tasks.length || stop.signal.aborted) return;
+      const result = await tasks[i]!(stop.signal);
+      out[i] = result;
+      const reason = decided?.(result, i);
+      if (reason !== undefined && !stop.signal.aborted) stop.abort(reason);
     }
   };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, tasks.length)) }, worker));
   return out;
 }
+
+const succeeded = (s: RunState) => s.run.status === "completed" && s.run.outcome === "success";
 
 export const parallelExecutor: NodeExecutor<ParallelNode> = {
   type: "parallel",
   async execute(ctx): Promise<StepOutcome> {
     const n = ctx.node;
-    let states: RunState[];
+    let branches: { branch: string; run: (signal: AbortSignal) => Promise<RunState> }[];
     if (n.branches) {
-      const entries = Object.entries(n.branches);
-      states = await mapLimit(entries, n.concurrency, ([name, ref]) => ctx.runChild(target(ctx, ref, [name]), { branch: name, vars: { branch: name } }));
+      branches = Object.entries(n.branches).map(([name, ref]) => ({ branch: name, run: (signal: AbortSignal) => ctx.runChild(target(ctx, ref, [name]), { branch: name, vars: { branch: name }, signal }) }));
     } else {
       const fe = n.forEach!;
       const items = await ctx.evaluate(fe.items);
       const list = Array.isArray(items) ? items : items && typeof items === "object" ? Object.values(items) : [];
-      states = await mapLimit(list, n.concurrency, (item, i) => ctx.runChild(target(ctx, fe.body, []), { branch: String(i), vars: { [fe.itemVar]: item, [fe.indexVar]: i } }));
+      branches = list.map((item, i) => ({ branch: String(i), run: (signal: AbortSignal) => ctx.runChild(target(ctx, fe.body, []), { branch: String(i), vars: { [fe.itemVar]: item, [fe.indexVar]: i }, signal }) }));
     }
+
+    /**
+     * With `failFast` (the default) a branch that already settles the join stops the node:
+     * `join: all` is lost the moment one branch does not succeed, `join: any` is won the
+     * moment one does. A *parked* branch settles nothing - a human may still steer it to
+     * success - so it never triggers the stop.
+     */
+    const decided = (s: RunState, i: number): string | undefined => {
+      if (s.run.status === "paused") return undefined;
+      const stop = n.join === "any" ? succeeded(s) : !succeeded(s);
+      return stop ? `parallel '${ctx.nodeId}': branch '${branches[i]!.branch}' decided join '${n.join}' (failFast)` : undefined;
+    };
+    const results = await runBounded(
+      branches.map((b) => b.run),
+      n.concurrency,
+      n.failFast ? decided : undefined,
+    );
+    const states = results.filter((s): s is RunState => s !== undefined);
+    const skipped = results.length - states.length;
+
     const parked = await pausedByChildren(ctx, states);
     if (parked) return parked;
     const { ok, data } = childOutcome(states);
-    const anyOk = states.some((s) => s.run.status === "completed" && s.run.outcome === "success");
-    if ((n.join === "all" && !ok) || (n.join === "any" && !anyOk)) return failed("RUN_STATE", `parallel '${ctx.nodeId}': ${states.filter((s) => s.run.outcome !== "success").length} of ${states.length} branches did not succeed`, data);
+    if (skipped > 0) data.skipped = skipped;
+    const anyOk = states.some(succeeded);
+    if ((n.join === "all" && !ok) || (n.join === "any" && !anyOk)) {
+      const bad = states.filter((s) => !succeeded(s)).length;
+      return failed("RUN_STATE", `parallel '${ctx.nodeId}': ${bad} of ${branches.length} branches did not succeed${skipped > 0 ? ` (${skipped} not started: failFast)` : ""}`, data);
+    }
     return completed({ data: { ...data, ok } });
   },
 };

@@ -159,6 +159,100 @@ edges: [{ from: s, to: init }, { from: init, to: par }, { from: par, to: sub }, 
     expect(failing.run.error?.message).toMatch(/1 of 2 branches did not succeed/);
   });
 
+  it("failFast stops a parallel node as soon as one branch decides the join", async () => {
+    // Four branches, one at a time; the first one settles the join for every variant below.
+    const fanOut = (opts: { first: "success" | "failure"; join?: "all" | "any"; failFast?: boolean }) => {
+      const branch = (value: string, outcome: string) =>
+        `{ graph: { start: s, nodes: { s: { type: start }, r: { type: "custom:record", value: ${value} }, e: { type: end, outcome: ${outcome} } }, edges: [{ from: s, to: r }, { from: r, to: e }] } }`;
+      return `
+id: fanout
+name: fanout
+start: s
+nodes:
+  s: { type: start }
+  par:
+    type: parallel
+    concurrency: 1
+    join: ${opts.join ?? "all"}
+    failFast: ${opts.failFast ?? true}
+    branches:
+      a: ${branch("a", opts.first)}
+      b: ${branch("b", "success")}
+      c: ${branch("c", "success")}
+      d: ${branch("d", "success")}
+  e: { type: end }
+edges: [{ from: s, to: par }, { from: par, to: e }]
+`;
+    };
+
+    // join: all - the first failing branch means the rest can no longer help.
+    const failing = make([fanOut({ first: "failure" })]);
+    const stopped = await failing.orchestrator.startAndRun({ workflowId: "fanout" });
+    expect(stopped.run.status).toBe("failed");
+    expect(stopped.run.error?.message).toMatch(/1 of 4 branches did not succeed \(3 not started: failFast\)/);
+    expect(stopped.steps[stopped.stepOrder[1]!]!.childRunIds).toHaveLength(1);
+    expect(calls.record).toBe(1);
+
+    // failFast: false keeps the old behaviour - every branch runs before the node fails.
+    const all = make([fanOut({ first: "failure", failFast: false })]);
+    const ran = await all.orchestrator.startAndRun({ workflowId: "fanout" });
+    expect(ran.run.status).toBe("failed");
+    expect(ran.run.error?.message).toMatch(/^parallel 'par': 1 of 4 branches did not succeed$/);
+    expect(ran.steps[ran.stepOrder[1]!]!.childRunIds).toHaveLength(4);
+    expect(calls.record).toBe(4);
+
+    // join: any - the first succeeding branch already wins, so the rest are pointless.
+    const any = make([fanOut({ first: "success", join: "any" })]);
+    const won = await any.orchestrator.startAndRun({ workflowId: "fanout" });
+    expect(won.run.status, JSON.stringify(won.run.error)).toBe("completed");
+    expect(won.steps[won.stepOrder[1]!]!.childRunIds).toHaveLength(1);
+    expect(won.steps[won.stepOrder[1]!]!.result?.data).toMatchObject({ skipped: 3 });
+    expect(calls.record).toBe(1);
+  });
+
+  it("failFast cancels branches that are still running", async () => {
+    const { orchestrator } = make([`
+id: racy
+name: racy
+start: s
+nodes:
+  s: { type: start }
+  par:
+    type: parallel
+    concurrency: 2
+    branches:
+      a: { graph: { start: s, nodes: { s: { type: start }, e: { type: end, outcome: failure } }, edges: [{ from: s, to: e }] } }
+      b:
+        graph:
+          start: s
+          nodes:
+            s: { type: start }
+            spin:
+              type: loop
+              mode: while
+              condition: "true"
+              maxIterations: 100000
+              body:
+                graph:
+                  start: s
+                  nodes: { s: { type: start }, r: { type: "custom:record", value: b }, e: { type: end } }
+                  edges: [{ from: s, to: r }, { from: r, to: e }]
+            e: { type: end }
+          edges: [{ from: s, to: spin }, { from: spin, to: e }]
+  e: { type: end }
+edges: [{ from: s, to: par }, { from: par, to: e }]
+`]);
+    const state = await orchestrator.startAndRun({ workflowId: "racy" });
+    expect(state.run.status).toBe("failed");
+    const par = state.steps[state.stepOrder[1]!]!;
+    expect(par.children.map((c) => c.branch)).toEqual(["a", "b"]);
+    // Branch 'b' would otherwise spin for 100k iterations; the failed branch 'a' stopped it.
+    const spinner = await orchestrator.getState(par.childRunIds[1]!);
+    expect(spinner.run.status).toBe("cancelled");
+    const cancelled = (await orchestrator.events(par.childRunIds[1]!)).find((e) => e.type === "run.cancelled");
+    expect((cancelled?.payload as { reason?: string }).reason).toMatch(/branch 'a' decided join 'all' \(failFast\)/);
+  });
+
   it("resumes an interrupted run from its event log", async () => {
     const { orchestrator, stores } = make([`
 id: resumable
