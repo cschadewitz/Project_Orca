@@ -89,6 +89,15 @@ export class Orchestrator {
 
   private readonly live = new Map<string, RunContext>();
   private readonly running = new Map<string, Promise<RunState>>();
+  /**
+   * Reduced states of runs that have reached a terminal status. A terminal run's log does not grow
+   * again, so its projection is worth keeping: `visibleArtifacts()` walks the whole parent/child
+   * tree on every condition and prompt render, and without this each walk re-read and re-parsed
+   * every completed child's log. Any append for a run drops its entry (see the subscription in the
+   * constructor), so the cache cannot outlive a run that is somehow restarted in this process.
+   * Bounded FIFO - a long-lived orchestrator would otherwise hold every run it ever touched.
+   */
+  private readonly terminalStates = new Map<string, RunState>();
   /** Per-run pooled sessions. `current.step` is the step using the session right now, so events from a long-lived session are attributed correctly. */
   private readonly sessions = new Map<string, { session: AgentSession; current: { step: StepRun } }>();
 
@@ -103,6 +112,7 @@ export class Orchestrator {
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
     this.clock = o.clock ?? systemClock;
     this.logger = o.logger ?? silentLogger;
+    this.stores.events.subscribe((e) => void this.terminalStates.delete(e.runId));
   }
 
   // ---------------------------------------------------------------- public API
@@ -143,10 +153,15 @@ export class Orchestrator {
   run(runId: string): Promise<RunState> {
     const inflight = this.running.get(runId);
     if (inflight) return inflight;
-    const p = this.execute(runId).finally(() => {
-      this.running.delete(runId);
-      this.live.delete(runId);
-    });
+    const p = this.execute(runId)
+      .then((state) => {
+        if (isTerminal(state)) this.cacheTerminalState(runId, state);
+        return state;
+      })
+      .finally(() => {
+        this.running.delete(runId);
+        this.live.delete(runId);
+      });
     this.running.set(runId, p);
     return p;
   }
@@ -170,12 +185,25 @@ export class Orchestrator {
     }
   }
 
+  /** Projected state of a run. Treat it as read-only: a live or terminal run's projection is shared. */
   async getState(runId: string): Promise<RunState> {
     const live = this.live.get(runId);
     if (live) return live.state;
+    const cached = this.terminalStates.get(runId);
+    if (cached) return cached;
     const events = await this.stores.events.read(runId);
     if (events.length === 0) throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
-    return reduceRun(events);
+    const state = reduceRun(events);
+    if (isTerminal(state)) this.cacheTerminalState(runId, state);
+    return state;
+  }
+
+  private cacheTerminalState(runId: string, state: RunState): void {
+    if (this.terminalStates.size >= TERMINAL_STATE_CACHE_SIZE) {
+      const oldest = this.terminalStates.keys().next();
+      if (!oldest.done) this.terminalStates.delete(oldest.value);
+    }
+    this.terminalStates.set(runId, state);
   }
 
   events(runId: string): Promise<OrcaEvent[]> {
@@ -645,6 +673,8 @@ export class Orchestrator {
     }
   }
 }
+
+const TERMINAL_STATE_CACHE_SIZE = 256;
 
 export function isTerminal(state: RunState): boolean {
   return state.run.status === "completed" || state.run.status === "failed" || state.run.status === "cancelled";
