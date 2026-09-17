@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reduceRun, type OrcaEvent } from "@orca/core";
+import { reduceRun, reduceRunSummary, runSummary, RUN_SUMMARY_EVENT_TYPES, type OrcaEvent } from "@orca/core";
 
 let seq = 0;
 const ev = (type: OrcaEvent["type"], payload: unknown): OrcaEvent => ({ id: `evt_${seq}`, seq: seq++, runId: "run_1", at: "2026-01-01T00:00:00.000Z", type, payload } as OrcaEvent);
@@ -83,5 +83,54 @@ describe("reduceRun", () => {
   });
   it("rejects logs that do not start with run.created", () => {
     expect(() => reduceRun([ev("run.started", {})])).toThrow(/run.created/);
+  });
+});
+
+describe("reduceRunSummary", () => {
+  /** The summary reducer mirrors applyEvent's run-level cases; these logs pin them together. */
+  // Built lazily: `ev` shares a sequence counter with the tests above.
+  const logs: Record<string, () => OrcaEvent[]> = {
+    "waiting on a step": () => [
+      ev("run.created", { workflowId: "wf", workflowVersion: "1", requestId: "req_1", parentRunId: "run_0", workspace: { hostId: "local", cwd: "/w" }, vars: { a: 1 } }),
+      ev("run.started", {}),
+      ev("step.scheduled", { stepRunId: "step_1", nodeId: "plan", nodeType: "agent", attempt: 1 }),
+      ev("step.started", { stepRunId: "step_1", inputArtifactIds: [] }),
+      ev("step.waiting", { stepRunId: "step_1", on: "agent-turn" }),
+      ev("agent.update", { stepRunId: "step_1", sessionId: "s", update: { kind: "agent_message_chunk", text: 'noise "type":"run.completed" noise' } }),
+    ],
+    "back to running after the step finishes": () => [
+      ev("run.created", { workflowId: "wf", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars: {} }),
+      ev("run.started", {}),
+      ev("step.scheduled", { stepRunId: "step_1", nodeId: "plan", nodeType: "agent", attempt: 1 }),
+      ev("step.waiting", { stepRunId: "step_1", on: "agent-turn" }),
+      ev("step.completed", { stepRunId: "step_1", result: { artifactIds: [], data: {} } }),
+    ],
+    "paused then resumed and completed": () => [
+      ev("run.created", { workflowId: "wf", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars: {} }),
+      ev("run.started", {}),
+      ev("run.paused", { reason: "human gate" }),
+      ev("run.resumed", {}),
+      ev("run.completed", { outcome: "success" }),
+    ],
+    failed: () => [
+      ev("run.created", { workflowId: "wf", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars: {} }),
+      ev("run.started", {}),
+      ev("run.failed", { error: { code: "STEP_FAILED", message: "boom" } }),
+    ],
+    cancelled: () => [
+      ev("run.created", { workflowId: "wf", workflowVersion: "1", workspace: { hostId: "local", cwd: "/w" }, vars: {} }),
+      ev("run.cancelled", { reason: "user" }),
+    ],
+  };
+  for (const [name, log] of Object.entries(logs)) {
+    it(`matches the full projection: ${name}`, () => {
+      const events = log();
+      const full = runSummary(reduceRun(events));
+      expect(reduceRunSummary(events)).toEqual(full);
+      expect(reduceRunSummary(events.filter((e) => (RUN_SUMMARY_EVENT_TYPES as readonly OrcaEvent["type"][]).includes(e.type)))).toEqual(full);
+    });
+  }
+  it("rejects logs that do not start with run.created", () => {
+    expect(() => reduceRunSummary([ev("run.started", {})])).toThrow(/run.created/);
   });
 });

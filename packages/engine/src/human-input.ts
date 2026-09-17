@@ -5,7 +5,7 @@
  * answer and resumes it), CLI prompt, or an upstream ACP client when ORCA runs
  * as an agent inside Kepler/Zed.
  */
-import { isOrcaError, OrcaError } from "@orca/core";
+import { isOrcaError, newId, OrcaError, type Clock, type OrcaEventInput } from "@orca/core";
 
 export interface HumanInputQuery {
   runId: string;
@@ -87,5 +87,52 @@ export class PausingHumanInput implements HumanInputPort {
   async ask(query: HumanInputQuery): Promise<string | undefined> {
     if (query.kind === "permission") return undefined;
     throw new HumanInputPending(query);
+  }
+}
+
+/**
+ * The full human-input protocol for one question: mint a request id, announce
+ * it (`human.requested`), park the step on it (`step.waiting`), ask the port,
+ * and record the answer (`human.answered`). Gates, human decisions and agent
+ * `ask` permissions all go through here so the facade and the CLI see the same
+ * event sequence whoever asked.
+ *
+ * `onRequested` runs between the two emits (the permission path counts the ask
+ * there), `onSettled` after the port settles - including when it throws, which
+ * is how a pausing port parks the run (HumanInputPending) or a cancelled run
+ * aborts the wait.
+ */
+export async function askHumanInput(opts: {
+  port: HumanInputPort;
+  emit(input: Omit<OrcaEventInput, "runId">): Promise<unknown>;
+  clock: Clock;
+  runId: string;
+  stepRunId: string;
+  kind: HumanInputQuery["kind"];
+  question: string;
+  options: string[];
+  context?: Record<string, unknown>;
+  onRequested?(query: HumanInputQuery): void;
+  onSettled?(query: HumanInputQuery): Promise<void> | void;
+}): Promise<string | undefined> {
+  const { emit, stepRunId } = opts;
+  const query: HumanInputQuery = {
+    runId: opts.runId,
+    stepRunId,
+    requestId: newId("hi", opts.clock.now()),
+    kind: opts.kind,
+    question: opts.question,
+    options: opts.options,
+    context: opts.context ?? {},
+  };
+  await emit({ type: "human.requested", payload: { stepRunId, requestId: query.requestId, kind: query.kind, question: query.question, options: query.options, context: query.context } });
+  opts.onRequested?.(query);
+  await emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
+  try {
+    const answer = await opts.port.ask(query);
+    await emit({ type: "human.answered", payload: { stepRunId, requestId: query.requestId, answer: answer ?? "" } });
+    return answer;
+  } finally {
+    await opts.onSettled?.(query);
   }
 }

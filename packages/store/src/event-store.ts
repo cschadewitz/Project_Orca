@@ -17,6 +17,12 @@ export type EventListener = (event: OrcaEvent) => void;
 export interface EventStore {
   append(input: OrcaEventInput): Promise<OrcaEvent>;
   read(runId: string): Promise<OrcaEvent[]>;
+  /**
+   * Only the events of `types`, in order. Implementations may skip the rest
+   * without materialising them, which is what makes summary projections cheap
+   * on runs whose logs are dominated by `agent.update`.
+   */
+  readTypes(runId: string, types: readonly OrcaEvent["type"][]): Promise<OrcaEvent[]>;
   /** All run ids known to the store, oldest first. */
   listRuns(): Promise<string[]>;
   subscribe(listener: EventListener, filter?: EventFilter): () => void;
@@ -30,6 +36,11 @@ export abstract class BaseEventStore implements EventStore {
   protected abstract persist(event: OrcaEvent): Promise<void>;
   abstract read(runId: string): Promise<OrcaEvent[]>;
   abstract listRuns(): Promise<string[]>;
+
+  /** Correct for any store; override when the backing format allows skipping the other events. */
+  async readTypes(runId: string, types: readonly OrcaEvent["type"][]): Promise<OrcaEvent[]> {
+    return (await this.read(runId)).filter((e) => types.includes(e.type));
+  }
 
   async append(input: OrcaEventInput): Promise<OrcaEvent> {
     const seq = await this.nextSeq(input.runId);

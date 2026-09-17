@@ -36,6 +36,26 @@ describe("event stores", () => {
       expect(await store.listRuns()).toEqual(["run_a", "run_b"]);
     });
   }
+  for (const [name, make] of [
+    ["memory", async () => new InMemoryEventStore(new FakeClock())],
+    ["jsonl", async () => {
+      const d = await mkdtemp(join(tmpdir(), "orca-store-"));
+      dirs.push(d);
+      return new JsonlEventStore(d, new FakeClock());
+    }],
+  ] as const) {
+    it(`${name}: readTypes returns only the requested types, in order`, async () => {
+      const store = await make();
+      await store.append({ type: "run.created", runId: "run_a", payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} } });
+      await store.append({ type: "run.started", runId: "run_a", payload: {} });
+      // A payload that quotes an event type must not be mistaken for one.
+      await store.append({ type: "agent.update", runId: "run_a", payload: { stepRunId: "step_1", sessionId: "s", update: { kind: "agent_message_chunk", text: '"type":"run.completed"' } } });
+      await store.append({ type: "run.completed", runId: "run_a", payload: { outcome: "success" } });
+      const got = await store.readTypes("run_a", ["run.created", "run.completed"]);
+      expect(got.map((e) => [e.type, e.seq])).toEqual([["run.created", 0], ["run.completed", 3]]);
+      expect(await store.readTypes("run_missing", ["run.created"])).toEqual([]);
+    });
+  }
   it("jsonl store survives a restart", async () => {
     const d = await mkdtemp(join(tmpdir(), "orca-store-"));
     dirs.push(d);

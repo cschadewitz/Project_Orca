@@ -6,13 +6,13 @@ import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAcpSession } from "@orca/agents";
-import { toMermaid, validateWorkflow, parseWorkflow, OrcaError, type OrcaConfig, type RunState, consoleLogger } from "@orca/core";
+import { toMermaid, validateWorkflow, parseWorkflow, loadTemplates, loadWorkflows, OrcaError, type OrcaConfig, type RunState, consoleLogger } from "@orca/core";
 import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
 import { autoHumanInput } from "@orca/engine";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { scriptedAgentSpec } from "@orca/testing";
-import { bootstrap, loadConfig, loadTemplates, loadWorkflows, type OrcaApp } from "../bootstrap.js";
+import { bootstrap, loadConfig, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../format.js";
 
 export interface CommandContext {
@@ -167,9 +167,8 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
     help: "runs  List runs in the store.",
     async run(ctx) {
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
-      for (const id of await app.orchestrator.listRuns()) {
-        const s = await app.orchestrator.getState(id);
-        ctx.out(`${id}  ${s.run.workflowId.padEnd(24)} ${s.run.status.padEnd(10)} ${s.run.outcome ?? ""}  ${s.run.createdAt}${s.run.parentRunId ? `  parent=${s.run.parentRunId}` : ""}`);
+      for (const r of await app.orchestrator.listRunSummaries()) {
+        ctx.out(`${r.id}  ${r.workflowId.padEnd(24)} ${r.status.padEnd(10)} ${r.outcome ?? ""}  ${r.createdAt}${r.parentRunId ? `  parent=${r.parentRunId}` : ""}`);
       }
       return 0;
     },
