@@ -14,8 +14,8 @@ ACP and supports any ACP agent (Claude Code, Codex, Gemini, Copilot, OpenCode, �
 
 ### Mode A — ORCA as an agent inside Kepler (proxy mode, recommended)
 
-Register ORCA as an agent in Kepler using the command `orca acp` (after `npm run build`
-and `npm link`, or `node <repo>/packages/cli/dist/main.js acp --config <orca.config.yaml>`).
+Register ORCA as an agent in Kepler using the command `orca acp` (after `pnpm run build`
+and `pnpm link --global`, or `node <repo>/packages/cli/dist/main.js acp --config <orca.config.yaml>`).
 A Kepler session then drives ORCA like any agent:
 
 - the prompt becomes a **Request** (first line = title) — or `/run ai-sdlc key=value` to

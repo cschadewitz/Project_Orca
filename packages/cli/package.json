@@ -15,12 +15,13 @@
     "dist"
   ],
   "dependencies": {
-    "@orca/core": "*",
-    "@orca/store": "*",
-    "@orca/agents": "*",
-    "@orca/engine": "*",
-    "@orca/testing": "*",
-    "@orca/integrations": "*"
+    "@orca/core": "workspace:*",
+    "@orca/store": "workspace:*",
+    "@orca/agents": "workspace:*",
+    "@orca/engine": "workspace:*",
+    "@orca/testing": "workspace:*",
+    "@orca/integrations": "workspace:*",
+    "yaml": "^2.9.1"
   },
   "bin": {
     "orca": "./dist/main.js"

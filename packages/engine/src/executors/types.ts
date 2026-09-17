@@ -58,8 +58,15 @@ export interface StepContext {
    * the child's stable key within the step (iteration index, branch name, work-item slug):
    * when this step is a re-attempt after an interruption, a child the previous attempt
    * spawned under the same key is resumed/reused instead of being spawned again.
+   *
+   * `signal` cancels just this child (the returned state is then `cancelled`), which is how
+   * a container abandons siblings whose result can no longer change its own outcome; the
+   * parent run's own signal always cancels every child it spawned.
    */
-  runChild(target: { workflow: string } | { graph: WorkflowGraph; inlineId: string }, options: { vars?: Record<string, unknown>; branch?: string; workspace?: Workspace; workItemId?: string }): Promise<import("@orca/core").RunState>;
+  runChild(
+    target: { workflow: string } | { graph: WorkflowGraph; inlineId: string },
+    options: { vars?: Record<string, unknown>; branch?: string; workspace?: Workspace; workItemId?: string; signal?: AbortSignal },
+  ): Promise<import("@orca/core").RunState>;
   /** Obtain an ACP session for an agent (honours sessionMode). */
   openSession(selector: import("@orca/core").AgentSelector): Promise<{ session: AgentSession; release: () => Promise<void> }>;
 }
