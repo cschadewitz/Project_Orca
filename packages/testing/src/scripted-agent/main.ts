@@ -5,8 +5,8 @@
  */
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { stdioAcpStream } from "@orca/agents";
 import { parse as parseYaml } from "yaml";
 import { ScriptedAgent } from "./agent.js";
 import { parsePlaybook } from "./playbook.js";
@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     ...(values.log ? { promptLog: values.log } : {}),
     ...(values.name ? { name: values.name } : {}),
   });
-  const stream = acp.ndJsonStream(Writable.toWeb(process.stdout) as WritableStream<Uint8Array>, Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>);
+  const stream = stdioAcpStream(process.stdin, process.stdout);
   const conn = agent.register(acp.agent({ name: "orca-scripted-agent" })).connect(stream);
   await conn.closed;
 }

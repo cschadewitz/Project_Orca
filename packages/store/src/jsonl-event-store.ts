@@ -5,7 +5,7 @@
  */
 import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { OrcaEventSchema, appendJsonl, readJsonl, type Clock, type OrcaEvent } from "@orca/core";
+import { OrcaEventSchema, appendJsonl, readJsonl, readJsonlLines, type Clock, type OrcaEvent } from "@orca/core";
 import { BaseEventStore } from "./event-store.js";
 
 export class JsonlEventStore extends BaseEventStore {
@@ -50,10 +50,32 @@ export class JsonlEventStore extends BaseEventStore {
     this.locks.set(input.runId, next.catch(() => undefined));
     return next;
   }
+  private async lines(runId: string): Promise<string[]> {
+    await this.init();
+    return readJsonlLines(this.file(runId));
+  }
   async read(runId: string): Promise<OrcaEvent[]> {
     await this.init();
     return readJsonl(this.file(runId), OrcaEventSchema);
   }
+  /**
+   * Filters on the raw line before parsing: `agent.update` lines carry the
+   * bulk of a log and zod-parsing them to throw them away dominates listings.
+   * The substring test only pre-selects - every surviving line is parsed and
+   * its type re-checked, so a payload that happens to contain the needle is
+   * harmless.
+   */
+  override async readTypes(runId: string, types: readonly OrcaEvent["type"][]): Promise<OrcaEvent[]> {
+    const needles = types.map((t) => `"type":"${t}"`);
+    const out: OrcaEvent[] = [];
+    for (const line of await this.lines(runId)) {
+      if (!needles.some((n) => line.includes(n))) continue;
+      const event = OrcaEventSchema.parse(JSON.parse(line));
+      if (types.includes(event.type)) out.push(event);
+    }
+    return out;
+  }
+
   async listRuns(): Promise<string[]> {
     await this.init();
     const files = await readdir(this.runsDir);

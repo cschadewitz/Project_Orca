@@ -22,6 +22,7 @@ export * from "./workflow/index.js";
 export * from "./util/clock.js";
 export * from "./util/logger.js";
 export * from "./util/frontmatter.js";
+export * from "./util/glob.js";
 export * from "./util/hash.js";
 export * from "./util/path-get.js";
 export * from "./util/jsonl.js";

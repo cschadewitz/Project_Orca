@@ -3,7 +3,7 @@
  * `git worktree add`. Works for remote hosts too because it only uses
  * AgentHost.exec.
  */
-import type { AgentHost } from "@orca/agents";
+import { type AgentHost, shellQuote } from "@orca/agents";
 import { OrcaError, type Workspace } from "@orca/core";
 import type { ProvisionInput, WorkspaceProvider } from "./provider.js";
 
@@ -32,8 +32,8 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     if (await host.fs.exists(dir)) return { hostId: host.id, cwd: dir, repo: this.o.repo, branch, provider: this.name };
     await host.fs.mkdirp(root);
     const base = this.o.baseBranch ?? "main";
-    const exists = await host.exec(`git rev-parse --verify --quiet refs/heads/${branch}`, { cwd: this.o.repo });
-    const cmd = exists.code === 0 ? `git worktree add ${q(dir)} ${q(branch)}` : `git worktree add -b ${q(branch)} ${q(dir)} ${q(base)}`;
+    const exists = await host.exec(`git rev-parse --verify --quiet refs/heads/${shellQuote(branch)}`, { cwd: this.o.repo });
+    const cmd = exists.code === 0 ? `git worktree add ${shellQuote(dir)} ${shellQuote(branch)}` : `git worktree add -b ${shellQuote(branch)} ${shellQuote(dir)} ${shellQuote(base)}`;
     const r = await host.exec(cmd, { cwd: this.o.repo });
     if (r.code !== 0) throw new OrcaError("INTERNAL", `git worktree add failed: ${r.stderr.trim()}`, { cmd, dir });
     return { hostId: host.id, cwd: dir, repo: this.o.repo, branch, provider: this.name };
@@ -41,10 +41,6 @@ export class GitWorktreeProvider implements WorkspaceProvider {
 
   async release(ws: Workspace): Promise<void> {
     if (ws.provider !== this.name || !ws.repo) return;
-    await this.o.host.exec(`git worktree remove --force ${q(ws.cwd)}`, { cwd: ws.repo });
+    await this.o.host.exec(`git worktree remove --force ${shellQuote(ws.cwd)}`, { cwd: ws.repo });
   }
-}
-
-function q(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
 }

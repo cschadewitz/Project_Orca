@@ -38,7 +38,8 @@ nodes:
   dispatch:
     type: "custom:dispatch-work-items"
     name: "Run SDLC per work item"
-    workflow: ai-sdlc
+    # No `workflow:` here on purpose: the item workflow comes from
+    # `vars.itemWorkflow` (see `vars` above / `program.itemWorkflow` in the config).
     concurrency: 2
 
   summarize:
