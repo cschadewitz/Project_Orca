@@ -86,6 +86,8 @@ edges:
   same session before failing the attempt.
 - `maxAttempts`: whole‑step retries (fresh session each time).
 - `timeoutMs`: per‑turn wall clock (defaults to the agent's `turnTimeoutMs`).
+  When it elapses ORCA sends `session/cancel`; an agent that does not end the turn within
+  its `cancelGraceMs` (default 10s) is killed and the step fails with `AGENT_TRANSPORT`.
 
 ## Templates
 
