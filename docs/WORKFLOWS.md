@@ -44,7 +44,7 @@ edges:
 | `gate` | human approval; can auto‑approve | `question`, `options`, `autoApproveWhen`, `autoOption` |
 | `set` | assign run vars | `vars` |
 | `loop` | repeat a nested graph / workflow as child runs | `mode` (`while` \| `until` \| `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
-| `parallel` | fan out child runs | `branches{}` or `forEach{items, body}`, `concurrency`, `join` (`all` \| `any`), `failFast` (default `true`: stop once the join is decided) |
+| `parallel` | fan out child runs | `branches{}` or `forEach{items, body, key, dependsOn, workflow, workItemId}`, `concurrency`, `join` (`all` \| `any`), `failFast` (default `true`: stop once the join is decided) |
 | `subworkflow` | run a registered workflow as a child | `workflow`, `vars` |
 | `custom:<name>` | anything a plugin registers | free‑form |
 
@@ -61,6 +61,38 @@ under `join: all`, or the first that does under `join: any`. Branches that have 
 are skipped and branches still running are cancelled, so a doomed fan-out stops burning
 agent turns. A branch parked at a human gate settles nothing — the parent parks with it as
 usual. Set `failFast: false` to always run every branch to completion.
+
+A `forEach` fan-out can also be a small DAG. Every field below is an expression evaluated
+per item with `itemVar`/`indexVar` in scope:
+
+| field | meaning |
+| --- | --- |
+| `key` | stable branch key for the item (default: its index); resume re-attaches by it |
+| `dependsOn` | keys that must **succeed** first (a string or a list) |
+| `workflow` | workflow id to run for this item instead of `body`, when non-empty |
+| `workItemId` | the `WorkItem` this branch stands for; its child run is bound to it |
+
+An item whose prerequisite failed, was cancelled or was itself skipped never starts: the
+step records a `branch.skipped` event with `reason: dependency` and `join: all` fails. A
+prerequisite parked at a human gate blocks nothing permanently — its dependants simply wait
+for the resume. This is how `workflows/program.yaml` drives a decomposition:
+
+```yaml
+dispatch:
+  type: parallel
+  concurrency: 2
+  forEach:
+    items: vars.leafWorkItems
+    itemVar: workItem
+    key: workItem.slug
+    dependsOn: workItem.dependsOn
+    workItemId: workItem.id
+    workflow: workItem.workflowId   # falls back to `body` when the item names none
+    body: { workflow: ai-sdlc }
+```
+
+The node's result carries a per-branch `branches` list (`branch`, `runId`, `status`, `ok`)
+that a later step can summarise — see `templates/program/summary.md`.
 
 ## Routing rules
 

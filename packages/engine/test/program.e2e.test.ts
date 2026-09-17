@@ -1,7 +1,7 @@
 /** The level above: request -> decomposition -> parallel SDLC runs with dependencies -> summary. */
 import { rm } from "node:fs/promises";
 import { afterAll, describe, expect, it } from "vitest";
-import { ProgramService } from "@orca/engine";
+import { ProgramService, projectWorkItems } from "@orca/engine";
 import { harness } from "./helpers.js";
 
 const dirs: string[] = [];
@@ -56,8 +56,15 @@ describe("program workflow (e2e)", () => {
     const artifacts = await h.orchestrator.stores.artifacts.list({ kind: "deploy-report" });
     expect(artifacts.map((a) => a.path).sort()).toEqual(["auth-api", "db-schema", "docs"].map((s) => `${h.dir}/.orca/work/${s}/deploy-report.md`));
     const summaryPrompt = (await h.prompts()).find((p) => p.text.includes("Summarise the program"))!;
-    expect(summaryPrompt.text).toContain("`auth-api`: done");
+    expect(summaryPrompt.text).toContain("`auth-api`: completed");
     expect(summaryPrompt.text).toContain("vertical slices");
+
+    // Work-item status is a projection, not a side-write: scribble over the documents the way a
+    // crash mid-dispatch would and the program run's own log puts every one of them back.
+    for (const w of items) await h.orchestrator.stores.workItems.put({ ...w, status: "in-progress" });
+    await projectWorkItems(h.orchestrator.stores, state, "2020-01-01T00:00:00.000Z");
+    const rebuilt = await h.orchestrator.stores.workItems.list();
+    expect(rebuilt.map((w) => [w.slug, w.status]).sort()).toEqual([["auth-api", "done"], ["db-schema", "done"], ["docs", "done"]]);
   }, 120_000);
 
   it("blocks dependants when a prerequisite fails and fails the program", async () => {

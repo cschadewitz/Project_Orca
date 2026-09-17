@@ -11,8 +11,8 @@ Summarise the program for the requester. Use the dispatch results below; for eac
 
 ## Work items
 
-{{#each vars.dispatched as d}}
-- `{{ d.slug }}`: {{ d.status }}{{#if d.runId}} (run {{ d.runId }}){{/if}}
+{{#each steps.dispatch.result.data.branches as b}}
+- `{{ b.branch }}`: {{ b.status }}{{#if b.runId}} (run {{ b.runId }}){{/if}}
 {{/each}}
 
 ## Decomposition rationale

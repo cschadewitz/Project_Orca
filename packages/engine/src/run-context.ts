@@ -6,6 +6,10 @@
  */
 import { applyEvent, artifactsByName, latestStepForNode, OrcaError, reduceRun, type Artifact, type Clock, type Logger, type OrcaEvent, type OrcaEventInput, type Request, type RunState, type WorkItem, type WorkflowDefinition, type Workspace } from "@orca/core";
 import type { Stores } from "@orca/store";
+import { projectWorkItems } from "./program/work-items.js";
+
+/** Events that change what a fan-out step knows about its branches - and so, about its work items. */
+const BRANCH_EVENTS = new Set<string>(["child.spawned", "child.finished", "branch.skipped"]);
 
 export interface RunContextDeps {
   stores: Stores;
@@ -44,7 +48,17 @@ export class RunContext {
   async emit(input: Omit<OrcaEventInput, "runId">): Promise<OrcaEvent> {
     const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
     applyEvent(this.state, e);
+    if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItems();
     return e;
+  }
+
+  /**
+   * Refresh the WorkItem documents from this run's log. The documents are a cache of a
+   * projection (see program/work-items.ts), never an independent record, so it is always
+   * safe - and on resume, necessary - to recompute them from the events alone.
+   */
+  async syncWorkItems(): Promise<void> {
+    await projectWorkItems(this.deps.stores, this.state, this.deps.clock.isoNow());
   }
 
   async request(): Promise<Request | undefined> {

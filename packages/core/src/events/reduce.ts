@@ -83,6 +83,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
         inputArtifactIds: [],
         childRunIds: [],
         children: [],
+        skippedBranches: [],
         scheduledAt: e.at,
         ...(e.payload.iteration !== undefined ? { iteration: e.payload.iteration } : {}),
       };
@@ -176,7 +177,22 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
     case "child.spawned": {
       const s = step(e.payload.stepRunId);
       s.childRunIds.push(e.payload.childRunId);
-      s.children.push({ runId: e.payload.childRunId, ...(e.payload.branch !== undefined ? { branch: e.payload.branch } : {}), ...(e.payload.resumed ? { resumed: true } : {}) });
+      s.children.push({
+        runId: e.payload.childRunId,
+        ...(e.payload.branch !== undefined ? { branch: e.payload.branch } : {}),
+        ...(e.payload.workItemId ? { workItemId: e.payload.workItemId } : {}),
+        ...(e.payload.resumed ? { resumed: true } : {}),
+      });
+      // A branch skipped by an earlier pass of this step is no longer skipped once it starts.
+      s.skippedBranches = s.skippedBranches.filter((b) => b.branch !== e.payload.branch);
+      break;
+    }
+    case "branch.skipped": {
+      const s = step(e.payload.stepRunId);
+      const entry = { branch: e.payload.branch, reason: e.payload.reason, ...(e.payload.workItemId ? { workItemId: e.payload.workItemId } : {}) };
+      const at = s.skippedBranches.findIndex((b) => b.branch === entry.branch);
+      if (at >= 0) s.skippedBranches[at] = entry;
+      else s.skippedBranches.push(entry);
       break;
     }
     case "child.finished": {

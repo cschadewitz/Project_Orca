@@ -59,6 +59,8 @@ export function formatEvent(e: OrcaEvent): string {
       return `${t}     ↳ child run ${String(p.childRunId)}${p.branch ? ` (${String(p.branch)})` : ""}`;
     case "child.finished":
       return `${t}     ↲ child run ${String(p.childRunId)} ${String(p.status)}${p.outcome ? `/${String(p.outcome)}` : ""}`;
+    case "branch.skipped":
+      return `${t}     ⤫ branch ${String(p.branch)} skipped (${String(p.reason)})`;
     case "loop.iteration":
       return `${t}     ↻ iteration ${String(p.iteration)}`;
     case "vars.set":

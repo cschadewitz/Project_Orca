@@ -35,11 +35,23 @@ nodes:
     autoApproveWhen: "len(vars.workItems) <= 12"
     autoOption: approve
 
+  # Plain fan-out: one child run per leaf work item, ordered by the decomposition's
+  # dependsOn (slugs), each bound to its WorkItem so it gets its own workspace and so
+  # the item's status is derived from the child-run events this node records.
   dispatch:
-    type: "custom:dispatch-work-items"
+    type: parallel
     name: "Run SDLC per work item"
-    workflow: ai-sdlc
     concurrency: 2
+    join: all
+    failFast: true
+    forEach:
+      items: vars.leafWorkItems
+      itemVar: workItem
+      key: workItem.slug
+      dependsOn: workItem.dependsOn
+      workItemId: workItem.id
+      workflow: workItem.workflowId
+      body: { workflow: ai-sdlc }
 
   summarize:
     type: agent

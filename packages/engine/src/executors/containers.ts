@@ -9,7 +9,7 @@
  * spawned instead of starting them again (see Orchestrator.runChild).
  */
 import { INLINE_SEP } from "../orchestrator.js";
-import { evaluateVars, type LoopNode, type ParallelNode, type RunState, type SubworkflowNode, type SubworkflowRef } from "@orca/core";
+import { evaluateVars, succeeded, type BranchSkipReason, type LoopNode, type ParallelForEach, type ParallelNode, type RunState, type SubworkflowNode, type SubworkflowRef } from "@orca/core";
 import { completed, failed, paused, type NodeExecutor, type StepContext, type StepOutcome } from "./types.js";
 
 function target(ctx: StepContext, ref: SubworkflowRef, suffix: string[]): { workflow: string } | { graph: import("@orca/core").WorkflowGraph; inlineId: string } {
@@ -18,7 +18,7 @@ function target(ctx: StepContext, ref: SubworkflowRef, suffix: string[]): { work
 }
 
 function childOutcome(states: RunState[]): { ok: boolean; data: Record<string, unknown> } {
-  const ok = states.every((s) => s.run.status === "completed" && s.run.outcome === "success");
+  const ok = states.every(succeeded);
   return { ok, data: { children: states.map((s) => ({ runId: s.run.id, status: s.run.status, outcome: s.run.outcome, vars: s.run.vars })) } };
 }
 
@@ -63,44 +63,123 @@ export const loopExecutor: NodeExecutor<LoopNode> = {
   },
 };
 
-/**
- * Run `tasks` with at most `limit` in flight, in order. When `decided` reports that a
- * finished task already settled the caller's outcome, the remaining tasks are never
- * started and the ones still running are asked to stop through the signal they were
- * handed. Slots for tasks that never started stay `undefined`.
- */
-async function runBounded<R>(tasks: ((signal: AbortSignal) => Promise<R>)[], limit: number, decided?: (result: R, i: number) => string | undefined): Promise<(R | undefined)[]> {
-  const out: (R | undefined)[] = new Array(tasks.length);
-  const stop = new AbortController();
-  let next = 0;
-  const worker = async () => {
-    for (;;) {
-      const i = next++;
-      if (i >= tasks.length || stop.signal.aborted) return;
-      const result = await tasks[i]!(stop.signal);
-      out[i] = result;
-      const reason = decided?.(result, i);
-      if (reason !== undefined && !stop.signal.aborted) stop.abort(reason);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, tasks.length)) }, worker));
-  return out;
+/** One branch of a fan-out: a stable key, what it waits for, and how to start it. */
+interface Branch {
+  key: string;
+  dependsOn: string[];
+  workItemId?: string;
+  run: (signal: AbortSignal) => Promise<RunState>;
 }
 
-const succeeded = (s: RunState) => s.run.status === "completed" && s.run.outcome === "success";
+/** What became of a branch: a child run, or a reason it never started. */
+interface BranchResult {
+  state?: RunState;
+  skipped?: BranchSkipReason;
+}
+
+/**
+ * Run `branches` with at most `limit` in flight, honouring `dependsOn`: a branch starts only
+ * once every key it depends on has succeeded, and is skipped (`dependency`) as soon as one of
+ * them cannot - it failed, was itself skipped, or names a key this fan-out does not have. A
+ * *parked* prerequisite decides nothing, so its dependants simply stay unstarted until the
+ * step is re-attempted on resume.
+ *
+ * When `decided` reports that a finished branch already settled the caller's outcome, the
+ * remaining branches are never started (`failFast`) and the ones still running are asked to
+ * stop through the signal they were handed.
+ */
+async function runBranches(
+  branches: Branch[],
+  limit: number,
+  decided: ((state: RunState, branch: Branch) => string | undefined) | undefined,
+  onSkip: (branch: Branch, reason: BranchSkipReason) => Promise<void>,
+): Promise<Map<string, BranchResult>> {
+  const out = new Map<string, BranchResult>();
+  const keys = new Set(branches.map((b) => b.key));
+  const stop = new AbortController();
+  const inFlight = new Map<string, Promise<void>>();
+  let stopped = false;
+  let failure: unknown;
+
+  const settled = (key: string) => out.get(key)?.state;
+  /** A dependency that can still be met: not yet resolved, or parked and waiting for a human. */
+  const pending = (key: string) => keys.has(key) && !out.has(key);
+  const met = (b: Branch) => b.dependsOn.every((d) => { const s = settled(d); return s !== undefined && succeeded(s); });
+  const unmeetable = (b: Branch) => b.dependsOn.some((d) => { const r = out.get(d); return !keys.has(d) || (r !== undefined && !(r.state && (succeeded(r.state) || r.state.run.status === "paused"))); });
+  const held = (b: Branch) => b.dependsOn.some((d) => pending(d) || settled(d)?.run.status === "paused");
+
+  const launch = (b: Branch) => {
+    const p = (async () => {
+      const state = await b.run(stop.signal);
+      out.set(b.key, { state });
+      const reason = decided?.(state, b);
+      if (reason !== undefined) {
+        stopped = true;
+        if (!stop.signal.aborted) stop.abort(reason);
+      }
+    })()
+      .catch((e: unknown) => {
+        failure ??= e;
+        stopped = true;
+        if (!stop.signal.aborted) stop.abort("a branch threw");
+      })
+      .finally(() => void inFlight.delete(b.key));
+    inFlight.set(b.key, p);
+  };
+
+  for (;;) {
+    // Cascade: skipping one branch can make its own dependants unmeetable, so iterate to a fixed point.
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const b of branches) {
+        if (out.has(b.key) || inFlight.has(b.key) || !unmeetable(b)) continue;
+        out.set(b.key, { skipped: "dependency" });
+        await onSkip(b, "dependency");
+        changed = true;
+      }
+    }
+    if (!stopped) {
+      for (const b of branches) {
+        if (inFlight.size >= limit) break;
+        if (out.has(b.key) || inFlight.has(b.key) || !met(b)) continue;
+        launch(b);
+      }
+    }
+    if (inFlight.size === 0) break;
+    await Promise.race(inFlight.values());
+  }
+  if (failure) throw failure;
+  // Whatever is left never started: because failFast cut the fan-out short, or because a parked
+  // prerequisite has not answered yet (those stay unrecorded - resume may still run them).
+  // Recording one branch can release the next in a chain, so iterate to a fixed point here too.
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const b of branches) {
+      if (out.has(b.key) || held(b)) continue;
+      const reason: BranchSkipReason = unmeetable(b) ? "dependency" : "failFast";
+      out.set(b.key, { skipped: reason });
+      await onSkip(b, reason);
+      changed = true;
+    }
+  }
+  return out;
+}
 
 export const parallelExecutor: NodeExecutor<ParallelNode> = {
   type: "parallel",
   async execute(ctx): Promise<StepOutcome> {
     const n = ctx.node;
-    let branches: { branch: string; run: (signal: AbortSignal) => Promise<RunState> }[];
+    let branches: Branch[];
     if (n.branches) {
-      branches = Object.entries(n.branches).map(([name, ref]) => ({ branch: name, run: (signal: AbortSignal) => ctx.runChild(target(ctx, ref, [name]), { branch: name, vars: { branch: name }, signal }) }));
+      branches = Object.entries(n.branches).map(([name, ref]) => ({
+        key: name,
+        dependsOn: [],
+        run: (signal: AbortSignal) => ctx.runChild(target(ctx, ref, [name]), { branch: name, vars: { branch: name }, signal }),
+      }));
     } else {
-      const fe = n.forEach!;
-      const items = await ctx.evaluate(fe.items);
-      const list = Array.isArray(items) ? items : items && typeof items === "object" ? Object.values(items) : [];
-      branches = list.map((item, i) => ({ branch: String(i), run: (signal: AbortSignal) => ctx.runChild(target(ctx, fe.body, []), { branch: String(i), vars: { [fe.itemVar]: item, [fe.indexVar]: i }, signal }) }));
+      branches = await forEachBranches(ctx, n.forEach!);
+      const dup = branches.map((b) => b.key).find((k, i, all) => all.indexOf(k) !== i);
+      if (dup !== undefined) return failed("WORKFLOW_INVALID", `parallel '${ctx.nodeId}': forEach.key is not unique ('${dup}' appears twice)`, {}, false);
     }
 
     /**
@@ -109,31 +188,69 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
      * moment one does. A *parked* branch settles nothing - a human may still steer it to
      * success - so it never triggers the stop.
      */
-    const decided = (s: RunState, i: number): string | undefined => {
+    const decided = (s: RunState, b: Branch): string | undefined => {
       if (s.run.status === "paused") return undefined;
       const stop = n.join === "any" ? succeeded(s) : !succeeded(s);
-      return stop ? `parallel '${ctx.nodeId}': branch '${branches[i]!.branch}' decided join '${n.join}' (failFast)` : undefined;
+      return stop ? `parallel '${ctx.nodeId}': branch '${b.key}' decided join '${n.join}' (failFast)` : undefined;
     };
-    const results = await runBounded(
-      branches.map((b) => b.run),
-      n.concurrency,
-      n.failFast ? decided : undefined,
+    const results = await runBranches(branches, n.concurrency, n.failFast ? decided : undefined, (b, reason) =>
+      ctx.emit({ type: "branch.skipped", payload: { stepRunId: ctx.step.id, branch: b.key, reason, ...(b.workItemId ? { workItemId: b.workItemId } : {}) } }),
     );
-    const states = results.filter((s): s is RunState => s !== undefined);
-    const skipped = results.length - states.length;
+
+    const states = branches.map((b) => results.get(b.key)?.state).filter((s): s is RunState => s !== undefined);
+    const notStarted = branches.length - states.length;
+    /** Per branch, so a summary step (or a UI) can say what happened to each without reading the log. */
+    const summary = branches.map((b) => {
+      const r = results.get(b.key);
+      return {
+        branch: b.key,
+        ...(b.workItemId ? { workItemId: b.workItemId } : {}),
+        ...(r?.state ? { runId: r.state.run.id, status: r.state.run.status, ...(r.state.run.outcome ? { outcome: r.state.run.outcome } : {}), ok: succeeded(r.state) } : { status: r?.skipped === "dependency" ? "blocked" : "skipped", ok: false }),
+      };
+    });
 
     const parked = await pausedByChildren(ctx, states);
     if (parked) return parked;
     const { ok, data } = childOutcome(states);
-    if (skipped > 0) data.skipped = skipped;
+    data.branches = summary;
+    if (notStarted > 0) data.skipped = notStarted;
     const anyOk = states.some(succeeded);
-    if ((n.join === "all" && !ok) || (n.join === "any" && !anyOk)) {
+    if ((n.join === "all" && (!ok || notStarted > 0)) || (n.join === "any" && !anyOk)) {
       const bad = states.filter((s) => !succeeded(s)).length;
-      return failed("RUN_STATE", `parallel '${ctx.nodeId}': ${bad} of ${branches.length} branches did not succeed${skipped > 0 ? ` (${skipped} not started: failFast)` : ""}`, data);
+      const blocked = summary.filter((s) => s.status === "blocked").length;
+      const why = [blocked > 0 ? `${blocked} blocked by a dependency` : "", notStarted - blocked > 0 ? `${notStarted - blocked} not started: failFast` : ""].filter(Boolean).join(", ");
+      return failed("RUN_STATE", `parallel '${ctx.nodeId}': ${bad} of ${branches.length} branches did not succeed${why ? ` (${why})` : ""}`, data);
     }
     return completed({ data: { ...data, ok } });
   },
 };
+
+/** Build the branches of a `forEach` fan-out, evaluating each per-item expression in the item's scope. */
+async function forEachBranches(ctx: StepContext, fe: ParallelForEach): Promise<Branch[]> {
+  const items = await ctx.evaluate(fe.items);
+  const list = Array.isArray(items) ? items : items && typeof items === "object" ? Object.values(items) : [];
+  const branches: Branch[] = [];
+  for (const [i, item] of list.entries()) {
+    const scope = { [fe.itemVar]: item, [fe.indexVar]: i };
+    const str = async (expr: string | undefined): Promise<string | undefined> => {
+      if (!expr) return undefined;
+      const v = await ctx.evaluate(expr, scope);
+      return v === undefined || v === null || v === "" ? undefined : String(v);
+    };
+    const key = (await str(fe.key)) ?? String(i);
+    const deps = fe.dependsOn ? await ctx.evaluate(fe.dependsOn, scope) : [];
+    const workItemId = await str(fe.workItemId);
+    const workflow = await str(fe.workflow);
+    const ref = workflow ? { workflow } : target(ctx, fe.body, []);
+    branches.push({
+      key,
+      dependsOn: (Array.isArray(deps) ? deps : deps === undefined || deps === null || deps === "" ? [] : [deps]).map(String),
+      ...(workItemId ? { workItemId } : {}),
+      run: (signal: AbortSignal) => ctx.runChild(ref, { branch: key, vars: scope, ...(workItemId ? { workItemId } : {}), signal }),
+    });
+  }
+  return branches;
+}
 
 export const subworkflowExecutor: NodeExecutor<SubworkflowNode> = {
   type: "subworkflow",

@@ -7,4 +7,5 @@ export * from "./executors/index.js";
 export * from "./workspace/provider.js";
 export * from "./workspace/git-worktree.js";
 export * from "./program/executors.js";
+export * from "./program/work-items.js";
 export * from "./program/service.js";

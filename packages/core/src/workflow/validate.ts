@@ -164,8 +164,13 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
       if (n.branches && n.forEach) err("parallel node must not set both 'branches' and 'forEach'");
       if (n.branches) for (const [b, ref] of Object.entries(n.branches)) checkRef(ref, `.branches.${b}`);
       if (n.forEach) {
-        const m = checkExpression(n.forEach.items);
-        if (m) err(m, ".forEach.items");
+        for (const field of ["items", "key", "dependsOn", "workflow", "workItemId"] as const) {
+          const expr = n.forEach[field];
+          if (!expr) continue;
+          const m = checkExpression(expr);
+          if (m) err(m, `.forEach.${field}`);
+        }
+        if (n.forEach.dependsOn && !n.forEach.key) warn("forEach.dependsOn without forEach.key compares against item indexes; set 'key' to something stable", ".forEach.dependsOn");
         checkRef(n.forEach.body, ".forEach.body");
       }
       break;
