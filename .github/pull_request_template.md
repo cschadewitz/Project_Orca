@@ -12,6 +12,6 @@
 
 ## Checklist
 
-- [ ] `npm run lint`, `npm test` and `npm run build` pass locally
+- [ ] `pnpm run lint`, `pnpm test` and `pnpm run build` pass locally
 - [ ] New files follow the conventions in `docs/DEVELOPMENT.md` (one concern per file, leading comment saying what it is for)
 - [ ] Docs under `docs/` updated if behaviour or architecture changed

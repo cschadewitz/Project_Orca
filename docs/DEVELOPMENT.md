@@ -1,14 +1,43 @@
 # Development
 
 ```bash
-mise install                 # Node 24 (any Node >= 22 works)
-npm install
-npm run lint                 # tsc --noEmit over every package + tests (paths-mapped to sources)
-npm test                     # vitest: unit tests + e2e against a real ACP subprocess
-npm run build                # tsc -b project references -> packages/*/dist
-npm run demo                 # program run with scripted agents (from sources via tsx)
+mise install                 # Node 24 + pnpm 12 (any Node >= 22 works)
+pnpm install
+pnpm run lint                # tsc --noEmit over every package + tests (paths-mapped to sources)
+pnpm test                    # vitest: unit tests + e2e against a real ACP subprocess
+pnpm run build               # tsc -b project references -> packages/*/dist
+pnpm run demo                # program run with scripted agents (from sources via tsx)
 node packages/cli/dist/main.js demo   # same, from the compiled build
 ```
+
+## Package manager
+
+pnpm, pinned by `packageManager` in `package.json` and installed by `mise install`.
+Internal packages depend on each other with `workspace:*`; every package declares
+what it imports, because pnpm's `node_modules` is symlinked rather than flattened
+and undeclared ("phantom") dependencies do not resolve.
+
+pnpm keeps one content-addressed store and hard links packages into each
+`node_modules`, so several checkouts on one machine share the bytes: a second
+fully-installed worktree costs about 1 MB instead of another ~90 MB.
+
+**Hard links only work within a filesystem.** If checkouts do not live on the
+same filesystem as the store, pnpm silently falls back to copying and the saving
+disappears. On a machine whose checkouts are not under `$HOME` (build agents,
+shared worktree hosts), point the store at the right filesystem once:
+
+```bash
+pnpm config set --global store-dir /srv/dev/.pnpm-store   # adjust to taste
+pnpm config get store-dir                                 # verify
+```
+
+This is deliberately machine-level rather than a committed `.npmrc`: the correct
+path differs per machine, and CI wants the default.
+
+pnpm runs no dependency lifecycle scripts by default. `esbuild` (via `tsx`) needs
+its postinstall, so it is allow-listed under `allowBuilds` in
+`pnpm-workspace.yaml`; add to that list with `pnpm approve-builds` if a new
+dependency legitimately needs to build.
 
 ## Layout conventions
 
@@ -38,4 +67,4 @@ node packages/cli/dist/main.js demo   # same, from the compiled build
 `packages/testing` ships an ACP agent that reads the deliverables block from each prompt and
 writes files from a **playbook** (per artifact kind, sequential entries). It is what makes the
 end‑to‑end tests and the demo deterministic and LLM‑free. Point any ACP client at
-`npx tsx packages/testing/src/scripted-agent/main.ts --playbook pb.yaml` to try it.
+`pnpm exec tsx packages/testing/src/scripted-agent/main.ts --playbook pb.yaml` to try it.
