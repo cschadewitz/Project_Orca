@@ -36,7 +36,7 @@ interface FacadeSession {
   id: string;
   cwd: string;
   runIds: string[];
-  active?: { runId: string; abort: AbortController };
+  active?: { runId: string };
 }
 
 export class OrcaAcpAgent {
@@ -96,7 +96,7 @@ export class OrcaAcpAgent {
       runId = submitted.runId;
     }
     session.runIds.push(runId);
-    session.active = { runId, abort: new AbortController() };
+    session.active = { runId };
     this.humanInput.bind({ sessionId: session.id, request: (m: string, p?: unknown) => ctx.client.request(m, p) });
 
     const state0 = await orchestrator.getState(runId);

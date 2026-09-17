@@ -4,8 +4,9 @@
  * projection in sync), and builds the expression/template context that
  * conditions and prompts are evaluated against.
  */
-import { applyEvent, artifactsByName, latestStepForNode, OrcaError, reduceRun, type Artifact, type Clock, type Logger, type OrcaEvent, type OrcaEventInput, type Request, type RunState, type WorkItem, type WorkflowDefinition, type Workspace } from "@orca/core";
+import { applyEvent, latestStepForNode, OrcaError, reduceRun, type Artifact, type Clock, type Logger, type OrcaEvent, type OrcaEventInput, type Request, type RunState, type WorkItem, type WorkflowDefinition, type Workspace } from "@orca/core";
 import type { Stores } from "@orca/store";
+import type { ResolvedArtifact } from "./executors/types.js";
 
 export interface RunContextDeps {
   stores: Stores;
@@ -13,10 +14,6 @@ export interface RunContextDeps {
   logger: Logger;
   /** Load another run's state (parents/children) - provided by the orchestrator. */
   loadState(runId: string): Promise<RunState>;
-}
-
-export interface ArtifactView extends Artifact {
-  content: string;
 }
 
 export class RunContext {
@@ -95,10 +92,10 @@ export class RunContext {
   /** Context object for expressions and templates. Documented in docs/DATA-MODEL.md. */
   async evalContext(extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     const [request, workItem, visible] = await Promise.all([this.request(), this.workItem(), this.visibleArtifacts()]);
-    const artifacts: Record<string, ArtifactView> = {};
-    const byKind: Record<string, ArtifactView> = {};
+    const artifacts: Record<string, ResolvedArtifact> = {};
+    const byKind: Record<string, ResolvedArtifact> = {};
     for (const [name, a] of visible) {
-      const view: ArtifactView = { ...a, content: await this.deps.stores.artifacts.content(a.id).catch(() => "") };
+      const view: ResolvedArtifact = { ...a, content: await this.deps.stores.artifacts.content(a.id).catch(() => "") };
       artifacts[name] = view;
       const cur = byKind[a.kind];
       if (!cur || cur.createdAt < a.createdAt) byKind[a.kind] = view;
@@ -126,6 +123,4 @@ export class RunContext {
       ...extra,
     };
   }
-
-  static artifactsByName = artifactsByName;
 }
