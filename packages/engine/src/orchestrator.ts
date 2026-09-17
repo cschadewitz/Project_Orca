@@ -609,7 +609,13 @@ export class Orchestrator {
       await rc.emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } }).catch(() => undefined);
     };
     if (agent.sessionMode === "per-run") {
-      this.sessions.set(key, { session, current });
+      const pooled = { session, current };
+      this.sessions.set(key, pooled);
+      // A pooled session whose connection went away (wedged agent killed after a cancel, or a
+      // crash) must not be handed to the next step; let that step open a fresh one instead.
+      void session.closed.then(() => {
+        if (this.sessions.get(key) === pooled) this.sessions.delete(key);
+      });
       return { session, release: async () => {} };
     }
     return { session, release: close };

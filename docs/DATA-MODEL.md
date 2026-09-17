@@ -100,6 +100,6 @@ what its loop body produced.
 ## Config (`config.ts`)
 
 `orca.config.yaml`: `storeDir`, `hosts[]` (`local` | `ssh`), `agents[]` (command, args, env,
-hostId, roles, permissions, mcpServers, sessionMode, turnTimeoutMs), `roles{}`,
+hostId, roles, permissions, mcpServers, sessionMode, turnTimeoutMs, cancelGraceMs), `roles{}`,
 `workflows[]`/`templates[]` globs, `program{workflow,itemWorkflow}`, `workspace`
 (`local` | `git-worktree` | `kepler`), `humanInput` (`pause` | `cli` | `auto`), `plugins[]`.
