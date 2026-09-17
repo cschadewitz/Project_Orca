@@ -31,13 +31,13 @@ Kepler, Zed, T3 Code or any ACP client can drive it like a single agent (proxy m
 ## Quick start
 
 ```bash
-mise install            # or use Node >= 22 yourself
-npm install
-npm test                # unit + end-to-end tests (scripted ACP agent, no LLM needed)
-npm run demo            # full program run with scripted agents; prints the run tree
-npm run orca -- validate --mermaid        # validate + draw the shipped workflows
-npm run orca -- run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'
-npm run orca -- answer <requestId> approve   # when a run pauses at a human gate (default humanInput mode)
+mise install            # Node 24 + pnpm 12 (any Node >= 22 works)
+pnpm install
+pnpm test               # unit + end-to-end tests (scripted ACP agent, no LLM needed)
+pnpm run demo           # full program run with scripted agents; prints the run tree
+pnpm run orca validate --mermaid        # validate + draw the shipped workflows
+pnpm run orca run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'
+pnpm run orca answer <requestId> approve   # when a run pauses at a human gate (default humanInput mode)
 ```
 
 To use real agents, create `orca.config.yaml` (see `examples/orca.config.yaml`),

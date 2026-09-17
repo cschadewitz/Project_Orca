@@ -104,4 +104,4 @@ file list by hand. Tell the agent *what good looks like* (sections, front‑matt
 - `workflows/program.yaml` — decompose → materialize → plan‑gate → dispatch (ai‑sdlc per item,
   dependency‑ordered) → summarize.
 
-Render either as Mermaid with `npm run orca -- graph ai-sdlc`.
+Render either as Mermaid with `pnpm run orca graph ai-sdlc`.

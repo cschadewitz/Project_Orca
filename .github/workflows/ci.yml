@@ -26,21 +26,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
+      # resolve the store path. Version comes from package.json packageManager.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Test
-        run: npm test
+        run: pnpm test
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
       # vitest resolves @orca/* to packages/*/src via aliases, so it never exercises the
       # emitted dist graph. This catches broken exports maps and missing project references.
