@@ -42,11 +42,15 @@ edges:
 | `agent` | run an agent turn and collect artifacts | `agent`, `template`/`prompt`, `inputs`, `produces`, `completion`, `vars` |
 | `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human`), `options`, `defaultOption` |
 | `gate` | human approval; can auto‑approve | `question`, `options`, `autoApproveWhen`, `autoOption` |
-| `set` | assign run vars (values starting with `=` are expressions) | `vars` |
+| `set` | assign run vars | `vars` |
 | `loop` | repeat a nested graph / workflow as child runs | `mode` (`while` \| `until` \| `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
 | `parallel` | fan out child runs | `branches{}` or `forEach{items, body}`, `concurrency`, `join` (`all` \| `any`), `failFast` |
 | `subworkflow` | run a registered workflow as a child | `workflow`, `vars` |
 | `custom:<name>` | anything a plugin registers | free‑form |
+
+In every `vars` map (`set`, `agent`, `subworkflow`) a string value starting with
+`=` is an expression evaluated against the step context; anything else is a
+literal.
 
 ## Routing rules
 

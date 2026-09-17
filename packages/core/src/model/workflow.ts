@@ -226,6 +226,7 @@ export const ParallelNodeSchema: z.ZodType<ParallelNode> = z.lazy(() =>
 export const SubworkflowNodeSchema: z.ZodType<SubworkflowNode> = NodeBaseSchema.extend({
   type: z.literal("subworkflow"),
   workflow: z.string().min(1),
+  /** Vars handed to the child run (evaluated as expressions when prefixed with `=`). */
   vars: z.record(z.string(), z.unknown()).default({}),
 }) as unknown as z.ZodType<SubworkflowNode>;
 

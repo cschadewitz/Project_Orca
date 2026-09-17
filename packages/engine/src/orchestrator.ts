@@ -42,7 +42,7 @@ import { reduceRun } from "@orca/core";
 import type { EventFilter, EventListener, Stores } from "@orca/store";
 import { builtinExecutors } from "./executors/index.js";
 import { NodeExecutorRegistry, paused, type ResolvedArtifact, type StepContext, type StepOutcome } from "./executors/types.js";
-import { abortableHumanInput, autoHumanInput, isHumanInputPending, type HumanInputPort, type HumanInputQuery } from "./human-input.js";
+import { abortableHumanInput, askHumanInput, autoHumanInput, isHumanInputPending, type HumanInputPort } from "./human-input.js";
 import { RunContext } from "./run-context.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
@@ -579,27 +579,25 @@ export class Orchestrator {
       // logged independently (one id per session made concurrent asks collide).
       askPermission: async (req) => {
         const stepRunId = current.step.id;
-        const query: HumanInputQuery = {
+        return askHumanInput({
+          port: humanInput,
+          emit: (e) => rc.emit(e),
+          clock: this.clock,
           runId: rc.id,
           stepRunId,
-          requestId: newId("hi", this.clock.now()),
           kind: "permission",
           question: req.toolCall.title ?? "Allow tool call?",
           options: req.options.map((o) => o.optionId),
           context: { toolCall: req.toolCall },
-        };
-        await rc.emit({ type: "human.requested", payload: { stepRunId, requestId: query.requestId, kind: query.kind, question: query.question, options: query.options, context: query.context } });
-        pendingAsks++;
-        await rc.emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
-        try {
-          const answer = await humanInput.ask(query);
-          await rc.emit({ type: "human.answered", payload: { stepRunId, requestId: query.requestId, answer: answer ?? "" } });
-          return answer;
-        } finally {
-          pendingAsks--;
-          // The agent turn is still in flight; go back to waiting on it once no ask is pending.
-          if (pendingAsks === 0) await rc.emit({ type: "step.waiting", payload: { stepRunId, on: "agent-turn" } }).catch(() => undefined);
-        }
+          onRequested: () => {
+            pendingAsks++;
+          },
+          onSettled: async () => {
+            pendingAsks--;
+            // The agent turn is still in flight; go back to waiting on it once no ask is pending.
+            if (pendingAsks === 0) await rc.emit({ type: "step.waiting", payload: { stepRunId, on: "agent-turn" } }).catch(() => undefined);
+          },
+        });
       },
       onPermission: (info) => void rc.emit({ type: "agent.permission", payload: { stepRunId: current.step.id, sessionId: session.id, title: info.title, decision: info.decision, ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}) } }),
     });
