@@ -437,7 +437,15 @@ export class Orchestrator {
       async render(body, extra) {
         return renderTemplate(body, await ctx.evalContext(extra), { partials: self.templates.partials });
       },
-      resolveInputs: (refs) => self.resolveInputs(rc, refs),
+      async resolveInputs(refs) {
+        const resolved = await self.resolveInputs(rc, refs);
+        // Record what the step actually read: `step.started` was appended before the executor ran,
+        // so the ids are only known here (see the `step.inputs` event).
+        const ids = resolved.filter((a): a is ResolvedArtifact => a !== undefined).map((a) => a.id);
+        const fresh = [...new Set(ids)].filter((id) => !step.inputArtifactIds.includes(id));
+        if (fresh.length) await rc.emit({ type: "step.inputs", payload: { stepRunId: step.id, artifactIds: fresh } });
+        return resolved;
+      },
       recordArtifact: (spec, content, extra) => self.recordArtifact(rc, step, spec, content, extra ?? {}),
       async runChild(target, options) {
         // A re-attempted (resumed) container step re-attaches to the children its interrupted
