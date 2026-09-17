@@ -7,9 +7,13 @@
  * the orchestrator needs from a host is file access, to pick up artifacts the
  * agent wrote and to serve ACP `fs/*` requests.
  */
-import type { ChildProcess } from "node:child_process";
-import type * as acp from "@agentclientprotocol/sdk";
+import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
+import { Readable, Writable } from "node:stream";
+import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSpec, HostSpec } from "@orca/core";
+
+/** A child spawned with `stdio: ["pipe", "pipe", "pipe"]`: all three streams present. */
+export type PipedChildProcess = ChildProcessByStdio<Writable, Readable, Readable>;
 
 export interface ProcessExit {
   code: number | null;
@@ -100,4 +104,105 @@ export class StderrTail {
   text(): string {
     return this.lines.join("\n");
   }
+}
+
+/**
+ * Frame an ACP ndjson stream over a pair of Node streams.
+ *
+ * `acp.ndJsonStream` speaks web streams, and `Readable.toWeb`/`Writable.toWeb`
+ * are typed with `any`-ish chunk types, hence the casts. They live here once so
+ * that every transport (child stdio, a process's own stdio) gets the same
+ * framing and any future fix - EPIPE handling, backpressure - lands in one spot.
+ */
+export function stdioAcpStream(input: Readable, output: Writable): acp.Stream {
+  return acp.ndJsonStream(Writable.toWeb(output) as WritableStream<Uint8Array>, Readable.toWeb(input) as ReadableStream<Uint8Array>);
+}
+
+export interface WrapAgentProcessOptions {
+  /** Turns a spawn failure into the host-specific error to throw. */
+  onSpawnError(error: Error): Error;
+}
+
+/**
+ * Turn a freshly spawned child into an `AgentProcessHandle`.
+ *
+ * Resolves only once the child has actually spawned, so a bad command fails
+ * here rather than as an unexplained handshake timeout later. The `exit`
+ * listener is attached before that await: an exit can race the spawn callback
+ * for a process that dies immediately.
+ */
+export async function wrapAgentProcess(child: PipedChildProcess, options: WrapAgentProcessOptions): Promise<AgentProcessHandle> {
+  const tail = new StderrTail();
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (d: string) => tail.push(d));
+  const exited = new Promise<ProcessExit>((resolve) => {
+    child.on("exit", (code, signal) => resolve({ code, signal }));
+  });
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  }).catch((e: unknown) => {
+    throw options.onSpawnError(e instanceof Error ? e : new Error(String(e)));
+  });
+  return {
+    stream: stdioAcpStream(child.stdout, child.stdin),
+    pid: child.pid,
+    exited,
+    stderrTail: () => tail.text(),
+    kill: (signal = "SIGTERM") => killIfRunning(child, signal),
+  };
+}
+
+export interface CollectChildProcessOptions {
+  stdin?: string;
+  timeoutMs?: number;
+}
+
+/**
+ * Run a child to completion, collecting stdout/stderr.
+ *
+ * Shared by every host's `exec`; hosts differ only in how they build the argv.
+ * `stdin` is always closed, otherwise a command that reads from it (`cat >
+ * file`) would hang forever.
+ *
+ * Writes to stdin are best-effort: a command that never reads it (or has
+ * already exited) makes the pipe fail with EPIPE, which is not an error for
+ * us - the exit code and output are what matter - so it must not reject the
+ * promise or bubble up as an unhandled stream error.
+ *
+ * Normally we resolve on `close` (all output flushed) rather than `exit`. On
+ * timeout we SIGKILL - a SIGTERM the command may ignore would leave us waiting
+ * - and then resolve on `exit`, because a grandchild that survived the kill
+ * (`sh -c` forks one) still holds the stdout pipe open and `close` would not
+ * fire until it finished, which is exactly what the timeout exists to prevent.
+ */
+export function collectChildProcess(child: PipedChildProcess, options: CollectChildProcessOptions = {}): Promise<ExecResult> {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (d: string) => (stdout += d));
+    child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+    let timedOut = false;
+    const timer = options.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          killIfRunning(child, "SIGKILL");
+        }, options.timeoutMs)
+      : undefined;
+    const done = (code: number | null): void => {
+      if (timer) clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    };
+    child.on("error", (e) => {
+      if (timer) clearTimeout(timer);
+      reject(e);
+    });
+    child.on("exit", (code) => {
+      if (timedOut) done(code);
+    });
+    child.on("close", done);
+    child.stdin.on("error", () => {});
+    if (options.stdin !== undefined) child.stdin.end(options.stdin);
+    else child.stdin.end();
+  });
 }
