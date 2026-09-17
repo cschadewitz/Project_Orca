@@ -13,10 +13,8 @@
  */
 import { spawn } from "node:child_process";
 import { posix } from "node:path";
-import { Readable, Writable } from "node:stream";
-import * as acp from "@agentclientprotocol/sdk";
 import { OrcaError, type AgentSpec, type SshHost as SshHostSpec } from "@orca/core";
-import { killIfRunning, shellQuote, StderrTail, type AgentHost, type AgentProcessHandle, type ExecResult, type HostFileSystem, type SpawnAgentOptions } from "../host.js";
+import { collectChildProcess, shellQuote, wrapAgentProcess, type AgentHost, type AgentProcessHandle, type ExecResult, type HostFileSystem, type SpawnAgentOptions } from "../host.js";
 
 export class SshHost implements AgentHost {
   readonly fs: HostFileSystem;
@@ -46,53 +44,26 @@ export class SshHost implements AgentHost {
     return [shell!, ...shellArgs, shellQuote(script)];
   }
 
-  async spawnAgent(agent: AgentSpec, options: SpawnAgentOptions): Promise<AgentProcessHandle> {
+  spawnAgent(agent: AgentSpec, options: SpawnAgentOptions): Promise<AgentProcessHandle> {
     const env = { ...agent.env, ...(options.env ?? {}) };
     const envPrefix = Object.entries(env)
       .map(([k, v]) => `${k}=${shellQuote(v)}`)
       .join(" ");
     const script = `cd ${shellQuote(options.cwd)} && exec ${envPrefix ? `env ${envPrefix} ` : ""}${shellQuote(agent.command)} ${agent.args.map(shellQuote).join(" ")}`.trim();
-    const args = [...this.baseArgs(), "--", ...this.remoteCommand(script)];
-    const child = spawn(this.spec.sshBinary, args, { stdio: ["pipe", "pipe", "pipe"] });
-    const tail = new StderrTail();
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (d: string) => tail.push(d));
-    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      child.on("exit", (code, signal) => resolve({ code, signal }));
+    return wrapAgentProcess(this.spawnSsh(script), {
+      onSpawnError: (e) => new OrcaError("AGENT_TRANSPORT", `cannot start ssh for host '${this.id}': ${e.message}`, { hostId: this.id }, { cause: e }),
     });
-    await new Promise<void>((resolve, reject) => {
-      child.once("spawn", resolve);
-      child.once("error", reject);
-    }).catch((e: Error) => {
-      throw new OrcaError("AGENT_TRANSPORT", `cannot start ssh for host '${this.id}': ${e.message}`, { hostId: this.id }, { cause: e });
-    });
-    const stream = acp.ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>);
-    return {
-      stream,
-      pid: child.pid,
-      exited,
-      stderrTail: () => tail.text(),
-      kill: (signal = "SIGTERM") => killIfRunning(child, signal),
-    };
   }
 
   exec(command: string, options: { cwd?: string; stdin?: string; timeoutMs?: number } = {}): Promise<ExecResult> {
     const script = options.cwd ? `cd ${shellQuote(options.cwd)} && ${command}` : command;
+    return collectChildProcess(this.spawnSsh(script), options);
+  }
+
+  /** Run `script` through the remote login shell; stdin/stdout carry the payload. */
+  private spawnSsh(script: string) {
     const args = [...this.baseArgs(), "--", ...this.remoteCommand(script)];
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.spec.sshBinary, args, { stdio: ["pipe", "pipe", "pipe"] });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8").on("data", (d: string) => (stdout += d));
-      child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
-      const timer = options.timeoutMs ? setTimeout(() => child.kill("SIGKILL"), options.timeoutMs) : undefined;
-      child.on("error", reject);
-      child.on("close", (code) => {
-        if (timer) clearTimeout(timer);
-        resolve({ code, stdout, stderr });
-      });
-      child.stdin.end(options.stdin ?? "");
-    });
+    return spawn(this.spec.sshBinary, args, { stdio: ["pipe", "pipe", "pipe"] });
   }
 }
 

@@ -15,6 +15,18 @@ describe("hosts", () => {
     expect(r.stdout.trim()).toBe("hi");
     expect(await host.fs.exists("/definitely/not/here")).toBe(false);
   });
+  it("feeds stdin, survives commands that never read it, and kills on timeout", async () => {
+    const host = new LocalHost({ id: "local", type: "local" });
+    expect((await host.exec("cat")).stdout).toBe("");
+    expect((await host.exec("cat", { stdin: "piped\n" })).stdout).toBe("piped\n");
+    // `echo` exits without draining stdin: the write must fail silently, not reject.
+    expect((await host.exec("echo hi", { stdin: "x".repeat(100_000) })).code).toBe(0);
+    // Must return promptly: the killed `sh` leaves `sleep` holding the stdout pipe.
+    const started = Date.now();
+    const slow = await host.exec("sleep 30", { timeoutMs: 50 });
+    expect(slow.code).toBe(null);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
   it("escalates SIGTERM to SIGKILL on a process that ignores SIGTERM", async () => {
     const host = new LocalHost({ id: "local", type: "local" });
     // SIG_IGN survives exec, so `sleep` inherits the ignored SIGTERM and no orphan is left behind.

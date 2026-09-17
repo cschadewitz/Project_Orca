@@ -16,8 +16,9 @@
  *   /status                             summarise runs in this session
  *   anything else                       submit as a Request (first line = title)
  */
-import { Readable, Writable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { stdioAcpStream } from "@orca/agents";
 import { newId, type OrcaEvent, type RunState, type WorkflowDefinition } from "@orca/core";
 import type { Orchestrator, ProgramService } from "@orca/engine";
 import { UpstreamHumanInput } from "./upstream-human-input.js";
@@ -190,7 +191,7 @@ export class OrcaAcpAgent {
 
 /** Serve ORCA as an ACP agent on stdio (used by `orca acp`). */
 export async function serveAcpFacade(opts: OrcaAcpAgentOptions, io: { stdin?: Readable; stdout?: Writable } = {}): Promise<void> {
-  const stream = acp.ndJsonStream(Writable.toWeb(io.stdout ?? process.stdout) as WritableStream<Uint8Array>, Readable.toWeb(io.stdin ?? process.stdin) as ReadableStream<Uint8Array>);
+  const stream = stdioAcpStream(io.stdin ?? process.stdin, io.stdout ?? process.stdout);
   const conn = new OrcaAcpAgent(opts).register(acp.agent({ name: "orca" })).connect(stream);
   await conn.closed;
 }
