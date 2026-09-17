@@ -49,7 +49,7 @@ export async function openT3CodeSession(base: Pick<OpenSessionOptions, "agent" |
       if (idle && turnWaiter) {
         const w = turnWaiter;
         turnWaiter = undefined;
-        w.resolve({ stopReason: "end_turn", durationMs: now() - w.started, updateCount: 0 });
+        w.resolve({ stopReason: "end_turn", durationMs: now() - w.started });
       }
     }
   });
@@ -62,7 +62,7 @@ export async function openT3CodeSession(base: Pick<OpenSessionOptions, "agent" |
     if (turnWaiter) {
       const w = turnWaiter;
       turnWaiter = undefined;
-      w.resolve({ stopReason: "cancelled", durationMs: now() - w.started, updateCount: 0 });
+      w.resolve({ stopReason: "cancelled", durationMs: now() - w.started });
     }
   };
 

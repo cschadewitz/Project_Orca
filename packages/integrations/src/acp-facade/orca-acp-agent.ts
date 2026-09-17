@@ -37,7 +37,7 @@ interface FacadeSession {
   id: string;
   cwd: string;
   runIds: string[];
-  active?: { runId: string; abort: AbortController };
+  active?: { runId: string };
 }
 
 export class OrcaAcpAgent {
@@ -109,7 +109,7 @@ export class OrcaAcpAgent {
       runId = submitted.runId;
     }
     session.runIds.push(runId);
-    session.active = { runId, abort: new AbortController() };
+    session.active = { runId };
     // Bound per run, so concurrent sessions each receive only their own gates and `ask` permissions.
     const unbindHumanInput = this.humanInput.bind(runId, { sessionId: session.id, request: (m: string, p?: unknown) => ctx.client.request(m, p) });
 
