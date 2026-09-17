@@ -102,10 +102,12 @@ back to `build` with the review as an extra input. That *is* the hand‑off.
   items with slugs, acceptance criteria and `dependsOn`.
 - `custom:materialize-work-items` → `WorkItem` records in the store.
 - `plan-gate` → auto‑approves small breakdowns, asks a human for big ones.
-- `custom:dispatch-work-items` → runs the item workflow (`ai-sdlc`) per leaf
-  item as child runs, honouring dependencies with bounded concurrency; each
-  item gets its own **workspace** from the `WorkspaceProvider` (a git worktree
-  per item, a Kepler task worktree, or the current directory).
+- `custom:dispatch-work-items` → runs the item workflow per leaf item as child
+  runs — the item's own `workflowId`, else the node's `workflow`, else
+  `vars.itemWorkflow` (seeded from `program.itemWorkflow`, default `ai-sdlc`) —
+  honouring dependencies with bounded concurrency; each item gets its own
+  **workspace** from the `WorkspaceProvider` (a git worktree per item, a Kepler
+  task worktree, or the current directory).
 - `summarize` (agent) → a program summary artifact.
 
 `ProgramService.submit()` is the single entry point used by the CLI and the ACP

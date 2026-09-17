@@ -165,5 +165,5 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
 
   const stores = opts.ephemeral ? memoryStores() : fileStores(resolve(configDir, config.storeDir));
   const orchestrator = new Orchestrator({ stores, agents, workflows, templates, executors, humanInput, workspaceProvider, logger });
-  return { config, configDir, orchestrator, program: new ProgramService(orchestrator, config.program.workflow), workflows, templates, agents, logger };
+  return { config, configDir, orchestrator, program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow), workflows, templates, agents, logger };
 }
