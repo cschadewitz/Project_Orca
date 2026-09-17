@@ -18,6 +18,12 @@ export interface RunContextDeps {
 
 export class RunContext {
   readonly abort = new AbortController();
+  /**
+   * Artifact bodies by content hash. Blobs are content-addressed and therefore immutable, and
+   * `evalContext()` runs for every render, condition, route and input resolution - without this
+   * each of those re-read every visible artifact from disk.
+   */
+  private readonly contentByHash = new Map<string, Promise<string>>();
   private constructor(
     readonly id: string,
     readonly definition: WorkflowDefinition,
@@ -75,6 +81,16 @@ export class RunContext {
     return map;
   }
 
+  /** Artifact body, read once per content hash for the lifetime of this context. */
+  private content(a: Artifact): Promise<string> {
+    let body = this.contentByHash.get(a.contentHash);
+    if (!body) {
+      body = this.deps.stores.artifacts.content(a.id).catch(() => "");
+      this.contentByHash.set(a.contentHash, body);
+    }
+    return body;
+  }
+
   async nextArtifactVersion(name: string): Promise<number> {
     const visible = await this.visibleArtifacts();
     return (visible.get(name)?.version ?? 0) + 1;
@@ -94,8 +110,10 @@ export class RunContext {
     const [request, workItem, visible] = await Promise.all([this.request(), this.workItem(), this.visibleArtifacts()]);
     const artifacts: Record<string, ResolvedArtifact> = {};
     const byKind: Record<string, ResolvedArtifact> = {};
+    const bodies = await Promise.all([...visible.values()].map((a) => this.content(a)));
+    let i = 0;
     for (const [name, a] of visible) {
-      const view: ResolvedArtifact = { ...a, content: await this.deps.stores.artifacts.content(a.id).catch(() => "") };
+      const view: ResolvedArtifact = { ...a, content: bodies[i++]! };
       artifacts[name] = view;
       const cur = byKind[a.kind];
       if (!cur || cur.createdAt < a.createdAt) byKind[a.kind] = view;

@@ -69,8 +69,8 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
 
 export interface DispatchWorkItemsNode extends CustomNode {
   type: "custom:dispatch-work-items";
-  /** Workflow to run per item unless the item names its own. */
-  workflow: string;
+  /** Workflow to run per item unless the item names its own. Defaults to `vars.itemWorkflow`. */
+  workflow?: string;
   concurrency?: number;
   /** Only dispatch leaf items (no children). Default true. */
   leavesOnly?: boolean;
@@ -82,6 +82,11 @@ export const dispatchWorkItemsExecutor: NodeExecutor<DispatchWorkItemsNode> = {
   type: "custom:dispatch-work-items",
   async execute(ctx): Promise<StepOutcome> {
     const n = ctx.node;
+    // Precedence: the item's own workflow, then the node, then `vars.itemWorkflow`
+    // (seeded from `config.program.itemWorkflow` / the workflow's `vars`).
+    const varWorkflow = ctx.run.state.run.vars.itemWorkflow;
+    const itemWorkflow = n.workflow ?? (typeof varWorkflow === "string" && varWorkflow ? varWorkflow : undefined);
+    if (!itemWorkflow) return failed("WORKFLOW_INVALID", "no item workflow: set 'workflow' on the node or 'itemWorkflow' in vars", {}, false);
     const ids = (ctx.run.state.run.vars.workItemIds as string[] | undefined) ?? [];
     let items = (await Promise.all(ids.map((id) => ctx.stores.workItems.get(id)))).filter((w): w is WorkItem => !!w);
     if (items.length === 0) return failed("RUN_STATE", "no work items to dispatch (run custom:materialize-work-items first)", {}, false);
@@ -107,7 +112,7 @@ export const dispatchWorkItemsExecutor: NodeExecutor<DispatchWorkItemsNode> = {
     const launch = (w: WorkItem) => {
       const p = (async () => {
         await touch(w, { status: "in-progress" });
-        const state = await ctx.runChild({ workflow: w.workflowId ?? n.workflow }, { workItemId: w.id, branch: w.slug, vars: { workItem: w } });
+        const state = await ctx.runChild({ workflow: w.workflowId ?? itemWorkflow }, { workItemId: w.id, branch: w.slug, vars: { workItem: w } });
         if (state.run.status === "paused") {
           parked.set(w.id, state);
           await touch(w, { runId: state.run.id });

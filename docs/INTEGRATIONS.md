@@ -26,7 +26,9 @@ A Kepler session then drives ORCA like any agent:
   node, live status), agent output as message chunks prefixed with the run/node, every
   recorded artifact as a completed **tool call** with the file location;
 - gates and `ask` permissions are forwarded upstream as `session/request_permission`, so
-  Kepler's normal approval UI is the human gate;
+  Kepler's normal approval UI is the human gate. Questions are routed by the run that raised
+  them (child runs resolve to the session that started their root run), so concurrent
+  sessions each see only their own gates;
 - `session/cancel` cancels the whole run tree.
 
 Implementation: `packages/integrations/src/acp-facade/`. Workspace selection:
