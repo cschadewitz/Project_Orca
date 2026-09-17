@@ -42,11 +42,25 @@ edges:
 | `agent` | run an agent turn and collect artifacts | `agent`, `template`/`prompt`, `inputs`, `produces`, `completion`, `vars` |
 | `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human`), `options`, `defaultOption` |
 | `gate` | human approval; can auto‑approve | `question`, `options`, `autoApproveWhen`, `autoOption` |
-| `set` | assign run vars (values starting with `=` are expressions) | `vars` |
+| `set` | assign run vars | `vars` |
 | `loop` | repeat a nested graph / workflow as child runs | `mode` (`while` \| `until` \| `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
-| `parallel` | fan out child runs | `branches{}` or `forEach{items, body}`, `concurrency`, `join` (`all` \| `any`), `failFast` |
+| `parallel` | fan out child runs | `branches{}` or `forEach{items, body}`, `concurrency`, `join` (`all` \| `any`), `failFast` (default `true`: stop once the join is decided) |
 | `subworkflow` | run a registered workflow as a child | `workflow`, `vars` |
 | `custom:<name>` | anything a plugin registers | free‑form |
+
+Wherever a node takes `vars` (`set`, `agent`, `subworkflow`), a string value starting
+with `=` is evaluated as an expression and anything else is a literal, e.g.
+`vars: { slug: "=vars.workItem.slug", stage: "build" }`.
+
+### Parallel fan-out
+
+`concurrency` bounds how many branches are in flight; `join` decides the node's outcome
+(`all` — every branch must succeed, `any` — one is enough). With `failFast` (the default)
+the node stops as soon as a branch settles the join: the first branch that does not succeed
+under `join: all`, or the first that does under `join: any`. Branches that have not started
+are skipped and branches still running are cancelled, so a doomed fan-out stops burning
+agent turns. A branch parked at a human gate settles nothing — the parent parks with it as
+usual. Set `failFast: false` to always run every branch to completion.
 
 ## Routing rules
 
@@ -81,11 +95,15 @@ edges:
 - `mode: artifact-present`: poll the host while the turn runs and cancel the turn as soon
   as all **required** files exist (useful for chatty agents). Optional deliverables are not
   watched, so a step whose deliverables are all `required: false` behaves like `turn-end`
-  (`orca validate` warns about that combination).
+  (`orca validate` warns about that combination). The poll asks for all watched paths in a
+  single host round trip, roughly every 1.5 s, and never starts a check while the previous
+  one is still in flight — a slow host is simply polled less often (up to 30 s apart).
 - `maxFollowUps`: how many "your deliverable is missing/invalid" follow‑ups to send in the
   same session before failing the attempt.
 - `maxAttempts`: whole‑step retries (fresh session each time).
 - `timeoutMs`: per‑turn wall clock (defaults to the agent's `turnTimeoutMs`).
+  When it elapses ORCA sends `session/cancel`; an agent that does not end the turn within
+  its `cancelGraceMs` (default 10s) is killed and the step fails with `AGENT_TRANSPORT`.
 
 ## Templates
 
@@ -104,4 +122,4 @@ file list by hand. Tell the agent *what good looks like* (sections, front‑matt
 - `workflows/program.yaml` — decompose → materialize → plan‑gate → dispatch (ai‑sdlc per item,
   dependency‑ordered) → summarize.
 
-Render either as Mermaid with `npm run orca -- graph ai-sdlc`.
+Render either as Mermaid with `pnpm run orca graph ai-sdlc`.

@@ -123,6 +123,11 @@ export class ScriptedAgent {
     for (const d of deliverables) {
       const n = (state.counts[d.kind] ?? 0) + 1;
       const entry = this.pick(d.kind, n);
+      if (entry.hang) {
+        // A deadlocked agent: no response, no reaction to session/cancel. Only a kill ends this.
+        await say(`Hanging on ${d.kind} (playbook says hang).\n`);
+        await new Promise<never>(() => {});
+      }
       await sleep(entry.delayMs ?? delay, session);
       if (session.cancelled) {
         // Leave the counter alone: the entry was never consumed, so a follow-up turn replays it.

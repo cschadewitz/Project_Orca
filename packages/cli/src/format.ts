@@ -25,6 +25,8 @@ export function formatEvent(e: OrcaEvent): string {
     }
     case "step.failed":
       return `${t}   ✖ ${stepName(e)}: ${(p.error as { message: string }).message}${p.willRetry ? " (retrying)" : ""}`;
+    case "step.inputs":
+      return `${t}     ⬓ inputs ${(p.artifactIds as string[]).join(", ")}`;
     case "step.waiting":
       return `${t}   … waiting on ${String(p.on)}${p.detail ? ` (${String(p.detail)})` : ""}`;
     case "agent.session.opened":
@@ -77,7 +79,7 @@ export function formatRunState(s: RunState): string {
   lines.push("", "steps:");
   for (const id of s.stepOrder) {
     const st = s.steps[id]!;
-    const extras = [st.result?.choice ? `choice=${st.result.choice}` : "", st.childRunIds.length ? `children=${st.childRunIds.length}` : "", st.error ? `error=${st.error.message}` : ""].filter(Boolean).join(" ");
+    const extras = [st.result?.choice ? `choice=${st.result.choice}` : "", st.inputArtifactIds.length ? `inputs=${st.inputArtifactIds.length}` : "", st.childRunIds.length ? `children=${st.childRunIds.length}` : "", st.error ? `error=${st.error.message}` : ""].filter(Boolean).join(" ");
     lines.push(`  ${st.status.padEnd(9)} ${st.nodeId.padEnd(22)} ${st.nodeType.padEnd(14)} attempt=${st.attempt} ${extras}`.trimEnd());
   }
   const arts = Object.values(s.artifacts);

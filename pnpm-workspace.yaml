@@ -1,0 +1,8 @@
+# Workspace packages. Replaces the npm `workspaces` field in package.json.
+packages:
+  - "packages/*"
+
+# pnpm runs no dependency lifecycle scripts by default. esbuild (pulled in by
+# tsx) needs its postinstall to place the platform binary, so allow just that.
+allowBuilds:
+  esbuild: true

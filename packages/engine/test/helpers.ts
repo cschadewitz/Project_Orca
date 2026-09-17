@@ -27,12 +27,12 @@ export interface TestHarness {
   prompts(): Promise<{ text: string; turn: number }[]>;
 }
 
-export async function harness(playbook: PlaybookInput, overrides: Partial<OrchestratorOptions> = {}, opts: { sessionMode?: "per-step" | "per-run" } = {}): Promise<TestHarness> {
+export async function harness(playbook: PlaybookInput, overrides: Partial<OrchestratorOptions> = {}, opts: { sessionMode?: "per-step" | "per-run"; turnTimeoutMs?: number; cancelGraceMs?: number } = {}): Promise<TestHarness> {
   const dir = await mkdtemp(join(tmpdir(), "orca-e2e-"));
   const promptLog = join(dir, ".orca-test", "prompts.jsonl");
   const agents = new AgentRegistry()
     .addHost(new LocalHost({ id: "local", type: "local" }))
-    .addAgent(scriptedAgentSpec({ playbookJson: playbook, stateFile: join(dir, ".orca-test", "state.json"), promptLog, ...(opts.sessionMode ? { sessionMode: opts.sessionMode } : {}) }));
+    .addAgent(scriptedAgentSpec({ playbookJson: playbook, stateFile: join(dir, ".orca-test", "state.json"), promptLog, ...opts }));
   const orchestrator = new Orchestrator({
     stores: memoryStores(),
     agents,
