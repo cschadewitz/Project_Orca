@@ -3,9 +3,9 @@
  * `<dir>/runs/<runId>.jsonl`. Simple, greppable, and safe to commit alongside
  * artifacts if a team wants run history in git.
  */
-import { appendFile, mkdir, readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { OrcaEventSchema, type Clock, type OrcaEvent } from "@orca/core";
+import { OrcaEventSchema, appendJsonl, readJsonl, readJsonlLines, type Clock, type OrcaEvent } from "@orca/core";
 import { BaseEventStore } from "./event-store.js";
 
 export class JsonlEventStore extends BaseEventStore {
@@ -41,7 +41,7 @@ export class JsonlEventStore extends BaseEventStore {
     return n;
   }
   protected async persist(event: OrcaEvent): Promise<void> {
-    await appendFile(this.file(event.runId), JSON.stringify(event) + "\n", "utf8");
+    await appendJsonl(this.file(event.runId), event);
     this.counts.set(event.runId, event.seq + 1);
   }
   override async append(input: Parameters<BaseEventStore["append"]>[0]): Promise<OrcaEvent> {
@@ -52,17 +52,11 @@ export class JsonlEventStore extends BaseEventStore {
   }
   private async lines(runId: string): Promise<string[]> {
     await this.init();
-    let text: string;
-    try {
-      text = await readFile(this.file(runId), "utf8");
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw e;
-    }
-    return text.split("\n").filter((l) => l.trim().length > 0);
+    return readJsonlLines(this.file(runId));
   }
   async read(runId: string): Promise<OrcaEvent[]> {
-    return (await this.lines(runId)).map((l) => OrcaEventSchema.parse(JSON.parse(l)));
+    await this.init();
+    return readJsonl(this.file(runId), OrcaEventSchema);
   }
   /**
    * Filters on the raw line before parsing: `agent.update` lines carry the

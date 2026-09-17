@@ -2,9 +2,9 @@
  * ArtifactStore - content-addressed blob storage plus an index of Artifact
  * metadata. The engine decides ids/versions; the store just persists.
  */
-import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ArtifactSchema, OrcaError, type Artifact } from "@orca/core";
+import { ArtifactSchema, OrcaError, appendJsonl, readJsonl, type Artifact } from "@orca/core";
 
 export interface ArtifactQuery {
   runId?: string;
@@ -52,27 +52,21 @@ export class FileArtifactStore implements ArtifactStore {
   private get base(): string {
     return join(this.dir, "artifacts");
   }
+  private get index(): string {
+    return join(this.base, "index.jsonl");
+  }
   private async load(): Promise<Map<string, Artifact>> {
     if (this.cache) return this.cache;
     await mkdir(join(this.base, "blobs"), { recursive: true });
     const map = new Map<string, Artifact>();
-    try {
-      const text = await readFile(join(this.base, "index.jsonl"), "utf8");
-      for (const line of text.split("\n")) {
-        if (!line.trim()) continue;
-        const a = ArtifactSchema.parse(JSON.parse(line));
-        map.set(a.id, a);
-      }
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-    }
+    for (const a of await readJsonl(this.index, ArtifactSchema)) map.set(a.id, a);
     this.cache = map;
     return map;
   }
   async put(artifact: Artifact, content: string): Promise<void> {
     const map = await this.load();
     await writeFile(join(this.base, "blobs", artifact.contentHash), content, "utf8");
-    await appendFile(join(this.base, "index.jsonl"), JSON.stringify(artifact) + "\n", "utf8");
+    await appendJsonl(this.index, artifact);
     map.set(artifact.id, artifact);
   }
   async get(id: string): Promise<Artifact | undefined> {
