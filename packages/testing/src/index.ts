@@ -29,6 +29,8 @@ export function scriptedAgentSpec(options: {
   hostId?: string;
   sessionMode?: "per-step" | "per-run";
   permissions?: AgentSpec["permissions"];
+  turnTimeoutMs?: number;
+  cancelGraceMs?: number;
 }): AgentSpec {
   const entry = join(here, "scripted-agent", runningFromSource ? "main.ts" : "main.js");
   const args: string[] = [];
@@ -54,5 +56,7 @@ export function scriptedAgentSpec(options: {
     roles: options.roles ?? ["planner", "designer", "builder", "tester", "reviewer", "deployer", "decomposer"],
     sessionMode: options.sessionMode ?? "per-step",
     ...(options.permissions ? { permissions: options.permissions } : {}),
+    ...(options.turnTimeoutMs ? { turnTimeoutMs: options.turnTimeoutMs } : {}),
+    ...(options.cancelGraceMs ? { cancelGraceMs: options.cancelGraceMs } : {}),
   });
 }

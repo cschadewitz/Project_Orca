@@ -4,8 +4,11 @@
  * No daemon is needed on the remote side: `ssh -T user@host -- bash -lc 'cd
  * <cwd> && exec <agent>'` gives us the agent's stdin/stdout, which *is* the ACP
  * stdio transport. File access for artifact pickup uses short-lived `ssh`
- * commands (`cat`, `test -e`, `mkdir -p`); swap in an SFTP-based
- * HostFileSystem if you need higher throughput.
+ * commands (`cat`, `test -e`, `mkdir -p`), batched where a caller needs several
+ * paths at once (`existsMany`). Each call is still a connection, so on a chatty
+ * workflow it is worth enabling multiplexing via `sshArgs`, e.g. ["-o",
+ * "ControlMaster=auto", "-o", "ControlPath=~/.ssh/orca-%r@%h:%p", "-o",
+ * "ControlPersist=60s"]; swap in an SFTP-based HostFileSystem if you need more.
  *
  * Requirements: key-based auth (BatchMode=yes, no password prompts), the agent
  * binary on the remote PATH for a login shell, and the workspace already
@@ -111,6 +114,20 @@ class SshFileSystem implements HostFileSystem {
   async exists(path: string): Promise<boolean> {
     const r = await this.host.exec(`test -e ${shellQuote(path)}`);
     return r.code === 0;
+  }
+  /**
+   * One ssh process for the whole set: the remote shell prints `1`/`0` per path,
+   * in order. A malformed reply (truncated output, a shell that failed to start)
+   * is reported as "nothing exists yet" rather than as a spurious hit, so a
+   * poller keeps waiting instead of concluding an artifact has landed.
+   */
+  async existsMany(paths: string[]): Promise<boolean[]> {
+    if (paths.length === 0) return [];
+    const script = `for p in ${paths.map(shellQuote).join(" ")}; do if test -e "$p"; then echo 1; else echo 0; fi; done`;
+    const r = await this.host.exec(script);
+    const lines = r.stdout.split("\n").filter((l) => l.trim() !== "");
+    if (lines.length !== paths.length) return paths.map(() => false);
+    return lines.map((l) => l.trim() === "1");
   }
   async mkdirp(path: string): Promise<void> {
     const r = await this.host.exec(`mkdir -p ${shellQuote(path)}`);

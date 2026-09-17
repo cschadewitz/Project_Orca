@@ -5,7 +5,7 @@ import { dispatchWorkItemsExecutor, materializeWorkItemsExecutor } from "../prog
 import { NodeExecutorRegistry } from "./types.js";
 
 export * from "./types.js";
-export { agentExecutor, runAgentTurn, validateArtifact, type AgentTurnSpec, type AgentTurnOutcome } from "./agent-step.js";
+export { agentExecutor, runAgentTurn, validateArtifact, watchForArtifacts, type AgentTurnSpec, type AgentTurnOutcome } from "./agent-step.js";
 export { startExecutor, endExecutor, setExecutor, decisionExecutor, gateExecutor } from "./basic.js";
 export { loopExecutor, parallelExecutor, subworkflowExecutor, pausedByChildren } from "./containers.js";
 
