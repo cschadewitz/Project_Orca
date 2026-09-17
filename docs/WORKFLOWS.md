@@ -95,7 +95,9 @@ usual. Set `failFast: false` to always run every branch to completion.
 - `mode: artifact-present`: poll the host while the turn runs and cancel the turn as soon
   as all **required** files exist (useful for chatty agents). Optional deliverables are not
   watched, so a step whose deliverables are all `required: false` behaves like `turn-end`
-  (`orca validate` warns about that combination).
+  (`orca validate` warns about that combination). The poll asks for all watched paths in a
+  single host round trip, roughly every 1.5 s, and never starts a check while the previous
+  one is still in flight — a slow host is simply polled less often (up to 30 s apart).
 - `maxFollowUps`: how many "your deliverable is missing/invalid" follow‑ups to send in the
   same session before failing the attempt.
 - `maxAttempts`: whole‑step retries (fresh session each time).
