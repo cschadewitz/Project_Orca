@@ -34,9 +34,18 @@ Kepler, Zed, T3 Code or any ACP client can drive it like a single agent (proxy m
 mise install            # Node 24 + pnpm 12 (any Node >= 22 works)
 pnpm install
 pnpm test               # unit + end-to-end tests (scripted ACP agent, no LLM needed)
-pnpm run demo           # full program run with scripted agents; prints the run tree
 pnpm run orca validate --mermaid        # validate + draw the shipped workflows
-pnpm run orca run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'
+pnpm run demo --dir /tmp/orca-demo      # full program run with scripted agents; prints the run tree
+```
+
+`orca run`/`submit` need agents, so they need an `orca.config.yaml`; without one
+they stop at `WORKFLOW_INVALID` (no agent fills the roles). The demo leaves a
+ready-made one — scripted agents, no LLM — in its workspace, so single workflow
+runs can be driven from there:
+
+```bash
+pnpm run orca --config /tmp/orca-demo/orca.config.yaml run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'
+pnpm run orca --config /tmp/orca-demo/orca.config.yaml runs        # runs, status <runId>, events <runId>
 pnpm run orca answer <requestId> approve   # when a run pauses at a human gate (default humanInput mode)
 ```
 

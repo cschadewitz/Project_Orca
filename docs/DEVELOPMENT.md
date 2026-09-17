@@ -10,6 +10,11 @@ pnpm run demo                # program run with scripted agents (from sources vi
 node packages/cli/dist/main.js demo   # same, from the compiled build
 ```
 
+`demo --dir <path>` leaves a complete setup behind — `orca.config.yaml` wired to the
+scripted agent plus its `demo-playbook.yaml` — so `orca --config <path>/orca.config.yaml
+run <workflow>` exercises any workflow without an LLM. Edit the playbook to change what
+the agent delivers per artifact kind.
+
 ## Package manager
 
 pnpm, pinned by `packageManager` in `package.json` and installed by `mise install`.
