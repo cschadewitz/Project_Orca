@@ -467,12 +467,19 @@ export class Orchestrator {
         await rc.emit({ type: "child.spawned", payload: { stepRunId: step.id, childRunId: childId, ...(options.branch ? { branch: options.branch } : {}), ...(resumedId ? { resumed: true } : {}) } });
         const onAbort = () => void self.cancel(childId, "parent cancelled");
         rc.abort.signal.addEventListener("abort", onAbort, { once: true });
+        // The caller may also cancel this one child on its own (e.g. a fail-fast parallel
+        // abandoning the siblings of a branch that already decided the join).
+        const own = options.signal;
+        const onOwnAbort = () => void self.cancel(childId, typeof own?.reason === "string" ? own.reason : "cancelled by parent step");
+        if (own?.aborted) onOwnAbort();
+        else own?.addEventListener("abort", onOwnAbort, { once: true });
         try {
           const result = await self.run(childId);
           await rc.emit({ type: "child.finished", payload: { stepRunId: step.id, childRunId: childId, status: result.run.status, ...(result.run.outcome ? { outcome: result.run.outcome } : {}) } });
           return result;
         } finally {
           rc.abort.signal.removeEventListener("abort", onAbort);
+          own?.removeEventListener("abort", onOwnAbort);
         }
       },
       openSession: (selector) => self.openSession(rc, step, selector),

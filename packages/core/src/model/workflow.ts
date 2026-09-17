@@ -145,6 +145,11 @@ export interface ParallelNode extends z.infer<typeof NodeBaseSchema> {
   forEach?: { items: Condition; itemVar: string; indexVar: string; body: SubworkflowRef };
   concurrency: number;
   join: "all" | "any";
+  /**
+   * Stop as soon as one branch settles `join` — the first branch that fails under
+   * `all`, the first that succeeds under `any`: pending branches are skipped and
+   * running ones cancelled. Default: stop. A parked branch settles nothing.
+   */
   failFast: boolean;
 }
 
