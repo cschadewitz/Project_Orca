@@ -1,6 +1,6 @@
 /**
  * @orca/core - domain model, event schema, expression language and templating.
- * No I/O beyond reading template/workflow files; no agent or engine code.
+ * No I/O beyond reading template/workflow files and the JSONL file helpers; no agent or engine code.
  */
 export * from "./ids.js";
 export * from "./errors.js";
@@ -24,3 +24,4 @@ export * from "./util/logger.js";
 export * from "./util/frontmatter.js";
 export * from "./util/hash.js";
 export * from "./util/path-get.js";
+export * from "./util/jsonl.js";

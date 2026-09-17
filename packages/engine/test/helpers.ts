@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { parseWorkflow, TemplateRegistry, WorkflowRegistry, silentLogger, parsePromptTemplate } from "@orca/core";
+import { parseWorkflow, TemplateRegistry, WorkflowRegistry, silentLogger, parsePromptTemplate, readJsonl, type JsonlParser } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, type OrchestratorOptions } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec, type PlaybookInput } from "@orca/testing";
@@ -27,6 +27,9 @@ export async function loadShippedTemplates(): Promise<TemplateRegistry> {
   await walk(join(repoRoot, "templates"));
   return reg;
 }
+
+/** The scripted agent's prompt log is untyped; tests only read these two fields. */
+const promptRecord: JsonlParser<{ text: string; turn: number }> = { parse: (raw) => raw as { text: string; turn: number } };
 
 export interface TestHarness {
   dir: string;
@@ -54,10 +57,6 @@ export async function harness(playbook: PlaybookInput, overrides: Partial<Orches
     dir,
     orchestrator,
     promptLog,
-    prompts: async () =>
-      (await readFile(promptLog, "utf8").catch(() => ""))
-        .split("\n")
-        .filter(Boolean)
-        .map((l) => JSON.parse(l) as { text: string; turn: number }),
+    prompts: () => readJsonl(promptLog, promptRecord),
   };
 }

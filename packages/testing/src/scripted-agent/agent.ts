@@ -8,11 +8,11 @@
  * It keeps a small state file so per-kind counters survive across processes
  * (ORCA opens a fresh process per step by default).
  */
-import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
-import { parseDeliverablesBlock, serializeFrontMatter } from "@orca/core";
+import { appendJsonl, parseDeliverablesBlock, serializeFrontMatter } from "@orca/core";
 import type { Playbook, PlaybookEntry } from "./playbook.js";
 
 export interface ScriptedAgentOptions {
@@ -106,7 +106,7 @@ export class ScriptedAgent {
     const text = prompt.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join("\n");
     if (this.opts.promptLog) {
       await mkdir(dirname(this.opts.promptLog), { recursive: true });
-      await appendFile(this.opts.promptLog, JSON.stringify({ sessionId, turn: session.turns, cwd: session.cwd, text }) + "\n");
+      await appendJsonl(this.opts.promptLog, { sessionId, turn: session.turns, cwd: session.cwd, text });
     }
     const say = (t: string) => ctx.client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } } });
     const delay = this.opts.playbook.delayMs;
