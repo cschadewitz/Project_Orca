@@ -31,8 +31,10 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 export const StepResultSchema = z.object({
   /** For decision nodes / gates. */
   choice: z.string().optional(),
-  /** For end nodes. */
+  /** Set by a terminal step (an `end` node, or any node type that ends the run): the run's outcome. */
   outcome: RunOutcomeSchema.optional(),
+  /** Closing message for a terminal step, copied into `run.completed`. */
+  message: z.string().optional(),
   /** Output artifacts recorded by the step. */
   artifactIds: z.array(z.string()).default([]),
   /** Free-form data exposed to expressions as `steps.<nodeId>.result.data`. */
