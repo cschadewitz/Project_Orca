@@ -10,7 +10,7 @@
  */
 import { isAbsolute } from "node:path";
 import type { AgentSession, SessionUpdateEvent } from "@orca/agents";
-import { OrcaError, renderDeliverablesBlock, sha256, type AgentNode, type AgentSelector, type Artifact, type ArtifactRef, type ArtifactSpec, type CompletionPolicy, type Deliverable } from "@orca/core";
+import { evaluateVars, OrcaError, renderDeliverablesBlock, sha256, type AgentNode, type AgentSelector, type Artifact, type ArtifactRef, type ArtifactSpec, type CompletionPolicy, type Deliverable } from "@orca/core";
 import { completed, failed, type NodeExecutor, type ResolvedArtifact, type StepContext, type StepOutcome } from "./types.js";
 
 export interface AgentTurnSpec {
@@ -20,6 +20,7 @@ export interface AgentTurnSpec {
   inputs: ArtifactRef[];
   produces: ArtifactSpec[];
   completion: CompletionPolicy;
+  /** Already-evaluated template vars: callers resolve "="-prefixed expressions with evaluateVars first. */
   vars: Record<string, unknown>;
 }
 
@@ -219,7 +220,7 @@ export const agentExecutor: NodeExecutor<AgentNode> = {
       inputs: n.inputs,
       produces: n.produces,
       completion: n.completion,
-      vars: n.vars,
+      vars: await evaluateVars(n.vars, (expr) => ctx.evaluate(expr)),
     });
     if (turn.kind === "failed") return failed(turn.error.code, turn.error.message, turn.error.details, true);
     return completed({ artifactIds: turn.artifacts.map((a) => a.id), data: { stopReason: turn.stopReason } });

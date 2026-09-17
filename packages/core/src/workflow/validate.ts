@@ -6,6 +6,7 @@ import { checkExpression } from "../expr/index.js";
 import type { NodeDef, WorkflowDefinition, WorkflowGraph } from "../model/workflow.js";
 import { checkTemplate } from "../template/render.js";
 import { outgoing, reachable } from "./graph.js";
+import { varExpression } from "./vars.js";
 
 export interface ValidationIssue {
   path: string;
@@ -96,9 +97,19 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
     }
     if (ctx.hasAgent && !ctx.hasAgent(o.agent)) err(`agent selector ${JSON.stringify(o.agent)} cannot be resolved`, `${sub}.agent`);
   };
+  /** Every vars-bearing node (set, agent, subworkflow) evaluates "="-prefixed values as expressions. */
+  const checkVars = (vars: Record<string, unknown>) => {
+    for (const [k, v] of Object.entries(vars)) {
+      const expr = varExpression(v);
+      if (expr === undefined) continue;
+      const m = checkExpression(expr);
+      if (m) err(m, `.vars.${k}`);
+    }
+  };
   switch (n.type) {
     case "agent":
       checkAgentPrompt(n, "");
+      checkVars(n.vars);
       n.inputs.forEach((r, i) => {
         if (r.fromNode && !graph.nodes[r.fromNode]) err(`input references unknown node '${r.fromNode}'`, `.inputs[${i}]`);
         if (!r.kind && !r.name && !r.fromNode) err("artifact ref needs kind, name or fromNode", `.inputs[${i}]`);
@@ -130,12 +141,7 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
       }
       break;
     case "set":
-      for (const [k, v] of Object.entries(n.vars)) {
-        if (typeof v === "string" && v.startsWith("=")) {
-          const m = checkExpression(v.slice(1));
-          if (m) err(m, `.vars.${k}`);
-        }
-      }
+      checkVars(n.vars);
       break;
     case "loop":
       if (n.mode === "forEach") {
@@ -165,6 +171,7 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
       break;
     case "subworkflow":
       checkRef({ workflow: n.workflow }, ".workflow");
+      checkVars(n.vars);
       break;
     case "start":
     case "end":
