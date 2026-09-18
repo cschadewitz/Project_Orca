@@ -145,6 +145,15 @@ fail, which is when the numbers are worth reading.
 - `packages/store/test/jsonl-log.test.ts` — the on‑disk sequencing under both JSONL stores:
   two instances over one directory, torn‑tail recovery, and the lock file's stale‑holder
   rules.
+- `packages/cli/test/commands.test.ts`, `plan.test.ts`, `bootstrap.test.ts` — the CLI as a
+  user meets it: every command's arguments and failures, `orca plan`'s subcommands over a
+  real plan in both the human and the `--json` form, and config discovery / plugin loading.
+- `packages/cli/test/format.test.ts` — one assertion per event type, so a rendering change
+  shows up as a diff rather than as a surprise in a terminal.
+- `packages/integrations/test/acp-facade-prompts.test.ts` — the facade's prompt grammar
+  (`/status`, `/run <id> k=v`, plain text as a Request) without an agent subprocess behind it.
+- `packages/integrations/test/t3code-session.test.ts` — the T3 Code adapter against a fake
+  RPC: dispatched commands, event → update mapping, and when a turn is considered finished.
 
 ## The scripted agent
 
