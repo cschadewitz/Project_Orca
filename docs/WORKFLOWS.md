@@ -38,7 +38,7 @@ edges:
 
 | type | purpose | key fields |
 | --- | --- | --- |
-| `start` / `end` | entry and exit; `end.outcome` = `success` \| `failure` \| `cancelled` | `message` |
+| `start` / `end` | entry and exit; `end.outcome` = `success` (default) \| `failure` \| `cancelled` | `end.message`; `start` takes no fields |
 | `agent` | run an agent turn and collect artifacts | `agent`, `template`/`prompt`, `inputs`, `produces`, `completion`, `vars` |
 | `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human` \| `matrix`), `options`, `defaultOption` |
 | `gate` | human approval; can auto‑approve | `question`, `options`, `autoApproveWhen`, `autoOption` |
@@ -46,14 +46,21 @@ edges:
 | `loop` | repeat a nested graph / workflow as child runs | `mode` (`while` \| `until` \| `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
 | `parallel` | fan out child runs | `branches{}` or `forEach{items, body, key, dependsOn, workflow, workItemId}`, `concurrency`, `join` (`all` \| `any`), `failFast` (default `true`: stop once the join is decided) |
 | `subworkflow` | run a registered workflow as a child | `workflow`, `vars` |
-| `custom:<name>` | anything a plugin registers | free‑form |
+| `custom:<kebab-name>` | anything a plugin registers | free‑form |
 | `custom:plan-register` | decomposition artifact → plan (items, dependencies, risks, decisions) | `artifact`, `plan`, `planName` |
 | `custom:decision-matrix` | score a `decision-matrix` artifact, record the decision, expose `choice` | `artifact`, `decision` (template) |
-| `custom:plan-schedule` | compute the schedule → `vars.schedule` + `schedule.md` | `artifactPath`, `policy`, `record` |
-| `custom:plan-dispatch` | run the item workflow for ready items, dependency‑ordered across the plan; claims each item so two dispatchers cannot both launch it | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request` \| `plan`), `onWaiting` (`defer` \| `wait`), `pollMs`, `waitTimeoutMs` (default 30 min, `0` = forever), `failFast` (cancels the items still running), `policy` |
+| `custom:plan-schedule` | compute the schedule → `vars.schedule` + `schedule.md` | `plan`, `artifactPath`, `policy`, `record` |
+| `custom:plan-dispatch` | run the item workflow for ready items, dependency‑ordered across the plan; claims each item so two dispatchers cannot both launch it | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request` \| `plan`), `leavesOnly` (default `true`), `onWaiting` (`defer` \| `wait`), `pollMs` (default 5000), `waitTimeoutMs` (default 30 min, `0` = forever), `failFast` (cancels the items still running), `policy` |
 | `custom:plan-await` | (in item workflows) wait for this item's `phase` dependencies | `phase`, `pollMs`, `timeoutMs` |
 
-The plan nodes are described in `docs/PLANNING.md`.
+The plan nodes are described in `docs/PLANNING.md`. Every node also takes `name`,
+`description` and `meta`; edges take `label`; a workflow takes `description`, `inputs`
+(name → description, informational) and `meta`. Defaults not shown above: `loop.itemVar`
+`item`, `loop.indexVar` `index`, `loop.maxIterations` 10, `parallel.concurrency` 4,
+`completion.maxFollowUps` 1, `completion.maxAttempts` 1. `produces[]` entries carry
+`name`, `mediaType`, `required` and `validate` (`requiredFields`, `fieldValues`,
+`minBodyLength`); `inputs[]` entries carry `kind`/`name`, `fromNode` and `as` (the alias
+under `inputs.<as>` in the prompt context).
 
 Wherever a node takes `vars` (`set`, `agent`, `subworkflow`), a string value starting
 with `=` is evaluated as an expression and anything else is a literal, e.g.
@@ -99,7 +106,10 @@ fan-outs over the same items — a program run and a dispatcher an operator star
 alongside it — cannot both launch one item into two workspaces. The branch that loses the
 claim is skipped with `reason: claimed` and, under `join: all`, its step fails rather than
 reporting work it never did. A run re-claims its own branches, so resume and retry are
-unaffected. This is how `workflows/program.yaml` drives a decomposition:
+unaffected. A request‑scoped fan‑out over the items `custom:materialize-work-items` puts
+in `vars.leafWorkItems` looks like this (the shipped `workflows/program.yaml` uses
+`custom:plan-dispatch` instead, which re‑schedules from the live plan after each
+completion):
 
 ```yaml
 dispatch:
@@ -115,13 +125,16 @@ dispatch:
     body: { workflow: ai-sdlc }
 ```
 
-The node's result carries a per-branch `branches` list (`branch`, `runId`, `status`, `ok`)
-that a later step can summarise — see `templates/program/summary.md`.
+The node's result carries a per-branch `branches` list (`branch`, `workItemId`, `runId`,
+`status`, `outcome`, `ok`) plus `skipped` that a later step can summarise.
+`custom:plan-dispatch` publishes the equivalent as `vars.dispatched` /
+`vars.dispatchOutcome`, which is what `templates/program/summary.md` renders.
 
 ## Routing rules
 
 - Edges are evaluated in file order; the first `when` that is truthy wins; otherwise the
-  single unconditional edge; otherwise the run fails with `WORKFLOW_INVALID`.
+  first unconditional edge (validation rejects more than one on the built‑in node types);
+  otherwise the run fails with `WORKFLOW_INVALID`.
 - Decision/gate nodes expose their choice as `choice`; write `when: "choice == 'x'"`.
 - Any node may have conditional edges (e.g. `agent` → branch on
   `steps.build.result.data.stopReason` or `artifacts.spec.data.risk`).
@@ -166,13 +179,14 @@ that a later step can summarise — see `templates/program/summary.md`.
 
 ## Templates
 
-Markdown files with front matter (`id`, `name`, `requires`, `produces`), rendered with
+Markdown files with front matter (`id`, `name`, `description`, `version`, `requires`,
+`produces`; anything else lands in `meta`), rendered with
 `{{ expr }}`, `{{#if}}…{{else}}…{{/if}}`, `{{#each xs as x, i}}…{{/each}}`,
 `{{> partial-id}}` and `{{!-- comments --}}`. The expression language is documented in
 `packages/core/src/expr/README.md`; the context in `docs/DATA-MODEL.md`.
 
-ORCA always appends the **deliverables block** to the rendered prompt; do not repeat the
-file list by hand. Tell the agent *what good looks like* (sections, front‑matter fields).
+ORCA appends the **deliverables block** to the rendered prompt of every node that declares
+`produces`; do not repeat the file list by hand. Tell the agent *what good looks like* (sections, front‑matter fields).
 
 ## Shipped workflows
 
@@ -183,6 +197,8 @@ file list by hand. Tell the agent *what good looks like* (sections, front‑matt
   open decision) → schedule → plan‑gate → dispatch (ai‑sdlc per item, dependency‑ordered
   across the plan) → summarize.
 - `workflows/plan-resume.yaml` — schedule → gate → dispatch with `scope: plan`; picks up
-  work deferred by earlier requests (`orca plan dispatch`).
+  work deferred by earlier requests (`orca plan dispatch`). Its dispatch node pins
+  `workflow: ai-sdlc`, which takes precedence over `program.itemWorkflow` (#92); edit the
+  node to run something else.
 
-Render either as Mermaid with `pnpm run orca graph ai-sdlc`.
+Render any of them as Mermaid with `pnpm run orca graph <id>` (or `orca validate --mermaid`).

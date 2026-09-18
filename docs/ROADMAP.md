@@ -38,5 +38,8 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     plan side following it (#74); `custom:plan-dispatch` drives the same `FanOut` as
     `parallel`, so `failFast` cancels in‑flight items, the journal is watched before the
     plan is read, and `onWaiting: wait` logs one event per reason under a default timeout
-    (#75, #76, #96). The rest are smaller: #77–#84, with the per‑wake full‑plan recompute
-    (#83) folded into item 12.
+    (#96, consolidating #75/#76; the per‑wake full‑plan recompute #83 named there is item
+    12's). One that still shapes the design: the JSONL event store and plan journal assign
+    `seq` from an in‑process cache, so two processes over one store collide (#97,
+    consolidating #78/#87; the prerequisite for daemon mode, item 1). The rest are smaller:
+    #77, #79–#82, #84, and #88 (no command releases a dead run's work‑item claims).
