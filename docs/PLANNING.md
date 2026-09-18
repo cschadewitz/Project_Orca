@@ -263,14 +263,14 @@ Every subcommand except `list` accepts the plan key positionally or as `--plan <
 
 ## Known limitations
 
-Reviewed when the layer was rebased onto main; tracked as issues #71–#84 (label
-`planning`), plus #87 and #88 found while adding the work‑item claim. In short:
-`custom:plan-dispatch` has its own fan‑out loop and does not cancel in‑flight children on
-`failFast` (#75); `onWaiting: wait` logs a `step.waiting` event per poll (#76); the plan
+Reviewed when the layer was rebased onto main; tracked as issues #77 and #79–#84 (label
+`planning`), #96, #97 and #88. In short: `custom:plan-dispatch` has its own fan‑out loop
+that does not cancel in‑flight children on `failFast`, logs a `step.waiting` event per
+poll under `onWaiting: wait`, and recomputes the whole plan on every wake (#96); the plan
 journal and the run event store both number events from an in‑process cache, so two
-processes over one store can duplicate `seq` (#78, #87); a dead run's claims can only be
-released by editing the store (#88). See `docs/ROADMAP.md` item 13. Fixed since: cycle detection ignores `soft`
-edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
+processes over one store can duplicate `seq` (#97); a dead run's claims can only be
+released by editing the store (#88). See `docs/ROADMAP.md` item 13. Fixed since: cycle
+detection ignores `soft` edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
 artifact intake is serialised per plan (#73); work‑item status is projected from the event
 log, with the plan side following it (#74).
 

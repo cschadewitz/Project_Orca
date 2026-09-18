@@ -35,8 +35,9 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     rebased onto main. Done: cycle detection ignores `soft` edges (#71); a work‑item claim
     stops two dispatchers from launching one item twice (#72); artifact intake is
     serialised per plan (#73); work‑item status is projected from the event log, with the
-    plan side following it (#74). The one that still shapes the design:
-    `custom:plan-dispatch` keeps its own fan‑out loop next to `runBranches` (#75). The
-    rest are smaller: #76–#84, plus #87 (event `seq` is assigned from an in‑process cache,
-    so two processes over one store collide) and #88 (no command releases a dead run's
-    work‑item claims), both found while adding the claim for #72.
+    plan side following it (#74). Two that still shape the design: `custom:plan-dispatch`
+    keeps its own fan‑out loop next to `runBranches` (#96, consolidating #75/#76/#83), and
+    the JSONL event store and plan journal assign `seq` from an in‑process cache, so two
+    processes over one store collide (#97, consolidating #78/#87; the prerequisite for
+    daemon mode, item 1). The rest are smaller: #77, #79–#82, #84, and #88 (no command
+    releases a dead run's work‑item claims).
