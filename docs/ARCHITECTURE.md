@@ -144,7 +144,10 @@ One run's log says nothing about what *other* runs are doing, so ownership of an
 settled outside the logs: each branch claims its item through the `ClaimStore`
 (`packages/store/src/claim-store.ts`) before spawning a child run — an atomic create, so
 it holds across processes. A second dispatcher over the same plan skips what it does not
-own (`branch.skipped`, `reason: claimed`) instead of starting a rival child run.
+own (`branch.skipped`, `reason: claimed`) instead of starting a rival child run. Nothing
+releases a claim on its own; taking an item away from a run that died is the operator's
+act (`Orchestrator.releaseClaim`, `orca claims release`), refused while the owner could
+still resume.
 
 `ProgramService.submit()` is the single entry point used by the CLI and the ACP
 facade. The original request‑scoped nodes (`custom:materialize-work-items`,

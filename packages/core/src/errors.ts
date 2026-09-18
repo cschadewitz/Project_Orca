@@ -17,6 +17,7 @@ export type OrcaErrorCode =
   | "AGENT_PROTOCOL"
   | "RUN_NOT_FOUND"
   | "RUN_STATE"
+  | "CLAIM_NOT_FOUND"
   | "STEP_TIMEOUT"
   | "CANCELLED"
   | "HUMAN_INPUT_PENDING"

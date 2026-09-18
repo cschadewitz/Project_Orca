@@ -50,6 +50,7 @@ runs can be driven from there:
 pnpm run orca --config /tmp/orca-demo/orca.config.yaml run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'
 pnpm run orca --config /tmp/orca-demo/orca.config.yaml runs        # runs, status <runId>, events <runId>
 pnpm run orca answer <requestId> approve   # when a run pauses at a human gate (default humanInput mode)
+pnpm run orca claims                       # who owns which work item; `claims release <id>` frees a dead run's
 ```
 
 To use real agents, create `orca.config.yaml` (see `examples/orca.config.yaml`),
