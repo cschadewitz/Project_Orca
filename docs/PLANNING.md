@@ -214,6 +214,17 @@ Every subcommand accepts the plan key positionally or as `--plan <key>` (default
 configured `planning.plan`). The read-only ones (`list`, `show`, `schedule`, `risks`,
 `decisions`, `journal`) also take `--json`.
 
+## Known limitations
+
+Reviewed when the layer was rebased onto main; tracked as issues #71–#84 (label
+`planning`). In short: the scheduler treats a `soft` back‑reference as a cycle (#71); two
+dispatchers over one plan can launch the same item twice (#72); artifact intake is not
+serialised per plan, so sibling runs can duplicate a same‑key risk (#73); work‑item status
+is written directly by the plan side instead of being projected from the event log as
+#70 does for the rest (#74); `custom:plan-dispatch` has its own fan‑out loop and does not
+cancel in‑flight children on `failFast` (#75); `onWaiting: wait` logs a `step.waiting`
+event per poll (#76). See `docs/ROADMAP.md` item 13.
+
 ## Configuration
 
 ```yaml

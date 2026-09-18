@@ -104,7 +104,7 @@ export const DecisionOptionSchema = z.object({
   key: PlanKeySchema,
   name: z.string().min(1),
   description: z.string().optional(),
-  /** criterion key -> score on the matrix scale (1..scale). */
+  /** criterion key -> score on the matrix scale (0..scale). */
   scores: z.record(z.string(), z.number()).default({}),
   pros: z.array(z.string()).default([]),
   cons: z.array(z.string()).default([]),
@@ -146,7 +146,7 @@ export const DecisionSchema = z.object({
   status: DecisionStatusSchema.default("open"),
   criteria: z.array(DecisionCriterionSchema).default([]),
   options: z.array(DecisionOptionSchema).default([]),
-  /** Score scale used by options (1..scale). */
+  /** Score scale used by options (scores are 0..scale). */
   scale: z.number().int().min(2).default(10),
   result: DecisionMatrixResultSchema.optional(),
   chosen: z.string().optional(),
