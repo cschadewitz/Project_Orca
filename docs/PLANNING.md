@@ -246,7 +246,16 @@ launch therefore claims its work item first (`ClaimStore`, an atomic
 compare-and-set outside the event logs); the dispatcher that loses the claim
 reports the item as `claimed` in `vars.dispatched`, leaves its WorkItem document
 to the owner, and drops it from its own ready set. A dispatcher re-claims what it
-already owns, so resuming an interrupted dispatch re-attaches as before.
+already owns, so resuming an interrupted dispatch re-attaches as before. Claims are
+not released when a run finishes (a finished item must not be dispatched twice
+either), so a run that died for good — cancelled, its log rolled back — leaves its
+items `claimed` for every later `orca plan dispatch`, which then completes with
+`dispatchOutcome: partial` and every such item reported `claimed`. `orca claims`
+shows who holds what and the owner's status; `orca claims release <workItemId>`
+frees the item once its owner is finished or gone (`--force` while it is merely
+paused). The claim decides who may launch; the item's `status` is still the
+projection of the dead run's log, so an item left `in-progress` is not offered by
+the scheduler until that changes.
 
 Human gates inside an item run behave as they do everywhere else (`humanInput.mode:
 pause`): the child parks, `plan-dispatch` parks the program run with it (the item stays

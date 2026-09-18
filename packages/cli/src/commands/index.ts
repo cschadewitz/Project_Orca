@@ -14,6 +14,7 @@ import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { scriptedAgentSpec } from "@orca/testing";
 import { bootstrap, loadConfig, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../format.js";
+import { claimsCommand } from "./claims.js";
 import { planCommand } from "./plan.js";
 
 export interface CommandContext {
@@ -167,6 +168,11 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   plan: {
     help: "plan [list|show|schedule|explain|graph|risks|decisions|journal|depend|waive|satisfy|decide|risk|dispatch] ...  Inspect and steer the long-term plan (see docs/PLANNING.md).",
     run: planCommand,
+  },
+
+  claims: {
+    help: "claims [list [--run <runId>] | release <workItemId> [--force]]  Show who owns which work item; free a dead run's claim so another dispatcher may launch it.",
+    run: claimsCommand,
   },
 
   runs: {

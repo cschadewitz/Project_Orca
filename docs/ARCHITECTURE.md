@@ -149,7 +149,10 @@ settled outside the logs: each branch claims its item through the `ClaimStore`
 it holds across processes. A second dispatcher over the same plan skips what it does not
 own instead of starting a rival child run: a `parallel` fan‑out records `branch.skipped`
 with `reason: claimed`, `custom:plan-dispatch` journals `dispatch.deferred` and reports
-the item as `claimed` in `vars.dispatched`. Neither writes that item's status.
+the item as `claimed` in `vars.dispatched`. Neither writes that item's status. Nothing
+releases a claim on its own; taking an item away from a run that died is the operator's
+act (`Orchestrator.releaseClaim`, `orca claims release`), refused while the owner could
+still resume.
 
 The logs themselves are safe to share the same way. The JSONL event store and the plan
 journal are one primitive, `JsonlLogDir` (`packages/store/src/jsonl-log.ts`): every append

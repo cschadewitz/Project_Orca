@@ -43,8 +43,10 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     other (#80; the remaining critical‑path overlaps are #108); the JSONL event store and
     plan journal number events on disk under a lock file, so two processes over one store
     extend one log (#97, consolidating #78/#87); `custom:decision-matrix` no longer
-    re-decides a decision the artifact intake already made (#79). The rest are smaller:
-    #77, #81, #82, #84, #88 (no command releases a dead run's work‑item claims), #104 (a
+    re-decides a decision the artifact intake already made (#79); `orca claims` lists and
+    releases a dead run's work‑item claims (#88; the released item still reads
+    `in-progress` to the dispatcher, #123). The rest are smaller:
+    #77, #81, #82, #84, #104 (a
     `decided` decision is re-decided by a different choice without reopening it, so the
     decide loop can undo a human's pick), #105 (intake reconciles on unchanged signals), and
     the #97 follow‑ups: a single‑writer lease per run (#101, the remaining prerequisite for

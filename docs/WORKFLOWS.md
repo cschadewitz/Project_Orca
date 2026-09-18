@@ -106,8 +106,13 @@ fan-outs over the same items — a program run and a dispatcher an operator star
 alongside it — cannot both launch one item into two workspaces. The branch that loses the
 claim is skipped with `reason: claimed` and, under `join: all`, its step fails rather than
 reporting work it never did. A run re-claims its own branches, so resume and retry are
-unaffected. A request‑scoped fan‑out over the items `custom:materialize-work-items` puts
-in `vars.leafWorkItems` looks like this (the shipped `workflows/program.yaml` uses
+unaffected. A claim is never released automatically — a finished run keeps its items so
+they are not dispatched twice — so an item held by a run that is gone for good stays
+`claimed` for every later fan-out; `orca claims` lists who holds what (with the owner's
+status), and `orca claims release <workItemId>` frees an item whose owner is finished or
+whose log is gone (`--force` for a run that is merely paused and abandoned). A
+request‑scoped fan‑out over the items `custom:materialize-work-items` puts in
+`vars.leafWorkItems` looks like this (the shipped `workflows/program.yaml` uses
 `custom:plan-dispatch` instead, which re‑schedules from the live plan after each
 completion):
 

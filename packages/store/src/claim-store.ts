@@ -15,9 +15,10 @@
  * *not* released when the child run finishes - a finished item must not be dispatched twice
  * either - and a claim outlives the process that took it. Taking an item away from a run that
  * died is therefore an explicit act (`release`), not something a competing dispatcher decides
- * on its own.
+ * on its own: the operator does it through `Orchestrator.releaseClaim` / `orca claims release`,
+ * which refuse while the owning run could still resume.
  */
-import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
@@ -42,6 +43,8 @@ export interface ClaimStore {
    */
   claim(claim: WorkItemClaim): Promise<WorkItemClaim>;
   get(workItemId: string): Promise<WorkItemClaim | undefined>;
+  /** Every claim currently held, in no particular order. */
+  list(): Promise<WorkItemClaim[]>;
   /** Drop the claim on `workItemId`, but only while `runId` still holds it. */
   release(workItemId: string, runId: string): Promise<void>;
 }
@@ -61,6 +64,9 @@ export class InMemoryClaimStore implements ClaimStore {
   }
   async get(workItemId: string): Promise<WorkItemClaim | undefined> {
     return this.claims.get(workItemId);
+  }
+  async list(): Promise<WorkItemClaim[]> {
+    return [...this.claims.values()];
   }
   async release(workItemId: string, runId: string): Promise<void> {
     if (this.claims.get(workItemId)?.runId === runId) this.claims.delete(workItemId);
@@ -107,6 +113,25 @@ export class FileClaimStore implements ClaimStore {
 
   async get(workItemId: string): Promise<WorkItemClaim | undefined> {
     return this.read(this.file(workItemId));
+  }
+
+  async list(): Promise<WorkItemClaim[]> {
+    const dir = join(this.dir, "claims");
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw e;
+    }
+    const out: WorkItemClaim[] = [];
+    // `.tmp` files are claims still being written (see `claim`); a claim released between
+    // the listing and the read is simply absent.
+    for (const name of names.filter((n) => n.endsWith(".json"))) {
+      const claim = await this.read(join(dir, name));
+      if (claim) out.push(claim);
+    }
+    return out;
   }
 
   async release(workItemId: string, runId: string): Promise<void> {
