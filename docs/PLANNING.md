@@ -226,7 +226,9 @@ the projection set. (A plain `parallel` fan‑out does project `blocked`, from
 decision, or held; claimed by another dispatcher; or in scope but never offered)
 or fails when items failed/blocked. Deferred items keep `deferredReason` and are picked up by the
 next dispatch that sees them: `orca plan dispatch <key>` runs
-`workflows/plan-resume.yaml` (schedule -> gate -> dispatch with `scope: plan`).
+`workflows/plan-resume.yaml` (schedule -> gate -> dispatch with `scope: plan`), and
+dispatches each item to the same `program.itemWorkflow` `orca submit` uses (the item's
+own `workflowId` still wins).
 
 The loop itself is the `FanOut` `parallel` uses (`engine/executors/containers.ts`), driven
 over a ready set recomputed from the live plan instead of a branch list fixed up front. So

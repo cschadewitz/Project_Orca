@@ -140,7 +140,8 @@ fail, which is when the numbers are worth reading.
 - `packages/engine/test/plan.e2e.test.ts` — the shipped program with decisions made by
   matrix, stage‑level pipelining (`core@spec`), build‑phase waits (`api#build`) with
   upstream artifacts in the build prompt, and a second request deferred then picked up by
-  `plan-resume`.
+  `plan-resume` (which dispatches to `vars.itemWorkflow`, i.e. `program.itemWorkflow`, not a
+  pinned `ai-sdlc`).
 - `packages/store/test/jsonl-log.test.ts` — the on‑disk sequencing under both JSONL stores:
   two instances over one directory, torn‑tail recovery, and the lock file's stale‑holder
   rules.
