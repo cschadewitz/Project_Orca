@@ -90,9 +90,10 @@ nodes:
     autoApproveWhen: "len(vars.workItems) <= vars.maxAutoApproveItems && vars.schedule.risk.highestLevel != 'critical' && len(vars.schedule.unschedulable) == 0"
     autoOption: approve
 
-  # Plain fan-out: one child run per leaf work item, ordered by the decomposition's
-  # dependsOn (slugs), each bound to its WorkItem so it gets its own workspace and so
-  # the item's status is derived from the child-run events this node records.
+  # Schedule-ordered dispatch: one child run per ready work item, re-scheduled from the
+  # live plan after every completion, each bound to its WorkItem so it gets its own
+  # workspace and so the item's status is derived from the child-run events this node
+  # records. Each launch claims its item first, so a second dispatcher cannot run it too.
   dispatch:
     type: "custom:plan-dispatch"
     name: "Run SDLC per work item in schedule order"

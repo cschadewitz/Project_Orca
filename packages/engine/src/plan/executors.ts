@@ -14,10 +14,10 @@
  *  custom:plan-await      inside an item workflow: wait until the item's
  *                         dependencies for a phase (e.g. `build`) are satisfied.
  */
-import { DecisionMatrixArtifactSchema, DecompositionSchema, decisionBlocks, evaluateDecisionMatrix, isOpenRisk, planToMermaid, renderDecisionMatrix, riskLevel, riskScore, serializeFrontMatter, succeeded, type CompactSchedule, type CustomNode, type Decision, type DecisionMatrixResult, type Dependency, type PlanOrigin, type RunState, type Schedule, type SchedulingPolicy, type WorkItem } from "@orca/core";
+import { DecisionMatrixArtifactSchema, DecompositionSchema, decisionBlocks, evaluateDecisionMatrix, isOpenRisk, planToMermaid, renderDecisionMatrix, riskLevel, riskScore, serializeFrontMatter, succeeded, type CompactSchedule, type CustomNode, type Decision, type DecisionMatrixResult, type Dependency, type PlanEvent, type PlanOrigin, type RunState, type Schedule, type SchedulingPolicy, type WorkItem } from "@orca/core";
 import { ownsClaim } from "@orca/store";
 import type { PlanSnapshot } from "./service.js";
-import { pausedByChildren } from "../executors/containers.js";
+import { FanOut, pausedByChildren } from "../executors/containers.js";
 import { completed, failed, type NodeExecutor, type StepContext, type StepOutcome } from "../executors/types.js";
 
 function originOf(ctx: StepContext, kind: PlanOrigin["kind"] = "system"): PlanOrigin {
@@ -26,13 +26,28 @@ function originOf(ctx: StepContext, kind: PlanOrigin["kind"] = "system"): PlanOr
 
 const PLAN_CHANGE_EVENTS = new Set(["dependency.resolved", "dependency.bound", "dependency.added", "decision.resolved", "work-item.updated", "work-item.added", "risk.updated"]);
 
-/** Resolves when the plan journal records something that may change the schedule, or after `ms`. */
-function planChanged(ctx: StepContext, planId: string, ms: number): { promise: Promise<void>; dispose: () => void } {
+interface PlanWatch {
+  /** Resolves on the first plan change worth acting on, after `ms`, or when the step is cancelled. */
+  readonly promise: Promise<void>;
+  /** Stop listening without waiting (the caller was woken by something else). */
+  dispose(): void;
+}
+
+/**
+ * Watch the plan journal for something that may change the schedule.
+ *
+ * Start the watch *before* reading the plan, never after: a journal entry that lands while the
+ * scheduler is running has then already resolved the wait instead of being missed until the
+ * next poll. `ignore` drops entries the caller itself caused - re-scheduling because of a
+ * change one already knows about is pure cost, and worse, it can wake a dispatcher in the
+ * middle of a decision one of its own children has not finished making.
+ */
+function watchPlan(ctx: StepContext, planId: string, ms: number, ignore: (e: PlanEvent) => boolean = () => false): PlanWatch {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => (resolve = r));
   const timer = setTimeout(() => resolve(), ms);
   const unsubscribe = ctx.stores.plan.journal.subscribe((e) => {
-    if (PLAN_CHANGE_EVENTS.has(e.type)) resolve();
+    if (PLAN_CHANGE_EVENTS.has(e.type) && !ignore(e)) resolve();
   }, planId);
   const onAbort = () => resolve();
   ctx.signal.addEventListener("abort", onAbort, { once: true });
@@ -130,6 +145,9 @@ export async function resolveMatrixChoice(ctx: StepContext, artifactName: string
   const plan = await ctx.plan.planForRun(ctx.run.state.run);
   if (plan) {
     // upsertDecision decides when the artifact carries a valid `chosen`; otherwise evaluate the matrix.
+    // When the artifact was recorded by a step of this run, intake (`PlanService.onArtifactRecorded`)
+    // has usually done both already; evaluateDecision is then a no-op that hands back the recorded
+    // choice rather than journalling a second `decision.resolved` (#79).
     const { chosen: _chosen, rationale: _rationale, ...definition } = input;
     const dec = await ctx.plan.upsertDecision(plan.id, definition, origin);
     const evaluated = await ctx.plan.evaluateDecision(plan.id, dec.id, { ...(input.chosen ? { chosen: input.chosen } : {}), decidedBy: "agent", ...(input.rationale ? { rationale: input.rationale } : {}) }, origin);
@@ -266,7 +284,10 @@ export interface PlanDispatchNode extends CustomNode {
   scope?: "request" | "plan";
   /** Only dispatch leaf items (no children). Default true. */
   leavesOnly?: boolean;
-  /** Stop launching new items after the first failure. Default false: unrelated items continue. */
+  /**
+   * Stop after the first failure. Default false: unrelated items continue. When set, the items
+   * still running are cancelled too - their result can no longer change this step's outcome.
+   */
   failFast?: boolean;
   /**
    * What to do when nothing is ready but items are still waiting (on another
@@ -275,9 +296,16 @@ export interface PlanDispatchNode extends CustomNode {
    */
   onWaiting?: "defer" | "wait";
   pollMs?: number;
+  /** How long `onWaiting: wait` waits before deferring what is left. Default 30 min; `0` waits forever. */
   waitTimeoutMs?: number;
   policy?: Partial<SchedulingPolicy>;
 }
+
+/** `onWaiting: wait` without a timeout parks a run for as long as the plan takes; bound it by default. */
+const DEFAULT_WAIT_TIMEOUT_MS = 30 * 60_000;
+
+/** What this step did with one item. `cancelled` is a child `failFast` stopped, not one that failed. */
+type DispatchStatus = "done" | "failed" | "paused" | "cancelled";
 
 export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
   type: "custom:plan-dispatch",
@@ -297,21 +325,32 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
     const policy: Partial<SchedulingPolicy> = { ...(n.policy ?? {}), ...(n.concurrency ? { concurrency: n.concurrency } : {}) };
     const concurrency = Math.max(1, n.concurrency ?? plan.policy.concurrency);
     const pollMs = n.pollMs ?? 5_000;
-    const deadline = n.waitTimeoutMs ? Date.now() + n.waitTimeoutMs : Number.POSITIVE_INFINITY;
+    const waitTimeoutMs = n.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+    const deadline = waitTimeoutMs > 0 ? Date.now() + waitTimeoutMs : Number.POSITIVE_INFINITY;
 
     const allItems = await ctx.stores.workItems.list((w) => w.planId === plan.id);
     const parents = new Set(allItems.map((w) => w.parentId).filter(Boolean));
     const inScope = (w: WorkItem) => (scope === "plan" || w.requestId === requestId) && (n.leavesOnly === false || !parents.has(w.id));
 
-    const inFlight = new Map<string, Promise<void>>();
-    const outcomes = new Map<string, { status: "done" | "failed" | "paused"; runId: string }>();
+    /**
+     * The same fan-out `parallel` runs on, driven over a ready set recomputed from the live plan
+     * instead of a branch list fixed up front: `failFast` cancels the children still in flight
+     * through `fan.stop.signal`, exactly as a fail-fast `parallel` does.
+     */
+    const fan = new FanOut(concurrency);
+    const outcomes = new Map<string, { status: DispatchStatus; runId: string }>();
     /** Children parked at a human gate: this step parks too and re-attaches to them on resume. */
     const parkedChildren = new Map<string, RunState>();
     const deferred = new Map<string, string>();
     /** Items another dispatcher owns: this step never launches them and never writes their status. */
     const claimed = new Map<string, string>();
-    let stop = false;
-    let failure: unknown;
+    /**
+     * A change this run wrote is not news. Its own journal entries - and the `work-item.updated`
+     * the projection of its own children produces - would otherwise re-schedule the whole plan
+     * for nothing, and could wake the loop *inside* `ctx.runChild`, before the failure that
+     * child is reporting has been turned into a `failFast` stop.
+     */
+    const ownWrite = (e: PlanEvent) => e.origin.runId === ctx.run.id;
 
     // Items an earlier, interrupted attempt of this step had already launched. They are still
     // `in-progress` (so the scheduler will not offer them as ready) but must be driven again:
@@ -328,8 +367,8 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
     // `in-progress` / `done` / `failed` / `cancelled` (engine/program/work-items.ts), journalling
     // each transition. One writer, so a crash between the child finishing and this step resuming
     // cannot leave the plan's view and the log's view disagreeing.
-    const launch = (item: WorkItem, reasons: string[]) => {
-      const p = (async () => {
+    const launch = (item: WorkItem) =>
+      fan.launch(item.id, async (signal) => {
         // The scheduler offered this item, but `in-progress` only lands once `child.spawned` is
         // projected - asynchronously, after the ready set was computed. Two dispatchers over one
         // plan therefore both see it ready; the claim is what makes exactly one of them launch it.
@@ -341,30 +380,40 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
           return;
         }
         const upstream = await ctx.plan.upstreamContext(item.id);
-        const state = await ctx.runChild({ workflow: item.workflowId ?? defaultWorkflow }, { workItemId: item.id, branch: item.slug, vars: { workItem: item, upstream, planId: plan.id, plan: plan.key } });
+        const state = await ctx.runChild({ workflow: item.workflowId ?? defaultWorkflow }, { workItemId: item.id, branch: item.slug, vars: { workItem: item, upstream, planId: plan.id, plan: plan.key }, signal });
         if (state.run.status === "paused") {
           // A human must answer inside the child. The item stays in-progress; nothing is decided yet.
           outcomes.set(item.id, { status: "paused", runId: state.run.id });
           parkedChildren.set(item.id, state);
           return;
         }
-        const ok = succeeded(state);
-        outcomes.set(item.id, { status: ok ? "done" : "failed", runId: state.run.id });
-        await ctx.stores.plan.journal.append({ type: "dispatch.finished", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, runId: state.run.id, status: ok ? "done" : "failed" } });
-        if (!ok && n.failFast) stop = true;
-      })()
-        .catch((e: unknown) => {
-          // Surface the first error from the loop below instead of leaving an unhandled rejection.
-          failure ??= e;
-          stop = true;
-        })
-        .finally(() => inFlight.delete(item.id));
-      inFlight.set(item.id, p);
-    };
+        // A child this step cancelled is not a failure of its own: it is the fan-out being cut short.
+        const status: DispatchStatus = succeeded(state) ? "done" : state.run.status === "cancelled" && fan.stopped ? "cancelled" : "failed";
+        outcomes.set(item.id, { status, runId: state.run.id });
+        // Halt *before* the journal append: that append is itself a plan change, and anything
+        // this step writes while a decision is half-made can wake its own loop.
+        if (status === "failed" && n.failFast) fan.halt(`plan-dispatch '${ctx.nodeId}': '${item.slug}' failed (failFast)`);
+        await ctx.stores.plan.journal.append({ type: "dispatch.finished", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, runId: state.run.id, status } });
+      });
+
+    /** The last wait this step announced, so `onWaiting: wait` logs a reason rather than a poll. */
+    let announced: string | undefined;
 
     for (;;) {
       if (ctx.signal.aborted) return failed("CANCELLED", "cancelled");
-      const schedule = await ctx.plan.schedule(plan.id, { inScope, running: [...inFlight.keys()], policy, origin: originOf(ctx) });
+      if (fan.stopped) {
+        // Cut short by failFast: nothing new can start, so there is nothing left to schedule -
+        // just let the children that were asked to stop finish stopping.
+        if (fan.inFlight === 0) break;
+        await fan.settled();
+        continue;
+      }
+      // Watch before reading the plan, so a change that lands while the scheduler runs is not
+      // missed until the next poll. Wake when a child finishes *or* the plan changes (an upstream
+      // item produced the stage a dependant waits for, a decision was made, ...), so pipelining
+      // does not have to wait for a slot to free.
+      const watch = watchPlan(ctx, plan.id, pollMs, ownWrite);
+      const schedule = await ctx.plan.schedule(plan.id, { inScope, running: fan.keys(), policy, origin: originOf(ctx) });
       const byId = new Map((await ctx.stores.workItems.list((w) => w.planId === plan.id)).map((w) => [w.id, w]));
       // An item another dispatcher owns stays "ready" as far as *this* plan is concerned, so it
       // has to come out of the ready set: otherwise it takes a launch slot every pass and the
@@ -376,36 +425,43 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
         if (!item || outcomes.has(item.id)) continue;
         await ctx.plan.deferWorkItem(item.id, u.reason, { blocked: true }, originOf(ctx));
       }
-      if (!stop) {
-        for (const item of byId.values()) {
-          if (inFlight.size >= concurrency) break;
-          if (!resumable.has(item.id) || item.status !== "in-progress" || !inScope(item) || inFlight.has(item.id) || outcomes.has(item.id) || claimed.has(item.id)) continue;
-          await ctx.stores.plan.journal.append({ type: "dispatch.started", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, runId: ctx.run.id, reasons: ["re-attached after an interrupted attempt"] } });
-          launch(item, []);
-        }
-        for (const r of ready.slice(0, Math.max(0, concurrency - inFlight.size))) {
-          const item = byId.get(r.workItemId);
-          if (!item || inFlight.has(item.id) || outcomes.has(item.id)) continue;
-          await ctx.plan.clearDeferral(item.id, originOf(ctx));
-          await ctx.stores.plan.journal.append({ type: "dispatch.started", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, runId: ctx.run.id, reasons: r.priority.reasons } });
-          launch(item, r.priority.reasons);
-        }
+      for (const item of byId.values()) {
+        if (fan.slots === 0) break;
+        if (!resumable.has(item.id) || item.status !== "in-progress" || !inScope(item) || fan.isRunning(item.id) || outcomes.has(item.id) || claimed.has(item.id)) continue;
+        await ctx.stores.plan.journal.append({ type: "dispatch.started", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, runId: ctx.run.id, reasons: ["re-attached after an interrupted attempt"] } });
+        launch(item);
       }
-      if (inFlight.size > 0) {
-        // Wake when a child finishes *or* the plan changes (an upstream item produced the stage
-        // a dependant waits for, a decision was made, ...), so pipelining does not wait for a slot to free.
-        const change = planChanged(ctx, plan.id, pollMs);
-        await Promise.race([...inFlight.values(), change.promise]);
-        change.dispose();
+      for (const r of ready) {
+        if (fan.slots === 0) break;
+        const item = byId.get(r.workItemId);
+        if (!item || fan.isRunning(item.id) || outcomes.has(item.id)) continue;
+        await ctx.plan.clearDeferral(item.id, originOf(ctx));
+        await ctx.stores.plan.journal.append({ type: "dispatch.started", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, runId: ctx.run.id, reasons: r.priority.reasons } });
+        launch(item);
+      }
+      if (fan.inFlight > 0) {
+        await fan.settled(watch.promise);
+        watch.dispose();
         continue;
       }
       const pending = [...schedule.waiting.map((w) => ({ id: w.workItemId, reason: w.waitingOn.map((x) => x.detail).join("; ") })), ...schedule.held.map((h) => ({ id: h.workItemId, reason: h.reason }))];
-      if (stop || pending.length === 0 || ready.length > 0) break;
+      if (fan.stopped || pending.length === 0 || ready.length > 0) {
+        watch.dispose();
+        break;
+      }
       if (n.onWaiting === "wait" && Date.now() < deadline) {
-        await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "plan", detail: pending.map((p) => `${byId.get(p.id)?.slug ?? p.id}: ${p.reason}`).join(" | ") } });
-        await planChanged(ctx, plan.id, pollMs).promise;
+        // One event per distinct reason, not one per poll: a day-long wait on an external
+        // dependency used to write thousands of identical `step.waiting` entries (#76).
+        const detail = pending.map((p) => `${byId.get(p.id)?.slug ?? p.id}: ${p.reason}`).join(" | ");
+        if (detail !== announced) {
+          announced = detail;
+          await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "plan", detail } });
+        }
+        await watch.promise;
         continue;
       }
+      watch.dispose();
+      if (n.onWaiting === "wait") ctx.logger.warn("plan-dispatch: gave up waiting for the plan", { node: ctx.nodeId, waitTimeoutMs, pending: pending.length });
       for (const p of pending) {
         deferred.set(p.id, p.reason);
         await ctx.plan.deferWorkItem(p.id, p.reason, {}, originOf(ctx));
@@ -413,7 +469,7 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
       break;
     }
 
-    if (failure) throw failure;
+    fan.throwIfFailed();
     const parked = await pausedByChildren(ctx, [...parkedChildren.values()]);
     if (parked) return parked;
 
@@ -425,12 +481,12 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
       runId: outcomes.get(w.id)?.runId ?? w.runId,
       reason: claimed.has(w.id) ? `claimed by run ${claimed.get(w.id)}` : (deferred.get(w.id) ?? w.deferredReason),
     }));
-    const counts = { done: 0, failed: 0, blocked: 0, deferred: 0, skipped: 0, paused: 0, claimed: 0 };
+    const counts = { done: 0, failed: 0, blocked: 0, deferred: 0, skipped: 0, paused: 0, claimed: 0, cancelled: 0 };
     for (const s of summary) counts[s.status as keyof typeof counts]++;
     // An item another dispatcher owns is not this step's failure - it is simply not its work.
-    const outcome = counts.failed || counts.blocked ? "failed" : counts.deferred || counts.skipped || counts.claimed ? "partial" : "complete";
+    const outcome = counts.failed || counts.blocked ? "failed" : counts.deferred || counts.skipped || counts.claimed || counts.cancelled ? "partial" : "complete";
     await ctx.emit({ type: "vars.set", payload: { vars: { dispatched: summary, dispatchOutcome: outcome } } });
-    if (outcome === "failed") return failed("RUN_STATE", `${counts.failed + counts.blocked} of ${summary.length} work items did not complete (${counts.failed} failed, ${counts.blocked} blocked)`, { summary, counts });
+    if (outcome === "failed") return failed("RUN_STATE", `${counts.failed + counts.blocked} of ${summary.length} work items did not complete (${counts.failed} failed, ${counts.blocked} blocked${counts.cancelled ? `, ${counts.cancelled} cancelled by failFast` : ""})`, { summary, counts });
     return completed({ data: { summary, counts, outcome } });
   },
 };
@@ -459,21 +515,31 @@ export const planAwaitExecutor: NodeExecutor<PlanAwaitNode> = {
     let announced = false;
     for (;;) {
       if (ctx.signal.aborted) return failed("CANCELLED", "cancelled");
+      // Before the evaluation, not after: the dependency this run is waiting for may be satisfied
+      // while `evaluateDependenciesOf` is reading, and a watch opened afterwards would miss it.
+      const watch = watchPlan(ctx, wi.planId, pollMs);
       const evals = (await ctx.plan.evaluateDependenciesOf(workItemId, phase)).filter((e) => e.dependency.type === "blocks");
       const failedDeps = evals.filter((e) => e.state === "failed");
-      if (failedDeps.length) return failed("RUN_STATE", `dependencies required by '${phase}' failed: ${failedDeps.map((e) => e.detail).join("; ")}`, { dependencyIds: failedDeps.map((e) => e.dependency.id) }, false);
+      if (failedDeps.length) {
+        watch.dispose();
+        return failed("RUN_STATE", `dependencies required by '${phase}' failed: ${failedDeps.map((e) => e.detail).join("; ")}`, { dependencyIds: failedDeps.map((e) => e.dependency.id) }, false);
+      }
       const waiting = evals.filter((e) => e.state === "waiting");
       if (waiting.length === 0) {
+        watch.dispose();
         const upstream = await ctx.plan.upstreamContext(workItemId);
         await ctx.emit({ type: "vars.set", payload: { vars: { upstream } } });
         return completed({ data: { phase, waitedMs: Date.now() - started, satisfied: evals.map((e) => e.detail) } });
       }
-      if (Date.now() >= deadline) return failed("STEP_TIMEOUT", `timed out waiting for dependencies required by '${phase}': ${waiting.map((e) => e.detail).join("; ")}`, {}, false);
+      if (Date.now() >= deadline) {
+        watch.dispose();
+        return failed("STEP_TIMEOUT", `timed out waiting for dependencies required by '${phase}': ${waiting.map((e) => e.detail).join("; ")}`, {}, false);
+      }
       if (!announced) {
         await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "dependencies", detail: waiting.map((e) => e.detail).join("; ") } });
         announced = true;
       }
-      await planChanged(ctx, wi.planId, pollMs).promise;
+      await watch.promise;
     }
   },
 };

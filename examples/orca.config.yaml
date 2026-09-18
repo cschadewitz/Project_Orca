@@ -56,7 +56,7 @@ planning:                             # long-term plan defaults (docs/PLANNING.m
     mitigateFirst: true               # pull items that mitigate open risks forward
   riskMatrix:
     scale: 5                          # likelihood and impact are 1..scale
-    thresholds: { medium: 5, high: 10, critical: 16 }
+    thresholds: { medium: 5, high: 10, critical: 16 }   # optional, must be increasing; omitted ones follow the scale
 
 workspace:
   provider: git-worktree              # local | git-worktree | kepler

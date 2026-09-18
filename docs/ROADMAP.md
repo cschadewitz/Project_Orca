@@ -35,6 +35,18 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     rebased onto main. Done: cycle detection ignores `soft` edges (#71); a work‑item claim
     stops two dispatchers from launching one item twice (#72); artifact intake is
     serialised per plan (#73); work‑item status is projected from the event log, with the
-    plan side following it (#74). The one that still shapes the design:
-    `custom:plan-dispatch` keeps its own fan‑out loop next to `runBranches` (#75). The
-    rest are smaller: #76–#84.
+    plan side following it (#74); `custom:plan-dispatch` drives the same `FanOut` as
+    `parallel`, so `failFast` cancels in‑flight items, the journal is watched before the
+    plan is read, and `onWaiting: wait` logs one event per reason under a default timeout
+    (#96, consolidating #75/#76; the per‑wake full‑plan recompute #83 named there is item
+    12's); scheduler explanations, the critical path and cycle messages agree with each
+    other (#80; the remaining critical‑path overlaps are #108); the JSONL event store and
+    plan journal number events on disk under a lock file, so two processes over one store
+    extend one log (#97, consolidating #78/#87); `custom:decision-matrix` no longer
+    re-decides a decision the artifact intake already made (#79). The rest are smaller:
+    #77, #81, #82, #84, #88 (no command releases a dead run's work‑item claims), #104 (a
+    `decided` decision is re-decided by a different choice without reopening it, so the
+    decide loop can undo a human's pick), #105 (intake reconciles on unchanged signals), and
+    the #97 follow‑ups: a single‑writer lease per run (#101, the remaining prerequisite for
+    daemon mode, item 1), the artifact index appended without the lock (#102), and lock
+    liveness across pid namespaces (#103).

@@ -1,8 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FakeClock, PlanSchema } from "@orca/core";
+import { consoleLogger, FakeClock, PlanSchema } from "@orca/core";
 import { filePlanStores, InMemoryPlanJournal, JsonlPlanJournal } from "@orca/store";
 
 const dirs: string[] = [];
@@ -24,7 +24,9 @@ describe("plan journal", () => {
     it(`${name}: assigns per-plan seq and filters subscribers`, async () => {
       const j = await make();
       const seen: string[] = [];
+      const all: string[] = [];
       j.subscribe((e) => seen.push(`${e.planId}:${e.seq}:${e.type}`), "plan_1");
+      const unsubscribe = j.subscribe((e) => all.push(`${e.planId}:${e.seq}`));
       await Promise.all([
         j.append({ type: "plan.created", planId: "plan_1", origin: { kind: "system" }, payload: { plan } }),
         j.append({ type: "request.linked", planId: "plan_1", origin: { kind: "api" }, payload: { requestId: "req_1" } }),
@@ -32,6 +34,11 @@ describe("plan journal", () => {
       ]);
       expect((await j.read("plan_1")).map((e) => e.seq)).toEqual([0, 1]);
       expect(seen).toEqual(["plan_1:0:plan.created", "plan_1:1:request.linked"]);
+      // A listener without a planId sees every plan, and stops when unsubscribed.
+      expect(all.sort()).toEqual(["plan_1:0", "plan_1:1", "plan_2:0"]);
+      unsubscribe();
+      await j.append({ type: "request.linked", planId: "plan_2", origin: { kind: "api" }, payload: { requestId: "req_2" } });
+      expect(all).toHaveLength(3);
       expect((await j.listPlans()).sort()).toEqual(["plan_1", "plan_2"]);
     });
   }
@@ -41,6 +48,34 @@ describe("plan journal", () => {
     await new JsonlPlanJournal(d).append({ type: "plan.created", planId: "plan_x", origin: { kind: "system" }, payload: { plan } });
     const e = await new JsonlPlanJournal(d).append({ type: "request.linked", planId: "plan_x", origin: { kind: "system" }, payload: { requestId: "r" } });
     expect(e.seq).toBe(1);
+  });
+  it("two jsonl journals over one directory number one plan consistently", async () => {
+    const d = await mkdtemp(join(tmpdir(), "orca-plan-"));
+    dirs.push(d);
+    const a = new JsonlPlanJournal(d);
+    const b = new JsonlPlanJournal(d);
+    await a.append({ type: "plan.created", planId: "plan_x", origin: { kind: "system" }, payload: { plan } });
+    await b.append({ type: "request.linked", planId: "plan_x", origin: { kind: "api" }, payload: { requestId: "r1" } });
+    await a.append({ type: "request.linked", planId: "plan_x", origin: { kind: "api" }, payload: { requestId: "r2" } });
+    expect((await b.read("plan_x")).map((e) => e.seq)).toEqual([0, 1, 2]);
+    await Promise.all(
+      Array.from({ length: 6 }, (_, i) => (i % 2 ? a : b).append({ type: "request.linked", planId: "plan_x", origin: { kind: "api" }, payload: { requestId: `c${i}` } })),
+    );
+    expect((await a.read("plan_x")).map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+  it("jsonl journal survives a corrupt line and a torn tail instead of failing every later append", async () => {
+    const d = await mkdtemp(join(tmpdir(), "orca-plan-"));
+    dirs.push(d);
+    const warnings: string[] = [];
+    const j = new JsonlPlanJournal(d, new FakeClock(), consoleLogger("warn", {}, (l) => warnings.push(l)));
+    await j.append({ type: "plan.created", planId: "plan_x", origin: { kind: "system" }, payload: { plan } });
+    await writeFile(join(d, "plans", "plan_x.jsonl"), '<<corrupt>>\n{"type":"request.linked","planId":"plan_x","origin":{"kind":"api"},"payload":{"requestId":"r"},"id":"pev_2","seq":1,"at"', { flag: "a" });
+    expect((await j.read("plan_x")).map((e) => e.seq)).toEqual([0]);
+    const e = await j.append({ type: "request.linked", planId: "plan_x", origin: { kind: "api" }, payload: { requestId: "r" } });
+    expect(e.seq).toBe(1);
+    expect((await new JsonlPlanJournal(d).read("plan_x")).map((e) => [e.seq, e.type])).toEqual([[0, "plan.created"], [1, "request.linked"]]);
+    expect(warnings.some((l) => l.includes("torn tail"))).toBe(true);
+    expect(warnings.some((l) => l.includes("not JSON"))).toBe(true);
   });
 });
 
