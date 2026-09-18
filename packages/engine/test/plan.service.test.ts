@@ -251,7 +251,7 @@ describe("PlanService", () => {
     await expect(plan.addDependency(p.id, "a", "b@", human)).rejects.toThrow(/invalid dependency reference 'b@'/);
     // Artifact intake reports the bad reference as an issue and keeps the one behind it.
     const issues = await plan.onArtifactRecorded({ id: "run_a", workItemId: a!.id, requestId: "req_1" }, art("art_1", "spec", { status: "ready", dependencies: ["#build", "external:legal#build"] }, "run_a"));
-    expect(issues).toEqual(["invalid dependency reference '#build'"]);
+    expect(issues).toEqual(["dependencies[0]: invalid dependency reference '#build'"]);
     const targets = (await plan.snapshot(p.id)).dependencies.map((d) => d.target);
     expect(targets).toHaveLength(2);
     expect(targets).toEqual(expect.arrayContaining([{ kind: "work-item", workItemId: b!.id }, { kind: "external", key: "legal" }]));

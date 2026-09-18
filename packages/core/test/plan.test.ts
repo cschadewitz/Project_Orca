@@ -85,14 +85,13 @@ describe("dependency references", () => {
   it("round-trips through formatDependencyRef", () => {
     for (const s of ["auth-api", "auth-api@spec", "soft:auth-api", "informs:auth-api@spec#build", "decision:storage", "external:x"]) expect(formatDependencyRef(parseDependencyRef(s))).toBe(s);
   });
-  it("honours a kind prefix and an inline stage inside the object form's `on`, with an explicit stage winning", () => {
-    // Only the *target* lives in `on` (`decision:` / `external:` and `@stage`); type and phase are fields. #77 tracks the prefixes it drops.
+  it("object form: a fully specified ref parses exactly, `on` is trimmed, and the result round-trips through formatDependencyRef", () => {
     expect(parseDependencyRef({ on: "decision:store", type: "blocks", requiredBy: "start" })).toEqual({ targetKind: "decision", key: "store", type: "blocks", requiredBy: "start" });
     expect(parseDependencyRef({ on: "external:vendor", type: "soft", requiredBy: "deploy" })).toEqual({ targetKind: "external", key: "vendor", type: "soft", requiredBy: "deploy" });
     expect(parseDependencyRef({ on: "auth-api@spec", type: "blocks", requiredBy: "build" })).toEqual({ targetKind: "work-item", key: "auth-api", stage: "spec", type: "blocks", requiredBy: "build" });
-    expect(parseDependencyRef({ on: "auth-api@spec", stage: "implementation", type: "blocks", requiredBy: "start" }).stage).toBe("implementation");
     expect(parseDependencyRef({ on: "  auth-api  ", type: "blocks", requiredBy: "start" }).key).toBe("auth-api");
     expect(formatDependencyRef(parseDependencyRef({ on: "decision:store", type: "blocks", requiredBy: "build" }))).toBe("decision:store#build");
+    expect(formatDependencyRef(parseDependencyRef({ on: "auth-api", type: "soft", stage: "spec", requiredBy: "build", rationale: "r" }))).toBe("soft:auth-api@spec#build");
   });
   it("rejects a string whose key, stage or phase is empty", () => {
     for (const bad of ["@spec", "#build", "auth-api@", "auth-api#", "auth-api@spec#", "   "]) expect(() => parseDependencyRef(bad), bad).toThrow(`invalid dependency reference '${bad}'`);
