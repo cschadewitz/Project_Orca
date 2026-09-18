@@ -12,6 +12,6 @@
 
 ## Checklist
 
-- [ ] `pnpm run lint`, `pnpm test` and `pnpm run build` pass locally
+- [ ] `pnpm run typecheck`, `pnpm run lint`, `pnpm run format:check`, `pnpm test` and `pnpm run build` pass locally
 - [ ] New files follow the conventions in `docs/DEVELOPMENT.md` (one concern per file, leading comment saying what it is for)
 - [ ] Docs under `docs/` updated if behaviour or architecture changed
