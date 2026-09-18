@@ -39,9 +39,11 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     `parallel`, so `failFast` cancels in‑flight items, the journal is watched before the
     plan is read, and `onWaiting: wait` logs one event per reason under a default timeout
     (#96, consolidating #75/#76; the per‑wake full‑plan recompute #83 named there is item
-    12's); the JSONL event store and plan journal number events on disk under a lock file,
-    so two processes over one store extend one log (#97, consolidating #78/#87). The rest
-    are smaller: #77, #79–#82, #84, #88 (no command releases a dead run's work‑item
-    claims), and the #97 follow‑ups: a single‑writer lease per run (#101, the remaining
-    prerequisite for daemon mode, item 1), the artifact index appended without the lock
-    (#102), and lock liveness across pid namespaces (#103).
+    12's); scheduler explanations, the critical path and cycle messages agree with each
+    other (#80; the remaining critical‑path overlaps are #108); the JSONL event store and
+    plan journal number events on disk under a lock file, so two processes over one store
+    extend one log (#97, consolidating #78/#87). The rest are smaller: #77, #79, #81, #82,
+    #84, #88 (no command releases a dead run's work‑item claims), and the #97 follow‑ups: a
+    single‑writer lease per run (#101, the remaining prerequisite for daemon mode, item 1),
+    the artifact index appended without the lock (#102), and lock liveness across pid
+    namespaces (#103).
