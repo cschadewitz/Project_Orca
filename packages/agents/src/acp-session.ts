@@ -48,7 +48,6 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const roots = [opts.cwd, ...(opts.additionalDirectories ?? [])];
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   let acpSessionId = "";
-  let updateCount = 0;
 
   const proc: AgentProcessHandle = await opts.host.spawnAgent(opts.agent, { cwd: opts.cwd, ...(opts.env ? { env: opts.env } : {}) });
 
@@ -57,7 +56,6 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     .onNotification(acp.methods.client.session.update, (ctx) => {
       const p = ctx.params;
       if (p.sessionId !== acpSessionId && acpSessionId !== "") return;
-      updateCount++;
       const e: SessionUpdateEvent = { sessionId: p.sessionId, raw: p.update, summary: summarizeUpdate(p.update), at: clock.now() };
       for (const l of listeners) l(e);
     })
@@ -204,7 +202,6 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       if (options.signal?.aborted) throw new OrcaError("CANCELLED", String(options.signal.reason ?? "cancelled"));
       const blocks: acp.ContentBlock[] = typeof input === "string" ? [{ type: "text", text: input }] : input;
       const started = clock.now();
-      const before = updateCount;
       // Settles the turn when the agent is wedged and the ACP request itself will never answer.
       let wedged: OrcaError | undefined;
       const turn: ActiveTurn = { fail: () => undefined };
@@ -221,7 +218,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       const timer = options.timeoutMs ? setTimeout(() => requestCancel(`turn timed out after ${options.timeoutMs}ms`), options.timeoutMs) : undefined;
       try {
         const res = await Promise.race([conn.agent.request(acp.methods.agent.session.prompt, { sessionId: acpSessionId, prompt: blocks }), failed]);
-        return { stopReason: res.stopReason, durationMs: clock.now() - started, updateCount: updateCount - before };
+        return { stopReason: res.stopReason, durationMs: clock.now() - started };
       } catch (e) {
         if (wedged) throw wedged;
         throw new OrcaError("AGENT_PROTOCOL", `prompt failed: ${(e as Error).message}`, { stderr: proc.stderrTail() }, { cause: e });

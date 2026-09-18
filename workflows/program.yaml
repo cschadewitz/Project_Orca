@@ -50,8 +50,10 @@ nodes:
       key: workItem.slug
       dependsOn: workItem.dependsOn
       workItemId: workItem.id
-      workflow: workItem.workflowId
-      body: { workflow: ai-sdlc }
+      # The item's own workflow, else `vars.itemWorkflow` (seeded from the workflow's
+      # `vars` below / `program.itemWorkflow` in the config). No `body:` on purpose:
+      # nothing here hard-codes ai-sdlc.
+      workflow: workItem.workflowId || vars.itemWorkflow
 
   summarize:
     type: agent

@@ -31,8 +31,10 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 export const StepResultSchema = z.object({
   /** For decision nodes / gates. */
   choice: z.string().optional(),
-  /** For end nodes. */
+  /** Set by a terminal step (an `end` node, or any node type that ends the run): the run's outcome. */
   outcome: RunOutcomeSchema.optional(),
+  /** Closing message for a terminal step, copied into `run.completed`. */
+  message: z.string().optional(),
   /** Output artifacts recorded by the step. */
   artifactIds: z.array(z.string()).default([]),
   /** Free-form data exposed to expressions as `steps.<nodeId>.result.data`. */
@@ -118,6 +120,26 @@ export const RunSchema = z.object({
   completedAt: z.string().optional(),
 });
 export type Run = z.infer<typeof RunSchema>;
+
+/**
+ * The cheap projection of a run: what a listing needs (`orca runs`), without
+ * the steps, artifacts and agent chatter. Rebuilt from a handful of lifecycle
+ * events rather than the whole log - see reduceRunSummary.
+ */
+export const RunSummarySchema = RunSchema.pick({
+  id: true,
+  workflowId: true,
+  workflowVersion: true,
+  status: true,
+  outcome: true,
+  requestId: true,
+  workItemId: true,
+  parentRunId: true,
+  createdAt: true,
+  startedAt: true,
+  completedAt: true,
+});
+export type RunSummary = z.infer<typeof RunSummarySchema>;
 
 export const HumanInputRequestSchema = z.object({
   id: z.string(),

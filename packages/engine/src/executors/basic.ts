@@ -1,5 +1,6 @@
 /** Executors for start, end, set, decision and gate nodes. */
-import { evaluateVars, newId, OrcaError, type DecisionNode, type EndNode, type GateNode, type SetNode, type StartNode } from "@orca/core";
+import { evaluateVars, OrcaError, type DecisionNode, type EndNode, type GateNode, type SetNode, type StartNode } from "@orca/core";
+import { askHumanInput, type HumanInputQuery } from "../human-input.js";
 import { runAgentTurn } from "./agent-step.js";
 import { completed, failed, type NodeExecutor, type StepContext } from "./types.js";
 
@@ -10,10 +11,11 @@ export const startExecutor: NodeExecutor<StartNode> = {
 
 export const endExecutor: NodeExecutor<EndNode> = {
   type: "end",
-  execute: async (ctx) => completed({ outcome: ctx.node.outcome }),
+  // Any step whose result carries an `outcome` ends the run, so a custom terminal node needs no engine change.
+  execute: async (ctx) => completed({ outcome: ctx.node.outcome, ...(ctx.node.message ? { message: ctx.node.message } : {}) }),
 };
 
-/** Values starting with "=" are expressions; anything else is a literal. */
+/** Assign run vars; `=`-prefixed values are expressions (see evaluateVars). */
 export const setExecutor: NodeExecutor<SetNode> = {
   type: "set",
   async execute(ctx) {
@@ -30,15 +32,10 @@ export const setExecutor: NodeExecutor<SetNode> = {
  * resumed run re-schedules the node as a new attempt, which lands here and
  * picks that answer up instead of asking again.
  */
-async function askHuman(ctx: StepContext, question: string, options: string[]): Promise<string | undefined> {
+export async function askHuman(ctx: StepContext, question: string, options: string[], kind: HumanInputQuery["kind"] = "decision"): Promise<string | undefined> {
   const recorded = answerFromPreviousAttempt(ctx);
   if (recorded !== undefined) return recorded;
-  const requestId = newId("hi", ctx.clock.now());
-  await ctx.emit({ type: "human.requested", payload: { stepRunId: ctx.step.id, requestId, kind: "decision", question, options, context: {} } });
-  await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "human-input", detail: requestId } });
-  const answer = await ctx.humanInput.ask({ runId: ctx.run.id, stepRunId: ctx.step.id, requestId, kind: "decision", question, options, context: {} });
-  await ctx.emit({ type: "human.answered", payload: { stepRunId: ctx.step.id, requestId, answer: answer ?? "" } });
-  return answer;
+  return askHumanInput({ port: ctx.humanInput, emit: (e) => ctx.emit(e), clock: ctx.clock, runId: ctx.run.id, stepRunId: ctx.step.id, kind, question, options });
 }
 
 /** The answer given to the immediately preceding, cancelled attempt of this node (a resumed pause), if any. */

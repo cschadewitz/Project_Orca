@@ -45,7 +45,8 @@ function validateGraph(graph: WorkflowGraph, path: string, ctx: ValidationContex
   else if (start.type !== "start") err(`${path}.start`, `start node '${graph.start}' must have type 'start'`);
   const starts = ids.filter((id) => graph.nodes[id]!.type === "start");
   if (starts.length !== 1) err(`${path}.nodes`, `graph must contain exactly one start node (found ${starts.length})`);
-  if (!ids.some((id) => graph.nodes[id]!.type === "end")) err(`${path}.nodes`, "graph must contain at least one end node");
+  // A custom node may end the run itself (its executor returns an outcome), so it counts as a possible terminus.
+  if (!ids.some((id) => mayBeTerminal(graph.nodes[id]!))) err(`${path}.nodes`, "graph must contain at least one end node (or a custom node that ends the run)");
 
   graph.edges.forEach((e, i) => {
     const p = `${path}.edges[${i}]`;
@@ -63,7 +64,7 @@ function validateGraph(graph: WorkflowGraph, path: string, ctx: ValidationContex
   for (const [id, n] of Object.entries(graph.nodes)) {
     const p = `${path}.nodes.${id}`;
     const outs = outgoing(graph, id);
-    if (n.type !== "end" && outs.length === 0) err(p, `node '${id}' has no outgoing edges`);
+    if (!mayBeTerminal(n) && outs.length === 0) err(p, `node '${id}' has no outgoing edges`);
     if (n.type === "decision" || n.type === "gate") {
       const unconditional = outs.filter((e) => !e.when);
       if (unconditional.length > 1) err(p, "decision nodes may have at most one unconditional (default) edge");
@@ -77,6 +78,11 @@ function validateGraph(graph: WorkflowGraph, path: string, ctx: ValidationContex
 
   const seen = reachable(graph);
   for (const id of ids) if (!seen.has(id)) warn(`${path}.nodes.${id}`, `node '${id}' is unreachable from start`);
+}
+
+/** Node types that may end a run: `end`, and custom nodes whose executor can return an outcome. */
+function mayBeTerminal(n: NodeDef): boolean {
+  return n.type === "end" || n.type.startsWith("custom:");
 }
 
 function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, ctx: ValidationContext, errors: ValidationIssue[], warnings: ValidationIssue[]): void {
@@ -171,7 +177,8 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
           if (m) err(m, `.forEach.${field}`);
         }
         if (n.forEach.dependsOn && !n.forEach.key) warn("forEach.dependsOn without forEach.key compares against item indexes; set 'key' to something stable", ".forEach.dependsOn");
-        checkRef(n.forEach.body, ".forEach.body");
+        if (!n.forEach.body && !n.forEach.workflow) err("forEach needs a 'body' to run per item, a 'workflow' expression naming one, or both", ".forEach");
+        if (n.forEach.body) checkRef(n.forEach.body, ".forEach.body");
       }
       break;
     case "subworkflow":

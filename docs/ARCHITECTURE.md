@@ -40,11 +40,12 @@ A **run** is one token walking a **graph** from `start` to an `end` node
 2. calls the node's **executor** (`packages/engine/src/executors/`), which appends
    `step.inputs` for every artifact it resolves (that is the audit record of what the
    step read — `step.started` precedes input resolution);
-3. appends `step.completed` / `step.failed` (retrying agent steps up to
-   `completion.maxAttempts`);
+3. appends `step.completed` / `step.failed` (retrying a retryable failure up to the
+   node's `maxAttempts` — agent nodes may instead set `completion.maxAttempts`);
 4. **routes**: evaluates outgoing edges in order, first `when` that is truthy
    wins, else the single unconditional edge;
-5. on an `end` node appends `run.completed` with the node's outcome.
+5. ends the run with `run.completed` whenever the step's result carries an `outcome`
+   (that is what the `end` executor returns, and how a plugin node can be terminal).
 
 Concurrency never happens inside one run. `loop`, `parallel` and `subworkflow`
 nodes **spawn child runs** (each with its own event log and id) and wait for
@@ -106,9 +107,11 @@ back to `build` with the review as an extra input. That *is* the hand‑off.
 - `plan-gate` → auto‑approves small breakdowns, asks a human for big ones.
 - `dispatch` → a plain `parallel` node fanning out over `vars.leafWorkItems`, with
   `forEach.key`/`dependsOn` giving the decomposition's dependency order and
-  `forEach.workItemId` binding each branch to its item; each item therefore gets its
-  own **workspace** from the `WorkspaceProvider` (a git worktree per item, a Kepler
-  task worktree, or the current directory). There is no second fan-out engine.
+  `forEach.workItemId` binding each branch to its item. The workflow per item is
+  `forEach.workflow` = the item's own `workflowId`, else `vars.itemWorkflow`
+  (seeded from `program.itemWorkflow`, default `ai-sdlc`). Each item therefore gets
+  its own **workspace** from the `WorkspaceProvider` (a git worktree per item, a
+  Kepler task worktree, or the current directory). There is no second fan-out engine.
 - `summarize` (agent) → a program summary artifact.
 
 A `WorkItem`'s `status` is a **projection** of that fan-out, not a side-write:
@@ -134,7 +137,7 @@ facade.
 - `openAcpSession()` performs `initialize` → `session/new` with a handshake
   timeout and surfaces the agent's stderr tail on failure.
 - Alternative transports implement `AgentSession` and are injected as
-  `Orchestrator.sessionFactory` (T3 Code threads, HTTP ACP).
+  `Orchestrator.sessionFactory` (HTTP ACP; T3 Code threads once its transport lands).
 
 ## Where ORCA sits relative to Kepler and T3 Code
 
@@ -142,7 +145,9 @@ See `docs/INTEGRATIONS.md`. Short version: ORCA is transport‑ and host‑agnos
 it is **an ACP agent to the tools above it** and **an ACP client to the agents
 below it**. Kepler launches `orca acp` like any agent; ORCA in turn launches
 Claude Code / Codex on the task's worktrees (locally or over SSH). T3 Code is
-not ACP, so its threads are adapted as `AgentSession`s over its WebSocket RPC.
+not ACP in either direction: it cannot launch `orca acp`, and adapting its
+threads as `AgentSession`s over its WebSocket RPC is groundwork, not a working
+transport.
 
 ## Key design decisions
 

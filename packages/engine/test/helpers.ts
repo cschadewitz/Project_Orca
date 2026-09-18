@@ -1,32 +1,27 @@
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { parseWorkflow, TemplateRegistry, WorkflowRegistry, silentLogger, parsePromptTemplate } from "@orca/core";
+import { loadTemplates, loadWorkflows, parseOrcaConfig, readJsonl, silentLogger, type JsonlParser, type TemplateRegistry, type WorkflowRegistry } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, type OrchestratorOptions } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec, type PlaybookInput } from "@orca/testing";
 
 export const repoRoot = join(new URL(".", import.meta.url).pathname, "..", "..", "..");
 
-export async function loadShippedWorkflows(): Promise<WorkflowRegistry> {
-  const reg = new WorkflowRegistry();
-  for (const f of await readdir(join(repoRoot, "workflows"))) if (f.endsWith(".yaml")) reg.register(parseWorkflow(await readFile(join(repoRoot, "workflows", f), "utf8"), f));
-  return reg;
+/** Same glob patterns `orca run` uses by default, so the tests exercise the file set the CLI does. */
+const shipped = parseOrcaConfig({});
+
+export function loadShippedWorkflows(): Promise<WorkflowRegistry> {
+  return loadWorkflows(shipped.workflows, repoRoot);
 }
 
-export async function loadShippedTemplates(): Promise<TemplateRegistry> {
-  const reg = new TemplateRegistry();
-  const walk = async (dir: string) => {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      const p = join(dir, entry.name);
-      if (entry.isDirectory()) await walk(p);
-      else if (entry.name.endsWith(".md")) reg.register(parsePromptTemplate(await readFile(p, "utf8"), p));
-    }
-  };
-  await walk(join(repoRoot, "templates"));
-  return reg;
+export function loadShippedTemplates(): Promise<TemplateRegistry> {
+  return loadTemplates(shipped.templates, repoRoot);
 }
+
+/** The scripted agent's prompt log is untyped; tests only read these two fields. */
+const promptRecord: JsonlParser<{ text: string; turn: number }> = { parse: (raw) => raw as { text: string; turn: number } };
 
 export interface TestHarness {
   dir: string;
@@ -54,10 +49,6 @@ export async function harness(playbook: PlaybookInput, overrides: Partial<Orches
     dir,
     orchestrator,
     promptLog,
-    prompts: async () =>
-      (await readFile(promptLog, "utf8").catch(() => ""))
-        .split("\n")
-        .filter(Boolean)
-        .map((l) => JSON.parse(l) as { text: string; turn: number }),
+    prompts: () => readJsonl(promptLog, promptRecord),
   };
 }

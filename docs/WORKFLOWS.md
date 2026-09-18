@@ -132,7 +132,10 @@ that a later step can summarise — see `templates/program/summary.md`.
   one is still in flight — a slow host is simply polled less often (up to 30 s apart).
 - `maxFollowUps`: how many "your deliverable is missing/invalid" follow‑ups to send in the
   same session before failing the attempt.
-- `maxAttempts`: whole‑step retries (fresh session each time).
+- `maxAttempts`: whole‑step retries (fresh session each time). Any node type can set
+  `maxAttempts` directly on the node; for an agent node the node‑level value wins over
+  `completion.maxAttempts`. A step is only retried when its executor reports the failure
+  as retryable.
 - `timeoutMs`: per‑turn wall clock (defaults to the agent's `turnTimeoutMs`).
   When it elapses ORCA sends `session/cancel`; an agent that does not end the turn within
   its `cancelGraceMs` (default 10s) is killed and the step fails with `AGENT_TRANSPORT`.

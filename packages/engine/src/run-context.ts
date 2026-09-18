@@ -4,8 +4,9 @@
  * projection in sync), and builds the expression/template context that
  * conditions and prompts are evaluated against.
  */
-import { applyEvent, artifactsByName, latestStepForNode, OrcaError, reduceRun, type Artifact, type Clock, type Logger, type OrcaEvent, type OrcaEventInput, type Request, type RunState, type WorkItem, type WorkflowDefinition, type Workspace } from "@orca/core";
+import { applyEvent, latestStepForNode, OrcaError, reduceRun, type Artifact, type Clock, type Logger, type OrcaEvent, type OrcaEventInput, type Request, type RunState, type WorkItem, type WorkflowDefinition, type Workspace } from "@orca/core";
 import type { Stores } from "@orca/store";
+import type { ResolvedArtifact } from "./executors/types.js";
 import { projectWorkItems } from "./program/work-items.js";
 
 /** Events that change what a fan-out step knows about its branches - and so, about its work items. */
@@ -19,12 +20,14 @@ export interface RunContextDeps {
   loadState(runId: string): Promise<RunState>;
 }
 
-export interface ArtifactView extends Artifact {
-  content: string;
-}
-
 export class RunContext {
   readonly abort = new AbortController();
+  /**
+   * Artifact bodies by content hash. Blobs are content-addressed and therefore immutable, and
+   * `evalContext()` runs for every render, condition, route and input resolution - without this
+   * each of those re-read every visible artifact from disk.
+   */
+  private readonly contentByHash = new Map<string, Promise<string>>();
   private constructor(
     readonly id: string,
     readonly definition: WorkflowDefinition,
@@ -92,6 +95,16 @@ export class RunContext {
     return map;
   }
 
+  /** Artifact body, read once per content hash for the lifetime of this context. */
+  private content(a: Artifact): Promise<string> {
+    let body = this.contentByHash.get(a.contentHash);
+    if (!body) {
+      body = this.deps.stores.artifacts.content(a.id).catch(() => "");
+      this.contentByHash.set(a.contentHash, body);
+    }
+    return body;
+  }
+
   async nextArtifactVersion(name: string): Promise<number> {
     const visible = await this.visibleArtifacts();
     return (visible.get(name)?.version ?? 0) + 1;
@@ -109,10 +122,12 @@ export class RunContext {
   /** Context object for expressions and templates. Documented in docs/DATA-MODEL.md. */
   async evalContext(extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     const [request, workItem, visible] = await Promise.all([this.request(), this.workItem(), this.visibleArtifacts()]);
-    const artifacts: Record<string, ArtifactView> = {};
-    const byKind: Record<string, ArtifactView> = {};
+    const artifacts: Record<string, ResolvedArtifact> = {};
+    const byKind: Record<string, ResolvedArtifact> = {};
+    const bodies = await Promise.all([...visible.values()].map((a) => this.content(a)));
+    let i = 0;
     for (const [name, a] of visible) {
-      const view: ArtifactView = { ...a, content: await this.deps.stores.artifacts.content(a.id).catch(() => "") };
+      const view: ResolvedArtifact = { ...a, content: bodies[i++]! };
       artifacts[name] = view;
       const cur = byKind[a.kind];
       if (!cur || cur.createdAt < a.createdAt) byKind[a.kind] = view;
@@ -140,6 +155,4 @@ export class RunContext {
       ...extra,
     };
   }
-
-  static artifactsByName = artifactsByName;
 }

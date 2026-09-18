@@ -1,8 +1,9 @@
 /** The level above: request -> decomposition -> parallel SDLC runs with dependencies -> summary. */
 import { rm } from "node:fs/promises";
 import { afterAll, describe, expect, it } from "vitest";
+import { parseWorkflow } from "@orca/core";
 import { ProgramService, projectWorkItems } from "@orca/engine";
-import { harness } from "./helpers.js";
+import { harness, loadShippedWorkflows } from "./helpers.js";
 
 const dirs: string[] = [];
 afterAll(async () => {
@@ -80,5 +81,31 @@ describe("program workflow (e2e)", () => {
     expect(state.run.status).toBe("failed");
     const items = await h.orchestrator.stores.workItems.list();
     expect(Object.fromEntries(items.map((w) => [w.slug, w.status]))).toEqual({ a: "failed", b: "blocked" });
+  }, 120_000);
+
+  it("dispatches work items to the configured itemWorkflow", async () => {
+    const workflows = await loadShippedWorkflows();
+    workflows.register(
+      parseWorkflow(
+        ["id: my-sdlc", 'name: "Minimal item workflow"', 'version: "1"', "start: start", "nodes:", "  start: { type: start }", "  done: { type: end, outcome: success }", "edges:", "  - { from: start, to: done }"].join("\n"),
+        "my-sdlc.yaml",
+      ),
+    );
+    const h = await harness(
+      {
+        kinds: {
+          ...good,
+          decomposition: [{ data: { items: [{ slug: "only", title: "Only", dependsOn: [] }] } }],
+        },
+      },
+      { workflows },
+    );
+    dirs.push(h.dir);
+    const { state } = await new ProgramService(h.orchestrator, "program", "my-sdlc").submitAndRun({ title: "x", body: "y" });
+
+    expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+    const dispatch = state.steps[state.stepOrder.find((id) => state.steps[id]!.nodeId === "dispatch")!]!;
+    const children = await Promise.all(dispatch.childRunIds.map((id) => h.orchestrator.getState(id)));
+    expect(children.map((c) => c.run.workflowId)).toEqual(["my-sdlc"]);
   }, 120_000);
 });

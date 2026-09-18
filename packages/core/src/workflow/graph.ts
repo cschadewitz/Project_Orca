@@ -5,14 +5,6 @@ export function outgoing(graph: WorkflowGraph, nodeId: string): Edge[] {
   return graph.edges.filter((e) => e.from === nodeId);
 }
 
-export function incoming(graph: WorkflowGraph, nodeId: string): Edge[] {
-  return graph.edges.filter((e) => e.to === nodeId);
-}
-
-export function node(graph: WorkflowGraph, nodeId: string): NodeDef | undefined {
-  return graph.nodes[nodeId];
-}
-
 /** Nodes reachable from `start` following edges regardless of conditions. */
 export function reachable(graph: WorkflowGraph): Set<string> {
   const seen = new Set<string>();

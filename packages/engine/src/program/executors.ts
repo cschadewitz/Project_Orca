@@ -13,7 +13,7 @@
  * This node is a `custom:*` node on purpose: it shows how a plugin extends the
  * node vocabulary without touching the core schema.
  */
-import { DecompositionSchema, newId, OrcaError, type CustomNode, type WorkItem } from "@orca/core";
+import { DecompositionSchema, newId, type CustomNode, type WorkItem } from "@orca/core";
 import { completed, failed, type NodeExecutor, type StepOutcome } from "../executors/types.js";
 
 export interface MaterializeWorkItemsNode extends CustomNode {
@@ -71,7 +71,3 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
     return completed({ data: { count: workItems.length, leaves: leafWorkItems.length, slugs: workItems.map((w) => w.slug) } });
   },
 };
-
-export function assertWorkItemsExecutorsRegistered(types: string[]): void {
-  for (const t of ["custom:materialize-work-items"]) if (!types.includes(t)) throw new OrcaError("NOT_SUPPORTED", `${t} executor missing`);
-}

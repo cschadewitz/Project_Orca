@@ -20,6 +20,8 @@ export class ProgramService {
   constructor(
     private readonly orchestrator: Orchestrator,
     private readonly programWorkflowId = "program",
+    /** Seeded as `vars.itemWorkflow`; the program workflow dispatches work items to it. */
+    private readonly itemWorkflowId?: string,
   ) {}
 
   async submit(input: SubmitRequestInput): Promise<{ request: Request; runId: string }> {
@@ -35,7 +37,7 @@ export class ProgramService {
       updatedAt: now,
     });
     await this.orchestrator.stores.requests.put(request);
-    const runId = await this.orchestrator.startRun({ workflowId: input.workflowId ?? this.programWorkflowId, requestId: request.id, vars: { request, ...(input.vars ?? {}) } });
+    const runId = await this.orchestrator.startRun({ workflowId: input.workflowId ?? this.programWorkflowId, requestId: request.id, vars: { request, ...(this.itemWorkflowId ? { itemWorkflow: this.itemWorkflowId } : {}), ...(input.vars ?? {}) } });
     await this.orchestrator.stores.requests.put({ ...request, programRunId: runId });
     return { request: { ...request, programRunId: runId }, runId };
   }

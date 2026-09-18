@@ -1,7 +1,7 @@
 /**
  * ORCA as an ACP *agent* (proxy mode).
  *
- * Any ACP client - GitKraken Kepler, Zed, T3 Code, an IDE - can launch `orca
+ * Any ACP client - GitKraken Kepler, Zed, an IDE - can launch `orca
  * acp` exactly as it would launch Claude Code or Codex. Prompts become
  * Requests (or direct workflow runs); ORCA then fans out to the real coding
  * agents (local or over SSH) and streams progress back as ACP session updates:
@@ -16,8 +16,9 @@
  *   /status                             summarise runs in this session
  *   anything else                       submit as a Request (first line = title)
  */
-import { Readable, Writable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { stdioAcpStream } from "@orca/agents";
 import { newId, type OrcaEvent, type RunState, type WorkflowDefinition } from "@orca/core";
 import type { Orchestrator, ProgramService } from "@orca/engine";
 import { UpstreamHumanInput } from "./upstream-human-input.js";
@@ -36,15 +37,27 @@ interface FacadeSession {
   id: string;
   cwd: string;
   runIds: string[];
-  active?: { runId: string; abort: AbortController };
+  active?: { runId: string };
 }
 
 export class OrcaAcpAgent {
   private readonly sessions = new Map<string, FacadeSession>();
   private readonly humanInput: UpstreamHumanInput;
   constructor(private readonly opts: OrcaAcpAgentOptions) {
-    this.humanInput = opts.humanInput ?? new UpstreamHumanInput(opts.orchestrator.humanInput);
-    opts.orchestrator.humanInput = this.humanInput;
+    const orchestrator = opts.orchestrator;
+    this.humanInput =
+      opts.humanInput ??
+      new UpstreamHumanInput({
+        fallback: orchestrator.humanInput,
+        parentRunId: async (runId) => {
+          try {
+            return (await orchestrator.getState(runId)).run.parentRunId;
+          } catch {
+            return undefined;
+          }
+        },
+      });
+    orchestrator.humanInput = this.humanInput;
   }
 
   register(app: acp.AgentApp): acp.AgentApp {
@@ -96,8 +109,9 @@ export class OrcaAcpAgent {
       runId = submitted.runId;
     }
     session.runIds.push(runId);
-    session.active = { runId, abort: new AbortController() };
-    this.humanInput.bind({ sessionId: session.id, request: (m: string, p?: unknown) => ctx.client.request(m, p) });
+    session.active = { runId };
+    // Bound per run, so concurrent sessions each receive only their own gates and `ask` permissions.
+    const unbindHumanInput = this.humanInput.bind(runId, { sessionId: session.id, request: (m, p) => ctx.client.request(m, p) });
 
     const state0 = await orchestrator.getState(runId);
     const def = orchestrator.resolveDefinition(state0.run.workflowId);
@@ -110,7 +124,7 @@ export class OrcaAcpAgent {
       return { stopReason: final.run.status === "cancelled" ? "cancelled" : "end_turn" };
     } finally {
       unsubscribe();
-      this.humanInput.bind(undefined);
+      unbindHumanInput();
       delete session.active;
     }
   }
@@ -190,7 +204,7 @@ export class OrcaAcpAgent {
 
 /** Serve ORCA as an ACP agent on stdio (used by `orca acp`). */
 export async function serveAcpFacade(opts: OrcaAcpAgentOptions, io: { stdin?: Readable; stdout?: Writable } = {}): Promise<void> {
-  const stream = acp.ndJsonStream(Writable.toWeb(io.stdout ?? process.stdout) as WritableStream<Uint8Array>, Readable.toWeb(io.stdin ?? process.stdin) as ReadableStream<Uint8Array>);
+  const stream = stdioAcpStream(io.stdin ?? process.stdin, io.stdout ?? process.stdout);
   const conn = new OrcaAcpAgent(opts).register(acp.agent({ name: "orca" })).connect(stream);
   await conn.closed;
 }

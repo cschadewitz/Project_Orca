@@ -10,7 +10,6 @@ import type { AgentUpdateSummary } from "@orca/core";
 export interface TurnResult {
   stopReason: acp.StopReason;
   durationMs: number;
-  updateCount: number;
 }
 
 export interface SessionUpdateEvent {

@@ -26,7 +26,9 @@ A Kepler session then drives ORCA like any agent:
   node, live status), agent output as message chunks prefixed with the run/node, every
   recorded artifact as a completed **tool call** with the file location;
 - gates and `ask` permissions are forwarded upstream as `session/request_permission`, so
-  Kepler's normal approval UI is the human gate;
+  Kepler's normal approval UI is the human gate. Questions are routed by the run that raised
+  them (child runs resolve to the session that started their root run), so concurrent
+  sessions each see only their own gates;
 - `session/cancel` cancels the whole run tree.
 
 Implementation: `packages/integrations/src/acp-facade/`. Workspace selection:
@@ -47,7 +49,7 @@ Kepler has no public API to create sessions or tasks from outside; the ACP‑age
 is the supported way in. Kepler's remote‑agent support is "in development"; ORCA's SSH
 host covers that gap today.
 
-## T3 Code
+## T3 Code (groundwork — neither direction works yet)
 
 [T3 Code](https://github.com/pingdotgg/t3code) is an open‑source, TypeScript control plane
 for coding agents: a Node **WebSocket server** wraps provider CLIs (Codex app‑server,
@@ -57,8 +59,9 @@ commands like `thread.create`, `thread.turn.start`, `thread.turn.interrupt`,
 `thread.approval.respond`; events like `thread.message-sent`, `thread.activity-appended`,
 `thread.session-set`). It is *not* an ACP client or agent.
 
-ORCA's adapter (`packages/integrations/src/t3code/`) therefore implements ORCA's
-`AgentSession` on top of a **T3 thread**:
+ORCA's adapter (`packages/integrations/src/t3code/`) therefore maps ORCA's
+`AgentSession` onto a **T3 thread**. The mapping is written; the transport under it
+is not, so nothing below runs today:
 
 | ORCA | T3 Code |
 | --- | --- |
@@ -68,9 +71,12 @@ ORCA's adapter (`packages/integrations/src/t3code/`) therefore implements ORCA's
 | `cancel()` | `thread.turn.interrupt` |
 | `close()` | `thread.session.stop` |
 
-Wire it in via `Orchestrator.sessionFactory` (route agents with e.g. `hostId: t3code` or an
-`env.ORCA_T3_PROJECT` marker to `openT3CodeSession`, everything else to `openAcpSession`).
-Artifact pickup keeps working because T3 threads run in local worktrees the host FS can read.
+Once a transport exists, wire it in via `Orchestrator.sessionFactory` (route agents with
+e.g. `hostId: t3code` or an `env.ORCA_T3_PROJECT` marker to `openT3CodeSession`, everything
+else to `openAcpSession`). Artifact pickup keeps working because T3 threads run in local
+worktrees the host FS can read. Until then a t3code session factory fails on first use:
+the only shipped `T3CodeRpc` is `UnimplementedT3CodeRpc`, whose `call` and `subscribe`
+both throw `NOT_SUPPORTED`.
 
 **Left open on purpose:** the concrete WebSocket transport. T3 Code uses Effect RPC over
 `/ws` with typed request/success/error envelopes and streaming subscriptions; `T3CodeRpc`
@@ -78,8 +84,9 @@ is the two‑method interface to implement (`call`, `subscribe`) once the envelo
 to a version. `UnimplementedT3CodeRpc` documents the gap. T3's own contracts package
 (`@t3tools/contracts` in the monorepo) is the right thing to depend on when publishing.
 
-Alternatively, T3 Code could sit *above* ORCA: if T3 adds ACP agents as a provider,
-`orca acp` plugs in unchanged.
+The other direction is equally unavailable: T3 Code cannot drive ORCA either, because it
+has no ACP client. If T3 ever adds ACP agents as a provider, `orca acp` plugs in unchanged
+— no work needed on ORCA's side.
 
 ## Remote agents over SSH
 

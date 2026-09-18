@@ -177,7 +177,9 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
         run: (signal: AbortSignal) => ctx.runChild(target(ctx, ref, [name]), { branch: name, vars: { branch: name }, signal }),
       }));
     } else {
-      branches = await forEachBranches(ctx, n.forEach!);
+      const built = await forEachBranches(ctx, n.forEach!);
+      if (built.error) return failed("WORKFLOW_INVALID", `parallel '${ctx.nodeId}': ${built.error}`, {}, false);
+      branches = built.branches;
       const dup = branches.map((b) => b.key).find((k, i, all) => all.indexOf(k) !== i);
       if (dup !== undefined) return failed("WORKFLOW_INVALID", `parallel '${ctx.nodeId}': forEach.key is not unique ('${dup}' appears twice)`, {}, false);
     }
@@ -226,7 +228,7 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
 };
 
 /** Build the branches of a `forEach` fan-out, evaluating each per-item expression in the item's scope. */
-async function forEachBranches(ctx: StepContext, fe: ParallelForEach): Promise<Branch[]> {
+async function forEachBranches(ctx: StepContext, fe: ParallelForEach): Promise<{ branches: Branch[]; error?: string }> {
   const items = await ctx.evaluate(fe.items);
   const list = Array.isArray(items) ? items : items && typeof items === "object" ? Object.values(items) : [];
   const branches: Branch[] = [];
@@ -241,7 +243,9 @@ async function forEachBranches(ctx: StepContext, fe: ParallelForEach): Promise<B
     const deps = fe.dependsOn ? await ctx.evaluate(fe.dependsOn, scope) : [];
     const workItemId = await str(fe.workItemId);
     const workflow = await str(fe.workflow);
-    const ref = workflow ? { workflow } : target(ctx, fe.body, []);
+    // `body` may be omitted when `workflow` names the target for every item (see program.yaml).
+    if (!workflow && !fe.body) return { branches: [], error: `forEach.workflow resolved to nothing for item ${key} and there is no 'body' to fall back on` };
+    const ref = workflow ? { workflow } : target(ctx, fe.body!, []);
     branches.push({
       key,
       dependsOn: (Array.isArray(deps) ? deps : deps === undefined || deps === null || deps === "" ? [] : [deps]).map(String),
@@ -249,7 +253,7 @@ async function forEachBranches(ctx: StepContext, fe: ParallelForEach): Promise<B
       run: (signal: AbortSignal) => ctx.runChild(ref, { branch: key, vars: scope, ...(workItemId ? { workItemId } : {}), signal }),
     });
   }
-  return branches;
+  return { branches };
 }
 
 export const subworkflowExecutor: NodeExecutor<SubworkflowNode> = {

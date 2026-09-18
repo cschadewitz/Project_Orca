@@ -1,6 +1,6 @@
 /** Fold a run's events into a RunState. Pure and deterministic. */
 import { OrcaError } from "../errors.js";
-import type { HumanInputRequest, RunState, StepRun } from "../model/run.js";
+import type { HumanInputRequest, RunState, RunSummary, StepRun } from "../model/run.js";
 import type { OrcaEvent } from "./events.js";
 
 export function reduceRun(events: readonly OrcaEvent[]): RunState {
@@ -262,4 +262,102 @@ export function artifactsByName(state: RunState): Map<string, RunState["artifact
     if (!cur || cur.version < a.version || (cur.version === a.version && cur.createdAt < a.createdAt)) out.set(a.name, a);
   }
   return out;
+}
+
+/**
+ * The only event types that can move a field of RunSummary. Listings project a
+ * run from these alone, so they never touch the `agent.update` bulk of a log.
+ * Keep in sync with reduceRunSummary (and with applyEvent, which it mirrors).
+ */
+export const RUN_SUMMARY_EVENT_TYPES = [
+  "run.created",
+  "run.started",
+  "run.paused",
+  "run.resumed",
+  "run.completed",
+  "run.failed",
+  "run.cancelled",
+  "step.waiting",
+  "step.completed",
+  "step.failed",
+] as const satisfies readonly OrcaEvent["type"][];
+
+/** Narrow a full run projection to its summary. */
+export function runSummary(state: RunState): RunSummary {
+  const r = state.run;
+  return {
+    id: r.id,
+    workflowId: r.workflowId,
+    workflowVersion: r.workflowVersion,
+    status: r.status,
+    createdAt: r.createdAt,
+    ...(r.outcome ? { outcome: r.outcome } : {}),
+    ...(r.requestId ? { requestId: r.requestId } : {}),
+    ...(r.workItemId ? { workItemId: r.workItemId } : {}),
+    ...(r.parentRunId ? { parentRunId: r.parentRunId } : {}),
+    ...(r.startedAt ? { startedAt: r.startedAt } : {}),
+    ...(r.completedAt ? { completedAt: r.completedAt } : {}),
+  };
+}
+
+/**
+ * Fold a run's RUN_SUMMARY_EVENT_TYPES events into a RunSummary. Equivalent to
+ * `runSummary(reduceRun(allEvents))` but needs only the filtered events; events
+ * of other types are ignored, so a full log works too.
+ */
+export function reduceRunSummary(events: readonly OrcaEvent[]): RunSummary {
+  const first = events[0];
+  if (!first || first.type !== "run.created") {
+    throw new OrcaError("RUN_STATE", "cannot reduce: first event must be run.created", { first: first?.type });
+  }
+  const s: RunSummary = {
+    id: first.runId,
+    workflowId: first.payload.workflowId,
+    workflowVersion: first.payload.workflowVersion,
+    status: "created",
+    createdAt: first.at,
+    ...(first.payload.requestId ? { requestId: first.payload.requestId } : {}),
+    ...(first.payload.workItemId ? { workItemId: first.payload.workItemId } : {}),
+    ...(first.payload.parentRunId ? { parentRunId: first.payload.parentRunId } : {}),
+  };
+  for (let i = 1; i < events.length; i++) {
+    const e = events[i]!;
+    switch (e.type) {
+      case "run.started":
+        s.status = "running";
+        s.startedAt = e.at;
+        break;
+      case "run.paused":
+        s.status = "paused";
+        break;
+      case "run.resumed":
+        s.status = "running";
+        break;
+      case "run.completed":
+        s.status = "completed";
+        s.outcome = e.payload.outcome;
+        s.completedAt = e.at;
+        break;
+      case "run.failed":
+        s.status = "failed";
+        s.outcome = "failure";
+        s.completedAt = e.at;
+        break;
+      case "run.cancelled":
+        s.status = "cancelled";
+        s.outcome = "cancelled";
+        s.completedAt = e.at;
+        break;
+      case "step.waiting":
+        if (s.status === "running") s.status = "waiting";
+        break;
+      case "step.completed":
+      case "step.failed":
+        if (s.status === "waiting") s.status = "running";
+        break;
+      default:
+        break;
+    }
+  }
+  return s;
 }

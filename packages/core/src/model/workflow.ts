@@ -20,6 +20,13 @@ export type Condition = z.infer<typeof ConditionSchema>;
 const NodeBaseSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
+  /**
+   * Whole-step retry budget: how many attempts the interpreter gives this node
+   * when its executor reports a retryable failure. Any node type may set it -
+   * agent nodes may instead use `completion.maxAttempts` (this wins if both are
+   * set). Read it with `retryBudget()`.
+   */
+  maxAttempts: z.number().int().positive().optional(),
   /** Free-form extension data for plugins/UIs (position, colour, owner...). */
   meta: z.record(z.string(), z.unknown()).optional(),
 });
@@ -158,7 +165,8 @@ export interface ParallelForEach {
   workflow?: Condition;
   /** WorkItem this item stands for; its child run is bound to that work item. */
   workItemId?: Condition;
-  body: SubworkflowRef;
+  /** What to run per item. Optional only when `workflow` always resolves to an id. */
+  body?: SubworkflowRef;
 }
 
 export interface ParallelNode extends z.infer<typeof NodeBaseSchema> {
@@ -246,7 +254,7 @@ export const ParallelNodeSchema: z.ZodType<ParallelNode> = z.lazy(() =>
         dependsOn: ConditionSchema.optional(),
         workflow: ConditionSchema.optional(),
         workItemId: ConditionSchema.optional(),
-        body: SubworkflowRefSchema,
+        body: SubworkflowRefSchema.optional(),
       })
       .optional(),
     concurrency: z.number().int().positive().default(4),
@@ -258,6 +266,7 @@ export const ParallelNodeSchema: z.ZodType<ParallelNode> = z.lazy(() =>
 export const SubworkflowNodeSchema: z.ZodType<SubworkflowNode> = NodeBaseSchema.extend({
   type: z.literal("subworkflow"),
   workflow: z.string().min(1),
+  /** Vars handed to the child run (evaluated as expressions when prefixed with `=`). */
   vars: z.record(z.string(), z.unknown()).default({}),
 }) as unknown as z.ZodType<SubworkflowNode>;
 
@@ -314,6 +323,17 @@ export const WorkflowDefinitionSchema: z.ZodType<WorkflowDefinition> = z.lazy(()
     edges: z.array(EdgeSchema).default([]),
   }),
 ) as unknown as z.ZodType<WorkflowDefinition>;
+
+/**
+ * Attempts the interpreter gives a node before a retryable failure fails the
+ * run. Node-level `maxAttempts` wins; agent nodes fall back to their completion
+ * policy; everything else runs once.
+ */
+export function retryBudget(n: NodeDef): number {
+  if (typeof n.maxAttempts === "number") return n.maxAttempts;
+  const completion = (n as Partial<AgentNode>).completion;
+  return completion?.maxAttempts ?? 1;
+}
 
 export const CONTAINER_NODE_TYPES = ["loop", "parallel", "subworkflow"] as const;
 export function isContainerNode(n: NodeDef): n is LoopNode | ParallelNode | SubworkflowNode {
