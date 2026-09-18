@@ -46,8 +46,10 @@ dependency legitimately needs to build.
 
 ## Layout conventions
 
-- One concern per file; every file starts with a comment saying what it is for.
-- `packages/*/src/index.ts` is the public surface of a package; tests import only that.
+- One concern per file; every file except a pure re‑export barrel starts with a comment
+  saying what it is for.
+- `packages/*/src/index.ts` is the public surface of a package; tests import only that
+  (the CLI tests reach into `src/commands` directly).
 - `core` has no runtime I/O except reading workflow/template files. `engine` depends on
   ports (`EventStore`, `ArtifactStore`, `AgentHost`, `AgentSession`), never on concrete
   transports, so it is testable with in‑memory stores and the scripted agent.

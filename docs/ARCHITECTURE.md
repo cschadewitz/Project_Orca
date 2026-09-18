@@ -55,8 +55,9 @@ A **run** is one token walking a **graph** from `start` to an `end` node
 Concurrency never happens inside one run. `loop`, `parallel` and `subworkflow`
 nodes **spawn child runs** (each with its own event log and id) and wait for
 them. That keeps the interpreter tiny and makes any node type usable inside any
-container. Inline nested graphs get ids like `ai-sdlc::fix-loop` so a child run
-can always be re‑resolved from its parent definition on resume.
+container. Inline nested graphs get ids like `program::decide` (or
+`parent::parallelNode::branch`) so a child run can always be re‑resolved from
+its parent definition on resume.
 
 Every transition is an **event** (`packages/core/src/events/events.ts`); run
 state is a pure projection (`reduce.ts`). A crashed process resumes by
@@ -87,8 +88,8 @@ that never started get a fresh child run.
    `human.answered`, one `hi_*` id per ask), so several pending tool calls can be
    listed and answered independently.
 4. `session/prompt`. Session updates stream into the event log as
-   `agent.update` (text chunks are coalesced; tool calls, plans and locations are
-   kept verbatim).
+   `agent.update` (text chunks are coalesced; tool calls, plan entries and
+   locations are kept as a compact `AgentUpdateSummary`, not the raw ACP payload).
 5. When the turn ends (`turn-end` mode) — or as soon as the files appear
    (`artifact-present` mode) — **collect**: read each promised file through the
    host FS, parse front matter, validate required fields / allowed values /
@@ -130,8 +131,10 @@ back to `build` with the review as an extra input. That *is* the hand‑off.
   Kepler task worktree, or the current directory). Items waiting on other
   requests are deferred and picked up by `workflows/plan-resume.yaml`
   (`orca plan dispatch`). Unlike a `parallel` fan‑out, the set of branches is
-  not known up front: it is re‑computed from the live plan, which is why this
-  node keeps its own scheduling loop on top of `ctx.runChild`.
+  not known up front: it is re‑computed from the live plan on every wake, which
+  is why this node drives the fan‑out itself — over the same `FanOut`
+  (`executors/containers.ts`), so concurrency, cancellation and `failFast` behave
+  as they do in `parallel`.
 - `summarize` (agent) → a program summary artifact.
 
 A `WorkItem`'s `status` is a **projection** of that fan-out, not a side-write:
@@ -144,12 +147,14 @@ One run's log says nothing about what *other* runs are doing, so ownership of an
 settled outside the logs: each branch claims its item through the `ClaimStore`
 (`packages/store/src/claim-store.ts`) before spawning a child run — an atomic create, so
 it holds across processes. A second dispatcher over the same plan skips what it does not
-own (`branch.skipped`, `reason: claimed`) instead of starting a rival child run.
+own instead of starting a rival child run: a `parallel` fan‑out records `branch.skipped`
+with `reason: claimed`, `custom:plan-dispatch` journals `dispatch.deferred` and reports
+the item as `claimed` in `vars.dispatched`. Neither writes that item's status.
 
 `ProgramService.submit()` is the single entry point used by the CLI and the ACP
-facade. The original request‑scoped nodes (`custom:materialize-work-items`,
-`custom:dispatch-work-items`) remain available for workflows that do not want
-a plan.
+facade. The original request‑scoped node (`custom:materialize-work-items`,
+fanned out by a plain `parallel` `forEach` over `vars.leafWorkItems`) remains
+available for workflows that do not want a plan.
 
 ## The planning layer
 

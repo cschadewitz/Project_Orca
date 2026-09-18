@@ -22,4 +22,6 @@ with brackets: `steps['review-verdict'].result`.
 Functions: `len exists empty default str num bool lower upper trim json keys values first last join count pluck all any min max range`
 
 Context available to expressions is documented in `docs/DATA-MODEL.md`
-(`vars`, `artifacts`, `steps`, `choice`, `iteration`, `item`, `run`, `workItem`, `request`, `workspace`).
+(`vars`, `artifacts`, `artifactsByKind`, `steps`, `step`, `choice`, `iteration`, `item`,
+`index`, `run`, `workItem`, `request`, `workspace`, `now`; agent prompts also see `inputs`
+and `deliverables`).
