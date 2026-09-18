@@ -52,7 +52,7 @@ Dependency references (`DependencyRef`, string or `{ on, type, stage, requiredBy
 `{ id, seq, planId, at, type, origin, payload }` with `origin.kind` ∈ `decomposition | artifact |
 agent | human | api | system` (+ `runId`, `artifactId`, `actor`). Types: `plan.created/updated`,
 `request.linked`, `work-item.added/updated`, `dependency.added/resolved/bound`,
-`risk.raised/updated`, `decision.opened/updated/resolved`, `schedule.computed`,
+`risk.raised/updated`, `signals.rejected`, `decision.opened/updated/resolved`, `schedule.computed`,
 `dispatch.started/finished/deferred`. Stored as `plans/<planId>.jsonl`.
 
 ## Artifact (`model/artifact.ts`)
@@ -106,7 +106,7 @@ Every event is `{ id, seq, runId, at, type, payload }`. Types:
 - run: `created started paused resumed completed failed cancelled`, `vars.set`
 - step: `scheduled started inputs waiting completed failed cancelled skipped`
 - agent: `session.opened turn.started update permission turn.completed session.closed`
-- `artifact.recorded`, `artifact.rejected`
+- `artifact.recorded`, `artifact.rejected`, `plan.signals.rejected`
 - `decision.resolved`, `loop.iteration`, `child.spawned`, `child.finished`
 - `human.requested`, `human.answered`
 

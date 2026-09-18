@@ -632,7 +632,8 @@ export class Orchestrator {
     await this.stores.artifacts.put(artifact, content);
     await rc.emit({ type: "artifact.recorded", payload: { stepRunId: step.id, artifact } });
     // Planning intake happens inline so the next node sees risks/decisions/dependencies this artifact carried.
-    await this.plan.onArtifactRecorded(rc.state.run, artifact);
+    const rejected = await this.plan.onArtifactRecorded(rc.state.run, artifact);
+    if (rejected.length) await rc.emit({ type: "plan.signals.rejected", payload: { stepRunId: step.id, artifactId: artifact.id, issues: rejected } });
     return artifact;
   }
 

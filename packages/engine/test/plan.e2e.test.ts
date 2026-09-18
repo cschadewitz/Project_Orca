@@ -79,6 +79,8 @@ describe("planning layer (e2e)", () => {
 
     // Risks: from the register (affects ui) and from every spec (attached to the producing item).
     expect(snap.risks.find((r) => r.key === "ui-regressions")).toMatchObject({ affects: [bySlug.ui!.id], origin: { kind: "artifact" } });
+    // One record per key, however many item runs declared it concurrently, and one journal entry per dependency.
+    expect(snap.risks.filter((r) => r.key === "flaky-tests")).toHaveLength(1);
     expect(snap.risks.find((r) => r.key === "flaky-tests")!.affects.sort()).toEqual([bySlug.api!.id, bySlug.core!.id, bySlug.ui!.id].sort());
 
     // Dispatch order and pipelining: api started after core's spec existed but before core finished.
@@ -106,6 +108,8 @@ describe("planning layer (e2e)", () => {
     const journal = await h.orchestrator.plan.journalOf(plan.id);
     const started = journal.filter((e) => e.type === "dispatch.started").map((e) => snap.items.find((i) => i.id === (e.payload as { workItemId: string }).workItemId)!.slug);
     expect(started).toEqual(["core", "api", "ui"]);
+    const resolved = journal.filter((e) => e.type === "dependency.resolved").map((e) => (e.payload as { dependencyId: string }).dependencyId);
+    expect(new Set(resolved).size).toBe(resolved.length);
     const summaryPrompt = (await h.prompts()).find((p) => p.text.includes("Summarise the program"))!;
     expect(summaryPrompt.text).toContain("Critical path: core -> api -> ui");
   }, 180_000);

@@ -109,7 +109,16 @@ Agents never call a planning API (ADR 0002). They write artifacts; ORCA lifts
 
 Every artifact recorded by an item's run also updates `WorkItem.produced`,
 which is what stage-level dependencies test. Intake happens *inline* in the
-orchestrator, so the next node always sees the updated plan.
+orchestrator, so the next node always sees the updated plan, and it is
+**serialised per plan**: sibling item runs record artifacts at the same time, so
+they take turns rather than interleaving their read-modify-write updates and
+each raising the same risk. Risks, decisions and dependencies also carry ids
+derived from their key, so a duplicate can only overwrite, never accumulate.
+
+Each signal is applied on its own. One the plan refuses (a `chosen` that is not
+one of the options, malformed front matter) never stops the ones behind it: the
+run keeps going and the rejection is reported as a `plan.signals.rejected` run
+event and a `signals.rejected` journal entry.
 
 Plugins can add extractors (`api.plan.addSignalExtractor`) to lift signals
 from their own artifact kinds.
@@ -225,12 +234,11 @@ configured `planning.plan`). The read-only ones (`list`, `show`, `schedule`, `ri
 
 Reviewed when the layer was rebased onto main; tracked as issues #71–#84 (label
 `planning`). In short: two dispatchers over one plan can launch the same item twice (#72);
-artifact intake is not serialised per plan, so sibling runs can duplicate a same‑key risk
-(#73); work‑item status is written directly by the plan side instead of being projected
-from the event log as #70 does for the rest (#74); `custom:plan-dispatch` has its own
-fan‑out loop and does not cancel in‑flight children on `failFast` (#75); `onWaiting: wait`
-logs a `step.waiting` event per poll (#76). See `docs/ROADMAP.md` item 13. Fixed since:
-cycle detection ignores `soft` edges (#71).
+work‑item status is written directly by the plan side instead of being projected from the
+event log as #70 does for the rest (#74); `custom:plan-dispatch` has its own fan‑out loop
+and does not cancel in‑flight children on `failFast` (#75); `onWaiting: wait` logs a
+`step.waiting` event per poll (#76). See `docs/ROADMAP.md` item 13. Fixed since: cycle
+detection ignores `soft` edges (#71); artifact intake is serialised per plan (#73).
 
 ## Configuration
 

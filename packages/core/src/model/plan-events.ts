@@ -40,6 +40,9 @@ export const PlanEventSchema = z.discriminatedUnion("type", [
   base("risk.raised", z.object({ risk: RiskSchema })),
   base("risk.updated", z.object({ riskId: z.string(), changes: patch })),
 
+  /** Front-matter signals an artifact carried that the plan refused (malformed, or rejected on apply). */
+  base("signals.rejected", z.object({ artifactId: z.string(), runId: z.string().optional(), issues: z.array(z.string()) })),
+
   base("decision.opened", z.object({ decision: DecisionSchema })),
   base("decision.updated", z.object({ decisionId: z.string(), changes: patch })),
   base("decision.resolved", z.object({ decisionId: z.string(), chosen: z.string(), decidedBy: z.enum(["matrix", "agent", "human"]), rationale: z.string().optional() })),
