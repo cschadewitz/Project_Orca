@@ -85,6 +85,18 @@ describe("dependency references", () => {
   it("round-trips through formatDependencyRef", () => {
     for (const s of ["auth-api", "auth-api@spec", "soft:auth-api", "informs:auth-api@spec#build", "decision:storage", "external:x"]) expect(formatDependencyRef(parseDependencyRef(s))).toBe(s);
   });
+  it("object form: a fully specified ref parses exactly, `on` is trimmed, and the result round-trips through formatDependencyRef", () => {
+    expect(parseDependencyRef({ on: "decision:store", type: "blocks", requiredBy: "start" })).toEqual({ targetKind: "decision", key: "store", type: "blocks", requiredBy: "start" });
+    expect(parseDependencyRef({ on: "external:vendor", type: "soft", requiredBy: "deploy" })).toEqual({ targetKind: "external", key: "vendor", type: "soft", requiredBy: "deploy" });
+    expect(parseDependencyRef({ on: "auth-api@spec", type: "blocks", requiredBy: "build" })).toEqual({ targetKind: "work-item", key: "auth-api", stage: "spec", type: "blocks", requiredBy: "build" });
+    expect(parseDependencyRef({ on: "  auth-api  ", type: "blocks", requiredBy: "start" }).key).toBe("auth-api");
+    expect(formatDependencyRef(parseDependencyRef({ on: "decision:store", type: "blocks", requiredBy: "build" }))).toBe("decision:store#build");
+    expect(formatDependencyRef(parseDependencyRef({ on: "auth-api", type: "soft", stage: "spec", requiredBy: "build", rationale: "r" }))).toBe("soft:auth-api@spec#build");
+  });
+  it("rejects a string whose key, stage or phase is empty", () => {
+    for (const bad of ["@spec", "#build", "auth-api@", "auth-api#", "auth-api@spec#", "   "]) expect(() => parseDependencyRef(bad), bad).toThrow(`invalid dependency reference '${bad}'`);
+    expect(parseDependencyRef("  auth-api@spec  ")).toMatchObject({ key: "auth-api", stage: "spec" });
+  });
 });
 
 describe("risk matrix", () => {
@@ -180,6 +192,30 @@ describe("dependency graph", () => {
     const { waves, cyclic } = topologicalWaves(g);
     expect(waves).toEqual([]); // d and e sit behind the cycle
     expect(cyclic.sort()).toEqual(["wi_a", "wi_b", "wi_c", "wi_d", "wi_e"]);
+  });
+  it("reports a self-loop as a cycle of one, and drops a soft one like any other closing hint", () => {
+    const g = buildDependencyGraph(["wi_a", "wi_b"], [dep("a", "a"), dep("b", "a")]);
+    expect(findCycles(g)).toEqual([["wi_a"]]);
+    expect(topologicalWaves(g)).toEqual({ waves: [], cyclic: ["wi_a", "wi_b"] }); // b sits behind the loop
+    expect([...transitiveDownstream(g, "wi_a")]).toEqual(["wi_b"]);
+    expect(dropCycleClosingEdges(g, ["soft"]).dropped).toEqual([]); // a `blocks` loop is not a hint
+    const soft = dropCycleClosingEdges(buildDependencyGraph(["wi_a"], [dep("a", "a", { type: "soft" })]), ["soft"]);
+    expect(soft.dropped.map((e) => e.dependencyId)).toEqual(["dep_a_a"]);
+    expect(findCycles(soft.graph)).toEqual([]);
+  });
+  it("keeps a cycle out of the critical path without losing the chains around it", () => {
+    // root <- a <-> b <- leaf, plus an unrelated solo <- tail chain ("x <- y": y waits for x).
+    const nodes = ["root", "a", "b", "leaf", "solo", "tail"].map((s) => `wi_${s}`);
+    const g = buildDependencyGraph(nodes, [dep("a", "root"), dep("a", "b"), dep("b", "a"), dep("leaf", "b"), dep("tail", "solo")]);
+    expect(findCycles(g)).toEqual([["wi_a", "wi_b"]]);
+    const paths = longestDownstreamPaths(g, () => 1);
+    expect(paths.get("wi_a")).toEqual({ length: 0, path: [] });
+    expect(paths.get("wi_b")).toEqual({ length: 0, path: [] });
+    // Upstream of the loop the chain stops where the loop begins; downstream of it an item is a chain of one.
+    expect(paths.get("wi_root")).toEqual({ length: 1, path: ["wi_root"] });
+    expect(paths.get("wi_leaf")).toEqual({ length: 1, path: ["wi_leaf"] });
+    expect(criticalPath(paths)).toEqual({ length: 2, path: ["wi_solo", "wi_tail"] });
+    expect(topologicalWaves(g)).toEqual({ waves: [["wi_root", "wi_solo"], ["wi_tail"]], cyclic: ["wi_a", "wi_b", "wi_leaf"] });
   });
 });
 
@@ -377,6 +413,80 @@ describe("scheduler", () => {
     expect(rf.ready[0]!.slug).toBe("hot");
     const compact = compactSchedule(rf, two);
     expect(compact).toMatchObject({ strategy: "risk-first", ready: [{ slug: "hot" }, { slug: "safe" }], risk: { open: 1, highestLevel: "high" } });
+  });
+
+  it("marks a self-dependent item unschedulable, while a soft self-reference is just ignored", () => {
+    const s = computeSchedule({ plan, items: [item("loop"), item("after")], dependencies: [dep("loop", "loop"), dep("after", "loop")], risks: [], decisions: [], now: T });
+    expect(s.cycles).toEqual([["wi_loop"]]);
+    expect(s.unschedulable.map((u) => [u.slug, u.reason])).toEqual([["loop", "dependency cycle: loop -> loop"]]);
+    // The item behind it waits like it would for any pending upstream (the dispatcher marks it blocked later).
+    expect(s.waiting.map((w) => [w.slug, w.waitingOn.map((o) => o.detail)])).toEqual([["after", ["waiting for loop to be done (currently pending)"]]]);
+    expect(s.waves).toEqual([]);
+    expect(explainWorkItem(s, [item("loop")], "wi_loop")).toContain("cannot run: dependency cycle: loop -> loop");
+    const soft = computeSchedule({ plan, items: [item("loop")], dependencies: [dep("loop", "loop", { type: "soft" })], risks: [], decisions: [], now: T });
+    expect(soft.cycles).toEqual([]);
+    expect(soft.ready.map((r) => r.slug)).toEqual(["loop"]);
+    expect(soft.ignoredSoftDependencies).toEqual([{ dependencyId: "dep_loop_loop", from: "wi_loop", to: "wi_loop" }]);
+    expect(soft.waves).toEqual([["wi_loop"]]);
+  });
+
+  it("fails the dependants of a superseded decision and keeps those of a deferred one waiting", () => {
+    const withStatus = (status: Decision["status"]) => computeSchedule({ plan, items, dependencies: deps, risks: [], decisions: [{ ...decisions[0]!, status }], now: T });
+    const superseded = withStatus("superseded");
+    expect(superseded.dependencyStates["dep_api_store"]).toEqual({ state: "failed", detail: "decision store was superseded" });
+    expect(superseded.unschedulable).toEqual([{ workItemId: "wi_api", slug: "api", reason: "decision store was superseded", dependencyIds: ["dep_api_store"] }]);
+    expect(superseded.openDecisions).toEqual([]);
+    const deferred = withStatus("deferred");
+    expect(deferred.unschedulable).toEqual([]);
+    expect(deferred.waiting.find((w) => w.slug === "api")!.waitingOn.map((o) => o.detail)).toEqual(["waiting for core to produce spec", "waiting for decision store (deferred)"]);
+    expect(deferred.openDecisions).toEqual([{ decisionId: "dec_store", key: "store", title: "store", blocks: ["wi_api"] }]);
+    // A decision missing from the snapshot altogether is a failure too, not an endless wait.
+    const missing = computeSchedule({ plan, items, dependencies: deps, risks: [], decisions: [], now: T });
+    expect(missing.dependencyStates["dep_api_store"]).toEqual({ state: "failed", detail: "decision dec_store is not in the plan" });
+  });
+
+  it("keeps a stage-level dependency satisfied when its upstream fails after producing the stage", () => {
+    const coreFailedAfterSpec = items.map((i) => (i.slug === "core" ? { ...i, status: "failed" as const, produced: { spec: "art_1" } } : i));
+    const decided = [{ ...decisions[0]!, status: "decided" as const, chosen: "sqlite" }];
+    const s = computeSchedule({ plan, items: coreFailedAfterSpec, dependencies: deps, risks: [], decisions: decided, now: T });
+    expect(s.dependencyStates["dep_api_core@spec"]).toEqual({ state: "satisfied", detail: "core produced spec" });
+    expect(s.settled.failed).toEqual(["wi_core"]);
+    expect(s.unschedulable).toEqual([]);
+    expect(s.ready.map((r) => r.slug)).toContain("api");
+    // The same failure fails a plain edge on core, which waits for the whole item ...
+    const whole = computeSchedule({ plan, items: coreFailedAfterSpec, dependencies: deps.map((d) => (d.id === "dep_api_core@spec" ? { ...d, target: { kind: "work-item" as const, workItemId: "wi_core" } } : d)), risks: [], decisions: decided, now: T });
+    expect(whole.unschedulable.map((u) => [u.slug, u.reason])).toEqual([["api", "core is failed"]]);
+    // ... and a stage the upstream never got to produce.
+    const noSpec = computeSchedule({ plan, items: coreFailedAfterSpec.map((i) => (i.slug === "core" ? { ...i, produced: {} } : i)), dependencies: deps, risks: [], decisions: decided, now: T });
+    expect(noSpec.unschedulable.map((u) => [u.slug, u.reason])).toEqual([["api", "core is failed"]]);
+  });
+
+  it("policy flags: holdAboveAppetite off only reports, mitigateFirst off drops the factor, weights override the preset", () => {
+    const base = { plan, items, dependencies: deps, risks, decisions, now: T };
+    const reported = computeSchedule({ ...base, policy: { holdAboveAppetite: false } });
+    expect(reported.held).toEqual([]);
+    expect(reported.ready.map((r) => r.slug).sort()).toEqual(["core", "risky"]);
+    expect(reported.exposure["wi_risky"]).toMatchObject({ level: "critical" }); // still visible, just not a hold
+    expect(reported.priorities["wi_risky"]!.reasons).toContain("exposed to critical risk: boom");
+    expect(reported.policy).toMatchObject({ holdAboveAppetite: false, riskAppetite: "high" });
+
+    const noMitigation = computeSchedule({ ...base, policy: { mitigateFirst: false } });
+    expect(noMitigation.priorities["wi_api"]!.factors.mitigation).toBe(0);
+    expect(noMitigation.priorities["wi_api"]!.reasons.some((r) => r.startsWith("mitigates"))).toBe(false);
+    expect(noMitigation.priorities["wi_api"]!.reasons).toContain("priority high");
+
+    // Weights: one item carries a high risk, the other a high priority; zeroing `risk` flips the order.
+    const two = [item("safe", { priority: "high" }), item("hot")];
+    const fire = [risk("fire", 3, 4, ["hot"])];
+    const riskFirst = computeSchedule({ plan, items: two, dependencies: [], risks: fire, decisions: [], now: T, policy: { strategy: "risk-first" } });
+    expect(riskFirst.ready.map((r) => r.slug)).toEqual(["hot", "safe"]);
+    const noRisk = computeSchedule({ plan, items: two, dependencies: [], risks: fire, decisions: [], now: T, policy: { strategy: "risk-first", weights: { risk: 0 } } });
+    expect(noRisk.ready.map((r) => r.slug)).toEqual(["safe", "hot"]);
+    expect(noRisk.priorities["wi_hot"]!.factors.risk).toBe(1); // the factor is still reported; only its weight is gone
+    // The plan's own policy is the base the per-call overrides sit on.
+    const strict = { ...plan, policy: { ...plan.policy, strategy: "risk-first" as const, weights: { risk: 0 } } };
+    expect(computeSchedule({ plan: strict, items: two, dependencies: [], risks: fire, decisions: [], now: T }).ready.map((r) => r.slug)).toEqual(["safe", "hot"]);
+    expect(computeSchedule({ plan: strict, items: two, dependencies: [], risks: fire, decisions: [], now: T, policy: { strategy: "fifo" } })).toMatchObject({ strategy: "fifo", policy: { weights: { risk: 0 } } });
   });
 });
 

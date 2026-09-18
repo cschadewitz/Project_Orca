@@ -241,7 +241,12 @@ export function longestDownstreamPaths(graph: DependencyGraph, weight: (id: stri
   const visit = (id: string): PathInfo => {
     const cached = memo.get(id);
     if (cached) return cached;
-    if (cyclic.has(id) || visiting.has(id)) return { length: 0, path: [] };
+    if (visiting.has(id)) return { length: 0, path: [] };
+    if (cyclic.has(id)) {
+      const none = { length: 0, path: [] };
+      memo.set(id, none);
+      return none;
+    }
     visiting.add(id);
     const own = weight(id);
     let best: PathInfo = { length: own, path: [id] };
