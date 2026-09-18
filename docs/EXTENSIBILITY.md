@@ -1,6 +1,7 @@
 # Extensibility
 
-Every extension point is an interface in `@orca/engine` / `@orca/agents` / `@orca/store`,
+Every extension point is an interface in `@orca/engine` / `@orca/agents` / `@orca/store` /
+`@orca/core`,
 and most can be reached from a **plugin**: an ES module whose default export is an
 `OrcaPlugin` (`packages/engine/src/plugin.ts`), listed under `plugins:` in `orca.config.yaml`.
 
@@ -29,12 +30,12 @@ export default definePlugin({
 | New artifact kind | just use it in `produces.kind`; register validation in a node or plugin | `core/model/artifact.ts` |
 | New prompt templates / partials | `api.templates.registerSource()` or files matched by `templates:` globs | `core/template/registry.ts` |
 | New workflows | `api.workflows.register()` or files matched by `workflows:` globs | `core/workflow/load.ts` |
-| Agent transport (HTTP ACP, T3 Code, in‑process) | `AgentSession` + `Orchestrator.sessionFactory` | `agents/session.ts` |
+| Agent transport (HTTP ACP, T3 Code, in‑process) | `AgentSession` + `Orchestrator.sessionFactory` (a constructor option, not reachable from `PluginApi`) | `agents/session.ts`, `engine/orchestrator.ts` |
 | Host type (containers, cloud sandboxes) | `AgentHost` → `api.agents.addHost()` | `agents/host.ts` |
 | Where work happens | `WorkspaceProvider` → `api.setWorkspaceProvider()` | `engine/workspace/provider.ts` |
 | Human channel (Slack, web UI, upstream ACP) | `HumanInputPort` → `api.setHumanInput()` | `engine/human-input.ts` |
 | Persistence (SQLite, Postgres) | `EventStore`, `ArtifactStore`, `DocumentStore`, `ClaimStore` | `store/*.ts` |
-| Expression functions | `evaluateExpression(src, ctx, { functions })` | `core/expr/evaluate.ts` |
+| Expression functions | `evaluateExpression(src, ctx, { functions })` — library API only; the engine does not yet let a plugin extend the built‑ins used by `when:` and templates | `core/expr/evaluate.ts` |
 | Planning signals from custom artifacts | `SignalExtractor` → `api.plan.addSignalExtractor()` | `core/plan/signals.ts` |
 | Scheduling behaviour | `policy.weights` / `strategy`, or rank from `computeSchedule().priorities` | `core/plan/schedule.ts` |
 | Plan persistence | `PlanStores` (four `DocumentStore`s + `PlanJournal`) | `store/plan-store.ts` |
@@ -51,8 +52,9 @@ Conventions that keep extensions reviewable:
 - Nothing in the interpreter is keyed on node type: a custom node gets retries by setting
   `maxAttempts:` on the node (its executor must return `failed(..., retryable = true)`), and
   ends the run by returning `completed({ outcome, message })` — no `end` node needed after it.
-- Custom node types are `custom:<kebab-name>`; validation of their fields is the plugin's job
-  (use zod and throw `OrcaError("WORKFLOW_INVALID", …)` from a validation hook if needed).
+- Custom node types are `custom:<kebab-name>`; validation of their fields is the plugin's job:
+  parse `ctx.node` with zod at the top of `execute` and return
+  `failed("WORKFLOW_INVALID", …, retryable = false)`. There is no plugin validation hook today.
 - A `HumanInputPort` receives `query.signal`, which fires when the run is cancelled while the
   question is open. Drop the request and reject with `humanInputCancelled(signal)`; the engine
   stops waiting on `cancel()` regardless, but a cooperative port avoids stranded questions.

@@ -55,10 +55,14 @@ Agents (and humans) write dependencies with a small grammar, in decomposition
 | `other@implementation#build` | both: build waits for `other`'s implementation |
 | `soft:other` | preferred ordering only; never blocks, never fails |
 | `informs:other@spec` | no ordering; `other`'s artifacts are handed to this item's agents (`vars.upstream`) |
-| `decision:key` | wait for the decision `key` to be made |
+| `decision:key` | wait for the decision `key` to be made (an unknown key opens a placeholder decision and warns) |
 | `external:key` | wait for something outside ORCA; a human marks it satisfied (`orca plan satisfy`) |
 
-The object form `{ on, type, stage, requiredBy, rationale }` is equivalent.
+`blocks:other` is accepted as the explicit form of the default. The object form
+`{ on, type, stage, requiredBy, rationale }` is equivalent, with one difference:
+`type` and `requiredBy` must be given as fields. Inside `on` only `decision:` /
+`external:` and `@stage` are honoured; a `soft:` / `informs:` prefix or `#phase`
+suffix written there is ignored (#77).
 A reference to a slug that is not in the plan yet is recorded as an `external`
 placeholder and **bound automatically** when a later request registers that
 slug. That is how one request can depend on work that another request will
@@ -89,7 +93,8 @@ computes:
   (`clear` >= 0.1, `close`, `tie`),
 - **pivotal criteria**: any criterion whose removal flips the recommendation.
 
-The artifact's `chosen` wins when it names a known option (the agent or human
+The artifact's `chosen` wins when it names a known option, or when the decision
+has no options recorded at all (the agent or human
 overrode the arithmetic, `decidedBy: agent|human`); otherwise the top-ranked
 option is chosen (`decidedBy: matrix`). A gate can route on
 `steps.<node>.result.data.confidence` to send close calls to a human.
@@ -105,10 +110,11 @@ Agents never call a planning API (ADR 0002). They write artifacts; ORCA lifts
 | `decomposition` | `items[].dependsOn`, `items[].priority`, `items[].risks`, `risks[]`, `decisions[]` | `custom:plan-register` creates items, dependencies, risks, decisions |
 | `risk-register` | `risks[]` | risks upserted by key; `affects`/`mitigatedBy` slugs resolved |
 | `decision-matrix` | criteria, options, `chosen`, `rationale` | a valid `chosen` decides on intake; otherwise `custom:decision-matrix` evaluates the matrix and decides. Re-submitting the same choice is a no-op: one `decision.resolved` per resolution |
-| any other (`spec`, `intent`, `review`, ...) | `risks`, `decisions`, `dependencies` | risks attach to the producing item; discovered dependencies are added from it; a decision with `chosen` is decided |
+| any other (`spec`, `intent`, `review`, ...) | `risks`, `decisions`, `dependencies` (alias `discoveredDependencies`) | risks attach to the producing item (a bare string becomes a risk keyed by its slugified title); discovered dependencies are added from it; a decision with `chosen` is decided |
 
 Every artifact recorded by an item's run also updates `WorkItem.produced`,
-which is what stage-level dependencies test. Intake happens *inline* in the
+keyed by artifact kind *and* name, which is what stage-level dependencies test
+(`other@spec` and `other@<artifactName>` both work). Intake happens *inline* in the
 orchestrator, so the next node always sees the updated plan, and it is
 **serialised per plan**: sibling item runs record artifacts at the same time, so
 they take turns rather than interleaving their read-modify-write updates and
@@ -126,7 +132,8 @@ from their own artifact kinds.
 ## The scheduler
 
 `computeSchedule()` (`packages/core/src/plan/schedule.ts`) is pure. Given a
-snapshot it classifies every unsettled item:
+snapshot it classifies every unsettled item that is in scope and not already
+running (running items are reported separately as `schedule.running`):
 
 1. **unschedulable** - in a `blocks` dependency cycle, or a `blocks` dependency has
    *failed* (upstream failed/cancelled/blocked, decision superseded, external
@@ -137,12 +144,14 @@ snapshot it classifies every unsettled item:
 3. **held** - exposure above the risk appetite (`holdAboveAppetite`);
 4. **ready** - everything else, ordered by priority.
 
-Dependencies are evaluated **live** against the current items and decisions,
-never from a stale persisted status; the service then persists transitions so
-the journal records *when* each dependency cleared.
+`open` and `failed` dependencies are evaluated **live** against the current
+items and decisions, never from a stale persisted status; `satisfied` and
+`waived` are sticky once persisted. The service persists transitions so the
+journal records *when* each dependency cleared.
 
-Priority is a weighted sum of normalised factors, and every factor that
-contributed becomes a reason (`orca plan explain <slug>`):
+Priority is a weighted sum of normalised factors; the ones that dominate
+(dependents, critical path, risk, mitigation, a non‑normal priority) are
+reported as human‑readable reasons (`orca plan explain <slug>`):
 
 | factor | meaning |
 | --- | --- |
@@ -172,27 +181,30 @@ into a `schedule` artifact for the gate and exposes as `vars.schedule`.
 | --- | --- | --- |
 | `custom:plan-register` | program, after `decompose` | decomposition -> plan; sets `vars.planId`, `vars.workItems`, `vars.openDecisions` |
 | `custom:decision-matrix` | inside the `decide` loop (or anywhere) | evaluates a `decision-matrix` artifact, records the decision, returns the choice (`decision:` is a template, e.g. `{{ vars.decision.key }}`) |
-| `custom:plan-schedule` | before the gate | computes the schedule, writes `schedule.md`, sets `vars.schedule`, journals |
-| `custom:plan-dispatch` | after the gate | runs the item workflow for ready items, re-schedules after every completion *and* on every plan change; `scope: request \| plan`, `onWaiting: defer \| wait` |
-| `custom:plan-await` | inside `ai-sdlc` before `build` | blocks until the item's dependencies for `phase` are satisfied; refreshes `vars.upstream`; a no-op without a plan |
+| `custom:plan-schedule` | before the gate | computes the schedule, writes `schedule.md`, sets `vars.schedule`, journals; `plan`, `artifactPath` (default `.orca/plans/{{ vars.plan }}/schedule.md`, empty disables), `policy`, `record` |
+| `custom:plan-dispatch` | after the gate | runs the item workflow for ready items, re-schedules after every completion *and* on every plan change; `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope: request \| plan`, `leavesOnly` (default true), `failFast`, `onWaiting: defer \| wait`, `pollMs` (5 s), `waitTimeoutMs`, `policy` |
+| `custom:plan-await` | inside `ai-sdlc` before `build` | blocks until the item's dependencies for `phase` are satisfied; refreshes `vars.upstream`; a no-op without a plan; `pollMs`, `timeoutMs` (default 30 min) |
 
-The `decision` node also accepts `source: { kind: matrix, artifact }` for
-decisions whose options are fixed in the workflow.
+The `decision` node also accepts `source: { kind: matrix, artifact, decision }`
+for decisions whose options are fixed in the workflow.
 
 `custom:plan-dispatch` does **not** write the items' `status` / `runId`. Those are a
-projection of the dispatch step's own log (`child.spawned` / `child.finished`, ADR 0001 and
+projection of the dispatch step's own log (`child.spawned` / `child.finished` /
+`branch.skipped`, ADR 0001 and
 `engine/program/work-items.ts`); the plan side journals each transition the projection makes
 (`work-item.updated`) and re-evaluates the dependencies it clears, so `orca plan journal` and
 `orca plan show` cannot disagree even if the process dies between a child finishing and the
-dispatch step resuming. The one status no run log can produce is `blocked` - an item the
-scheduler refused to start never gets a branch - and that one the plan owns, through
-`PlanService.deferWorkItem`, which writes the reason and journals `dispatch.deferred`
-together and never overwrites a status the projection set.
+dispatch step resuming. `custom:plan-dispatch` never skips a branch, so within plan
+dispatch no run log can produce `blocked` - an item the scheduler refused to start never
+gets a branch. That status the plan owns, through `PlanService.deferWorkItem`, which
+writes the reason and journals `dispatch.deferred` together and never overwrites a status
+the projection set. (A plain `parallel` fan‑out does project `blocked`, from
+`branch.skipped` with `reason: dependency`.)
 
 `custom:plan-dispatch` finishes with `vars.dispatchOutcome` = `complete`,
 `partial` (items deferred: waiting on another request, an external, an open
-decision, or held; or claimed by another dispatcher) or fails when items
-failed/blocked. Deferred items keep `deferredReason` and are picked up by the
+decision, or held; claimed by another dispatcher; or in scope but never offered)
+or fails when items failed/blocked. Deferred items keep `deferredReason` and are picked up by the
 next dispatch that sees them: `orca plan dispatch <key>` runs
 `workflows/plan-resume.yaml` (schedule -> gate -> dispatch with `scope: plan`).
 
@@ -239,25 +251,31 @@ orca plan explain <slug> [key]            # everything about one item
 orca plan graph [key]                     # Mermaid dependency graph
 orca plan risks [key] | decisions [key] | journal [key]
 orca plan depend <slug> <ref> [key]       # add a dependency
-orca plan waive <depId> | satisfy <depId> # human overrides (externals, waivers)
+orca plan waive <depId> | satisfy <depId> [--rationale ...]   # human overrides (externals, waivers)
 orca plan decide <decisionKey> <option> [--rationale ...]
 orca plan risk <riskKey> --status accepted|mitigated|closed|...
-orca plan dispatch [key]                  # resume: schedule -> gate -> dispatch across the plan
+orca plan dispatch [key] [--workflow id] [--quiet]   # resume: schedule -> gate -> dispatch across the plan
 ```
 
-Every subcommand accepts the plan key positionally or as `--plan <key>` (default: the
-configured `planning.plan`). The read-only ones (`list`, `show`, `schedule`, `risks`,
+Every subcommand except `list` accepts the plan key positionally or as `--plan <key>`
+(default: the configured `planning.plan`). The read-only ones (`list`, `show`, `schedule`, `risks`,
 `decisions`, `journal`) also take `--json`.
 
 ## Known limitations
 
-Reviewed when the layer was rebased onto main; tracked as issues #71–#84 (label
-`planning`). In short: `custom:plan-dispatch` has its own fan‑out loop and does not cancel
-in‑flight children on `failFast` (#75); `onWaiting: wait` logs a `step.waiting` event per
-poll (#76). See `docs/ROADMAP.md` item 13. Fixed since: cycle detection ignores `soft`
-edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
+Reviewed when the layer was rebased onto main; tracked as issues #77 and #80–#84 (label
+`planning`), #96, #97, #88, #104 and #105. In short: `custom:plan-dispatch` has its own fan‑out loop
+that does not cancel in‑flight children on `failFast`, logs a `step.waiting` event per
+poll under `onWaiting: wait`, and recomputes the whole plan on every wake (#96); the plan
+journal and the run event store both number events from an in‑process cache, so two
+processes over one store can duplicate `seq` (#97); a dead run's claims can only be
+released by editing the store (#88). See `docs/ROADMAP.md` item 13. Fixed since: cycle
+detection ignores `soft` edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
 artifact intake is serialised per plan (#73); work‑item status is projected from the event
-log, with the plan side following it (#74).
+log, with the plan side following it (#74); a decision the artifact intake already made is
+not re-decided by `custom:decision-matrix` (#79). Still open around decisions: a different
+choice overrides a decided decision without `reopenDecision`, so the decide loop can undo a
+human's pick (#104), and intake reconciles even when a signal changed nothing (#105).
 
 ## Configuration
 

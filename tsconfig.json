@@ -14,5 +14,5 @@
       "@orca/cli": ["./packages/cli/src/index.ts"]
     }
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "vitest.config.ts"]
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "examples/**/*.ts", "vitest.config.ts"]
 }
