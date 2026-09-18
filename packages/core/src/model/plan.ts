@@ -332,10 +332,14 @@ export type Plan = z.infer<typeof PlanSchema>;
  *   ...#build            (suffix) the dependency must hold before this item's `build` phase
  */
 export const DependencyRefObjectSchema = z.object({
+  /** A reference in the string grammar above. Prefixes/suffixes it carries are honoured. */
   on: z.string().min(1),
-  type: DependencyTypeSchema.default("blocks"),
+  /** Defaults to the `on` prefix, else `blocks`. Must agree with the prefix when both are given. */
+  type: DependencyTypeSchema.optional(),
+  /** Defaults to the `@stage` in `on`. Must agree with it when both are given. */
   stage: z.string().optional(),
-  requiredBy: z.string().default(DEPENDENCY_START_PHASE),
+  /** Defaults to the `#phase` in `on`, else `start`. Must agree with it when both are given. */
+  requiredBy: z.string().optional(),
   rationale: z.string().optional(),
 });
 export type DependencyRefObject = z.infer<typeof DependencyRefObjectSchema>;
@@ -352,20 +356,55 @@ export interface ParsedDependencyRef {
   rationale?: string;
 }
 
-const REF_RE = /^(?:(soft|informs|blocks):)?(?:(decision|external):)?([^@#]+?)(?:@([^#]+))?(?:#(.+))?$/;
+/** Keys may not contain the grammar's separators, so a stray prefix (`decision:`) never becomes a key. */
+const REF_RE = /^(?:(soft|informs|blocks):)?(?:(decision|external):)?([^@#:]+)(?:@([^@#]+))?(?:#([^@#]+))?$/;
 
+/** The parts a reference string spells out explicitly; `type`/`stage`/`requiredBy` are absent when the string omits them. */
+interface RefParts {
+  targetKind: ParsedDependencyRef["targetKind"];
+  key: string;
+  type?: DependencyType;
+  stage?: string;
+  requiredBy?: string;
+}
+
+function matchRef(text: string): RefParts {
+  const m = REF_RE.exec(text.trim());
+  const key = m?.[3]?.trim();
+  const stage = m?.[4]?.trim();
+  const requiredBy = m?.[5]?.trim();
+  if (!m || !key || stage === "" || requiredBy === "") throw new Error(`invalid dependency reference '${text}'`);
+  return {
+    targetKind: (m[2] as "decision" | "external" | undefined) ?? "work-item",
+    key,
+    ...(m[1] ? { type: m[1] as DependencyType } : {}),
+    ...(stage ? { stage } : {}),
+    ...(requiredBy ? { requiredBy } : {}),
+  };
+}
+
+/**
+ * Normalise a reference. Throws on text the grammar does not accept, and on an
+ * object whose `on` string spells out a type/stage/phase that disagrees with
+ * the object's own field, so the two forms can never silently mean different things.
+ */
 export function parseDependencyRef(ref: DependencyRef): ParsedDependencyRef {
-  if (typeof ref !== "string") {
-    const m = REF_RE.exec(ref.on.trim());
-    const base = m ? { targetKind: (m[2] as "decision" | "external" | undefined) ?? "work-item", key: m[3]!.trim(), stage: m[4]?.trim() } : { targetKind: "work-item" as const, key: ref.on.trim(), stage: undefined };
-    const stage = ref.stage ?? base.stage;
-    return { ...base, type: ref.type, requiredBy: ref.requiredBy, ...(stage ? { stage } : {}), ...(ref.rationale ? { rationale: ref.rationale } : {}) } as ParsedDependencyRef;
-  }
-  const m = REF_RE.exec(ref.trim());
-  if (!m) throw new Error(`invalid dependency reference '${ref}'`);
-  const targetKind = (m[2] as "decision" | "external" | undefined) ?? "work-item";
-  const out: ParsedDependencyRef = { targetKind, key: m[3]!.trim(), type: (m[1] as DependencyType | undefined) ?? "blocks", requiredBy: m[5]?.trim() || DEPENDENCY_START_PHASE };
-  if (m[4]) out.stage = m[4].trim();
+  const text = typeof ref === "string" ? ref : ref.on;
+  const parts = matchRef(text);
+  const pick = <T extends string>(field: "type" | "stage" | "requiredBy", inline: T | undefined, explicit: T | undefined): T | undefined => {
+    if (inline !== undefined && explicit !== undefined && inline !== explicit) throw new Error(`invalid dependency reference '${text}': ${field} '${inline}' conflicts with ${field} '${explicit}'`);
+    return explicit ?? inline;
+  };
+  const obj = typeof ref === "string" ? undefined : ref;
+  const stage = pick("stage", parts.stage, obj?.stage);
+  const out: ParsedDependencyRef = {
+    targetKind: parts.targetKind,
+    key: parts.key,
+    type: pick("type", parts.type, obj?.type) ?? "blocks",
+    requiredBy: pick("requiredBy", parts.requiredBy, obj?.requiredBy) ?? DEPENDENCY_START_PHASE,
+  };
+  if (stage) out.stage = stage;
+  if (obj?.rationale) out.rationale = obj.rationale;
   return out;
 }
 

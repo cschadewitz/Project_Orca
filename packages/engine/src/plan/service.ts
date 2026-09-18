@@ -493,8 +493,14 @@ export class PlanService {
 
   private async addDependencyLocked(planId: string, fromSlugOrId: string, ref: DependencyRef, origin: PlanOrigin): Promise<Dependency> {
     const from = await this.requireItem(planId, fromSlugOrId);
+    let parsed: ParsedDependencyRef;
+    try {
+      parsed = parseDependencyRef(ref);
+    } catch (e) {
+      throw new OrcaError("PLAN_INVALID", (e as Error).message);
+    }
     const warnings: string[] = [];
-    const dep = await this.addDependencyFromRef(planId, from, parseDependencyRef(ref), origin, undefined, warnings);
+    const dep = await this.addDependencyFromRef(planId, from, parsed, origin, undefined, warnings);
     if (!dep) throw new OrcaError("PLAN_INVALID", warnings.join("; ") || "dependency already exists");
     if (warnings.length) this.logger.warn("dependency added with warnings", { warnings });
     await this.reconcile(planId, origin);

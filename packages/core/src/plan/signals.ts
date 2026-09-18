@@ -7,7 +7,7 @@
  * module normalises it so the PlanService can update the plan as the artifacts
  * are recorded. Unknown or malformed entries are reported, never thrown.
  */
-import { DecisionInputSchema, DependencyRefSchema, RiskInputSchema, RiskRegisterSchema, type DecisionInput, type DependencyRef, type RiskInput } from "../model/plan.js";
+import { DecisionInputSchema, DependencyRefSchema, RiskInputSchema, RiskRegisterSchema, parseDependencyRef, type DecisionInput, type DependencyRef, type RiskInput } from "../model/plan.js";
 
 export interface PlanSignals {
   risks: RiskInput[];
@@ -57,6 +57,22 @@ function decisionFrom(raw: unknown, i: number, issues: string[]): DecisionInput 
   return parsed.data;
 }
 
+/** Shape-check, then run the grammar, so the service never sees a ref `parseDependencyRef` would throw on. */
+function dependencyFrom(raw: unknown, i: number, issues: string[]): DependencyRef | undefined {
+  const parsed = DependencyRefSchema.safeParse(raw);
+  if (!parsed.success) {
+    issues.push(`dependencies[${i}]: not a dependency reference`);
+    return undefined;
+  }
+  try {
+    parseDependencyRef(parsed.data);
+  } catch (e) {
+    issues.push(`dependencies[${i}]: ${(e as Error).message}`);
+    return undefined;
+  }
+  return parsed.data;
+}
+
 const asList = (v: unknown): unknown[] => (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]);
 
 /** Default extraction rules, by artifact kind. */
@@ -85,9 +101,8 @@ export const defaultSignalExtractor: SignalExtractor = (artifact) => {
     if (dec) out.decisions.push(dec);
   });
   asList(data.dependencies ?? data.discoveredDependencies).forEach((ref, i) => {
-    const parsed = DependencyRefSchema.safeParse(ref);
-    if (parsed.success) out.dependencies.push(parsed.data);
-    else issues.push(`dependencies[${i}]: not a dependency reference`);
+    const dep = dependencyFrom(ref, i, issues);
+    if (dep) out.dependencies.push(dep);
   });
   return out;
 };

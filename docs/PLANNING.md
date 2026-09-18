@@ -59,10 +59,10 @@ Agents (and humans) write dependencies with a small grammar, in decomposition
 | `external:key` | wait for something outside ORCA; a human marks it satisfied (`orca plan satisfy`) |
 
 `blocks:other` is accepted as the explicit form of the default. The object form
-`{ on, type, stage, requiredBy, rationale }` is equivalent, with one difference:
-`type` and `requiredBy` must be given as fields. Inside `on` only `decision:` /
-`external:` and `@stage` are honoured; a `soft:` / `informs:` prefix or `#phase`
-suffix written there is ignored (#77).
+`{ on, type, stage, requiredBy, rationale }` is equivalent: `on` takes the
+same grammar, so `{ on: "soft:other@spec#build" }` means exactly what the string does. A field
+that disagrees with a prefix or suffix in `on` (`{ on: "soft:other", type: "blocks" }`) is
+rejected rather than silently resolved.
 A reference to a slug that is not in the plan yet is recorded as an `external`
 placeholder and **bound automatically** when a later request registers that
 slug. That is how one request can depend on work that another request will
