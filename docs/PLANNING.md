@@ -39,7 +39,7 @@ Everything is data plus pure functions (`packages/core/src/model/plan.ts`,
 | **WorkItem** (extended) | One deliverable slice, now with `planId`, `priority`, `produced` (artifact kind -> id, drives stage-level dependencies) and `deferredReason`. Slugs are unique per plan; a clash with an earlier request gets a `-2` suffix. | see `docs/DATA-MODEL.md` |
 | **Dependency** | An edge from a dependent item to what it waits for: another item (optionally a *stage* of it), a decision, or something external. | `type` (`blocks` / `soft` / `informs`), `requiredBy` (phase), `status`, `origin` |
 | **Risk** | Something that could go wrong, scored likelihood x impact on the plan's matrix, attached to the items it affects and to the items that mitigate it. | `likelihood`, `impact`, `status`, `affects`, `mitigatedBy`, `mitigation`, `triggers` |
-| **Decision** | A choice that must be made, with a weighted **decision matrix** (criteria x options) and an outcome. Items can depend on it. | `criteria`, `options`, `result`, `chosen`, `decidedBy`, `blocks` |
+| **Decision** | A choice that must be made, with a weighted **decision matrix** (criteria x options) and an outcome. Items can depend on it. | `criteria`, `options`, `result`, `chosen`, `decidedBy` (the items it gates are the dependencies targeting it) |
 | **Journal** | Append-only log of every plan change with its origin (decomposition, artifact, agent, human, system). | `plans/<planId>.jsonl` |
 
 ### Dependency references

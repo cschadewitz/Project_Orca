@@ -16,7 +16,7 @@
  *   plan risk <riskKey> --status <status> [key]   accept / mitigate / close a risk
  *   plan dispatch [key]           run the plan-resume workflow: schedule -> gate -> dispatch across the plan
  */
-import { planToMermaid, renderDecisionMatrix, riskLevel, riskScore, OrcaError, type PlanOrigin, type RiskStatus } from "@orca/core";
+import { decisionBlocks, planToMermaid, renderDecisionMatrix, riskLevel, riskScore, OrcaError, type PlanOrigin, type RiskStatus } from "@orca/core";
 import type { PlanService } from "@orca/engine";
 import { bootstrap } from "../bootstrap.js";
 import { attachEventPrinter, finish, type CommandContext } from "./index.js";
@@ -80,7 +80,7 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       if (snap.decisions.length) {
         ctx.out("");
         ctx.out("decisions:");
-        for (const d of snap.decisions) ctx.out(`  ${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}  blocks: ${d.blocks.map(slug).join(", ") || "-"}`);
+        for (const d of snap.decisions) ctx.out(`  ${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}  blocks: ${decisionBlocks(d.id, snap.dependencies).map(slug).join(", ") || "-"}`);
       }
       return 0;
     }
@@ -161,7 +161,8 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       for (const d of snap.decisions) {
         ctx.out(`${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}`);
         if (d.question) ctx.out(`${" ".repeat(12)}${d.question}`);
-        if (d.blocks.length) ctx.out(`${" ".repeat(12)}blocks: ${d.blocks.map(slug).join(", ")}`);
+        const blocks = decisionBlocks(d.id, snap.dependencies);
+        if (blocks.length) ctx.out(`${" ".repeat(12)}blocks: ${blocks.map(slug).join(", ")}`);
         if (d.result && d.criteria.length && d.options.length) ctx.out(renderDecisionMatrix({ criteria: d.criteria, options: d.options, scale: d.scale }, d.result).split("\n").map((l) => " ".repeat(12) + l).join("\n"));
         if (d.rationale) ctx.out(`${" ".repeat(12)}rationale: ${d.rationale}`);
       }

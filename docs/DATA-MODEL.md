@@ -41,7 +41,7 @@ agent‑facing shape that `custom:plan-register` turns into plan records.
 | `Plan` | `key`, `requestIds`, `policy` (`strategy`, `concurrency`, `riskAppetite`, `holdAboveAppetite`, `mitigateFirst`, `weights`), `riskMatrix` (`scale`, `thresholds`) |
 | `Dependency` | `from` (item id), `target` (`{kind: work-item, workItemId, stage?}` \| `{kind: decision, decisionId}` \| `{kind: external, key}`), `type` (`blocks` \| `soft` \| `informs`), `requiredBy` (phase, default `start`), `status` (`open` \| `satisfied` \| `failed` \| `waived`), `origin`, `resolution` |
 | `Risk` | `key`, `category`, `likelihood`, `impact`, `status` (`open → mitigating → mitigated | accepted | realized → closed`), `mitigation`, `contingency`, `triggers`, `affects[]`, `mitigatedBy[]` |
-| `Decision` | `key`, `question`, `criteria[]` (`weight`, `direction`), `options[]` (`scores{}`), `scale`, `result` (ranking, margin, confidence, pivotal criteria), `chosen`, `decidedBy` (`matrix` \| `agent` \| `human`), `blocks[]` |
+| `Decision` | `key`, `question`, `criteria[]` (`weight`, `direction`), `options[]` (`scores{}`), `scale`, `result` (ranking, margin, confidence, pivotal criteria), `chosen`, `decidedBy` (`matrix` \| `agent` \| `human`); the items it gates are derived from `Dependency` records (`decisionBlocks`) |
 
 Dependency references (`DependencyRef`, string or `{ on, type, stage, requiredBy }`):
 `other`, `other@spec`, `other#build`, `soft:other`, `informs:other@spec`, `decision:key`,
