@@ -36,7 +36,10 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     stops two dispatchers from launching one item twice (#72); artifact intake is
     serialised per plan (#73); work‑item status is projected from the event log, with the
     plan side following it (#74); the JSONL event store and plan journal number events on
-    disk under a lock file, so two processes can share one store (#97). The one that still
-    shapes the design:
-    `custom:plan-dispatch` keeps its own fan‑out loop next to `runBranches` (#75). The
-    rest are smaller: #76–#84.
+    disk under a lock file, so two processes over one store extend one log (#97,
+    consolidating #78/#87). The one that still shapes the design: `custom:plan-dispatch`
+    keeps its own fan‑out loop next to `runBranches` (#96, consolidating #75/#76/#83). The
+    rest are smaller: #77, #79–#82, #84, #88 (no command releases a dead run's work‑item
+    claims), and the #97 follow‑ups: a single‑writer lease per run (#101, the remaining
+    prerequisite for daemon mode, item 1), the artifact index appended without the lock
+    (#102), and lock liveness across pid namespaces (#103).

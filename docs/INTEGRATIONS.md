@@ -19,12 +19,13 @@ and `pnpm link --global`, or `node <repo>/packages/cli/dist/main.js acp --config
 A Kepler session then drives ORCA like any agent:
 
 - the prompt becomes a **Request** (first line = title) — or `/run ai-sdlc key=value` to
-  run a single workflow in the session's cwd;
+  run a single workflow in the session's cwd, or `/status` to list the session's runs;
 - ORCA decomposes it and launches the real agents (from `orca.config.yaml`) on the task's
   worktrees, locally or over SSH;
 - progress streams back as ACP updates: the workflow appears as a **plan** (one entry per
-  node, live status), agent output as message chunks prefixed with the run/node, every
-  recorded artifact as a completed **tool call** with the file location;
+  node, live status), agent output as message chunks (child runs' output is prefixed with
+  the workflow chain, e.g. `[program › ai-sdlc]`, and each node start as a `▶ <node>` line),
+  every recorded artifact as a completed **tool call** with the file location;
 - gates and `ask` permissions are forwarded upstream as `session/request_permission`, so
   Kepler's normal approval UI is the human gate. Questions are routed by the run that raised
   them (child runs resolve to the session that started their root run), so concurrent
@@ -34,7 +35,8 @@ A Kepler session then drives ORCA like any agent:
 Implementation: `packages/integrations/src/acp-facade/`. Workspace selection:
 `workspace: { provider: kepler }` in `orca.config.yaml` makes ORCA use the task's worktrees
 (`KeplerTaskWorkspaceProvider` scans the task dir for `*/.git`, picks by work item `repo`,
-else the first worktree). Sub‑agents launched by ORCA can still be given Kepler's MCP server
+else the worktree the parent workspace already sits in, else the first worktree, else the
+parent workspace or the task directory itself). Sub‑agents launched by ORCA can still be given Kepler's MCP server
 via `agents[].mcpServers` so they keep the task's resource list honest.
 
 ### Mode B — ORCA beside Kepler (side‑car)
@@ -66,7 +68,7 @@ is not, so nothing below runs today:
 | ORCA | T3 Code |
 | --- | --- |
 | `openSession` | `orchestration.dispatchCommand` → `thread.create` (project, model selection, runtime mode) |
-| `prompt()` | `thread.turn.start`; resolves when `thread.session-set` reports no active turn |
+| `prompt()` | `thread.turn.start`; resolves when `thread.session-set` reports no active turn or `thread.turn-diff-completed` reports the turn `completed` / `error` / `interrupted` |
 | updates | `orchestration.subscribeThread` events mapped to `AgentUpdateSummary` |
 | `cancel()` | `thread.turn.interrupt` |
 | `close()` | `thread.session.stop` |
@@ -108,8 +110,10 @@ agents:
     roles: [builder, tester]
 ```
 
-How it works: ORCA spawns `ssh -T -o BatchMode=yes … buildbox -- bash -lc 'cd <cwd> && exec
-claude-code-acp'`; the child's stdin/stdout carry ACP's newline‑delimited JSON‑RPC, so the
+How it works: ORCA spawns `ssh -T -o BatchMode=yes -o ConnectTimeout=20 [sshArgs…] [-p port]
+[-i identityFile] ci@build.internal -- bash -lc 'cd <cwd> && exec [env K=V …] claude-code-acp'`
+(`bash -lc` is the default `remoteShell`); the child's stdin/stdout carry ACP's
+newline‑delimited JSON‑RPC, so the
 remote agent is indistinguishable from a local one. File access for artifact pickup and
 `fs/*` requests goes through short `ssh … cat|test|mkdir` commands (`SshFileSystem`); the
 `git-worktree` workspace provider runs `git worktree add` on the remote via `exec`.
