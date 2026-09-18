@@ -6,14 +6,19 @@
  *
  * Dispatching them is *not* a custom node: the program workflow fans out over
  * `vars.leafWorkItems` with a plain `parallel` node whose `forEach` carries the
- * item key, its `dependsOn` and its `workItemId` (see workflows/program.yaml).
- * One fan-out engine, one join, and the work-item status falls out of the
- * child-run events the container already records (see work-items.ts).
+ * item key, its `dependsOn` and its `workItemId`. One fan-out engine, one join,
+ * and the work-item status falls out of the child-run events the container
+ * already records (see work-items.ts).
  *
  * This node is a `custom:*` node on purpose: it shows how a plugin extends the
  * node vocabulary without touching the core schema.
+ *
+ * It is the *request-scoped* original. The plan-aware successors
+ * (`custom:plan-register`, `custom:plan-dispatch`, ...) in `../plan/executors.ts`
+ * track dependencies, risks and decisions across requests; the shipped
+ * `workflows/program.yaml` uses those.
  */
-import { DecompositionSchema, newId, type CustomNode, type WorkItem } from "@orca/core";
+import { DecompositionSchema, newId, parseDependencyRef, type CustomNode, type WorkItem } from "@orca/core";
 import { completed, failed, type NodeExecutor, type StepOutcome } from "../executors/types.js";
 
 export interface MaterializeWorkItemsNode extends CustomNode {
@@ -44,6 +49,8 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
         kind: item.kind,
         acceptanceCriteria: item.acceptanceCriteria,
         dependsOn: item.dependsOn,
+        priority: item.priority,
+        produced: {},
         status: "pending",
         createdAt: now,
         updatedAt: now,
@@ -58,7 +65,10 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
         const parent = bySlug.get(item.parent);
         if (parent) bySlug.get(item.slug)!.parentId = parent.id;
       }
-      for (const dep of item.dependsOn) if (!bySlug.has(dep)) return failed("ARTIFACT_INVALID", `work item '${item.slug}' depends on unknown '${dep}'`, {}, false);
+      for (const dep of item.dependsOn) {
+        const key = parseDependencyRef(dep).key;
+        if (!bySlug.has(key)) return failed("ARTIFACT_INVALID", `work item '${item.slug}' depends on unknown '${key}'`, {}, false);
+      }
     }
     await ctx.stores.workItems.putMany([...bySlug.values()]);
     if (request) await ctx.stores.requests.put({ ...request, status: "in-progress", updatedAt: now });

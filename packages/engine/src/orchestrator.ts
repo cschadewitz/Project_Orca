@@ -48,6 +48,7 @@ import type { EventFilter, EventListener, Stores } from "@orca/store";
 import { builtinExecutors } from "./executors/index.js";
 import { NodeExecutorRegistry, paused, type ResolvedArtifact, type StepContext, type StepOutcome } from "./executors/types.js";
 import { abortableHumanInput, askHumanInput, autoHumanInput, isHumanInputPending, type HumanInputPort } from "./human-input.js";
+import { PlanService } from "./plan/service.js";
 import { RunContext } from "./run-context.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
@@ -63,6 +64,8 @@ export interface OrchestratorOptions {
   humanInput?: HumanInputPort;
   workspaceProvider?: WorkspaceProvider;
   sessionFactory?: SessionFactory;
+  /** Planning layer; created over `stores` when omitted. */
+  plan?: PlanService;
   clock?: Clock;
   logger?: Logger;
 }
@@ -89,6 +92,7 @@ export class Orchestrator {
   humanInput: HumanInputPort;
   workspaceProvider: WorkspaceProvider;
   sessionFactory: SessionFactory;
+  readonly plan: PlanService;
   readonly clock: Clock;
   readonly logger: Logger;
 
@@ -117,6 +121,7 @@ export class Orchestrator {
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
     this.clock = o.clock ?? systemClock;
     this.logger = o.logger ?? silentLogger;
+    this.plan = o.plan ?? new PlanService({ stores: this.stores, clock: this.clock, logger: this.logger.child({ component: "plan" }) });
     this.stores.events.subscribe((e) => void this.terminalStates.delete(e.runId));
   }
 
@@ -436,6 +441,7 @@ export class Orchestrator {
       return rc.state;
     } finally {
       await this.closeRunSessions(runId);
+      if (rc.state.run.workItemId && isTerminal(rc.state)) await this.plan.onRunFinished(rc.state.run);
     }
   }
 
@@ -480,6 +486,7 @@ export class Orchestrator {
       templates: this.templates,
       workflows: this.workflows,
       humanInput: abortableHumanInput(this.humanInput, rc.abort.signal),
+      plan: this.plan,
 
       async emit(event) {
         await rc.emit(event as Omit<OrcaEventInput, "runId">);
@@ -624,6 +631,8 @@ export class Orchestrator {
     };
     await this.stores.artifacts.put(artifact, content);
     await rc.emit({ type: "artifact.recorded", payload: { stepRunId: step.id, artifact } });
+    // Planning intake happens inline so the next node sees risks/decisions/dependencies this artifact carried.
+    await this.plan.onArtifactRecorded(rc.state.run, artifact);
     return artifact;
   }
 

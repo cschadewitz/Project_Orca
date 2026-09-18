@@ -1,6 +1,7 @@
 /** Executors for start, end, set, decision and gate nodes. */
 import { evaluateVars, OrcaError, type DecisionNode, type EndNode, type GateNode, type SetNode, type StartNode } from "@orca/core";
 import { askHumanInput, type HumanInputQuery } from "../human-input.js";
+import { resolveMatrixChoice } from "../plan/executors.js";
 import { runAgentTurn } from "./agent-step.js";
 import { completed, failed, type NodeExecutor, type StepContext } from "./types.js";
 
@@ -73,6 +74,10 @@ async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise
     }
     case "human":
       return { raw: await askHuman(ctx, s.question, ctx.node.options), source: "human" };
+    case "matrix": {
+      const m = await resolveMatrixChoice(ctx, s.artifact, s.decision);
+      return { raw: m.choice, source: `matrix:${m.key}:${m.decidedBy}` };
+    }
   }
 }
 

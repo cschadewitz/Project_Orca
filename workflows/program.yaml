@@ -1,14 +1,17 @@
-# The level above: accept a large request, decompose it, and run the SDLC loop
-# per work item (respecting dependencies), then summarise.
+# The level above: accept a large request, decompose it, register the pieces in
+# the long-term plan (dependencies, risks, decisions), make the open decisions,
+# schedule, gate, dispatch in dependency order, then summarise.
 id: program
-name: Program (request -> work items -> SDLC runs)
-version: "1"
-description: Decompose a feature/system request and drive each piece through ai-sdlc.
+name: Program (request -> plan -> SDLC runs)
+version: "2"
+description: Decompose a feature/system request, plan it against everything else ORCA is tracking, and drive each piece through ai-sdlc.
 inputs:
   request: The Request record (title, body).
+  plan: Optional plan key to register the work in (defaults to orca.config.yaml `planning.plan`).
 vars:
   itemWorkflow: ai-sdlc
   concurrency: 2
+  maxAutoApproveItems: 12
 start: start
 nodes:
   start: { type: start }
@@ -23,56 +26,106 @@ nodes:
         path: ".orca/program/{{ request.id }}/decomposition.md"
         validate: { requiredFields: [items] }
 
-  materialize:
-    type: "custom:materialize-work-items"
-    name: "Create work items"
+  register:
+    type: "custom:plan-register"
+    name: "Register work items, dependencies, risks and decisions in the plan"
+
+  assess-risks:
+    type: agent
+    name: "Assess risks across the breakdown"
+    agent: { role: planner }
+    template: program/assess-risks
+    inputs: [{ kind: decomposition }]
+    produces:
+      - kind: risk-register
+        name: riskRegister
+        path: ".orca/program/{{ request.id }}/risk-register.md"
+        validate: { requiredFields: [status] }
+
+  decide:
+    type: loop
+    name: "Make each open decision with a decision matrix"
+    mode: forEach
+    items: "vars.openDecisions"
+    itemVar: decision
+    maxIterations: 20
+    breakOnFailure: true
+    body:
+      graph:
+        start: start
+        nodes:
+          start: { type: start }
+          matrix:
+            type: agent
+            name: "Fill in the decision matrix"
+            agent: { role: planner }
+            template: program/decide
+            produces:
+              - kind: decision-matrix
+                name: decisionMatrix
+                path: ".orca/program/{{ request.id }}/decisions/{{ vars.decision.key }}.md"
+                validate: { requiredFields: [options] }
+          resolve:
+            type: "custom:decision-matrix"
+            name: "Score the matrix and record the decision"
+            artifact: decisionMatrix
+            decision: "{{ vars.decision.key }}"
+          done: { type: end }
+        edges:
+          - { from: start, to: matrix }
+          - { from: matrix, to: resolve }
+          - { from: resolve, to: done }
+
+  schedule:
+    type: "custom:plan-schedule"
+    name: "Compute the schedule"
+    artifactPath: ".orca/program/{{ request.id }}/schedule.md"
 
   plan-gate:
     type: gate
-    name: "Approve the breakdown"
-    question: "Approve {{ len(vars.workItems) }} work items for '{{ request.title }}'?"
+    name: "Approve the plan"
+    question: "Approve {{ len(vars.workItems) }} work items for '{{ request.title }}'? Ready now: {{ join(pluck(vars.schedule.ready, 'slug'), ', ') }}. Waiting: {{ len(vars.schedule.waiting) }}. Held for risk: {{ len(vars.schedule.held) }}. Highest open risk: {{ vars.schedule.risk.highestLevel }}."
     options: [approve, reject]
-    autoApproveWhen: "len(vars.workItems) <= 12"
+    # Humans look at big breakdowns, critical risk, or anything that can never run.
+    autoApproveWhen: "len(vars.workItems) <= vars.maxAutoApproveItems && vars.schedule.risk.highestLevel != 'critical' && len(vars.schedule.unschedulable) == 0"
     autoOption: approve
 
   # Plain fan-out: one child run per leaf work item, ordered by the decomposition's
   # dependsOn (slugs), each bound to its WorkItem so it gets its own workspace and so
   # the item's status is derived from the child-run events this node records.
   dispatch:
-    type: parallel
-    name: "Run SDLC per work item"
+    type: "custom:plan-dispatch"
+    name: "Run SDLC per work item in schedule order"
+    # The item's own workflow, else `vars.itemWorkflow` (seeded from the workflow's
+    # `vars` above / `program.itemWorkflow` in the config). Nothing here hard-codes ai-sdlc.
     concurrency: 2
-    join: all
-    failFast: true
-    forEach:
-      items: vars.leafWorkItems
-      itemVar: workItem
-      key: workItem.slug
-      dependsOn: workItem.dependsOn
-      workItemId: workItem.id
-      # The item's own workflow, else `vars.itemWorkflow` (seeded from the workflow's
-      # `vars` below / `program.itemWorkflow` in the config). No `body:` on purpose:
-      # nothing here hard-codes ai-sdlc.
-      workflow: workItem.workflowId || vars.itemWorkflow
+    scope: request
+    onWaiting: defer
 
   summarize:
     type: agent
     name: "Summarise the program"
     agent: { role: planner }
     template: program/summary
-    inputs: [{ kind: decomposition }]
+    inputs:
+      - { kind: decomposition }
+      - { name: riskRegister, required: false }
+      - { kind: schedule, required: false }
     produces:
       - kind: generic
         name: programSummary
         path: ".orca/program/{{ request.id }}/summary.md"
 
   done: { type: end, outcome: success }
-  rejected: { type: end, outcome: failure, message: "Breakdown rejected." }
+  rejected: { type: end, outcome: failure, message: "Plan rejected." }
 
 edges:
   - { from: start, to: decompose }
-  - { from: decompose, to: materialize }
-  - { from: materialize, to: plan-gate }
+  - { from: decompose, to: register }
+  - { from: register, to: assess-risks }
+  - { from: assess-risks, to: decide }
+  - { from: decide, to: schedule }
+  - { from: schedule, to: plan-gate }
   - { from: plan-gate, to: dispatch, when: "choice == 'approve'" }
   - { from: plan-gate, to: rejected }
   - { from: dispatch, to: summarize }
