@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { FakeClock, type Artifact } from "@orca/core";
+import { consoleLogger, FakeClock, type Artifact } from "@orca/core";
 import { FileArtifactStore, InMemoryDocumentStore, InMemoryEventStore, JsonFileDocumentStore, JsonlEventStore } from "@orca/store";
 
 const dirs: string[] = [];
@@ -64,6 +64,36 @@ describe("event stores", () => {
     const second = new JsonlEventStore(d);
     const e = await second.append({ type: "run.started", runId: "run_x", payload: {} });
     expect(e.seq).toBe(1);
+  });
+  it("two jsonl stores over one directory number one run consistently", async () => {
+    const d = await mkdtemp(join(tmpdir(), "orca-store-"));
+    dirs.push(d);
+    // Two processes over one store: an ACP facade beside a resume, or two CLI invocations.
+    const a = new JsonlEventStore(d);
+    const b = new JsonlEventStore(d);
+    await a.append({ type: "run.created", runId: "run_x", payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} } });
+    await b.append({ type: "run.started", runId: "run_x", payload: {} });
+    await a.append({ type: "run.completed", runId: "run_x", payload: { outcome: "success" } });
+    expect((await a.read("run_x")).map((e) => [e.type, e.seq])).toEqual([["run.created", 0], ["run.started", 1], ["run.completed", 2]]);
+    await Promise.all([
+      ...Array.from({ length: 8 }, () => a.append({ type: "agent.update", runId: "run_x", payload: { stepRunId: "s", sessionId: "s", update: { kind: "agent_message_chunk", text: "a" } } })),
+      ...Array.from({ length: 8 }, () => b.append({ type: "agent.update", runId: "run_x", payload: { stepRunId: "s", sessionId: "s", update: { kind: "agent_message_chunk", text: "b" } } })),
+    ]);
+    expect((await b.read("run_x")).map((e) => e.seq)).toEqual(Array.from({ length: 19 }, (_, i) => i));
+    expect(await a.listRuns()).toEqual(["run_x"]);
+  });
+  it("jsonl store reads past a torn line and keeps appending after it", async () => {
+    const d = await mkdtemp(join(tmpdir(), "orca-store-"));
+    dirs.push(d);
+    const warnings: string[] = [];
+    const store = new JsonlEventStore(d, new FakeClock(), consoleLogger("warn", {}, (l) => warnings.push(l)));
+    await store.append({ type: "run.created", runId: "run_x", payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} } });
+    await writeFile(join(d, "runs", "run_x.jsonl"), '{"type":"run.started","runId":"run_x","payload":{},"id":"evt_1","seq":1,"at":"2', { flag: "a" });
+    expect((await store.read("run_x")).map((e) => e.seq)).toEqual([0]);
+    expect((await store.readTypes("run_x", ["run.started"])).length).toBe(0);
+    expect((await store.append({ type: "run.started", runId: "run_x", payload: {} })).seq).toBe(1);
+    expect((await store.readTypes("run_x", ["run.started"])).map((e) => e.seq)).toEqual([1]);
+    expect(warnings.some((l) => l.includes("torn tail"))).toBe(true);
   });
 });
 

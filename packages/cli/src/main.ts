@@ -45,9 +45,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     },
   });
   const [name, ...rest] = positionals;
-  if (!name || values.help) {
+  if (values.help) {
     process.stdout.write(USAGE);
-    return name ? 0 : 1;
+    return 0;
+  }
+  if (!name) {
+    process.stderr.write(USAGE);
+    return 1;
   }
   const command = commands[name];
   if (!command) {

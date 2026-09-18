@@ -79,6 +79,75 @@ interface BranchResult {
 }
 
 /**
+ * The mechanics every fan-out shares: at most `limit` children in flight, one AbortController
+ * all of them are handed, and a latch that both stops new launches and cancels what is still
+ * running once the outcome is decided.
+ *
+ * `parallel` drives it over a branch list known up front (`runBranches` below);
+ * `custom:plan-dispatch` drives it over a ready set recomputed from the live plan on every wake
+ * (`plan/executors.ts`). Cancellation and fail-fast therefore mean the same thing in both, and
+ * are written once.
+ */
+export class FanOut {
+  /** Handed to every child; aborted by `halt`, so a decided fan-out stops burning agent time. */
+  readonly stop = new AbortController();
+  private readonly running = new Map<string, Promise<void>>();
+  private firstFailure: unknown;
+  private halted = false;
+
+  constructor(private readonly limit: number) {}
+
+  get inFlight(): number {
+    return this.running.size;
+  }
+  /** How many children may start right now - none once the fan-out is halted. */
+  get slots(): number {
+    return this.halted ? 0 : Math.max(0, this.limit - this.running.size);
+  }
+  get stopped(): boolean {
+    return this.halted;
+  }
+  isRunning(key: string): boolean {
+    return this.running.has(key);
+  }
+  keys(): string[] {
+    return [...this.running.keys()];
+  }
+
+  /** Launch nothing more, and ask everything still running to stop through `stop.signal`. */
+  halt(reason: string): void {
+    this.halted = true;
+    if (!this.stop.signal.aborted) this.stop.abort(reason);
+  }
+
+  /**
+   * Start `body` under `key`. Everything `body` decides - `halt` included - is settled before
+   * the promise `settled()` races resolves, so a caller woken by a child never acts on a
+   * decision that child has not finished making.
+   */
+  launch(key: string, body: (signal: AbortSignal) => Promise<void>): void {
+    const p = (async () => body(this.stop.signal))()
+      .catch((e: unknown) => {
+        this.firstFailure ??= e;
+        this.halt("a branch threw");
+      })
+      .finally(() => void this.running.delete(key));
+    this.running.set(key, p);
+  }
+
+  /** Resolve as soon as one child settles, or as soon as `wake` does (a poll, a plan change). */
+  async settled(wake?: Promise<unknown>): Promise<void> {
+    const waits: Promise<unknown>[] = [...this.running.values(), ...(wake ? [wake] : [])];
+    if (waits.length) await Promise.race(waits);
+  }
+
+  /** Re-throw the first error a child threw, once the fan-out has drained. */
+  throwIfFailed(): void {
+    if (this.firstFailure !== undefined) throw this.firstFailure;
+  }
+}
+
+/**
  * Run `branches` with at most `limit` in flight, honouring `dependsOn`: a branch starts only
  * once every key it depends on has succeeded, and is skipped (`dependency`) as soon as one of
  * them cannot - it failed, was itself skipped, or names a key this fan-out does not have. A
@@ -99,10 +168,7 @@ async function runBranches(
 ): Promise<Map<string, BranchResult>> {
   const out = new Map<string, BranchResult>();
   const keys = new Set(branches.map((b) => b.key));
-  const stop = new AbortController();
-  const inFlight = new Map<string, Promise<void>>();
-  let stopped = false;
-  let failure: unknown;
+  const fan = new FanOut(limit);
 
   const settled = (key: string) => out.get(key)?.state;
   /** A dependency that can still be met: not yet resolved, or parked and waiting for a human. */
@@ -111,8 +177,8 @@ async function runBranches(
   const unmeetable = (b: Branch) => b.dependsOn.some((d) => { const r = out.get(d); return !keys.has(d) || (r !== undefined && !(r.state && (succeeded(r.state) || r.state.run.status === "paused"))); });
   const held = (b: Branch) => b.dependsOn.some((d) => pending(d) || settled(d)?.run.status === "paused");
 
-  const launch = (b: Branch) => {
-    const p = (async () => {
+  const launch = (b: Branch) =>
+    fan.launch(b.key, async (signal) => {
       // Claimed here rather than up front: a branch that never becomes ready must not take
       // ownership of its work item, or it would block the dispatcher that can run it.
       if (!(await claim(b))) {
@@ -120,45 +186,32 @@ async function runBranches(
         await onSkip(b, "claimed");
         return;
       }
-      const state = await b.run(stop.signal);
+      const state = await b.run(signal);
       out.set(b.key, { state });
       const reason = decided?.(state, b);
-      if (reason !== undefined) {
-        stopped = true;
-        if (!stop.signal.aborted) stop.abort(reason);
-      }
-    })()
-      .catch((e: unknown) => {
-        failure ??= e;
-        stopped = true;
-        if (!stop.signal.aborted) stop.abort("a branch threw");
-      })
-      .finally(() => void inFlight.delete(b.key));
-    inFlight.set(b.key, p);
-  };
+      if (reason !== undefined) fan.halt(reason);
+    });
 
   for (;;) {
     // Cascade: skipping one branch can make its own dependants unmeetable, so iterate to a fixed point.
     for (let changed = true; changed; ) {
       changed = false;
       for (const b of branches) {
-        if (out.has(b.key) || inFlight.has(b.key) || !unmeetable(b)) continue;
+        if (out.has(b.key) || fan.isRunning(b.key) || !unmeetable(b)) continue;
         out.set(b.key, { skipped: "dependency" });
         await onSkip(b, "dependency");
         changed = true;
       }
     }
-    if (!stopped) {
-      for (const b of branches) {
-        if (inFlight.size >= limit) break;
-        if (out.has(b.key) || inFlight.has(b.key) || !met(b)) continue;
-        launch(b);
-      }
+    for (const b of branches) {
+      if (fan.slots === 0) break;
+      if (out.has(b.key) || fan.isRunning(b.key) || !met(b)) continue;
+      launch(b);
     }
-    if (inFlight.size === 0) break;
-    await Promise.race(inFlight.values());
+    if (fan.inFlight === 0) break;
+    await fan.settled();
   }
-  if (failure) throw failure;
+  fan.throwIfFailed();
   // Whatever is left never started: because failFast cut the fan-out short, or because a parked
   // prerequisite has not answered yet (those stay unrecorded - resume may still run them).
   // Recording one branch can release the next in a chain, so iterate to a fixed point here too.

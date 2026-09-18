@@ -38,7 +38,7 @@ mise install            # Node 24 + pnpm 12 (any Node >= 22 works)
 pnpm install
 pnpm test               # unit + end-to-end tests (scripted ACP agent, no LLM needed)
 pnpm run orca validate --mermaid        # validate + draw the shipped workflows
-pnpm run demo --dir /tmp/orca-demo      # full program run with scripted agents; prints the run tree
+pnpm run demo --dir /tmp/orca-demo      # full program run with scripted agents; prints the run tree (without --dir/--keep the temp workspace is removed afterwards)
 ```
 
 `orca run`/`submit` need agents, so they need an `orca.config.yaml`; without one
@@ -64,16 +64,17 @@ Requests accumulate in a **long‑term plan**: work items from different request
 depend on each other (or on a decision, or on something external), risks are scored
 on a likelihood × impact matrix and can hold work for a human, and decisions are made
 with weighted decision matrices before the work that needs them starts. Inspect and
-steer it with `orca plan show | schedule | explain <slug> | risks | decisions | graph`
-and resume deferred work across requests with `orca plan dispatch` (see
-`docs/PLANNING.md`).
+steer it with `orca plan show | schedule | explain <slug> | risks | decisions | graph |
+journal | depend | waive | satisfy | decide | risk` and resume deferred work across
+requests with `orca plan dispatch` (see `docs/PLANNING.md`). A run interrupted by a
+crash is picked up with `orca resume <runId>`.
 
 ## Repository map
 
 | Path | What lives there |
 | --- | --- |
-| `packages/core` | Domain model (Request, WorkItem, Artifact, Workflow, Run, Plan/Dependency/Risk/Decision), event schema + reducer, planning algorithms (scheduler, risk matrix, decision matrix, signals), expression language, template renderer, config schema. Pure; no I/O. |
-| `packages/store` | Persistence ports and implementations: event log (memory / JSONL), artifact store (content‑addressed), document stores, plan stores + journal. |
+| `packages/core` | Domain model (Request, WorkItem, Artifact, Workflow, Run, Plan/Dependency/Risk/Decision), event schema + reducer, planning algorithms (scheduler, risk matrix, decision matrix, signals), expression language, template renderer, config schema. No transports or process spawning; the only I/O is reading workflow/template files and the shared JSONL helper. |
+| `packages/store` | Persistence ports and implementations: event log (memory / JSONL), artifact store (content‑addressed), document stores, plan stores + journal, work‑item claim store. |
 | `packages/agents` | Hosts (local, SSH), ACP client sessions, permission policies. |
 | `packages/engine` | The orchestrator (graph interpreter), node executors (agent, decision, gate, loop, parallel, subworkflow, set, custom), program service, **PlanService** and the plan nodes (`plan-register`, `decision-matrix`, `plan-schedule`, `plan-dispatch`, `plan-await`), workspace providers, plugin API. |
 | `packages/integrations` | ORCA as an ACP agent (proxy mode), Kepler task awareness, T3 Code adapter (groundwork). |

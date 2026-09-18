@@ -16,7 +16,7 @@
  *   plan risk <riskKey> --status <status> [key]   accept / mitigate / close a risk
  *   plan dispatch [key]           run the plan-resume workflow: schedule -> gate -> dispatch across the plan
  */
-import { planToMermaid, renderDecisionMatrix, riskLevel, riskScore, OrcaError, type PlanOrigin, type RiskStatus } from "@orca/core";
+import { describeRiskMatrix, planToMermaid, renderDecisionMatrix, riskLevel, riskScore, OrcaError, type PlanOrigin, type RiskStatus } from "@orca/core";
 import type { PlanService } from "@orca/engine";
 import { bootstrap } from "../bootstrap.js";
 import { attachEventPrinter, finish, type CommandContext } from "./index.js";
@@ -65,6 +65,7 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       const slug = (id: string) => snap.items.find((i) => i.id === id)?.slug ?? id;
       ctx.out(`plan ${p.key} (${p.id})  ${p.name}  status=${p.status}  strategy=${p.policy.strategy}  concurrency=${p.policy.concurrency}  appetite=${p.policy.riskAppetite}`);
       ctx.out(`requests: ${p.requestIds.join(", ") || "-"}`);
+      ctx.out(`risk matrix: ${describeRiskMatrix(p.riskMatrix)}`);
       ctx.out("");
       ctx.out("work items:");
       for (const w of snap.items) {
@@ -145,6 +146,7 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       if (json) return (ctx.out(JSON.stringify(snap.risks, null, 2)), 0);
       const slug = (id: string) => snap.items.find((i) => i.id === id)?.slug ?? id;
       const sorted = [...snap.risks].sort((a, b) => riskScore(b) - riskScore(a));
+      ctx.out(`risk matrix: ${describeRiskMatrix(p.riskMatrix)}`);
       for (const r of sorted) {
         ctx.out(`${pad(r.status, 11)} ${pad(riskLevel(riskScore(r), p.riskMatrix), 8)} ${pad(r.key, 24)} L${r.likelihood} x I${r.impact} = ${riskScore(r)}  ${r.title}`);
         ctx.out(`${" ".repeat(12)}category=${r.category}  affects: ${r.affects.map(slug).join(", ") || "-"}  mitigated by: ${r.mitigatedBy.map(slug).join(", ") || "-"}${r.mitigation ? `\n${" ".repeat(12)}mitigation: ${r.mitigation}` : ""}`);
