@@ -435,8 +435,9 @@ export class PlanService {
    * *and* into the journal, in one place, so a dispatch summary can never describe a deferral
    * the journal does not hold. Idempotent.
    *
-   * `blocked` is the one status the plan side owns - an item the scheduler refuses to start
-   * never gets a run branch, so the run-log projection has nothing to say about it. The guard
+   * Under plan dispatch `blocked` is the one status the plan side owns - an item the scheduler
+   * refuses to start never gets a run branch, so the run-log projection has nothing to say
+   * about it. The guard
    * makes that explicit: a status the projection wrote is never overwritten here.
    */
   async deferWorkItem(workItemId: string, reason: string, opts: { blocked?: boolean } = {}, origin: PlanOrigin = SYSTEM): Promise<void> {

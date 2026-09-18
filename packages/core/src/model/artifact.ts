@@ -48,7 +48,7 @@ export const ArtifactSchema = z.object({
   kind: ArtifactKindSchema,
   /** Logical name within a run, e.g. "spec" or "review-2". Defaults to kind. */
   name: z.string(),
-  /** Workspace-relative path where the artifact was materialised, if any. */
+  /** Absolute path on the host where the artifact was materialised, if any. */
   path: z.string().optional(),
   mediaType: z.string().default("text/markdown"),
   contentHash: z.string(),

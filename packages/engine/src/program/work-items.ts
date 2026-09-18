@@ -9,9 +9,11 @@
  *
  * This module is the *only* writer of `WorkItem.status` / `runId` for an item that has a run:
  * the planning layer reacts to what is projected here (`PlanService.onWorkItemsProjected`)
- * instead of writing the same fields alongside it. The one status no run log can produce is
- * `blocked` - an item the scheduler refused to start never gets a branch - and that one the
- * plan side owns (`PlanService.deferWorkItem`), so the two can never disagree.
+ * instead of writing the same fields alongside it. `custom:plan-dispatch` never skips a
+ * branch, so under plan dispatch no run log can produce `blocked` - an item the scheduler
+ * refused to start never gets a branch - and that one the plan side owns
+ * (`PlanService.deferWorkItem`), so the two can never disagree. (A plain `parallel` fan-out
+ * does project `blocked`, from `branch.skipped` with reason `dependency`.)
  */
 import { outcomeSucceeded, type Run, type RunOutcome, type RunState, type RunStatus, type WorkItem, type WorkItemStatus } from "@orca/core";
 import type { Stores } from "@orca/store";
