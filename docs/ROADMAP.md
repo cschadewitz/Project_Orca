@@ -34,7 +34,7 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
 13. **Planning: review findings** — filed as issues #71–#84 when the planning layer was
     rebased onto main. Done: cycle detection ignores `soft` edges (#71); a work‑item claim
     stops two dispatchers from launching one item twice (#72); artifact intake is
-    serialised per plan (#73). The ones that still shape the design: work‑item status is
-    written by the plan side rather than projected from the event log (#74);
+    serialised per plan (#73); work‑item status is projected from the event log, with the
+    plan side following it (#74). The one that still shapes the design:
     `custom:plan-dispatch` keeps its own fan‑out loop next to `runBranches` (#75). The
     rest are smaller: #76–#84.

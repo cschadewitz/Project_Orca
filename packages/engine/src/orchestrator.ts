@@ -342,6 +342,7 @@ export class Orchestrator {
       clock: this.clock,
       logger: this.logger.child({ runId }),
       loadState: (id) => this.getState(id),
+      plan: this.plan,
     });
     this.live.set(runId, rc);
     return rc;

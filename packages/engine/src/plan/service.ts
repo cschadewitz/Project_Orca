@@ -57,6 +57,7 @@ import {
   type WorkItem,
 } from "@orca/core";
 import type { Stores } from "@orca/store";
+import { projectWorkItemForRun, type ProjectedWorkItem } from "../program/work-items.js";
 
 export interface PlanDefaults {
   /** Plan used when a request does not name one. */
@@ -427,6 +428,31 @@ export class PlanService {
     await this.stores.workItems.put(next);
     if (cur.planId) await this.journal({ type: "work-item.updated", planId: cur.planId, origin, payload: { workItemId, changes: changes as Record<string, unknown> } });
     return next;
+  }
+
+  /**
+   * Record that the scheduler cannot offer an item right now: the reason goes on the document
+   * *and* into the journal, in one place, so a dispatch summary can never describe a deferral
+   * the journal does not hold. Idempotent.
+   *
+   * `blocked` is the one status the plan side owns - an item the scheduler refuses to start
+   * never gets a run branch, so the run-log projection has nothing to say about it. The guard
+   * makes that explicit: a status the projection wrote is never overwritten here.
+   */
+  async deferWorkItem(workItemId: string, reason: string, opts: { blocked?: boolean } = {}, origin: PlanOrigin = SYSTEM): Promise<void> {
+    const cur = await this.stores.workItems.get(workItemId);
+    if (!cur?.planId) return;
+    const block = opts.blocked === true && (cur.status === "pending" || cur.status === "blocked");
+    if (cur.deferredReason === reason && (!block || cur.status === "blocked")) return;
+    await this.updateWorkItem(workItemId, { deferredReason: reason, ...(block ? { status: "blocked" as const } : {}) }, origin);
+    await this.journal({ type: "dispatch.deferred", planId: cur.planId, origin, payload: { workItemId, reason } });
+  }
+
+  /** The item is being offered again: drop the reason an earlier deferral left on it. */
+  async clearDeferral(workItemId: string, origin: PlanOrigin = SYSTEM): Promise<void> {
+    const cur = await this.stores.workItems.get(workItemId);
+    if (!cur || cur.deferredReason === undefined) return;
+    await this.updateWorkItem(workItemId, { deferredReason: null }, origin);
   }
 
   /** Remember that the item produced an artifact kind (drives stage-level dependencies), then reconcile. */
@@ -884,22 +910,51 @@ export class PlanService {
     }
   }
 
-  /** Called by the orchestrator when a run reaches a terminal state. Never throws. */
+  /**
+   * Called by the orchestrator when a run reaches a terminal state. Never throws.
+   *
+   * The status itself is *not* written here. A run dispatched by a container step is
+   * projected from its parent's log the moment the parent records `child.finished`
+   * (`RunContext.syncWorkItems`); this only projects the item run that no parent is
+   * driving, through the very same mapping, and then re-evaluates the plan.
+   */
   async onRunFinished(run: Pick<Run, "id" | "workItemId" | "requestId" | "status" | "outcome" | "parentRunId">): Promise<void> {
     try {
       if (!run.workItemId) return;
       const planId = (await this.stores.workItems.get(run.workItemId))?.planId;
       if (!planId) return;
-      const status: WorkItem["status"] = run.status === "completed" && run.outcome === "success" ? "done" : run.status === "cancelled" ? "cancelled" : "failed";
       await this.withPlan(planId, async () => {
         // Re-read under the lock: a sibling's intake may have moved the item on.
         const wi = await this.stores.workItems.get(run.workItemId!);
         if (!wi || wi.planId !== planId || (wi.runId && wi.runId !== run.id)) return;
-        if (wi.status !== status) await this.updateWorkItem(wi.id, { status, runId: run.id }, { kind: "system", runId: run.id });
+        if (!run.parentRunId) await this.onWorkItemsProjected(await projectWorkItemForRun(this.stores, run, this.clock.isoNow()), run.id);
         await this.reconcile(planId, { kind: "system", runId: run.id });
       });
     } catch (e) {
       this.logger.error("plan: run completion intake failed", { run: run.id, error: (e as Error).message });
+    }
+  }
+
+  /**
+   * Called by `RunContext.syncWorkItems` after the run-log projection has mirrored a status
+   * onto the WorkItem documents. The projection owns `status` / `runId`; the plan side only
+   * records what it did, so the journal (`orca plan journal`) can never fall behind the read
+   * model (`orca plan show`) - not even if the process dies mid-dispatch. Never throws.
+   */
+  async onWorkItemsProjected(changes: readonly ProjectedWorkItem[], runId?: string): Promise<void> {
+    const origin: PlanOrigin = { kind: "system", ...(runId ? { runId } : {}) };
+    try {
+      const plans = new Set<string>();
+      for (const c of changes) {
+        const planId = c.workItem.planId;
+        if (!planId) continue;
+        plans.add(planId);
+        await this.journal({ type: "work-item.updated", planId, origin, payload: { workItemId: c.workItem.id, changes: { ...c.changes, from: c.previous } } });
+      }
+      // A finished item can satisfy what its dependants were waiting for.
+      for (const planId of plans) await this.reconcile(planId, origin);
+    } catch (e) {
+      this.logger.error("plan: work-item projection intake failed", { ...(runId ? { run: runId } : {}), error: (e as Error).message });
     }
   }
 

@@ -110,6 +110,17 @@ describe("planning layer (e2e)", () => {
     expect(started).toEqual(["core", "api", "ui"]);
     const resolved = journal.filter((e) => e.type === "dependency.resolved").map((e) => (e.payload as { dependencyId: string }).dependencyId);
     expect(new Set(resolved).size).toBe(resolved.length);
+    // Every status `orca plan show` reports is backed by a `work-item.updated` entry the run-log
+    // projection wrote: the plan side no longer sets the field alongside it, so the journal and
+    // the read model cannot drift apart when a run dies mid-dispatch.
+    const projected = journal.filter((e) => e.type === "work-item.updated" && (e.payload as { changes: { status?: string } }).changes.status !== undefined);
+    const lastStatus = new Map<string, string>();
+    for (const e of projected) {
+      const pl = e.payload as { workItemId: string; changes: { status: string } };
+      lastStatus.set(pl.workItemId, pl.changes.status);
+    }
+    expect(Object.fromEntries(snap.items.map((i) => [i.slug, lastStatus.get(i.id)]))).toEqual({ core: "done", api: "done", ui: "done" });
+    expect(projected.every((e) => e.origin.kind === "system" && e.origin.runId === state.run.id)).toBe(true);
     const summaryPrompt = (await h.prompts()).find((p) => p.text.includes("Summarise the program"))!;
     expect(summaryPrompt.text).toContain("Critical path: core -> api -> ui");
   }, 180_000);
