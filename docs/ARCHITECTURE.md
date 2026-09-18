@@ -140,6 +140,12 @@ A `WorkItem`'s `status` is a **projection** of that fan-out, not a side-write:
 document store, which is a cache. A process that dies mid-dispatch cannot strand an item
 in `in-progress`: `execute()` recomputes every status from the log before resuming.
 
+One run's log says nothing about what *other* runs are doing, so ownership of an item is
+settled outside the logs: each branch claims its item through the `ClaimStore`
+(`packages/store/src/claim-store.ts`) before spawning a child run — an atomic create, so
+it holds across processes. A second dispatcher over the same plan skips what it does not
+own (`branch.skipped`, `reason: claimed`) instead of starting a rival child run.
+
 `ProgramService.submit()` is the single entry point used by the CLI and the ACP
 facade. The original request‑scoped nodes (`custom:materialize-work-items`,
 `custom:dispatch-work-items`) remain available for workflows that do not want

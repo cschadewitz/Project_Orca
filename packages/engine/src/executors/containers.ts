@@ -10,6 +10,7 @@
  */
 import { INLINE_SEP } from "../orchestrator.js";
 import { evaluateVars, succeeded, type BranchSkipReason, type LoopNode, type ParallelForEach, type ParallelNode, type RunState, type SubworkflowNode, type SubworkflowRef } from "@orca/core";
+import { ownsClaim } from "@orca/store";
 import { completed, failed, paused, type NodeExecutor, type StepContext, type StepOutcome } from "./types.js";
 
 function target(ctx: StepContext, ref: SubworkflowRef, suffix: string[]): { workflow: string } | { graph: import("@orca/core").WorkflowGraph; inlineId: string } {
@@ -93,6 +94,8 @@ async function runBranches(
   limit: number,
   decided: ((state: RunState, branch: Branch) => string | undefined) | undefined,
   onSkip: (branch: Branch, reason: BranchSkipReason) => Promise<void>,
+  /** Last gate before a branch starts: `false` means another owner has it, so it is skipped (`claimed`). */
+  claim: (branch: Branch) => Promise<boolean>,
 ): Promise<Map<string, BranchResult>> {
   const out = new Map<string, BranchResult>();
   const keys = new Set(branches.map((b) => b.key));
@@ -110,6 +113,13 @@ async function runBranches(
 
   const launch = (b: Branch) => {
     const p = (async () => {
+      // Claimed here rather than up front: a branch that never becomes ready must not take
+      // ownership of its work item, or it would block the dispatcher that can run it.
+      if (!(await claim(b))) {
+        out.set(b.key, { skipped: "claimed" });
+        await onSkip(b, "claimed");
+        return;
+      }
       const state = await b.run(stop.signal);
       out.set(b.key, { state });
       const reason = decided?.(state, b);
@@ -165,6 +175,20 @@ async function runBranches(
   return out;
 }
 
+/**
+ * Take ownership of the work item a branch stands for, so that two fan-outs over the same items
+ * cannot both launch it (two workspaces, two agent sessions, one WorkItem). A branch without a
+ * work item needs no claim; a re-attempted or resumed step re-claims what it already owns, which
+ * is what keeps `runChild`'s re-attach path working after a crash.
+ */
+async function claimWorkItem(ctx: StepContext, b: Branch): Promise<boolean> {
+  if (!b.workItemId) return true;
+  const held = await ctx.stores.claims.claim({ workItemId: b.workItemId, runId: ctx.run.id, branch: b.key, stepRunId: ctx.step.id, at: ctx.clock.isoNow() });
+  if (ownsClaim(held, ctx.run.id, b.key)) return true;
+  ctx.logger.warn("work item already claimed", { branch: b.key, workItemId: b.workItemId, owner: held.runId, ownerBranch: held.branch });
+  return false;
+}
+
 export const parallelExecutor: NodeExecutor<ParallelNode> = {
   type: "parallel",
   async execute(ctx): Promise<StepOutcome> {
@@ -195,8 +219,12 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
       const stop = n.join === "any" ? succeeded(s) : !succeeded(s);
       return stop ? `parallel '${ctx.nodeId}': branch '${b.key}' decided join '${n.join}' (failFast)` : undefined;
     };
-    const results = await runBranches(branches, n.concurrency, n.failFast ? decided : undefined, (b, reason) =>
-      ctx.emit({ type: "branch.skipped", payload: { stepRunId: ctx.step.id, branch: b.key, reason, ...(b.workItemId ? { workItemId: b.workItemId } : {}) } }),
+    const results = await runBranches(
+      branches,
+      n.concurrency,
+      n.failFast ? decided : undefined,
+      (b, reason) => ctx.emit({ type: "branch.skipped", payload: { stepRunId: ctx.step.id, branch: b.key, reason, ...(b.workItemId ? { workItemId: b.workItemId } : {}) } }),
+      (b) => claimWorkItem(ctx, b),
     );
 
     const states = branches.map((b) => results.get(b.key)?.state).filter((s): s is RunState => s !== undefined);
@@ -207,7 +235,7 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
       return {
         branch: b.key,
         ...(b.workItemId ? { workItemId: b.workItemId } : {}),
-        ...(r?.state ? { runId: r.state.run.id, status: r.state.run.status, ...(r.state.run.outcome ? { outcome: r.state.run.outcome } : {}), ok: succeeded(r.state) } : { status: r?.skipped === "dependency" ? "blocked" : "skipped", ok: false }),
+        ...(r?.state ? { runId: r.state.run.id, status: r.state.run.status, ...(r.state.run.outcome ? { outcome: r.state.run.outcome } : {}), ok: succeeded(r.state) } : { status: r?.skipped === "dependency" ? "blocked" : r?.skipped === "claimed" ? "claimed" : "skipped", ok: false }),
       };
     });
 
@@ -220,7 +248,8 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
     if ((n.join === "all" && (!ok || notStarted > 0)) || (n.join === "any" && !anyOk)) {
       const bad = states.filter((s) => !succeeded(s)).length;
       const blocked = summary.filter((s) => s.status === "blocked").length;
-      const why = [blocked > 0 ? `${blocked} blocked by a dependency` : "", notStarted - blocked > 0 ? `${notStarted - blocked} not started: failFast` : ""].filter(Boolean).join(", ");
+      const claimed = summary.filter((s) => s.status === "claimed").length;
+      const why = [blocked > 0 ? `${blocked} blocked by a dependency` : "", claimed > 0 ? `${claimed} claimed by another run` : "", notStarted - blocked - claimed > 0 ? `${notStarted - blocked - claimed} not started: failFast` : ""].filter(Boolean).join(", ");
       return failed("RUN_STATE", `parallel '${ctx.nodeId}': ${bad} of ${branches.length} branches did not succeed${why ? ` (${why})` : ""}`, data);
     }
     return completed({ data: { ...data, ok } });

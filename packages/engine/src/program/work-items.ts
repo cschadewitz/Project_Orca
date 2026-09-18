@@ -25,7 +25,8 @@ export function deriveWorkItemProgress(state: RunState): Map<string, WorkItemPro
     const step = state.steps[stepId];
     if (!step) continue;
     for (const b of step.skippedBranches) {
-      if (b.workItemId) out.set(b.workItemId, { status: b.reason === "dependency" ? "blocked" : "pending" });
+      // `claimed` says another run owns the item: its progress is that run's to project, not ours.
+      if (b.workItemId && b.reason !== "claimed") out.set(b.workItemId, { status: b.reason === "dependency" ? "blocked" : "pending" });
     }
     for (const c of step.children) {
       if (!c.workItemId) continue;

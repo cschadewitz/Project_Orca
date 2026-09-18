@@ -9,8 +9,8 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    over the wire and keep agent sessions alive across the wait.
 2. **T3 Code WebSocket transport** — implement `T3CodeRpc` over T3's Effect‑RPC envelope and
    depend on `@t3tools/contracts`; map `thread.meta-updated.worktreePath` into the workspace.
-3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore` over `node:sqlite` for
-   large histories; JSONL remains the reviewable default.
+3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore`/`ClaimStore` over
+   `node:sqlite` for large histories; JSONL remains the reviewable default.
 4. **Maintain stage** — a `custom:metrics-watch` node (or a scheduled trigger) that turns
    breached production controls into new Requests, closing the playbook's loop.
 5. **Remote workspace sync** — optional rsync/`git push` step for SSH hosts that do not share
@@ -32,8 +32,9 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
 12. **Planning: cross‑plan dependencies and indexes** — one plan per product is assumed and
     the scheduler re‑reads the whole plan per pass.
 13. **Planning: review findings** — filed as issues #71–#84 when the planning layer was
-    rebased onto main. Done: cycle detection ignores `soft` edges (#71); artifact intake
-    is serialised per plan (#73). The ones that still shape the design: one item can be
-    launched twice by two dispatchers on the same plan (#72); work‑item status is written
-    by the plan side rather than projected from the event log (#74); `custom:plan-dispatch`
-    keeps its own fan‑out loop next to `runBranches` (#75). The rest are smaller: #76–#84.
+    rebased onto main. Done: cycle detection ignores `soft` edges (#71); a work‑item claim
+    stops two dispatchers from launching one item twice (#72); artifact intake is
+    serialised per plan (#73). The ones that still shape the design: work‑item status is
+    written by the plan side rather than projected from the event log (#74);
+    `custom:plan-dispatch` keeps its own fan‑out loop next to `runBranches` (#75). The
+    rest are smaller: #76–#84.

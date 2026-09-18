@@ -50,7 +50,7 @@ edges:
 | `custom:plan-register` | decomposition artifact → plan (items, dependencies, risks, decisions) | `artifact`, `plan`, `planName` |
 | `custom:decision-matrix` | score a `decision-matrix` artifact, record the decision, expose `choice` | `artifact`, `decision` (template) |
 | `custom:plan-schedule` | compute the schedule → `vars.schedule` + `schedule.md` | `artifactPath`, `policy`, `record` |
-| `custom:plan-dispatch` | run the item workflow for ready items, dependency‑ordered across the plan | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request` \| `plan`), `onWaiting` (`defer` \| `wait`), `failFast`, `policy` |
+| `custom:plan-dispatch` | run the item workflow for ready items, dependency‑ordered across the plan; claims each item so two dispatchers cannot both launch it | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request` \| `plan`), `onWaiting` (`defer` \| `wait`), `failFast`, `policy` |
 | `custom:plan-await` | (in item workflows) wait for this item's `phase` dependencies | `phase`, `pollMs`, `timeoutMs` |
 
 The plan nodes are described in `docs/PLANNING.md`.
@@ -91,7 +91,15 @@ per item with `itemVar`/`indexVar` in scope:
 An item whose prerequisite failed, was cancelled or was itself skipped never starts: the
 step records a `branch.skipped` event with `reason: dependency` and `join: all` fails. A
 prerequisite parked at a human gate blocks nothing permanently — its dependants simply wait
-for the resume. This is how `workflows/program.yaml` drives a decomposition:
+for the resume.
+
+A branch with a `workItemId` also **claims** that item before it starts (see
+`ClaimStore`): the claim is an atomic compare-and-set outside the event logs, so two
+fan-outs over the same items — a program run and a dispatcher an operator started
+alongside it — cannot both launch one item into two workspaces. The branch that loses the
+claim is skipped with `reason: claimed` and, under `join: all`, its step fails rather than
+reporting work it never did. A run re-claims its own branches, so resume and retry are
+unaffected. This is how `workflows/program.yaml` drives a decomposition:
 
 ```yaml
 dispatch:

@@ -15,6 +15,7 @@
  *                         dependencies for a phase (e.g. `build`) are satisfied.
  */
 import { DecisionMatrixArtifactSchema, DecompositionSchema, evaluateDecisionMatrix, isOpenRisk, planToMermaid, renderDecisionMatrix, riskLevel, riskScore, serializeFrontMatter, succeeded, type CompactSchedule, type CustomNode, type Decision, type DecisionMatrixResult, type PlanOrigin, type RunState, type Schedule, type SchedulingPolicy, type WorkItem } from "@orca/core";
+import { ownsClaim } from "@orca/store";
 import type { PlanSnapshot } from "./service.js";
 import { pausedByChildren } from "../executors/containers.js";
 import { completed, failed, type NodeExecutor, type StepContext, type StepOutcome } from "../executors/types.js";
@@ -305,6 +306,8 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
     /** Children parked at a human gate: this step parks too and re-attaches to them on resume. */
     const parkedChildren = new Map<string, RunState>();
     const deferred = new Map<string, string>();
+    /** Items another dispatcher owns: this step never launches them and never writes their status. */
+    const claimed = new Map<string, string>();
     let stop = false;
     let failure: unknown;
 
@@ -320,6 +323,16 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
 
     const launch = (item: WorkItem, reasons: string[]) => {
       const p = (async () => {
+        // The scheduler offered this item, but `in-progress` is written below - asynchronously,
+        // after the ready set was computed. Two dispatchers over one plan therefore both see it
+        // ready; the claim is what makes exactly one of them launch it.
+        const holder = await ctx.stores.claims.claim({ workItemId: item.id, runId: ctx.run.id, branch: item.slug, stepRunId: ctx.step.id, at: ctx.clock.isoNow() });
+        if (!ownsClaim(holder, ctx.run.id, item.slug)) {
+          claimed.set(item.id, holder.runId);
+          ctx.logger.warn("work item already claimed", { workItem: item.slug, owner: holder.runId });
+          await ctx.stores.plan.journal.append({ type: "dispatch.deferred", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, reason: `claimed by run ${holder.runId}` } });
+          return;
+        }
         if (item.status !== "in-progress") await ctx.plan.updateWorkItem(item.id, { status: "in-progress" }, originOf(ctx));
         const upstream = await ctx.plan.upstreamContext(item.id);
         const state = await ctx.runChild({ workflow: item.workflowId ?? defaultWorkflow }, { workItemId: item.id, branch: item.slug, vars: { workItem: item, upstream, planId: plan.id, plan: plan.key } });
@@ -349,6 +362,10 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
       if (ctx.signal.aborted) return failed("CANCELLED", "cancelled");
       const schedule = await ctx.plan.schedule(plan.id, { inScope, running: [...inFlight.keys()], policy, origin: originOf(ctx) });
       const byId = new Map((await ctx.stores.workItems.list((w) => w.planId === plan.id)).map((w) => [w.id, w]));
+      // An item another dispatcher owns stays "ready" as far as *this* plan is concerned, so it
+      // has to come out of the ready set: otherwise it takes a launch slot every pass and the
+      // loop below never settles.
+      const ready = schedule.ready.filter((r) => !claimed.has(r.workItemId));
 
       for (const u of schedule.unschedulable) {
         const item = byId.get(u.workItemId);
@@ -359,11 +376,11 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
       if (!stop) {
         for (const item of byId.values()) {
           if (inFlight.size >= concurrency) break;
-          if (!resumable.has(item.id) || item.status !== "in-progress" || !inScope(item) || inFlight.has(item.id) || outcomes.has(item.id)) continue;
+          if (!resumable.has(item.id) || item.status !== "in-progress" || !inScope(item) || inFlight.has(item.id) || outcomes.has(item.id) || claimed.has(item.id)) continue;
           await ctx.stores.plan.journal.append({ type: "dispatch.started", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, runId: ctx.run.id, reasons: ["re-attached after an interrupted attempt"] } });
           launch(item, []);
         }
-        for (const r of schedule.ready.slice(0, Math.max(0, concurrency - inFlight.size))) {
+        for (const r of ready.slice(0, Math.max(0, concurrency - inFlight.size))) {
           const item = byId.get(r.workItemId);
           if (!item || inFlight.has(item.id) || outcomes.has(item.id)) continue;
           if (item.deferredReason) await ctx.plan.updateWorkItem(item.id, { deferredReason: null }, originOf(ctx));
@@ -380,7 +397,7 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
         continue;
       }
       const pending = [...schedule.waiting.map((w) => ({ id: w.workItemId, reason: w.waitingOn.map((x) => x.detail).join("; ") })), ...schedule.held.map((h) => ({ id: h.workItemId, reason: h.reason }))];
-      if (stop || pending.length === 0 || schedule.ready.length > 0) break;
+      if (stop || pending.length === 0 || ready.length > 0) break;
       if (n.onWaiting === "wait" && Date.now() < deadline) {
         await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "plan", detail: pending.map((p) => `${byId.get(p.id)?.slug ?? p.id}: ${p.reason}`).join(" | ") } });
         await planChanged(ctx, plan.id, pollMs).promise;
@@ -405,13 +422,14 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
     const summary = finalItems.map((w) => ({
       id: w.id,
       slug: w.slug,
-      status: outcomes.get(w.id)?.status ?? (w.status === "done" ? "done" : w.status === "blocked" ? "blocked" : deferred.has(w.id) ? "deferred" : w.status === "failed" ? "failed" : "skipped"),
+      status: claimed.has(w.id) ? "claimed" : (outcomes.get(w.id)?.status ?? (w.status === "done" ? "done" : w.status === "blocked" ? "blocked" : deferred.has(w.id) ? "deferred" : w.status === "failed" ? "failed" : "skipped")),
       runId: outcomes.get(w.id)?.runId ?? w.runId,
-      reason: deferred.get(w.id) ?? w.deferredReason,
+      reason: claimed.has(w.id) ? `claimed by run ${claimed.get(w.id)}` : (deferred.get(w.id) ?? w.deferredReason),
     }));
-    const counts = { done: 0, failed: 0, blocked: 0, deferred: 0, skipped: 0, paused: 0 };
+    const counts = { done: 0, failed: 0, blocked: 0, deferred: 0, skipped: 0, paused: 0, claimed: 0 };
     for (const s of summary) counts[s.status as keyof typeof counts]++;
-    const outcome = counts.failed || counts.blocked ? "failed" : counts.deferred || counts.skipped ? "partial" : "complete";
+    // An item another dispatcher owns is not this step's failure - it is simply not its work.
+    const outcome = counts.failed || counts.blocked ? "failed" : counts.deferred || counts.skipped || counts.claimed ? "partial" : "complete";
     await ctx.emit({ type: "vars.set", payload: { vars: { dispatched: summary, dispatchOutcome: outcome } } });
     if (outcome === "failed") return failed("RUN_STATE", `${counts.failed + counts.blocked} of ${summary.length} work items did not complete (${counts.failed} failed, ${counts.blocked} blocked)`, { summary, counts });
     return completed({ data: { summary, counts, outcome } });

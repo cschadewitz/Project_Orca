@@ -181,10 +181,19 @@ decisions whose options are fixed in the workflow.
 
 `custom:plan-dispatch` finishes with `vars.dispatchOutcome` = `complete`,
 `partial` (items deferred: waiting on another request, an external, an open
-decision, or held) or fails when items failed/blocked. Deferred items keep
-`deferredReason` and are picked up by the next dispatch that sees them:
-`orca plan dispatch <key>` runs `workflows/plan-resume.yaml`
-(schedule -> gate -> dispatch with `scope: plan`).
+decision, or held; or claimed by another dispatcher) or fails when items
+failed/blocked. Deferred items keep `deferredReason` and are picked up by the
+next dispatch that sees them: `orca plan dispatch <key>` runs
+`workflows/plan-resume.yaml` (schedule -> gate -> dispatch with `scope: plan`).
+
+`plan.policy.concurrency` bounds *one* dispatcher, so it cannot stop two of them —
+a program run dispatching with `scope: request` while an operator runs `orca plan
+dispatch` over the same plan — from both being offered the same ready item. Each
+launch therefore claims its work item first (`ClaimStore`, an atomic
+compare-and-set outside the event logs); the dispatcher that loses the claim
+reports the item as `claimed` in `vars.dispatched`, leaves its WorkItem document
+to the owner, and drops it from its own ready set. A dispatcher re-claims what it
+already owns, so resuming an interrupted dispatch re-attaches as before.
 
 Human gates inside an item run behave as they do everywhere else (`humanInput.mode:
 pause`): the child parks, `plan-dispatch` parks the program run with it (the item stays
@@ -233,12 +242,13 @@ configured `planning.plan`). The read-only ones (`list`, `show`, `schedule`, `ri
 ## Known limitations
 
 Reviewed when the layer was rebased onto main; tracked as issues #71–#84 (label
-`planning`). In short: two dispatchers over one plan can launch the same item twice (#72);
-work‑item status is written directly by the plan side instead of being projected from the
-event log as #70 does for the rest (#74); `custom:plan-dispatch` has its own fan‑out loop
-and does not cancel in‑flight children on `failFast` (#75); `onWaiting: wait` logs a
-`step.waiting` event per poll (#76). See `docs/ROADMAP.md` item 13. Fixed since: cycle
-detection ignores `soft` edges (#71); artifact intake is serialised per plan (#73).
+`planning`). In short: work‑item status is written directly by the plan side instead of
+being projected from the event log as #70 does for the rest (#74); `custom:plan-dispatch`
+has its own fan‑out loop and does not cancel in‑flight children on `failFast` (#75);
+`onWaiting: wait` logs a `step.waiting` event per poll (#76). See `docs/ROADMAP.md` item
+13. Fixed since: cycle detection ignores `soft` edges (#71); a work-item claim stops two
+dispatchers from launching one item twice (#72); artifact intake is serialised per plan
+(#73).
 
 ## Configuration
 
