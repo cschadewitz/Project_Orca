@@ -1,7 +1,7 @@
 /** PlanService without agents: registration across requests, dependency resolution, risks, decisions, artifact intake, scheduling. */
 import { describe, expect, it } from "vitest";
 import { FakeClock, silentLogger, type Artifact, type OrcaEventInput } from "@orca/core";
-import { PlanService, planAwaitExecutor, type PlanAwaitNode, type StepContext } from "@orca/engine";
+import { PlanService, planAwaitExecutor, projectWorkItems, type PlanAwaitNode, type StepContext } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
 const human = { kind: "human" as const, actor: "test" };
@@ -175,6 +175,45 @@ describe("PlanService", () => {
     expect(s.ready.map((r) => r.slug)).toEqual(["x", "y"]);
     expect(reg.items[0]!.priority).toBe("normal");
     expect((await plan.journalOf(p.id)).filter((e) => e.type === "risk.updated")).toHaveLength(1);
+  });
+
+  it("follows the run-log projection: journals what it wrote, and never overwrites a projected status", async () => {
+    const { plan, stores, clock } = make();
+    const p = await plan.ensurePlan({ key: "proj" });
+    const reg = await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "up", title: "Up" }, { slug: "down", title: "Down", dependsOn: ["up"] }, { slug: "orphan", title: "Orphan", dependsOn: ["external:legal"] }] }, { kind: "decomposition" });
+    const [up, down, orphan] = reg.items;
+
+    // A dispatch step's log: `up` spawned and finished, `down` never started.
+    const state = {
+      stepOrder: ["step_1"],
+      steps: { step_1: { skippedBranches: [], children: [{ runId: "run_up", workItemId: up!.id, status: "completed", outcome: "success" }] } },
+    } as never;
+    const changes = await projectWorkItems(stores, state, clock.isoNow());
+    expect(changes).toEqual([expect.objectContaining({ previous: "pending", changes: { status: "done", runId: "run_up" } })]);
+    await plan.onWorkItemsProjected(changes, "run_program");
+
+    // The journal holds the transition the documents show ...
+    const updates = (await plan.journalOf(p.id)).filter((e) => e.type === "work-item.updated");
+    expect(updates).toEqual([expect.objectContaining({ origin: { kind: "system", runId: "run_program" }, payload: { workItemId: up!.id, changes: { status: "done", runId: "run_up", from: "pending" } } })]);
+    // ... and the dependency it cleared was reconciled by the same hook.
+    expect((await plan.snapshot(p.id)).dependencies.find((d) => d.from === down!.id)).toMatchObject({ status: "satisfied" });
+
+    // A deferral marks an item the scheduler cannot offer, and is idempotent.
+    await plan.deferWorkItem(orphan!.id, "waiting on external 'legal'", { blocked: true });
+    await plan.deferWorkItem(orphan!.id, "waiting on external 'legal'", { blocked: true });
+    expect(await stores.workItems.get(orphan!.id)).toMatchObject({ status: "blocked", deferredReason: "waiting on external 'legal'" });
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "dispatch.deferred")).toHaveLength(1);
+
+    // But it refuses to walk back over a status the projection wrote.
+    await plan.deferWorkItem(up!.id, "held for risk", { blocked: true });
+    expect(await stores.workItems.get(up!.id)).toMatchObject({ status: "done", deferredReason: "held for risk" });
+
+    // Starting a deferred item clears the reason as part of the projection, not as a separate write.
+    const restart = { stepOrder: ["step_2"], steps: { step_2: { skippedBranches: [], children: [{ runId: "run_orphan", workItemId: orphan!.id }] } } } as never;
+    expect(await projectWorkItems(stores, restart, clock.isoNow())).toEqual([expect.objectContaining({ changes: { status: "in-progress", runId: "run_orphan", deferredReason: null } })]);
+    const started = (await stores.workItems.get(orphan!.id))!;
+    expect(started.status).toBe("in-progress");
+    expect(started.deferredReason).toBeUndefined();
   });
 
   it("custom:plan-await waits for build-phase dependencies and wakes when the plan changes", async () => {

@@ -26,7 +26,9 @@ One deliverable slice. `slug` is stable and human‑readable (used in artifact p
 branch names; unique per plan). `dependsOn` holds the dependency *references* as written
 (see below); once registered, `Dependency` records are authoritative. `parentId` builds an
 epic → feature → task tree. `status` moves `pending → in-progress → done | failed | blocked`.
-`runId` links to the SDLC run that delivered it. Planning fields: `planId`, `priority`
+`runId` links to the SDLC run that delivered it. Both are *projected* from the dispatching
+run's event log rather than written by the dispatcher (`blocked` excepted - see
+`docs/PLANNING.md`). Planning fields: `planId`, `priority`
 (`critical | high | normal | low`), `produced` (artifact kind → newest artifact id, what
 stage‑level dependencies test) and `deferredReason`. The `decomposition` artifact's front
 matter (`DecompositionSchema`: `items[]`, `risks[]`, `decisions[]`, `rationale`) is the

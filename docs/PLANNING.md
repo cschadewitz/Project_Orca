@@ -179,6 +179,16 @@ into a `schedule` artifact for the gate and exposes as `vars.schedule`.
 The `decision` node also accepts `source: { kind: matrix, artifact }` for
 decisions whose options are fixed in the workflow.
 
+`custom:plan-dispatch` does **not** write the items' `status` / `runId`. Those are a
+projection of the dispatch step's own log (`child.spawned` / `child.finished`, ADR 0001 and
+`engine/program/work-items.ts`); the plan side journals each transition the projection makes
+(`work-item.updated`) and re-evaluates the dependencies it clears, so `orca plan journal` and
+`orca plan show` cannot disagree even if the process dies between a child finishing and the
+dispatch step resuming. The one status no run log can produce is `blocked` - an item the
+scheduler refused to start never gets a branch - and that one the plan owns, through
+`PlanService.deferWorkItem`, which writes the reason and journals `dispatch.deferred`
+together and never overwrites a status the projection set.
+
 `custom:plan-dispatch` finishes with `vars.dispatchOutcome` = `complete`,
 `partial` (items deferred: waiting on another request, an external, an open
 decision, or held; or claimed by another dispatcher) or fails when items
@@ -242,13 +252,12 @@ configured `planning.plan`). The read-only ones (`list`, `show`, `schedule`, `ri
 ## Known limitations
 
 Reviewed when the layer was rebased onto main; tracked as issues #71–#84 (label
-`planning`). In short: work‑item status is written directly by the plan side instead of
-being projected from the event log as #70 does for the rest (#74); `custom:plan-dispatch`
-has its own fan‑out loop and does not cancel in‑flight children on `failFast` (#75);
-`onWaiting: wait` logs a `step.waiting` event per poll (#76). See `docs/ROADMAP.md` item
-13. Fixed since: cycle detection ignores `soft` edges (#71); a work-item claim stops two
-dispatchers from launching one item twice (#72); artifact intake is serialised per plan
-(#73).
+`planning`). In short: `custom:plan-dispatch` has its own fan‑out loop and does not cancel
+in‑flight children on `failFast` (#75); `onWaiting: wait` logs a `step.waiting` event per
+poll (#76). See `docs/ROADMAP.md` item 13. Fixed since: cycle detection ignores `soft`
+edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
+artifact intake is serialised per plan (#73); work‑item status is projected from the event
+log, with the plan side following it (#74).
 
 ## Configuration
 

@@ -321,11 +321,16 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
       for (const c of s.children) if (c.workItemId) resumable.add(c.workItemId);
     }
 
+    // The item's `status` / `runId` are not written here: `ctx.runChild` records `child.spawned`
+    // and `child.finished` on this step, and the run-log projection turns those into
+    // `in-progress` / `done` / `failed` / `cancelled` (engine/program/work-items.ts), journalling
+    // each transition. One writer, so a crash between the child finishing and this step resuming
+    // cannot leave the plan's view and the log's view disagreeing.
     const launch = (item: WorkItem, reasons: string[]) => {
       const p = (async () => {
-        // The scheduler offered this item, but `in-progress` is written below - asynchronously,
-        // after the ready set was computed. Two dispatchers over one plan therefore both see it
-        // ready; the claim is what makes exactly one of them launch it.
+        // The scheduler offered this item, but `in-progress` only lands once `child.spawned` is
+        // projected - asynchronously, after the ready set was computed. Two dispatchers over one
+        // plan therefore both see it ready; the claim is what makes exactly one of them launch it.
         const holder = await ctx.stores.claims.claim({ workItemId: item.id, runId: ctx.run.id, branch: item.slug, stepRunId: ctx.step.id, at: ctx.clock.isoNow() });
         if (!ownsClaim(holder, ctx.run.id, item.slug)) {
           claimed.set(item.id, holder.runId);
@@ -333,7 +338,6 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
           await ctx.stores.plan.journal.append({ type: "dispatch.deferred", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, reason: `claimed by run ${holder.runId}` } });
           return;
         }
-        if (item.status !== "in-progress") await ctx.plan.updateWorkItem(item.id, { status: "in-progress" }, originOf(ctx));
         const upstream = await ctx.plan.upstreamContext(item.id);
         const state = await ctx.runChild({ workflow: item.workflowId ?? defaultWorkflow }, { workItemId: item.id, branch: item.slug, vars: { workItem: item, upstream, planId: plan.id, plan: plan.key } });
         if (state.run.status === "paused") {
@@ -344,9 +348,7 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
         }
         const ok = succeeded(state);
         outcomes.set(item.id, { status: ok ? "done" : "failed", runId: state.run.id });
-        await ctx.plan.updateWorkItem(item.id, { status: ok ? "done" : state.run.status === "cancelled" ? "cancelled" : "failed", runId: state.run.id }, { kind: "system", runId: state.run.id });
         await ctx.stores.plan.journal.append({ type: "dispatch.finished", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, runId: state.run.id, status: ok ? "done" : "failed" } });
-        await ctx.plan.reconcile(plan.id, originOf(ctx));
         if (!ok && n.failFast) stop = true;
       })()
         .catch((e: unknown) => {
@@ -369,9 +371,8 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
 
       for (const u of schedule.unschedulable) {
         const item = byId.get(u.workItemId);
-        if (!item || outcomes.has(item.id) || item.status === "blocked") continue;
-        await ctx.plan.updateWorkItem(item.id, { status: "blocked", deferredReason: u.reason }, originOf(ctx));
-        await ctx.stores.plan.journal.append({ type: "dispatch.deferred", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, reason: u.reason } });
+        if (!item || outcomes.has(item.id)) continue;
+        await ctx.plan.deferWorkItem(item.id, u.reason, { blocked: true }, originOf(ctx));
       }
       if (!stop) {
         for (const item of byId.values()) {
@@ -383,7 +384,7 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
         for (const r of ready.slice(0, Math.max(0, concurrency - inFlight.size))) {
           const item = byId.get(r.workItemId);
           if (!item || inFlight.has(item.id) || outcomes.has(item.id)) continue;
-          if (item.deferredReason) await ctx.plan.updateWorkItem(item.id, { deferredReason: null }, originOf(ctx));
+          await ctx.plan.clearDeferral(item.id, originOf(ctx));
           await ctx.stores.plan.journal.append({ type: "dispatch.started", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, runId: ctx.run.id, reasons: r.priority.reasons } });
           launch(item, r.priority.reasons);
         }
@@ -405,11 +406,7 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
       }
       for (const p of pending) {
         deferred.set(p.id, p.reason);
-        const item = byId.get(p.id);
-        if (item && item.deferredReason !== p.reason) {
-          await ctx.plan.updateWorkItem(item.id, { deferredReason: p.reason }, originOf(ctx));
-          await ctx.stores.plan.journal.append({ type: "dispatch.deferred", planId: plan.id, origin: originOf(ctx), payload: { workItemId: item.id, reason: p.reason } });
-        }
+        await ctx.plan.deferWorkItem(p.id, p.reason, {}, originOf(ctx));
       }
       break;
     }

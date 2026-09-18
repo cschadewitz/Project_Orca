@@ -7,7 +7,7 @@
 import { applyEvent, latestStepForNode, OrcaError, reduceRun, type Artifact, type Clock, type Logger, type OrcaEvent, type OrcaEventInput, type Request, type Run, type RunState, type RunStatus, type WorkItem, type WorkflowDefinition, type Workspace } from "@orca/core";
 import type { Stores } from "@orca/store";
 import type { ResolvedArtifact } from "./executors/types.js";
-import { projectWorkItems } from "./program/work-items.js";
+import { projectWorkItems, type ProjectedWorkItem } from "./program/work-items.js";
 
 /** Events that change what a fan-out step knows about its branches - and so, about its work items. */
 const BRANCH_EVENTS = new Set<string>(["child.spawned", "child.finished", "branch.skipped"]);
@@ -15,12 +15,22 @@ const BRANCH_EVENTS = new Set<string>(["child.spawned", "child.finished", "branc
 /** Run statuses a child can no longer leave on its own. */
 const FINISHED: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "failed", "cancelled"]);
 
+/**
+ * What the projection tells the planning layer once it has written. `PlanService` implements
+ * it; taking the hook as an interface keeps the engine's core free of a plan-layer import.
+ */
+export interface WorkItemProjectionSink {
+  onWorkItemsProjected(changes: readonly ProjectedWorkItem[], runId: string): Promise<void>;
+}
+
 export interface RunContextDeps {
   stores: Stores;
   clock: Clock;
   logger: Logger;
   /** Load another run's state (parents/children) - provided by the orchestrator. */
   loadState(runId: string): Promise<RunState>;
+  /** Notified of the work-item transitions each projection writes, if this deployment plans. */
+  plan?: WorkItemProjectionSink;
 }
 
 export class RunContext {
@@ -64,7 +74,8 @@ export class RunContext {
    * safe - and on resume, necessary - to recompute them from the events alone.
    */
   async syncWorkItems(): Promise<void> {
-    await projectWorkItems(this.deps.stores, this.state, this.deps.clock.isoNow());
+    const changes = await projectWorkItems(this.deps.stores, this.state, this.deps.clock.isoNow());
+    if (changes.length && this.deps.plan) await this.deps.plan.onWorkItemsProjected(changes, this.id);
   }
 
   async request(): Promise<Request | undefined> {
