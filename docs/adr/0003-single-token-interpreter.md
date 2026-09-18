@@ -8,9 +8,10 @@ engine with join semantics inside one run is large and hard to reason about.
 
 ## Decision
 One run executes one node at a time. `loop`, `parallel` and `subworkflow` spawn **child
-runs** (own id, own log, parent links) and wait. `parallel` is the *only* fan-out engine:
+runs** (own id, own log, parent links) and wait. `parallel` is the fan-out engine:
 `forEach.dependsOn` makes it a small DAG, so the program level needs no fan-out node of
-its own.
+its own — with one exception today: `custom:plan-dispatch` keeps its own launch loop
+because its branch set is recomputed from the live plan (#75).
 Inline nested graphs are addressable (`parent::node::branch`) so they resolve on resume.
 Graph back‑edges are allowed for simple retry loops, bounded by vars.
 

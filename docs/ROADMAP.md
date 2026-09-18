@@ -37,4 +37,6 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     serialised per plan (#73); work‑item status is projected from the event log, with the
     plan side following it (#74). The one that still shapes the design:
     `custom:plan-dispatch` keeps its own fan‑out loop next to `runBranches` (#75). The
-    rest are smaller: #76–#84.
+    rest are smaller: #76–#84, plus #87 (event `seq` is assigned from an in‑process cache,
+    so two processes over one store collide) and #88 (no command releases a dead run's
+    work‑item claims), both found while adding the claim for #72.
