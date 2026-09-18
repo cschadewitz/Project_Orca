@@ -2,7 +2,7 @@
 
 All types are zod schemas in `packages/core/src/model/` and exported from `@orca/core`.
 Identifiers are prefixed ULIDs (`req_…`, `wi_…`, `run_…`, `step_…`, `art_…`, `evt_…`, `sess_…`,
-`plan_…`, `dep_…`, `risk_…`, `dec_…`, `pev_…`).
+`plan_…`, `dep_…`, `risk_…`, `dec_…`, `pev_…`, `hi_…` for human‑input requests).
 
 ```
 Plan 1──* Request 1──* WorkItem 1──? Run 1──* StepRun 1──* Artifact
@@ -25,7 +25,8 @@ The large ask. `source` records where it came from (`manual`, `issue`, `kepler-t
 One deliverable slice. `slug` is stable and human‑readable (used in artifact paths and
 branch names; unique per plan). `dependsOn` holds the dependency *references* as written
 (see below); once registered, `Dependency` records are authoritative. `parentId` builds an
-epic → feature → task tree. `status` moves `pending → in-progress → done | failed | blocked`.
+epic → feature → task tree. `status` moves `pending → in-progress → done | failed | cancelled | blocked` (the schema
+also declares `ready`, which nothing writes today).
 `runId` links to the SDLC run that delivered it. Both are *projected* from the dispatching
 run's event log rather than written by the dispatcher (`blocked` excepted - see
 `docs/PLANNING.md`). Planning fields: `planId`, `priority`
@@ -38,7 +39,7 @@ agent‑facing shape that `custom:plan-register` turns into plan records.
 
 | entity | fields worth knowing |
 | --- | --- |
-| `Plan` | `key`, `requestIds`, `policy` (`strategy`, `concurrency`, `riskAppetite`, `holdAboveAppetite`, `mitigateFirst`, `weights`), `riskMatrix` (`scale`, `thresholds`) |
+| `Plan` | `key`, `requestIds`, `policy` (`strategy`, `concurrency`, `riskAppetite`, `holdAboveAppetite`, `mitigateFirst`, `orderSoftDependencies`, `weights`), `riskMatrix` (`scale`, `thresholds`) |
 | `Dependency` | `from` (item id), `target` (`{kind: work-item, workItemId, stage?}` \| `{kind: decision, decisionId}` \| `{kind: external, key}`), `type` (`blocks` \| `soft` \| `informs`), `requiredBy` (phase, default `start`), `status` (`open` \| `satisfied` \| `failed` \| `waived`), `origin`, `resolution` |
 | `Risk` | `key`, `category`, `likelihood`, `impact`, `status` (`open → mitigating → mitigated | accepted | realized → closed`), `mitigation`, `contingency`, `triggers`, `affects[]`, `mitigatedBy[]` |
 | `Decision` | `key`, `question`, `criteria[]` (`weight`, `direction`), `options[]` (`scores{}`), `scale`, `result` (ranking, margin, confidence, pivotal criteria), `chosen`, `decidedBy` (`matrix` \| `agent` \| `human`), `blocks[]` |
@@ -55,16 +56,19 @@ Dependency references (`DependencyRef`, string or `{ on, type, stage, requiredBy
 agent | human | api | system` (+ `runId`, `artifactId`, `actor`). Types: `plan.created/updated`,
 `request.linked`, `work-item.added/updated`, `dependency.added/resolved/bound`,
 `risk.raised/updated`, `signals.rejected`, `decision.opened/updated/resolved`, `schedule.computed`,
-`dispatch.started/finished/deferred`. Stored as `plans/<planId>.jsonl`.
+`dispatch.started/finished/deferred`. Stored as `plans/<planId>.jsonl`, sequenced on disk the
+same way as a run's event log: an append holds `plans/<planId>.jsonl.lock` while it numbers
+and writes the record, so two processes over one store extend one journal.
 
 ## Artifact (`model/artifact.ts`)
 
 | field | meaning |
 | --- | --- |
-| `kind` | kebab‑case category: `intent`, `spec`, `plan`, `implementation`, `test-report`, `review`, `deploy-report`, `decomposition`, `decision`, `risk-register`, `decision-matrix`, `schedule`, `generic`, or any plugin‑registered kind |
+| `kind` | kebab‑case category: `intent`, `spec`, `plan`, `implementation`, `test-report`, `review`, `deploy-report`, `decomposition`, `decision`, `risk-register`, `decision-matrix`, `schedule`, `request`, `metrics-report`, `generic`, or any plugin‑registered kind |
 | `name` | logical name within a run (`testReport`, `review`); defaults to kind |
 | `version` | increments each time a step produces an artifact with the same name (re‑runs, loops) |
 | `path` | where it was materialised on the host (absolute) |
+| `mediaType` | taken from the deliverable's `mediaType`, default `text/markdown` |
 | `contentHash` / `size` | content‑addressed blob in the ArtifactStore |
 | `data` | structured part: YAML front matter (or the JSON body for `.json`) |
 | `producedBy` | run, step, node, agent session, agent id, host id |
@@ -98,7 +102,9 @@ outcome, `workspace` (host id + cwd + repo/branch), `vars`, and parent links.
 input artifact ids (accumulated from `step.inputs` as the executor resolves them), `result` (`choice`, `outcome`, `message`, `artifactIds`, `data`), error, child run ids.
 `children` lists the same child runs with their `branch` key (loop index, branch name, work‑item
 slug), last known status/outcome, and `resumed: true` when a re‑attempted step re‑attached to a
-child spawned by the interrupted attempt instead of spawning a new one.
+child spawned by the interrupted attempt instead of spawning a new one. `skippedBranches`
+lists the branches the step decided not to run (`reason`: `dependency`, `claimed`, …);
+the WorkItem projection reads it alongside `children`.
 `RunState` is the projection: run, steps (+ order), artifacts, human‑input requests, last seq.
 
 ## Events (`events/events.ts`)
@@ -109,7 +115,7 @@ Every event is `{ id, seq, runId, at, type, payload }`. Types:
 - step: `scheduled started inputs waiting completed failed cancelled skipped`
 - agent: `session.opened turn.started update permission turn.completed session.closed`
 - `artifact.recorded`, `artifact.rejected`, `plan.signals.rejected`
-- `decision.resolved`, `loop.iteration`, `child.spawned`, `child.finished`
+- `decision.resolved`, `loop.iteration`, `child.spawned`, `child.finished`, `branch.skipped`
 - `human.requested`, `human.answered`
 
 `agent.update` stores a compact `AgentUpdateSummary` (kind, text, tool call id/title/kind/status,
@@ -126,13 +132,16 @@ Built by `RunContext.evalContext()` (`packages/engine/src/run-context.ts`):
 | `artifactsByKind` | newest visible artifact per **kind** |
 | `inputs` | (agent steps) the node's resolved `inputs:` keyed by `as` alias |
 | `steps` | latest StepRun per node id in this run |
+| `step` | the StepRun being executed (and, while routing, `result` = its result) |
 | `choice` | most recent decision choice in this run |
 | `iteration`, `item`, `index` | loop scope (also present in `vars`) |
 | `request`, `workItem`, `workspace`, `run`, `now` | context records |
 | `deliverables` | (agent steps) the planned outputs with absolute paths |
-| `vars.schedule` | (after `custom:plan-schedule`) compact schedule: `ready[]`, `waiting[]`, `held[]`, `unschedulable[]`, `waves`, `criticalPath`, `risk`, `openDecisions` |
-| `vars.upstream` | (item runs in a plan) upstream items this item depends on, with their artifacts (`slug`, `status`, `type`, `stage`, `requiredBy`, `artifacts{kind: {path, data}}`) |
+| `vars.schedule` | (after `custom:plan-schedule`) compact schedule: `ready[]`, `waiting[]`, `held[]`, `unschedulable[]`, `waves`, `criticalPath` + `criticalPathLength` (remaining work only), `risk`, `openDecisions` (each with the items its still-waiting `blocks` dependencies hold back) |
+| `vars.upstream` | (item runs in a plan) upstream items this item depends on, with their artifacts (`slug`, `title`, `status`, `type`, `stage`, `requiredBy`, `artifacts{kind: {id, path, data}}`) |
 | `vars.openDecisions`, `vars.decision` | (program) decisions to make; the current one inside the `decide` loop |
+| `vars.planId`, `vars.plan`, `vars.workItems`, `vars.workItemIds`, `vars.registration` | (after `custom:plan-register`) the plan and the items this request registered |
+| `vars.dispatched`, `vars.dispatchOutcome` | (after `custom:plan-dispatch`) per‑item summary (`status`, `runId`, `reason`) and `complete` \| `partial` \| `failed` |
 
 Visibility of artifacts is own run + all ancestors + all descendants + each
 ancestor's *earlier siblings* (children of the same container step that were

@@ -435,8 +435,9 @@ export class PlanService {
    * *and* into the journal, in one place, so a dispatch summary can never describe a deferral
    * the journal does not hold. Idempotent.
    *
-   * `blocked` is the one status the plan side owns - an item the scheduler refuses to start
-   * never gets a run branch, so the run-log projection has nothing to say about it. The guard
+   * Under plan dispatch `blocked` is the one status the plan side owns - an item the scheduler
+   * refuses to start never gets a run branch, so the run-log projection has nothing to say
+   * about it. The guard
    * makes that explicit: a status the projection wrote is never overwritten here.
    */
   async deferWorkItem(workItemId: string, reason: string, opts: { blocked?: boolean } = {}, origin: PlanOrigin = SYSTEM): Promise<void> {
@@ -732,6 +733,10 @@ export class PlanService {
    * Run the matrix (when criteria and options exist) and decide. An explicit
    * `chosen` wins when it names a known option; otherwise the top-ranked option
    * is chosen. Dependencies on the decision are reconciled afterwards.
+   *
+   * Idempotent for a decision already `decided` the same way: nothing is
+   * journalled or reconciled again (a new `rationale` is still recorded). A
+   * *different* choice re-decides, e.g. a human overriding via `orca plan decide`.
    */
   async evaluateDecision(planId: string, keyOrId: string, opts: { chosen?: string; decidedBy?: Decision["decidedBy"]; rationale?: string } = {}, origin: PlanOrigin = SYSTEM): Promise<{ decision: Decision; result?: DecisionMatrixResult; choice: string }> {
     return this.withPlan(planId, () => this.evaluateDecisionLocked(planId, keyOrId, opts, origin));
@@ -747,6 +752,20 @@ export class PlanService {
     const explicit = opts.chosen && (optionKeys.length === 0 || optionKeys.includes(opts.chosen)) ? opts.chosen : undefined;
     const choice = explicit ?? result?.recommended;
     if (!choice) throw new OrcaError("PLAN_INVALID", `decision '${cur.key}' has no options to choose from${opts.chosen ? ` ('${opts.chosen}' is not one of ${optionKeys.join(", ")})` : ""}`);
+    if (cur.status === "decided" && cur.chosen === choice) {
+      // Already decided this way. The usual route here is the decide loop: the agent's
+      // `decision-matrix` artifact carried a valid `chosen`, so intake at `artifact.recorded`
+      // decided it, and the `custom:decision-matrix` node that follows submits the same
+      // choice (#79). One `decision.resolved` per resolution, one reconcile - not two.
+      let decision = cur;
+      if (opts.rationale && opts.rationale !== cur.rationale) {
+        decision = { ...cur, rationale: opts.rationale, updatedAt: now };
+        await this.stores.plan.decisions.put(decision);
+        await this.journal({ type: "decision.updated", planId, origin, payload: { decisionId: cur.id, changes: { rationale: opts.rationale } } });
+      }
+      const kept = decision.result ?? result;
+      return { decision, choice, ...(kept ? { result: kept } : {}) };
+    }
     const decidedBy: Decision["decidedBy"] = explicit ? (opts.decidedBy ?? "agent") : "matrix";
     const decision: Decision = { ...cur, status: "decided", chosen: choice, decidedBy, updatedAt: now, decidedAt: now, ...(result ? { result } : {}), ...(opts.rationale ? { rationale: opts.rationale } : {}) };
     await this.stores.plan.decisions.put(decision);
