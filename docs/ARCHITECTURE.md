@@ -131,8 +131,10 @@ back to `build` with the review as an extra input. That *is* the hand‑off.
   Kepler task worktree, or the current directory). Items waiting on other
   requests are deferred and picked up by `workflows/plan-resume.yaml`
   (`orca plan dispatch`). Unlike a `parallel` fan‑out, the set of branches is
-  not known up front: it is re‑computed from the live plan, which is why this
-  node keeps its own scheduling loop on top of `ctx.runChild`.
+  not known up front: it is re‑computed from the live plan on every wake, which
+  is why this node drives the fan‑out itself — over the same `FanOut`
+  (`executors/containers.ts`), so concurrency, cancellation and `failFast` behave
+  as they do in `parallel`.
 - `summarize` (agent) → a program summary artifact.
 
 A `WorkItem`'s `status` is a **projection** of that fan-out, not a side-write:
