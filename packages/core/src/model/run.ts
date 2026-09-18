@@ -63,13 +63,14 @@ export const ChildRunLinkSchema = z.object({
 export type ChildRunLink = z.infer<typeof ChildRunLinkSchema>;
 
 /** Why a fan-out branch never became a child run. */
-export const BranchSkipReasonSchema = z.enum(["dependency", "failFast"]);
+export const BranchSkipReasonSchema = z.enum(["dependency", "failFast", "claimed"]);
 export type BranchSkipReason = z.infer<typeof BranchSkipReasonSchema>;
 
 /**
- * A branch of a fan-out step that was never started: either a prerequisite branch did not
- * succeed (`dependency`) or a sibling already settled the join under `failFast`. Recorded so
- * the *whole* fan-out - not just the part that ran - is reconstructible from the event log.
+ * A branch of a fan-out step that was never started: a prerequisite branch did not succeed
+ * (`dependency`), a sibling already settled the join under `failFast`, or the work item the
+ * branch stands for is already owned by another run (`claimed`). Recorded so the *whole*
+ * fan-out - not just the part that ran - is reconstructible from the event log.
  */
 export const SkippedBranchSchema = z.object({
   branch: z.string(),

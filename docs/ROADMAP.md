@@ -9,8 +9,8 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    over the wire and keep agent sessions alive across the wait.
 2. **T3 Code WebSocket transport** — implement `T3CodeRpc` over T3's Effect‑RPC envelope and
    depend on `@t3tools/contracts`; map `thread.meta-updated.worktreePath` into the workspace.
-3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore` over `node:sqlite` for
-   large histories; JSONL remains the reviewable default.
+3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore`/`ClaimStore` over
+   `node:sqlite` for large histories; JSONL remains the reviewable default.
 4. **Maintain stage** — a `custom:metrics-watch` node (or a scheduled trigger) that turns
    breached production controls into new Requests, closing the playbook's loop.
 5. **Remote workspace sync** — optional rsync/`git push` step for SSH hosts that do not share

@@ -33,7 +33,7 @@ export default definePlugin({
 | Host type (containers, cloud sandboxes) | `AgentHost` → `api.agents.addHost()` | `agents/host.ts` |
 | Where work happens | `WorkspaceProvider` → `api.setWorkspaceProvider()` | `engine/workspace/provider.ts` |
 | Human channel (Slack, web UI, upstream ACP) | `HumanInputPort` → `api.setHumanInput()` | `engine/human-input.ts` |
-| Persistence (SQLite, Postgres) | `EventStore`, `ArtifactStore`, `DocumentStore` | `store/*.ts` |
+| Persistence (SQLite, Postgres) | `EventStore`, `ArtifactStore`, `DocumentStore`, `ClaimStore` | `store/*.ts` |
 | Expression functions | `evaluateExpression(src, ctx, { functions })` | `core/expr/evaluate.ts` |
 | Observability | `orchestrator.subscribe()` on the event stream | `store/event-store.ts` |
 
