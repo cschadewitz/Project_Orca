@@ -5,9 +5,15 @@
  * where the adapter's behaviour is pinned down.
  */
 import { describe, expect, it, vi } from "vitest";
-import type { AgentSpec, HostSpec } from "@orca/core";
+import type { AgentSpec } from "@orca/core";
 import type { AgentHost } from "@orca/agents";
-import { openT3CodeSession, T3_WS_METHODS, UnimplementedT3CodeRpc, type T3CodeRpc, type T3ThreadEvent } from "@orca/integrations";
+import {
+  openT3CodeSession,
+  T3_WS_METHODS,
+  UnimplementedT3CodeRpc,
+  type T3CodeRpc,
+  type T3ThreadEvent,
+} from "@orca/integrations";
 
 /** Records every dispatched command and hands the test the event callback the adapter subscribed with. */
 function fakeRpc() {
@@ -25,17 +31,24 @@ function fakeRpc() {
       return unsubscribe;
     },
   };
-  return { rpc, calls, unsubscribe, emit: (e: T3ThreadEvent) => emit(e), commands: () => calls.filter((c) => c.method === T3_WS_METHODS.dispatchCommand).map((c) => c.payload.type ?? "") };
+  return {
+    rpc,
+    calls,
+    unsubscribe,
+    emit: (e: T3ThreadEvent) => emit(e),
+    commands: () => calls.filter((c) => c.method === T3_WS_METHODS.dispatchCommand).map((c) => c.payload.type ?? ""),
+  };
 }
 
 const base = {
   agent: { id: "t3", hostId: "local" } as AgentSpec,
-  host: { id: "local", spec: { id: "local", type: "local" } as HostSpec } as AgentHost,
+  host: { id: "local", spec: { id: "local", type: "local" } } as AgentHost,
   cwd: "/work",
   clock: { now: () => 1_000, isoNow: () => "2026-01-01T00:00:00.000Z" },
 };
 
-const open = (rpc: T3CodeRpc) => openT3CodeSession(base, { rpc, projectId: "proj_1", modelSelection: { instanceId: "codex", model: "gpt-5" } });
+const open = (rpc: T3CodeRpc) =>
+  openT3CodeSession(base, { rpc, projectId: "proj_1", modelSelection: { instanceId: "codex", model: "gpt-5" } });
 
 /** The thread goes idle: what the adapter reads as "the turn is over". */
 const idle: T3ThreadEvent = { type: "thread.session-set", payload: { session: { activeTurnId: null } } };
@@ -44,15 +57,27 @@ describe("openT3CodeSession", () => {
   it("creates a thread and subscribes to it, reporting the thread as the ACP session id", async () => {
     const { rpc, calls } = fakeRpc();
     const session = await open(rpc);
-    expect(calls[0]).toMatchObject({ method: T3_WS_METHODS.dispatchCommand, payload: { type: "thread.create", projectId: "proj_1", title: "orca t3", runtimeMode: "full-access" } });
-    expect(calls[1]).toMatchObject({ method: T3_WS_METHODS.subscribeThread, payload: { threadId: calls[0]!.payload.threadId } });
+    expect(calls[0]).toMatchObject({
+      method: T3_WS_METHODS.dispatchCommand,
+      payload: { type: "thread.create", projectId: "proj_1", title: "orca t3", runtimeMode: "full-access" },
+    });
+    expect(calls[1]).toMatchObject({
+      method: T3_WS_METHODS.subscribeThread,
+      payload: { threadId: calls[0]!.payload.threadId },
+    });
     expect(session.acpSessionId).toBe(calls[0]!.payload.threadId);
     expect(session).toMatchObject({ agentId: "t3", hostId: "local", cwd: "/work" });
   });
 
   it("takes the title and runtime mode from its options", async () => {
     const { rpc, calls } = fakeRpc();
-    await openT3CodeSession(base, { rpc, projectId: "proj_1", modelSelection: { instanceId: "codex", model: "gpt-5" }, title: "Review", runtimeMode: "read-only" });
+    await openT3CodeSession(base, {
+      rpc,
+      projectId: "proj_1",
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      title: "Review",
+      runtimeMode: "read-only",
+    });
     expect(calls[0]!.payload).toMatchObject({ title: "Review", runtimeMode: "read-only" });
   });
 
@@ -68,7 +93,11 @@ describe("openT3CodeSession", () => {
   it("joins a structured prompt into one text block, ignoring what is not text", async () => {
     const { rpc, emit, calls } = fakeRpc();
     const session = await open(rpc);
-    const turn = session.prompt([{ type: "text", text: "one" }, { type: "image" } as never, { type: "text", text: "two" }]);
+    const turn = session.prompt([
+      { type: "text", text: "one" },
+      { type: "image" } as never,
+      { type: "text", text: "two" },
+    ]);
     await vi.waitFor(() => expect(calls.some((c) => c.payload.type === "thread.turn.start")).toBe(true));
     expect(calls.find((c) => c.payload.type === "thread.turn.start")!.payload.text).toBe("one\n\ntwo");
     emit(idle);
@@ -135,7 +164,10 @@ describe("openT3CodeSession", () => {
 
     emit({ type: "thread.message-sent", payload: { role: "assistant", text: "hello" } });
     emit({ type: "thread.message-sent", payload: { role: "user", text: "ignored" } });
-    emit({ type: "thread.activity-appended", payload: { activity: { kind: "edit", summary: "Edited a file", tone: "tool" } } });
+    emit({
+      type: "thread.activity-appended",
+      payload: { activity: { kind: "edit", summary: "Edited a file", tone: "tool" } },
+    });
     emit({ type: "thread.activity-appended", payload: { activity: { kind: "thinking" } } });
     emit({ type: "thread.activity-appended", payload: {} });
     emit({ type: "thread.something-else", payload: {} });
@@ -174,7 +206,10 @@ describe("openT3CodeSession", () => {
 describe("UnimplementedT3CodeRpc", () => {
   it("names the transport that is still missing", async () => {
     const rpc = new UnimplementedT3CodeRpc("ws://localhost:1234");
-    await expect(rpc.call()).rejects.toMatchObject({ code: "NOT_SUPPORTED", message: expect.stringContaining("ws://localhost:1234") });
+    await expect(rpc.call()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringContaining("ws://localhost:1234"),
+    });
     expect(() => rpc.subscribe()).toThrow(/not implemented yet/);
   });
 });

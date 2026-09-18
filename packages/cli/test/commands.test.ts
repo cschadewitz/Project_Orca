@@ -14,10 +14,22 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
-function ctx(cwd: string, positionals: string[], flags: CommandContext["flags"] = {}): CommandContext & { lines: string[]; errs: string[] } {
+function ctx(
+  cwd: string,
+  positionals: string[],
+  flags: CommandContext["flags"] = {},
+): CommandContext & { lines: string[]; errs: string[] } {
   const lines: string[] = [];
   const errs: string[] = [];
-  return { cwd, flags: { quiet: true, ...flags }, positionals, out: (l) => lines.push(l), err: (l) => errs.push(l), lines, errs };
+  return {
+    cwd,
+    flags: { quiet: true, ...flags },
+    positionals,
+    out: (l) => lines.push(l),
+    err: (l) => errs.push(l),
+    lines,
+    errs,
+  };
 }
 
 const TINY = `
@@ -147,11 +159,14 @@ describe("orca ping", () => {
 describe("orca run", () => {
   it("needs a workflow id, and rejects a --var that is not key=value", async () => {
     await expect(commands.run!.run(ctx(dir, []))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
-    await expect(commands.run!.run(ctx(dir, ["tiny"], { var: ["oops"] }))).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("key=value") });
+    await expect(commands.run!.run(ctx(dir, ["tiny"], { var: ["oops"] }))).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("key=value"),
+    });
   });
 
   it("parses --var values as JSON, falling back to the raw string", async () => {
-    const c = ctx(dir, ["tiny"], { var: ['count=3', 'obj={"a":1}', "name=plain text"] });
+    const c = ctx(dir, ["tiny"], { var: ["count=3", 'obj={"a":1}', "name=plain text"] });
     expect(await commands.run!.run(c)).toBe(0);
     expect(c.lines.join("\n")).toMatch(/status=completed\/success/);
   });
@@ -224,7 +239,10 @@ describe("orca submit", () => {
 
 describe("orca answer", () => {
   it("needs an answer once it has been given a request id", async () => {
-    await expect(commands.answer!.run(ctx(dir, ["hi_nope"]))).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("<requestId> <option>") });
+    await expect(commands.answer!.run(ctx(dir, ["hi_nope"]))).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("<requestId> <option>"),
+    });
   });
 });
 
@@ -238,7 +256,11 @@ describe("orca kepler", () => {
 
     const c = ctx(dir, [taskDir]);
     expect(await commands.kepler!.run(c)).toBe(0);
-    expect(JSON.parse(c.lines.join("\n"))).toMatchObject({ taskDir, title: "Fix the login bug", worktrees: [{ name: "repo", path: join(taskDir, "repo") }] });
+    expect(JSON.parse(c.lines.join("\n"))).toMatchObject({
+      taskDir,
+      title: "Fix the login bug",
+      worktrees: [{ name: "repo", path: join(taskDir, "repo") }],
+    });
   });
 
   it("falls back to the current directory when no task dir is given", async () => {

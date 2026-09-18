@@ -81,9 +81,16 @@ function setup() {
 }
 
 /** Drive the facade as an ACP client, collecting the updates it pushes back. */
-async function withClient<T>(opts: { useClientCwd?: boolean; answerGates?: boolean } = {}, body: (ctx: ClientCtx, updates: acp.SessionUpdate[]) => Promise<T>): Promise<{ result: T; updates: acp.SessionUpdate[]; orchestrator: Orchestrator }> {
+async function withClient<T>(
+  opts: { useClientCwd?: boolean; answerGates?: boolean } = {},
+  body: (ctx: ClientCtx, updates: acp.SessionUpdate[]) => Promise<T>,
+): Promise<{ result: T; updates: acp.SessionUpdate[]; orchestrator: Orchestrator }> {
   const { orchestrator, program } = setup();
-  const agentApp = new OrcaAcpAgent({ orchestrator, program, ...(opts.useClientCwd === undefined ? {} : { useClientCwd: opts.useClientCwd }) }).register(acp.agent({ name: "orca-under-test" }));
+  const agentApp = new OrcaAcpAgent({
+    orchestrator,
+    program,
+    ...(opts.useClientCwd === undefined ? {} : { useClientCwd: opts.useClientCwd }),
+  }).register(acp.agent({ name: "orca-under-test" }));
   const updates: acp.SessionUpdate[] = [];
   const result = await acp
     .client({ name: "fake-kepler" })
@@ -91,7 +98,11 @@ async function withClient<T>(opts: { useClientCwd?: boolean; answerGates?: boole
       updates.push(ctx.params.update);
     })
     // answerGates: false stands in for a human who has not replied yet - the request stays open.
-    .onRequest(acp.methods.client.session.requestPermission, () => (opts.answerGates === false ? new Promise<never>(() => {}) : Promise.resolve({ outcome: { outcome: "selected" as const, optionId: "ship" } })))
+    .onRequest(acp.methods.client.session.requestPermission, () =>
+      opts.answerGates === false
+        ? new Promise<never>(() => {})
+        : Promise.resolve({ outcome: { outcome: "selected" as const, optionId: "ship" } }),
+    )
     .connectWith(agentApp, (ctx) => body(ctx as never, updates));
   return { result, updates, orchestrator };
 }
@@ -103,7 +114,8 @@ const newSession = async (ctx: ClientCtx): Promise<string> => {
   return (await ctx.request(acp.methods.agent.session.new, { cwd: process.cwd(), mcpServers: [] })).sessionId;
 };
 
-const prompt = (ctx: ClientCtx, sessionId: string, text: string) => ctx.request(acp.methods.agent.session.prompt, { sessionId, prompt: [{ type: "text", text }] });
+const prompt = (ctx: ClientCtx, sessionId: string, text: string) =>
+  ctx.request(acp.methods.agent.session.prompt, { sessionId, prompt: [{ type: "text", text }] });
 
 const said = (updates: acp.SessionUpdate[]) =>
   updates
@@ -142,23 +154,34 @@ describe("the facade's prompt grammar", () => {
     });
     const requests = await orchestrator.stores.requests.list(() => true);
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ title: "Add authentication", body: "Users must be able to log in.", source: { kind: "acp-session" } });
+    expect(requests[0]).toMatchObject({
+      title: "Add authentication",
+      body: "Users must be able to log in.",
+      source: { kind: "acp-session" },
+    });
     expect(said(updates)).toContain("Starting Program");
   });
 
   it("titles an empty prompt rather than submitting a nameless request", async () => {
     const { orchestrator } = await withClient({}, async (ctx) => prompt(ctx, await newSession(ctx), "   "));
-    expect((await orchestrator.stores.requests.list(() => true))[0]).toMatchObject({ title: "Untitled request", body: "" });
+    expect((await orchestrator.stores.requests.list(() => true))[0]).toMatchObject({
+      title: "Untitled request",
+      body: "",
+    });
   });
 
   it("leaves the workspace to ORCA's own provider when useClientCwd is off", async () => {
-    const { orchestrator } = await withClient({ useClientCwd: false }, async (ctx) => prompt(ctx, await newSession(ctx), "/run mini"));
+    const { orchestrator } = await withClient({ useClientCwd: false }, async (ctx) =>
+      prompt(ctx, await newSession(ctx), "/run mini"),
+    );
     const [summary] = await orchestrator.listRunSummaries();
     expect((await orchestrator.getState(summary!.id)).run.workspace.provider).not.toBe("acp-client");
   });
 
   it("rejects a prompt for a session it never opened", async () => {
-    await expect(withClient({}, async (ctx) => prompt(ctx, "sess_nope", "/run mini"))).rejects.toMatchObject({ data: { sessionId: "sess_nope", reason: "unknown session" } });
+    await expect(withClient({}, async (ctx) => prompt(ctx, "sess_nope", "/run mini"))).rejects.toMatchObject({
+      data: { sessionId: "sess_nope", reason: "unknown session" },
+    });
   });
 
   it("relays a failed run's error upstream", async () => {
@@ -198,7 +221,14 @@ describe("serveAcpFacade", () => {
     stdout.on("data", (c: Buffer) => lines.push(...c.toString().split("\n").filter(Boolean)));
 
     const served = serveAcpFacade({ orchestrator, program }, { stdin, stdout });
-    stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: acp.methods.agent.initialize, params: { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} } }) + "\n");
+    stdin.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: acp.methods.agent.initialize,
+        params: { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} },
+      }) + "\n",
+    );
     await vi.waitFor(() => expect(lines.length).toBeGreaterThan(0));
     expect(JSON.parse(lines[0]!)).toMatchObject({ id: 1, result: { agentInfo: { name: "orca" } } });
 

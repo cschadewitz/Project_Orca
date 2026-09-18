@@ -17,7 +17,9 @@ const AT = "03:04:05";
 
 describe("formatEvent", () => {
   it("renders the run lifecycle", () => {
-    expect(formatEvent(ev("run.created", { workflowId: "ai-sdlc" }))).toBe(`${AT} run run_1 created (workflow ai-sdlc)`);
+    expect(formatEvent(ev("run.created", { workflowId: "ai-sdlc" }))).toBe(
+      `${AT} run run_1 created (workflow ai-sdlc)`,
+    );
     expect(formatEvent(ev("run.completed", { outcome: "success" }))).toBe(`${AT} run run_1 completed: success`);
     expect(formatEvent(ev("run.failed", { error: { message: "boom" } }))).toBe(`${AT} run run_1 FAILED: boom`);
     expect(formatEvent(ev("run.cancelled", {}))).toBe(`${AT} run run_1 cancelled`);
@@ -30,50 +32,102 @@ describe("formatEvent", () => {
   });
 
   it("renders steps, with the choice and artifact count only when present", () => {
-    expect(formatEvent(ev("step.scheduled", { nodeId: "build", nodeType: "agent", attempt: 2 }))).toBe(`${AT}   ▶ build (agent, attempt 2)`);
-    expect(formatEvent(ev("step.completed", { stepRunId: "step_gate", result: { choice: "ship", artifactIds: ["a1", "a2"] } }))).toBe(`${AT}   ✔ step gate → ship [2 artifact(s)]`);
-    expect(formatEvent(ev("step.completed", { stepRunId: "step_noop", result: { artifactIds: [] } }))).toBe(`${AT}   ✔ step noop`);
+    expect(formatEvent(ev("step.scheduled", { nodeId: "build", nodeType: "agent", attempt: 2 }))).toBe(
+      `${AT}   ▶ build (agent, attempt 2)`,
+    );
+    expect(
+      formatEvent(
+        ev("step.completed", { stepRunId: "step_gate", result: { choice: "ship", artifactIds: ["a1", "a2"] } }),
+      ),
+    ).toBe(`${AT}   ✔ step gate → ship [2 artifact(s)]`);
+    expect(formatEvent(ev("step.completed", { stepRunId: "step_noop", result: { artifactIds: [] } }))).toBe(
+      `${AT}   ✔ step noop`,
+    );
     // No stepRunId at all: the name collapses to empty rather than "undefined".
     expect(formatEvent(ev("step.completed", { result: { artifactIds: [] } }))).toBe(`${AT}   ✔ `);
-    expect(formatEvent(ev("step.failed", { stepRunId: "step_test", error: { message: "red" }, willRetry: true }))).toBe(`${AT}   ✖ step test: red (retrying)`);
-    expect(formatEvent(ev("step.failed", { stepRunId: "step_test", error: { message: "red" } }))).toBe(`${AT}   ✖ step test: red`);
+    expect(formatEvent(ev("step.failed", { stepRunId: "step_test", error: { message: "red" }, willRetry: true }))).toBe(
+      `${AT}   ✖ step test: red (retrying)`,
+    );
+    expect(formatEvent(ev("step.failed", { stepRunId: "step_test", error: { message: "red" } }))).toBe(
+      `${AT}   ✖ step test: red`,
+    );
     expect(formatEvent(ev("step.inputs", { artifactIds: ["a1", "a2"] }))).toBe(`${AT}     ⬓ inputs a1, a2`);
-    expect(formatEvent(ev("step.waiting", { on: "dependency", detail: "schema@spec" }))).toBe(`${AT}   … waiting on dependency (schema@spec)`);
+    expect(formatEvent(ev("step.waiting", { on: "dependency", detail: "schema@spec" }))).toBe(
+      `${AT}   … waiting on dependency (schema@spec)`,
+    );
     expect(formatEvent(ev("step.waiting", { on: "dependency" }))).toBe(`${AT}   … waiting on dependency`);
   });
 
   it("renders the agent conversation", () => {
-    expect(formatEvent(ev("agent.session.opened", { sessionId: "s1", agentId: "scripted", hostId: "local", cwd: "/w" }))).toBe(`${AT}     session s1 agent=scripted host=local cwd=/w`);
-    expect(formatEvent(ev("agent.turn.started", { promptHash: "0123456789abcdef", followUp: false }))).toBe(`${AT}     prompt (01234567) follow-up=false`);
-    expect(formatEvent(ev("agent.turn.completed", { stopReason: "end_turn", durationMs: 42 }))).toBe(`${AT}     turn ended: end_turn in 42ms`);
+    expect(
+      formatEvent(ev("agent.session.opened", { sessionId: "s1", agentId: "scripted", hostId: "local", cwd: "/w" })),
+    ).toBe(`${AT}     session s1 agent=scripted host=local cwd=/w`);
+    expect(formatEvent(ev("agent.turn.started", { promptHash: "0123456789abcdef", followUp: false }))).toBe(
+      `${AT}     prompt (01234567) follow-up=false`,
+    );
+    expect(formatEvent(ev("agent.turn.completed", { stopReason: "end_turn", durationMs: 42 }))).toBe(
+      `${AT}     turn ended: end_turn in 42ms`,
+    );
     // A multi-line chunk is indented to line up under the first line.
-    expect(formatEvent(ev("agent.update", { update: { kind: "agent_message_chunk", text: " one\ntwo\n" } }))).toBe(`${AT}     │ one\n           │ two`);
+    expect(formatEvent(ev("agent.update", { update: { kind: "agent_message_chunk", text: " one\ntwo\n" } }))).toBe(
+      `${AT}     │ one\n           │ two`,
+    );
     expect(formatEvent(ev("agent.update", { update: { kind: "agent_message_chunk" } }))).toBe(`${AT}     │ `);
-    expect(formatEvent(ev("agent.update", { update: { kind: "tool_call", title: "Read file", status: "in_progress" } }))).toBe(`${AT}     ⚙ Read file in_progress`);
+    expect(
+      formatEvent(ev("agent.update", { update: { kind: "tool_call", title: "Read file", status: "in_progress" } })),
+    ).toBe(`${AT}     ⚙ Read file in_progress`);
     // Neither title nor status: no trailing whitespace is left behind.
     expect(formatEvent(ev("agent.update", { update: { kind: "tool_call_update" } }))).toBe(`${AT}     ⚙`);
-    expect(formatEvent(ev("agent.update", { update: { kind: "available_commands_update" } }))).toBe(`${AT}     [available_commands_update]`);
-    expect(formatEvent(ev("agent.permission", { title: "Write /etc/hosts", decision: "deny" }))).toBe(`${AT}     permission "Write /etc/hosts" → deny`);
+    expect(formatEvent(ev("agent.update", { update: { kind: "available_commands_update" } }))).toBe(
+      `${AT}     [available_commands_update]`,
+    );
+    expect(formatEvent(ev("agent.permission", { title: "Write /etc/hosts", decision: "deny" }))).toBe(
+      `${AT}     permission "Write /etc/hosts" → deny`,
+    );
   });
 
   it("renders artifacts, plan signals and decisions", () => {
-    expect(formatEvent(ev("artifact.recorded", { artifact: { kind: "spec", name: "spec", version: 2, path: ".orca/spec.md" } }))).toBe(`${AT}     ⬒ artifact spec (spec v2) .orca/spec.md`);
-    expect(formatEvent(ev("artifact.recorded", { artifact: { kind: "spec", name: "spec", version: 1 } }))).toBe(`${AT}     ⬒ artifact spec (spec v1) `);
-    expect(formatEvent(ev("artifact.rejected", { kind: "spec", reason: "missing status" }))).toBe(`${AT}     ⚠ artifact spec rejected: missing status`);
-    expect(formatEvent(ev("plan.signals.rejected", { issues: ["bad ref", "cycle"] }))).toBe(`${AT}     ⚠ plan signals rejected: bad ref; cycle`);
-    expect(formatEvent(ev("decision.resolved", { choice: "ship", source: "human" }))).toBe(`${AT}     decision: ship (human)`);
+    expect(
+      formatEvent(
+        ev("artifact.recorded", { artifact: { kind: "spec", name: "spec", version: 2, path: ".orca/spec.md" } }),
+      ),
+    ).toBe(`${AT}     ⬒ artifact spec (spec v2) .orca/spec.md`);
+    expect(formatEvent(ev("artifact.recorded", { artifact: { kind: "spec", name: "spec", version: 1 } }))).toBe(
+      `${AT}     ⬒ artifact spec (spec v1) `,
+    );
+    expect(formatEvent(ev("artifact.rejected", { kind: "spec", reason: "missing status" }))).toBe(
+      `${AT}     ⚠ artifact spec rejected: missing status`,
+    );
+    expect(formatEvent(ev("plan.signals.rejected", { issues: ["bad ref", "cycle"] }))).toBe(
+      `${AT}     ⚠ plan signals rejected: bad ref; cycle`,
+    );
+    expect(formatEvent(ev("decision.resolved", { choice: "ship", source: "human" }))).toBe(
+      `${AT}     decision: ship (human)`,
+    );
   });
 
   it("renders human input, children, branches, loops and vars", () => {
-    expect(formatEvent(ev("human.requested", { question: "Ship it?", options: ["ship", "hold"] }))).toBe(`${AT}     ? Ship it? [ship | hold]`);
+    expect(formatEvent(ev("human.requested", { question: "Ship it?", options: ["ship", "hold"] }))).toBe(
+      `${AT}     ? Ship it? [ship | hold]`,
+    );
     expect(formatEvent(ev("human.answered", { answer: "ship" }))).toBe(`${AT}     ! answered: ship`);
-    expect(formatEvent(ev("child.spawned", { childRunId: "run_2", branch: "api" }))).toBe(`${AT}     ↳ child run run_2 (api)`);
+    expect(formatEvent(ev("child.spawned", { childRunId: "run_2", branch: "api" }))).toBe(
+      `${AT}     ↳ child run run_2 (api)`,
+    );
     expect(formatEvent(ev("child.spawned", { childRunId: "run_2" }))).toBe(`${AT}     ↳ child run run_2`);
-    expect(formatEvent(ev("child.finished", { childRunId: "run_2", status: "completed", outcome: "success" }))).toBe(`${AT}     ↲ child run run_2 completed/success`);
-    expect(formatEvent(ev("child.finished", { childRunId: "run_2", status: "cancelled" }))).toBe(`${AT}     ↲ child run run_2 cancelled`);
+    expect(formatEvent(ev("child.finished", { childRunId: "run_2", status: "completed", outcome: "success" }))).toBe(
+      `${AT}     ↲ child run run_2 completed/success`,
+    );
+    expect(formatEvent(ev("child.finished", { childRunId: "run_2", status: "cancelled" }))).toBe(
+      `${AT}     ↲ child run run_2 cancelled`,
+    );
     // "claimed" is spelled out; every other reason is passed through.
-    expect(formatEvent(ev("branch.skipped", { branch: "api", reason: "claimed" }))).toBe(`${AT}     ⤫ branch api claimed by another run`);
-    expect(formatEvent(ev("branch.skipped", { branch: "api", reason: "when-false" }))).toBe(`${AT}     ⤫ branch api skipped (when-false)`);
+    expect(formatEvent(ev("branch.skipped", { branch: "api", reason: "claimed" }))).toBe(
+      `${AT}     ⤫ branch api claimed by another run`,
+    );
+    expect(formatEvent(ev("branch.skipped", { branch: "api", reason: "when-false" }))).toBe(
+      `${AT}     ⤫ branch api skipped (when-false)`,
+    );
     expect(formatEvent(ev("loop.iteration", { iteration: 3 }))).toBe(`${AT}     ↻ iteration 3`);
     expect(formatEvent(ev("vars.set", { vars: { a: 1, b: 2 } }))).toBe(`${AT}     vars a, b`);
   });
@@ -111,20 +165,55 @@ function state(over: Partial<RunState["run"]> = {}): RunState {
     artifacts: {},
     humanInputs: {},
     lastSeq: 0,
-  } as RunState;
+  };
 }
 
 describe("formatRunState", () => {
   it("renders the header, steps and artifacts", () => {
-    const s = state({ outcome: "success", status: "completed", parentRunId: "run_0", workspace: { hostId: "local", cwd: "/w", branch: "orca/x" } });
+    const s = state({
+      outcome: "success",
+      status: "completed",
+      parentRunId: "run_0",
+      workspace: { hostId: "local", cwd: "/w", branch: "orca/x" },
+    });
     s.stepOrder = ["step_a", "step_b"];
     s.steps = {
-      step_a: { id: "step_a", runId: "run_1", nodeId: "build", nodeType: "agent", status: "completed", attempt: 1, inputArtifactIds: ["art_1"], childRunIds: [], result: { artifactIds: ["art_1"] }, scheduledAt: "t" },
-      step_b: { id: "step_b", runId: "run_1", nodeId: "gate", nodeType: "gate", status: "failed", attempt: 2, inputArtifactIds: [], childRunIds: ["run_2"], result: { choice: "hold", artifactIds: [] }, error: { code: "RUN_STATE", message: "nope" }, scheduledAt: "t" },
+      step_a: {
+        id: "step_a",
+        runId: "run_1",
+        nodeId: "build",
+        nodeType: "agent",
+        status: "completed",
+        attempt: 1,
+        inputArtifactIds: ["art_1"],
+        childRunIds: [],
+        result: { artifactIds: ["art_1"] },
+        scheduledAt: "t",
+      },
+      step_b: {
+        id: "step_b",
+        runId: "run_1",
+        nodeId: "gate",
+        nodeType: "gate",
+        status: "failed",
+        attempt: 2,
+        inputArtifactIds: [],
+        childRunIds: ["run_2"],
+        result: { choice: "hold", artifactIds: [] },
+        error: { code: "RUN_STATE", message: "nope" },
+        scheduledAt: "t",
+      },
     } as unknown as RunState["steps"];
     s.artifacts = {
       art_2: { id: "art_2", kind: "review", name: "review", version: 1, createdAt: "2026-01-02T03:04:06.000Z" },
-      art_1: { id: "art_1", kind: "spec", name: "spec", version: 1, path: ".orca/spec.md", createdAt: "2026-01-02T03:04:05.000Z" },
+      art_1: {
+        id: "art_1",
+        kind: "spec",
+        name: "spec",
+        version: 1,
+        path: ".orca/spec.md",
+        createdAt: "2026-01-02T03:04:05.000Z",
+      },
     } as unknown as RunState["artifacts"];
 
     const lines = formatRunState(s).split("\n");
@@ -132,7 +221,9 @@ describe("formatRunState", () => {
     expect(lines[1]).toBe("workspace local:/w (orca/x)");
     expect(lines[2]).toBe("parent run_0");
     expect(lines).toContain("  completed build                  agent          attempt=1 inputs=1");
-    expect(lines).toContain("  failed    gate                   gate           attempt=2 choice=hold children=1 error=nope");
+    expect(lines).toContain(
+      "  failed    gate                   gate           attempt=2 choice=hold children=1 error=nope",
+    );
     // Artifacts are listed oldest first, and an id stands in for a missing path.
     const arts = lines.slice(lines.indexOf("artifacts:") + 1);
     expect(arts[0]).toBe("  spec             spec           v1  .orca/spec.md");
@@ -146,7 +237,19 @@ describe("formatRunState", () => {
     const paused = state({ status: "paused" });
     paused.humanInputs = { hi_1: REQUEST };
     paused.stepOrder = ["step_gate"];
-    paused.steps = { step_gate: { id: "step_gate", runId: "run_1", nodeId: "gate", nodeType: "gate", status: "waiting", attempt: 1, inputArtifactIds: [], childRunIds: [], scheduledAt: "t" } } as unknown as RunState["steps"];
+    paused.steps = {
+      step_gate: {
+        id: "step_gate",
+        runId: "run_1",
+        nodeId: "gate",
+        nodeType: "gate",
+        status: "waiting",
+        attempt: 1,
+        inputArtifactIds: [],
+        childRunIds: [],
+        scheduledAt: "t",
+      },
+    } as unknown as RunState["steps"];
     const text = formatRunState(paused);
     expect(text).toContain("waiting for humans:");
     expect(text).toContain("  hi_1  run=run_1  Ship it? [ship | hold]");

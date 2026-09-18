@@ -17,10 +17,22 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
-function ctx(cwd: string, positionals: string[], flags: CommandContext["flags"] = {}): CommandContext & { lines: string[]; errs: string[] } {
+function ctx(
+  cwd: string,
+  positionals: string[],
+  flags: CommandContext["flags"] = {},
+): CommandContext & { lines: string[]; errs: string[] } {
   const lines: string[] = [];
   const errs: string[] = [];
-  return { cwd, flags: { quiet: true, ...flags }, positionals, out: (l) => lines.push(l), err: (l) => errs.push(l), lines, errs };
+  return {
+    cwd,
+    flags: { quiet: true, ...flags },
+    positionals,
+    out: (l) => lines.push(l),
+    err: (l) => errs.push(l),
+    lines,
+    errs,
+  };
 }
 
 const plan = (dir: string, positionals: string[], flags: CommandContext["flags"] = {}) => {
@@ -48,7 +60,11 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "orca-plan-cli-"));
   dirs.push(dir);
   await writeFile(join(dir, "tiny.yaml"), TINY, "utf8");
-  await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: [tiny.yaml]\ntemplates: []\nplanning: { plan: roadmap, planName: Roadmap }\n", "utf8");
+  await writeFile(
+    join(dir, "orca.config.yaml"),
+    "version: 1\nworkflows: [tiny.yaml]\ntemplates: []\nplanning: { plan: roadmap, planName: Roadmap }\n",
+    "utf8",
+  );
 
   // Seed the plan through the same service the CLI reads, writing to the store the CLI opens.
   const app = await bootstrap({ cwd: dir, logger: silentLogger });
@@ -62,7 +78,17 @@ beforeAll(async () => {
         { slug: "api", title: "Login API", priority: "high", dependsOn: ["schema@spec", "decision:session-store"] },
         { slug: "docs", title: "Docs", dependsOn: ["external:legal-review", { on: "api", type: "informs" }] },
       ],
-      risks: [{ key: "migration", title: "Migration locks the users table", category: "operational", likelihood: 2, impact: 4, mitigation: "Run it online", mitigatedBy: ["api"] }],
+      risks: [
+        {
+          key: "migration",
+          title: "Migration locks the users table",
+          category: "operational",
+          likelihood: 2,
+          impact: 4,
+          mitigation: "Run it online",
+          mitigatedBy: ["api"],
+        },
+      ],
       decisions: [
         {
           key: "session-store",
@@ -94,7 +120,9 @@ describe("orca plan list", () => {
   it("is the default subcommand and summarises each plan", async () => {
     const { c, run } = plan(dir, []);
     expect(await run()).toBe(0);
-    expect(c.lines[0]).toMatch(/^roadmap\s+active\s+3 item\(s\), 1 request\(s\), strategy=critical-path, appetite=high {2}plan_/);
+    expect(c.lines[0]).toMatch(
+      /^roadmap\s+active\s+3 item\(s\), 1 request\(s\), strategy=critical-path, appetite=high {2}plan_/,
+    );
   });
 
   it("renders JSON with --json", async () => {
@@ -111,7 +139,10 @@ describe("orca plan list", () => {
     expect(await run()).toBe(0);
     expect(c.lines).toEqual(["no plans yet (submit a request to create one)"]);
     // And a named plan in an empty store names the mistake rather than crashing.
-    await expect(commands.plan!.run(ctx(empty, ["show", "roadmap"]))).rejects.toMatchObject({ code: "PLAN_NOT_FOUND", message: expect.stringContaining("no plans yet") });
+    await expect(commands.plan!.run(ctx(empty, ["show", "roadmap"]))).rejects.toMatchObject({
+      code: "PLAN_NOT_FOUND",
+      message: expect.stringContaining("no plans yet"),
+    });
   });
 });
 
@@ -120,7 +151,9 @@ describe("orca plan show", () => {
     const { c, run } = plan(dir, ["show"]);
     expect(await run()).toBe(0);
     const text = c.lines.join("\n");
-    expect(text).toMatch(/^plan roadmap \(plan_\S+\) {2}Roadmap {2}status=active {2}strategy=critical-path {2}concurrency=2/m);
+    expect(text).toMatch(
+      /^plan roadmap \(plan_\S+\) {2}Roadmap {2}status=active {2}strategy=critical-path {2}concurrency=2/m,
+    );
     expect(text).toContain("requests: req_1");
     expect(text).toMatch(/depends on: decision:session-store \[open\], schema@spec \[open\]/);
     expect(text).toMatch(/depends on: external:legal-review \[open\], informs:api \[open\]/);
@@ -138,7 +171,10 @@ describe("orca plan show", () => {
   });
 
   it("names the plans it does know when the key is wrong", async () => {
-    await expect(plan(dir, ["show", "nope"]).run()).rejects.toMatchObject({ code: "PLAN_NOT_FOUND", message: expect.stringContaining("known plans: roadmap") });
+    await expect(plan(dir, ["show", "nope"]).run()).rejects.toMatchObject({
+      code: "PLAN_NOT_FOUND",
+      message: expect.stringContaining("known plans: roadmap"),
+    });
   });
 });
 
@@ -167,7 +203,10 @@ describe("orca plan explain / graph / risks / decisions / journal", () => {
     const { c, run } = plan(dir, ["explain", "api"]);
     expect(await run()).toBe(0);
     expect(c.lines.join("\n")).toContain("api");
-    await expect(plan(dir, ["explain"]).run()).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("work item slug") });
+    await expect(plan(dir, ["explain"]).run()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("work item slug"),
+    });
   });
 
   it("renders the dependency graph as Mermaid", async () => {
@@ -239,11 +278,18 @@ describe("orca plan depend / waive / satisfy", () => {
   it("adds a dependency from the command line", async () => {
     const { c, run } = plan(dir, ["depend", "docs", "schema"]);
     expect(await run()).toBe(0);
-    expect(c.lines[0]).toMatch(new RegExp(`^added dep_\\S+: docs -> {"kind":"work-item","workItemId":"${ids.schema}"} \\(blocks, by start\\) status=open$`));
+    expect(c.lines[0]).toMatch(
+      new RegExp(
+        `^added dep_\\S+: docs -> {"kind":"work-item","workItemId":"${ids.schema}"} \\(blocks, by start\\) status=open$`,
+      ),
+    );
   });
 
   it("needs both a slug and a reference", async () => {
-    await expect(plan(dir, ["depend", "docs"]).run()).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("<slug> <dependency-ref>") });
+    await expect(plan(dir, ["depend", "docs"]).run()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("<slug> <dependency-ref>"),
+    });
   });
 
   it("waives and satisfies a dependency by id, recording the rationale", async () => {
@@ -256,8 +302,14 @@ describe("orca plan depend / waive / satisfy", () => {
     expect(await satisfied.run()).toBe(0);
     expect(satisfied.c.lines).toEqual([`${ids.external} is now satisfied`]);
 
-    await expect(plan(dir, ["waive"]).run()).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("plan waive needs a dependency id") });
-    await expect(plan(dir, ["satisfy"]).run()).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("plan satisfy needs a dependency id") });
+    await expect(plan(dir, ["waive"]).run()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("plan waive needs a dependency id"),
+    });
+    await expect(plan(dir, ["satisfy"]).run()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("plan satisfy needs a dependency id"),
+    });
   });
 });
 
@@ -275,7 +327,10 @@ describe("orca plan decide / risk", () => {
   });
 
   it("needs a decision key and an option", async () => {
-    await expect(plan(dir, ["decide", "session-store"]).run()).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("<decisionKey> <optionKey>") });
+    await expect(plan(dir, ["decide", "session-store"]).run()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("<decisionKey> <optionKey>"),
+    });
   });
 
   it("moves a risk to a new status", async () => {
@@ -285,7 +340,10 @@ describe("orca plan decide / risk", () => {
   });
 
   it("needs both a risk key and --status", async () => {
-    await expect(plan(dir, ["risk", "migration"]).run()).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("--status") });
+    await expect(plan(dir, ["risk", "migration"]).run()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("--status"),
+    });
     await expect(plan(dir, ["risk"], { status: "closed" }).run()).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
 });
@@ -301,6 +359,9 @@ describe("orca plan dispatch", () => {
 
 describe("an unknown plan subcommand", () => {
   it("lists the ones that exist", async () => {
-    await expect(plan(dir, ["frobnicate"]).run()).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("unknown plan subcommand 'frobnicate'") });
+    await expect(plan(dir, ["frobnicate"]).run()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("unknown plan subcommand 'frobnicate'"),
+    });
   });
 });

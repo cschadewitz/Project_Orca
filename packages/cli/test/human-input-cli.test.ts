@@ -66,7 +66,10 @@ describe("cliHumanInput", () => {
   it("rejects with CANCELLED when the run is cancelled before the prompt", async () => {
     const { input, output } = streams();
     const signal = AbortSignal.abort("run cancelled");
-    await expect(cliHumanInput(input, output).ask(query({ signal }))).rejects.toMatchObject({ code: "CANCELLED", message: "run cancelled" });
+    await expect(cliHumanInput(input, output).ask(query({ signal }))).rejects.toMatchObject({
+      code: "CANCELLED",
+      message: "run cancelled",
+    });
   });
 
   it("rejects with CANCELLED when the run is cancelled while waiting for an answer", async () => {

@@ -11,7 +11,14 @@ import { parseOrcaConfig, silentLogger, type OrcaConfig } from "@orca/core";
 import { GitWorktreeProvider, LocalWorkspaceProvider, PausingHumanInput } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { bootstrap, CONFIG_FILENAMES, findConfig, loadConfig, makeHumanInput, makeWorkspaceProvider } from "../src/bootstrap.js";
+import {
+  bootstrap,
+  CONFIG_FILENAMES,
+  findConfig,
+  loadConfig,
+  makeHumanInput,
+  makeWorkspaceProvider,
+} from "../src/bootstrap.js";
 
 const dirs: string[] = [];
 async function temp(prefix = "orca-bootstrap-"): Promise<string> {
@@ -52,7 +59,9 @@ describe("findConfig", () => {
     // A machine could have a config somewhere above tmpdir; all that is
     // guaranteed is that the walk terminates instead of looping at the root.
     const above = await findConfig(await temp());
-    expect(above === undefined || above.endsWith(".yaml") || above.endsWith(".yml") || above.endsWith(".json")).toBe(true);
+    expect(above === undefined || above.endsWith(".yaml") || above.endsWith(".yml") || above.endsWith(".json")).toBe(
+      true,
+    );
   });
 });
 
@@ -79,7 +88,10 @@ describe("loadConfig", () => {
   it("names the offending file when the config does not parse", async () => {
     const dir = await temp();
     await writeFile(join(dir, "orca.config.yaml"), "version: 2\n", "utf8");
-    await expect(loadConfig(dir)).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("orca.config.yaml") });
+    await expect(loadConfig(dir)).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("orca.config.yaml"),
+    });
   });
 });
 
@@ -87,27 +99,49 @@ describe("makeWorkspaceProvider", () => {
   const agents = () => new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" }));
 
   it("builds each provider the config can name, resolving relative paths against the config dir", () => {
-    const local = makeWorkspaceProvider(parseOrcaConfig({ workspace: { provider: "local", root: "sub" } }), "/cfg", new AgentRegistry());
+    const local = makeWorkspaceProvider(
+      parseOrcaConfig({ workspace: { provider: "local", root: "sub" } }),
+      "/cfg",
+      new AgentRegistry(),
+    );
     expect(local).toBeInstanceOf(LocalWorkspaceProvider);
 
-    const kepler = makeWorkspaceProvider(parseOrcaConfig({ workspace: { provider: "kepler", taskDir: "/tasks/x" } }), "/cfg", new AgentRegistry());
+    const kepler = makeWorkspaceProvider(
+      parseOrcaConfig({ workspace: { provider: "kepler", taskDir: "/tasks/x" } }),
+      "/cfg",
+      new AgentRegistry(),
+    );
     expect(kepler).toBeInstanceOf(KeplerTaskWorkspaceProvider);
     expect(kepler.name).toBe("kepler");
 
-    const worktree = makeWorkspaceProvider(parseOrcaConfig({ workspace: { provider: "git-worktree", repo: "repo", worktreeRoot: "wt" } }), "/cfg", agents());
+    const worktree = makeWorkspaceProvider(
+      parseOrcaConfig({ workspace: { provider: "git-worktree", repo: "repo", worktreeRoot: "wt" } }),
+      "/cfg",
+      agents(),
+    );
     expect(worktree).toBeInstanceOf(GitWorktreeProvider);
 
     // Absolute paths are kept as they are.
-    expect(makeWorkspaceProvider(parseOrcaConfig({ workspace: { provider: "git-worktree", repo: "/abs/repo", worktreeRoot: "/abs/wt" } }), "/cfg", agents())).toBeInstanceOf(GitWorktreeProvider);
+    expect(
+      makeWorkspaceProvider(
+        parseOrcaConfig({ workspace: { provider: "git-worktree", repo: "/abs/repo", worktreeRoot: "/abs/wt" } }),
+        "/cfg",
+        agents(),
+      ),
+    ).toBeInstanceOf(GitWorktreeProvider);
   });
 
   it("uses KEPLER_TASK_DIR, then the config dir, when the kepler provider names no task dir", () => {
     const previous = process.env.KEPLER_TASK_DIR;
     try {
       process.env.KEPLER_TASK_DIR = "/tasks/from-env";
-      expect(makeWorkspaceProvider(parseOrcaConfig({ workspace: { provider: "kepler" } }), "/cfg", new AgentRegistry())).toBeInstanceOf(KeplerTaskWorkspaceProvider);
+      expect(
+        makeWorkspaceProvider(parseOrcaConfig({ workspace: { provider: "kepler" } }), "/cfg", new AgentRegistry()),
+      ).toBeInstanceOf(KeplerTaskWorkspaceProvider);
       delete process.env.KEPLER_TASK_DIR;
-      expect(makeWorkspaceProvider(parseOrcaConfig({ workspace: { provider: "kepler" } }), "/cfg", new AgentRegistry())).toBeInstanceOf(KeplerTaskWorkspaceProvider);
+      expect(
+        makeWorkspaceProvider(parseOrcaConfig({ workspace: { provider: "kepler" } }), "/cfg", new AgentRegistry()),
+      ).toBeInstanceOf(KeplerTaskWorkspaceProvider);
     } finally {
       if (previous === undefined) delete process.env.KEPLER_TASK_DIR;
       else process.env.KEPLER_TASK_DIR = previous;
@@ -118,7 +152,17 @@ describe("makeWorkspaceProvider", () => {
 describe("makeHumanInput", () => {
   it("maps each mode to its port", async () => {
     const auto = makeHumanInput(parseOrcaConfig({ humanInput: { mode: "auto", option: "hold" } }));
-    await expect(auto.ask({ runId: "r", stepRunId: "s", requestId: "hi", kind: "decision", question: "?", options: ["ship"], context: {} })).resolves.toBe("hold");
+    await expect(
+      auto.ask({
+        runId: "r",
+        stepRunId: "s",
+        requestId: "hi",
+        kind: "decision",
+        question: "?",
+        options: ["ship"],
+        context: {},
+      }),
+    ).resolves.toBe("hold");
     expect(makeHumanInput(parseOrcaConfig({ humanInput: { mode: "pause" } }))).toBeInstanceOf(PausingHumanInput);
     // The CLI port only reads stdin once something asks it a question.
     expect(typeof makeHumanInput(parseOrcaConfig({ humanInput: { mode: "cli" } })).ask).toBe("function");
@@ -156,7 +200,11 @@ describe("bootstrap", () => {
       `export default { name: "test-plugin", register(api) { api.executors.register({ type: "custom:noop", async execute() { return { status: "completed" }; } }); } };\n`,
       "utf8",
     );
-    await writeFile(join(dir, "orca.config.yaml"), 'version: 1\nworkflows: [tiny.yaml]\ntemplates: []\nplugins: ["./plugin.mjs"]\n', "utf8");
+    await writeFile(
+      join(dir, "orca.config.yaml"),
+      'version: 1\nworkflows: [tiny.yaml]\ntemplates: []\nplugins: ["./plugin.mjs"]\n',
+      "utf8",
+    );
     const app = await bootstrap({ cwd: dir, ephemeral: true, logLevel: "debug", logger: silentLogger });
     expect(app.workflows.has("tiny")).toBe(true);
   });
@@ -165,14 +213,28 @@ describe("bootstrap", () => {
     const dir = await temp();
     await writeFile(join(dir, "tiny.yaml"), WORKFLOW, "utf8");
     await writeFile(join(dir, "not-a-plugin.mjs"), "export default { name: 'nope' };\n", "utf8");
-    await writeFile(join(dir, "orca.config.yaml"), 'version: 1\nworkflows: [tiny.yaml]\ntemplates: []\nplugins: ["./not-a-plugin.mjs"]\n', "utf8");
-    await expect(bootstrap({ cwd: dir, ephemeral: true, logger: silentLogger })).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringContaining("no default OrcaPlugin export") });
+    await writeFile(
+      join(dir, "orca.config.yaml"),
+      'version: 1\nworkflows: [tiny.yaml]\ntemplates: []\nplugins: ["./not-a-plugin.mjs"]\n',
+      "utf8",
+    );
+    await expect(bootstrap({ cwd: dir, ephemeral: true, logger: silentLogger })).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("no default OrcaPlugin export"),
+    });
   });
 
   it("refuses to start when a workflow does not validate, listing every problem", async () => {
     const dir = await temp();
-    await writeFile(join(dir, "broken.yaml"), "id: broken\nname: Broken\nstart: s\nnodes:\n  s: { type: start }\n  gone: { type: subworkflow, workflow: missing }\nedges:\n  - { from: s, to: gone }\n", "utf8");
+    await writeFile(
+      join(dir, "broken.yaml"),
+      "id: broken\nname: Broken\nstart: s\nnodes:\n  s: { type: start }\n  gone: { type: subworkflow, workflow: missing }\nedges:\n  - { from: s, to: gone }\n",
+      "utf8",
+    );
     await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: [broken.yaml]\ntemplates: []\n", "utf8");
-    await expect(bootstrap({ cwd: dir, ephemeral: true, logger: silentLogger })).rejects.toMatchObject({ code: "WORKFLOW_INVALID", details: { problems: expect.arrayContaining([expect.stringContaining("broken")]) } });
+    await expect(bootstrap({ cwd: dir, ephemeral: true, logger: silentLogger })).rejects.toMatchObject({
+      code: "WORKFLOW_INVALID",
+      details: { problems: expect.arrayContaining([expect.stringContaining("broken")]) },
+    });
   });
 });
