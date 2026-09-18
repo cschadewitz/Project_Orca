@@ -201,8 +201,10 @@ export const DecisionSchema = z.object({
   rationale: z.string().optional(),
   /** Follow-ups the choice implies (new work, constraints). Informational. */
   consequences: z.array(z.string()).default([]),
-  /** Work items that must not start before this decision is made (denormalised from dependencies). */
-  blocks: z.array(z.string()).default([]),
+  /**
+   * The work items a decision gates are not stored here: they are the
+   * `Dependency` records targeting it (see `decisionBlocks` in `plan/schedule`).
+   */
   supersedes: z.string().optional(),
   dueBy: z.string().optional(),
   origin: PlanOriginSchema,

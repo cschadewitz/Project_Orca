@@ -595,10 +595,6 @@ export class PlanService {
     const dep: Dependency = { id: keyedId("dep", planId, from, meta.type, meta.requiredBy, JSON.stringify(target)), planId, from, target, type: meta.type, requiredBy: meta.requiredBy, status: "open", origin, createdAt: now, updatedAt: now, ...(meta.rationale ? { rationale: meta.rationale } : {}) };
     await this.stores.plan.dependencies.put(dep);
     await this.journal({ type: "dependency.added", planId, origin, payload: { dependency: dep } });
-    if (target.kind === "decision") {
-      const dec = await this.stores.plan.decisions.get(target.decisionId);
-      if (dec && !dec.blocks.includes(from)) await this.stores.plan.decisions.put({ ...dec, blocks: [...dec.blocks, from], updatedAt: now });
-    }
     return dep;
   }
 
@@ -719,7 +715,6 @@ export class PlanService {
         options: parsed.options,
         scale: parsed.scale,
         consequences: parsed.consequences,
-        blocks: [],
         origin,
         createdAt: now,
         updatedAt: now,

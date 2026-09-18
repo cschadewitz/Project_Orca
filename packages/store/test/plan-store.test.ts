@@ -87,7 +87,7 @@ describe("file plan stores", () => {
     await s.plans.put(plan);
     await s.dependencies.put({ id: "dep_1", planId: plan.id, from: "wi_a", target: { kind: "external", key: "vendor" }, type: "blocks", requiredBy: "start", status: "open", origin: { kind: "human" }, createdAt: "t", updatedAt: "t" });
     await s.risks.put({ id: "risk_1", planId: plan.id, key: "k", title: "K", description: "", category: "technical", likelihood: 2, impact: 3, status: "open", triggers: [], affects: [], mitigatedBy: [], origin: { kind: "human" }, createdAt: "t", updatedAt: "t" });
-    await s.decisions.put({ id: "dec_1", planId: plan.id, key: "d", title: "D", question: "", status: "open", criteria: [], options: [], scale: 10, consequences: [], blocks: [], origin: { kind: "human" }, createdAt: "t", updatedAt: "t" });
+    await s.decisions.put({ id: "dec_1", planId: plan.id, key: "d", title: "D", question: "", status: "open", criteria: [], options: [], scale: 10, consequences: [], origin: { kind: "human" }, createdAt: "t", updatedAt: "t" });
     const again = filePlanStores(d);
     expect((await again.plans.get(plan.id))?.key).toBe("p");
     expect((await again.dependencies.list())[0]?.target).toEqual({ kind: "external", key: "vendor" });

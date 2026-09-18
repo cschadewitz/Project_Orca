@@ -18,13 +18,17 @@ export interface PlanSignals {
 
 export type SignalExtractor = (artifact: { kind: string; name: string; data: Record<string, unknown> }) => Partial<PlanSignals> | undefined;
 
+export const SLUG_MAX_LENGTH = 48;
+
+/** Kebab-case key from free text, at most SLUG_MAX_LENGTH characters and never starting or ending in `-`. */
 export function slugify(text: string): string {
   return (
     text
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 48) || "item"
+      .slice(0, SLUG_MAX_LENGTH)
+      .replace(/-+$/, "") || "item"
   );
 }
 

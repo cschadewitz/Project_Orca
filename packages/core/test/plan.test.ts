@@ -5,6 +5,7 @@ import {
   compactSchedule,
   computeSchedule,
   criticalPath,
+  decisionBlocks,
   defaultRiskRating,
   defaultRiskThresholds,
   describeRiskMatrix,
@@ -24,6 +25,7 @@ import {
   RiskMatrixConfigSchema,
   riskLevel,
   riskRatingIssue,
+  slugify,
   summarizeRisks,
   topologicalWaves,
   transitiveDownstream,
@@ -49,7 +51,7 @@ function risk(key: string, likelihood: number, impact: number, affects: string[]
   return { id: `risk_${key}`, planId: plan.id, key, title: key, description: "", category: "technical", likelihood, impact, status: "open", triggers: [], affects: affects.map((s) => `wi_${s}`), mitigatedBy: [], origin, createdAt: T, updatedAt: T, ...extra };
 }
 function decision(key: string, extra: Partial<Decision> = {}): Decision {
-  return { id: `dec_${key}`, planId: plan.id, key, title: key, question: "", status: "open", criteria: [], options: [], scale: 10, consequences: [], blocks: [], origin, createdAt: T, updatedAt: T, ...extra };
+  return { id: `dec_${key}`, planId: plan.id, key, title: key, question: "", status: "open", criteria: [], options: [], scale: 10, consequences: [], origin, createdAt: T, updatedAt: T, ...extra };
 }
 
 describe("dependency references", () => {
@@ -188,6 +190,13 @@ describe("decision matrix", () => {
     expect(r.pivotalCriteria).toEqual(["cost"]);
     expect(renderDecisionMatrix({ criteria, options, scale: 10 }, r)).toContain("Recommended: **b**");
   });
+  it("renders a result whose options the matrix no longer has", () => {
+    const r = evaluateDecisionMatrix({ criteria, options, scale: 10 }, T);
+    const renamed = renderDecisionMatrix({ criteria, options: [{ key: "c", name: "C", scores: { fit: 1, cost: 1 }, pros: [], cons: [], risks: [] }], scale: 10 }, r);
+    expect(renamed).toContain("| **a** |  |  | 6.5 |");
+    expect(renamed).toContain("| b |  |  | 6.5 |");
+    expect(renderDecisionMatrix({ criteria, options: [], scale: 10 }, r)).toContain("Recommended: **a**");
+  });
   it("validates shape", () => {
     const issues = validateDecisionMatrix({ criteria, options: [{ key: "a", name: "A", scores: { fit: 11 }, pros: [], cons: [], risks: [] }], scale: 10 });
     expect(issues.map((i) => i.path)).toEqual(["options[0].scores.fit", "options[0].scores.cost"]);
@@ -250,6 +259,15 @@ describe("scheduler", () => {
     expect(apiDone.openDecisions[0]!.blocks).toEqual([]);
     const soft = computeSchedule({ plan, items, dependencies: deps.map((d) => (d.id === "dep_api_store" ? { ...d, type: "soft" as const } : d)), risks: [], decisions, now: T });
     expect(soft.openDecisions[0]!.blocks).toEqual([]);
+  });
+  it("derives what a decision blocks from its dependencies", () => {
+    const decided = { ...dep("ui", "core"), id: "dep_ui_store", target: { kind: "decision" as const, decisionId: "dec_store" }, status: "satisfied" as const };
+    const waived = { ...decided, id: "dep_docs_store", from: "wi_docs", status: "waived" as const };
+    const soft = { ...decided, id: "dep_x_store", from: "wi_x", type: "soft" as const, status: "open" as const };
+    const deps: Dependency[] = [dep("api", "core"), { ...decided, id: "dep_api_store", from: "wi_api", status: "open" }, decided, waived, soft, { ...decided, id: "dep_api_store_build", from: "wi_api", status: "open", requiredBy: "build" }];
+    expect(decisionBlocks("dec_store", deps)).toEqual(["wi_api", "wi_ui"]);
+    expect(decisionBlocks("dec_store", deps, ["open"])).toEqual(["wi_api"]);
+    expect(decisionBlocks("dec_other", deps)).toEqual([]);
   });
 
   it("unblocks on produced stages, decisions, accepted risks and satisfied externals", () => {
@@ -345,6 +363,13 @@ describe("scheduler", () => {
 });
 
 describe("artifact signals", () => {
+  it("slugifies without a leading or trailing hyphen, even when cut", () => {
+    expect(slugify("  Where do Sessions live?  ")).toBe("where-do-sessions-live");
+    const long = slugify("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbb"); // 47 a's, cut lands on the "-"
+    expect(long).toBe("a".repeat(47));
+    expect(long.length).toBeLessThanOrEqual(48);
+    expect(slugify("***")).toBe("item");
+  });
   it("lifts risks, decisions and dependencies from generic front matter", () => {
     const s = extractPlanSignals({
       kind: "spec",

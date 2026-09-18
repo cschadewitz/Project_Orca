@@ -14,7 +14,7 @@
  *  custom:plan-await      inside an item workflow: wait until the item's
  *                         dependencies for a phase (e.g. `build`) are satisfied.
  */
-import { DecisionMatrixArtifactSchema, DecompositionSchema, evaluateDecisionMatrix, isOpenRisk, planToMermaid, renderDecisionMatrix, riskLevel, riskScore, serializeFrontMatter, succeeded, type CompactSchedule, type CustomNode, type Decision, type DecisionMatrixResult, type PlanEvent, type PlanOrigin, type RunState, type Schedule, type SchedulingPolicy, type WorkItem } from "@orca/core";
+import { DecisionMatrixArtifactSchema, DecompositionSchema, decisionBlocks, evaluateDecisionMatrix, isOpenRisk, planToMermaid, renderDecisionMatrix, riskLevel, riskScore, serializeFrontMatter, succeeded, type CompactSchedule, type CustomNode, type Decision, type DecisionMatrixResult, type Dependency, type PlanEvent, type PlanOrigin, type RunState, type Schedule, type SchedulingPolicy, type WorkItem } from "@orca/core";
 import { ownsClaim } from "@orca/store";
 import type { PlanSnapshot } from "./service.js";
 import { FanOut, pausedByChildren } from "../executors/containers.js";
@@ -92,7 +92,7 @@ export const planRegisterExecutor: NodeExecutor<PlanRegisterNode> = {
     const snap = await ctx.plan.snapshot(plan.id);
     const slugOf = new Map(snap.items.map((w) => [w.id, w.slug]));
     const registeredKeys = new Set(reg.decisions.map((d) => d.key));
-    const openDecisions = snap.decisions.filter((d) => registeredKeys.has(d.key) && (d.status === "open" || d.status === "deferred")).map((d) => decisionView(d, slugOf));
+    const openDecisions = snap.decisions.filter((d) => registeredKeys.has(d.key) && (d.status === "open" || d.status === "deferred")).map((d) => decisionView(d, snap.dependencies, slugOf));
     await ctx.emit({
       type: "vars.set",
       payload: {
@@ -111,8 +111,9 @@ export const planRegisterExecutor: NodeExecutor<PlanRegisterNode> = {
 };
 
 /** What the decision loop / `program/decide` template sees as `vars.decision`. */
-export function decisionView(d: Decision, slugOf: ReadonlyMap<string, string> = new Map()) {
-  return { id: d.id, key: d.key, title: d.title, question: d.question, context: d.context, status: d.status, criteria: d.criteria, options: d.options.map((o) => ({ key: o.key, name: o.name, description: o.description })), blocks: d.blocks, blockedSlugs: d.blocks.map((id) => slugOf.get(id) ?? id), dueBy: d.dueBy };
+export function decisionView(d: Decision, dependencies: readonly Dependency[], slugOf: ReadonlyMap<string, string> = new Map()) {
+  const blocks = decisionBlocks(d.id, dependencies);
+  return { id: d.id, key: d.key, title: d.title, question: d.question, context: d.context, status: d.status, criteria: d.criteria, options: d.options.map((o) => ({ key: o.key, name: o.name, description: o.description })), blocks, blockedSlugs: blocks.map((id) => slugOf.get(id) ?? id), dueBy: d.dueBy };
 }
 
 // ----------------------------------------------------------- decision-matrix
@@ -264,7 +265,8 @@ export function renderScheduleMarkdown(schedule: Schedule, snap: PlanSnapshot, c
       if (d.question) lines.push(d.question, "");
       if (d.result && d.criteria.length && d.options.length) lines.push(renderDecisionMatrix({ criteria: d.criteria, options: d.options, scale: d.scale }, d.result), "");
       if (d.rationale) lines.push(`Rationale: ${d.rationale}`, "");
-      if (d.blocks.length) lines.push(`Blocks: ${d.blocks.map(slug).join(", ")}`, "");
+      const blocks = decisionBlocks(d.id, snap.dependencies);
+      if (blocks.length) lines.push(`Blocks: ${blocks.map(slug).join(", ")}`, "");
     }
   }
   lines.push("", "## Dependency graph", "", "```mermaid", planToMermaid({ items: snap.items, dependencies: snap.dependencies, decisions: snap.decisions }), "```", "");

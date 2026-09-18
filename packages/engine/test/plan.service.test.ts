@@ -1,6 +1,6 @@
 /** PlanService without agents: registration across requests, dependency resolution, risks, decisions, artifact intake, scheduling. */
 import { describe, expect, it } from "vitest";
-import { FakeClock, silentLogger, type Artifact, type OrcaEventInput } from "@orca/core";
+import { FakeClock, decisionBlocks, silentLogger, type Artifact, type OrcaEventInput } from "@orca/core";
 import { PlanService, planAwaitExecutor, projectWorkItems, type PlanAwaitNode, type StepContext } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
@@ -50,7 +50,8 @@ describe("PlanService", () => {
       ].sort(),
     );
     expect(snap.risks[0]).toMatchObject({ key: "migration", affects: [bySlug.schema!.id], mitigatedBy: [bySlug.api!.id] });
-    expect(snap.decisions[0]).toMatchObject({ key: "store", status: "open", blocks: [bySlug.api!.id] });
+    expect(snap.decisions[0]).toMatchObject({ key: "store", status: "open" });
+    expect(decisionBlocks(snap.decisions[0]!.id, snap.dependencies)).toEqual([bySlug.api!.id]);
     expect(p.requestIds).toEqual(["req_1"]);
 
     // Schedule: only schema is ready; api waits on spec + decision; docs on the external; later on billing.

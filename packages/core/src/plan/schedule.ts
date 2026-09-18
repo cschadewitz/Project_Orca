@@ -21,6 +21,21 @@ export const STRATEGY_WEIGHTS: Record<SchedulingStrategy, PriorityWeights> = {
 
 export type DependencyState = "satisfied" | "waiting" | "failed" | "waived";
 
+/**
+ * Work item ids gated by a decision: the `from` side of every `blocks`
+ * dependency targeting it in one of `statuses` (by default the ones that still
+ * express an ordering - open or satisfied; waived and failed no longer gate).
+ * This is the only source of truth; `Decision` carries no copy.
+ */
+export function decisionBlocks(decisionId: string, dependencies: readonly Dependency[], statuses: readonly Dependency["status"][] = ["open", "satisfied"]): string[] {
+  const out: string[] = [];
+  for (const d of dependencies) {
+    if (d.target.kind !== "decision" || d.target.decisionId !== decisionId || d.type !== "blocks" || !statuses.includes(d.status)) continue;
+    if (!out.includes(d.from)) out.push(d.from);
+  }
+  return out;
+}
+
 export interface DependencyEvaluation {
   state: DependencyState;
   /** One line a human can read: "waiting for auth-api to produce spec". */
