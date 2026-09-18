@@ -30,20 +30,60 @@ export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 export const RISK_LEVELS: readonly RiskLevel[] = ["low", "medium", "high", "critical"];
 
+export const DEFAULT_RISK_SCALE = 5;
+export const MAX_RISK_SCALE = 10;
+
+/** The *minimum* score for each level above `low`. */
+export const RiskThresholdsSchema = z.object({
+  medium: z.number().positive(),
+  high: z.number().positive(),
+  critical: z.number().positive(),
+});
+export type RiskThresholds = z.infer<typeof RiskThresholdsSchema>;
+
+/**
+ * Thresholds for a `scale` x `scale` grid. The 5x5 defaults (5 / 10 / 16) are
+ * kept as fractions of the maximum score, so a smaller grid still reaches
+ * every level: 3x3 gives 2 / 4 / 6, 10x10 gives 20 / 40 / 64.
+ */
+export function defaultRiskThresholds(scale: number): RiskThresholds {
+  const max = scale * scale;
+  return { medium: Math.ceil(max * 0.2), high: Math.ceil(max * 0.4), critical: Math.ceil(max * 0.64) };
+}
+
+/** What config files and callers may pass: everything optional; missing thresholds follow `scale`. */
+export const RiskMatrixInputSchema = z.object({
+  scale: z.number().int().min(2).max(MAX_RISK_SCALE).optional(),
+  thresholds: RiskThresholdsSchema.partial().optional(),
+});
+export type RiskMatrixInput = z.infer<typeof RiskMatrixInputSchema>;
+
 /**
  * A likelihood x impact matrix. Scores are `likelihood * impact` on a 1..scale
  * grid; `thresholds` are the *minimum* score for each level above `low`.
+ * Parsing fills thresholds the input leaves out from the scale, then checks
+ * that the levels are ordered and that `critical` is reachable on the grid.
  */
-export const RiskMatrixConfigSchema = z.object({
-  scale: z.number().int().min(2).max(10).default(5),
-  thresholds: z
-    .object({
-      medium: z.number().positive().default(5),
-      high: z.number().positive().default(10),
-      critical: z.number().positive().default(16),
-    })
-    .default({ medium: 5, high: 10, critical: 16 }),
-});
+export const RiskMatrixConfigSchema = RiskMatrixInputSchema.transform((m) => {
+  const scale = m.scale ?? DEFAULT_RISK_SCALE;
+  const thresholds = defaultRiskThresholds(scale);
+  for (const level of ["medium", "high", "critical"] as const) {
+    const given = m.thresholds?.[level];
+    if (given !== undefined) thresholds[level] = given;
+  }
+  return { scale, thresholds };
+}).pipe(
+  z.object({ scale: z.number().int().min(2).max(MAX_RISK_SCALE), thresholds: RiskThresholdsSchema }).superRefine((m, ctx) => {
+    const { medium, high, critical } = m.thresholds;
+    if (!(medium < high && high < critical)) {
+      ctx.addIssue({ code: "custom", path: ["thresholds"], message: `risk matrix thresholds must be strictly increasing (medium < high < critical); got medium=${medium}, high=${high}, critical=${critical}` });
+    }
+    const max = m.scale * m.scale;
+    if (critical > max) {
+      ctx.addIssue({ code: "custom", path: ["thresholds", "critical"], message: `risk matrix threshold critical=${critical} is unreachable on a ${m.scale}x${m.scale} grid (maximum score ${max})` });
+    }
+  }),
+);
 export type RiskMatrixConfig = z.infer<typeof RiskMatrixConfigSchema>;
 export const DEFAULT_RISK_MATRIX: RiskMatrixConfig = RiskMatrixConfigSchema.parse({});
 
@@ -53,6 +93,12 @@ export type RiskCategory = z.infer<typeof RiskCategorySchema>;
 /** open -> mitigating -> mitigated | accepted | realized -> closed. */
 export const RiskStatusSchema = z.enum(["open", "mitigating", "mitigated", "accepted", "realized", "closed"]);
 export type RiskStatus = z.infer<typeof RiskStatusSchema>;
+/**
+ * Statuses that count towards an item's exposure. `realized` is deliberately
+ * open: the harm is happening, so exposed items stay held above the appetite
+ * until a human closes or accepts the risk. `mitigated`, `accepted` and
+ * `closed` no longer count.
+ */
 export const OPEN_RISK_STATUSES: readonly RiskStatus[] = ["open", "mitigating", "realized"];
 
 export const PlanKeySchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "keys are kebab-case");
@@ -65,8 +111,9 @@ export const RiskSchema = z.object({
   title: z.string().min(1),
   description: z.string().default(""),
   category: RiskCategorySchema.default("technical"),
-  likelihood: z.number().int().min(1),
-  impact: z.number().int().min(1),
+  /** 1..scale of the plan's risk matrix (PlanService enforces the scale). */
+  likelihood: z.number().int().min(1).max(MAX_RISK_SCALE),
+  impact: z.number().int().min(1).max(MAX_RISK_SCALE),
   status: RiskStatusSchema.default("open"),
   mitigation: z.string().optional(),
   contingency: z.string().optional(),
@@ -335,8 +382,9 @@ export const RiskInputSchema = z.object({
   title: z.string().min(1),
   description: z.string().default(""),
   category: RiskCategorySchema.default("technical"),
-  likelihood: z.number().int().min(1).default(3),
-  impact: z.number().int().min(1).default(3),
+  /** 1..scale of the plan's risk matrix; the plan fills the midpoint when omitted. */
+  likelihood: z.number().int().min(1).max(MAX_RISK_SCALE).optional(),
+  impact: z.number().int().min(1).max(MAX_RISK_SCALE).optional(),
   status: RiskStatusSchema.optional(),
   mitigation: z.string().optional(),
   contingency: z.string().optional(),

@@ -17,6 +17,7 @@ import {
   DecompositionItemSchema,
   DEPENDENCY_START_PHASE,
   DecisionInputSchema,
+  defaultRiskRating,
   defaultSignalExtractor,
   evaluateDecisionMatrix,
   evaluateDependency,
@@ -47,9 +48,10 @@ import {
   type PlanEventInput,
   type PlanOrigin,
   RiskInputSchema,
+  riskRatingIssue,
   type Risk,
   type RiskInputLike,
-  type RiskMatrixConfig,
+  type RiskMatrixInput,
   type Run,
   type Schedule,
   type SchedulingPolicy,
@@ -64,8 +66,21 @@ export interface PlanDefaults {
   planKey: string;
   planName: string;
   policy: Partial<SchedulingPolicy>;
-  riskMatrix: Partial<RiskMatrixConfig>;
+  /** Thresholds left out follow `scale` (see `RiskMatrixConfigSchema`). */
+  riskMatrix: RiskMatrixInput;
 }
+
+export interface EnsurePlanInput {
+  key?: string;
+  name?: string;
+  description?: string;
+  policy?: Partial<SchedulingPolicy>;
+  riskMatrix?: RiskMatrixInput;
+  requestId?: string;
+}
+
+/** Fields `updatePlan` accepts. A partial `riskMatrix` replaces the plan's matrix; missing thresholds follow its scale. */
+export type PlanChanges = Partial<Pick<Plan, "name" | "description" | "status" | "policy" | "meta">> & { riskMatrix?: RiskMatrixInput };
 
 export interface PlanServiceOptions {
   stores: Stores;
@@ -179,14 +194,14 @@ export class PlanService {
 
   // ------------------------------------------------------------------ plans
 
-  async ensurePlan(input: { key?: string; name?: string; description?: string; policy?: Partial<SchedulingPolicy>; riskMatrix?: Partial<RiskMatrixConfig>; requestId?: string } = {}, origin: PlanOrigin = SYSTEM): Promise<Plan> {
+  async ensurePlan(input: EnsurePlanInput = {}, origin: PlanOrigin = SYSTEM): Promise<Plan> {
     const key = input.key ?? this.defaults.planKey;
     // Locked on the key, not the id: the id does not exist yet, and two callers
     // racing to create the same plan is exactly what has to be serialised.
     return this.withPlan(`key:${key}`, () => this.ensurePlanLocked(key, input, origin));
   }
 
-  private async ensurePlanLocked(key: string, input: { name?: string; description?: string; policy?: Partial<SchedulingPolicy>; riskMatrix?: Partial<RiskMatrixConfig>; requestId?: string }, origin: PlanOrigin): Promise<Plan> {
+  private async ensurePlanLocked(key: string, input: Omit<EnsurePlanInput, "key">, origin: PlanOrigin): Promise<Plan> {
     let plan = await this.getPlan(key);
     if (!plan) {
       const now = this.clock.isoNow();
@@ -221,11 +236,11 @@ export class PlanService {
     return this.stores.plan.plans.list();
   }
 
-  async updatePlan(planId: string, changes: Partial<Pick<Plan, "name" | "description" | "status" | "policy" | "riskMatrix" | "meta">>, origin: PlanOrigin = SYSTEM): Promise<Plan> {
+  async updatePlan(planId: string, changes: PlanChanges, origin: PlanOrigin = SYSTEM): Promise<Plan> {
     return this.withPlan(planId, () => this.updatePlanLocked(planId, changes, origin));
   }
 
-  private async updatePlanLocked(planId: string, changes: Partial<Pick<Plan, "name" | "description" | "status" | "policy" | "riskMatrix" | "meta">>, origin: PlanOrigin): Promise<Plan> {
+  private async updatePlanLocked(planId: string, changes: PlanChanges, origin: PlanOrigin): Promise<Plan> {
     const plan = await this.requirePlan(planId);
     const next = PlanSchema.parse({ ...plan, ...changes, updatedAt: this.clock.isoNow() });
     await this.stores.plan.plans.put(next);
@@ -596,6 +611,13 @@ export class PlanService {
 
   private async upsertRiskLocked(planId: string, raw: RiskInputLike, origin: PlanOrigin, opts: { resolveSlug?: (slug: string) => WorkItem | undefined; extraAffects?: string[] }): Promise<Risk> {
     const input = RiskInputSchema.parse(raw);
+    const matrix = (await this.requirePlan(planId)).riskMatrix;
+    // Ratings the author left out sit in the middle of the plan's grid; the
+    // ones given must fit it, or the score means nothing on this matrix.
+    const likelihood = input.likelihood ?? defaultRiskRating(matrix);
+    const impact = input.impact ?? defaultRiskRating(matrix);
+    const ratingIssue = riskRatingIssue({ likelihood, impact }, matrix);
+    if (ratingIssue) throw new OrcaError("PLAN_INVALID", `risk '${input.key}': ${ratingIssue}`);
     const toIds = async (slugs: string[]) => {
       const ids: string[] = [];
       for (const s of slugs) {
@@ -619,8 +641,8 @@ export class PlanService {
         title: input.title,
         description: input.description,
         category: input.category,
-        likelihood: input.likelihood,
-        impact: input.impact,
+        likelihood,
+        impact,
         status: input.status ?? "open",
         triggers: input.triggers,
         affects,
@@ -639,8 +661,8 @@ export class PlanService {
     const changes: Partial<Risk> = {};
     if (input.title !== cur.title && input.title !== input.key) changes.title = input.title;
     if (input.description && input.description !== cur.description) changes.description = input.description;
-    if (raw.likelihood !== undefined && input.likelihood !== cur.likelihood) changes.likelihood = input.likelihood;
-    if (raw.impact !== undefined && input.impact !== cur.impact) changes.impact = input.impact;
+    if (input.likelihood !== undefined && input.likelihood !== cur.likelihood) changes.likelihood = input.likelihood;
+    if (input.impact !== undefined && input.impact !== cur.impact) changes.impact = input.impact;
     if (input.mitigation && input.mitigation !== cur.mitigation) changes.mitigation = input.mitigation;
     if (input.contingency && input.contingency !== cur.contingency) changes.contingency = input.contingency;
     if (input.owner && input.owner !== cur.owner) changes.owner = input.owner;
@@ -665,6 +687,10 @@ export class PlanService {
     const now = this.clock.isoNow();
     const closing = changes.status && ["mitigated", "accepted", "closed"].includes(changes.status) && !["mitigated", "accepted", "closed"].includes(cur.status);
     const next: Risk = { ...cur, ...changes, updatedAt: now, ...(closing ? { closedAt: now } : {}) };
+    if (changes.likelihood !== undefined || changes.impact !== undefined) {
+      const ratingIssue = riskRatingIssue(next, (await this.requirePlan(planId)).riskMatrix);
+      if (ratingIssue) throw new OrcaError("PLAN_INVALID", `risk '${cur.key}': ${ratingIssue}`);
+    }
     await this.stores.plan.risks.put(next);
     await this.journal({ type: "risk.updated", planId, origin, payload: { riskId: cur.id, changes: changes as Record<string, unknown> } });
     return next;

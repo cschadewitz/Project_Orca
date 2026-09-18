@@ -5,6 +5,9 @@ import {
   compactSchedule,
   computeSchedule,
   criticalPath,
+  defaultRiskRating,
+  defaultRiskThresholds,
+  describeRiskMatrix,
   dropCycleClosingEdges,
   DEFAULT_RISK_MATRIX,
   evaluateDecisionMatrix,
@@ -18,7 +21,9 @@ import {
   PlanSchema,
   planToMermaid,
   renderDecisionMatrix,
+  RiskMatrixConfigSchema,
   riskLevel,
+  riskRatingIssue,
   summarizeRisks,
   topologicalWaves,
   transitiveDownstream,
@@ -68,6 +73,36 @@ describe("risk matrix", () => {
     expect(riskLevel(5, DEFAULT_RISK_MATRIX)).toBe("medium");
     expect(riskLevel(12, DEFAULT_RISK_MATRIX)).toBe("high");
     expect(riskLevel(20, DEFAULT_RISK_MATRIX)).toBe("critical");
+    expect(DEFAULT_RISK_MATRIX).toEqual({ scale: 5, thresholds: { medium: 5, high: 10, critical: 16 } });
+  });
+  it("derives thresholds from the scale, so every level stays reachable on any grid", () => {
+    expect(RiskMatrixConfigSchema.parse({ scale: 3 })).toEqual({ scale: 3, thresholds: { medium: 2, high: 4, critical: 6 } });
+    expect(riskLevel(9, RiskMatrixConfigSchema.parse({ scale: 3 }))).toBe("critical");
+    for (let scale = 2; scale <= 10; scale++) {
+      const t = defaultRiskThresholds(scale);
+      expect(t.medium, `scale ${scale}`).toBeLessThan(t.high);
+      expect(t.high, `scale ${scale}`).toBeLessThan(t.critical);
+      expect(t.critical, `scale ${scale}`).toBeLessThanOrEqual(scale * scale);
+      expect(riskLevel(scale * scale, RiskMatrixConfigSchema.parse({ scale }))).toBe("critical");
+      expect(defaultRiskRating({ scale })).toBe(Math.ceil(scale / 2));
+    }
+    // Thresholds given explicitly win; the rest still follow the scale.
+    expect(RiskMatrixConfigSchema.parse({ scale: 4, thresholds: { critical: 12 } })).toEqual({ scale: 4, thresholds: { medium: 4, high: 7, critical: 12 } });
+    expect(describeRiskMatrix(RiskMatrixConfigSchema.parse({ scale: 4 }))).toBe("4x4 (medium >= 4, high >= 7, critical >= 11)");
+  });
+  it("rejects thresholds that are out of order or unreachable on the grid", () => {
+    const unordered = RiskMatrixConfigSchema.safeParse({ thresholds: { medium: 10, high: 5 } });
+    expect(unordered.success).toBe(false);
+    expect(unordered.error!.issues.map((i) => i.message)).toEqual([expect.stringMatching(/strictly increasing.*medium=10, high=5, critical=16/)]);
+    const unreachable = RiskMatrixConfigSchema.safeParse({ scale: 3, thresholds: { medium: 5, high: 10, critical: 16 } });
+    expect(unreachable.success).toBe(false);
+    expect(unreachable.error!.issues.map((i) => i.message)).toEqual([expect.stringMatching(/critical=16 is unreachable on a 3x3 grid \(maximum score 9\)/)]);
+    expect(RiskMatrixConfigSchema.safeParse({ scale: 11 }).success).toBe(false);
+  });
+  it("tells a rating that does not fit the matrix", () => {
+    const m = RiskMatrixConfigSchema.parse({ scale: 3 });
+    expect(riskRatingIssue({ likelihood: 3, impact: 1 }, m)).toBeUndefined();
+    expect(riskRatingIssue({ likelihood: 4, impact: 0 }, m)).toBe("likelihood=4, impact=0 outside the plan's risk matrix (1..3)");
   });
   it("computes exposure from open risks only and summarises", () => {
     const risks = [risk("a", 5, 5, ["x"]), risk("b", 2, 2, ["x", "y"]), risk("c", 4, 4, ["y"], { status: "accepted" })];

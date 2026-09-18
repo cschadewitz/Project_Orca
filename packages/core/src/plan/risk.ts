@@ -10,6 +10,24 @@ export function riskScore(r: { likelihood: number; impact: number }): number {
   return r.likelihood * r.impact;
 }
 
+/** The rating a risk gets when the author gives none: the midpoint of the grid (3 on 1..5). */
+export function defaultRiskRating(matrix: Pick<RiskMatrixConfig, "scale">): number {
+  return Math.ceil(matrix.scale / 2);
+}
+
+/** Why a likelihood / impact pair does not fit the matrix, or undefined when it does. */
+export function riskRatingIssue(r: { likelihood: number; impact: number }, matrix: Pick<RiskMatrixConfig, "scale">): string | undefined {
+  const off = (["likelihood", "impact"] as const).filter((k) => !Number.isInteger(r[k]) || r[k] < 1 || r[k] > matrix.scale);
+  if (!off.length) return undefined;
+  return `${off.map((k) => `${k}=${r[k]}`).join(", ")} outside the plan's risk matrix (1..${matrix.scale})`;
+}
+
+/** One line describing the matrix, for CLI output and explanations. */
+export function describeRiskMatrix(matrix: RiskMatrixConfig): string {
+  const t = matrix.thresholds;
+  return `${matrix.scale}x${matrix.scale} (medium >= ${t.medium}, high >= ${t.high}, critical >= ${t.critical})`;
+}
+
 export function riskLevel(score: number, matrix: RiskMatrixConfig): RiskLevel {
   const t = matrix.thresholds;
   if (score >= t.critical) return "critical";
