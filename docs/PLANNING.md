@@ -104,7 +104,7 @@ Agents never call a planning API (ADR 0002). They write artifacts; ORCA lifts
 | --- | --- | --- |
 | `decomposition` | `items[].dependsOn`, `items[].priority`, `items[].risks`, `risks[]`, `decisions[]` | `custom:plan-register` creates items, dependencies, risks, decisions |
 | `risk-register` | `risks[]` | risks upserted by key; `affects`/`mitigatedBy` slugs resolved |
-| `decision-matrix` | criteria, options, `chosen`, `rationale` | `custom:decision-matrix` evaluates and decides |
+| `decision-matrix` | criteria, options, `chosen`, `rationale` | a valid `chosen` decides on intake; otherwise `custom:decision-matrix` evaluates the matrix and decides. Re-submitting the same choice is a no-op: one `decision.resolved` per resolution |
 | any other (`spec`, `intent`, `review`, ...) | `risks`, `decisions`, `dependencies` | risks attach to the producing item; discovered dependencies are added from it; a decision with `chosen` is decided |
 
 Every artifact recorded by an item's run also updates `WorkItem.produced`,

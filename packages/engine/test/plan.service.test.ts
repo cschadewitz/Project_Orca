@@ -119,6 +119,41 @@ describe("PlanService", () => {
     expect((await plan.evaluateDependenciesOf(a!.id, "build"))[0]).toMatchObject({ state: "satisfied", detail: "b is done" });
   });
 
+  it("does not re-decide a decision the artifact intake already decided with the same choice (#79)", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "api", title: "API", dependsOn: ["decision:store"] }], decisions: [{ key: "store", title: "Session store", options: [{ key: "cookie", name: "Cookie" }, { key: "redis", name: "Redis" }], blocks: ["api"] }] }, { kind: "decomposition" });
+    const criteria = [{ key: "simple", name: "Simplicity", weight: 1 }];
+    const options = [{ key: "cookie", name: "Cookie", scores: { simple: 9 } }, { key: "redis", name: "Redis", scores: { simple: 4 } }];
+    const matrix = art("art_m", "decision-matrix", { key: "store", title: "Session store", criteria, options, chosen: "cookie", rationale: "v1 favours simplicity" }, "run_decide");
+
+    // The decide loop's agent step records the matrix: intake decides it, since it carries a valid `chosen`.
+    await plan.onArtifactRecorded({ id: "run_decide", requestId: "req_1" }, matrix);
+    expect((await plan.snapshot(p.id)).decisions[0]).toMatchObject({ key: "store", status: "decided", chosen: "cookie", decidedBy: "agent" });
+
+    // Then `custom:decision-matrix` submits the very same artifact (see resolveMatrixChoice): upsert, then evaluate.
+    const origin = { kind: "agent" as const, runId: "run_decide", artifactId: "art_m" };
+    const dec = await plan.upsertDecision(p.id, { key: "store", title: "Session store", criteria, options }, origin);
+    const evaluated = await plan.evaluateDecision(p.id, dec.id, { chosen: "cookie", decidedBy: "agent", rationale: "v1 favours simplicity" }, origin);
+    expect(evaluated).toMatchObject({ choice: "cookie", decision: { status: "decided", chosen: "cookie", decidedBy: "agent", rationale: "v1 favours simplicity" } });
+    expect(evaluated.result?.recommended).toBe("cookie");
+
+    let journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toEqual([expect.objectContaining({ origin: { kind: "artifact", artifactId: "art_m", runId: "run_decide" }, payload: expect.objectContaining({ chosen: "cookie", decidedBy: "agent" }) })]);
+    expect(journal.filter((e) => e.type === "dependency.resolved")).toHaveLength(1);
+
+    // A different choice is a real re-decision (a human overriding via `orca plan decide`) and is journalled ...
+    const overridden = await plan.evaluateDecision(p.id, "store", { chosen: "redis", decidedBy: "human", rationale: "revocation matters" }, human);
+    expect(overridden.decision).toMatchObject({ chosen: "redis", decidedBy: "human", rationale: "revocation matters" });
+    journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toHaveLength(2);
+    // ... while repeating it changes nothing.
+    await plan.evaluateDecision(p.id, "store", { chosen: "redis", decidedBy: "human" }, human);
+    journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toHaveLength(2);
+    expect((await plan.snapshot(p.id)).decisions[0]).toMatchObject({ chosen: "redis", decidedBy: "human", rationale: "revocation matters" });
+  });
+
   it("serialises intake, so concurrent sibling runs cannot duplicate a risk or re-resolve a dependency", async () => {
     const { plan } = make();
     const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
