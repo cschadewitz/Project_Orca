@@ -5,7 +5,7 @@
  * or a JSON dump can be understood at a glance (e.g. `run_01J...`, `art_01J...`).
  * They are ULID-like: time-ordered and random, without an external dependency.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 const ENCODING = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford base32
 
@@ -50,6 +50,18 @@ export type IdPrefix =
 
 export function newId(prefix: IdPrefix, now?: number): string {
   return `${prefix}_${ulid(now)}`;
+}
+
+/**
+ * Deterministic id for a record that is unique by key within a scope (a risk's
+ * key within a plan, say). The same parts always yield the same id, so two
+ * concurrent creators converge on one record instead of writing two.
+ */
+export function keyedId(prefix: IdPrefix, ...parts: readonly string[]): string {
+  const digest = createHash("sha256").update(parts.join("\u0000")).digest();
+  let out = "";
+  for (let i = 0; i < 26; i++) out += ENCODING[(digest[i] ?? 0) % 32];
+  return `${prefix}_${out}`;
 }
 
 export function hasPrefix(id: string, prefix: IdPrefix): boolean {

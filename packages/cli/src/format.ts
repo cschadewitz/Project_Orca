@@ -49,6 +49,8 @@ export function formatEvent(e: OrcaEvent): string {
     }
     case "artifact.rejected":
       return `${t}     ⚠ artifact ${String(p.kind)} rejected: ${String(p.reason)}`;
+    case "plan.signals.rejected":
+      return `${t}     ⚠ plan signals rejected: ${(p.issues as string[]).join("; ")}`;
     case "decision.resolved":
       return `${t}     decision: ${String(p.choice)} (${String(p.source)})`;
     case "human.requested":

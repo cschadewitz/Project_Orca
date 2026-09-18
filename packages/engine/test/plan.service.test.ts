@@ -119,6 +119,50 @@ describe("PlanService", () => {
     expect((await plan.evaluateDependenciesOf(a!.id, "build"))[0]).toMatchObject({ state: "satisfied", detail: "b is done" });
   });
 
+  it("serialises intake, so concurrent sibling runs cannot duplicate a risk or re-resolve a dependency", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    const reg = await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "a", title: "A" }, { slug: "b", title: "B" }, { slug: "c", title: "C", dependsOn: ["a@spec"] }] }, { kind: "decomposition" });
+    const [a, b, c] = reg.items;
+
+    // All three siblings record a spec at the same moment, each declaring the same risk key.
+    const risks = [{ key: "flaky-tests", title: "Flaky integration tests", likelihood: 2, impact: 2 }];
+    await Promise.all(
+      [a, b, c].map((item, i) => plan.onArtifactRecorded({ id: `run_${item!.slug}`, workItemId: item!.id, requestId: "req_1" }, art(`art_${i}`, "spec", { status: "ready", risks }, `run_${item!.slug}`))),
+    );
+
+    const snap = await plan.snapshot(p.id);
+    expect(snap.risks.map((r) => r.key)).toEqual(["flaky-tests"]);
+    expect(snap.risks[0]!.affects.sort()).toEqual([a!.id, b!.id, c!.id].sort());
+    const journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "risk.raised")).toHaveLength(1);
+    // c's stage dependency on a clears exactly once, however many intakes reconciled.
+    expect(journal.filter((e) => e.type === "dependency.resolved")).toEqual([expect.objectContaining({ payload: { dependencyId: snap.dependencies[0]!.id, status: "satisfied", resolution: "a produced spec" } })]);
+    expect(snap.dependencies).toHaveLength(1);
+  });
+
+  it("reports a rejected signal without dropping the ones behind it", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    const [a] = (await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "a", title: "A" }] }, { kind: "decomposition" })).items;
+    const spec = art("art_1", "spec", {
+      status: "ready",
+      decisions: [
+        { key: "queue", title: "Queue tech", options: [{ key: "sqs", name: "SQS" }], chosen: "kafka" }, // not one of the options
+        { key: "cache", title: "Cache", options: [{ key: "redis", name: "Redis" }], chosen: "redis" },
+      ],
+      risks: ["Rate limits"],
+      dependencies: [42], // not a dependency reference
+    });
+    const issues = await plan.onArtifactRecorded({ id: "run_a", workItemId: a!.id, requestId: "req_1" }, spec);
+    expect(issues).toEqual([expect.stringMatching(/dependencies\[0\]: not a dependency reference/), expect.stringMatching(/decision 'queue'.*'kafka' is not one of sqs/)]);
+
+    const snap = await plan.snapshot(p.id);
+    expect(snap.decisions.map((d) => [d.key, d.status, d.chosen])).toEqual([["queue", "open", undefined], ["cache", "decided", "redis"]]);
+    expect(snap.risks.map((r) => r.key)).toEqual(["rate-limits"]);
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "signals.rejected")).toEqual([expect.objectContaining({ payload: { artifactId: "art_1", runId: "run_a", issues } })]);
+  });
+
   it("holds items above the risk appetite until the risk is accepted, honouring plan policy", async () => {
     const { plan } = make();
     const p = await plan.ensurePlan({ key: "strict", policy: { riskAppetite: "low", strategy: "risk-first" } });

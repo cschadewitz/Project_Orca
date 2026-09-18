@@ -10,6 +10,7 @@
  * artifacts and finishes runs, so a node that runs *after* an agent step always
  * sees the plan updated with that step's signals. Nothing here talks to agents.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   compactSchedule,
   computeSchedule,
@@ -21,6 +22,7 @@ import {
   evaluateDependency,
   explainWorkItem,
   extractPlanSignals,
+  keyedId,
   newId,
   OrcaError,
   parseDependencyRef,
@@ -120,12 +122,17 @@ export interface UpstreamContext {
 
 const SYSTEM: PlanOrigin = { kind: "system" };
 
+/** The plan locks the current async context already owns (see `PlanService.withPlan`). */
+const ownedLocks = new AsyncLocalStorage<ReadonlySet<string>>();
+
 export class PlanService {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly defaults: PlanDefaults;
   private readonly stores: Stores;
   private readonly extractors: SignalExtractor[];
+  /** Tail of the mutation chain per plan; see `withPlan`. */
+  private readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(opts: PlanServiceOptions) {
     this.stores = opts.stores;
@@ -139,10 +146,46 @@ export class PlanService {
     this.extractors.push(extractor);
   }
 
+  /**
+   * Serialise every mutation of one plan onto a promise chain, the way the
+   * journal already serialises appends.
+   *
+   * Sibling child runs record artifacts concurrently and each mutation here is
+   * list-then-put: without this, two runs whose specs declare the same risk key
+   * both find nothing and both create a record, and two `reconcile` passes
+   * journal `dependency.resolved` twice for one dependency.
+   *
+   * Reentrant: a locked method called from inside another one for the same plan
+   * runs straight through, because the chain already owns the lock. Ownership
+   * is tracked per async context, so concurrent chains never mistake another
+   * chain's lock for their own.
+   */
+  private withPlan<T>(planId: string, fn: () => Promise<T>): Promise<T> {
+    const owned = ownedLocks.getStore();
+    if (owned?.has(planId)) return fn();
+    const next = new Set(owned ?? []).add(planId);
+    const result = (this.locks.get(planId) ?? Promise.resolve()).then(() => ownedLocks.run(next, fn));
+    // The chain must survive a rejected link, or one failed mutation would wedge the plan.
+    this.locks.set(
+      planId,
+      result.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return result;
+  }
+
   // ------------------------------------------------------------------ plans
 
   async ensurePlan(input: { key?: string; name?: string; description?: string; policy?: Partial<SchedulingPolicy>; riskMatrix?: Partial<RiskMatrixConfig>; requestId?: string } = {}, origin: PlanOrigin = SYSTEM): Promise<Plan> {
     const key = input.key ?? this.defaults.planKey;
+    // Locked on the key, not the id: the id does not exist yet, and two callers
+    // racing to create the same plan is exactly what has to be serialised.
+    return this.withPlan(`key:${key}`, () => this.ensurePlanLocked(key, input, origin));
+  }
+
+  private async ensurePlanLocked(key: string, input: { name?: string; description?: string; policy?: Partial<SchedulingPolicy>; riskMatrix?: Partial<RiskMatrixConfig>; requestId?: string }, origin: PlanOrigin): Promise<Plan> {
     let plan = await this.getPlan(key);
     if (!plan) {
       const now = this.clock.isoNow();
@@ -178,6 +221,10 @@ export class PlanService {
   }
 
   async updatePlan(planId: string, changes: Partial<Pick<Plan, "name" | "description" | "status" | "policy" | "riskMatrix" | "meta">>, origin: PlanOrigin = SYSTEM): Promise<Plan> {
+    return this.withPlan(planId, () => this.updatePlanLocked(planId, changes, origin));
+  }
+
+  private async updatePlanLocked(planId: string, changes: Partial<Pick<Plan, "name" | "description" | "status" | "policy" | "riskMatrix" | "meta">>, origin: PlanOrigin): Promise<Plan> {
     const plan = await this.requirePlan(planId);
     const next = PlanSchema.parse({ ...plan, ...changes, updatedAt: this.clock.isoNow() });
     await this.stores.plan.plans.put(next);
@@ -186,6 +233,10 @@ export class PlanService {
   }
 
   async linkRequest(planId: string, requestId: string, origin: PlanOrigin = SYSTEM): Promise<Plan> {
+    return this.withPlan(planId, () => this.linkRequestLocked(planId, requestId, origin));
+  }
+
+  private async linkRequestLocked(planId: string, requestId: string, origin: PlanOrigin): Promise<Plan> {
     const plan = await this.requirePlan(planId);
     if (plan.requestIds.includes(requestId)) return plan;
     const next = { ...plan, requestIds: [...plan.requestIds, requestId], updatedAt: this.clock.isoNow() };
@@ -246,6 +297,10 @@ export class PlanService {
    */
   async registerWorkItems(planId: string, input: RegisterInput, origin: PlanOrigin): Promise<RegisterResult> {
     const plan = await this.requirePlan(planId);
+    return this.withPlan(plan.id, () => this.registerWorkItemsLocked(plan, input, origin));
+  }
+
+  private async registerWorkItemsLocked(plan: Plan, input: RegisterInput, origin: PlanOrigin): Promise<RegisterResult> {
     const warnings: string[] = [];
     const existing = await this.stores.workItems.list((w) => w.planId === plan.id);
     const planBySlug = new Map(existing.map((w) => [w.slug, w]));
@@ -359,6 +414,13 @@ export class PlanService {
   async updateWorkItem(workItemId: string, changes: Partial<Omit<WorkItem, "deferredReason">> & { deferredReason?: string | null }, origin: PlanOrigin = SYSTEM): Promise<WorkItem> {
     const cur = await this.stores.workItems.get(workItemId);
     if (!cur) throw new OrcaError("PLAN_INVALID", `work item ${workItemId} not found`);
+    const apply = () => this.updateWorkItemLocked(workItemId, changes, origin);
+    return cur.planId ? this.withPlan(cur.planId, apply) : apply();
+  }
+
+  private async updateWorkItemLocked(workItemId: string, changes: Partial<Omit<WorkItem, "deferredReason">> & { deferredReason?: string | null }, origin: PlanOrigin): Promise<WorkItem> {
+    const cur = await this.stores.workItems.get(workItemId);
+    if (!cur) throw new OrcaError("PLAN_INVALID", `work item ${workItemId} not found`);
     const { deferredReason, ...rest } = changes;
     const next: WorkItem = { ...cur, ...rest, updatedAt: this.clock.isoNow(), ...(typeof deferredReason === "string" ? { deferredReason } : {}) };
     if (deferredReason === null) delete next.deferredReason;
@@ -369,6 +431,12 @@ export class PlanService {
 
   /** Remember that the item produced an artifact kind (drives stage-level dependencies), then reconcile. */
   async recordProduced(workItemId: string, artifact: Artifact, origin: PlanOrigin = SYSTEM): Promise<void> {
+    const item = await this.stores.workItems.get(workItemId);
+    if (!item?.planId) return;
+    return this.withPlan(item.planId, () => this.recordProducedLocked(workItemId, artifact, origin));
+  }
+
+  private async recordProducedLocked(workItemId: string, artifact: Artifact, origin: PlanOrigin): Promise<void> {
     const cur = await this.stores.workItems.get(workItemId);
     if (!cur?.planId) return;
     await this.updateWorkItem(workItemId, { produced: { ...cur.produced, [artifact.kind]: artifact.id, ...(artifact.name !== artifact.kind ? { [artifact.name]: artifact.id } : {}) } }, origin);
@@ -378,6 +446,10 @@ export class PlanService {
   // ----------------------------------------------------------- dependencies
 
   async addDependency(planId: string, fromSlugOrId: string, ref: DependencyRef, origin: PlanOrigin = SYSTEM): Promise<Dependency> {
+    return this.withPlan(planId, () => this.addDependencyLocked(planId, fromSlugOrId, ref, origin));
+  }
+
+  private async addDependencyLocked(planId: string, fromSlugOrId: string, ref: DependencyRef, origin: PlanOrigin): Promise<Dependency> {
     const from = await this.requireItem(planId, fromSlugOrId);
     const warnings: string[] = [];
     const dep = await this.addDependencyFromRef(planId, from, parseDependencyRef(ref), origin, undefined, warnings);
@@ -388,6 +460,12 @@ export class PlanService {
   }
 
   async resolveDependency(dependencyId: string, status: "satisfied" | "failed" | "waived" | "open", resolution: string | undefined, origin: PlanOrigin = SYSTEM): Promise<Dependency> {
+    const dep = await this.stores.plan.dependencies.get(dependencyId);
+    if (!dep) throw new OrcaError("PLAN_INVALID", `dependency ${dependencyId} not found`);
+    return this.withPlan(dep.planId, () => this.resolveDependencyLocked(dependencyId, status, resolution, origin));
+  }
+
+  private async resolveDependencyLocked(dependencyId: string, status: "satisfied" | "failed" | "waived" | "open", resolution: string | undefined, origin: PlanOrigin): Promise<Dependency> {
     const cur = await this.stores.plan.dependencies.get(dependencyId);
     if (!cur) throw new OrcaError("PLAN_INVALID", `dependency ${dependencyId} not found`);
     const now = this.clock.isoNow();
@@ -418,6 +496,10 @@ export class PlanService {
    * journal records *when* each dependency cleared. Idempotent.
    */
   async reconcile(planId: string, origin: PlanOrigin = SYSTEM): Promise<{ satisfied: string[]; failed: string[] }> {
+    return this.withPlan(planId, () => this.reconcileLocked(planId, origin));
+  }
+
+  private async reconcileLocked(planId: string, origin: PlanOrigin): Promise<{ satisfied: string[]; failed: string[] }> {
     const snap = await this.snapshot(planId);
     const itemsById = new Map(snap.items.map((i) => [i.id, i]));
     const decisionsById = new Map(snap.decisions.map((d) => [d.id, d]));
@@ -468,7 +550,7 @@ export class PlanService {
     const dup = await this.stores.plan.dependencies.list((d) => d.planId === planId && d.from === from && d.type === meta.type && d.requiredBy === meta.requiredBy && JSON.stringify(d.target) === JSON.stringify(target));
     if (dup.length) return undefined;
     const now = this.clock.isoNow();
-    const dep: Dependency = { id: newId("dep", this.clock.now()), planId, from, target, type: meta.type, requiredBy: meta.requiredBy, status: "open", origin, createdAt: now, updatedAt: now, ...(meta.rationale ? { rationale: meta.rationale } : {}) };
+    const dep: Dependency = { id: keyedId("dep", planId, from, meta.type, meta.requiredBy, JSON.stringify(target)), planId, from, target, type: meta.type, requiredBy: meta.requiredBy, status: "open", origin, createdAt: now, updatedAt: now, ...(meta.rationale ? { rationale: meta.rationale } : {}) };
     await this.stores.plan.dependencies.put(dep);
     await this.journal({ type: "dependency.added", planId, origin, payload: { dependency: dep } });
     if (target.kind === "decision") {
@@ -482,6 +564,10 @@ export class PlanService {
 
   /** Create or update a risk by key. Slugs in `affects` / `mitigatedBy` are resolved to work item ids. */
   async upsertRisk(planId: string, raw: RiskInputLike, origin: PlanOrigin, opts: { resolveSlug?: (slug: string) => WorkItem | undefined; extraAffects?: string[] } = {}): Promise<Risk> {
+    return this.withPlan(planId, () => this.upsertRiskLocked(planId, raw, origin, opts));
+  }
+
+  private async upsertRiskLocked(planId: string, raw: RiskInputLike, origin: PlanOrigin, opts: { resolveSlug?: (slug: string) => WorkItem | undefined; extraAffects?: string[] }): Promise<Risk> {
     const input = RiskInputSchema.parse(raw);
     const toIds = async (slugs: string[]) => {
       const ids: string[] = [];
@@ -498,7 +584,9 @@ export class PlanService {
     const cur = (await this.stores.plan.risks.list((r) => r.planId === planId && r.key === input.key))[0];
     if (!cur) {
       const risk: Risk = {
-        id: newId("risk", this.clock.now()),
+        // Keyed, not random: a concurrent creator of the same risk writes the
+        // same record instead of a duplicate, even from outside the plan lock.
+        id: keyedId("risk", planId, input.key),
         planId,
         key: input.key,
         title: input.title,
@@ -541,6 +629,10 @@ export class PlanService {
   }
 
   async updateRisk(planId: string, keyOrId: string, changes: Partial<Risk>, origin: PlanOrigin = SYSTEM): Promise<Risk> {
+    return this.withPlan(planId, () => this.updateRiskLocked(planId, keyOrId, changes, origin));
+  }
+
+  private async updateRiskLocked(planId: string, keyOrId: string, changes: Partial<Risk>, origin: PlanOrigin): Promise<Risk> {
     const cur = (await this.stores.plan.risks.get(keyOrId)) ?? (await this.stores.plan.risks.list((r) => r.planId === planId && r.key === keyOrId))[0];
     if (!cur || cur.planId !== planId) throw new OrcaError("PLAN_INVALID", `risk '${keyOrId}' not found in plan ${planId}`);
     const now = this.clock.isoNow();
@@ -555,12 +647,16 @@ export class PlanService {
 
   /** Create or update a decision by key. A valid `chosen` decides it immediately. */
   async upsertDecision(planId: string, input: DecisionInputLike, origin: PlanOrigin): Promise<Decision> {
+    return this.withPlan(planId, () => this.upsertDecisionLocked(planId, input, origin));
+  }
+
+  private async upsertDecisionLocked(planId: string, input: DecisionInputLike, origin: PlanOrigin): Promise<Decision> {
     const parsed = DecisionInputSchema.parse(input);
     const now = this.clock.isoNow();
     let dec = (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === parsed.key))[0];
     if (!dec) {
       dec = {
-        id: newId("dec", this.clock.now()),
+        id: keyedId("dec", planId, parsed.key),
         planId,
         key: parsed.key,
         title: parsed.title,
@@ -612,6 +708,10 @@ export class PlanService {
    * is chosen. Dependencies on the decision are reconciled afterwards.
    */
   async evaluateDecision(planId: string, keyOrId: string, opts: { chosen?: string; decidedBy?: Decision["decidedBy"]; rationale?: string } = {}, origin: PlanOrigin = SYSTEM): Promise<{ decision: Decision; result?: DecisionMatrixResult; choice: string }> {
+    return this.withPlan(planId, () => this.evaluateDecisionLocked(planId, keyOrId, opts, origin));
+  }
+
+  private async evaluateDecisionLocked(planId: string, keyOrId: string, opts: { chosen?: string; decidedBy?: Decision["decidedBy"]; rationale?: string }, origin: PlanOrigin): Promise<{ decision: Decision; result?: DecisionMatrixResult; choice: string }> {
     const cur = (await this.stores.plan.decisions.get(keyOrId)) ?? (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === keyOrId))[0];
     if (!cur || cur.planId !== planId) throw new OrcaError("PLAN_INVALID", `decision '${keyOrId}' not found in plan ${planId}`);
     const now = this.clock.isoNow();
@@ -630,6 +730,10 @@ export class PlanService {
   }
 
   async reopenDecision(planId: string, keyOrId: string, origin: PlanOrigin = SYSTEM): Promise<Decision> {
+    return this.withPlan(planId, () => this.reopenDecisionLocked(planId, keyOrId, origin));
+  }
+
+  private async reopenDecisionLocked(planId: string, keyOrId: string, origin: PlanOrigin): Promise<Decision> {
     const cur = (await this.stores.plan.decisions.get(keyOrId)) ?? (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === keyOrId))[0];
     if (!cur) throw new OrcaError("PLAN_INVALID", `decision '${keyOrId}' not found`);
     const next: Decision = { ...cur, status: "open", updatedAt: this.clock.isoNow() };
@@ -708,14 +812,30 @@ export class PlanService {
    * artifact says `chosen`), and dependencies discovered mid-flight.
    */
   async ingestArtifact(artifact: Artifact, ctx: { planId: string; workItemId?: string | undefined; runId?: string | undefined }): Promise<{ risks: Risk[]; decisions: Decision[]; dependencies: Dependency[]; issues: string[] }> {
+    return this.withPlan(ctx.planId, () => this.ingestArtifactLocked(artifact, ctx));
+  }
+
+  private async ingestArtifactLocked(artifact: Artifact, ctx: { planId: string; workItemId?: string | undefined; runId?: string | undefined }): Promise<{ risks: Risk[]; decisions: Decision[]; dependencies: Dependency[]; issues: string[] }> {
     const signals = extractPlanSignals(artifact, [defaultSignalExtractor, ...this.extractors]);
     const origin: PlanOrigin = { kind: "artifact", artifactId: artifact.id, ...(ctx.runId ? { runId: ctx.runId } : {}) };
     const out = { risks: [] as Risk[], decisions: [] as Decision[], dependencies: [] as Dependency[], issues: [...signals.issues] };
+    // Each signal is applied on its own: a rejected one (an unknown `chosen`,
+    // say) is reported, not allowed to drop the signals behind it.
     for (const r of signals.risks) {
       const extraAffects = r.affects.length === 0 && ctx.workItemId ? [ctx.workItemId] : [];
-      out.risks.push(await this.upsertRisk(ctx.planId, r, origin, { extraAffects }));
+      try {
+        out.risks.push(await this.upsertRisk(ctx.planId, r, origin, { extraAffects }));
+      } catch (e) {
+        out.issues.push(`risk '${r.key}': ${(e as Error).message}`);
+      }
     }
-    for (const d of signals.decisions) out.decisions.push(await this.upsertDecision(ctx.planId, d, origin));
+    for (const d of signals.decisions) {
+      try {
+        out.decisions.push(await this.upsertDecision(ctx.planId, d, origin));
+      } catch (e) {
+        out.issues.push(`decision '${d.key}': ${(e as Error).message}`);
+      }
+    }
     if (ctx.workItemId) {
       const from = await this.stores.workItems.get(ctx.workItemId);
       if (from?.planId === ctx.planId) {
@@ -730,22 +850,37 @@ export class PlanService {
       }
     }
     if (out.risks.length || out.decisions.length || out.dependencies.length) await this.reconcile(ctx.planId, origin);
-    if (out.issues.length) this.logger.warn("plan signals with issues", { artifact: artifact.id, issues: out.issues });
+    if (out.issues.length) {
+      this.logger.warn("plan signals with issues", { artifact: artifact.id, issues: out.issues });
+      await this.journal({ type: "signals.rejected", planId: ctx.planId, origin, payload: { artifactId: artifact.id, ...(ctx.runId ? { runId: ctx.runId } : {}), issues: out.issues } });
+    }
     return out;
   }
 
   // ----------------------------------------------------- orchestrator hooks
 
-  /** Called by the orchestrator right after `artifact.recorded`. Never throws. */
-  async onArtifactRecorded(run: Pick<Run, "id" | "workItemId" | "requestId">, artifact: Artifact): Promise<void> {
+  /**
+   * Called by the orchestrator right after `artifact.recorded`. Never throws;
+   * returns the signals the plan refused, for the run to surface.
+   *
+   * The whole intake runs under the plan lock, so sibling child runs recording
+   * artifacts at the same time take turns rather than interleaving their
+   * list-then-put updates.
+   */
+  async onArtifactRecorded(run: Pick<Run, "id" | "workItemId" | "requestId">, artifact: Artifact): Promise<string[]> {
     try {
       const plan = await this.planForRun(run);
-      if (!plan) return;
-      const origin: PlanOrigin = { kind: "artifact", artifactId: artifact.id, runId: run.id };
-      if (run.workItemId) await this.recordProduced(run.workItemId, artifact, origin);
-      await this.ingestArtifact(artifact, { planId: plan.id, workItemId: run.workItemId, runId: run.id });
+      if (!plan) return [];
+      return await this.withPlan(plan.id, async () => {
+        const origin: PlanOrigin = { kind: "artifact", artifactId: artifact.id, runId: run.id };
+        if (run.workItemId) await this.recordProduced(run.workItemId, artifact, origin);
+        const { issues } = await this.ingestArtifact(artifact, { planId: plan.id, workItemId: run.workItemId, runId: run.id });
+        return issues;
+      });
     } catch (e) {
-      this.logger.error("plan: artifact intake failed", { artifact: artifact.id, error: (e as Error).message });
+      const message = (e as Error).message;
+      this.logger.error("plan: artifact intake failed", { artifact: artifact.id, error: message });
+      return [`plan intake failed: ${message}`];
     }
   }
 
@@ -753,11 +888,16 @@ export class PlanService {
   async onRunFinished(run: Pick<Run, "id" | "workItemId" | "requestId" | "status" | "outcome" | "parentRunId">): Promise<void> {
     try {
       if (!run.workItemId) return;
-      const wi = await this.stores.workItems.get(run.workItemId);
-      if (!wi?.planId || (wi.runId && wi.runId !== run.id)) return;
+      const planId = (await this.stores.workItems.get(run.workItemId))?.planId;
+      if (!planId) return;
       const status: WorkItem["status"] = run.status === "completed" && run.outcome === "success" ? "done" : run.status === "cancelled" ? "cancelled" : "failed";
-      if (wi.status !== status) await this.updateWorkItem(wi.id, { status, runId: run.id }, { kind: "system", runId: run.id });
-      await this.reconcile(wi.planId, { kind: "system", runId: run.id });
+      await this.withPlan(planId, async () => {
+        // Re-read under the lock: a sibling's intake may have moved the item on.
+        const wi = await this.stores.workItems.get(run.workItemId!);
+        if (!wi || wi.planId !== planId || (wi.runId && wi.runId !== run.id)) return;
+        if (wi.status !== status) await this.updateWorkItem(wi.id, { status, runId: run.id }, { kind: "system", runId: run.id });
+        await this.reconcile(planId, { kind: "system", runId: run.id });
+      });
     } catch (e) {
       this.logger.error("plan: run completion intake failed", { run: run.id, error: (e as Error).message });
     }
