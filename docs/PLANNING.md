@@ -119,7 +119,7 @@ from their own artifact kinds.
 `computeSchedule()` (`packages/core/src/plan/schedule.ts`) is pure. Given a
 snapshot it classifies every unsettled item:
 
-1. **unschedulable** - in a dependency cycle, or a `blocks` dependency has
+1. **unschedulable** - in a `blocks` dependency cycle, or a `blocks` dependency has
    *failed* (upstream failed/cancelled/blocked, decision superseded, external
    marked failed);
 2. **waiting** - a `blocks` dependency required by `start` is not satisfied,
@@ -143,6 +143,13 @@ contributed becomes a reason (`orca plan explain <slug>`):
 | `mitigation` | it mitigates an open risk (level-weighted) |
 | `priority` | `critical` / `high` / `normal` / `low` from the decomposition |
 | `age` | older items first |
+
+Cycle detection runs over `blocks` edges only: a `soft` edge is an ordering
+preference that never blocks, so a soft back-reference must not strand the
+items it points at. With `orderSoftDependencies` (the default) soft edges still
+shape the **waves**, the **critical path** and the dependent counts - except
+for the ones that would close a cycle, which are left out of that view and
+listed in `schedule.ignoredSoftDependencies`.
 
 Strategies are weight presets: `critical-path` (default), `risk-first`,
 `most-dependents`, `fifo`; `policy.weights` overrides individual weights. The
@@ -217,13 +224,13 @@ configured `planning.plan`). The read-only ones (`list`, `show`, `schedule`, `ri
 ## Known limitations
 
 Reviewed when the layer was rebased onto main; tracked as issues #71–#84 (label
-`planning`). In short: the scheduler treats a `soft` back‑reference as a cycle (#71); two
-dispatchers over one plan can launch the same item twice (#72); artifact intake is not
-serialised per plan, so sibling runs can duplicate a same‑key risk (#73); work‑item status
-is written directly by the plan side instead of being projected from the event log as
-#70 does for the rest (#74); `custom:plan-dispatch` has its own fan‑out loop and does not
-cancel in‑flight children on `failFast` (#75); `onWaiting: wait` logs a `step.waiting`
-event per poll (#76). See `docs/ROADMAP.md` item 13.
+`planning`). In short: two dispatchers over one plan can launch the same item twice (#72);
+artifact intake is not serialised per plan, so sibling runs can duplicate a same‑key risk
+(#73); work‑item status is written directly by the plan side instead of being projected
+from the event log as #70 does for the rest (#74); `custom:plan-dispatch` has its own
+fan‑out loop and does not cancel in‑flight children on `failFast` (#75); `onWaiting: wait`
+logs a `step.waiting` event per poll (#76). See `docs/ROADMAP.md` item 13. Fixed since:
+cycle detection ignores `soft` edges (#71).
 
 ## Configuration
 

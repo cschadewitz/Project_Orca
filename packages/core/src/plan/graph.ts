@@ -38,18 +38,66 @@ export function buildDependencyGraph(nodeIds: readonly string[], dependencies: r
   const nodes = [...new Set(nodeIds)];
   const known = new Set(nodes);
   const edges: GraphEdge[] = [];
-  const upstreamOf = new Map<string, GraphEdge[]>(nodes.map((n) => [n, []]));
-  const downstreamOf = new Map<string, GraphEdge[]>(nodes.map((n) => [n, []]));
   for (const d of dependencies) {
     if (d.target.kind !== "work-item" || !ordering.has(d.type)) continue;
     if (!known.has(d.from) || !known.has(d.target.workItemId)) continue;
     if (d.status === "waived") continue;
-    const e: GraphEdge = { from: d.from, to: d.target.workItemId, type: d.type, dependencyId: d.id, ...(d.target.stage ? { stage: d.target.stage } : {}) };
-    edges.push(e);
+    edges.push({ from: d.from, to: d.target.workItemId, type: d.type, dependencyId: d.id, ...(d.target.stage ? { stage: d.target.stage } : {}) });
+  }
+  return graphFromEdges(nodes, edges);
+}
+
+function graphFromEdges(nodes: readonly string[], edges: readonly GraphEdge[]): DependencyGraph {
+  const upstreamOf = new Map<string, GraphEdge[]>(nodes.map((n) => [n, []]));
+  const downstreamOf = new Map<string, GraphEdge[]>(nodes.map((n) => [n, []]));
+  for (const e of edges) {
     upstreamOf.get(e.from)!.push(e);
     downstreamOf.get(e.to)!.push(e);
   }
-  return { nodes, edges, upstreamOf, downstreamOf };
+  return { nodes: [...nodes], edges: [...edges], upstreamOf, downstreamOf };
+}
+
+export interface RelaxedGraph {
+  graph: DependencyGraph;
+  /** The optional edges that were left out because they closed a cycle. */
+  dropped: GraphEdge[];
+}
+
+/**
+ * Drop the edges of type `optional` that close a cycle, keeping every other
+ * edge (and therefore every cycle the required edges already form).
+ *
+ * Ordering *hints* must never make work unschedulable: a `soft` edge that
+ * points back into a `blocks` chain is a preference that cannot be honoured,
+ * not a planning error. Edges are considered in input order, so the result is
+ * deterministic and earlier hints win.
+ */
+export function dropCycleClosingEdges(graph: DependencyGraph, optional: readonly DependencyType[]): RelaxedGraph {
+  const droppable = new Set(optional);
+  const dropped: GraphEdge[] = [];
+  const upstream = new Map<string, string[]>(graph.nodes.map((n) => [n, []]));
+  for (const e of graph.edges) if (!droppable.has(e.type)) upstream.get(e.from)!.push(e.to);
+  // Can `to` already reach `from` by following upstream edges? Then `from -> to` closes a cycle.
+  const reaches = (from: string, to: string): boolean => {
+    const seen = new Set<string>();
+    const stack = [to];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      if (cur === from) return true;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      stack.push(...(upstream.get(cur) ?? []));
+    }
+    return false;
+  };
+  for (const e of graph.edges) {
+    if (!droppable.has(e.type)) continue;
+    if (reaches(e.from, e.to)) dropped.push(e);
+    else upstream.get(e.from)!.push(e.to);
+  }
+  if (!dropped.length) return { graph, dropped };
+  const out = new Set(dropped.map((e) => e.dependencyId));
+  return { graph: graphFromEdges(graph.nodes, graph.edges.filter((e) => !out.has(e.dependencyId))), dropped };
 }
 
 /** Strongly connected components with more than one node, plus self-loops (Tarjan). */
