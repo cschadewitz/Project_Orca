@@ -268,7 +268,17 @@ describe("planning layer (e2e)", () => {
     const workflows = await loadShippedWorkflows();
     workflows.register(
       parseWorkflow(
-        ["id: my-sdlc", 'name: "Minimal item workflow"', 'version: "1"', "start: start", "nodes:", "  start: { type: start }", "  done: { type: end, outcome: success }", "edges:", "  - { from: start, to: done }"].join("\n"),
+        [
+          "id: my-sdlc",
+          'name: "Minimal item workflow"',
+          'version: "1"',
+          "start: start",
+          "nodes:",
+          "  start: { type: start }",
+          "  done: { type: end, outcome: success }",
+          "edges:",
+          "  - { from: start, to: done }",
+        ].join("\n"),
         "my-sdlc.yaml",
       ),
     );
@@ -292,7 +302,10 @@ describe("planning layer (e2e)", () => {
     expect(b.state.run.status, JSON.stringify(b.state.run.error)).toBe("completed");
 
     // What `orca plan dispatch` does: seed `vars.itemWorkflow` from `program.itemWorkflow`.
-    const resume = await h.orchestrator.startAndRun({ workflowId: "plan-resume", vars: { plan: "default", itemWorkflow: "my-sdlc" } });
+    const resume = await h.orchestrator.startAndRun({
+      workflowId: "plan-resume",
+      vars: { plan: "default", itemWorkflow: "my-sdlc" },
+    });
     expect(resume.run.status, JSON.stringify(resume.run.error)).toBe("completed");
     const dispatch = resume.steps[resume.stepOrder.find((id) => resume.steps[id]!.nodeId === "dispatch")!]!;
     const children = await Promise.all(dispatch.childRunIds.map((id) => h.orchestrator.getState(id)));
