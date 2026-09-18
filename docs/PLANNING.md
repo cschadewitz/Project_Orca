@@ -194,7 +194,9 @@ together and never overwrites a status the projection set.
 decision, or held; or claimed by another dispatcher) or fails when items
 failed/blocked. Deferred items keep `deferredReason` and are picked up by the
 next dispatch that sees them: `orca plan dispatch <key>` runs
-`workflows/plan-resume.yaml` (schedule -> gate -> dispatch with `scope: plan`).
+`workflows/plan-resume.yaml` (schedule -> gate -> dispatch with `scope: plan`), and
+dispatches each item to the same `program.itemWorkflow` `orca submit` uses (the item's
+own `workflowId` still wins).
 
 `plan.policy.concurrency` bounds *one* dispatcher, so it cannot stop two of them —
 a program run dispatching with `scope: request` while an operator runs `orca plan

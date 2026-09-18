@@ -7,8 +7,9 @@
  */
 import { rm } from "node:fs/promises";
 import { afterAll, describe, expect, it } from "vitest";
+import { parseWorkflow } from "@orca/core";
 import { PausingHumanInput, ProgramService } from "@orca/engine";
-import { harness } from "./helpers.js";
+import { harness, loadShippedWorkflows } from "./helpers.js";
 
 const dirs: string[] = [];
 afterAll(async () => {
@@ -162,6 +163,41 @@ describe("planning layer (e2e)", () => {
     const journal = await h.orchestrator.plan.journalOf(plan.id);
     expect(journal.map((e) => e.type)).toEqual(expect.arrayContaining(["dispatch.deferred", "dependency.bound", "dependency.resolved", "dispatch.started"]));
     expect((await h.orchestrator.plan.explain(plan.id, "a2"))[0]).toBe("a2: done");
+  }, 180_000);
+
+  it("plan-resume dispatches deferred items to vars.itemWorkflow (program.itemWorkflow), not a pinned ai-sdlc", async () => {
+    const workflows = await loadShippedWorkflows();
+    workflows.register(
+      parseWorkflow(
+        ["id: my-sdlc", 'name: "Minimal item workflow"', 'version: "1"', "start: start", "nodes:", "  start: { type: start }", "  done: { type: end, outcome: success }", "edges:", "  - { from: start, to: done }"].join("\n"),
+        "my-sdlc.yaml",
+      ),
+    );
+    const h = await harness(
+      {
+        kinds: {
+          ...good,
+          decomposition: [
+            { data: { items: [{ slug: "a1", title: "A1", dependsOn: ["b1"] }], rationale: "A" } },
+            { data: { items: [{ slug: "b1", title: "B1" }], rationale: "B" } },
+          ],
+        },
+      },
+      { workflows },
+    );
+    dirs.push(h.dir);
+    const program = new ProgramService(h.orchestrator);
+    const a = await program.submitAndRun({ title: "A", body: "first" });
+    expect(a.state.run.vars.dispatchOutcome).toBe("partial");
+    const b = await program.submitAndRun({ title: "B", body: "second" });
+    expect(b.state.run.status, JSON.stringify(b.state.run.error)).toBe("completed");
+
+    // What `orca plan dispatch` does: seed `vars.itemWorkflow` from `program.itemWorkflow`.
+    const resume = await h.orchestrator.startAndRun({ workflowId: "plan-resume", vars: { plan: "default", itemWorkflow: "my-sdlc" } });
+    expect(resume.run.status, JSON.stringify(resume.run.error)).toBe("completed");
+    const dispatch = resume.steps[resume.stepOrder.find((id) => resume.steps[id]!.nodeId === "dispatch")!]!;
+    const children = await Promise.all(dispatch.childRunIds.map((id) => h.orchestrator.getState(id)));
+    expect(children.map((c) => c.run.workflowId)).toEqual(["my-sdlc"]);
   }, 180_000);
   it("parks the program when an item's gate needs a human, and resumes into the same child runs", async () => {
     const h = await harness(

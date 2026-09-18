@@ -8,6 +8,8 @@ version: "1"
 inputs:
   plan: Plan key to resume.
 vars:
+  # Default item workflow; `orca plan dispatch` overrides it with `program.itemWorkflow`.
+  itemWorkflow: ai-sdlc
   maxAutoApproveItems: 12
 start: start
 nodes:
@@ -28,7 +30,8 @@ nodes:
   dispatch:
     type: "custom:plan-dispatch"
     name: "Dispatch ready work across the plan"
-    workflow: ai-sdlc
+    # The item's own workflow, else `vars.itemWorkflow` (seeded from the workflow's
+    # `vars` above / `program.itemWorkflow` in the config). Nothing here hard-codes ai-sdlc.
     scope: plan
     onWaiting: defer
 

@@ -180,9 +180,15 @@ file list by hand. Tell the agent *what good looks like* (sections, front‑matt
   High‑risk specs stop at the gate; `await-deps` holds the build until build‑phase
   dependencies are satisfied; tests and review loop back with bounded budgets.
 - `workflows/program.yaml` — decompose → register (plan) → assess‑risks → decide (matrix per
-  open decision) → schedule → plan‑gate → dispatch (ai‑sdlc per item, dependency‑ordered
-  across the plan) → summarize.
+  open decision) → schedule → plan‑gate → dispatch (the item workflow per item,
+  dependency‑ordered across the plan) → summarize.
 - `workflows/plan-resume.yaml` — schedule → gate → dispatch with `scope: plan`; picks up
   work deferred by earlier requests (`orca plan dispatch`).
+
+Neither pins the item workflow on its `custom:plan-dispatch` node: both default
+`vars.itemWorkflow` to `ai-sdlc`, and `orca submit` / `orca plan dispatch` override it with
+`program.itemWorkflow` from `orca.config.yaml`, so the same setting steers both. An item that
+names its own `workflowId` wins over either. (`--workflow` on `orca plan dispatch` picks the
+*program* workflow to run instead of `plan-resume`, not the item workflow.)
 
 Render either as Mermaid with `pnpm run orca graph ai-sdlc`.

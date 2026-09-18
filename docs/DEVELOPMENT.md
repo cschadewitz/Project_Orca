@@ -75,7 +75,8 @@ dependency legitimately needs to build.
 - `packages/engine/test/plan.e2e.test.ts` — the shipped program with decisions made by
   matrix, stage‑level pipelining (`core@spec`), build‑phase waits (`api#build`) with
   upstream artifacts in the build prompt, and a second request deferred then picked up by
-  `plan-resume`.
+  `plan-resume` (which dispatches to `vars.itemWorkflow`, i.e. `program.itemWorkflow`, not a
+  pinned `ai-sdlc`).
 
 ## The scripted agent
 
