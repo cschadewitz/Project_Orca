@@ -109,7 +109,7 @@ Agents never call a planning API (ADR 0002). They write artifacts; ORCA lifts
 | --- | --- | --- |
 | `decomposition` | `items[].dependsOn`, `items[].priority`, `items[].risks`, `risks[]`, `decisions[]` | `custom:plan-register` creates items, dependencies, risks, decisions |
 | `risk-register` | `risks[]` | risks upserted by key; `affects`/`mitigatedBy` slugs resolved |
-| `decision-matrix` | criteria, options, `chosen`, `rationale` | `custom:decision-matrix` evaluates and decides |
+| `decision-matrix` | criteria, options, `chosen`, `rationale` | a valid `chosen` decides on intake; otherwise `custom:decision-matrix` evaluates the matrix and decides. Re-submitting the same choice is a no-op: one `decision.resolved` per resolution |
 | any other (`spec`, `intent`, `review`, ...) | `risks`, `decisions`, `dependencies` (alias `discoveredDependencies`) | risks attach to the producing item (a bare string becomes a risk keyed by its slugified title); discovered dependencies are added from it; a decision with `chosen` is decided |
 
 Every artifact recorded by an item's run also updates `WorkItem.produced`,
@@ -283,19 +283,22 @@ Every subcommand except `list` accepts the plan key positionally or as `--plan <
 
 ## Known limitations
 
-Reviewed when the layer was rebased onto main; tracked as issues #77, #79 and #81–#84 (label
-`planning`), #97 and #88. In short: the scheduler still re‑reads the whole plan on every
-wake, which grows with plan age (#83, `docs/ROADMAP.md` item 12); the plan journal and the
-run event store both number events from an in‑process cache, so two processes over one
-store can duplicate `seq` (#97); a dead run's claims can only be released by editing the
-store (#88). See `docs/ROADMAP.md` item 13. Fixed since: cycle
+Reviewed when the layer was rebased onto main; tracked as issues #77 and #81–#84 (label
+`planning`), #88, #104 and #105. In short: the scheduler still re‑reads the whole plan on every
+wake, which grows with plan age (#83, `docs/ROADMAP.md` item 12); a dead run's claims can
+only be released by editing the store (#88); a *different* choice re-decides a `decided`
+decision without `reopenDecision`, so the decide loop can undo a human's `orca plan decide`
+(#104); artifact intake reconciles even when a signal changed nothing (#105). See
+`docs/ROADMAP.md` item 13. Fixed since: cycle
 detection ignores `soft` edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
 artifact intake is serialised per plan (#73); work‑item status is projected from the event
 log, with the plan side following it (#74); the dispatcher loop runs on the same `FanOut` as
 `parallel`, so `failFast` cancels the items still in flight, and `onWaiting: wait` announces
 one `step.waiting` per distinct reason under a default `waitTimeoutMs` instead of one per
 poll (#96); scheduler explanations, the critical path and cycle messages agree with each
-other (#80).
+other (#80); the JSONL event store and plan journal number events on disk under a lock
+file, so two processes over one store extend one log (#97); a decision the artifact intake
+already made is not re-decided by `custom:decision-matrix` (#79).
 
 ## Configuration
 

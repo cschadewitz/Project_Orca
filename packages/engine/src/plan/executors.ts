@@ -144,6 +144,9 @@ export async function resolveMatrixChoice(ctx: StepContext, artifactName: string
   const plan = await ctx.plan.planForRun(ctx.run.state.run);
   if (plan) {
     // upsertDecision decides when the artifact carries a valid `chosen`; otherwise evaluate the matrix.
+    // When the artifact was recorded by a step of this run, intake (`PlanService.onArtifactRecorded`)
+    // has usually done both already; evaluateDecision is then a no-op that hands back the recorded
+    // choice rather than journalling a second `decision.resolved` (#79).
     const { chosen: _chosen, rationale: _rationale, ...definition } = input;
     const dec = await ctx.plan.upsertDecision(plan.id, definition, origin);
     const evaluated = await ctx.plan.evaluateDecision(plan.id, dec.id, { ...(input.chosen ? { chosen: input.chosen } : {}), decidedBy: "agent", ...(input.rationale ? { rationale: input.rationale } : {}) }, origin);
