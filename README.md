@@ -38,7 +38,7 @@ mise install            # Node 24 + pnpm 12 (any Node >= 22 works)
 pnpm install
 pnpm test               # unit + end-to-end tests (scripted ACP agent, no LLM needed)
 pnpm run orca validate --mermaid        # validate + draw the shipped workflows
-pnpm run demo --dir /tmp/orca-demo      # full program run with scripted agents; prints the run tree
+pnpm run demo --dir /tmp/orca-demo      # full program run with scripted agents; prints the run tree (without --dir/--keep the temp workspace is removed afterwards)
 ```
 
 `orca run`/`submit` need agents, so they need an `orca.config.yaml`; without one
