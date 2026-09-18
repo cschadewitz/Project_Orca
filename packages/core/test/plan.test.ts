@@ -5,6 +5,7 @@ import {
   compactSchedule,
   computeSchedule,
   criticalPath,
+  dropCycleClosingEdges,
   DEFAULT_RISK_MATRIX,
   evaluateDecisionMatrix,
   explainWorkItem,
@@ -91,6 +92,18 @@ describe("dependency graph", () => {
     const g = buildDependencyGraph(items.map((i) => i.id), deps);
     const paths = longestDownstreamPaths(g, (id) => (id === "wi_b" ? 3 : 1));
     expect(criticalPath(paths)).toEqual({ length: 5, path: ["wi_a", "wi_b", "wi_c"] });
+  });
+  it("drops the soft edges that close a cycle, keeping the required ones", () => {
+    const g = buildDependencyGraph(items.map((i) => i.id), [...deps, dep("a", "e", { type: "soft" })]);
+    expect(findCycles(g)).toEqual([["wi_a", "wi_d", "wi_e"]]);
+    const relaxed = dropCycleClosingEdges(g, ["soft"]);
+    expect(relaxed.dropped.map((e) => e.dependencyId)).toEqual(["dep_a_e"]);
+    expect(findCycles(relaxed.graph)).toEqual([]);
+    expect(topologicalWaves(relaxed.graph).waves).toEqual([["wi_a"], ["wi_b", "wi_d"], ["wi_c", "wi_e"]]);
+    // A cycle made only of required edges survives untouched.
+    const hard = buildDependencyGraph(items.map((i) => i.id), [...deps, dep("a", "c")]);
+    expect(dropCycleClosingEdges(hard, ["soft"])).toMatchObject({ dropped: [] });
+    expect(findCycles(dropCycleClosingEdges(hard, ["soft"]).graph)).toEqual([["wi_a", "wi_b", "wi_c"]]);
   });
   it("detects cycles and keeps the rest schedulable", () => {
     const g = buildDependencyGraph(items.map((i) => i.id), [...deps, dep("a", "c")]);
@@ -193,6 +206,44 @@ describe("scheduler", () => {
     const s = computeSchedule({ plan, items: [item("x"), item("y")], dependencies: [dep("x", "y"), dep("y", "x")], risks: [], decisions: [], now: T });
     expect(s.cycles).toEqual([["wi_x", "wi_y"]]);
     expect(s.unschedulable.map((u) => u.reason)).toEqual(["dependency cycle: x -> y", "dependency cycle: x -> y"]);
+  });
+
+  it("ignores soft edges that close a cycle instead of stranding both items", () => {
+    const two = [item("x"), item("y")];
+    // x waits for y; y would *prefer* to come after x. The hint cannot be honoured - it is not a cycle.
+    const s = computeSchedule({ plan, items: two, dependencies: [dep("x", "y"), dep("y", "x", { type: "soft" })], risks: [], decisions: [], now: T });
+    expect(s.cycles).toEqual([]);
+    expect(s.unschedulable).toEqual([]);
+    expect(s.ready.map((r) => r.slug)).toEqual(["y"]);
+    expect(s.waiting.map((w) => [w.slug, w.waitingOn.map((o) => o.detail)])).toEqual([["x", ["waiting for y to be done (currently pending)"]]]);
+    expect(s.waves).toEqual([["wi_y"], ["wi_x"]]);
+    expect(s.ignoredSoftDependencies).toEqual([{ dependencyId: "dep_y_x", from: "wi_y", to: "wi_x" }]);
+  });
+
+  it("keeps soft edges that only order, and a soft-only ring never blocks", () => {
+    const two = [item("x"), item("y")];
+    const soft = computeSchedule({ plan, items: two, dependencies: [dep("x", "y", { type: "soft" })], risks: [], decisions: [], now: T });
+    expect(soft.ignoredSoftDependencies).toEqual([]);
+    expect(soft.waves).toEqual([["wi_y"], ["wi_x"]]); // still an ordering hint
+    expect(soft.ready.map((r) => r.slug)).toEqual(["y", "x"]); // ... that never blocks dispatch, it only ranks y first
+    const ring = computeSchedule({ plan, items: two, dependencies: [dep("x", "y", { type: "soft" }), dep("y", "x", { type: "soft" })], risks: [], decisions: [], now: T });
+    expect(ring.cycles).toEqual([]);
+    expect(ring.unschedulable).toEqual([]);
+    expect(ring.ignoredSoftDependencies.map((d) => d.dependencyId)).toEqual(["dep_y_x"]);
+  });
+
+  it("still reports a blocks cycle when soft edges are not ordering", () => {
+    const s = computeSchedule({
+      plan,
+      items: [item("x"), item("y")],
+      dependencies: [dep("x", "y"), dep("y", "x")],
+      risks: [],
+      decisions: [],
+      now: T,
+      policy: { orderSoftDependencies: false },
+    });
+    expect(s.cycles).toEqual([["wi_x", "wi_y"]]);
+    expect(s.unschedulable).toHaveLength(2);
   });
 
   it("strategies change the order", () => {

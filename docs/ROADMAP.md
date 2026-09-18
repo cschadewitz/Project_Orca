@@ -32,8 +32,9 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
 12. **Planning: cross‑plan dependencies and indexes** — one plan per product is assumed and
     the scheduler re‑reads the whole plan per pass.
 13. **Planning: review findings** — filed as issues #71–#84 when the planning layer was
-    rebased onto main. The ones that shape the design: cycle detection must ignore `soft`
-    edges (#71); one item can be launched twice by two dispatchers on the same plan (#72);
-    artifact intake is not serialised per plan (#73); work‑item status is written by the
-    plan side rather than projected from the event log (#74); `custom:plan-dispatch` keeps
-    its own fan‑out loop next to `runBranches` (#75). The rest are smaller: #76–#84.
+    rebased onto main. Done: cycle detection ignores `soft` edges (#71). The ones that
+    still shape the design: one item can be launched twice by two dispatchers on the same
+    plan (#72); artifact intake is not serialised per plan (#73); work‑item status is
+    written by the plan side rather than projected from the event log (#74);
+    `custom:plan-dispatch` keeps its own fan‑out loop next to `runBranches` (#75). The
+    rest are smaller: #76–#84.

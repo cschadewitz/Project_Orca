@@ -9,7 +9,7 @@
  */
 import { DEPENDENCY_START_PHASE, PRIORITY_RANK, PriorityWeightsSchema, SchedulingPolicySchema, estimateWeight, type Decision, type Dependency, type Plan, type PriorityWeights, type RiskLevel, type SchedulingPolicy, type SchedulingStrategy, type Risk } from "../model/plan.js";
 import type { WorkItem } from "../model/request.js";
-import { buildDependencyGraph, criticalPath, findCycles, longestDownstreamPaths, topologicalWaves, transitiveDownstream, type DependencyGraph } from "./graph.js";
+import { buildDependencyGraph, criticalPath, dropCycleClosingEdges, findCycles, longestDownstreamPaths, topologicalWaves, transitiveDownstream, type DependencyGraph, type GraphEdge } from "./graph.js";
 import { itemRiskExposure, levelRank, risksMitigatedBy, summarizeRisks, type RiskExposure, type RiskSummary } from "./risk.js";
 
 export const STRATEGY_WEIGHTS: Record<SchedulingStrategy, PriorityWeights> = {
@@ -104,7 +104,10 @@ export interface Schedule {
   /** Topological layers over every item in scope (plan view, not dispatch order). */
   waves: string[][];
   criticalPath: { workItemIds: string[]; length: number };
+  /** Cycles among `blocks` edges; every item in one is unschedulable. */
   cycles: string[][];
+  /** `soft` edges left out of the ordering view because they pointed back into a cycle. */
+  ignoredSoftDependencies: { dependencyId: string; from: string; to: string }[];
   risk: RiskSummary;
   exposure: Record<string, RiskExposure>;
   openDecisions: { decisionId: string; key: string; title: string; blocks: string[] }[];
@@ -143,10 +146,19 @@ export function computeSchedule(input: ScheduleInput): Schedule {
   const inScope = input.inScope ?? (() => true);
   const running = new Set<string>([...items.filter((i) => i.status === "in-progress").map((i) => i.id), ...(input.running ?? [])]);
 
-  // Graph over the whole plan: ordering edges are `blocks` (+ `soft` when the policy says so).
-  const graph = buildDependencyGraph(items.map((i) => i.id), input.dependencies, { orderingTypes: policy.orderSoftDependencies ? ["blocks", "soft"] : ["blocks"] });
-  const cycles = findCycles(graph);
+  // Only `blocks` edges can make work impossible, so cycle detection runs on them alone:
+  // a `soft` edge never blocks (see `DependencyType`), and a soft back-reference must not
+  // strand the items it points at.
+  const itemIds = items.map((i) => i.id);
+  const blockingGraph = buildDependencyGraph(itemIds, input.dependencies, { orderingTypes: ["blocks"] });
+  const cycles = findCycles(blockingGraph);
   const cyclic = new Set(cycles.flat());
+  // Ordering view for waves / critical path / dependent counts: `soft` edges join in when the
+  // policy says so, minus the ones that would close a cycle (they are hints, so they yield).
+  const { graph, dropped } = policy.orderSoftDependencies
+    ? dropCycleClosingEdges(buildDependencyGraph(itemIds, input.dependencies, { orderingTypes: ["blocks", "soft"] }), ["soft"])
+    : { graph: blockingGraph, dropped: [] as GraphEdge[] };
+  const ignoredSoftDependencies = dropped.map((e) => ({ dependencyId: e.dependencyId, from: e.from, to: e.to }));
   const paths = longestDownstreamPaths(graph, (id) => estimateWeight(itemsById.get(id)?.estimate));
   const cp = criticalPath(paths);
   const { waves } = topologicalWaves(graph);
@@ -238,6 +250,7 @@ export function computeSchedule(input: ScheduleInput): Schedule {
     waves,
     criticalPath: { workItemIds: cp.path, length: cp.length },
     cycles,
+    ignoredSoftDependencies,
     risk: summarizeRisks(input.risks, matrix),
     exposure,
     openDecisions,
