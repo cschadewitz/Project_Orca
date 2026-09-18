@@ -28,7 +28,6 @@ export type AgentTurnOutcome = { kind: "completed"; artifacts: Artifact[]; stopR
 
 interface PlannedDeliverable extends Deliverable {
   spec: ArtifactSpec;
-  absolutePath: string;
 }
 
 export function absolutize(cwd: string, path: string, join: (...p: string[]) => string): string {
@@ -42,13 +41,11 @@ async function planDeliverables(ctx: StepContext, agent: AgentSelector, produces
   const out: PlannedDeliverable[] = [];
   for (const spec of produces) {
     const rel = (await ctx.render(spec.path, extra)).trim();
-    const absolutePath = absolutize(ctx.workspace.cwd, rel, (...p) => host.joinPath(...p));
     out.push({
       spec,
       kind: spec.kind,
       ...(spec.name ? { name: spec.name } : {}),
-      path: absolutePath,
-      absolutePath,
+      path: absolutize(ctx.workspace.cwd, rel, (...p) => host.joinPath(...p)),
       required: spec.required,
       ...(spec.mediaType ? { mediaType: spec.mediaType } : {}),
       ...(spec.validate?.requiredFields ? { requiredFields: spec.validate.requiredFields } : {}),
@@ -83,22 +80,22 @@ async function collect(ctx: StepContext, planned: PlannedDeliverable[], inputs: 
   // One existence round trip for the whole set, then every read in flight at once: on a remote
   // host each of these is an ssh process, and doing them serially per deliverable showed up as
   // dead time at the end of every turn.
-  const present = await host.fs.existsMany(planned.map((d) => d.absolutePath));
-  const contents = await Promise.all(planned.map((d, i) => (present[i] ? host.fs.readFile(d.absolutePath) : undefined)));
+  const present = await host.fs.existsMany(planned.map((d) => d.path));
+  const contents = await Promise.all(planned.map((d, i) => (present[i] ? host.fs.readFile(d.path) : undefined)));
   for (const [i, d] of planned.entries()) {
     const content = contents[i];
     if (content === undefined) {
-      if (d.required) problems.push(`missing ${d.kind} at ${d.absolutePath}`);
+      if (d.required) problems.push(`missing ${d.kind} at ${d.path}`);
       continue;
     }
     const data = extractStructuredData(content, d.mediaType);
     const reason = validateArtifact(d.spec, data, parseFrontMatter(content).body);
     if (reason) {
-      await ctx.emit({ type: "artifact.rejected", payload: { stepRunId: ctx.step.id, kind: d.kind, path: d.absolutePath, reason } });
-      if (d.required) problems.push(`${d.kind} at ${d.absolutePath}: ${reason}`);
+      await ctx.emit({ type: "artifact.rejected", payload: { stepRunId: ctx.step.id, kind: d.kind, path: d.path, reason } });
+      if (d.required) problems.push(`${d.kind} at ${d.path}: ${reason}`);
       continue;
     }
-    artifacts.push(await ctx.recordArtifact(d.spec, content, { path: d.absolutePath, parents: inputs.map((i) => i.id), agentSessionId: session.id, agentId: session.agentId }));
+    artifacts.push(await ctx.recordArtifact(d.spec, content, { path: d.path, parents: inputs.map((i) => i.id), agentSessionId: session.id, agentId: session.agentId }));
   }
   return { artifacts, problems };
 }
@@ -224,7 +221,7 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
         watched.length > 0
           ? watchForArtifacts(
               ctx.agents.resolve(spec.agent).host.fs,
-              watched.map((d) => d.absolutePath),
+              watched.map((d) => d.path),
               () => void session.cancel(),
             )
           : undefined;

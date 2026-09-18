@@ -11,7 +11,8 @@ export const startExecutor: NodeExecutor<StartNode> = {
 
 export const endExecutor: NodeExecutor<EndNode> = {
   type: "end",
-  execute: async (ctx) => completed({ outcome: ctx.node.outcome }),
+  // Any step whose result carries an `outcome` ends the run, so a custom terminal node needs no engine change.
+  execute: async (ctx) => completed({ outcome: ctx.node.outcome, ...(ctx.node.message ? { message: ctx.node.message } : {}) }),
 };
 
 /** Assign run vars; `=`-prefixed values are expressions (see evaluateVars). */

@@ -44,6 +44,9 @@ Conventions that keep extensions reviewable:
 - Never write to the projection directly; append events through `ctx.emit()`.
 - Anything an agent must know goes into the prompt (template) or the deliverables block,
   not into side channels.
+- Nothing in the interpreter is keyed on node type: a custom node gets retries by setting
+  `maxAttempts:` on the node (its executor must return `failed(..., retryable = true)`), and
+  ends the run by returning `completed({ outcome, message })` — no `end` node needed after it.
 - Custom node types are `custom:<kebab-name>`; validation of their fields is the plugin's job
   (use zod and throw `OrcaError("WORKFLOW_INVALID", …)` from a validation hook if needed).
 - A `HumanInputPort` receives `query.signal`, which fires when the run is cancelled while the

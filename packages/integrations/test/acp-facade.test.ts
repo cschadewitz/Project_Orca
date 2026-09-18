@@ -1,5 +1,5 @@
 /**
- * Proxy mode: an ACP *client* (standing in for Kepler / Zed / T3 Code) drives
+ * Proxy mode: an ACP *client* (standing in for Kepler / Zed) drives
  * ORCA as an ACP *agent*, in-process via the SDK's app-to-app connection. ORCA
  * in turn drives the scripted agent through a real subprocess.
  */

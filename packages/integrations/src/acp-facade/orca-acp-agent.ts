@@ -1,7 +1,7 @@
 /**
  * ORCA as an ACP *agent* (proxy mode).
  *
- * Any ACP client - GitKraken Kepler, Zed, T3 Code, an IDE - can launch `orca
+ * Any ACP client - GitKraken Kepler, Zed, an IDE - can launch `orca
  * acp` exactly as it would launch Claude Code or Codex. Prompts become
  * Requests (or direct workflow runs); ORCA then fans out to the real coding
  * agents (local or over SSH) and streams progress back as ACP session updates:
@@ -37,7 +37,7 @@ interface FacadeSession {
   id: string;
   cwd: string;
   runIds: string[];
-  active?: { runId: string; abort: AbortController };
+  active?: { runId: string };
 }
 
 export class OrcaAcpAgent {
@@ -109,9 +109,9 @@ export class OrcaAcpAgent {
       runId = submitted.runId;
     }
     session.runIds.push(runId);
-    session.active = { runId, abort: new AbortController() };
+    session.active = { runId };
     // Bound per run, so concurrent sessions each receive only their own gates and `ask` permissions.
-    const unbindHumanInput = this.humanInput.bind(runId, { sessionId: session.id, request: (m: string, p?: unknown) => ctx.client.request(m, p) });
+    const unbindHumanInput = this.humanInput.bind(runId, { sessionId: session.id, request: (m, p) => ctx.client.request(m, p) });
 
     const state0 = await orchestrator.getState(runId);
     const def = orchestrator.resolveDefinition(state0.run.workflowId);

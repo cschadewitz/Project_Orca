@@ -20,6 +20,13 @@ export type Condition = z.infer<typeof ConditionSchema>;
 const NodeBaseSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
+  /**
+   * Whole-step retry budget: how many attempts the interpreter gives this node
+   * when its executor reports a retryable failure. Any node type may set it -
+   * agent nodes may instead use `completion.maxAttempts` (this wins if both are
+   * set). Read it with `retryBudget()`.
+   */
+  maxAttempts: z.number().int().positive().optional(),
   /** Free-form extension data for plugins/UIs (position, colour, owner...). */
   meta: z.record(z.string(), z.unknown()).optional(),
 });
@@ -289,6 +296,17 @@ export const WorkflowDefinitionSchema: z.ZodType<WorkflowDefinition> = z.lazy(()
     edges: z.array(EdgeSchema).default([]),
   }),
 ) as unknown as z.ZodType<WorkflowDefinition>;
+
+/**
+ * Attempts the interpreter gives a node before a retryable failure fails the
+ * run. Node-level `maxAttempts` wins; agent nodes fall back to their completion
+ * policy; everything else runs once.
+ */
+export function retryBudget(n: NodeDef): number {
+  if (typeof n.maxAttempts === "number") return n.maxAttempts;
+  const completion = (n as Partial<AgentNode>).completion;
+  return completion?.maxAttempts ?? 1;
+}
 
 export const CONTAINER_NODE_TYPES = ["loop", "parallel", "subworkflow"] as const;
 export function isContainerNode(n: NodeDef): n is LoopNode | ParallelNode | SubworkflowNode {

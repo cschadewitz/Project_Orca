@@ -57,7 +57,7 @@ See `docs/WORKFLOWS.md` for the authoring guide.
 plus `paused` while parked at a human gate awaiting `orca answer`),
 outcome, `workspace` (host id + cwd + repo/branch), `vars`, and parent links.
 `StepRun` is one execution attempt of one node: attempt number, iteration, agent session id,
-input artifact ids (accumulated from `step.inputs` as the executor resolves them), `result` (`choice`, `outcome`, `artifactIds`, `data`), error, child run ids.
+input artifact ids (accumulated from `step.inputs` as the executor resolves them), `result` (`choice`, `outcome`, `message`, `artifactIds`, `data`), error, child run ids.
 `children` lists the same child runs with their `branch` key (loop index, branch name, work‑item
 slug), last known status/outcome, and `resumed: true` when a re‑attempted step re‑attached to a
 child spawned by the interrupted attempt instead of spawning a new one.

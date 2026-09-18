@@ -11,7 +11,7 @@
  * They are implemented as `custom:*` nodes on purpose: they show how a plugin
  * extends the node vocabulary without touching the core schema.
  */
-import { DecompositionSchema, newId, OrcaError, type CustomNode, type RunState, type WorkItem } from "@orca/core";
+import { DecompositionSchema, newId, type CustomNode, type RunState, type WorkItem } from "@orca/core";
 import { pausedByChildren } from "../executors/containers.js";
 import { completed, failed, type NodeExecutor, type StepOutcome } from "../executors/types.js";
 
@@ -156,7 +156,3 @@ export const dispatchWorkItemsExecutor: NodeExecutor<DispatchWorkItemsNode> = {
     return completed({ data: { summary } });
   },
 };
-
-export function assertWorkItemsExecutorsRegistered(types: string[]): void {
-  for (const t of ["custom:materialize-work-items", "custom:dispatch-work-items"]) if (!types.includes(t)) throw new OrcaError("NOT_SUPPORTED", `${t} executor missing`);
-}

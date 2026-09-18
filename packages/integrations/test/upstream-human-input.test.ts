@@ -1,16 +1,17 @@
 /** Per-run routing of gates / `ask` permissions to the ACP session that owns the run. */
 import { describe, expect, it } from "vitest";
+import type * as acp from "@agentclientprotocol/sdk";
 import type { HumanInputQuery } from "@orca/engine";
 import { UpstreamHumanInput, type UpstreamTarget } from "@orca/integrations";
 
 function target(sessionId: string, log: { sessionId: string; question: string }[]): UpstreamTarget {
   return {
     sessionId,
-    request: async (_method, params) => {
-      const p = params as { sessionId: string; toolCall: { title: string }; options: { optionId: string }[] };
-      log.push({ sessionId: p.sessionId, question: p.toolCall.title });
-      return { outcome: { outcome: "selected", optionId: p.options[0]!.optionId } };
-    },
+    // The stub only answers session/request_permission, so it is cast rather than made generic over every client method.
+    request: (async (_method: string, params: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse> => {
+      log.push({ sessionId: params.sessionId, question: params.toolCall.title ?? "" });
+      return { outcome: { outcome: "selected", optionId: params.options[0]!.optionId } };
+    }) as UpstreamTarget["request"],
   };
 }
 
@@ -74,7 +75,7 @@ describe("UpstreamHumanInput", () => {
 
   it("returns undefined when the client cancels the permission request", async () => {
     const port = new UpstreamHumanInput();
-    port.bind("run-a", { sessionId: "sess-a", request: async () => ({ outcome: { outcome: "cancelled" } }) });
+    port.bind("run-a", { sessionId: "sess-a", request: (async (): Promise<acp.RequestPermissionResponse> => ({ outcome: { outcome: "cancelled" } })) as UpstreamTarget["request"] });
     expect(await port.ask(query("run-a", "cancel?"))).toBeUndefined();
   });
 });

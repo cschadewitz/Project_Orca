@@ -16,6 +16,7 @@ import {
   pendingHumanInputs,
   reduceRunSummary,
   renderTemplate,
+  retryBudget,
   RUN_SUMMARY_EVENT_TYPES,
   runSummary,
   sha256,
@@ -394,8 +395,7 @@ export class Orchestrator {
           return rc.state;
         }
         if (outcome.kind === "failed") {
-          const maxAttempts = node.type === "agent" ? node.completion.maxAttempts : 1;
-          const willRetry = outcome.retryable !== false && attempt < maxAttempts;
+          const willRetry = outcome.retryable !== false && attempt < retryBudget(node);
           await rc.emit({ type: "step.failed", payload: { stepRunId, error: outcome.error, willRetry } });
           if (willRetry) {
             attempt++;
@@ -406,9 +406,9 @@ export class Orchestrator {
         }
 
         await rc.emit({ type: "step.completed", payload: { stepRunId, result: outcome.result } });
-        if (node.type === "end") {
-          const outcomeName = outcome.result.outcome ?? node.outcome;
-          await rc.emit({ type: "run.completed", payload: { outcome: outcomeName, ...(node.message ? { message: node.message } : {}) } });
+        // Terminal by result, not by node type: any executor may end the run by returning an outcome.
+        if (outcome.result.outcome) {
+          await rc.emit({ type: "run.completed", payload: { outcome: outcome.result.outcome, ...(outcome.result.message ? { message: outcome.result.message } : {}) } });
           return rc.state;
         }
         const edge = await this.route(rc, nodeId, outcome.result);

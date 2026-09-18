@@ -76,7 +76,7 @@ function fakeSessions(asksPerTurn: number) {
         const got = await Promise.all(reqs.map((r) => o.askPermission!(r)));
         for (const [i, r] of reqs.entries()) o.onPermission?.({ toolCallId: r.toolCall.toolCallId, title: r.toolCall.title ?? "", decision: got[i] ? `ask:${got[i]}` : "ask:cancelled" });
         answers.push(...got);
-        return { stopReason: "end_turn", durationMs: 1, updateCount: 0 };
+        return { stopReason: "end_turn", durationMs: 1 };
       },
       onUpdate: () => () => {},
       cancel: async () => {},
