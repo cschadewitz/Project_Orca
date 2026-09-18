@@ -20,12 +20,16 @@ function countingStores(): { stores: Stores; counts: Counts } {
   const counts: Counts = { read: 0, content: 0 };
   const stores: Stores = {
     ...base,
-    events: Object.assign(Object.create(Object.getPrototypeOf(base.events) as object) as typeof base.events, base.events, {
-      read: (runId: string) => {
-        counts.read++;
-        return base.events.read(runId);
+    events: Object.assign(
+      Object.create(Object.getPrototypeOf(base.events) as object) as typeof base.events,
+      base.events,
+      {
+        read: (runId: string) => {
+          counts.read++;
+          return base.events.read(runId);
+        },
       },
-    }),
+    ),
     artifacts: {
       put: (a, c) => base.artifacts.put(a, c),
       get: (id) => base.artifacts.get(id),

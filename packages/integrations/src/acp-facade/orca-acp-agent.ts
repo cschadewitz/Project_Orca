@@ -64,7 +64,10 @@ export class OrcaAcpAgent {
     return app
       .onRequest(acp.methods.agent.initialize, () => ({
         protocolVersion: acp.PROTOCOL_VERSION,
-        agentCapabilities: { loadSession: false, promptCapabilities: { image: false, audio: false, embeddedContext: true } },
+        agentCapabilities: {
+          loadSession: false,
+          promptCapabilities: { image: false, audio: false, embeddedContext: true },
+        },
         agentInfo: { name: this.opts.name ?? "orca", version: this.opts.version ?? "0.1.0" },
       }))
       .onRequest(acp.methods.agent.authenticate, () => ({}))
@@ -83,17 +86,33 @@ export class OrcaAcpAgent {
   private async prompt(ctx: acp.AgentRequestContext<acp.PromptRequest>): Promise<acp.PromptResponse> {
     const session = this.sessions.get(ctx.params.sessionId);
     if (!session) throw acp.RequestError.invalidParams({ sessionId: ctx.params.sessionId, reason: "unknown session" });
-    const text = ctx.params.prompt.map((b) => (b.type === "text" ? b.text : b.type === "resource" && "text" in b.resource ? b.resource.text : "")).join("\n").trim();
-    const say = (t: string) => ctx.client.notify(acp.methods.client.session.update, { sessionId: session.id, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } } });
+    const text = ctx.params.prompt
+      .map((b) => (b.type === "text" ? b.text : b.type === "resource" && "text" in b.resource ? b.resource.text : ""))
+      .join("\n")
+      .trim();
+    const say = (t: string) =>
+      ctx.client.notify(acp.methods.client.session.update, {
+        sessionId: session.id,
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } },
+      });
 
     if (text === "/status") {
       const states = await Promise.all(session.runIds.map((id) => this.opts.orchestrator.getState(id)));
-      await say(states.length ? states.map((s) => `- ${s.run.id} ${s.run.workflowId}: ${s.run.status}${s.run.outcome ? `/${s.run.outcome}` : ""}`).join("\n") + "\n" : "No runs in this session yet.\n");
+      await say(
+        states.length
+          ? states
+              .map(
+                (s) => `- ${s.run.id} ${s.run.workflowId}: ${s.run.status}${s.run.outcome ? `/${s.run.outcome}` : ""}`,
+              )
+              .join("\n") + "\n"
+          : "No runs in this session yet.\n",
+      );
       return { stopReason: "end_turn" };
     }
 
     const orchestrator = this.opts.orchestrator;
-    const workspace = this.opts.useClientCwd === false ? undefined : { hostId: "local", cwd: session.cwd, provider: "acp-client" };
+    const workspace =
+      this.opts.useClientCwd === false ? undefined : { hostId: "local", cwd: session.cwd, provider: "acp-client" };
     let runId: string;
     if (text.startsWith("/run ")) {
       const [, workflowId, ...rest] = text.split(/\s+/);
@@ -105,13 +124,20 @@ export class OrcaAcpAgent {
       runId = await orchestrator.startRun({ workflowId: workflowId!, vars, ...(workspace ? { workspace } : {}) });
     } else {
       const [title, ...body] = text.split("\n");
-      const submitted = await this.opts.program.submit({ title: title || "Untitled request", body: body.join("\n").trim(), source: { kind: "acp-session", sessionId: session.id } });
+      const submitted = await this.opts.program.submit({
+        title: title || "Untitled request",
+        body: body.join("\n").trim(),
+        source: { kind: "acp-session", sessionId: session.id },
+      });
       runId = submitted.runId;
     }
     session.runIds.push(runId);
     session.active = { runId };
     // Bound per run, so concurrent sessions each receive only their own gates and `ask` permissions.
-    const unbindHumanInput = this.humanInput.bind(runId, { sessionId: session.id, request: (m, p) => ctx.client.request(m, p) });
+    const unbindHumanInput = this.humanInput.bind(runId, {
+      sessionId: session.id,
+      request: (m, p) => ctx.client.request(m, p),
+    });
 
     const state0 = await orchestrator.getState(runId);
     const def = orchestrator.resolveDefinition(state0.run.workflowId);
@@ -120,7 +146,9 @@ export class OrcaAcpAgent {
     try {
       const final = await orchestrator.run(runId);
       await this.sendPlan(ctx, session, def, final);
-      await say(`\nRun ${runId} ${final.run.status}${final.run.outcome ? ` (${final.run.outcome})` : ""}${final.run.error ? `: ${final.run.error.message}` : ""}\n`);
+      await say(
+        `\nRun ${runId} ${final.run.status}${final.run.outcome ? ` (${final.run.outcome})` : ""}${final.run.error ? `: ${final.run.error.message}` : ""}\n`,
+      );
       return { stopReason: final.run.status === "cancelled" ? "cancelled" : "end_turn" };
     } finally {
       unsubscribe();
@@ -130,9 +158,16 @@ export class OrcaAcpAgent {
   }
 
   /** Translate ORCA events (root run and its descendants) into ACP session updates. */
-  private async forward(ctx: acp.AgentRequestContext<acp.PromptRequest>, session: FacadeSession, def: WorkflowDefinition, rootRunId: string, e: OrcaEvent): Promise<void> {
+  private async forward(
+    ctx: acp.AgentRequestContext<acp.PromptRequest>,
+    session: FacadeSession,
+    def: WorkflowDefinition,
+    rootRunId: string,
+    e: OrcaEvent,
+  ): Promise<void> {
     const orchestrator = this.opts.orchestrator;
-    const notify = (update: acp.SessionUpdate) => ctx.client.notify(acp.methods.client.session.update, { sessionId: session.id, update });
+    const notify = (update: acp.SessionUpdate) =>
+      ctx.client.notify(acp.methods.client.session.update, { sessionId: session.id, update });
     const isRoot = e.runId === rootRunId;
     let prefix = "";
     if (!isRoot) {
@@ -155,13 +190,31 @@ export class OrcaAcpAgent {
       case "step.completed":
       case "step.failed":
         if (isRoot) await this.sendPlan(ctx, session, def, await orchestrator.getState(rootRunId));
-        else if (e.type === "step.scheduled") await notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${prefix}▶ ${e.payload.nodeId}\n` } });
+        else if (e.type === "step.scheduled")
+          await notify({
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: `${prefix}▶ ${e.payload.nodeId}\n` },
+          });
         break;
       case "agent.update": {
         const u = e.payload.update;
-        if (u.kind === "agent_message_chunk" && u.text) await notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${prefix}${u.text}` } });
-        else if (u.kind === "tool_call" && u.toolCallId) await notify({ sessionUpdate: "tool_call", toolCallId: `${e.runId}:${u.toolCallId}`, title: `${prefix}${u.title ?? ""}`, kind: (u.toolKind as acp.ToolKind | undefined) ?? "other", status: (u.status as acp.ToolCallStatus | undefined) ?? "in_progress", locations: (u.locations ?? []).map((path) => ({ path })) });
-        else if (u.kind === "tool_call_update" && u.toolCallId) await notify({ sessionUpdate: "tool_call_update", toolCallId: `${e.runId}:${u.toolCallId}`, ...(u.status ? { status: u.status as acp.ToolCallStatus } : {}) });
+        if (u.kind === "agent_message_chunk" && u.text)
+          await notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${prefix}${u.text}` } });
+        else if (u.kind === "tool_call" && u.toolCallId)
+          await notify({
+            sessionUpdate: "tool_call",
+            toolCallId: `${e.runId}:${u.toolCallId}`,
+            title: `${prefix}${u.title ?? ""}`,
+            kind: (u.toolKind as acp.ToolKind | undefined) ?? "other",
+            status: (u.status as acp.ToolCallStatus | undefined) ?? "in_progress",
+            locations: (u.locations ?? []).map((path) => ({ path })),
+          });
+        else if (u.kind === "tool_call_update" && u.toolCallId)
+          await notify({
+            sessionUpdate: "tool_call_update",
+            toolCallId: `${e.runId}:${u.toolCallId}`,
+            ...(u.status ? { status: u.status as acp.ToolCallStatus } : {}),
+          });
         break;
       }
       case "artifact.recorded": {
@@ -173,37 +226,71 @@ export class OrcaAcpAgent {
           kind: "edit",
           status: "completed",
           locations: a.path ? [{ path: a.path }] : [],
-          content: a.path ? [{ type: "content", content: { type: "resource_link", uri: `file://${a.path}`, name: a.name, mimeType: a.mediaType } }] : [],
+          content: a.path
+            ? [
+                {
+                  type: "content",
+                  content: { type: "resource_link", uri: `file://${a.path}`, name: a.name, mimeType: a.mediaType },
+                },
+              ]
+            : [],
         });
         break;
       }
       case "decision.resolved":
-        await notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${prefix}decision: ${e.payload.choice} (${e.payload.source})\n` } });
+        await notify({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: `${prefix}decision: ${e.payload.choice} (${e.payload.source})\n` },
+        });
         break;
       case "run.failed":
-        await notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${prefix}run failed: ${e.payload.error.message}\n` } });
+        await notify({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: `${prefix}run failed: ${e.payload.error.message}\n` },
+        });
         break;
       default:
         break;
     }
   }
 
-  private async sendPlan(ctx: acp.AgentRequestContext<acp.PromptRequest>, session: FacadeSession, def: WorkflowDefinition, state: RunState): Promise<void> {
+  private async sendPlan(
+    ctx: acp.AgentRequestContext<acp.PromptRequest>,
+    session: FacadeSession,
+    def: WorkflowDefinition,
+    state: RunState,
+  ): Promise<void> {
     const latest = new Map<string, RunState["steps"][string]>();
     for (const id of state.stepOrder) latest.set(state.steps[id]!.nodeId, state.steps[id]!);
     const entries: acp.PlanEntry[] = Object.entries(def.nodes)
       .filter(([, n]) => n.type !== "start" && n.type !== "end")
       .map(([id, n]) => {
         const s = latest.get(id);
-        const status: acp.PlanEntryStatus = !s ? "pending" : s.status === "completed" ? "completed" : s.status === "failed" || s.status === "cancelled" || s.status === "skipped" ? "pending" : "in_progress";
-        return { content: `${n.name ?? id}${s?.result?.choice ? ` → ${s.result.choice}` : ""}`, priority: n.type === "gate" ? "high" : "medium", status };
+        const status: acp.PlanEntryStatus = !s
+          ? "pending"
+          : s.status === "completed"
+            ? "completed"
+            : s.status === "failed" || s.status === "cancelled" || s.status === "skipped"
+              ? "pending"
+              : "in_progress";
+        return {
+          content: `${n.name ?? id}${s?.result?.choice ? ` → ${s.result.choice}` : ""}`,
+          priority: n.type === "gate" ? "high" : "medium",
+          status,
+        };
       });
-    await ctx.client.notify(acp.methods.client.session.update, { sessionId: session.id, update: { sessionUpdate: "plan", entries } });
+    await ctx.client.notify(acp.methods.client.session.update, {
+      sessionId: session.id,
+      update: { sessionUpdate: "plan", entries },
+    });
   }
 }
 
 /** Serve ORCA as an ACP agent on stdio (used by `orca acp`). */
-export async function serveAcpFacade(opts: OrcaAcpAgentOptions, io: { stdin?: Readable; stdout?: Writable } = {}): Promise<void> {
+export async function serveAcpFacade(
+  opts: OrcaAcpAgentOptions,
+  io: { stdin?: Readable; stdout?: Writable } = {},
+): Promise<void> {
   const stream = stdioAcpStream(io.stdin ?? process.stdin, io.stdout ?? process.stdout);
   const conn = new OrcaAcpAgent(opts).register(acp.agent({ name: "orca" })).connect(stream);
   await conn.closed;

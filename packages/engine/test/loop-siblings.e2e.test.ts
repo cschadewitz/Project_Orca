@@ -59,7 +59,10 @@ describe("loop iterations see earlier siblings", () => {
   it("hands iteration 1's review to iteration 2's builder", async () => {
     const workflows = new WorkflowRegistry();
     workflows.register(parseWorkflow(workflow, "fix-loop.yaml"));
-    const h = await harness({ kinds: { code: [{ body: "CODE-{n}" }], review: [{ body: "REVIEW-{n}" }] } }, { workflows });
+    const h = await harness(
+      { kinds: { code: [{ body: "CODE-{n}" }], review: [{ body: "REVIEW-{n}" }] } },
+      { workflows },
+    );
     dirs.push(h.dir);
 
     const state = await h.orchestrator.startAndRun({ workflowId: "fix-loop" });

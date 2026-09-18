@@ -16,7 +16,16 @@ afterAll(async () => {
 });
 
 const good = {
-  spec: [{ data: { status: "ready", risk: "low", risks: [{ key: "flaky-tests", title: "Flaky integration tests", likelihood: 2, impact: 2 }] }, body: "# Spec\n\nLong enough body to satisfy the design validation rule of eighty characters minimum." }],
+  spec: [
+    {
+      data: {
+        status: "ready",
+        risk: "low",
+        risks: [{ key: "flaky-tests", title: "Flaky integration tests", likelihood: 2, impact: 2 }],
+      },
+      body: "# Spec\n\nLong enough body to satisfy the design validation rule of eighty characters minimum.",
+    },
+  ],
   implementation: [{ data: { status: "done", branch: "b" } }],
   "test-report": [{ data: { status: "done", passed: true } }],
   review: [{ data: { status: "done", verdict: "approve" } }],
@@ -35,18 +44,40 @@ describe("planning layer (e2e)", () => {
                 { slug: "api", title: "API", dependsOn: ["core@spec", "decision:store"], priority: "high" },
                 { slug: "ui", title: "UI", dependsOn: ["api#build"] },
               ],
-              decisions: [{ key: "store", title: "Session store", question: "Cookie or Redis?", options: [{ key: "cookie", name: "Cookie" }, { key: "redis", name: "Redis" }], blocks: ["api"] }],
+              decisions: [
+                {
+                  key: "store",
+                  title: "Session store",
+                  question: "Cookie or Redis?",
+                  options: [
+                    { key: "cookie", name: "Cookie" },
+                    { key: "redis", name: "Redis" },
+                  ],
+                  blocks: ["api"],
+                },
+              ],
               rationale: "three slices",
             },
           },
         ],
-        "risk-register": [{ data: { status: "done", risks: [{ key: "ui-regressions", title: "UI regressions", likelihood: 3, impact: 3, affects: ["ui"] }], summary: "one medium risk" } }],
+        "risk-register": [
+          {
+            data: {
+              status: "done",
+              risks: [{ key: "ui-regressions", title: "UI regressions", likelihood: 3, impact: 3, affects: ["ui"] }],
+              summary: "one medium risk",
+            },
+          },
+        ],
         "decision-matrix": [
           {
             data: {
               key: "store",
               title: "Session store",
-              criteria: [{ key: "simple", name: "Simplicity", weight: 3 }, { key: "revoke", name: "Revocation", weight: 1 }],
+              criteria: [
+                { key: "simple", name: "Simplicity", weight: 3 },
+                { key: "revoke", name: "Revocation", weight: 1 },
+              ],
               options: [
                 { key: "cookie", name: "Cookie", scores: { simple: 9, revoke: 3 } },
                 { key: "redis", name: "Redis", scores: { simple: 4, revoke: 9 } },
@@ -58,30 +89,66 @@ describe("planning layer (e2e)", () => {
       },
     });
     dirs.push(h.dir);
-    const { request, state } = await new ProgramService(h.orchestrator).submitAndRun({ title: "Sessions", body: "Add sessions." });
+    const { request, state } = await new ProgramService(h.orchestrator).submitAndRun({
+      title: "Sessions",
+      body: "Add sessions.",
+    });
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
-    expect(state.stepOrder.map((id) => state.steps[id]!.nodeId)).toEqual(["start", "decompose", "register", "assess-risks", "decide", "schedule", "plan-gate", "dispatch", "summarize", "done"]);
+    expect(state.stepOrder.map((id) => state.steps[id]!.nodeId)).toEqual([
+      "start",
+      "decompose",
+      "register",
+      "assess-risks",
+      "decide",
+      "schedule",
+      "plan-gate",
+      "dispatch",
+      "summarize",
+      "done",
+    ]);
 
     const plan = (await h.orchestrator.plan.getPlan("default"))!;
     const snap = await h.orchestrator.plan.snapshot(plan.id);
     const bySlug = Object.fromEntries(snap.items.map((i) => [i.slug, i]));
-    expect(Object.fromEntries(snap.items.map((i) => [i.slug, i.status]))).toEqual({ core: "done", api: "done", ui: "done" });
+    expect(Object.fromEntries(snap.items.map((i) => [i.slug, i.status]))).toEqual({
+      core: "done",
+      api: "done",
+      ui: "done",
+    });
 
     // Decision: made by the matrix inside the decide loop, before api ran.
-    expect(snap.decisions).toEqual([expect.objectContaining({ key: "store", status: "decided", chosen: "cookie", decidedBy: "matrix", rationale: "v1 favours simplicity" })]);
+    expect(snap.decisions).toEqual([
+      expect.objectContaining({
+        key: "store",
+        status: "decided",
+        chosen: "cookie",
+        decidedBy: "matrix",
+        rationale: "v1 favours simplicity",
+      }),
+    ]);
     const decideStep = state.steps[state.stepOrder[4]!]!;
     expect(decideStep.childRunIds).toHaveLength(1);
     const decideRun = await h.orchestrator.getState(decideStep.childRunIds[0]!);
-    expect(decideRun.stepOrder.map((id) => decideRun.steps[id]!.nodeId)).toEqual(["start", "matrix", "resolve", "done"]);
+    expect(decideRun.stepOrder.map((id) => decideRun.steps[id]!.nodeId)).toEqual([
+      "start",
+      "matrix",
+      "resolve",
+      "done",
+    ]);
     expect(Object.values(decideRun.artifacts)[0]?.path).toBe(`${h.dir}/.orca/program/${request.id}/decisions/store.md`);
     const decidePrompt = (await h.prompts()).find((p) => p.text.includes("You are the **architect**"))!;
     expect(decidePrompt.text).toContain("Work items waiting on this decision: api");
 
     // Risks: from the register (affects ui) and from every spec (attached to the producing item).
-    expect(snap.risks.find((r) => r.key === "ui-regressions")).toMatchObject({ affects: [bySlug.ui!.id], origin: { kind: "artifact" } });
+    expect(snap.risks.find((r) => r.key === "ui-regressions")).toMatchObject({
+      affects: [bySlug.ui!.id],
+      origin: { kind: "artifact" },
+    });
     // One record per key, however many item runs declared it concurrently, and one journal entry per dependency.
     expect(snap.risks.filter((r) => r.key === "flaky-tests")).toHaveLength(1);
-    expect(snap.risks.find((r) => r.key === "flaky-tests")!.affects.sort()).toEqual([bySlug.api!.id, bySlug.core!.id, bySlug.ui!.id].sort());
+    expect(snap.risks.find((r) => r.key === "flaky-tests")!.affects.sort()).toEqual(
+      [bySlug.api!.id, bySlug.core!.id, bySlug.ui!.id].sort(),
+    );
 
     // Dispatch order and pipelining: api started after core's spec existed but before core finished.
     const dispatch = state.steps[state.stepOrder[7]!]!;
@@ -96,19 +163,29 @@ describe("planning layer (e2e)", () => {
     expect(uiAwait.status).toBe("completed");
     expect(uiAwait.result?.data).toMatchObject({ phase: "build", satisfied: ["api is done"] });
     expect(uiAwait.completedAt! >= runOf("api").run.completedAt!).toBe(true);
-    const uiBuild = (await h.prompts()).filter((p) => p.text.includes("You are the **build agent**")).find((p) => p.text.includes("(`ui`)"))!;
+    const uiBuild = (await h.prompts())
+      .filter((p) => p.text.includes("You are the **build agent**"))
+      .find((p) => p.text.includes("(`ui`)"))!;
     expect(uiBuild.text).toContain("Upstream work this item depends on");
     expect(uiBuild.text).toMatch(/`api` \(done; blocks, required by build\)/);
     expect(uiBuild.text).toContain(`${h.dir}/.orca/work/api/implementation.md`);
 
     // Schedule artifact + gate + journal.
     expect(Object.values(state.artifacts).some((a) => a.kind === "schedule")).toBe(true);
-    expect(state.run.vars.schedule).toMatchObject({ ready: [{ slug: "core" }], waiting: [{ slug: "api" }, { slug: "ui" }], criticalPath: ["core", "api", "ui"] });
+    expect(state.run.vars.schedule).toMatchObject({
+      ready: [{ slug: "core" }],
+      waiting: [{ slug: "api" }, { slug: "ui" }],
+      criticalPath: ["core", "api", "ui"],
+    });
     expect(state.run.vars.dispatchOutcome).toBe("complete");
     const journal = await h.orchestrator.plan.journalOf(plan.id);
-    const started = journal.filter((e) => e.type === "dispatch.started").map((e) => snap.items.find((i) => i.id === (e.payload as { workItemId: string }).workItemId)!.slug);
+    const started = journal
+      .filter((e) => e.type === "dispatch.started")
+      .map((e) => snap.items.find((i) => i.id === (e.payload as { workItemId: string }).workItemId)!.slug);
     expect(started).toEqual(["core", "api", "ui"]);
-    const resolved = journal.filter((e) => e.type === "dependency.resolved").map((e) => (e.payload as { dependencyId: string }).dependencyId);
+    const resolved = journal
+      .filter((e) => e.type === "dependency.resolved")
+      .map((e) => (e.payload as { dependencyId: string }).dependencyId);
     expect(new Set(resolved).size).toBe(resolved.length);
     // The decision was resolved once, although the artifact was ingested at `artifact.recorded`
     // and then handed to `custom:decision-matrix` (#79).
@@ -116,13 +193,20 @@ describe("planning layer (e2e)", () => {
     // Every status `orca plan show` reports is backed by a `work-item.updated` entry the run-log
     // projection wrote: the plan side no longer sets the field alongside it, so the journal and
     // the read model cannot drift apart when a run dies mid-dispatch.
-    const projected = journal.filter((e) => e.type === "work-item.updated" && (e.payload as { changes: { status?: string } }).changes.status !== undefined);
+    const projected = journal.filter(
+      (e) =>
+        e.type === "work-item.updated" && (e.payload as { changes: { status?: string } }).changes.status !== undefined,
+    );
     const lastStatus = new Map<string, string>();
     for (const e of projected) {
       const pl = e.payload as { workItemId: string; changes: { status: string } };
       lastStatus.set(pl.workItemId, pl.changes.status);
     }
-    expect(Object.fromEntries(snap.items.map((i) => [i.slug, lastStatus.get(i.id)]))).toEqual({ core: "done", api: "done", ui: "done" });
+    expect(Object.fromEntries(snap.items.map((i) => [i.slug, lastStatus.get(i.id)]))).toEqual({
+      core: "done",
+      api: "done",
+      ui: "done",
+    });
     expect(projected.every((e) => e.origin.kind === "system" && e.origin.runId === state.run.id)).toBe(true);
     const summaryPrompt = (await h.prompts()).find((p) => p.text.includes("Summarise the program"))!;
     expect(summaryPrompt.text).toContain("Critical path: core -> api -> ui");
@@ -133,7 +217,15 @@ describe("planning layer (e2e)", () => {
       kinds: {
         ...good,
         decomposition: [
-          { data: { items: [{ slug: "a1", title: "A1" }, { slug: "a2", title: "A2", dependsOn: ["b1"] }], rationale: "A" } },
+          {
+            data: {
+              items: [
+                { slug: "a1", title: "A1" },
+                { slug: "a2", title: "A2", dependsOn: ["b1"] },
+              ],
+              rationale: "A",
+            },
+          },
           { data: { items: [{ slug: "b1", title: "B1" }], rationale: "B" } },
         ],
       },
@@ -147,7 +239,9 @@ describe("planning layer (e2e)", () => {
     let items = Object.fromEntries((await h.orchestrator.plan.snapshot(plan.id)).items.map((i) => [i.slug, i]));
     expect(items.a1!.status).toBe("done");
     expect(items.a2).toMatchObject({ status: "pending", deferredReason: expect.stringMatching(/external 'b1'/) });
-    expect((a.state.run.vars.dispatched as { slug: string; status: string }[]).map((d) => `${d.slug}:${d.status}`)).toEqual(["a1:done", "a2:deferred"]);
+    expect(
+      (a.state.run.vars.dispatched as { slug: string; status: string }[]).map((d) => `${d.slug}:${d.status}`),
+    ).toEqual(["a1:done", "a2:deferred"]);
 
     const b = await program.submitAndRun({ title: "B", body: "second" });
     expect(b.state.run.status, JSON.stringify(b.state.run.error)).toBe("completed");
@@ -163,7 +257,9 @@ describe("planning layer (e2e)", () => {
     expect(items.a2!.status).toBe("done");
     expect(items.a2!.deferredReason).toBeUndefined();
     const journal = await h.orchestrator.plan.journalOf(plan.id);
-    expect(journal.map((e) => e.type)).toEqual(expect.arrayContaining(["dispatch.deferred", "dependency.bound", "dependency.resolved", "dispatch.started"]));
+    expect(journal.map((e) => e.type)).toEqual(
+      expect.arrayContaining(["dispatch.deferred", "dependency.bound", "dependency.resolved", "dispatch.started"]),
+    );
     expect((await h.orchestrator.plan.explain(plan.id, "a2"))[0]).toBe("a2: done");
   }, 180_000);
   it("parks the program when an item's gate needs a human, and resumes into the same child runs", async () => {
@@ -173,10 +269,26 @@ describe("planning layer (e2e)", () => {
           ...good,
           // The first spec is high-risk, so `one`'s spec gate asks a human; the second (for `two`) auto-approves.
           spec: [
-            { data: { status: "ready", risk: "high" }, body: "# Spec\n\nLong enough body to satisfy the design validation rule of eighty characters minimum." },
-            { data: { status: "ready", risk: "low" }, body: "# Spec\n\nLong enough body to satisfy the design validation rule of eighty characters minimum." },
+            {
+              data: { status: "ready", risk: "high" },
+              body: "# Spec\n\nLong enough body to satisfy the design validation rule of eighty characters minimum.",
+            },
+            {
+              data: { status: "ready", risk: "low" },
+              body: "# Spec\n\nLong enough body to satisfy the design validation rule of eighty characters minimum.",
+            },
           ],
-          decomposition: [{ data: { items: [{ slug: "one", title: "One" }, { slug: "two", title: "Two", dependsOn: ["one"] }], rationale: "two slices" } }],
+          decomposition: [
+            {
+              data: {
+                items: [
+                  { slug: "one", title: "One" },
+                  { slug: "two", title: "Two", dependsOn: ["one"] },
+                ],
+                rationale: "two slices",
+              },
+            },
+          ],
           "risk-register": [{ data: { status: "done", risks: [], summary: "nothing to report" } }],
         },
       },
@@ -185,11 +297,17 @@ describe("planning layer (e2e)", () => {
     dirs.push(h.dir);
     const program = new ProgramService(h.orchestrator);
     const { request, state: parked } = await program.submitAndRun({ title: "Gated", body: "x" });
-    const items = async () => (await h.orchestrator.stores.workItems.list((w) => w.requestId === request.id)).map((w) => [w.slug, w.status]).sort();
+    const items = async () =>
+      (await h.orchestrator.stores.workItems.list((w) => w.requestId === request.id))
+        .map((w) => [w.slug, w.status])
+        .sort();
 
     // The program run is parked, not failed: `one` is still in progress and `two` has not started.
     expect(parked.run.status, JSON.stringify(parked.run.error)).toBe("paused");
-    expect(await items()).toEqual([["one", "in-progress"], ["two", "pending"]]);
+    expect(await items()).toEqual([
+      ["one", "in-progress"],
+      ["two", "pending"],
+    ]);
     const firstAttempt = parked.stepOrder.map((id) => parked.steps[id]!).find((s) => s.nodeId === "dispatch")!;
     expect(firstAttempt.children.map((c) => c.branch)).toEqual(["one"]);
     const [query] = await h.orchestrator.pendingInputs();
@@ -199,12 +317,18 @@ describe("planning layer (e2e)", () => {
     const state = await program.resume(parked.run.id);
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(state.run.outcome).toBe("success");
-    expect(await items()).toEqual([["one", "done"], ["two", "done"]]);
+    expect(await items()).toEqual([
+      ["one", "done"],
+      ["two", "done"],
+    ]);
 
     // The re-attempted dispatch step resumed `one`'s existing child run instead of spawning another, then ran `two`.
     const attempts = state.stepOrder.map((id) => state.steps[id]!).filter((s) => s.nodeId === "dispatch");
     expect(attempts.map((s) => s.attempt)).toEqual([1, 2]);
-    expect(attempts[1]!.children.map((c) => [c.branch, c.resumed ?? false])).toEqual([["one", true], ["two", false]]);
+    expect(attempts[1]!.children.map((c) => [c.branch, c.resumed ?? false])).toEqual([
+      ["one", true],
+      ["two", false],
+    ]);
     expect(attempts[1]!.childRunIds[0]).toBe(firstAttempt.childRunIds[0]);
     expect((await h.orchestrator.stores.requests.get(request.id))?.status).toBe("completed");
   }, 120_000);

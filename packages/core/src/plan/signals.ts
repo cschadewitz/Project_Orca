@@ -7,7 +7,16 @@
  * module normalises it so the PlanService can update the plan as the artifacts
  * are recorded. Unknown or malformed entries are reported, never thrown.
  */
-import { DecisionInputSchema, DependencyRefSchema, RiskInputSchema, RiskRegisterSchema, parseDependencyRef, type DecisionInput, type DependencyRef, type RiskInput } from "../model/plan.js";
+import {
+  DecisionInputSchema,
+  DependencyRefSchema,
+  RiskInputSchema,
+  RiskRegisterSchema,
+  parseDependencyRef,
+  type DecisionInput,
+  type DependencyRef,
+  type RiskInput,
+} from "../model/plan.js";
 
 export interface PlanSignals {
   risks: RiskInput[];
@@ -16,7 +25,11 @@ export interface PlanSignals {
   issues: string[];
 }
 
-export type SignalExtractor = (artifact: { kind: string; name: string; data: Record<string, unknown> }) => Partial<PlanSignals> | undefined;
+export type SignalExtractor = (artifact: {
+  kind: string;
+  name: string;
+  data: Record<string, unknown>;
+}) => Partial<PlanSignals> | undefined;
 
 export const SLUG_MAX_LENGTH = 48;
 
@@ -33,7 +46,12 @@ export function slugify(text: string): string {
 }
 
 function riskFrom(raw: unknown, i: number, issues: string[]): RiskInput | undefined {
-  const candidate: Record<string, unknown> | undefined = typeof raw === "string" ? { key: slugify(raw), title: raw } : raw && typeof raw === "object" ? { ...(raw as Record<string, unknown>) } : undefined;
+  const candidate: Record<string, unknown> | undefined =
+    typeof raw === "string"
+      ? { key: slugify(raw), title: raw }
+      : raw && typeof raw === "object"
+        ? { ...(raw as Record<string, unknown>) }
+        : undefined;
   if (!candidate) return undefined;
   if (candidate.key === undefined && typeof candidate.title === "string") candidate.key = slugify(candidate.title);
   if (candidate.title === undefined && typeof candidate.key === "string") candidate.title = candidate.key;
@@ -83,7 +101,8 @@ export const defaultSignalExtractor: SignalExtractor = (artifact) => {
   if (artifact.kind === "risk-register") {
     const parsed = RiskRegisterSchema.safeParse(data);
     if (parsed.success) out.risks = parsed.data.risks;
-    else issues.push(`risk-register: ${parsed.error.issues.map((x) => `${x.path.join(".")}: ${x.message}`).join("; ")}`);
+    else
+      issues.push(`risk-register: ${parsed.error.issues.map((x) => `${x.path.join(".")}: ${x.message}`).join("; ")}`);
     return out;
   }
   if (artifact.kind === "decision-matrix") {
@@ -107,7 +126,10 @@ export const defaultSignalExtractor: SignalExtractor = (artifact) => {
   return out;
 };
 
-export function extractPlanSignals(artifact: { kind: string; name: string; data: Record<string, unknown> }, extractors: readonly SignalExtractor[] = [defaultSignalExtractor]): PlanSignals {
+export function extractPlanSignals(
+  artifact: { kind: string; name: string; data: Record<string, unknown> },
+  extractors: readonly SignalExtractor[] = [defaultSignalExtractor],
+): PlanSignals {
   const merged: PlanSignals = { risks: [], decisions: [], dependencies: [], issues: [] };
   for (const extract of extractors) {
     const part = extract(artifact);

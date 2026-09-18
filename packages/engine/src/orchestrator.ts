@@ -45,8 +45,20 @@ import {
 import { reduceRun } from "@orca/core";
 import type { EventFilter, EventListener, Stores, WorkItemClaim } from "@orca/store";
 import { builtinExecutors } from "./executors/index.js";
-import { NodeExecutorRegistry, paused, type ResolvedArtifact, type StepContext, type StepOutcome } from "./executors/types.js";
-import { abortableHumanInput, askHumanInput, autoHumanInput, isHumanInputPending, type HumanInputPort } from "./human-input.js";
+import {
+  NodeExecutorRegistry,
+  paused,
+  type ResolvedArtifact,
+  type StepContext,
+  type StepOutcome,
+} from "./executors/types.js";
+import {
+  abortableHumanInput,
+  askHumanInput,
+  autoHumanInput,
+  isHumanInputPending,
+  type HumanInputPort,
+} from "./human-input.js";
 import { PlanService } from "./plan/service.js";
 import { RunContext } from "./run-context.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
@@ -123,7 +135,9 @@ export class Orchestrator {
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
     this.clock = o.clock ?? systemClock;
     this.logger = o.logger ?? silentLogger;
-    this.plan = o.plan ?? new PlanService({ stores: this.stores, clock: this.clock, logger: this.logger.child({ component: "plan" }) });
+    this.plan =
+      o.plan ??
+      new PlanService({ stores: this.stores, clock: this.clock, logger: this.logger.child({ component: "plan" }) });
     this.stores.events.subscribe((e) => void this.terminalStates.delete(e.runId));
   }
 
@@ -131,7 +145,9 @@ export class Orchestrator {
 
   /** Create a run (emits run.created) without executing it. */
   async startRun(opts: StartRunOptions): Promise<string> {
-    const def = opts.inline ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1") : this.workflows.get(opts.workflowId!);
+    const def = opts.inline
+      ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1")
+      : this.workflows.get(opts.workflowId!);
     const runId = newId("run", this.clock.now());
     const request = opts.requestId ? await this.stores.requests.get(opts.requestId) : undefined;
     const workItem = opts.workItemId ? await this.stores.workItems.get(opts.workItemId) : undefined;
@@ -192,7 +208,8 @@ export class Orchestrator {
       if (isTerminal(state)) return;
       // A parked run tree: cancel the children it is waiting on, then close its own open step.
       for (const s of Object.values(state.steps)) for (const c of s.childRunIds) await this.cancel(c, reason);
-      for (const s of openSteps(state)) await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
+      for (const s of openSteps(state))
+        await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
       await this.stores.events.append({ type: "run.cancelled", runId, payload: reason ? { reason } : {} });
     }
   }
@@ -272,12 +289,27 @@ export class Orchestrator {
    * run is live in some process, or the answer is not one of the options.
    */
   async answer(requestId: string, answer: string, runId?: string): Promise<HumanInputRequest> {
-    const request = (runId ? pendingHumanInputs(await this.getState(runId)) : await this.pendingInputs()).find((h) => h.id === requestId);
+    const request = (runId ? pendingHumanInputs(await this.getState(runId)) : await this.pendingInputs()).find(
+      (h) => h.id === requestId,
+    );
     if (!request) throw new OrcaError("RUN_STATE", `no pending human input '${requestId}'`, { requestId });
     const state = await this.getState(request.runId);
-    if (state.run.status !== "paused") throw new OrcaError("RUN_STATE", `run ${request.runId} is ${state.run.status}, not paused: answer it through the process running it`, { runId: request.runId, status: state.run.status });
-    if (request.options.length && !request.options.includes(answer)) throw new OrcaError("RUN_STATE", `'${answer}' is not one of: ${request.options.join(", ")}`, { requestId, options: request.options });
-    await this.stores.events.append({ type: "human.answered", runId: request.runId, payload: { stepRunId: request.stepRunId, requestId, answer } });
+    if (state.run.status !== "paused")
+      throw new OrcaError(
+        "RUN_STATE",
+        `run ${request.runId} is ${state.run.status}, not paused: answer it through the process running it`,
+        { runId: request.runId, status: state.run.status },
+      );
+    if (request.options.length && !request.options.includes(answer))
+      throw new OrcaError("RUN_STATE", `'${answer}' is not one of: ${request.options.join(", ")}`, {
+        requestId,
+        options: request.options,
+      });
+    await this.stores.events.append({
+      type: "human.answered",
+      runId: request.runId,
+      payload: { stepRunId: request.stepRunId, requestId, answer },
+    });
     return { ...request, answer };
   }
 
@@ -307,7 +339,8 @@ export class Orchestrator {
   async listClaims(runId?: string): Promise<HeldClaim[]> {
     const claims = (await this.stores.claims.list()).filter((c) => !runId || c.runId === runId);
     const out: HeldClaim[] = [];
-    for (const claim of claims.sort((a, b) => a.at.localeCompare(b.at) || a.workItemId.localeCompare(b.workItemId))) out.push({ ...claim, owner: await this.ownerStatus(claim.runId) });
+    for (const claim of claims.sort((a, b) => a.at.localeCompare(b.at) || a.workItemId.localeCompare(b.workItemId)))
+      out.push({ ...claim, owner: await this.ownerStatus(claim.runId) });
     return out;
   }
 
@@ -323,10 +356,21 @@ export class Orchestrator {
     if (!claim) throw new OrcaError("CLAIM_NOT_FOUND", `work item ${workItemId} is not claimed`, { workItemId });
     const owner = await this.ownerStatus(claim.runId);
     const dead = owner === "missing" || owner === "completed" || owner === "failed" || owner === "cancelled";
-    if (!dead && !opts.force) throw new OrcaError("RUN_STATE", `work item ${workItemId} is claimed by run ${claim.runId}, which is ${owner}, not finished: resume or cancel that run, or release with force`, { workItemId, runId: claim.runId, status: owner });
+    if (!dead && !opts.force)
+      throw new OrcaError(
+        "RUN_STATE",
+        `work item ${workItemId} is claimed by run ${claim.runId}, which is ${owner}, not finished: resume or cancel that run, or release with force`,
+        { workItemId, runId: claim.runId, status: owner },
+      );
     // Compare-and-delete against the incumbent we inspected: a claim another run took in the meantime survives.
     await this.stores.claims.release(workItemId, claim.runId);
-    this.logger.info("work item claim released", { workItemId, runId: claim.runId, branch: claim.branch, owner, forced: !dead });
+    this.logger.info("work item claim released", {
+      workItemId,
+      runId: claim.runId,
+      branch: claim.branch,
+      owner,
+      forced: !dead,
+    });
     return { ...claim, owner };
   }
 
@@ -349,21 +393,29 @@ export class Orchestrator {
     let graph: WorkflowGraph = root;
     for (let i = 0; i < path.length; i++) {
       const node: NodeDef | undefined = graph.nodes[path[i]!];
-      if (!node) throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: node '${path[i]}' not found`);
+      if (!node)
+        throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: node '${path[i]}' not found`);
       if (node.type === "loop") {
-        if (!("graph" in node.body)) throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: loop body is a reference`);
+        if (!("graph" in node.body))
+          throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: loop body is a reference`);
         graph = node.body.graph;
       } else if (node.type === "parallel") {
         if (node.forEach) {
-          if (!node.forEach.body || !("graph" in node.forEach.body)) throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: forEach body is a reference`);
+          if (!node.forEach.body || !("graph" in node.forEach.body))
+            throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: forEach body is a reference`);
           graph = node.forEach.body.graph;
         } else {
           const branch = path[++i];
           const ref = branch !== undefined ? node.branches?.[branch] : undefined;
-          if (!ref || !("graph" in ref)) throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: branch '${branch}' not found`);
+          if (!ref || !("graph" in ref))
+            throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: branch '${branch}' not found`);
           graph = ref.graph;
         }
-      } else throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: node '${path[i]}' has no nested graph`);
+      } else
+        throw new OrcaError(
+          "WORKFLOW_NOT_FOUND",
+          `inline workflow ${workflowId}: node '${path[i]}' has no nested graph`,
+        );
     }
     return this.inlineDefinition(workflowId, graph, root.version);
   }
@@ -435,7 +487,13 @@ export class Orchestrator {
         const stepRunId = newId("step", this.clock.now());
         await rc.emit({
           type: "step.scheduled",
-          payload: { stepRunId, nodeId, nodeType: node.type, attempt, ...(viaEdge ? { viaEdge: { from: viaEdge.from, ...(viaEdge.label ? { label: viaEdge.label } : {}) } } : {}) },
+          payload: {
+            stepRunId,
+            nodeId,
+            nodeType: node.type,
+            attempt,
+            ...(viaEdge ? { viaEdge: { from: viaEdge.from, ...(viaEdge.label ? { label: viaEdge.label } : {}) } } : {}),
+          },
         });
         const step = rc.state.steps[stepRunId]!;
         log.info("step", { node: nodeId, type: node.type, attempt });
@@ -461,12 +519,26 @@ export class Orchestrator {
         await rc.emit({ type: "step.completed", payload: { stepRunId, result: outcome.result } });
         // Terminal by result, not by node type: any executor may end the run by returning an outcome.
         if (outcome.result.outcome) {
-          await rc.emit({ type: "run.completed", payload: { outcome: outcome.result.outcome, ...(outcome.result.message ? { message: outcome.result.message } : {}) } });
+          await rc.emit({
+            type: "run.completed",
+            payload: {
+              outcome: outcome.result.outcome,
+              ...(outcome.result.message ? { message: outcome.result.message } : {}),
+            },
+          });
           return rc.state;
         }
         const edge = await this.route(rc, nodeId, outcome.result);
         if (!edge) {
-          await rc.emit({ type: "run.failed", payload: { error: { code: "WORKFLOW_INVALID", message: `no outgoing edge matched from '${nodeId}' (choice=${outcome.result.choice ?? "none"})` } } });
+          await rc.emit({
+            type: "run.failed",
+            payload: {
+              error: {
+                code: "WORKFLOW_INVALID",
+                message: `no outgoing edge matched from '${nodeId}' (choice=${outcome.result.choice ?? "none"})`,
+              },
+            },
+          });
           return rc.state;
         }
         viaEdge = edge;
@@ -501,7 +573,12 @@ export class Orchestrator {
 
   private async executeStep(rc: RunContext, step: StepRun, node: NodeDef): Promise<StepOutcome> {
     const executor = this.executors.get(node.type);
-    if (!executor) return { kind: "failed", error: { code: "NOT_SUPPORTED", message: `no executor registered for node type '${node.type}'` }, retryable: false };
+    if (!executor)
+      return {
+        kind: "failed",
+        error: { code: "NOT_SUPPORTED", message: `no executor registered for node type '${node.type}'` },
+        retryable: false,
+      };
     const ctx = this.stepContext(rc, step, node);
     await rc.emit({ type: "step.started", payload: { stepRunId: step.id, inputArtifactIds: [] } });
     try {
@@ -561,30 +638,56 @@ export class Orchestrator {
         const childId =
           resumedId ??
           (await self.startRun({
-            ...("workflow" in target ? { workflowId: target.workflow } : { inline: { graph: target.graph, id: target.inlineId, version: rc.definition.version } }),
+            ...("workflow" in target
+              ? { workflowId: target.workflow }
+              : { inline: { graph: target.graph, id: target.inlineId, version: rc.definition.version } }),
             parentRunId: rc.id,
             parentStepRunId: step.id,
             ...(options.vars ? { vars: { ...rc.state.run.vars, ...options.vars } } : { vars: rc.state.run.vars }),
-            ...(options.workspace ? { workspace: options.workspace } : options.workItemId ? {} : { workspace: rc.workspace }),
+            ...(options.workspace
+              ? { workspace: options.workspace }
+              : options.workItemId
+                ? {}
+                : { workspace: rc.workspace }),
             ...(options.workItemId ? { workItemId: options.workItemId } : {}),
             ...(rc.state.run.requestId ? { requestId: rc.state.run.requestId } : {}),
           }));
-        if (resumedId) rc.logger.info("child re-attached", { step: step.nodeId, child: childId, ...(options.branch ? { branch: options.branch } : {}) });
+        if (resumedId)
+          rc.logger.info("child re-attached", {
+            step: step.nodeId,
+            child: childId,
+            ...(options.branch ? { branch: options.branch } : {}),
+          });
         await rc.emit({
           type: "child.spawned",
-          payload: { stepRunId: step.id, childRunId: childId, ...(options.branch ? { branch: options.branch } : {}), ...(options.workItemId ? { workItemId: options.workItemId } : {}), ...(resumedId ? { resumed: true } : {}) },
+          payload: {
+            stepRunId: step.id,
+            childRunId: childId,
+            ...(options.branch ? { branch: options.branch } : {}),
+            ...(options.workItemId ? { workItemId: options.workItemId } : {}),
+            ...(resumedId ? { resumed: true } : {}),
+          },
         });
         const onAbort = () => void self.cancel(childId, "parent cancelled");
         rc.abort.signal.addEventListener("abort", onAbort, { once: true });
         // The caller may also cancel this one child on its own (e.g. a fail-fast parallel
         // abandoning the siblings of a branch that already decided the join).
         const own = options.signal;
-        const onOwnAbort = () => void self.cancel(childId, typeof own?.reason === "string" ? own.reason : "cancelled by parent step");
+        const onOwnAbort = () =>
+          void self.cancel(childId, typeof own?.reason === "string" ? own.reason : "cancelled by parent step");
         if (own?.aborted) onOwnAbort();
         else own?.addEventListener("abort", onOwnAbort, { once: true });
         try {
           const result = await self.run(childId);
-          await rc.emit({ type: "child.finished", payload: { stepRunId: step.id, childRunId: childId, status: result.run.status, ...(result.run.outcome ? { outcome: result.run.outcome } : {}) } });
+          await rc.emit({
+            type: "child.finished",
+            payload: {
+              stepRunId: step.id,
+              childRunId: childId,
+              status: result.run.status,
+              ...(result.run.outcome ? { outcome: result.run.outcome } : {}),
+            },
+          });
           return result;
         } finally {
           rc.abort.signal.removeEventListener("abort", onAbort);
@@ -633,14 +736,20 @@ export class Orchestrator {
           .sort((a, b) => (a.completedAt ?? "").localeCompare(b.completedAt ?? ""))
           .pop();
         const ids = step?.result?.artifactIds ?? [];
-        found = ids.map((id) => rc.state.artifacts[id]).find((a) => a && (!ref.kind || a.kind === ref.kind) && (!ref.name || a.name === ref.name));
+        found = ids
+          .map((id) => rc.state.artifacts[id])
+          .find((a) => a && (!ref.kind || a.kind === ref.kind) && (!ref.name || a.name === ref.name));
       } else if (ref.name) {
         found = visible.get(ref.name);
       } else if (ref.kind) {
-        found = [...visible.values()].filter((a) => a.kind === ref.kind).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).pop();
+        found = [...visible.values()]
+          .filter((a) => a.kind === ref.kind)
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .pop();
       }
       if (!found) {
-        if (ref.required) throw new OrcaError("ARTIFACT_MISSING", `required input artifact not found: ${JSON.stringify(ref)}`);
+        if (ref.required)
+          throw new OrcaError("ARTIFACT_MISSING", `required input artifact not found: ${JSON.stringify(ref)}`);
         out.push(undefined);
         continue;
       }
@@ -649,7 +758,13 @@ export class Orchestrator {
     return out;
   }
 
-  private async recordArtifact(rc: RunContext, step: StepRun, spec: ArtifactSpec, content: string, extra: { path?: string; parents?: string[]; agentSessionId?: string; agentId?: string }): Promise<Artifact> {
+  private async recordArtifact(
+    rc: RunContext,
+    step: StepRun,
+    spec: ArtifactSpec,
+    content: string,
+    extra: { path?: string; parents?: string[]; agentSessionId?: string; agentId?: string },
+  ): Promise<Artifact> {
     const { extractStructuredData } = await import("@orca/core");
     const name = spec.name ?? spec.kind;
     const mediaType = spec.mediaType ?? (extra.path?.endsWith(".json") ? "application/json" : "text/markdown");
@@ -678,13 +793,21 @@ export class Orchestrator {
     await rc.emit({ type: "artifact.recorded", payload: { stepRunId: step.id, artifact } });
     // Planning intake happens inline so the next node sees risks/decisions/dependencies this artifact carried.
     const rejected = await this.plan.onArtifactRecorded(rc.state.run, artifact);
-    if (rejected.length) await rc.emit({ type: "plan.signals.rejected", payload: { stepRunId: step.id, artifactId: artifact.id, issues: rejected } });
+    if (rejected.length)
+      await rc.emit({
+        type: "plan.signals.rejected",
+        payload: { stepRunId: step.id, artifactId: artifact.id, issues: rejected },
+      });
     return artifact;
   }
 
   // ----------------------------------------------------------------- sessions
 
-  private async openSession(rc: RunContext, step: StepRun, selector: AgentSelector): Promise<{ session: AgentSession; release: () => Promise<void> }> {
+  private async openSession(
+    rc: RunContext,
+    step: StepRun,
+    selector: AgentSelector,
+  ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
     const { agent, host } = this.agents.resolve(selector);
     const key = `${rc.id}:${agent.id}`;
     const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
@@ -722,16 +845,32 @@ export class Orchestrator {
           onSettled: async () => {
             pendingAsks--;
             // The agent turn is still in flight; go back to waiting on it once no ask is pending.
-            if (pendingAsks === 0) await rc.emit({ type: "step.waiting", payload: { stepRunId, on: "agent-turn" } }).catch(() => undefined);
+            if (pendingAsks === 0)
+              await rc.emit({ type: "step.waiting", payload: { stepRunId, on: "agent-turn" } }).catch(() => undefined);
           },
         });
       },
-      onPermission: (info) => void rc.emit({ type: "agent.permission", payload: { stepRunId: current.step.id, sessionId: session.id, title: info.title, decision: info.decision, ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}) } }),
+      onPermission: (info) =>
+        void rc.emit({
+          type: "agent.permission",
+          payload: {
+            stepRunId: current.step.id,
+            sessionId: session.id,
+            title: info.title,
+            decision: info.decision,
+            ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
+          },
+        }),
     });
-    await rc.emit({ type: "agent.session.opened", payload: { stepRunId: step.id, sessionId: session.id, agentId: agent.id, hostId: host.id, cwd: rc.workspace.cwd } });
+    await rc.emit({
+      type: "agent.session.opened",
+      payload: { stepRunId: step.id, sessionId: session.id, agentId: agent.id, hostId: host.id, cwd: rc.workspace.cwd },
+    });
     const close = async () => {
       await session.close();
-      await rc.emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } }).catch(() => undefined);
+      await rc
+        .emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } })
+        .catch(() => undefined);
     };
     if (agent.sessionMode === "per-run") {
       const pooled = { session, current };
@@ -764,5 +903,7 @@ export function isTerminal(state: RunState): boolean {
 
 /** Steps that have been scheduled but not yet settled (scheduled, running or waiting). */
 function openSteps(state: RunState): StepRun[] {
-  return state.stepOrder.map((id) => state.steps[id]!).filter((s) => s.status === "scheduled" || s.status === "running" || s.status === "waiting");
+  return state.stepOrder
+    .map((id) => state.steps[id]!)
+    .filter((s) => s.status === "scheduled" || s.status === "running" || s.status === "waiting");
 }

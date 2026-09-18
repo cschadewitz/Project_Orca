@@ -7,10 +7,43 @@
  * current work items and decisions, so the schedule never trusts a stale
  * `Dependency.status` (the PlanService persists status transitions afterwards).
  */
-import { DEPENDENCY_START_PHASE, PRIORITY_RANK, PriorityWeightsSchema, RISK_LEVELS, SchedulingPolicySchema, estimateWeight, type Decision, type Dependency, type Plan, type PriorityWeights, type RiskLevel, type SchedulingPolicy, type SchedulingStrategy, type Risk } from "../model/plan.js";
+import {
+  DEPENDENCY_START_PHASE,
+  PRIORITY_RANK,
+  PriorityWeightsSchema,
+  RISK_LEVELS,
+  SchedulingPolicySchema,
+  estimateWeight,
+  type Decision,
+  type Dependency,
+  type Plan,
+  type PriorityWeights,
+  type RiskLevel,
+  type SchedulingPolicy,
+  type SchedulingStrategy,
+  type Risk,
+} from "../model/plan.js";
 import type { WorkItem } from "../model/request.js";
-import { buildDependencyGraph, criticalPath, dropCycleClosingEdges, findCycles, longestDownstreamPaths, topologicalWaves, transitiveDownstream, type DependencyGraph, type GraphEdge, type PathInfo } from "./graph.js";
-import { itemRiskExposure, levelRank, risksMitigatedBy, summarizeRisks, type RiskExposure, type RiskSummary } from "./risk.js";
+import {
+  buildDependencyGraph,
+  criticalPath,
+  dropCycleClosingEdges,
+  findCycles,
+  longestDownstreamPaths,
+  topologicalWaves,
+  transitiveDownstream,
+  type DependencyGraph,
+  type GraphEdge,
+  type PathInfo,
+} from "./graph.js";
+import {
+  itemRiskExposure,
+  levelRank,
+  risksMitigatedBy,
+  summarizeRisks,
+  type RiskExposure,
+  type RiskSummary,
+} from "./risk.js";
 
 export const STRATEGY_WEIGHTS: Record<SchedulingStrategy, PriorityWeights> = {
   "critical-path": PriorityWeightsSchema.parse({}),
@@ -27,10 +60,20 @@ export type DependencyState = "satisfied" | "waiting" | "failed" | "waived";
  * express an ordering - open or satisfied; waived and failed no longer gate).
  * This is the only source of truth; `Decision` carries no copy.
  */
-export function decisionBlocks(decisionId: string, dependencies: readonly Dependency[], statuses: readonly Dependency["status"][] = ["open", "satisfied"]): string[] {
+export function decisionBlocks(
+  decisionId: string,
+  dependencies: readonly Dependency[],
+  statuses: readonly Dependency["status"][] = ["open", "satisfied"],
+): string[] {
   const out: string[] = [];
   for (const d of dependencies) {
-    if (d.target.kind !== "decision" || d.target.decisionId !== decisionId || d.type !== "blocks" || !statuses.includes(d.status)) continue;
+    if (
+      d.target.kind !== "decision" ||
+      d.target.decisionId !== decisionId ||
+      d.type !== "blocks" ||
+      !statuses.includes(d.status)
+    )
+      continue;
     if (!out.includes(d.from)) out.push(d.from);
   }
   return out;
@@ -66,19 +109,32 @@ export function evaluateDependency(d: Dependency, ctx: EvaluationContext): Depen
       if (!up) return { state: "failed", detail: `upstream work item ${t.workItemId} is not in the plan` };
       if (up.status === "done") return { state: "satisfied", detail: `${up.slug} is done` };
       if (t.stage && up.produced[t.stage]) return { state: "satisfied", detail: `${up.slug} produced ${t.stage}` };
-      if (TERMINAL_FAILURE.includes(up.status) || up.status === "blocked") return { state: "failed", detail: `${up.slug} is ${up.status}` };
-      return { state: "waiting", detail: t.stage ? `waiting for ${up.slug} to produce ${t.stage}` : `waiting for ${up.slug} to be done (currently ${up.status})` };
+      if (TERMINAL_FAILURE.includes(up.status) || up.status === "blocked")
+        return { state: "failed", detail: `${up.slug} is ${up.status}` };
+      return {
+        state: "waiting",
+        detail: t.stage
+          ? `waiting for ${up.slug} to produce ${t.stage}`
+          : `waiting for ${up.slug} to be done (currently ${up.status})`,
+      };
     }
     case "decision": {
       const dec = ctx.decisionsById.get(t.decisionId);
       if (!dec) return { state: "failed", detail: `decision ${t.decisionId} is not in the plan` };
       if (dec.status === "decided") return { state: "satisfied", detail: `decision ${dec.key} = ${dec.chosen ?? "?"}` };
       if (dec.status === "superseded") return { state: "failed", detail: `decision ${dec.key} was superseded` };
-      return { state: "waiting", detail: `waiting for decision ${dec.key}${dec.status === "deferred" ? " (deferred)" : ""}` };
+      return {
+        state: "waiting",
+        detail: `waiting for decision ${dec.key}${dec.status === "deferred" ? " (deferred)" : ""}`,
+      };
     }
     case "external":
-      if (d.status === "failed") return { state: "failed", detail: d.resolution ?? `external dependency ${t.key} failed` };
-      return { state: "waiting", detail: `waiting for external '${t.key}'${t.description ? ` (${t.description})` : ""}` };
+      if (d.status === "failed")
+        return { state: "failed", detail: d.resolution ?? `external dependency ${t.key} failed` };
+      return {
+        state: "waiting",
+        detail: `waiting for external '${t.key}'${t.description ? ` (${t.description})` : ""}`,
+      };
   }
 }
 
@@ -152,10 +208,14 @@ export interface ScheduleInput {
   running?: readonly string[];
 }
 
-export function resolvePolicy(plan: Plan, overrides?: Partial<SchedulingPolicy>): { policy: SchedulingPolicy; weights: PriorityWeights } {
+export function resolvePolicy(
+  plan: Plan,
+  overrides?: Partial<SchedulingPolicy>,
+): { policy: SchedulingPolicy; weights: PriorityWeights } {
   const policy = SchedulingPolicySchema.parse({ ...plan.policy, ...(overrides ?? {}) });
   const weights: PriorityWeights = { ...STRATEGY_WEIGHTS[policy.strategy] };
-  for (const [k, v] of Object.entries(policy.weights ?? {})) if (typeof v === "number") weights[k as keyof PriorityWeights] = v;
+  for (const [k, v] of Object.entries(policy.weights ?? {}))
+    if (typeof v === "number") weights[k as keyof PriorityWeights] = v;
   return { policy, weights };
 }
 
@@ -166,7 +226,10 @@ export function computeSchedule(input: ScheduleInput): Schedule {
   const itemsById = new Map(items.map((i) => [i.id, i]));
   const decisionsById = new Map(input.decisions.map((d) => [d.id, d]));
   const inScope = input.inScope ?? (() => true);
-  const running = new Set<string>([...items.filter((i) => i.status === "in-progress").map((i) => i.id), ...(input.running ?? [])]);
+  const running = new Set<string>([
+    ...items.filter((i) => i.status === "in-progress").map((i) => i.id),
+    ...(input.running ?? []),
+  ]);
 
   // The graph spans the *remaining* work: settled items are neither nodes nor edges, so an
   // edge to a done item simply disappears, waves show what is left and the critical path
@@ -182,10 +245,16 @@ export function computeSchedule(input: ScheduleInput): Schedule {
   // Ordering view for waves / critical path / dependent counts: `soft` edges join in when the
   // policy says so, minus the ones that would close a cycle (they are hints, so they yield).
   const { graph, dropped } = policy.orderSoftDependencies
-    ? dropCycleClosingEdges(buildDependencyGraph(itemIds, input.dependencies, { orderingTypes: ["blocks", "soft"] }), ["soft"])
+    ? dropCycleClosingEdges(buildDependencyGraph(itemIds, input.dependencies, { orderingTypes: ["blocks", "soft"] }), [
+        "soft",
+      ])
     : { graph: blockingGraph, dropped: [] as GraphEdge[] };
   const ignoredSoftDependencies = dropped.map((e) => ({ dependencyId: e.dependencyId, from: e.from, to: e.to }));
-  const paths = longestDownstreamPaths(graph, (id) => estimateWeight(itemsById.get(id)?.estimate), (e) => (e.stage ? STAGE_EDGE_LAG : 1));
+  const paths = longestDownstreamPaths(
+    graph,
+    (id) => estimateWeight(itemsById.get(id)?.estimate),
+    (e) => (e.stage ? STAGE_EDGE_LAG : 1),
+  );
   const cp = criticalPath(paths);
   const { waves } = topologicalWaves(graph);
 
@@ -204,7 +273,19 @@ export function computeSchedule(input: ScheduleInput): Schedule {
   for (const i of items) exposure[i.id] = itemRiskExposure(i.id, input.risks, matrix);
 
   // Priorities for every unsettled item (so explanations exist for waiting items too).
-  const priorities = computePriorities(candidates, graph, paths, cp, exposure, input.risks, matrix, weights, policy, input.now, itemsById);
+  const priorities = computePriorities(
+    candidates,
+    graph,
+    paths,
+    cp,
+    exposure,
+    input.risks,
+    matrix,
+    weights,
+    policy,
+    input.now,
+    itemsById,
+  );
 
   const ready: ScheduledItem[] = [];
   const waiting: WaitingItem[] = [];
@@ -221,33 +302,64 @@ export function computeSchedule(input: ScheduleInput): Schedule {
     if (cyclic.has(item.id)) {
       const cycle = cycles.find((c) => c.includes(item.id))!;
       // Members come in edge order; repeat the head so the ring reads as one.
-      unschedulable.push({ workItemId: item.id, slug: item.slug, reason: `dependency cycle: ${[...cycle, cycle[0]!].map((id) => itemsById.get(id)?.slug ?? id).join(" -> ")}`, dependencyIds: [] });
+      unschedulable.push({
+        workItemId: item.id,
+        slug: item.slug,
+        reason: `dependency cycle: ${[...cycle, cycle[0]!].map((id) => itemsById.get(id)?.slug ?? id).join(" -> ")}`,
+        dependencyIds: [],
+      });
       continue;
     }
     const blocking = (depsByItem.get(item.id) ?? []).filter((d) => d.type === "blocks");
     const failedDeps = blocking.filter((d) => dependencyStates[d.id]!.state === "failed");
     if (failedDeps.length) {
-      unschedulable.push({ workItemId: item.id, slug: item.slug, reason: failedDeps.map((d) => dependencyStates[d.id]!.detail).join("; "), dependencyIds: failedDeps.map((d) => d.id) });
+      unschedulable.push({
+        workItemId: item.id,
+        slug: item.slug,
+        reason: failedDeps.map((d) => dependencyStates[d.id]!.detail).join("; "),
+        dependencyIds: failedDeps.map((d) => d.id),
+      });
       continue;
     }
-    const waitingDeps = blocking.filter((d) => d.requiredBy === DEPENDENCY_START_PHASE && dependencyStates[d.id]!.state === "waiting");
+    const waitingDeps = blocking.filter(
+      (d) => d.requiredBy === DEPENDENCY_START_PHASE && dependencyStates[d.id]!.state === "waiting",
+    );
     // A later-phase dependency (`other#build`) lets the item start early, but only once the
     // upstream item is itself underway; otherwise the item would just occupy a slot waiting.
-    const notStartedUpstream = blocking.filter((d) => d.requiredBy !== DEPENDENCY_START_PHASE && dependencyStates[d.id]!.state === "waiting" && d.target.kind === "work-item" && !hasStarted(itemsById.get(d.target.workItemId), running));
+    const notStartedUpstream = blocking.filter(
+      (d) =>
+        d.requiredBy !== DEPENDENCY_START_PHASE &&
+        dependencyStates[d.id]!.state === "waiting" &&
+        d.target.kind === "work-item" &&
+        !hasStarted(itemsById.get(d.target.workItemId), running),
+    );
     if (waitingDeps.length || notStartedUpstream.length) {
       waiting.push({
         workItemId: item.id,
         slug: item.slug,
         waitingOn: [
-          ...waitingDeps.map((d) => ({ dependencyId: d.id, detail: dependencyStates[d.id]!.detail, requiredBy: d.requiredBy })),
-          ...notStartedUpstream.map((d) => ({ dependencyId: d.id, detail: `waiting for ${itemsById.get((d.target as { workItemId: string }).workItemId)?.slug ?? "upstream"} to start (needed by ${d.requiredBy})`, requiredBy: d.requiredBy })),
+          ...waitingDeps.map((d) => ({
+            dependencyId: d.id,
+            detail: dependencyStates[d.id]!.detail,
+            requiredBy: d.requiredBy,
+          })),
+          ...notStartedUpstream.map((d) => ({
+            dependencyId: d.id,
+            detail: `waiting for ${itemsById.get((d.target as { workItemId: string }).workItemId)?.slug ?? "upstream"} to start (needed by ${d.requiredBy})`,
+            requiredBy: d.requiredBy,
+          })),
         ],
       });
       continue;
     }
     const exp = exposure[item.id]!;
     if (policy.holdAboveAppetite && exp.level !== "none" && levelRank(exp.level) > levelRank(policy.riskAppetite)) {
-      held.push({ workItemId: item.id, slug: item.slug, level: exp.level, reason: `open ${exp.level} risk${exp.risks.length > 1 ? "s" : ""} ${exp.risks.map((r) => r.key).join(", ")} exceed${exp.risks.length > 1 ? "" : "s"} the plan's appetite (${policy.riskAppetite}); accept or mitigate first` });
+      held.push({
+        workItemId: item.id,
+        slug: item.slug,
+        level: exp.level,
+        reason: `open ${exp.level} risk${exp.risks.length > 1 ? "s" : ""} ${exp.risks.map((r) => r.key).join(", ")} exceed${exp.risks.length > 1 ? "" : "s"} the plan's appetite (${policy.riskAppetite}); accept or mitigate first`,
+      });
       continue;
     }
     ready.push({ workItemId: item.id, slug: item.slug, priority: priorities[item.id]! });
@@ -263,7 +375,13 @@ export function computeSchedule(input: ScheduleInput): Schedule {
       key: d.key,
       title: d.title,
       blocks: input.dependencies
-        .filter((x) => x.target.kind === "decision" && x.target.decisionId === d.id && x.type === "blocks" && dependencyStates[x.id]!.state === "waiting")
+        .filter(
+          (x) =>
+            x.target.kind === "decision" &&
+            x.target.decisionId === d.id &&
+            x.type === "blocks" &&
+            dependencyStates[x.id]!.state === "waiting",
+        )
         .map((x) => x.from)
         .filter((id) => itemsById.has(id) && !SETTLED.includes(itemsById.get(id)!.status)),
     }));
@@ -292,7 +410,12 @@ export function computeSchedule(input: ScheduleInput): Schedule {
 
 function hasStarted(item: WorkItem | undefined, running: ReadonlySet<string>): boolean {
   if (!item) return false;
-  return item.status === "in-progress" || item.status === "done" || running.has(item.id) || Object.keys(item.produced).length > 0;
+  return (
+    item.status === "in-progress" ||
+    item.status === "done" ||
+    running.has(item.id) ||
+    Object.keys(item.produced).length > 0
+  );
 }
 
 function computePriorities(
@@ -321,7 +444,9 @@ function computePriorities(
       risk: exposure[item.id]?.score ?? 0,
       // Level-weighted so that mitigating even a `low` risk counts for something (0.25 .. 1);
       // the "mitigates ..." reason below only appears when this factor is non-zero.
-      mitigation: mitigates.length ? (Math.max(...mitigates.map((r) => levelRank(r.level))) + 1) / RISK_LEVELS.length : 0,
+      mitigation: mitigates.length
+        ? (Math.max(...mitigates.map((r) => levelRank(r.level))) + 1) / RISK_LEVELS.length
+        : 0,
       priority: PRIORITY_RANK[item.priority] / 3,
       age: Math.max(0, nowMs - (Date.parse(item.createdAt) || nowMs)),
     };
@@ -343,15 +468,23 @@ function computePriorities(
     };
     const score = Object.entries(factors).reduce((s, [k, v]) => s + v * weights[k as keyof PriorityWeights], 0);
     const reasons: string[] = [];
-    if (r.dependents.size) reasons.push(`unblocks ${r.dependents.size} item${r.dependents.size > 1 ? "s" : ""} (${[...r.dependents].map((id) => itemsById.get(id)?.slug ?? id).join(", ")})`);
+    if (r.dependents.size)
+      reasons.push(
+        `unblocks ${r.dependents.size} item${r.dependents.size > 1 ? "s" : ""} (${[...r.dependents].map((id) => itemsById.get(id)?.slug ?? id).join(", ")})`,
+      );
     // Membership in `schedule.criticalPath` itself, so the reason, `explainWorkItem` and the
     // reported path never disagree (ties, or a chain that is not the heaviest from this item).
     if (onCriticalPath.has(r.item.id)) reasons.push(`on the critical path (length ${cp.length})`);
     const exp = exposure[r.item.id];
-    if (exp && exp.level !== "none") reasons.push(`exposed to ${exp.level} risk: ${exp.risks.map((x) => x.key).join(", ")}`);
+    if (exp && exp.level !== "none")
+      reasons.push(`exposed to ${exp.level} risk: ${exp.risks.map((x) => x.key).join(", ")}`);
     if (r.mitigates.length) reasons.push(`mitigates ${r.mitigates.map((x) => `${x.key} (${x.level})`).join(", ")}`);
     if (r.item.priority !== "normal") reasons.push(`priority ${r.item.priority}`);
-    out[r.item.id] = { score: Math.round(score * 1000) / 1000, factors: Object.fromEntries(Object.entries(factors).map(([k, v]) => [k, Math.round(v * 1000) / 1000])), reasons };
+    out[r.item.id] = {
+      score: Math.round(score * 1000) / 1000,
+      factors: Object.fromEntries(Object.entries(factors).map(([k, v]) => [k, Math.round(v * 1000) / 1000])),
+      reasons,
+    };
   }
   return out;
 }
@@ -364,7 +497,10 @@ export function explainWorkItem(schedule: Schedule, items: readonly WorkItem[], 
   const slug = (id: string) => byId.get(id)?.slug ?? id;
   const lines = [`${item.slug}: ${item.status}${item.priority !== "normal" ? ` (priority ${item.priority})` : ""}`];
   const ready = schedule.ready.findIndex((r) => r.workItemId === workItemId);
-  if (ready >= 0) lines.push(`ready - position ${ready + 1} of ${schedule.ready.length} (score ${schedule.ready[ready]!.priority.score})`);
+  if (ready >= 0)
+    lines.push(
+      `ready - position ${ready + 1} of ${schedule.ready.length} (score ${schedule.ready[ready]!.priority.score})`,
+    );
   const waiting = schedule.waiting.find((w) => w.workItemId === workItemId);
   if (waiting) for (const w of waiting.waitingOn) lines.push(`waiting: ${w.detail}`);
   const held = schedule.held.find((h) => h.workItemId === workItemId);
@@ -374,7 +510,8 @@ export function explainWorkItem(schedule: Schedule, items: readonly WorkItem[], 
   if (schedule.running.includes(workItemId)) lines.push("running");
   const p = schedule.priorities[workItemId];
   if (p) for (const r of p.reasons) lines.push(`why: ${r}`);
-  if (schedule.criticalPath.workItemIds.includes(workItemId)) lines.push(`critical path: ${schedule.criticalPath.workItemIds.map(slug).join(" -> ")}`);
+  if (schedule.criticalPath.workItemIds.includes(workItemId))
+    lines.push(`critical path: ${schedule.criticalPath.workItemIds.map(slug).join(" -> ")}`);
   const wave = schedule.waves.findIndex((w) => w.includes(workItemId));
   if (wave >= 0) lines.push(`wave ${wave + 1} of ${schedule.waves.length}`);
   return lines;
@@ -395,7 +532,12 @@ export interface CompactSchedule {
   criticalPath: string[];
   criticalPathLength: number;
   cycles: string[][];
-  risk: { open: number; highestLevel: RiskLevel | "none"; byLevel: Record<RiskLevel, number>; top: { key: string; level: RiskLevel; score: number }[] };
+  risk: {
+    open: number;
+    highestLevel: RiskLevel | "none";
+    byLevel: Record<RiskLevel, number>;
+    top: { key: string; level: RiskLevel; score: number }[];
+  };
   openDecisions: { key: string; title: string; blocks: string[] }[];
 }
 
@@ -416,8 +558,12 @@ export function compactSchedule(schedule: Schedule, items: readonly WorkItem[]):
     criticalPath: schedule.criticalPath.workItemIds.map(slug),
     criticalPathLength: schedule.criticalPath.length,
     cycles: schedule.cycles.map((c) => c.map(slug)),
-    risk: { open: schedule.risk.open, highestLevel: schedule.risk.highestLevel, byLevel: schedule.risk.byLevel, top: schedule.risk.top.map((r) => ({ key: r.key, level: r.level, score: r.score })) },
+    risk: {
+      open: schedule.risk.open,
+      highestLevel: schedule.risk.highestLevel,
+      byLevel: schedule.risk.byLevel,
+      top: schedule.risk.top.map((r) => ({ key: r.key, level: r.level, score: r.score })),
+    },
     openDecisions: schedule.openDecisions.map((d) => ({ key: d.key, title: d.title, blocks: d.blocks.map(slug) })),
   };
 }
-

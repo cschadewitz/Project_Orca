@@ -13,7 +13,12 @@ describe("expression language", () => {
   it("evaluates comparisons and logic", () => {
     expect(evaluateCondition("choice == 'approve'", ctx)).toBe(true);
     expect(evaluateCondition("vars.buildAttempt < vars.maxBuildAttempts && choice != 'reject'", ctx)).toBe(true);
-    expect(evaluateCondition("artifacts.review.data.verdict == 'changes-requested' or steps.build.result.data.testsPassed", ctx)).toBe(true);
+    expect(
+      evaluateCondition(
+        "artifacts.review.data.verdict == 'changes-requested' or steps.build.result.data.testsPassed",
+        ctx,
+      ),
+    ).toBe(true);
     expect(evaluateCondition("!exists(artifacts.plan)", ctx)).toBe(true);
     expect(evaluateCondition("len(vars.failures) > 0", ctx)).toBe(false);
   });
@@ -33,7 +38,9 @@ describe("expression language", () => {
     expect(evaluateExpression("iteration-1", { iteration: 5 })).toBe(4);
     expect(evaluateCondition("vars.buildAttempt-1 < vars.maxBuildAttempts", ctx)).toBe(true);
     // Hyphenated keys remain reachable via bracket access.
-    expect(evaluateExpression("steps['review-verdict'].result", { steps: { "review-verdict": { result: "ok" } } })).toBe("ok");
+    expect(
+      evaluateExpression("steps['review-verdict'].result", { steps: { "review-verdict": { result: "ok" } } }),
+    ).toBe("ok");
   });
   it("is sandboxed", () => {
     expect(evaluateExpression("vars.__proto__", ctx)).toBeUndefined();

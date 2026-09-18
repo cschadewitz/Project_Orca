@@ -13,16 +13,39 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
-const workItem = { id: "wi_1", requestId: "req_1", slug: "auth-api", title: "Auth API", description: "Add login endpoint", kind: "task", acceptanceCriteria: ["POST /login returns a token"], dependsOn: [], status: "pending", createdAt: "t", updatedAt: "t" };
+const workItem = {
+  id: "wi_1",
+  requestId: "req_1",
+  slug: "auth-api",
+  title: "Auth API",
+  description: "Add login endpoint",
+  kind: "task",
+  acceptanceCriteria: ["POST /login returns a token"],
+  dependsOn: [],
+  status: "pending",
+  createdAt: "t",
+  updatedAt: "t",
+};
 
 describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
   it("runs plan -> design -> build -> test -> review -> deploy and passes artifacts along", async () => {
     const h = await harness({
       kinds: {
-        spec: [{ data: { status: "ready", risk: "low" }, body: "# Spec\n\nRequirements: R1 login endpoint. Design: token service. Test strategy: unit + integration tests." }],
+        spec: [
+          {
+            data: { status: "ready", risk: "low" },
+            body: "# Spec\n\nRequirements: R1 login endpoint. Design: token service. Test strategy: unit + integration tests.",
+          },
+        ],
         implementation: [{ data: { status: "done", branch: "orca/auth-api" }, body: "Implemented login." }],
-        "test-report": [{ data: { status: "done", passed: false, failures: 1 }, body: "1 failing test" }, { data: { status: "done", passed: true, failures: 0 }, body: "all green" }],
-        review: [{ data: { status: "done", verdict: "changes-requested" }, body: "Please add rate limiting." }, { data: { status: "done", verdict: "approve" }, body: "LGTM" }],
+        "test-report": [
+          { data: { status: "done", passed: false, failures: 1 }, body: "1 failing test" },
+          { data: { status: "done", passed: true, failures: 0 }, body: "all green" },
+        ],
+        review: [
+          { data: { status: "done", verdict: "changes-requested" }, body: "Please add rate limiting." },
+          { data: { status: "done", verdict: "approve" }, body: "LGTM" },
+        ],
       },
     });
     dirs.push(h.dir);
@@ -33,13 +56,31 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
     expect(state.run.outcome).toBe("success");
     const path = state.stepOrder.map((id) => state.steps[id]!.nodeId);
     expect(path).toEqual([
-      "start", "plan", "design", "spec-gate", "await-deps",
-      "bump-build", "build", "test", "tests-passed", // tests fail -> retry build
-      "bump-build", "build", "test", "tests-passed", // tests pass
-      "bump-review", "review", "review-verdict", // changes requested -> build again
-      "bump-build", "build", "test", "tests-passed",
-      "bump-review", "review", "review-verdict", // approved
-      "deploy", "done",
+      "start",
+      "plan",
+      "design",
+      "spec-gate",
+      "await-deps",
+      "bump-build",
+      "build",
+      "test",
+      "tests-passed", // tests fail -> retry build
+      "bump-build",
+      "build",
+      "test",
+      "tests-passed", // tests pass
+      "bump-review",
+      "review",
+      "review-verdict", // changes requested -> build again
+      "bump-build",
+      "build",
+      "test",
+      "tests-passed",
+      "bump-review",
+      "review",
+      "review-verdict", // approved
+      "deploy",
+      "done",
     ]);
     expect(state.run.vars).toMatchObject({ buildAttempt: 3, reviewRound: 2 });
 
@@ -69,7 +110,20 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
     // Event log tells the whole story.
     const events = await h.orchestrator.events(state.run.id);
     const types = new Set(events.map((e) => e.type));
-    for (const t of ["run.created", "run.started", "step.scheduled", "agent.session.opened", "agent.turn.started", "agent.update", "agent.turn.completed", "artifact.recorded", "decision.resolved", "vars.set", "run.completed"]) expect(types.has(t as never), t).toBe(true);
+    for (const t of [
+      "run.created",
+      "run.started",
+      "step.scheduled",
+      "agent.session.opened",
+      "agent.turn.started",
+      "agent.update",
+      "agent.turn.completed",
+      "artifact.recorded",
+      "decision.resolved",
+      "vars.set",
+      "run.completed",
+    ])
+      expect(types.has(t as never), t).toBe(true);
     const gate = events.find((e) => e.type === "decision.resolved" && e.payload.source === "gate:auto");
     expect(gate).toBeDefined();
   }, 60_000);
@@ -77,7 +131,12 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
   it("re-prompts when a required artifact is missing, then fails the run when the budget is exhausted", async () => {
     const h = await harness({
       kinds: {
-        spec: [{ data: { status: "ready", risk: "low" }, body: "# Spec\n\nEnough words to satisfy the minimum body length requirement of the design step." }],
+        spec: [
+          {
+            data: { status: "ready", risk: "low" },
+            body: "# Spec\n\nEnough words to satisfy the minimum body length requirement of the design step.",
+          },
+        ],
         // build never delivers implementation.md
         implementation: [{ skip: true }],
       },
@@ -95,7 +154,16 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
 
   it("routes high-risk specs to the human gate and honours a rejection", async () => {
     const h = await harness(
-      { kinds: { spec: [{ data: { status: "ready", risk: "high" }, body: "# Risky spec\n\nA sufficiently long body for the validation rules configured in the workflow." }] } },
+      {
+        kinds: {
+          spec: [
+            {
+              data: { status: "ready", risk: "high" },
+              body: "# Risky spec\n\nA sufficiently long body for the validation rules configured in the workflow.",
+            },
+          ],
+        },
+      },
       { humanInput: { ask: async (q) => (q.question.includes("risk: high") ? "reject" : "approve") } },
     );
     dirs.push(h.dir);

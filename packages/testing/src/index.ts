@@ -9,7 +9,14 @@ import type { AgentSpec } from "@orca/core";
 import { AgentSpecSchema } from "@orca/core";
 
 export { ScriptedAgent, type ScriptedAgentOptions } from "./scripted-agent/agent.js";
-export { parsePlaybook, PlaybookSchema, PlaybookEntrySchema, type Playbook, type PlaybookEntry, type PlaybookInput } from "./scripted-agent/playbook.js";
+export {
+  parsePlaybook,
+  PlaybookSchema,
+  PlaybookEntrySchema,
+  type Playbook,
+  type PlaybookEntry,
+  type PlaybookInput,
+} from "./scripted-agent/playbook.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const runningFromSource = import.meta.url.endsWith(".ts");

@@ -12,7 +12,10 @@ export function varExpression(value: unknown): string | undefined {
 }
 
 /** Evaluate every "="-prefixed value in `vars`; literals pass through untouched. */
-export async function evaluateVars(vars: Record<string, unknown>, evaluate: (expr: string) => Promise<unknown> | unknown): Promise<Record<string, unknown>> {
+export async function evaluateVars(
+  vars: Record<string, unknown>,
+  evaluate: (expr: string) => Promise<unknown> | unknown,
+): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(vars)) {
     const expr = varExpression(v);

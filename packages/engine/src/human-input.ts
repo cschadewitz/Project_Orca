@@ -67,7 +67,10 @@ export function abortableHumanInput(port: HumanInputPort, signal: AbortSignal): 
 export class HumanInputPending extends OrcaError {
   override readonly name = "HumanInputPending";
   constructor(readonly query: HumanInputQuery) {
-    super("HUMAN_INPUT_PENDING", `waiting for a human: ${query.question}`, { requestId: query.requestId, stepRunId: query.stepRunId });
+    super("HUMAN_INPUT_PENDING", `waiting for a human: ${query.question}`, {
+      requestId: query.requestId,
+      stepRunId: query.stepRunId,
+    });
   }
 }
 
@@ -125,7 +128,17 @@ export async function askHumanInput(opts: {
     options: opts.options,
     context: opts.context ?? {},
   };
-  await emit({ type: "human.requested", payload: { stepRunId, requestId: query.requestId, kind: query.kind, question: query.question, options: query.options, context: query.context } });
+  await emit({
+    type: "human.requested",
+    payload: {
+      stepRunId,
+      requestId: query.requestId,
+      kind: query.kind,
+      question: query.question,
+      options: query.options,
+      context: query.context,
+    },
+  });
   opts.onRequested?.(query);
   await emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
   try {

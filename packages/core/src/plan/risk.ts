@@ -16,8 +16,13 @@ export function defaultRiskRating(matrix: Pick<RiskMatrixConfig, "scale">): numb
 }
 
 /** Why a likelihood / impact pair does not fit the matrix, or undefined when it does. */
-export function riskRatingIssue(r: { likelihood: number; impact: number }, matrix: Pick<RiskMatrixConfig, "scale">): string | undefined {
-  const off = (["likelihood", "impact"] as const).filter((k) => !Number.isInteger(r[k]) || r[k] < 1 || r[k] > matrix.scale);
+export function riskRatingIssue(
+  r: { likelihood: number; impact: number },
+  matrix: Pick<RiskMatrixConfig, "scale">,
+): string | undefined {
+  const off = (["likelihood", "impact"] as const).filter(
+    (k) => !Number.isInteger(r[k]) || r[k] < 1 || r[k] > matrix.scale,
+  );
   if (!off.length) return undefined;
   return `${off.map((k) => `${k}=${r[k]}`).join(", ")} outside the plan's risk matrix (1..${matrix.scale})`;
 }
@@ -99,7 +104,10 @@ export interface RiskSummary {
 }
 
 export function summarizeRisks(risks: readonly Risk[], matrix: RiskMatrixConfig, top = 5): RiskSummary {
-  const open = risks.filter(isOpenRisk).map((r) => scoreRisk(r, matrix)).sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+  const open = risks
+    .filter(isOpenRisk)
+    .map((r) => scoreRisk(r, matrix))
+    .sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
   const byLevel: Record<RiskLevel, number> = { low: 0, medium: 0, high: 0, critical: 0 };
   for (const r of open) byLevel[r.level]++;
   return {

@@ -37,11 +37,16 @@ function pick(options: acp.PermissionOption[], kinds: acp.PermissionOptionKind[]
   return undefined;
 }
 
-export async function resolvePermission(policy: PermissionPolicy, ctx: PermissionContext): Promise<{ response: acp.RequestPermissionResponse; decision: string }> {
+export async function resolvePermission(
+  policy: PermissionPolicy,
+  ctx: PermissionContext,
+): Promise<{ response: acp.RequestPermissionResponse; decision: string }> {
   const decision = decidePermission(policy, ctx.request);
   const options = ctx.request.options;
   const select = (o: acp.PermissionOption | undefined, label: string) =>
-    o ? { response: { outcome: { outcome: "selected" as const, optionId: o.optionId } }, decision: label } : { response: { outcome: { outcome: "cancelled" as const } }, decision: "cancelled" };
+    o
+      ? { response: { outcome: { outcome: "selected" as const, optionId: o.optionId } }, decision: label }
+      : { response: { outcome: { outcome: "cancelled" as const } }, decision: "cancelled" };
   switch (decision) {
     case "allow":
       return select(pick(options, ["allow_once", "allow_always"]), "allow");
@@ -50,7 +55,9 @@ export async function resolvePermission(policy: PermissionPolicy, ctx: Permissio
     case "ask": {
       const chosen = ctx.ask ? await ctx.ask(ctx.request) : undefined;
       const o = chosen ? options.find((x) => x.optionId === chosen) : undefined;
-      return o ? { response: { outcome: { outcome: "selected", optionId: o.optionId } }, decision: `ask:${o.kind}` } : { response: { outcome: { outcome: "cancelled" } }, decision: "ask:cancelled" };
+      return o
+        ? { response: { outcome: { outcome: "selected", optionId: o.optionId } }, decision: `ask:${o.kind}` }
+        : { response: { outcome: { outcome: "cancelled" } }, decision: "ask:cancelled" };
     }
   }
 }

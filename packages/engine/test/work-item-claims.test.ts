@@ -5,7 +5,15 @@
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, PlanService, builtinExecutors, completed, definePlugin, type OrchestratorOptions } from "@orca/engine";
+import {
+  LocalWorkspaceProvider,
+  Orchestrator,
+  PlanService,
+  builtinExecutors,
+  completed,
+  definePlugin,
+  type OrchestratorOptions,
+} from "@orca/engine";
 import { memoryStores, type Stores } from "@orca/store";
 
 /** Branch bodies block here until `release()` is called, so both dispatchers are in flight at once. */
@@ -55,7 +63,15 @@ function make(overrides: Partial<OrchestratorOptions> = {}) {
     register: (api) => {
       api.executors.register({ type: "custom:work", execute: async () => (await gate.wait, completed()) });
     },
-  }).register({ executors, templates: new TemplateRegistry(), workflows, agents: new AgentRegistry(), plan: new PlanService({ stores }), setHumanInput() {}, setWorkspaceProvider() {} });
+  }).register({
+    executors,
+    templates: new TemplateRegistry(),
+    workflows,
+    agents: new AgentRegistry(),
+    plan: new PlanService({ stores }),
+    setHumanInput() {},
+    setWorkspaceProvider() {},
+  });
   const orchestrator = new Orchestrator({
     stores,
     agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })),
@@ -81,15 +97,17 @@ const items = [
 async function launched(stores: Stores): Promise<string[]> {
   const byChild = new Map<string, string>();
   for (const runId of await stores.events.listRuns()) {
-    for (const e of (await stores.events.read(runId))) {
+    for (const e of await stores.events.read(runId)) {
       if (e.type === "child.spawned" && e.payload.workItemId) byChild.set(e.payload.childRunId, e.payload.workItemId);
     }
   }
   return [...byChild.values()].sort();
 }
 
-const skips = (state: { stepOrder: string[]; steps: Record<string, { skippedBranches: { branch: string; reason: string }[] }> }) =>
-  state.stepOrder.flatMap((id) => state.steps[id]!.skippedBranches.map((b) => `${b.branch}:${b.reason}`)).sort();
+const skips = (state: {
+  stepOrder: string[];
+  steps: Record<string, { skippedBranches: { branch: string; reason: string }[] }>;
+}) => state.stepOrder.flatMap((id) => state.steps[id]!.skippedBranches.map((b) => `${b.branch}:${b.reason}`)).sort();
 
 describe("work item claims", () => {
   it("two runs dispatching the same work items launch each item exactly once", async () => {
@@ -98,7 +116,10 @@ describe("work item claims", () => {
     // The second dispatcher is a different run in a different orchestrator, over the same store.
     const second = make({ stores: first.stores });
     openGate();
-    const runs = [first.orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } }), second.orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } })];
+    const runs = [
+      first.orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } }),
+      second.orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } }),
+    ];
     // Both fan-outs are past their schedule decision before either child finishes.
     await new Promise((r) => setTimeout(r, 20));
     gate.release();
@@ -119,7 +140,22 @@ describe("work item claims", () => {
     const now = "2026-01-01T00:00:00.000Z";
     const { orchestrator, stores } = make();
     for (const item of items) {
-      await stores.workItems.put({ id: item.id, requestId: "req_1", slug: item.slug, title: item.slug, description: "", kind: "task", acceptanceCriteria: [], dependsOn: [], status: "in-progress", runId: "run_owner", priority: "normal", produced: {}, createdAt: now, updatedAt: now });
+      await stores.workItems.put({
+        id: item.id,
+        requestId: "req_1",
+        slug: item.slug,
+        title: item.slug,
+        description: "",
+        kind: "task",
+        acceptanceCriteria: [],
+        dependsOn: [],
+        status: "in-progress",
+        runId: "run_owner",
+        priority: "normal",
+        produced: {},
+        createdAt: now,
+        updatedAt: now,
+      });
       await stores.claims.claim({ workItemId: item.id, runId: "run_owner", branch: item.slug, at: now });
     }
     const state = await orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } });
@@ -127,7 +163,8 @@ describe("work item claims", () => {
     expect(state.run.status).toBe("failed");
     expect(await launched(stores)).toEqual([]);
     // Untouched: a `claimed` skip says "not mine", not "pending".
-    for (const item of items) expect(await stores.workItems.get(item.id)).toMatchObject({ status: "in-progress", runId: "run_owner" });
+    for (const item of items)
+      expect(await stores.workItems.get(item.id)).toMatchObject({ status: "in-progress", runId: "run_owner" });
   });
 
   it("a resumed run re-claims the items it already owns", async () => {
@@ -186,17 +223,46 @@ describe("work item claims: plan-dispatch", () => {
     const stores = memoryStores();
     const plan = new PlanService({ stores, defaults: { planKey: "roadmap", planName: "Roadmap" } });
     const p = await plan.ensurePlan({ requestId: "req_1" }, { kind: "human", actor: "test" });
-    await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "core", title: "Core" }, { slug: "api", title: "API" }] }, { kind: "decomposition" });
+    await plan.registerWorkItems(
+      p.id,
+      {
+        requestId: "req_1",
+        items: [
+          { slug: "core", title: "Core" },
+          { slug: "api", title: "API" },
+        ],
+      },
+      { kind: "decomposition" },
+    );
     const dispatcher = () => {
-      const workflows = new WorkflowRegistry().register(parseWorkflow(planDispatch)).register(parseWorkflow(itemWorkflow));
+      const workflows = new WorkflowRegistry()
+        .register(parseWorkflow(planDispatch))
+        .register(parseWorkflow(itemWorkflow));
       const executors = builtinExecutors();
       void definePlugin({
         name: "test",
         register: (api) => {
           api.executors.register({ type: "custom:work", execute: async () => (await gate.wait, completed()) });
         },
-      }).register({ executors, templates: new TemplateRegistry(), workflows, agents: new AgentRegistry(), plan, setHumanInput() {}, setWorkspaceProvider() {} });
-      return new Orchestrator({ stores, agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })), workflows, templates: new TemplateRegistry(), executors, plan, workspaceProvider: new LocalWorkspaceProvider("/tmp"), clock: new FakeClock() });
+      }).register({
+        executors,
+        templates: new TemplateRegistry(),
+        workflows,
+        agents: new AgentRegistry(),
+        plan,
+        setHumanInput() {},
+        setWorkspaceProvider() {},
+      });
+      return new Orchestrator({
+        stores,
+        agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })),
+        workflows,
+        templates: new TemplateRegistry(),
+        executors,
+        plan,
+        workspaceProvider: new LocalWorkspaceProvider("/tmp"),
+        clock: new FakeClock(),
+      });
     };
     return { stores, plan, dispatcher };
   };
@@ -206,7 +272,12 @@ describe("work item claims: plan-dispatch", () => {
     // The scheduler will offer both items - they have no dependencies and are still `pending`,
     // which is exactly the state the losing dispatcher of the race sees.
     for (const item of await stores.workItems.list()) {
-      await stores.claims.claim({ workItemId: item.id, runId: "run_owner", branch: item.slug, at: "2026-01-01T00:00:00.000Z" });
+      await stores.claims.claim({
+        workItemId: item.id,
+        runId: "run_owner",
+        branch: item.slug,
+        at: "2026-01-01T00:00:00.000Z",
+      });
     }
     const state = await dispatcher().startAndRun({ workflowId: "plan-dispatch-test", requestId: "req_1" });
 
@@ -226,7 +297,10 @@ describe("work item claims: plan-dispatch", () => {
   it("two dispatchers over one plan launch each ready item at most once", async () => {
     const { stores, dispatcher } = await setup();
     openGate();
-    const runs = [dispatcher().startAndRun({ workflowId: "plan-dispatch-test", requestId: "req_1" }), dispatcher().startAndRun({ workflowId: "plan-dispatch-test", requestId: "req_1" })];
+    const runs = [
+      dispatcher().startAndRun({ workflowId: "plan-dispatch-test", requestId: "req_1" }),
+      dispatcher().startAndRun({ workflowId: "plan-dispatch-test", requestId: "req_1" }),
+    ];
     gate.release();
     const states = await Promise.all(runs);
 
@@ -253,7 +327,10 @@ describe("work item claims: release", () => {
     expect(skips(again)).toEqual(["api:claimed", "ui:claimed"]);
 
     const held = await orchestrator.listClaims();
-    expect(held.map((c) => `${c.workItemId}:${c.runId}:${c.owner}`).sort()).toEqual([`wi_api:${owner.run.id}:completed`, `wi_ui:${owner.run.id}:completed`]);
+    expect(held.map((c) => `${c.workItemId}:${c.runId}:${c.owner}`).sort()).toEqual([
+      `wi_api:${owner.run.id}:completed`,
+      `wi_ui:${owner.run.id}:completed`,
+    ]);
     expect(await orchestrator.listClaims("run_nobody")).toEqual([]);
 
     const released = await orchestrator.releaseClaim("wi_api");
@@ -276,8 +353,14 @@ describe("work item claims: release", () => {
     const running = orchestrator.run(runId);
     await new Promise((r) => setTimeout(r, 20));
 
-    expect((await orchestrator.listClaims(runId)).map((c) => `${c.workItemId}:${c.owner}`).sort()).toEqual(["wi_api:running", "wi_ui:running"]);
-    await expect(orchestrator.releaseClaim("wi_api")).rejects.toMatchObject({ code: "RUN_STATE", details: { workItemId: "wi_api", runId, status: "running" } });
+    expect((await orchestrator.listClaims(runId)).map((c) => `${c.workItemId}:${c.owner}`).sort()).toEqual([
+      "wi_api:running",
+      "wi_ui:running",
+    ]);
+    await expect(orchestrator.releaseClaim("wi_api")).rejects.toMatchObject({
+      code: "RUN_STATE",
+      details: { workItemId: "wi_api", runId, status: "running" },
+    });
     expect(await orchestrator.stores.claims.get("wi_api")).toMatchObject({ runId });
 
     expect(await orchestrator.releaseClaim("wi_api", { force: true })).toMatchObject({ runId, owner: "running" });
@@ -289,7 +372,12 @@ describe("work item claims: release", () => {
 
   it("a claim whose run's log is gone counts as dead", async () => {
     const { orchestrator, stores } = make();
-    await stores.claims.claim({ workItemId: "wi_api", runId: "run_rolled_back", branch: "api", at: "2026-01-01T00:00:00.000Z" });
+    await stores.claims.claim({
+      workItemId: "wi_api",
+      runId: "run_rolled_back",
+      branch: "api",
+      at: "2026-01-01T00:00:00.000Z",
+    });
     expect(await orchestrator.listClaims()).toMatchObject([{ workItemId: "wi_api", owner: "missing" }]);
     expect(await orchestrator.releaseClaim("wi_api")).toMatchObject({ runId: "run_rolled_back", owner: "missing" });
     expect(await stores.claims.list()).toEqual([]);

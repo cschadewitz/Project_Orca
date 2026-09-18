@@ -35,7 +35,12 @@ type Node =
 const TAG = /\{\{(!--[\s\S]*?--|[^}]*)\}\}/g;
 
 function parseTemplate(src: string): Node[] {
-  type Frame = { nodes: Node[]; open?: { kind: "if"; cond: string; then: Node[]; inElse: boolean } | { kind: "each"; src: string; itemVar: string; indexVar?: string } };
+  type Frame = {
+    nodes: Node[];
+    open?:
+      | { kind: "if"; cond: string; then: Node[]; inElse: boolean }
+      | { kind: "each"; src: string; itemVar: string; indexVar?: string };
+  };
   const root: Frame = { nodes: [] };
   const stack: Frame[] = [root];
   let last = 0;
@@ -57,17 +62,28 @@ function parseTemplate(src: string): Node[] {
     } else if (tag === "/if") {
       const f = stack.pop();
       if (!f?.open || f.open.kind !== "if") throw new OrcaError("TEMPLATE_RENDER", "unexpected {{/if}}");
-      const node: Node = f.open.inElse ? { t: "if", cond: f.open.cond, then: f.open.then, else: f.nodes } : { t: "if", cond: f.open.cond, then: f.nodes, else: [] };
+      const node: Node = f.open.inElse
+        ? { t: "if", cond: f.open.cond, then: f.open.then, else: f.nodes }
+        : { t: "if", cond: f.open.cond, then: f.nodes, else: [] };
       stack[stack.length - 1]!.nodes.push(node);
     } else if (tag.startsWith("#each ")) {
       const mm = /^#each\s+(.+?)\s+as\s+([A-Za-z_$][\w$]*)(?:\s*,\s*([A-Za-z_$][\w$]*))?$/.exec(tag);
       if (!mm) throw new OrcaError("TEMPLATE_RENDER", `malformed each: {{${tag}}}`);
-      stack.push({ nodes: [], open: { kind: "each", src: mm[1]!, itemVar: mm[2]!, ...(mm[3] ? { indexVar: mm[3] } : {}) } });
+      stack.push({
+        nodes: [],
+        open: { kind: "each", src: mm[1]!, itemVar: mm[2]!, ...(mm[3] ? { indexVar: mm[3] } : {}) },
+      });
     } else if (tag === "/each") {
       const f = stack.pop();
       if (!f?.open || f.open.kind !== "each") throw new OrcaError("TEMPLATE_RENDER", "unexpected {{/each}}");
       const o = f.open;
-      stack[stack.length - 1]!.nodes.push({ t: "each", src: o.src, itemVar: o.itemVar, ...(o.indexVar ? { indexVar: o.indexVar } : {}), body: f.nodes });
+      stack[stack.length - 1]!.nodes.push({
+        t: "each",
+        src: o.src,
+        itemVar: o.itemVar,
+        ...(o.indexVar ? { indexVar: o.indexVar } : {}),
+        body: f.nodes,
+      });
     } else if (tag.startsWith(">")) {
       top.nodes.push({ t: "partial", name: tag.slice(1).trim() });
     } else {
@@ -76,7 +92,8 @@ function parseTemplate(src: string): Node[] {
   }
   const tail = src.slice(last);
   if (tail) stack[stack.length - 1]!.nodes.push({ t: "text", s: tail });
-  if (stack.length !== 1) throw new OrcaError("TEMPLATE_RENDER", `unclosed {{#${stack[stack.length - 1]!.open?.kind}}} block`);
+  if (stack.length !== 1)
+    throw new OrcaError("TEMPLATE_RENDER", `unclosed {{#${stack[stack.length - 1]!.open?.kind}}} block`);
   return root.nodes;
 }
 
@@ -111,7 +128,8 @@ function renderNodes(nodes: Node[], ctx: Record<string, unknown>, opts: RenderOp
         break;
       }
       case "partial": {
-        if (depth > (opts.maxDepth ?? 8)) throw new OrcaError("TEMPLATE_RENDER", `partial nesting too deep at ${n.name}`);
+        if (depth > (opts.maxDepth ?? 8))
+          throw new OrcaError("TEMPLATE_RENDER", `partial nesting too deep at ${n.name}`);
         const body = opts.partials?.(n.name);
         if (body === undefined) throw new OrcaError("TEMPLATE_NOT_FOUND", `partial '${n.name}' not found`);
         out += renderNodes(parseTemplate(body), ctx, opts, depth + 1);

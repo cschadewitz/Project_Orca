@@ -10,7 +10,15 @@ import { ArtifactSchema } from "./artifact.js";
 export const RunStatusSchema = z.enum(["created", "running", "waiting", "paused", "completed", "failed", "cancelled"]);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
-export const StepStatusSchema = z.enum(["scheduled", "running", "waiting", "completed", "failed", "cancelled", "skipped"]);
+export const StepStatusSchema = z.enum([
+  "scheduled",
+  "running",
+  "waiting",
+  "completed",
+  "failed",
+  "cancelled",
+  "skipped",
+]);
 export type StepStatus = z.infer<typeof StepStatusSchema>;
 
 export const RunOutcomeSchema = z.enum(["success", "failure", "cancelled"]);

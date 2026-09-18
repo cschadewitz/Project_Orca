@@ -22,7 +22,11 @@ export const WorkspaceProviderConfigSchema = z.discriminatedUnion("provider", [
     hostId: z.string().default(LOCAL_HOST_ID),
   }),
   /** Inside a Kepler task: reuse the task's worktrees. */
-  z.object({ provider: z.literal("kepler"), taskDir: z.string().optional(), hostId: z.string().default(LOCAL_HOST_ID) }),
+  z.object({
+    provider: z.literal("kepler"),
+    taskDir: z.string().optional(),
+    hostId: z.string().default(LOCAL_HOST_ID),
+  }),
 ]);
 export type WorkspaceProviderConfig = z.infer<typeof WorkspaceProviderConfigSchema>;
 

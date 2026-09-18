@@ -2,7 +2,17 @@
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, PlanService, definePlugin, builtinExecutors, completed, type HumanInputPort, type OrchestratorOptions } from "@orca/engine";
+import {
+  LocalWorkspaceProvider,
+  Orchestrator,
+  PausingHumanInput,
+  PlanService,
+  definePlugin,
+  builtinExecutors,
+  completed,
+  type HumanInputPort,
+  type OrchestratorOptions,
+} from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
 /** How often each custom node ran, across every orchestrator created by `make`. Reset per `make`. */
@@ -29,7 +39,17 @@ function make(yaml: string[], overrides: Partial<OrchestratorOptions> = {}) {
         type: "custom:record",
         execute: async (ctx) => {
           calls.record++;
-          await ctx.emit({ type: "vars.set", payload: { vars: { log: [...((ctx.run.state.run.vars.log as unknown[]) ?? []), (ctx.node as unknown as { value: string }).value] } } });
+          await ctx.emit({
+            type: "vars.set",
+            payload: {
+              vars: {
+                log: [
+                  ...((ctx.run.state.run.vars.log as unknown[]) ?? []),
+                  (ctx.node as unknown as { value: string }).value,
+                ],
+              },
+            },
+          });
           return completed();
         },
       });
@@ -46,12 +66,32 @@ function make(yaml: string[], overrides: Partial<OrchestratorOptions> = {}) {
         },
       });
     },
-  }).register({ executors, templates: new TemplateRegistry(), workflows, agents: new AgentRegistry(), plan: new PlanService({ stores }), setHumanInput() {}, setWorkspaceProvider() {} });
-  const orchestrator = new Orchestrator({ stores, agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })), workflows, templates: new TemplateRegistry(), executors, workspaceProvider: new LocalWorkspaceProvider("/tmp"), clock: new FakeClock(), ...overrides });
+  }).register({
+    executors,
+    templates: new TemplateRegistry(),
+    workflows,
+    agents: new AgentRegistry(),
+    plan: new PlanService({ stores }),
+    setHumanInput() {},
+    setWorkspaceProvider() {},
+  });
+  const orchestrator = new Orchestrator({
+    stores,
+    agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })),
+    workflows,
+    templates: new TemplateRegistry(),
+    executors,
+    workspaceProvider: new LocalWorkspaceProvider("/tmp"),
+    clock: new FakeClock(),
+    ...overrides,
+  });
   return { orchestrator, stores, hung };
 }
 
-const stepSummary = (s: { stepOrder: string[]; steps: Record<string, { nodeId: string; attempt: number; status: string }> }) => s.stepOrder.map((id) => `${s.steps[id]!.nodeId}:${s.steps[id]!.attempt}:${s.steps[id]!.status}`);
+const stepSummary = (s: {
+  stepOrder: string[];
+  steps: Record<string, { nodeId: string; attempt: number; status: string }>;
+}) => s.stepOrder.map((id) => `${s.steps[id]!.nodeId}:${s.steps[id]!.attempt}:${s.steps[id]!.status}`);
 
 async function until(cond: () => boolean, ms = 2000): Promise<void> {
   const deadline = Date.now() + ms;
@@ -78,7 +118,8 @@ edges:
 
 describe("container nodes", () => {
   it("while loop runs a nested graph as child runs and exposes iteration vars", async () => {
-    const { orchestrator } = make([`
+    const { orchestrator } = make([
+      `
 id: loops
 name: loops
 vars: { n: 0 }
@@ -99,7 +140,8 @@ nodes:
         edges: [{ from: s, to: rec }, { from: rec, to: e }]
   e: { type: end }
 edges: [{ from: s, to: loop }, { from: loop, to: e }]
-`]);
+`,
+    ]);
     const state = await orchestrator.startAndRun({ workflowId: "loops" });
     expect(state.run.status).toBe("completed");
     const loopStep = state.steps[state.stepOrder[1]!]!;
@@ -154,7 +196,10 @@ edges: [{ from: s, to: init }, { from: init, to: par }, { from: par, to: sub }, 
     expect(sub.result?.data).toMatchObject({ ok: true });
 
     // A failing branch fails the parallel node with join: all.
-    const failing = await orchestrator.startAndRun({ workflowId: "parent", vars: { items: [{ ok: true }, { ok: false }] } });
+    const failing = await orchestrator.startAndRun({
+      workflowId: "parent",
+      vars: { items: [{ ok: true }, { ok: false }] },
+    });
     expect(failing.run.status).toBe("failed");
     expect(failing.run.error?.message).toMatch(/1 of 2 branches did not succeed/);
   });
@@ -211,7 +256,8 @@ edges: [{ from: s, to: par }, { from: par, to: e }]
   });
 
   it("failFast cancels branches that are still running", async () => {
-    const { orchestrator } = make([`
+    const { orchestrator } = make([
+      `
 id: racy
 name: racy
 start: s
@@ -241,7 +287,8 @@ nodes:
           edges: [{ from: s, to: spin }, { from: spin, to: e }]
   e: { type: end }
 edges: [{ from: s, to: par }, { from: par, to: e }]
-`]);
+`,
+    ]);
     const state = await orchestrator.startAndRun({ workflowId: "racy" });
     expect(state.run.status).toBe("failed");
     const par = state.steps[state.stepOrder[1]!]!;
@@ -254,7 +301,8 @@ edges: [{ from: s, to: par }, { from: par, to: e }]
   });
 
   it("resumes an interrupted run from its event log", async () => {
-    const { orchestrator, stores } = make([`
+    const { orchestrator, stores } = make([
+      `
 id: resumable
 name: resumable
 start: s
@@ -264,28 +312,46 @@ nodes:
   b: { type: "custom:record", value: b }
   e: { type: end }
 edges: [{ from: s, to: a }, { from: a, to: b }, { from: b, to: e }]
-`]);
+`,
+    ]);
     // Simulate a crash after step 'a' completed: hand-craft the log up to that point.
     const runId = await orchestrator.startRun({ workflowId: "resumable" });
     await stores.events.append({ type: "run.started", runId, payload: {} });
-    await stores.events.append({ type: "step.scheduled", runId, payload: { stepRunId: "step_x", nodeId: "a", nodeType: "custom:record", attempt: 1 } });
+    await stores.events.append({
+      type: "step.scheduled",
+      runId,
+      payload: { stepRunId: "step_x", nodeId: "a", nodeType: "custom:record", attempt: 1 },
+    });
     await stores.events.append({ type: "step.started", runId, payload: { stepRunId: "step_x", inputArtifactIds: [] } });
-    await stores.events.append({ type: "step.completed", runId, payload: { stepRunId: "step_x", result: { artifactIds: [], data: {} } } });
+    await stores.events.append({
+      type: "step.completed",
+      runId,
+      payload: { stepRunId: "step_x", result: { artifactIds: [], data: {} } },
+    });
     const state = await orchestrator.run(runId);
     expect(state.run.status).toBe("completed");
     expect(state.stepOrder.map((id) => state.steps[id]!.nodeId)).toEqual(["a", "b", "e"]);
     // A run interrupted mid-step is retried as a new attempt.
     const runId2 = await orchestrator.startRun({ workflowId: "resumable" });
     await stores.events.append({ type: "run.started", runId: runId2, payload: {} });
-    await stores.events.append({ type: "step.scheduled", runId: runId2, payload: { stepRunId: "step_y", nodeId: "b", nodeType: "custom:record", attempt: 1 } });
-    await stores.events.append({ type: "step.started", runId: runId2, payload: { stepRunId: "step_y", inputArtifactIds: [] } });
+    await stores.events.append({
+      type: "step.scheduled",
+      runId: runId2,
+      payload: { stepRunId: "step_y", nodeId: "b", nodeType: "custom:record", attempt: 1 },
+    });
+    await stores.events.append({
+      type: "step.started",
+      runId: runId2,
+      payload: { stepRunId: "step_y", inputArtifactIds: [] },
+    });
     const s2 = await orchestrator.run(runId2);
     expect(s2.steps.step_y?.status).toBe("cancelled");
     expect(s2.stepOrder.map((id) => `${s2.steps[id]!.nodeId}:${s2.steps[id]!.attempt}`)).toEqual(["b:1", "b:2", "e:1"]);
   });
 
   it("resume re-attaches an interrupted loop to its child runs instead of respawning them", async () => {
-    const yaml = [`
+    const yaml = [
+      `
 id: crashy-loop
 name: crashy-loop
 start: s
@@ -306,7 +372,8 @@ nodes:
         edges: [{ from: s, to: rec }, { from: rec, to: hang }, { from: hang, to: e }]
   e: { type: end }
 edges: [{ from: s, to: loop }, { from: loop, to: e }]
-`];
+`,
+    ];
     // Process 1: iteration 0 completes, iteration 1 dies inside 'hang'.
     const first = make(yaml);
     const runId = await first.orchestrator.startRun({ workflowId: "crashy-loop" });
@@ -338,7 +405,13 @@ edges: [{ from: s, to: loop }, { from: loop, to: e }]
     const it0 = await second.orchestrator.getState(resumedStep.childRunIds[0]!);
     expect(stepSummary(it0)).toEqual(["s:1:completed", "rec:1:completed", "hang:1:completed", "e:1:completed"]);
     const it1 = await second.orchestrator.getState(resumedStep.childRunIds[1]!);
-    expect(stepSummary(it1)).toEqual(["s:1:completed", "rec:1:completed", "hang:1:cancelled", "hang:2:completed", "e:1:completed"]);
+    expect(stepSummary(it1)).toEqual([
+      "s:1:completed",
+      "rec:1:completed",
+      "hang:1:cancelled",
+      "hang:2:completed",
+      "e:1:completed",
+    ]);
     expect(it1.run.parentStepRunId).toBe(interruptedStep.id);
     // Only three child runs exist in total: nothing was respawned.
     expect((await second.stores.events.listRuns()).length).toBe(4);
@@ -347,7 +420,8 @@ edges: [{ from: s, to: loop }, { from: loop, to: e }]
   it("resume re-attaches an interrupted parallel step to finished, in-flight and not-yet-started branches", async () => {
     const branch = (value: string, hang: boolean) =>
       `{ graph: { start: s, nodes: { s: { type: start }, ${hang ? 'hang: { type: "custom:hang", when: "true" }, ' : ""}rec: { type: "custom:record", value: ${value} }, e: { type: end } }, edges: [${hang ? "{ from: s, to: hang }, { from: hang, to: rec }" : "{ from: s, to: rec }"}, { from: rec, to: e }] } }`;
-    const yaml = [`
+    const yaml = [
+      `
 id: crashy-par
 name: crashy-par
 start: s
@@ -362,12 +436,15 @@ nodes:
       c: ${branch("c", false)}
   e: { type: end }
 edges: [{ from: s, to: par }, { from: par, to: e }]
-`];
+`,
+    ];
     const first = make(yaml);
     const runId = await first.orchestrator.startRun({ workflowId: "crashy-par" });
     void first.orchestrator.run(runId);
     await first.hung;
-    const interruptedStep = (await first.orchestrator.getState(runId)).steps[(await first.orchestrator.getState(runId)).stepOrder[1]!]!;
+    const interruptedStep = (await first.orchestrator.getState(runId)).steps[
+      (await first.orchestrator.getState(runId)).stepOrder[1]!
+    ]!;
     expect(interruptedStep.children.map((c) => c.branch)).toEqual(["a", "b"]);
 
     const second = make(yaml, { stores: first.stores });
@@ -386,7 +463,8 @@ edges: [{ from: s, to: par }, { from: par, to: e }]
   });
 
   it("does not re-attach children across a back-edge revisit of the same node", async () => {
-    const { orchestrator } = make([`
+    const { orchestrator } = make([
+      `
 id: revisit
 name: revisit
 vars: { round: 0 }
@@ -409,7 +487,8 @@ edges:
   - { from: sub, to: bump }
   - { from: bump, to: sub, when: "vars.round < 2" }
   - { from: bump, to: e }
-`]);
+`,
+    ]);
     const state = await orchestrator.startAndRun({ workflowId: "revisit" });
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     const loops = state.stepOrder.map((id) => state.steps[id]!).filter((s) => s.nodeId === "sub");
@@ -420,7 +499,8 @@ edges:
   });
 
   it("cancels a running loop", async () => {
-    const { orchestrator } = make([`
+    const { orchestrator } = make([
+      `
 id: forever
 name: forever
 start: s
@@ -438,7 +518,8 @@ nodes:
         edges: [{ from: s, to: r }, { from: r, to: e }]
   e: { type: end }
 edges: [{ from: s, to: loop }, { from: loop, to: e }]
-`]);
+`,
+    ]);
     const runId = await orchestrator.startRun({ workflowId: "forever" });
     const done = orchestrator.run(runId);
     await new Promise((r) => setTimeout(r, 50));
@@ -474,7 +555,9 @@ edges: [{ from: s, to: loop }, { from: loop, to: e }]
   it("cancel unblocks a human decision even when the port ignores the signal", async () => {
     let asked = 0;
     const neverAnswers: HumanInputPort = { ask: () => new Promise(() => void asked++) };
-    const { orchestrator } = make([`
+    const { orchestrator } = make(
+      [
+        `
 id: ask
 name: ask
 start: s
@@ -486,7 +569,10 @@ nodes:
     options: [left, right]
   e: { type: end }
 edges: [{ from: s, to: d }, { from: d, to: e }]
-`], { humanInput: neverAnswers });
+`,
+      ],
+      { humanInput: neverAnswers },
+    );
     const runId = await orchestrator.startRun({ workflowId: "ask" });
     const done = orchestrator.run(runId);
     await until(() => asked === 1);
@@ -556,7 +642,8 @@ edges: [{ from: s, to: fan }, { from: fan, to: e }]
   });
 
   it("parallel forEach rejects duplicate branch keys", async () => {
-    const { orchestrator } = make([`
+    const { orchestrator } = make([
+      `
 id: dup
 name: dup
 vars: { items: [{ slug: a }, { slug: a }] }
@@ -571,7 +658,8 @@ nodes:
       body: { graph: { start: s, nodes: { s: { type: start }, e: { type: end } }, edges: [{ from: s, to: e }] } }
   e: { type: end }
 edges: [{ from: s, to: fan }, { from: fan, to: e }]
-`]);
+`,
+    ]);
     const state = await orchestrator.startAndRun({ workflowId: "dup" });
     expect(state.run.status).toBe("failed");
     expect(state.run.error?.message).toMatch(/forEach.key is not unique \('a' appears twice\)/);
@@ -581,9 +669,17 @@ edges: [{ from: s, to: fan }, { from: fan, to: e }]
     const { orchestrator, stores } = make([gated]);
     const runId = await orchestrator.startRun({ workflowId: "gated" });
     await stores.events.append({ type: "run.started", runId, payload: {} });
-    await stores.events.append({ type: "step.scheduled", runId, payload: { stepRunId: "step_g", nodeId: "gate", nodeType: "gate", attempt: 1 } });
+    await stores.events.append({
+      type: "step.scheduled",
+      runId,
+      payload: { stepRunId: "step_g", nodeId: "gate", nodeType: "gate", attempt: 1 },
+    });
     await stores.events.append({ type: "step.started", runId, payload: { stepRunId: "step_g", inputArtifactIds: [] } });
-    await stores.events.append({ type: "step.waiting", runId, payload: { stepRunId: "step_g", on: "human-input", detail: "hi_1" } });
+    await stores.events.append({
+      type: "step.waiting",
+      runId,
+      payload: { stepRunId: "step_g", on: "human-input", detail: "hi_1" },
+    });
     await orchestrator.cancel(runId, "offline");
     const state = await orchestrator.getState(runId);
     expect(state.run.status).toBe("cancelled");

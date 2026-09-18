@@ -18,7 +18,15 @@ export const RequestSourceSchema = z.discriminatedUnion("kind", [
 ]);
 export type RequestSource = z.infer<typeof RequestSourceSchema>;
 
-export const RequestStatusSchema = z.enum(["new", "decomposing", "in-progress", "blocked", "completed", "failed", "cancelled"]);
+export const RequestStatusSchema = z.enum([
+  "new",
+  "decomposing",
+  "in-progress",
+  "blocked",
+  "completed",
+  "failed",
+  "cancelled",
+]);
 export type RequestStatus = z.infer<typeof RequestStatusSchema>;
 
 export const RequestSchema = z.object({
@@ -38,7 +46,15 @@ export type Request = z.infer<typeof RequestSchema>;
 export const WorkItemKindSchema = z.enum(["epic", "feature", "task", "spike"]);
 export type WorkItemKind = z.infer<typeof WorkItemKindSchema>;
 
-export const WorkItemStatusSchema = z.enum(["pending", "ready", "in-progress", "blocked", "done", "failed", "cancelled"]);
+export const WorkItemStatusSchema = z.enum([
+  "pending",
+  "ready",
+  "in-progress",
+  "blocked",
+  "done",
+  "failed",
+  "cancelled",
+]);
 export type WorkItemStatus = z.infer<typeof WorkItemStatusSchema>;
 
 export const WorkItemSchema = z.object({

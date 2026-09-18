@@ -6,7 +6,18 @@ import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAcpSession } from "@orca/agents";
-import { succeeded, toMermaid, validateWorkflow, parseWorkflow, loadTemplates, loadWorkflows, OrcaError, type OrcaConfig, type RunState, consoleLogger } from "@orca/core";
+import {
+  succeeded,
+  toMermaid,
+  validateWorkflow,
+  parseWorkflow,
+  loadTemplates,
+  loadWorkflows,
+  OrcaError,
+  type OrcaConfig,
+  type RunState,
+  consoleLogger,
+} from "@orca/core";
 import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
 import { autoHumanInput } from "@orca/engine";
@@ -65,11 +76,21 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       const { config, configDir } = await loadConfig(ctx.cwd, ctx.configPath);
       const templates = await loadTemplates(config.templates, configDir);
       const files = ctx.positionals;
-      const workflows = files.length ? await loadWorkflows(files.map((f) => join(ctx.cwd, f)), configDir) : await loadWorkflows(config.workflows, configDir);
+      const workflows = files.length
+        ? await loadWorkflows(
+            files.map((f) => join(ctx.cwd, f)),
+            configDir,
+          )
+        : await loadWorkflows(config.workflows, configDir);
       let failed = 0;
       for (const def of workflows.list()) {
-        const r = validateWorkflow(def, { hasTemplate: (id) => templates.has(id), hasWorkflow: (id) => workflows.has(id) });
-        ctx.out(`${r.ok ? "OK  " : "FAIL"} ${def.id} (${Object.keys(def.nodes).length} nodes, ${def.edges.length} edges)`);
+        const r = validateWorkflow(def, {
+          hasTemplate: (id) => templates.has(id),
+          hasWorkflow: (id) => workflows.has(id),
+        });
+        ctx.out(
+          `${r.ok ? "OK  " : "FAIL"} ${def.id} (${Object.keys(def.nodes).length} nodes, ${def.edges.length} edges)`,
+        );
         for (const e of r.errors) ctx.out(`     error   ${e.path}: ${e.message}`);
         for (const w of r.warnings) ctx.out(`     warning ${w.path}: ${w.message}`);
         if (!r.ok) failed++;
@@ -101,10 +122,22 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
     async run(ctx) {
       const { config } = await loadConfig(ctx.cwd, ctx.configPath);
       ctx.out("hosts:");
-      for (const h of config.hosts) ctx.out(`  ${h.id.padEnd(14)} ${h.type}${h.type === "ssh" ? ` ${h.user ? h.user + "@" : ""}${h.host}${h.port ? ":" + h.port : ""}` : ""}`);
+      for (const h of config.hosts)
+        ctx.out(
+          `  ${h.id.padEnd(14)} ${h.type}${h.type === "ssh" ? ` ${h.user ? h.user + "@" : ""}${h.host}${h.port ? ":" + h.port : ""}` : ""}`,
+        );
       ctx.out("agents:");
-      for (const a of config.agents) ctx.out(`  ${a.id.padEnd(14)} host=${a.hostId.padEnd(10)} roles=[${a.roles.join(", ")}] ${a.command} ${a.args.join(" ")}`);
-      if (Object.keys(config.roles).length) ctx.out("roles: " + Object.entries(config.roles).map(([r, a]) => `${r}→${a}`).join(", "));
+      for (const a of config.agents)
+        ctx.out(
+          `  ${a.id.padEnd(14)} host=${a.hostId.padEnd(10)} roles=[${a.roles.join(", ")}] ${a.command} ${a.args.join(" ")}`,
+        );
+      if (Object.keys(config.roles).length)
+        ctx.out(
+          "roles: " +
+            Object.entries(config.roles)
+              .map(([r, a]) => `${r}→${a}`)
+              .join(", "),
+        );
       return 0;
     },
   },
@@ -114,10 +147,23 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
     async run(ctx) {
       const id = ctx.positionals[0];
       if (!id) throw new OrcaError("CONFIG_INVALID", "ping needs an agent id");
-      const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}), ephemeral: true, logger: consoleLogger("debug") });
+      const app = await bootstrap({
+        cwd: ctx.cwd,
+        ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+        ephemeral: true,
+        logger: consoleLogger("debug"),
+      });
       const { agent, host } = app.agents.resolve(id);
       const started = Date.now();
-      const session = await openAcpSession({ host, agent, cwd: (ctx.flags.cwd as string | undefined) ?? host.spec.workspaceRoot ?? (host.spec.type === "local" ? ctx.cwd : "/tmp"), logger: app.logger });
+      const session = await openAcpSession({
+        host,
+        agent,
+        cwd:
+          (ctx.flags.cwd as string | undefined) ??
+          host.spec.workspaceRoot ??
+          (host.spec.type === "local" ? ctx.cwd : "/tmp"),
+        logger: app.logger,
+      });
       ctx.out(`OK ${agent.id} on ${host.id}: ACP session ${session.acpSessionId} in ${Date.now() - started}ms`);
       await session.close();
       return 0;
@@ -133,7 +179,11 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
         const workspace = ctx.flags.cwd ? { hostId: "local", cwd: String(ctx.flags.cwd) } : undefined;
-        const state = await app.orchestrator.startAndRun({ workflowId, vars: parseVars(ctx.flags.var as string[] | undefined), ...(workspace ? { workspace } : {}) });
+        const state = await app.orchestrator.startAndRun({
+          workflowId,
+          vars: parseVars(ctx.flags.var as string[] | undefined),
+          ...(workspace ? { workspace } : {}),
+        });
         return await finish(app, ctx, state);
       } finally {
         detach();
@@ -146,17 +196,24 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
     async run(ctx) {
       const title = ctx.positionals.join(" ");
       if (!title) throw new OrcaError("CONFIG_INVALID", "submit needs a title");
-      const body = ctx.flags["body-file"] ? await readFile(String(ctx.flags["body-file"]), "utf8") : String(ctx.flags.body ?? "");
+      const body = ctx.flags["body-file"]
+        ? await readFile(String(ctx.flags["body-file"]), "utf8")
+        : String(ctx.flags.body ?? "");
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
-        const { request, state } = await app.program.submitAndRun({ title, body, vars: parseVars(ctx.flags.var as string[] | undefined) });
+        const { request, state } = await app.program.submitAndRun({
+          title,
+          body,
+          vars: parseVars(ctx.flags.var as string[] | undefined),
+        });
         ctx.out(`request ${request.id}: ${request.status}`);
         const code = await finish(app, ctx, state);
         const items = await app.orchestrator.stores.workItems.list((w) => w.requestId === request.id);
         if (items.length) {
           ctx.out("\nwork items:");
-          for (const w of items) ctx.out(`  ${w.status.padEnd(12)} ${w.slug.padEnd(20)} ${w.title}${w.runId ? `  run=${w.runId}` : ""}`);
+          for (const w of items)
+            ctx.out(`  ${w.status.padEnd(12)} ${w.slug.padEnd(20)} ${w.title}${w.runId ? `  run=${w.runId}` : ""}`);
         }
         return code;
       } finally {
@@ -180,7 +237,9 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
     async run(ctx) {
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
       for (const r of await app.orchestrator.listRunSummaries()) {
-        ctx.out(`${r.id}  ${r.workflowId.padEnd(24)} ${r.status.padEnd(10)} ${r.outcome ?? ""}  ${r.createdAt}${r.parentRunId ? `  parent=${r.parentRunId}` : ""}`);
+        ctx.out(
+          `${r.id}  ${r.workflowId.padEnd(24)} ${r.status.padEnd(10)} ${r.outcome ?? ""}  ${r.createdAt}${r.parentRunId ? `  parent=${r.parentRunId}` : ""}`,
+        );
       }
       return 0;
     },
@@ -208,7 +267,8 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       const runId = ctx.positionals[0];
       if (!runId) throw new OrcaError("CONFIG_INVALID", "events needs a run id");
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
-      for (const e of await app.orchestrator.events(runId)) ctx.out(ctx.flags.json ? JSON.stringify(e) : formatEvent(e));
+      for (const e of await app.orchestrator.events(runId))
+        ctx.out(ctx.flags.json ? JSON.stringify(e) : formatEvent(e));
       return 0;
     },
   },
@@ -240,7 +300,11 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         return 0;
       }
       const value = rest.join(" ");
-      if (!value) throw new OrcaError("CONFIG_INVALID", "answer needs a request id and an answer (orca answer <requestId> <option>)");
+      if (!value)
+        throw new OrcaError(
+          "CONFIG_INVALID",
+          "answer needs a request id and an answer (orca answer <requestId> <option>)",
+        );
       const request = await app.orchestrator.answer(requestId, value);
       ctx.out(`answered ${request.id} (run ${request.runId}): ${value}`);
       if (ctx.flags["no-resume"]) return 0;
@@ -257,7 +321,11 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
     help: "acp  Serve ORCA as an ACP agent on stdio (register this command in Kepler, Zed, ...).",
     async run(ctx) {
       // stdout is the protocol channel; all logging goes to stderr.
-      const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}), logger: consoleLogger((ctx.flags["log-level"] as never) ?? "info") });
+      const app = await bootstrap({
+        cwd: ctx.cwd,
+        ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+        logger: consoleLogger((ctx.flags["log-level"] as never) ?? "info"),
+      });
       await serveAcpFacade({ orchestrator: app.orchestrator, program: app.program });
       return 0;
     },
@@ -286,21 +354,115 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       const playbook = {
         greeting: "Scripted demo agent reporting for duty.",
         kinds: {
-          decomposition: [{ data: {
-            items: [
-              { slug: "schema", title: "Database schema", kind: "task", description: "Add users table", estimate: "S", dependsOn: [], risks: ["migration-downtime"] },
-              { slug: "login-api", title: "Login API", kind: "feature", description: "POST /login", estimate: "M", priority: "high", dependsOn: ["schema", "decision:session-store"] },
-              { slug: "docs", title: "Docs", kind: "task", description: "Document auth", estimate: "XS", dependsOn: ["informs:login-api@spec"] },
-            ],
-            risks: [{ key: "migration-downtime", title: "Schema migration locks the users table", category: "operational", likelihood: 2, impact: 4, mitigation: "Run the migration online", affects: ["schema"] }],
-            decisions: [{ key: "session-store", title: "Where do sessions live?", question: "Signed cookies or a server-side store?", options: [{ key: "cookie", name: "Signed cookie" }, { key: "redis", name: "Redis session store" }], blocks: ["login-api"] }],
-            rationale: "Vertical slices with one shared prerequisite and one architectural decision.",
-          }, body: "Demo breakdown." }],
-          "risk-register": [{ data: { status: "done", risks: [{ key: "token-leak", title: "Tokens logged in plaintext", category: "security", likelihood: 2, impact: 5, mitigation: "Redact in logger", affects: ["login-api"] }], summary: "Two open risks, none critical." }, body: "Risk narrative." }],
-          "decision-matrix": [{ data: { key: "session-store", title: "Where do sessions live?", scale: 10, criteria: [{ key: "simplicity", name: "Simplicity", weight: 3 }, { key: "revocation", name: "Revocation support", weight: 1 }], options: [{ key: "cookie", name: "Signed cookie", scores: { simplicity: 9, revocation: 3 } }, { key: "redis", name: "Redis", scores: { simplicity: 5, revocation: 9 } }], rationale: "Simplicity wins for v1." }, body: "Matrix reasoning." }],
-          spec: [{ data: { status: "ready", risk: "low" }, body: "# Spec\n\nDemo specification with enough prose to pass the design step's minimum body length validation rule." }],
+          decomposition: [
+            {
+              data: {
+                items: [
+                  {
+                    slug: "schema",
+                    title: "Database schema",
+                    kind: "task",
+                    description: "Add users table",
+                    estimate: "S",
+                    dependsOn: [],
+                    risks: ["migration-downtime"],
+                  },
+                  {
+                    slug: "login-api",
+                    title: "Login API",
+                    kind: "feature",
+                    description: "POST /login",
+                    estimate: "M",
+                    priority: "high",
+                    dependsOn: ["schema", "decision:session-store"],
+                  },
+                  {
+                    slug: "docs",
+                    title: "Docs",
+                    kind: "task",
+                    description: "Document auth",
+                    estimate: "XS",
+                    dependsOn: ["informs:login-api@spec"],
+                  },
+                ],
+                risks: [
+                  {
+                    key: "migration-downtime",
+                    title: "Schema migration locks the users table",
+                    category: "operational",
+                    likelihood: 2,
+                    impact: 4,
+                    mitigation: "Run the migration online",
+                    affects: ["schema"],
+                  },
+                ],
+                decisions: [
+                  {
+                    key: "session-store",
+                    title: "Where do sessions live?",
+                    question: "Signed cookies or a server-side store?",
+                    options: [
+                      { key: "cookie", name: "Signed cookie" },
+                      { key: "redis", name: "Redis session store" },
+                    ],
+                    blocks: ["login-api"],
+                  },
+                ],
+                rationale: "Vertical slices with one shared prerequisite and one architectural decision.",
+              },
+              body: "Demo breakdown.",
+            },
+          ],
+          "risk-register": [
+            {
+              data: {
+                status: "done",
+                risks: [
+                  {
+                    key: "token-leak",
+                    title: "Tokens logged in plaintext",
+                    category: "security",
+                    likelihood: 2,
+                    impact: 5,
+                    mitigation: "Redact in logger",
+                    affects: ["login-api"],
+                  },
+                ],
+                summary: "Two open risks, none critical.",
+              },
+              body: "Risk narrative.",
+            },
+          ],
+          "decision-matrix": [
+            {
+              data: {
+                key: "session-store",
+                title: "Where do sessions live?",
+                scale: 10,
+                criteria: [
+                  { key: "simplicity", name: "Simplicity", weight: 3 },
+                  { key: "revocation", name: "Revocation support", weight: 1 },
+                ],
+                options: [
+                  { key: "cookie", name: "Signed cookie", scores: { simplicity: 9, revocation: 3 } },
+                  { key: "redis", name: "Redis", scores: { simplicity: 5, revocation: 9 } },
+                ],
+                rationale: "Simplicity wins for v1.",
+              },
+              body: "Matrix reasoning.",
+            },
+          ],
+          spec: [
+            {
+              data: { status: "ready", risk: "low" },
+              body: "# Spec\n\nDemo specification with enough prose to pass the design step's minimum body length validation rule.",
+            },
+          ],
           implementation: [{ data: { status: "done", branch: "orca/demo" }, body: "Demo implementation." }],
-          "test-report": [{ data: { status: "done", passed: false, failures: 1 }, body: "First run fails." }, { data: { status: "done", passed: true, failures: 0 }, body: "All green." }],
+          "test-report": [
+            { data: { status: "done", passed: false, failures: 1 }, body: "First run fails." },
+            { data: { status: "done", passed: true, failures: 0 }, body: "All green." },
+          ],
           review: [{ data: { status: "done", verdict: "approve" }, body: "LGTM" }],
         },
       };
@@ -309,7 +471,13 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         version: 1,
         storeDir: join(dir, ".orca"),
         hosts: [{ id: "local", type: "local" }],
-        agents: [scriptedAgentSpec({ playbookFile, stateFile: join(dir, ".orca-demo", "state.json"), promptLog: join(dir, ".orca-demo", "prompts.jsonl") })],
+        agents: [
+          scriptedAgentSpec({
+            playbookFile,
+            stateFile: join(dir, ".orca-demo", "state.json"),
+            promptLog: join(dir, ".orca-demo", "prompts.jsonl"),
+          }),
+        ],
         roles: {},
         workflows: [join(repoRoot, "workflows", "*.yaml")],
         templates: [join(repoRoot, "templates", "**", "*.md")],
@@ -325,11 +493,20 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       // working ORCA setup: `orca --config <dir>/orca.config.yaml <cmd>` (or any
       // orca command run from <dir>) drives the same scripted agents afterwards.
       await writeFile(join(dir, "orca.config.yaml"), stringifyYaml(config), "utf8");
-      const app = await bootstrap({ config, configDir: dir, cwd: dir, humanInput: autoHumanInput("approve"), logLevel: ctx.flags.quiet ? "warn" : "info" });
+      const app = await bootstrap({
+        config,
+        configDir: dir,
+        cwd: dir,
+        humanInput: autoHumanInput("approve"),
+        logLevel: ctx.flags.quiet ? "warn" : "info",
+      });
       ctx.err(`demo workspace: ${dir}`);
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
-        const { request, state } = await app.program.submitAndRun({ title: "Add authentication", body: "Users must be able to log in with email and password." });
+        const { request, state } = await app.program.submitAndRun({
+          title: "Add authentication",
+          body: "Users must be able to log in with email and password.",
+        });
         ctx.out("");
         const code = await finish(app, ctx, state);
         const items = await app.orchestrator.stores.workItems.list((w) => w.requestId === request.id);
@@ -338,13 +515,24 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         const plan = await app.plan.getPlan("demo");
         if (plan) {
           const snap = await app.plan.snapshot(plan.id);
-          ctx.out(`\nplan '${plan.key}': ${snap.dependencies.length} dependencies, ${snap.risks.length} risks, ${snap.decisions.length} decisions (${snap.decisions.filter((d) => d.status === "decided").map((d) => `${d.key}=${d.chosen}`).join(", ")})`);
+          ctx.out(
+            `\nplan '${plan.key}': ${snap.dependencies.length} dependencies, ${snap.risks.length} risks, ${snap.decisions.length} decisions (${snap.decisions
+              .filter((d) => d.status === "decided")
+              .map((d) => `${d.key}=${d.chosen}`)
+              .join(", ")})`,
+          );
           for (const line of await app.plan.explain(plan.id, "login-api")) ctx.out(`  ${line}`);
         }
         if (keep) {
-          ctx.out(`\nartifacts and event logs are under ${join(dir, ".orca")}; inspect with: orca runs / orca status <runId> / orca events <runId> / orca plan show demo / orca plan journal demo  (run from ${dir})`);
-          ctx.out(`the workspace also holds a ready-to-use ${join(dir, "orca.config.yaml")} (scripted agents, playbook in demo-playbook.yaml); e.g.`);
-          ctx.out(`  orca --config ${join(dir, "orca.config.yaml")} run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'`);
+          ctx.out(
+            `\nartifacts and event logs are under ${join(dir, ".orca")}; inspect with: orca runs / orca status <runId> / orca events <runId> / orca plan show demo / orca plan journal demo  (run from ${dir})`,
+          );
+          ctx.out(
+            `the workspace also holds a ready-to-use ${join(dir, "orca.config.yaml")} (scripted agents, playbook in demo-playbook.yaml); e.g.`,
+          );
+          ctx.out(
+            `  orca --config ${join(dir, "orca.config.yaml")} run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'`,
+          );
         } else {
           ctx.out(`\nremoving demo workspace ${dir} (pass --keep or --dir <path> to inspect it afterwards)`);
         }

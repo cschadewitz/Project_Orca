@@ -6,7 +6,23 @@
  * `<dir>/decisions.json`, `<dir>/plans/<planId>.jsonl` (journal).
  */
 import { join } from "node:path";
-import { DecisionSchema, DependencySchema, newId, PlanEventSchema, PlanSchema, RiskSchema, systemClock, type Clock, type Decision, type Dependency, type Logger, type Plan, type PlanEvent, type PlanEventInput, type Risk } from "@orca/core";
+import {
+  DecisionSchema,
+  DependencySchema,
+  newId,
+  PlanEventSchema,
+  PlanSchema,
+  RiskSchema,
+  systemClock,
+  type Clock,
+  type Decision,
+  type Dependency,
+  type Logger,
+  type Plan,
+  type PlanEvent,
+  type PlanEventInput,
+  type Risk,
+} from "@orca/core";
 import { InMemoryDocumentStore, JsonFileDocumentStore, type DocumentStore } from "./document-store.js";
 import { JsonlLogDir } from "./jsonl-log.js";
 
@@ -29,7 +45,12 @@ abstract class BasePlanJournal implements PlanJournal {
   abstract listPlans(): Promise<string[]>;
 
   async append(input: PlanEventInput): Promise<PlanEvent> {
-    const event = await this.write(input.planId, (seq) => ({ ...input, id: newId("pev", this.clock.now()), seq, at: this.clock.isoNow() }));
+    const event = await this.write(input.planId, (seq) => ({
+      ...input,
+      id: newId("pev", this.clock.now()),
+      seq,
+      at: this.clock.isoNow(),
+    }));
     for (const { listener, planId } of this.listeners) {
       if (planId && planId !== event.planId) continue;
       try {

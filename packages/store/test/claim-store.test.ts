@@ -16,7 +16,13 @@ async function fileStore(): Promise<{ store: FileClaimStore; dir: string }> {
   return { store: new FileClaimStore(dir), dir };
 }
 
-const claim = (workItemId: string, runId: string, branch = "b"): WorkItemClaim => ({ workItemId, runId, branch, stepRunId: "step_1", at: "2026-01-01T00:00:00.000Z" });
+const claim = (workItemId: string, runId: string, branch = "b"): WorkItemClaim => ({
+  workItemId,
+  runId,
+  branch,
+  stepRunId: "step_1",
+  at: "2026-01-01T00:00:00.000Z",
+});
 
 describe("claim stores", () => {
   for (const [name, make] of [
@@ -82,7 +88,11 @@ describe("claim stores", () => {
 
   it("file store leaves no temporary files behind and survives a restart", async () => {
     const { store, dir } = await fileStore();
-    await Promise.all([store.claim(claim("wi_1", "run_a")), store.claim(claim("wi_1", "run_b")), store.claim(claim("wi_2", "run_b"))]);
+    await Promise.all([
+      store.claim(claim("wi_1", "run_a")),
+      store.claim(claim("wi_1", "run_b")),
+      store.claim(claim("wi_2", "run_b")),
+    ]);
     const files = await readdir(join(dir, "claims"));
     expect(files.sort()).toEqual(["wi_1.json", "wi_2.json"]);
     // A second process over the same directory reads the claims, it does not re-elect.

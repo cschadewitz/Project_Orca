@@ -11,7 +11,13 @@ import * as acp from "@agentclientprotocol/sdk";
 import { newId, OrcaError, silentLogger, type AgentSpec, type Clock, type Logger, systemClock } from "@orca/core";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
 import { resolvePermission } from "./permissions.js";
-import { summarizeUpdate, type AgentSession, type PromptOptions, type SessionUpdateEvent, type TurnResult } from "./session.js";
+import {
+  summarizeUpdate,
+  type AgentSession,
+  type PromptOptions,
+  type SessionUpdateEvent,
+  type TurnResult,
+} from "./session.js";
 
 export interface OpenSessionOptions {
   host: AgentHost;
@@ -49,14 +55,22 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   let acpSessionId = "";
 
-  const proc: AgentProcessHandle = await opts.host.spawnAgent(opts.agent, { cwd: opts.cwd, ...(opts.env ? { env: opts.env } : {}) });
+  const proc: AgentProcessHandle = await opts.host.spawnAgent(opts.agent, {
+    cwd: opts.cwd,
+    ...(opts.env ? { env: opts.env } : {}),
+  });
 
   const app = acp
     .client({ name: ORCA_CLIENT_INFO.name })
     .onNotification(acp.methods.client.session.update, (ctx) => {
       const p = ctx.params;
       if (p.sessionId !== acpSessionId && acpSessionId !== "") return;
-      const e: SessionUpdateEvent = { sessionId: p.sessionId, raw: p.update, summary: summarizeUpdate(p.update), at: clock.now() };
+      const e: SessionUpdateEvent = {
+        sessionId: p.sessionId,
+        raw: p.update,
+        summary: summarizeUpdate(p.update),
+        at: clock.now(),
+      };
       for (const l of listeners) l(e);
     })
     .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
@@ -64,7 +78,11 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
         request: ctx.params,
         ...(opts.askPermission ? { ask: opts.askPermission } : {}),
       });
-      opts.onPermission?.({ ...(ctx.params.toolCall.toolCallId ? { toolCallId: ctx.params.toolCall.toolCallId } : {}), title: ctx.params.toolCall.title ?? "", decision });
+      opts.onPermission?.({
+        ...(ctx.params.toolCall.toolCallId ? { toolCallId: ctx.params.toolCall.toolCallId } : {}),
+        title: ctx.params.toolCall.title ?? "",
+        decision,
+      });
       logger.debug("permission", { title: ctx.params.toolCall.title, decision });
       return response;
     })
@@ -73,7 +91,12 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       let content = await opts.host.fs.readFile(path);
       if (line !== undefined && line !== null) {
-        const lines = content.split("\n").slice(Math.max(0, line - 1), limit !== undefined && limit !== null ? Math.max(0, line - 1) + limit : undefined);
+        const lines = content
+          .split("\n")
+          .slice(
+            Math.max(0, line - 1),
+            limit !== undefined && limit !== null ? Math.max(0, line - 1) + limit : undefined,
+          );
         content = lines.join("\n");
       }
       return { content };
@@ -91,7 +114,11 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
 
   const withTimeout = <T>(p: Promise<T>, ms: number, what: string): Promise<T> =>
     new Promise<T>((resolve, reject) => {
-      const t = setTimeout(() => reject(new OrcaError("AGENT_TRANSPORT", `${what} timed out after ${ms}ms`, { stderr: proc.stderrTail() })), ms);
+      const t = setTimeout(
+        () =>
+          reject(new OrcaError("AGENT_TRANSPORT", `${what} timed out after ${ms}ms`, { stderr: proc.stderrTail() })),
+        ms,
+      );
       // Adopting `p` forwards its rejection as-is; the `finally` stops the timer either way.
       resolve(p.finally(() => clearTimeout(t)));
     });
@@ -109,16 +136,30 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     logger.debug("initialized", { protocolVersion: init.protocolVersion, agentInfo: init.agentInfo });
     const newSession: acp.NewSessionRequest = {
       cwd: opts.cwd,
-      mcpServers: opts.agent.mcpServers.map((m) => ({ name: m.name, command: m.command, args: m.args, env: Object.entries(m.env).map(([name, value]) => ({ name, value })) })),
+      mcpServers: opts.agent.mcpServers.map((m) => ({
+        name: m.name,
+        command: m.command,
+        args: m.args,
+        env: Object.entries(m.env).map(([name, value]) => ({ name, value })),
+      })),
     };
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
-    const created = await withTimeout(conn.agent.request(acp.methods.agent.session.new, newSession), handshakeTimeout, "session/new");
+    const created = await withTimeout(
+      conn.agent.request(acp.methods.agent.session.new, newSession),
+      handshakeTimeout,
+      "session/new",
+    );
     acpSessionId = created.sessionId;
   } catch (e) {
     proc.kill();
     conn.close(e);
     if (e instanceof OrcaError) throw e;
-    throw new OrcaError("AGENT_PROTOCOL", `ACP handshake with '${opts.agent.id}' failed: ${(e as Error).message}`, { stderr: proc.stderrTail() }, { cause: e });
+    throw new OrcaError(
+      "AGENT_PROTOCOL",
+      `ACP handshake with '${opts.agent.id}' failed: ${(e as Error).message}`,
+      { stderr: proc.stderrTail() },
+      { cause: e },
+    );
   }
 
   const id = newId("sess", clock.now());
@@ -150,7 +191,10 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
         /* ignore */
       }
       proc.kill();
-      const exitedInTime = await Promise.race([proc.exited.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 2000))]);
+      const exitedInTime = await Promise.race([
+        proc.exited.then(() => true),
+        new Promise<boolean>((r) => setTimeout(() => r(false), 2000)),
+      ]);
       if (!exitedInTime) {
         // Escalate: the agent ignored SIGTERM (or is wedged). The handle's kill()
         // is a no-op once the process has exited, so this is safe to call blindly.
@@ -172,9 +216,15 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     if (!turn || turn.cancelReason) return;
     turn.cancelReason = reason;
     logger.debug("cancelling turn", { reason, graceMs: cancelGraceMs });
-    void conn.agent.notify(acp.methods.agent.session.cancel, { sessionId: acpSessionId }).catch(() => undefined /* connection may already be gone */);
+    void conn.agent
+      .notify(acp.methods.agent.session.cancel, { sessionId: acpSessionId })
+      .catch(() => undefined /* connection may already be gone */);
     turn.grace = setTimeout(() => {
-      const err = new OrcaError("AGENT_TRANSPORT", `agent '${opts.agent.id}' did not end its turn within ${cancelGraceMs}ms of session/cancel (${reason}); killing it`, { reason, stderr: proc.stderrTail() });
+      const err = new OrcaError(
+        "AGENT_TRANSPORT",
+        `agent '${opts.agent.id}' did not end its turn within ${cancelGraceMs}ms of session/cancel (${reason}); killing it`,
+        { reason, stderr: proc.stderrTail() },
+      );
       logger.warn("agent wedged after cancel; terminating", { reason });
       turn.fail(err);
       void terminate(err);
@@ -207,13 +257,23 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       activeTurn = turn;
       const onAbort = () => requestCancel(`aborted: ${String(options.signal?.reason ?? "cancelled")}`);
       options.signal?.addEventListener("abort", onAbort, { once: true });
-      const timer = options.timeoutMs ? setTimeout(() => requestCancel(`turn timed out after ${options.timeoutMs}ms`), options.timeoutMs) : undefined;
+      const timer = options.timeoutMs
+        ? setTimeout(() => requestCancel(`turn timed out after ${options.timeoutMs}ms`), options.timeoutMs)
+        : undefined;
       try {
-        const res = await Promise.race([conn.agent.request(acp.methods.agent.session.prompt, { sessionId: acpSessionId, prompt: blocks }), failed]);
+        const res = await Promise.race([
+          conn.agent.request(acp.methods.agent.session.prompt, { sessionId: acpSessionId, prompt: blocks }),
+          failed,
+        ]);
         return { stopReason: res.stopReason, durationMs: clock.now() - started };
       } catch (e) {
         if (wedged) throw wedged;
-        throw new OrcaError("AGENT_PROTOCOL", `prompt failed: ${(e as Error).message}`, { stderr: proc.stderrTail() }, { cause: e });
+        throw new OrcaError(
+          "AGENT_PROTOCOL",
+          `prompt failed: ${(e as Error).message}`,
+          { stderr: proc.stderrTail() },
+          { cause: e },
+        );
       } finally {
         if (timer) clearTimeout(timer);
         if (turn.grace) clearTimeout(turn.grace);

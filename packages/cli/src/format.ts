@@ -37,8 +37,10 @@ export function formatEvent(e: OrcaEvent): string {
       return `${t}     turn ended: ${String(p.stopReason)} in ${String(p.durationMs)}ms`;
     case "agent.update": {
       const u = p.update as { kind: string; text?: string; title?: string; status?: string };
-      if (u.kind === "agent_message_chunk") return `${t}     │ ${(u.text ?? "").trim().split("\n").join("\n           │ ")}`;
-      if (u.kind === "tool_call" || u.kind === "tool_call_update") return `${t}     ⚙ ${u.title ?? ""} ${u.status ?? ""}`.trimEnd();
+      if (u.kind === "agent_message_chunk")
+        return `${t}     │ ${(u.text ?? "").trim().split("\n").join("\n           │ ")}`;
+      if (u.kind === "tool_call" || u.kind === "tool_call_update")
+        return `${t}     ⚙ ${u.title ?? ""} ${u.status ?? ""}`.trimEnd();
       return `${t}     [${u.kind}]`;
     }
     case "agent.permission":
@@ -77,19 +79,32 @@ function stepName(e: OrcaEvent): string {
 }
 
 export function formatRunState(s: RunState): string {
-  const lines = [`run ${s.run.id}  workflow=${s.run.workflowId}@${s.run.workflowVersion}  status=${s.run.status}${s.run.outcome ? `/${s.run.outcome}` : ""}`, `workspace ${s.run.workspace.hostId}:${s.run.workspace.cwd}${s.run.workspace.branch ? ` (${s.run.workspace.branch})` : ""}`];
+  const lines = [
+    `run ${s.run.id}  workflow=${s.run.workflowId}@${s.run.workflowVersion}  status=${s.run.status}${s.run.outcome ? `/${s.run.outcome}` : ""}`,
+    `workspace ${s.run.workspace.hostId}:${s.run.workspace.cwd}${s.run.workspace.branch ? ` (${s.run.workspace.branch})` : ""}`,
+  ];
   if (s.run.parentRunId) lines.push(`parent ${s.run.parentRunId}`);
   if (s.run.error) lines.push(`error ${s.run.error.code}: ${s.run.error.message}`);
   lines.push("", "steps:");
   for (const id of s.stepOrder) {
     const st = s.steps[id]!;
-    const extras = [st.result?.choice ? `choice=${st.result.choice}` : "", st.inputArtifactIds.length ? `inputs=${st.inputArtifactIds.length}` : "", st.childRunIds.length ? `children=${st.childRunIds.length}` : "", st.error ? `error=${st.error.message}` : ""].filter(Boolean).join(" ");
-    lines.push(`  ${st.status.padEnd(9)} ${st.nodeId.padEnd(22)} ${st.nodeType.padEnd(14)} attempt=${st.attempt} ${extras}`.trimEnd());
+    const extras = [
+      st.result?.choice ? `choice=${st.result.choice}` : "",
+      st.inputArtifactIds.length ? `inputs=${st.inputArtifactIds.length}` : "",
+      st.childRunIds.length ? `children=${st.childRunIds.length}` : "",
+      st.error ? `error=${st.error.message}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    lines.push(
+      `  ${st.status.padEnd(9)} ${st.nodeId.padEnd(22)} ${st.nodeType.padEnd(14)} attempt=${st.attempt} ${extras}`.trimEnd(),
+    );
   }
   const arts = Object.values(s.artifacts);
   if (arts.length) {
     lines.push("", "artifacts:");
-    for (const a of arts.sort((x, y) => x.createdAt.localeCompare(y.createdAt))) lines.push(`  ${a.name.padEnd(16)} ${a.kind.padEnd(14)} v${a.version}  ${a.path ?? a.id}`);
+    for (const a of arts.sort((x, y) => x.createdAt.localeCompare(y.createdAt)))
+      lines.push(`  ${a.name.padEnd(16)} ${a.kind.padEnd(14)} v${a.version}  ${a.path ?? a.id}`);
   }
   const pending = pendingHumanInputs(s);
   if (pending.length) {
@@ -108,6 +123,8 @@ export function formatPaused(runId: string, pending: HumanInputRequest[]): strin
   const lines = [`run ${runId} is paused, waiting for a human:`];
   for (const h of pending) lines.push(`  ${formatPendingInput(h)}`);
   const example = pending[0];
-  lines.push(`answer with: orca answer ${example?.id ?? "<requestId>"} ${example?.options.length ? `<${example.options.join("|")}>` : "<answer>"}   (records the answer and resumes the run)`);
+  lines.push(
+    `answer with: orca answer ${example?.id ?? "<requestId>"} ${example?.options.length ? `<${example.options.join("|")}>` : "<answer>"}   (records the answer and resumes the run)`,
+  );
   return lines.join("\n");
 }

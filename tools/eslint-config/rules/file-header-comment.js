@@ -7,9 +7,7 @@
 
 /** A statement that only forwards another module's exports: `export * from "x"`, `export { a } from "x"`. */
 function isReExport(node) {
-  return (
-    (node.type === "ExportAllDeclaration" || node.type === "ExportNamedDeclaration") && node.source != null
-  );
+  return (node.type === "ExportAllDeclaration" || node.type === "ExportNamedDeclaration") && node.source != null;
 }
 
 /** @type {import("eslint").Rule.RuleModule} */

@@ -24,7 +24,17 @@
  */
 import { mkdir, readdir, readFile, stat, truncate } from "node:fs/promises";
 import { join } from "node:path";
-import { anyJson, appendJsonl, parseJsonlLine, readJsonl, readJsonlLines, silentLogger, splitJsonlLines, type JsonlParser, type Logger } from "@orca/core";
+import {
+  anyJson,
+  appendJsonl,
+  parseJsonlLine,
+  readJsonl,
+  readJsonlLines,
+  silentLogger,
+  splitJsonlLines,
+  type JsonlParser,
+  type Logger,
+} from "@orca/core";
 import { withFileLock, type FileLockOptions } from "./file-lock.js";
 
 export interface JsonlLogDirOptions {
@@ -54,10 +64,13 @@ export class JsonlLogDir {
     options: JsonlLogDirOptions = {},
   ) {
     this.logger = options.logger ?? silentLogger;
-    this.lock = { ...options.lock, onBroken: (holder) => {
-      this.logger.warn("jsonl log: broke a stale lock", { dir, pid: holder.pid, ageMs: Date.now() - holder.at });
-      options.lock?.onBroken?.(holder);
-    } };
+    this.lock = {
+      ...options.lock,
+      onBroken: (holder) => {
+        this.logger.warn("jsonl log: broke a stale lock", { dir, pid: holder.pid, ageMs: Date.now() - holder.at });
+        options.lock?.onBroken?.(holder);
+      },
+    };
   }
 
   file(key: string): string {
@@ -76,21 +89,28 @@ export class JsonlLogDir {
   append<T>(key: string, build: (seq: number) => T): Promise<T> {
     const prev = this.chains.get(key) ?? Promise.resolve();
     const next = prev.then(() => this.appendLocked(key, build));
-    this.chains.set(key, next.catch(() => undefined));
+    this.chains.set(
+      key,
+      next.catch(() => undefined),
+    );
     return next;
   }
 
   private async appendLocked<T>(key: string, build: (seq: number) => T): Promise<T> {
     await this.init();
     const file = this.file(key);
-    return withFileLock(`${file}.lock`, async () => {
-      const tail = await this.tail(key, file);
-      const record = build(tail.nextSeq);
-      await appendJsonl(file, record);
-      const { ino, size } = await stat(file);
-      this.tails.set(key, { ino, size, nextSeq: tail.nextSeq + 1 });
-      return record;
-    }, this.lock);
+    return withFileLock(
+      `${file}.lock`,
+      async () => {
+        const tail = await this.tail(key, file);
+        const record = build(tail.nextSeq);
+        await appendJsonl(file, record);
+        const { ino, size } = await stat(file);
+        this.tails.set(key, { ino, size, nextSeq: tail.nextSeq + 1 });
+        return record;
+      },
+      this.lock,
+    );
   }
 
   /** Where the log ends right now: from the cache when the file is unchanged, otherwise from disk. */
@@ -111,7 +131,10 @@ export class JsonlLogDir {
     let end = buf.length;
     if (end > 0 && buf[end - 1] !== NEWLINE) {
       end = buf.lastIndexOf(NEWLINE) + 1;
-      this.logger.warn("jsonl log: discarding torn tail left by an interrupted append", { file, bytes: buf.length - end });
+      this.logger.warn("jsonl log: discarding torn tail left by an interrupted append", {
+        file,
+        bytes: buf.length - end,
+      });
       await truncate(file, end);
     }
     const lines = splitJsonlLines(buf.toString("utf8", 0, end));
@@ -133,7 +156,10 @@ export class JsonlLogDir {
   }
 
   private readOptions(file: string) {
-    return { onCorrupt: (line: string) => this.logger.warn("jsonl log: skipping a line that is not JSON", { file, bytes: Buffer.byteLength(line) }) };
+    return {
+      onCorrupt: (line: string) =>
+        this.logger.warn("jsonl log: skipping a line that is not JSON", { file, bytes: Buffer.byteLength(line) }),
+    };
   }
 
   /** Every record of `key`'s log, in file order; a missing log reads as empty. */

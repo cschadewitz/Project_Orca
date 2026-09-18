@@ -108,7 +108,11 @@ export class ScriptedAgent {
       await mkdir(dirname(this.opts.promptLog), { recursive: true });
       await appendJsonl(this.opts.promptLog, { sessionId, turn: session.turns, cwd: session.cwd, text });
     }
-    const say = (t: string) => ctx.client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } } });
+    const say = (t: string) =>
+      ctx.client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } },
+      });
     const delay = this.opts.playbook.delayMs;
 
     await say(this.opts.playbook.greeting + "\n");
@@ -144,7 +148,14 @@ export class ScriptedAgent {
       const toolCallId = `write-${d.kind}-${n}`;
       await ctx.client.notify(acp.methods.client.session.update, {
         sessionId,
-        update: { sessionUpdate: "tool_call", toolCallId, title: `Write ${d.kind} to ${d.path}`, kind: "edit", status: "in_progress", locations: [{ path: d.path }] },
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId,
+          title: `Write ${d.kind} to ${d.path}`,
+          kind: "edit",
+          status: "in_progress",
+          locations: [{ path: d.path }],
+        },
       });
       if (entry.askPermission) {
         const res = await ctx.client.request(acp.methods.client.session.requestPermission, {
@@ -156,7 +167,10 @@ export class ScriptedAgent {
           ],
         });
         if (res.outcome.outcome !== "selected" || res.outcome.optionId !== "allow") {
-          await ctx.client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId, status: "failed" } });
+          await ctx.client.notify(acp.methods.client.session.update, {
+            sessionId,
+            update: { sessionUpdate: "tool_call_update", toolCallId, status: "failed" },
+          });
           await say(`Permission denied for ${d.path}.\n`);
           continue;
         }
@@ -164,7 +178,10 @@ export class ScriptedAgent {
       const content = renderEntry(entry, { kind: d.kind, path: d.path, n, prompt: text });
       await mkdir(dirname(d.path), { recursive: true });
       await writeFile(d.path, content, "utf8");
-      await ctx.client.notify(acp.methods.client.session.update, { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId, status: "completed" } });
+      await ctx.client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: "tool_call_update", toolCallId, status: "completed" },
+      });
       await say(`Wrote ${d.kind} (${content.length} chars) to ${d.path}\n`);
       if (entry.stopReason) stopReason = entry.stopReason;
     }

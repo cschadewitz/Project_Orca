@@ -12,7 +12,11 @@ export interface Logger {
 
 const LEVELS: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
-export function consoleLogger(min: LogLevel = "info", base: Record<string, unknown> = {}, sink: (line: string) => void = (l) => process.stderr.write(l + "\n")): Logger {
+export function consoleLogger(
+  min: LogLevel = "info",
+  base: Record<string, unknown> = {},
+  sink: (line: string) => void = (l) => process.stderr.write(l + "\n"),
+): Logger {
   const log = (level: LogLevel, msg: string, fields?: Record<string, unknown>) => {
     if (LEVELS[level] < LEVELS[min]) return;
     const merged = { ...base, ...(fields ?? {}) };

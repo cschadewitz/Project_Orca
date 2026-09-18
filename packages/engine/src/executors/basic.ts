@@ -1,5 +1,13 @@
 /** Executors for start, end, set, decision and gate nodes. */
-import { evaluateVars, OrcaError, type DecisionNode, type EndNode, type GateNode, type SetNode, type StartNode } from "@orca/core";
+import {
+  evaluateVars,
+  OrcaError,
+  type DecisionNode,
+  type EndNode,
+  type GateNode,
+  type SetNode,
+  type StartNode,
+} from "@orca/core";
 import { askHumanInput, type HumanInputQuery } from "../human-input.js";
 import { resolveMatrixChoice } from "../plan/executors.js";
 import { runAgentTurn } from "./agent-step.js";
@@ -13,7 +21,8 @@ export const startExecutor: NodeExecutor<StartNode> = {
 export const endExecutor: NodeExecutor<EndNode> = {
   type: "end",
   // Any step whose result carries an `outcome` ends the run, so a custom terminal node needs no engine change.
-  execute: async (ctx) => completed({ outcome: ctx.node.outcome, ...(ctx.node.message ? { message: ctx.node.message } : {}) }),
+  execute: async (ctx) =>
+    completed({ outcome: ctx.node.outcome, ...(ctx.node.message ? { message: ctx.node.message } : {}) }),
 };
 
 /** Assign run vars; `=`-prefixed values are expressions (see evaluateVars). */
@@ -33,10 +42,24 @@ export const setExecutor: NodeExecutor<SetNode> = {
  * resumed run re-schedules the node as a new attempt, which lands here and
  * picks that answer up instead of asking again.
  */
-export async function askHuman(ctx: StepContext, question: string, options: string[], kind: HumanInputQuery["kind"] = "decision"): Promise<string | undefined> {
+export async function askHuman(
+  ctx: StepContext,
+  question: string,
+  options: string[],
+  kind: HumanInputQuery["kind"] = "decision",
+): Promise<string | undefined> {
   const recorded = answerFromPreviousAttempt(ctx);
   if (recorded !== undefined) return recorded;
-  return askHumanInput({ port: ctx.humanInput, emit: (e) => ctx.emit(e), clock: ctx.clock, runId: ctx.run.id, stepRunId: ctx.step.id, kind, question, options });
+  return askHumanInput({
+    port: ctx.humanInput,
+    emit: (e) => ctx.emit(e),
+    clock: ctx.clock,
+    runId: ctx.run.id,
+    stepRunId: ctx.step.id,
+    kind,
+    question,
+    options,
+  });
 }
 
 /** The answer given to the immediately preceding, cancelled attempt of this node (a resumed pause), if any. */
@@ -53,22 +76,34 @@ async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise
     case "expression":
       return { raw: await ctx.evaluate(s.expr), source: "expression" };
     case "artifact": {
-      const a = (await ctx.resolveInputs([{ name: s.artifact, required: false }, { kind: s.artifact, required: false }])).find((r) => r !== undefined);
+      const a = (
+        await ctx.resolveInputs([
+          { name: s.artifact, required: false },
+          { kind: s.artifact, required: false },
+        ])
+      ).find((r) => r !== undefined);
       if (!a) throw new OrcaError("ARTIFACT_MISSING", `decision '${ctx.nodeId}' needs artifact '${s.artifact}'`);
       return { raw: a.data[s.field], source: `artifact:${a.name}.${s.field}` };
     }
     case "agent": {
-      const produces = s.produces ?? { kind: "decision", path: `.orca/runs/${ctx.run.id}/${ctx.nodeId}-decision.md`, required: true };
+      const produces = s.produces ?? {
+        kind: "decision",
+        path: `.orca/runs/${ctx.run.id}/${ctx.nodeId}-decision.md`,
+        required: true,
+      };
       const turn = await runAgentTurn(ctx, {
         agent: s.agent,
         ...(s.template ? { template: s.template } : {}),
         ...(s.prompt ? { prompt: s.prompt } : {}),
         inputs: s.inputs,
-        produces: [{ ...produces, validate: { requiredFields: [s.field], fieldValues: { [s.field]: ctx.node.options } } }],
+        produces: [
+          { ...produces, validate: { requiredFields: [s.field], fieldValues: { [s.field]: ctx.node.options } } },
+        ],
         completion: { mode: "turn-end", maxFollowUps: 1, maxAttempts: 1 },
         vars: { options: ctx.node.options },
       });
-      if (turn.kind === "failed") throw new OrcaError(turn.error.code as "INTERNAL", turn.error.message, turn.error.details);
+      if (turn.kind === "failed")
+        throw new OrcaError(turn.error.code as "INTERNAL", turn.error.message, turn.error.details);
       const art = turn.artifacts[0];
       return { raw: art?.data[s.field], source: `agent:${art?.name ?? "decision"}` };
     }
@@ -85,9 +120,15 @@ export const decisionExecutor: NodeExecutor<DecisionNode> = {
   type: "decision",
   async execute(ctx) {
     const { raw, source } = await resolveChoice(ctx);
-    let choice = typeof raw === "boolean" ? (raw ? "true" : "false") : raw === undefined || raw === null ? undefined : String(raw);
+    let choice =
+      typeof raw === "boolean" ? (raw ? "true" : "false") : raw === undefined || raw === null ? undefined : String(raw);
     if (choice === undefined || !ctx.node.options.includes(choice)) {
-      if (!ctx.node.defaultOption) return failed("RUN_STATE", `decision '${ctx.nodeId}' produced '${String(choice)}' which is not one of ${ctx.node.options.join(", ")}`, { raw, source });
+      if (!ctx.node.defaultOption)
+        return failed(
+          "RUN_STATE",
+          `decision '${ctx.nodeId}' produced '${String(choice)}' which is not one of ${ctx.node.options.join(", ")}`,
+          { raw, source },
+        );
       choice = ctx.node.defaultOption;
     }
     await ctx.emit({ type: "decision.resolved", payload: { stepRunId: ctx.step.id, choice, source, raw } });
@@ -105,8 +146,12 @@ export const gateExecutor: NodeExecutor<GateNode> = {
       return completed({ choice });
     }
     const answer = await askHuman(ctx, await ctx.render(n.question), n.options);
-    if (answer === undefined || !n.options.includes(answer)) return failed("CANCELLED", `gate '${ctx.nodeId}' was not approved (answer: ${String(answer)})`, {}, false);
-    await ctx.emit({ type: "decision.resolved", payload: { stepRunId: ctx.step.id, choice: answer, source: "gate:human" } });
+    if (answer === undefined || !n.options.includes(answer))
+      return failed("CANCELLED", `gate '${ctx.nodeId}' was not approved (answer: ${String(answer)})`, {}, false);
+    await ctx.emit({
+      type: "decision.resolved",
+      payload: { stepRunId: ctx.step.id, choice: answer, source: "gate:human" },
+    });
     return completed({ choice: answer });
   },
 };

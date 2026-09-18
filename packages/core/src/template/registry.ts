@@ -28,8 +28,18 @@ export type PromptTemplate = z.infer<typeof PromptTemplateSchema>;
 export function parsePromptTemplate(text: string, fallbackId?: string): PromptTemplate {
   const { data, body } = parseFrontMatter(text);
   const { id, name, description, version, requires, produces, ...meta } = data;
-  const parsed = PromptTemplateSchema.safeParse({ id: id ?? fallbackId, name, description, version, requires, produces, body: body.trim(), meta });
-  if (!parsed.success) throw new OrcaError("TEMPLATE_RENDER", `invalid template ${String(id ?? fallbackId)}: ${parsed.error.message}`);
+  const parsed = PromptTemplateSchema.safeParse({
+    id: id ?? fallbackId,
+    name,
+    description,
+    version,
+    requires,
+    produces,
+    body: body.trim(),
+    meta,
+  });
+  if (!parsed.success)
+    throw new OrcaError("TEMPLATE_RENDER", `invalid template ${String(id ?? fallbackId)}: ${parsed.error.message}`);
   return parsed.data;
 }
 
@@ -50,7 +60,10 @@ export class TemplateRegistry {
   }
   get(id: string): PromptTemplate {
     const t = this.templates.get(id);
-    if (!t) throw new OrcaError("TEMPLATE_NOT_FOUND", `template '${id}' not registered`, { known: [...this.templates.keys()] });
+    if (!t)
+      throw new OrcaError("TEMPLATE_NOT_FOUND", `template '${id}' not registered`, {
+        known: [...this.templates.keys()],
+      });
     return t;
   }
   find(id: string): PromptTemplate | undefined {

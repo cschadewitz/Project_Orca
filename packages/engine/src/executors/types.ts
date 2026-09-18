@@ -4,7 +4,22 @@
  * returns an outcome. Custom node types (`custom:<name>`) plug in here.
  */
 import type { AgentRegistry, AgentSession } from "@orca/agents";
-import type { Artifact, ArtifactRef, ArtifactSpec, Clock, Logger, NodeDef, OrcaEventInput, StepResult, StepRun, TemplateRegistry, WorkflowDefinition, WorkflowGraph, WorkflowRegistry, Workspace } from "@orca/core";
+import type {
+  Artifact,
+  ArtifactRef,
+  ArtifactSpec,
+  Clock,
+  Logger,
+  NodeDef,
+  OrcaEventInput,
+  StepResult,
+  StepRun,
+  TemplateRegistry,
+  WorkflowDefinition,
+  WorkflowGraph,
+  WorkflowRegistry,
+  Workspace,
+} from "@orca/core";
 import type { Stores } from "@orca/store";
 import type { HumanInputPort } from "../human-input.js";
 import type { PlanService } from "../plan/service.js";
@@ -55,7 +70,11 @@ export interface StepContext {
    */
   resolveInputs(refs: ArtifactRef[]): Promise<(ResolvedArtifact | undefined)[]>;
   /** Record a produced artifact (stores content, emits artifact.recorded). */
-  recordArtifact(spec: ArtifactSpec, content: string, extra?: { path?: string; parents?: string[]; agentSessionId?: string; agentId?: string }): Promise<Artifact>;
+  recordArtifact(
+    spec: ArtifactSpec,
+    content: string,
+    extra?: { path?: string; parents?: string[]; agentSessionId?: string; agentId?: string },
+  ): Promise<Artifact>;
   /**
    * Spawn a child run for a nested graph or registered workflow and wait for it. `branch` is
    * the child's stable key within the step (iteration index, branch name, work-item slug):
@@ -68,10 +87,18 @@ export interface StepContext {
    */
   runChild(
     target: { workflow: string } | { graph: WorkflowGraph; inlineId: string },
-    options: { vars?: Record<string, unknown>; branch?: string; workspace?: Workspace; workItemId?: string; signal?: AbortSignal },
+    options: {
+      vars?: Record<string, unknown>;
+      branch?: string;
+      workspace?: Workspace;
+      workItemId?: string;
+      signal?: AbortSignal;
+    },
   ): Promise<import("@orca/core").RunState>;
   /** Obtain an ACP session for an agent (honours sessionMode). */
-  openSession(selector: import("@orca/core").AgentSelector): Promise<{ session: AgentSession; release: () => Promise<void> }>;
+  openSession(
+    selector: import("@orca/core").AgentSelector,
+  ): Promise<{ session: AgentSession; release: () => Promise<void> }>;
 }
 
 export interface NodeExecutor<N extends NodeDef = NodeDef> {
@@ -93,6 +120,18 @@ export class NodeExecutorRegistry {
   }
 }
 
-export const completed = (result: Partial<StepResult> = {}): StepOutcome => ({ kind: "completed", result: { artifactIds: [], data: {}, ...result } });
-export const failed = (code: string, message: string, details?: Record<string, unknown>, retryable = false): StepOutcome => ({ kind: "failed", error: details ? { code, message, details } : { code, message }, retryable });
-export const paused = (reason: string, details?: Record<string, unknown>): StepOutcome => ({ kind: "paused", reason, ...(details ? { details } : {}) });
+export const completed = (result: Partial<StepResult> = {}): StepOutcome => ({
+  kind: "completed",
+  result: { artifactIds: [], data: {}, ...result },
+});
+export const failed = (
+  code: string,
+  message: string,
+  details?: Record<string, unknown>,
+  retryable = false,
+): StepOutcome => ({ kind: "failed", error: details ? { code, message, details } : { code, message }, retryable });
+export const paused = (reason: string, details?: Record<string, unknown>): StepOutcome => ({
+  kind: "paused",
+  reason,
+  ...(details ? { details } : {}),
+});

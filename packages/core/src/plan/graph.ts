@@ -33,7 +33,11 @@ export interface BuildGraphOptions {
   orderingTypes?: readonly DependencyType[];
 }
 
-export function buildDependencyGraph(nodeIds: readonly string[], dependencies: readonly Dependency[], opts: BuildGraphOptions = {}): DependencyGraph {
+export function buildDependencyGraph(
+  nodeIds: readonly string[],
+  dependencies: readonly Dependency[],
+  opts: BuildGraphOptions = {},
+): DependencyGraph {
   const ordering = new Set(opts.orderingTypes ?? ["blocks", "soft"]);
   const nodes = [...new Set(nodeIds)];
   const known = new Set(nodes);
@@ -42,7 +46,13 @@ export function buildDependencyGraph(nodeIds: readonly string[], dependencies: r
     if (d.target.kind !== "work-item" || !ordering.has(d.type)) continue;
     if (!known.has(d.from) || !known.has(d.target.workItemId)) continue;
     if (d.status === "waived") continue;
-    edges.push({ from: d.from, to: d.target.workItemId, type: d.type, dependencyId: d.id, ...(d.target.stage ? { stage: d.target.stage } : {}) });
+    edges.push({
+      from: d.from,
+      to: d.target.workItemId,
+      type: d.type,
+      dependencyId: d.id,
+      ...(d.target.stage ? { stage: d.target.stage } : {}),
+    });
   }
   return graphFromEdges(nodes, edges);
 }
@@ -97,7 +107,13 @@ export function dropCycleClosingEdges(graph: DependencyGraph, optional: readonly
   }
   if (!dropped.length) return { graph, dropped };
   const out = new Set(dropped.map((e) => e.dependencyId));
-  return { graph: graphFromEdges(graph.nodes, graph.edges.filter((e) => !out.has(e.dependencyId))), dropped };
+  return {
+    graph: graphFromEdges(
+      graph.nodes,
+      graph.edges.filter((e) => !out.has(e.dependencyId)),
+    ),
+    dropped,
+  };
 }
 
 /** Strongly connected components with more than one node, plus self-loops (Tarjan). */
@@ -234,7 +250,11 @@ export type EdgeLag = (edge: GraphEdge) => number;
  * and a node alone costs its own weight, so with every lag at 1 (the default)
  * this is the plain longest path over node weights.
  */
-export function longestDownstreamPaths(graph: DependencyGraph, weight: (id: string) => number, lag: EdgeLag = () => 1): Map<string, PathInfo> {
+export function longestDownstreamPaths(
+  graph: DependencyGraph,
+  weight: (id: string) => number,
+  lag: EdgeLag = () => 1,
+): Map<string, PathInfo> {
   const cyclic = new Set(findCycles(graph).flat());
   const memo = new Map<string, PathInfo>();
   const visiting = new Set<string>();

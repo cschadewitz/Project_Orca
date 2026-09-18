@@ -96,7 +96,11 @@ export const DecisionSourceSchema = z.discriminatedUnion("kind", [
    * choice is the artifact's `chosen` option if valid, else the top-ranked one.
    * The decision is recorded in the Plan when the run belongs to one.
    */
-  z.object({ kind: z.literal("matrix"), artifact: z.string().default("decisionMatrix"), decision: z.string().optional() }),
+  z.object({
+    kind: z.literal("matrix"),
+    artifact: z.string().default("decisionMatrix"),
+    decision: z.string().optional(),
+  }),
 ]);
 export type DecisionSource = z.infer<typeof DecisionSourceSchema>;
 

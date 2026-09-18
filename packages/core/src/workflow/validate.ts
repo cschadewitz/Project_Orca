@@ -35,7 +35,13 @@ export function validateWorkflow(def: WorkflowDefinition, ctx: ValidationContext
   return { ok: errors.length === 0, errors, warnings };
 }
 
-function validateGraph(graph: WorkflowGraph, path: string, ctx: ValidationContext, errors: ValidationIssue[], warnings: ValidationIssue[]): void {
+function validateGraph(
+  graph: WorkflowGraph,
+  path: string,
+  ctx: ValidationContext,
+  errors: ValidationIssue[],
+  warnings: ValidationIssue[],
+): void {
   const err = (p: string, message: string) => errors.push({ path: p, message });
   const warn = (p: string, message: string) => warnings.push({ path: p, message });
   const ids = Object.keys(graph.nodes);
@@ -46,7 +52,8 @@ function validateGraph(graph: WorkflowGraph, path: string, ctx: ValidationContex
   const starts = ids.filter((id) => graph.nodes[id]!.type === "start");
   if (starts.length !== 1) err(`${path}.nodes`, `graph must contain exactly one start node (found ${starts.length})`);
   // A custom node may end the run itself (its executor returns an outcome), so it counts as a possible terminus.
-  if (!ids.some((id) => mayBeTerminal(graph.nodes[id]!))) err(`${path}.nodes`, "graph must contain at least one end node (or a custom node that ends the run)");
+  if (!ids.some((id) => mayBeTerminal(graph.nodes[id]!)))
+    err(`${path}.nodes`, "graph must contain at least one end node (or a custom node that ends the run)");
 
   graph.edges.forEach((e, i) => {
     const p = `${path}.edges[${i}]`;
@@ -68,10 +75,19 @@ function validateGraph(graph: WorkflowGraph, path: string, ctx: ValidationContex
     if (n.type === "decision" || n.type === "gate") {
       const unconditional = outs.filter((e) => !e.when);
       if (unconditional.length > 1) err(p, "decision nodes may have at most one unconditional (default) edge");
-      if (outs.length > 0 && outs.every((e) => !e.when)) warn(p, "decision node has no conditional edges; every choice goes the same way");
-    } else if (n.type === "start" || n.type === "agent" || n.type === "set" || n.type === "loop" || n.type === "parallel" || n.type === "subworkflow") {
+      if (outs.length > 0 && outs.every((e) => !e.when))
+        warn(p, "decision node has no conditional edges; every choice goes the same way");
+    } else if (
+      n.type === "start" ||
+      n.type === "agent" ||
+      n.type === "set" ||
+      n.type === "loop" ||
+      n.type === "parallel" ||
+      n.type === "subworkflow"
+    ) {
       const unconditional = outs.filter((e) => !e.when);
-      if (outs.length > 1 && unconditional.length > 1) err(p, `node '${id}' has multiple unconditional outgoing edges; add 'when' conditions or use a parallel node`);
+      if (outs.length > 1 && unconditional.length > 1)
+        err(p, `node '${id}' has multiple unconditional outgoing edges; add 'when' conditions or use a parallel node`);
     }
     validateNode(n, id, p, graph, ctx, errors, warnings);
   }
@@ -85,23 +101,41 @@ function mayBeTerminal(n: NodeDef): boolean {
   return n.type === "end" || n.type.startsWith("custom:");
 }
 
-function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, ctx: ValidationContext, errors: ValidationIssue[], warnings: ValidationIssue[]): void {
+function validateNode(
+  n: NodeDef,
+  id: string,
+  p: string,
+  graph: WorkflowGraph,
+  ctx: ValidationContext,
+  errors: ValidationIssue[],
+  warnings: ValidationIssue[],
+): void {
   const err = (message: string, sub = "") => errors.push({ path: p + sub, message });
   const warn = (message: string, sub = "") => warnings.push({ path: p + sub, message });
   const checkRef = (ref: { workflow: string } | { graph: WorkflowGraph }, sub: string) => {
     if ("workflow" in ref) {
-      if (ctx.hasWorkflow && !ctx.hasWorkflow(ref.workflow)) err(`referenced workflow '${ref.workflow}' is not registered`, sub);
+      if (ctx.hasWorkflow && !ctx.hasWorkflow(ref.workflow))
+        err(`referenced workflow '${ref.workflow}' is not registered`, sub);
     } else validateGraph(ref.graph, p + sub, ctx, errors, warnings);
   };
-  const checkAgentPrompt = (o: { template?: string | undefined; prompt?: string | undefined; agent: string | { id: string } | { role: string } }, sub: string) => {
+  const checkAgentPrompt = (
+    o: {
+      template?: string | undefined;
+      prompt?: string | undefined;
+      agent: string | { id: string } | { role: string };
+    },
+    sub: string,
+  ) => {
     if (!o.template && !o.prompt) err("agent step needs a 'template' id or an inline 'prompt'", sub);
     if (o.template && o.prompt) err("agent step must not set both 'template' and 'prompt'", sub);
-    if (o.template && ctx.hasTemplate && !ctx.hasTemplate(o.template)) err(`template '${o.template}' is not registered`, `${sub}.template`);
+    if (o.template && ctx.hasTemplate && !ctx.hasTemplate(o.template))
+      err(`template '${o.template}' is not registered`, `${sub}.template`);
     if (o.prompt) {
       const m = checkTemplate(o.prompt);
       if (m) err(m, `${sub}.prompt`);
     }
-    if (ctx.hasAgent && !ctx.hasAgent(o.agent)) err(`agent selector ${JSON.stringify(o.agent)} cannot be resolved`, `${sub}.agent`);
+    if (ctx.hasAgent && !ctx.hasAgent(o.agent))
+      err(`agent selector ${JSON.stringify(o.agent)} cannot be resolved`, `${sub}.agent`);
   };
   /** Every vars-bearing node (set, agent, subworkflow) evaluates "="-prefixed values as expressions. */
   const checkVars = (vars: Record<string, unknown>) => {
@@ -117,7 +151,8 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
       checkAgentPrompt(n, "");
       checkVars(n.vars);
       n.inputs.forEach((r, i) => {
-        if (r.fromNode && !graph.nodes[r.fromNode]) err(`input references unknown node '${r.fromNode}'`, `.inputs[${i}]`);
+        if (r.fromNode && !graph.nodes[r.fromNode])
+          err(`input references unknown node '${r.fromNode}'`, `.inputs[${i}]`);
         if (!r.kind && !r.name && !r.fromNode) err("artifact ref needs kind, name or fromNode", `.inputs[${i}]`);
       });
       n.produces.forEach((s, i) => {
@@ -127,7 +162,10 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
       // artifact-present only ever waits for *required* deliverables; with none there is nothing to
       // watch and the step silently behaves like turn-end.
       if (n.completion.mode === "artifact-present" && !n.produces.some((s) => s.required)) {
-        warn("completion.mode 'artifact-present' has no required deliverable to wait for; the step behaves like 'turn-end' (mark a deliverable required: true or use mode: turn-end)", ".completion.mode");
+        warn(
+          "completion.mode 'artifact-present' has no required deliverable to wait for; the step behaves like 'turn-end' (mark a deliverable required: true or use mode: turn-end)",
+          ".completion.mode",
+        );
       }
       break;
     case "decision": {
@@ -136,7 +174,8 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
         const m = checkExpression(s.expr);
         if (m) err(m, ".source.expr");
       } else if (s.kind === "agent") checkAgentPrompt(s, ".source");
-      if (n.defaultOption && !n.options.includes(n.defaultOption)) err("defaultOption must be one of options", ".defaultOption");
+      if (n.defaultOption && !n.options.includes(n.defaultOption))
+        err("defaultOption must be one of options", ".defaultOption");
       break;
     }
     case "gate":
@@ -176,8 +215,13 @@ function validateNode(n: NodeDef, id: string, p: string, graph: WorkflowGraph, c
           const m = checkExpression(expr);
           if (m) err(m, `.forEach.${field}`);
         }
-        if (n.forEach.dependsOn && !n.forEach.key) warn("forEach.dependsOn without forEach.key compares against item indexes; set 'key' to something stable", ".forEach.dependsOn");
-        if (!n.forEach.body && !n.forEach.workflow) err("forEach needs a 'body' to run per item, a 'workflow' expression naming one, or both", ".forEach");
+        if (n.forEach.dependsOn && !n.forEach.key)
+          warn(
+            "forEach.dependsOn without forEach.key compares against item indexes; set 'key' to something stable",
+            ".forEach.dependsOn",
+          );
+        if (!n.forEach.body && !n.forEach.workflow)
+          err("forEach needs a 'body' to run per item, a 'workflow' expression naming one, or both", ".forEach");
         if (n.forEach.body) checkRef(n.forEach.body, ".forEach.body");
       }
       break;

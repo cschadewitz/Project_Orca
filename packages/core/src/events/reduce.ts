@@ -190,7 +190,11 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
     }
     case "branch.skipped": {
       const s = step(e.payload.stepRunId);
-      const entry = { branch: e.payload.branch, reason: e.payload.reason, ...(e.payload.workItemId ? { workItemId: e.payload.workItemId } : {}) };
+      const entry = {
+        branch: e.payload.branch,
+        reason: e.payload.reason,
+        ...(e.payload.workItemId ? { workItemId: e.payload.workItemId } : {}),
+      };
       const at = s.skippedBranches.findIndex((b) => b.branch === entry.branch);
       if (at >= 0) s.skippedBranches[at] = entry;
       else s.skippedBranches.push(entry);
@@ -243,7 +247,9 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
 export function pendingHumanInputs(state: RunState): HumanInputRequest[] {
   const { status } = state.run;
   if (status === "completed" || status === "failed" || status === "cancelled") return [];
-  return Object.values(state.humanInputs).filter((h) => h.answer === undefined && state.steps[h.stepRunId]?.status === "waiting");
+  return Object.values(state.humanInputs).filter(
+    (h) => h.answer === undefined && state.steps[h.stepRunId]?.status === "waiting",
+  );
 }
 
 /** Latest step run for a node (highest attempt / most recently scheduled). */
@@ -260,7 +266,8 @@ export function artifactsByName(state: RunState): Map<string, RunState["artifact
   const out = new Map<string, RunState["artifacts"][string]>();
   for (const a of Object.values(state.artifacts)) {
     const cur = out.get(a.name);
-    if (!cur || cur.version < a.version || (cur.version === a.version && cur.createdAt < a.createdAt)) out.set(a.name, a);
+    if (!cur || cur.version < a.version || (cur.version === a.version && cur.createdAt < a.createdAt))
+      out.set(a.name, a);
   }
   return out;
 }

@@ -10,7 +10,9 @@ export default definePlugin({
     api.executors.register({
       type: "custom:echo",
       async execute(ctx) {
-        const message = await ctx.render(String((ctx.node as unknown as { message?: string }).message ?? "hello from {{ run.id }}"));
+        const message = await ctx.render(
+          String((ctx.node as unknown as { message?: string }).message ?? "hello from {{ run.id }}"),
+        );
         ctx.logger.info(message);
         return completed({ data: { message } });
       },

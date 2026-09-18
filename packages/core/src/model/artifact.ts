@@ -30,7 +30,10 @@ export const BUILTIN_ARTIFACT_KINDS = [
 
 export type BuiltinArtifactKind = (typeof BUILTIN_ARTIFACT_KINDS)[number];
 
-export const ArtifactKindSchema = z.string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/, "artifact kinds are kebab-case");
+export const ArtifactKindSchema = z
+  .string()
+  .min(1)
+  .regex(/^[a-z0-9][a-z0-9-]*$/, "artifact kinds are kebab-case");
 export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
 
 export const ArtifactProvenanceSchema = z.object({

@@ -11,10 +11,22 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
-function ctx(cwd: string, positionals: string[], flags: CommandContext["flags"] = {}): CommandContext & { lines: string[]; errors: string[] } {
+function ctx(
+  cwd: string,
+  positionals: string[],
+  flags: CommandContext["flags"] = {},
+): CommandContext & { lines: string[]; errors: string[] } {
   const lines: string[] = [];
   const errors: string[] = [];
-  return { cwd, flags: { quiet: true, ...flags }, positionals, out: (l) => lines.push(l), err: (l) => errors.push(l), lines, errors };
+  return {
+    cwd,
+    flags: { quiet: true, ...flags },
+    positionals,
+    out: (l) => lines.push(l),
+    err: (l) => errors.push(l),
+    lines,
+    errors,
+  };
 }
 
 describe("orca claims", () => {
@@ -77,9 +89,13 @@ edges:
     expect(forced.lines).toEqual([`released wi_paused from run ${runId} (paused, branch paused)`]);
     expect(await claims.get("wi_paused")).toBeUndefined();
 
-    await expect(commands.claims!.run(ctx(dir, ["release", "wi_paused"]))).rejects.toMatchObject({ code: "CLAIM_NOT_FOUND" });
+    await expect(commands.claims!.run(ctx(dir, ["release", "wi_paused"]))).rejects.toMatchObject({
+      code: "CLAIM_NOT_FOUND",
+    });
     await expect(commands.claims!.run(ctx(dir, ["release"]))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
-    await expect(commands.claims!.run(ctx(dir, ["drop", "wi_paused"]))).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await expect(commands.claims!.run(ctx(dir, ["drop", "wi_paused"]))).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+    });
 
     const json = ctx(dir, [], { json: true });
     expect(await commands.claims!.run(json)).toBe(0);

@@ -115,7 +115,10 @@ export class StderrTail {
  * framing and any future fix - EPIPE handling, backpressure - lands in one spot.
  */
 export function stdioAcpStream(input: Readable, output: Writable): acp.Stream {
-  return acp.ndJsonStream(Writable.toWeb(output) as WritableStream<Uint8Array>, Readable.toWeb(input) as ReadableStream<Uint8Array>);
+  return acp.ndJsonStream(
+    Writable.toWeb(output) as WritableStream<Uint8Array>,
+    Readable.toWeb(input) as ReadableStream<Uint8Array>,
+  );
 }
 
 export interface WrapAgentProcessOptions {
@@ -131,7 +134,10 @@ export interface WrapAgentProcessOptions {
  * listener is attached before that await: an exit can race the spawn callback
  * for a process that dies immediately.
  */
-export async function wrapAgentProcess(child: PipedChildProcess, options: WrapAgentProcessOptions): Promise<AgentProcessHandle> {
+export async function wrapAgentProcess(
+  child: PipedChildProcess,
+  options: WrapAgentProcessOptions,
+): Promise<AgentProcessHandle> {
   const tail = new StderrTail();
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (d: string) => tail.push(d));
@@ -176,7 +182,10 @@ export interface CollectChildProcessOptions {
  * (`sh -c` forks one) still holds the stdout pipe open and `close` would not
  * fire until it finished, which is exactly what the timeout exists to prevent.
  */
-export function collectChildProcess(child: PipedChildProcess, options: CollectChildProcessOptions = {}): Promise<ExecResult> {
+export function collectChildProcess(
+  child: PipedChildProcess,
+  options: CollectChildProcessOptions = {},
+): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";

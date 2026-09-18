@@ -39,7 +39,10 @@ edges:
 
 describe("agent-sourced decision node (e2e with scripted ACP agent)", () => {
   it("resolves the decision's own agent selector and routes on the delivered choice", async () => {
-    const h = await harness({ kinds: { decision: [{ data: { choice: "ship" }, body: "Looks good." }] } }, { workflows: (await loadShippedWorkflows()).register(workflow) });
+    const h = await harness(
+      { kinds: { decision: [{ data: { choice: "ship" }, body: "Looks good." }] } },
+      { workflows: (await loadShippedWorkflows()).register(workflow) },
+    );
     dirs.push(h.dir);
     const state = await h.orchestrator.startAndRun({ workflowId: "agent-decision" });
 

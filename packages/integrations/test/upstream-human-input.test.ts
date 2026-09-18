@@ -15,7 +15,15 @@ function target(sessionId: string, log: { sessionId: string; question: string }[
   };
 }
 
-const query = (runId: string, question: string): HumanInputQuery => ({ runId, stepRunId: "step", requestId: `hi-${runId}`, kind: "decision", question, options: ["ship", "hold"], context: {} });
+const query = (runId: string, question: string): HumanInputQuery => ({
+  runId,
+  stepRunId: "step",
+  requestId: `hi-${runId}`,
+  kind: "decision",
+  question,
+  options: ["ship", "hold"],
+  context: {},
+});
 
 describe("UpstreamHumanInput", () => {
   it("routes each run's questions to the session bound to that run", async () => {
@@ -59,7 +67,10 @@ describe("UpstreamHumanInput", () => {
     expect(await port.ask(query("run-other", "orphan?"))).toBe("hold");
     expect(asked).toEqual(["run-other"]);
     // A bound run with a cyclic / unknown parent chain still terminates.
-    const cyclic = new UpstreamHumanInput({ fallback: { ask: async () => "hold" }, parentRunId: async (id) => (id === "x" ? "y" : "x") });
+    const cyclic = new UpstreamHumanInput({
+      fallback: { ask: async () => "hold" },
+      parentRunId: async (id) => (id === "x" ? "y" : "x"),
+    });
     expect(await cyclic.ask(query("x", "loop?"))).toBe("hold");
   });
 
@@ -75,7 +86,12 @@ describe("UpstreamHumanInput", () => {
 
   it("returns undefined when the client cancels the permission request", async () => {
     const port = new UpstreamHumanInput();
-    port.bind("run-a", { sessionId: "sess-a", request: (async (): Promise<acp.RequestPermissionResponse> => ({ outcome: { outcome: "cancelled" } })) as UpstreamTarget["request"] });
+    port.bind("run-a", {
+      sessionId: "sess-a",
+      request: (async (): Promise<acp.RequestPermissionResponse> => ({
+        outcome: { outcome: "cancelled" },
+      })) as UpstreamTarget["request"],
+    });
     expect(await port.ask(query("run-a", "cancel?"))).toBeUndefined();
   });
 });

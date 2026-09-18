@@ -39,7 +39,10 @@ edges: [{ from: s, to: work }, { from: work, to: e }]
 describe("artifact-present completion (e2e with scripted ACP agent)", () => {
   it("does not cancel the turn when no deliverable is required", async () => {
     // The agent takes longer than one watcher tick (1.5 s) to write its only, optional, deliverable.
-    const h = await harness({ kinds: { plan: [{ delayMs: 2500, body: "# Plan\n\nWritten after the first watcher tick." }] } }, { workflows: workflow("      - { kind: plan, path: .orca/plan.md, required: false }") });
+    const h = await harness(
+      { kinds: { plan: [{ delayMs: 2500, body: "# Plan\n\nWritten after the first watcher tick." }] } },
+      { workflows: workflow("      - { kind: plan, path: .orca/plan.md, required: false }") },
+    );
     dirs.push(h.dir);
     const state = await h.orchestrator.startAndRun({ workflowId: "present" });
 
@@ -55,8 +58,17 @@ describe("artifact-present completion (e2e with scripted ACP agent)", () => {
     // `plan` is written right away; `notes` would only land after 20 s. The watcher must cancel
     // the turn as soon as `plan` exists rather than wait for the optional `notes`.
     const h = await harness(
-      { kinds: { plan: [{ body: "# Plan\n\nWritten immediately." }], notes: [{ delayMs: 20_000, body: "never written" }] } },
-      { workflows: workflow("      - { kind: plan, path: .orca/plan.md }\n      - { kind: notes, path: .orca/notes.md, required: false }") },
+      {
+        kinds: {
+          plan: [{ body: "# Plan\n\nWritten immediately." }],
+          notes: [{ delayMs: 20_000, body: "never written" }],
+        },
+      },
+      {
+        workflows: workflow(
+          "      - { kind: plan, path: .orca/plan.md }\n      - { kind: notes, path: .orca/notes.md, required: false }",
+        ),
+      },
     );
     dirs.push(h.dir);
     const started = Date.now();

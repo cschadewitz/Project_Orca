@@ -36,7 +36,10 @@ edges:
   - { from: gate, to: held }
 `;
 
-const nodes = (s: { stepOrder: string[]; steps: Record<string, { nodeId: string; status: string; attempt: number }> }) => s.stepOrder.map((id) => `${s.steps[id]!.nodeId}:${s.steps[id]!.status}`);
+const nodes = (s: {
+  stepOrder: string[];
+  steps: Record<string, { nodeId: string; status: string; attempt: number }>;
+}) => s.stepOrder.map((id) => `${s.steps[id]!.nodeId}:${s.steps[id]!.status}`);
 
 describe("pause mode", () => {
   it("parks the run at a gate, records the answer in the log and resumes as a new attempt", async () => {
@@ -213,6 +216,16 @@ edges: [{ from: s, to: child }, { from: child, to: e }]
   });
 
   it("cancels agent permission asks instead of parking (the agent session cannot be resumed)", async () => {
-    await expect(new PausingHumanInput().ask({ runId: "r", stepRunId: "s", requestId: "hi", kind: "permission", question: "rm -rf?", options: ["allow", "reject"], context: {} })).resolves.toBeUndefined();
+    await expect(
+      new PausingHumanInput().ask({
+        runId: "r",
+        stepRunId: "s",
+        requestId: "hi",
+        kind: "permission",
+        question: "rm -rf?",
+        options: ["allow", "reject"],
+        context: {},
+      }),
+    ).resolves.toBeUndefined();
   });
 });
