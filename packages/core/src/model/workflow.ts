@@ -231,7 +231,7 @@ export const EdgeSchema: z.ZodType<Edge> = z.object({
 
 export const SubworkflowRefSchema: z.ZodType<SubworkflowRef> = z.lazy(() =>
   z.union([z.object({ workflow: z.string().min(1) }), z.object({ graph: WorkflowGraphSchema })]),
-) as unknown as z.ZodType<SubworkflowRef>;
+);
 
 export const LoopNodeSchema: z.ZodType<LoopNode> = z.lazy(() =>
   NodeBaseSchema.extend({
@@ -274,7 +274,7 @@ export const SubworkflowNodeSchema: z.ZodType<SubworkflowNode> = NodeBaseSchema.
   workflow: z.string().min(1),
   /** Vars handed to the child run (evaluated as expressions when prefixed with `=`). */
   vars: z.record(z.string(), z.unknown()).default({}),
-}) as unknown as z.ZodType<SubworkflowNode>;
+});
 
 export const CustomNodeSchema: z.ZodType<CustomNode> = z
   .looseObject({ type: z.string().regex(/^custom:[a-z0-9][a-z0-9-]*$/) })
@@ -293,7 +293,7 @@ export const NodeDefSchema: z.ZodType<NodeDef> = z.lazy(() =>
     SubworkflowNodeSchema,
     CustomNodeSchema,
   ]),
-) as unknown as z.ZodType<NodeDef>;
+);
 
 export const WorkflowGraphSchema: z.ZodType<WorkflowGraph> = z.lazy(() =>
   z.object({
@@ -301,7 +301,7 @@ export const WorkflowGraphSchema: z.ZodType<WorkflowGraph> = z.lazy(() =>
     nodes: z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), NodeDefSchema),
     edges: z.array(EdgeSchema).default([]),
   }),
-) as unknown as z.ZodType<WorkflowGraph>;
+);
 
 export interface WorkflowDefinition extends WorkflowGraph {
   id: string;

@@ -41,7 +41,7 @@ export const loopExecutor: NodeExecutor<LoopNode> = {
   async execute(ctx): Promise<StepOutcome> {
     const n = ctx.node;
     const results: RunState[] = [];
-    const items = n.mode === "forEach" ? ((await ctx.evaluate(n.items!)) as unknown) : undefined;
+    const items = n.mode === "forEach" ? ((await ctx.evaluate(n.items!))) : undefined;
     const list = n.mode === "forEach" ? (Array.isArray(items) ? items : items && typeof items === "object" ? Object.values(items) : []) : undefined;
     const limit = n.mode === "forEach" ? Math.min(list!.length, n.maxIterations) : n.maxIterations;
 
@@ -143,6 +143,7 @@ export class FanOut {
 
   /** Re-throw the first error a child threw, once the fan-out has drained. */
   throwIfFailed(): void {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- whatever a child threw, unchanged; the caller's describeError turns it into an OrcaError.
     if (this.firstFailure !== undefined) throw this.firstFailure;
   }
 }

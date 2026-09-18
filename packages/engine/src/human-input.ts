@@ -104,7 +104,7 @@ export class PausingHumanInput implements HumanInputPort {
  */
 export async function askHumanInput(opts: {
   port: HumanInputPort;
-  emit(input: Omit<OrcaEventInput, "runId">): Promise<unknown>;
+  emit: (input: Omit<OrcaEventInput, "runId">) => Promise<unknown>;
   clock: Clock;
   runId: string;
   stepRunId: string;
@@ -112,8 +112,8 @@ export async function askHumanInput(opts: {
   question: string;
   options: string[];
   context?: Record<string, unknown>;
-  onRequested?(query: HumanInputQuery): void;
-  onSettled?(query: HumanInputQuery): Promise<void> | void;
+  onRequested?: (query: HumanInputQuery) => void;
+  onSettled?: (query: HumanInputQuery) => Promise<void> | void;
 }): Promise<string | undefined> {
   const { emit, stepRunId } = opts;
   const query: HumanInputQuery = {

@@ -1,3 +1,4 @@
+/** Host construction from config (`local` / `ssh`) and the registry the engine looks agents up in. */
 import { OrcaError, type AgentSelector, type AgentSpec, type HostSpec } from "@orca/core";
 import type { AgentHost } from "../host.js";
 import { LocalHost } from "./local-host.js";

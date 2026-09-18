@@ -92,16 +92,8 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const withTimeout = <T>(p: Promise<T>, ms: number, what: string): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       const t = setTimeout(() => reject(new OrcaError("AGENT_TRANSPORT", `${what} timed out after ${ms}ms`, { stderr: proc.stderrTail() })), ms);
-      p.then(
-        (v) => {
-          clearTimeout(t);
-          resolve(v);
-        },
-        (e) => {
-          clearTimeout(t);
-          reject(e);
-        },
-      );
+      // Adopting `p` forwards its rejection as-is; the `finally` stops the timer either way.
+      resolve(p.finally(() => clearTimeout(t)));
     });
 
   try {

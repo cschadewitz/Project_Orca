@@ -22,7 +22,7 @@ function make(yaml: string[], overrides: Partial<OrchestratorOptions> = {}) {
   const executors = builtinExecutors();
   const stores = overrides.stores ?? memoryStores();
   // Custom node types registered through the plugin API.
-  definePlugin({
+  void definePlugin({
     name: "test",
     register: (api) => {
       api.executors.register({

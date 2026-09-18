@@ -30,7 +30,7 @@ function slowFs(latencyMs: number, answer: (call: number) => boolean[] | Error):
       return a;
     },
   };
-  return fs as unknown as HostFileSystem & { calls: number; maxConcurrent: number; batches: number[] };
+  return fs;
 }
 
 describe("watchForArtifacts", () => {

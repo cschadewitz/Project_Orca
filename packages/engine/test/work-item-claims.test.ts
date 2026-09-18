@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry, type OrcaEvent } from "@orca/core";
+import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, PlanService, builtinExecutors, completed, definePlugin, type OrchestratorOptions } from "@orca/engine";
 import { memoryStores, type Stores } from "@orca/store";
 
@@ -50,7 +50,7 @@ function make(overrides: Partial<OrchestratorOptions> = {}) {
   const workflows = new WorkflowRegistry().register(parseWorkflow(dispatch));
   const executors = builtinExecutors();
   const stores = overrides.stores ?? memoryStores();
-  definePlugin({
+  void definePlugin({
     name: "test",
     register: (api) => {
       api.executors.register({ type: "custom:work", execute: async () => (await gate.wait, completed()) });
@@ -81,7 +81,7 @@ const items = [
 async function launched(stores: Stores): Promise<string[]> {
   const byChild = new Map<string, string>();
   for (const runId of await stores.events.listRuns()) {
-    for (const e of (await stores.events.read(runId)) as OrcaEvent[]) {
+    for (const e of (await stores.events.read(runId))) {
       if (e.type === "child.spawned" && e.payload.workItemId) byChild.set(e.payload.childRunId, e.payload.workItemId);
     }
   }
@@ -190,7 +190,7 @@ describe("work item claims: plan-dispatch", () => {
     const dispatcher = () => {
       const workflows = new WorkflowRegistry().register(parseWorkflow(planDispatch)).register(parseWorkflow(itemWorkflow));
       const executors = builtinExecutors();
-      definePlugin({
+      void definePlugin({
         name: "test",
         register: (api) => {
           api.executors.register({ type: "custom:work", execute: async () => (await gate.wait, completed()) });

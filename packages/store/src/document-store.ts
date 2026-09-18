@@ -149,8 +149,8 @@ export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores 
   return {
     events: new JsonlEventStore(dir, clock, logger),
     artifacts: new FileArtifactStore(dir),
-    requests: new JsonFileDocumentStore<Request>(join(dir, "requests.json"), RequestSchema as unknown as ZodType<Request>),
-    workItems: new JsonFileDocumentStore<WorkItem>(join(dir, "work-items.json"), WorkItemSchema as unknown as ZodType<WorkItem>),
+    requests: new JsonFileDocumentStore<Request>(join(dir, "requests.json"), RequestSchema),
+    workItems: new JsonFileDocumentStore<WorkItem>(join(dir, "work-items.json"), WorkItemSchema),
     claims: new FileClaimStore(dir),
     plan: filePlanStores(dir, clock, logger),
   };

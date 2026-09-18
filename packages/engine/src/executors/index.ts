@@ -1,3 +1,4 @@
+/** The executor barrel: re-exports every node implementation and assembles the builtin registry. */
 import { agentExecutor } from "./agent-step.js";
 import { decisionExecutor, endExecutor, gateExecutor, setExecutor, startExecutor } from "./basic.js";
 import { loopExecutor, parallelExecutor, subworkflowExecutor } from "./containers.js";

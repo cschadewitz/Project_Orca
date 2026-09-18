@@ -81,7 +81,7 @@ export const planRegisterExecutor: NodeExecutor<PlanRegisterNode> = {
 
     const request = await ctx.run.request();
     const requestId = request?.id ?? ctx.run.id;
-    const keyTemplate = ctx.node.plan ?? (typeof ctx.run.state.run.vars.plan === "string" ? (ctx.run.state.run.vars.plan as string) : undefined);
+    const keyTemplate = ctx.node.plan ?? (typeof ctx.run.state.run.vars.plan === "string" ? (ctx.run.state.run.vars.plan) : undefined);
     const key = keyTemplate ? await ctx.render(keyTemplate) : undefined;
     const origin: PlanOrigin = { kind: "decomposition", runId: ctx.run.id, artifactId: source.id };
     const plan = await ctx.plan.ensurePlan({ ...(key ? { key } : {}), ...(ctx.node.planName ? { name: await ctx.render(ctx.node.planName) } : {}), requestId }, origin);
@@ -209,7 +209,7 @@ export const planScheduleExecutor: NodeExecutor<PlanScheduleNode> = {
     const schedule = await ctx.plan.schedule(plan.id, { ...(ctx.node.policy ? { policy: ctx.node.policy } : {}), record: ctx.node.record !== false, runId: ctx.run.id, origin: originOf(ctx) });
     const snap = await ctx.plan.snapshot(plan.id);
     const compact = await ctx.plan.compactSchedule(plan.id, ctx.node.policy ? { policy: ctx.node.policy } : {});
-    await ctx.emit({ type: "vars.set", payload: { vars: { schedule: compact as unknown as Record<string, unknown> } } });
+    await ctx.emit({ type: "vars.set", payload: { vars: { schedule: compact } } });
 
     const pathTemplate = ctx.node.artifactPath ?? ".orca/plans/{{ vars.plan }}/schedule.md";
     const artifactIds: string[] = [];

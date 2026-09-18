@@ -82,7 +82,7 @@ export interface NodeExecutor<N extends NodeDef = NodeDef> {
 export class NodeExecutorRegistry {
   private readonly executors = new Map<string, NodeExecutor>();
   register<N extends NodeDef>(executor: NodeExecutor<N>): this {
-    this.executors.set(executor.type, executor as unknown as NodeExecutor);
+    this.executors.set(executor.type, executor);
     return this;
   }
   get(type: string): NodeExecutor | undefined {

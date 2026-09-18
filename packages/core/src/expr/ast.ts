@@ -1,3 +1,4 @@
+/** The expression AST shared by the parser and the evaluator - one node kind per `t`. */
 export type Expr =
   | { t: "lit"; v: unknown }
   | { t: "ident"; name: string }

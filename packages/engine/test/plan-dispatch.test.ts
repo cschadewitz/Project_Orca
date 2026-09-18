@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry, type OrcaEvent } from "@orca/core";
+import { FakeClock, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, PlanService, builtinExecutors, completed, definePlugin, failed, type StepContext, type StepOutcome } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
@@ -53,7 +53,7 @@ async function setup(options: string, items: ItemInput[], work: (ctx: StepContex
   await plan.registerWorkItems(p.id, { requestId: "req_1", items }, { kind: "decomposition" });
   const workflows = new WorkflowRegistry().register(parseWorkflow(dispatcher(options))).register(parseWorkflow(itemWorkflow));
   const executors = builtinExecutors();
-  definePlugin({
+  void definePlugin({
     name: "test",
     register: (api) => {
       api.executors.register({ type: "custom:work", execute: work });
@@ -119,7 +119,7 @@ describe("plan-dispatch: failFast", () => {
 });
 
 describe("plan-dispatch: onWaiting wait", () => {
-  const waiting = async (stores: ReturnType<typeof memoryStores>, runId: string) => ((await stores.events.read(runId)) as OrcaEvent[]).filter((e) => e.type === "step.waiting");
+  const waiting = async (stores: ReturnType<typeof memoryStores>, runId: string) => ((await stores.events.read(runId))).filter((e) => e.type === "step.waiting");
 
   it("announces each distinct reason once, however many times it polls", async () => {
     const { stores, run } = await setup("onWaiting: wait, pollMs: 20, waitTimeoutMs: 150", [{ slug: "blocked", title: "Blocked", dependsOn: ["never"] }], async () => completed());

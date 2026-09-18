@@ -34,7 +34,6 @@ import {
   type Logger,
   type NodeDef,
   type OrcaEvent,
-  type OrcaEventInput,
   type RunState,
   type RunSummary,
   type StepResult,
@@ -535,7 +534,7 @@ export class Orchestrator {
       plan: this.plan,
 
       async emit(event) {
-        await rc.emit(event as Omit<OrcaEventInput, "runId">);
+        await rc.emit(event);
       },
       evalContext: (extra) => rc.evalContext({ step, ...(extra ?? {}) }),
       async evaluate(expr, extra) {

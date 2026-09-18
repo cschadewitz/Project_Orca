@@ -81,6 +81,7 @@ async function collect(ctx: StepContext, planned: PlannedDeliverable[], inputs: 
   // host each of these is an ssh process, and doing them serially per deliverable showed up as
   // dead time at the end of every turn.
   const present = await host.fs.existsMany(planned.map((d) => d.path));
+  // eslint-disable-next-line @typescript-eslint/await-thenable -- an absent deliverable maps to a plain `undefined`.
   const contents = await Promise.all(planned.map((d, i) => (present[i] ? host.fs.readFile(d.path) : undefined)));
   for (const [i, d] of planned.entries()) {
     const content = contents[i];

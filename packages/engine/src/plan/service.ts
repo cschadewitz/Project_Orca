@@ -441,7 +441,7 @@ export class PlanService {
     const next: WorkItem = { ...cur, ...rest, updatedAt: this.clock.isoNow(), ...(typeof deferredReason === "string" ? { deferredReason } : {}) };
     if (deferredReason === null) delete next.deferredReason;
     await this.stores.workItems.put(next);
-    if (cur.planId) await this.journal({ type: "work-item.updated", planId: cur.planId, origin, payload: { workItemId, changes: changes as Record<string, unknown> } });
+    if (cur.planId) await this.journal({ type: "work-item.updated", planId: cur.planId, origin, payload: { workItemId, changes: changes } });
     return next;
   }
 
@@ -694,7 +694,7 @@ export class PlanService {
       if (ratingIssue) throw new OrcaError("PLAN_INVALID", `risk '${cur.key}': ${ratingIssue}`);
     }
     await this.stores.plan.risks.put(next);
-    await this.journal({ type: "risk.updated", planId, origin, payload: { riskId: cur.id, changes: changes as Record<string, unknown> } });
+    await this.journal({ type: "risk.updated", planId, origin, payload: { riskId: cur.id, changes: changes } });
     return next;
   }
 
@@ -741,7 +741,7 @@ export class PlanService {
       if (Object.keys(changes).length) {
         dec = { ...dec, ...changes, updatedAt: now };
         await this.stores.plan.decisions.put(dec);
-        await this.journal({ type: "decision.updated", planId, origin, payload: { decisionId: dec.id, changes: changes as Record<string, unknown> } });
+        await this.journal({ type: "decision.updated", planId, origin, payload: { decisionId: dec.id, changes: changes } });
       }
     }
     // Slugs in `blocks` become dependencies when the caller registers items; here we only handle already-known items.

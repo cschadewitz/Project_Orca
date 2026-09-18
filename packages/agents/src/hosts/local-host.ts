@@ -1,3 +1,4 @@
+/** LocalHost - runs ACP agents as child processes of this one, against the local filesystem. */
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
