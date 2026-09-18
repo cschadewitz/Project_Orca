@@ -57,6 +57,24 @@ describe("dependency references", () => {
     expect(parseDependencyRef("external:vendor-contract#deploy")).toMatchObject({ targetKind: "external", key: "vendor-contract", requiredBy: "deploy" });
     expect(parseDependencyRef({ on: "auth-api", type: "soft", stage: "spec", requiredBy: "build", rationale: "r" })).toMatchObject({ key: "auth-api", type: "soft", stage: "spec", requiredBy: "build", rationale: "r" });
   });
+  it("object form honours the prefixes and suffixes written in `on`", () => {
+    expect(parseDependencyRef({ on: "soft:auth-api@spec#build" })).toEqual(parseDependencyRef("soft:auth-api@spec#build"));
+    expect(parseDependencyRef({ on: "decision:storage" })).toMatchObject({ targetKind: "decision", key: "storage", type: "blocks", requiredBy: "start" });
+    // Object fields fill in what `on` leaves out, and may restate it.
+    expect(parseDependencyRef({ on: "auth-api@spec", requiredBy: "build" })).toMatchObject({ stage: "spec", requiredBy: "build", type: "blocks" });
+    expect(parseDependencyRef({ on: "soft:auth-api", type: "soft" })).toMatchObject({ type: "soft" });
+  });
+  it("rejects an object whose fields disagree with `on`", () => {
+    expect(() => parseDependencyRef({ on: "soft:auth-api", type: "blocks" })).toThrow(/type 'soft' conflicts with type 'blocks'/);
+    expect(() => parseDependencyRef({ on: "auth-api@spec", stage: "build" })).toThrow(/stage 'spec' conflicts with stage 'build'/);
+    expect(() => parseDependencyRef({ on: "auth-api#build", requiredBy: "deploy" })).toThrow(/requiredBy 'build' conflicts with requiredBy 'deploy'/);
+  });
+  it("rejects references the grammar does not cover, in both forms", () => {
+    for (const bad of ["@spec", "#build", "decision:", "soft:", "external:", "foo:bar", "auth@", "auth#", "auth@spec@x", "  ", "auth@ #build"]) {
+      expect(() => parseDependencyRef(bad), bad).toThrow(/invalid dependency reference/);
+      expect(() => parseDependencyRef({ on: bad }), bad).toThrow(/invalid dependency reference/);
+    }
+  });
   it("round-trips through formatDependencyRef", () => {
     for (const s of ["auth-api", "auth-api@spec", "soft:auth-api", "informs:auth-api@spec#build", "decision:storage", "external:x"]) expect(formatDependencyRef(parseDependencyRef(s))).toBe(s);
   });
@@ -264,12 +282,17 @@ describe("artifact signals", () => {
     const s = extractPlanSignals({
       kind: "spec",
       name: "spec",
-      data: { status: "ready", risks: ["Flaky integration tests", { key: "pii", title: "PII in logs", likelihood: 2, impact: 5, affects: ["api"] }], dependencies: ["billing@spec", { on: "auth", requiredBy: "build" }, 42], decisions: [{ key: "cache", title: "Cache layer", options: [{ key: "redis", name: "Redis" }], chosen: "redis" }] },
+      data: { status: "ready", risks: ["Flaky integration tests", { key: "pii", title: "PII in logs", likelihood: 2, impact: 5, affects: ["api"] }], dependencies: ["billing@spec", { on: "auth", requiredBy: "build" }, 42, "@spec", "decision:", { on: "soft:x", type: "blocks" }], decisions: [{ key: "cache", title: "Cache layer", options: [{ key: "redis", name: "Redis" }], chosen: "redis" }] },
     });
     expect(s.risks.map((r) => r.key)).toEqual(["flaky-integration-tests", "pii"]);
-    expect(s.dependencies).toHaveLength(2);
+    expect(s.dependencies).toEqual(["billing@spec", { on: "auth", requiredBy: "build" }]);
     expect(s.decisions[0]).toMatchObject({ key: "cache", chosen: "redis" });
-    expect(s.issues).toEqual(["dependencies[2]: not a dependency reference"]);
+    expect(s.issues).toEqual([
+      "dependencies[2]: not a dependency reference",
+      "dependencies[3]: invalid dependency reference '@spec'",
+      "dependencies[4]: invalid dependency reference 'decision:'",
+      "dependencies[5]: invalid dependency reference 'soft:x': type 'soft' conflicts with type 'blocks'",
+    ]);
   });
   it("reads risk registers and decision matrices", () => {
     expect(extractPlanSignals({ kind: "risk-register", name: "riskRegister", data: { risks: [{ key: "a", title: "A" }] } }).risks).toHaveLength(1);

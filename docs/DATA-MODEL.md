@@ -43,9 +43,12 @@ agent‑facing shape that `custom:plan-register` turns into plan records.
 | `Risk` | `key`, `category`, `likelihood`, `impact`, `status` (`open → mitigating → mitigated | accepted | realized → closed`), `mitigation`, `contingency`, `triggers`, `affects[]`, `mitigatedBy[]` |
 | `Decision` | `key`, `question`, `criteria[]` (`weight`, `direction`), `options[]` (`scores{}`), `scale`, `result` (ranking, margin, confidence, pivotal criteria), `chosen`, `decidedBy` (`matrix` \| `agent` \| `human`), `blocks[]` |
 
-Dependency references (`DependencyRef`, string or `{ on, type, stage, requiredBy }`):
+Dependency references (`DependencyRef`, string or `{ on, type, stage, requiredBy, rationale }`):
 `other`, `other@spec`, `other#build`, `soft:other`, `informs:other@spec`, `decision:key`,
-`external:key`. `parseDependencyRef()` normalises them. Agent‑facing input shapes are
+`external:key`. `parseDependencyRef()` normalises them; `on` takes the same grammar as the
+string form, and an object field that contradicts a prefix or suffix in `on` is an error.
+Only `parseDependencyRef()` checks the grammar (the schema checks shape), so every intake
+path runs it and reports failures. Agent‑facing input shapes are
 `RiskInputSchema`, `DecisionInputSchema`, `RiskRegisterSchema` (front matter of a
 `risk-register`) and `DecisionMatrixArtifactSchema` (front matter of a `decision-matrix`).
 
