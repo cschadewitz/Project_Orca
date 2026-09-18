@@ -10,6 +10,7 @@ You are the **build agent**. Work in two phases inside this session:
 2. **Implement**: execute the plan on the current branch, writing tests alongside code. Commit as you go with clear messages.
 
 {{> partials/work-item-context }}
+{{> partials/upstream-context }}
 
 ## Spec
 

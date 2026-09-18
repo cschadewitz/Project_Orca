@@ -40,13 +40,20 @@ edges:
 | --- | --- | --- |
 | `start` / `end` | entry and exit; `end.outcome` = `success` \| `failure` \| `cancelled` | `message` |
 | `agent` | run an agent turn and collect artifacts | `agent`, `template`/`prompt`, `inputs`, `produces`, `completion`, `vars` |
-| `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human`), `options`, `defaultOption` |
+| `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human` \| `matrix`), `options`, `defaultOption` |
 | `gate` | human approval; can auto‑approve | `question`, `options`, `autoApproveWhen`, `autoOption` |
 | `set` | assign run vars | `vars` |
 | `loop` | repeat a nested graph / workflow as child runs | `mode` (`while` \| `until` \| `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
 | `parallel` | fan out child runs | `branches{}` or `forEach{items, body, key, dependsOn, workflow, workItemId}`, `concurrency`, `join` (`all` \| `any`), `failFast` (default `true`: stop once the join is decided) |
 | `subworkflow` | run a registered workflow as a child | `workflow`, `vars` |
 | `custom:<name>` | anything a plugin registers | free‑form |
+| `custom:plan-register` | decomposition artifact → plan (items, dependencies, risks, decisions) | `artifact`, `plan`, `planName` |
+| `custom:decision-matrix` | score a `decision-matrix` artifact, record the decision, expose `choice` | `artifact`, `decision` (template) |
+| `custom:plan-schedule` | compute the schedule → `vars.schedule` + `schedule.md` | `artifactPath`, `policy`, `record` |
+| `custom:plan-dispatch` | run the item workflow for ready items, dependency‑ordered across the plan; claims each item so two dispatchers cannot both launch it | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request` \| `plan`), `onWaiting` (`defer` \| `wait`), `failFast`, `policy` |
+| `custom:plan-await` | (in item workflows) wait for this item's `phase` dependencies | `phase`, `pollMs`, `timeoutMs` |
+
+The plan nodes are described in `docs/PLANNING.md`.
 
 Wherever a node takes `vars` (`set`, `agent`, `subworkflow`), a string value starting
 with `=` is evaluated as an expression and anything else is a literal, e.g.
@@ -169,9 +176,13 @@ file list by hand. Tell the agent *what good looks like* (sections, front‑matt
 
 ## Shipped workflows
 
-- `workflows/ai-sdlc.yaml` — plan → design → spec‑gate → build ⇄ test → review ⇄ build → deploy.
-  High‑risk specs stop at the gate; tests and review loop back with bounded budgets.
-- `workflows/program.yaml` — decompose → materialize → plan‑gate → dispatch (ai‑sdlc per item,
-  dependency‑ordered) → summarize.
+- `workflows/ai-sdlc.yaml` — plan → design → spec‑gate → await‑deps → build ⇄ test → review ⇄ build → deploy.
+  High‑risk specs stop at the gate; `await-deps` holds the build until build‑phase
+  dependencies are satisfied; tests and review loop back with bounded budgets.
+- `workflows/program.yaml` — decompose → register (plan) → assess‑risks → decide (matrix per
+  open decision) → schedule → plan‑gate → dispatch (ai‑sdlc per item, dependency‑ordered
+  across the plan) → summarize.
+- `workflows/plan-resume.yaml` — schedule → gate → dispatch with `scope: plan`; picks up
+  work deferred by earlier requests (`orca plan dispatch`).
 
 Render either as Mermaid with `pnpm run orca graph ai-sdlc`.

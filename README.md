@@ -1,7 +1,8 @@
 # ORCA — Orchestration Runtime for Coding Agents
 
 ORCA sits **one level above** individual coding agents. It accepts a large feature or
-system request, breaks it into work items, and drives each item through the
+system request, breaks it into work items, plans them against everything else it is
+tracking (dependencies, risks, decisions), and drives each item through the
 [AI‑native SDLC](https://academy.claude.com/courses/ai-native-sdlc-playbook/introduction)
 loop — Plan → Design → Build → Test → Review → Deploy — by handing **artifacts**
 (intent.md, spec.md, plan.md, test report, review, …) from one agent to the next.
@@ -19,8 +20,8 @@ integration works yet — it is groundwork (see `docs/INTEGRATIONS.md`).
 
 ```
                     ┌──────────────────────────── ORCA ─────────────────────────────┐
-  Request ───────▶  │ program workflow: decompose → work items → dispatch (deps)     │
-  (issue, Kepler    │                                     │                          │
+  Request ───────▶  │ program workflow: decompose → plan (deps, risks, decisions)    │
+  (issue, Kepler    │                → decide → schedule → gate → dispatch          │
    task, ACP prompt)│      ai-sdlc workflow per item:     ▼                          │
                     │   plan ─▶ design ─▶ gate ─▶ build ─▶ test ─▶ review ─▶ deploy │
                     │     │        │              ▲  │       │  ▲     │              │
@@ -59,30 +60,42 @@ To run **inside Kepler / Zed / any ACP client**, register `orca acp` as an agent
 command; prompts sent to it become Requests and progress streams back as ACP
 plan/tool‑call updates (see `docs/INTEGRATIONS.md`).
 
+Requests accumulate in a **long‑term plan**: work items from different requests can
+depend on each other (or on a decision, or on something external), risks are scored
+on a likelihood × impact matrix and can hold work for a human, and decisions are made
+with weighted decision matrices before the work that needs them starts. Inspect and
+steer it with `orca plan show | schedule | explain <slug> | risks | decisions | graph`
+and resume deferred work across requests with `orca plan dispatch` (see
+`docs/PLANNING.md`).
+
 ## Repository map
 
 | Path | What lives there |
 | --- | --- |
-| `packages/core` | Domain model (Request, WorkItem, Artifact, Workflow, Run), event schema + reducer, expression language, template renderer, config schema. Pure; no I/O. |
-| `packages/store` | Persistence ports and implementations: event log (memory / JSONL), artifact store (content‑addressed), document stores. |
+| `packages/core` | Domain model (Request, WorkItem, Artifact, Workflow, Run, Plan/Dependency/Risk/Decision), event schema + reducer, planning algorithms (scheduler, risk matrix, decision matrix, signals), expression language, template renderer, config schema. Pure; no I/O. |
+| `packages/store` | Persistence ports and implementations: event log (memory / JSONL), artifact store (content‑addressed), document stores, plan stores + journal. |
 | `packages/agents` | Hosts (local, SSH), ACP client sessions, permission policies. |
-| `packages/engine` | The orchestrator (graph interpreter), node executors (agent, decision, gate, loop, parallel, subworkflow, set, custom), program service, workspace providers, plugin API. |
+| `packages/engine` | The orchestrator (graph interpreter), node executors (agent, decision, gate, loop, parallel, subworkflow, set, custom), program service, **PlanService** and the plan nodes (`plan-register`, `decision-matrix`, `plan-schedule`, `plan-dispatch`, `plan-await`), workspace providers, plugin API. |
 | `packages/integrations` | ORCA as an ACP agent (proxy mode), Kepler task awareness, T3 Code adapter (groundwork). |
 | `packages/cli` | `orca` command line and config bootstrap. |
 | `packages/testing` | A deterministic scripted ACP agent used by tests and the demo. |
-| `workflows/` | Shipped workflow definitions: `ai-sdlc.yaml`, `program.yaml`. |
-| `templates/` | Prompt templates per SDLC stage (markdown + front matter). |
-| `docs/` | Architecture, data model, workflow authoring, integrations, extensibility, ADRs. |
+| `workflows/` | Shipped workflow definitions: `ai-sdlc.yaml`, `program.yaml`, `plan-resume.yaml`. |
+| `templates/` | Prompt templates per SDLC stage and program step (decompose, assess‑risks, decide, summary). |
+| `docs/` | Architecture, data model, planning, workflow authoring, integrations, extensibility, ADRs. |
 
 Start reading at `docs/ARCHITECTURE.md`, then `workflows/ai-sdlc.yaml` next to
 `templates/sdlc/*.md`, then `packages/engine/src/orchestrator.ts` and
-`packages/engine/src/executors/agent-step.ts`.
+`packages/engine/src/executors/agent-step.ts`. For the planning layer read
+`docs/PLANNING.md`, then `packages/core/src/plan/schedule.ts` and
+`packages/engine/src/plan/service.ts`.
 
 ## Status
 
 [![CI](https://github.com/cschadewitz/Project_Orca/actions/workflows/ci.yml/badge.svg)](https://github.com/cschadewitz/Project_Orca/actions/workflows/ci.yml)
 
 Groundwork release: the data model, event‑sourced engine, ACP transport (local +
-SSH), workflow language, SDLC templates and CLI are implemented and tested
-end‑to‑end against a real ACP subprocess. See `docs/ROADMAP.md` for what is
-deliberately left open (T3 Code WebSocket transport, daemon mode, UI).
+SSH), workflow language, SDLC templates, the long‑term planning layer
+(dependencies across requests, risk matrix, decision matrices, explainable
+scheduling) and CLI are implemented and tested end‑to‑end against a real ACP
+subprocess. See `docs/ROADMAP.md` for what is deliberately left open (T3 Code
+WebSocket transport, daemon mode, UI, capacity‑aware scheduling).

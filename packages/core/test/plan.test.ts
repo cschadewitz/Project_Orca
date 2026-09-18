@@ -1,0 +1,294 @@
+/** Pure planning algorithms: dependency refs, risk matrix, graph, decision matrix, scheduler, signals, Mermaid. */
+import { describe, expect, it } from "vitest";
+import {
+  buildDependencyGraph,
+  compactSchedule,
+  computeSchedule,
+  criticalPath,
+  dropCycleClosingEdges,
+  DEFAULT_RISK_MATRIX,
+  evaluateDecisionMatrix,
+  explainWorkItem,
+  extractPlanSignals,
+  findCycles,
+  formatDependencyRef,
+  itemRiskExposure,
+  longestDownstreamPaths,
+  parseDependencyRef,
+  PlanSchema,
+  planToMermaid,
+  renderDecisionMatrix,
+  riskLevel,
+  summarizeRisks,
+  topologicalWaves,
+  transitiveDownstream,
+  validateDecisionMatrix,
+  type Decision,
+  type Dependency,
+  type Risk,
+  type WorkItem,
+} from "@orca/core";
+
+const T = "2026-01-01T00:00:00.000Z";
+const plan = PlanSchema.parse({ id: "plan_1", key: "p", name: "P", createdAt: T, updatedAt: T });
+const origin = { kind: "system" as const };
+
+function item(slug: string, extra: Partial<WorkItem> = {}): WorkItem {
+  return { id: `wi_${slug}`, requestId: "req_1", planId: plan.id, slug, title: slug, description: "", kind: "task", acceptanceCriteria: [], dependsOn: [], priority: "normal", produced: {}, status: "pending", createdAt: T, updatedAt: T, ...extra };
+}
+function dep(from: string, to: string, extra: Partial<Dependency> & { stage?: string } = {}): Dependency {
+  const { stage, ...rest } = extra;
+  return { id: `dep_${from}_${to}${stage ? "@" + stage : ""}`, planId: plan.id, from: `wi_${from}`, target: { kind: "work-item", workItemId: `wi_${to}`, ...(stage ? { stage } : {}) }, type: "blocks", requiredBy: "start", status: "open", origin, createdAt: T, updatedAt: T, ...rest };
+}
+function risk(key: string, likelihood: number, impact: number, affects: string[], extra: Partial<Risk> = {}): Risk {
+  return { id: `risk_${key}`, planId: plan.id, key, title: key, description: "", category: "technical", likelihood, impact, status: "open", triggers: [], affects: affects.map((s) => `wi_${s}`), mitigatedBy: [], origin, createdAt: T, updatedAt: T, ...extra };
+}
+function decision(key: string, extra: Partial<Decision> = {}): Decision {
+  return { id: `dec_${key}`, planId: plan.id, key, title: key, question: "", status: "open", criteria: [], options: [], scale: 10, consequences: [], blocks: [], origin, createdAt: T, updatedAt: T, ...extra };
+}
+
+describe("dependency references", () => {
+  it("parses the string grammar", () => {
+    expect(parseDependencyRef("auth-api")).toEqual({ targetKind: "work-item", key: "auth-api", type: "blocks", requiredBy: "start" });
+    expect(parseDependencyRef("auth-api@spec")).toMatchObject({ targetKind: "work-item", key: "auth-api", stage: "spec" });
+    expect(parseDependencyRef("soft:auth-api")).toMatchObject({ type: "soft" });
+    expect(parseDependencyRef("informs:auth-api@spec#build")).toMatchObject({ type: "informs", stage: "spec", requiredBy: "build" });
+    expect(parseDependencyRef("decision:storage")).toMatchObject({ targetKind: "decision", key: "storage" });
+    expect(parseDependencyRef("external:vendor-contract#deploy")).toMatchObject({ targetKind: "external", key: "vendor-contract", requiredBy: "deploy" });
+    expect(parseDependencyRef({ on: "auth-api", type: "soft", stage: "spec", requiredBy: "build", rationale: "r" })).toMatchObject({ key: "auth-api", type: "soft", stage: "spec", requiredBy: "build", rationale: "r" });
+  });
+  it("round-trips through formatDependencyRef", () => {
+    for (const s of ["auth-api", "auth-api@spec", "soft:auth-api", "informs:auth-api@spec#build", "decision:storage", "external:x"]) expect(formatDependencyRef(parseDependencyRef(s))).toBe(s);
+  });
+});
+
+describe("risk matrix", () => {
+  it("maps scores to levels with the default thresholds", () => {
+    expect(riskLevel(1, DEFAULT_RISK_MATRIX)).toBe("low");
+    expect(riskLevel(5, DEFAULT_RISK_MATRIX)).toBe("medium");
+    expect(riskLevel(12, DEFAULT_RISK_MATRIX)).toBe("high");
+    expect(riskLevel(20, DEFAULT_RISK_MATRIX)).toBe("critical");
+  });
+  it("computes exposure from open risks only and summarises", () => {
+    const risks = [risk("a", 5, 5, ["x"]), risk("b", 2, 2, ["x", "y"]), risk("c", 4, 4, ["y"], { status: "accepted" })];
+    expect(itemRiskExposure("wi_x", risks, DEFAULT_RISK_MATRIX)).toMatchObject({ score: 29, level: "critical" });
+    expect(itemRiskExposure("wi_y", risks, DEFAULT_RISK_MATRIX)).toMatchObject({ score: 4, level: "low" });
+    const s = summarizeRisks(risks, DEFAULT_RISK_MATRIX);
+    expect(s).toMatchObject({ total: 3, open: 2, highestLevel: "critical", byLevel: { low: 1, medium: 0, high: 0, critical: 1 } });
+    expect(s.top[0]!.key).toBe("a");
+  });
+});
+
+describe("dependency graph", () => {
+  const items = ["a", "b", "c", "d", "e"].map((s) => item(s, { estimate: s === "b" ? "L" : "S" }));
+  const deps = [dep("b", "a"), dep("c", "b"), dep("d", "a"), dep("e", "d", { type: "soft" })];
+  it("layers into waves and finds dependents", () => {
+    const g = buildDependencyGraph(items.map((i) => i.id), deps);
+    expect(topologicalWaves(g).waves).toEqual([["wi_a"], ["wi_b", "wi_d"], ["wi_c", "wi_e"]]);
+    expect([...transitiveDownstream(g, "wi_a")].sort()).toEqual(["wi_b", "wi_c", "wi_d", "wi_e"]);
+    expect(findCycles(g)).toEqual([]);
+  });
+  it("computes the critical path from estimates", () => {
+    const g = buildDependencyGraph(items.map((i) => i.id), deps);
+    const paths = longestDownstreamPaths(g, (id) => (id === "wi_b" ? 3 : 1));
+    expect(criticalPath(paths)).toEqual({ length: 5, path: ["wi_a", "wi_b", "wi_c"] });
+  });
+  it("drops the soft edges that close a cycle, keeping the required ones", () => {
+    const g = buildDependencyGraph(items.map((i) => i.id), [...deps, dep("a", "e", { type: "soft" })]);
+    expect(findCycles(g)).toEqual([["wi_a", "wi_d", "wi_e"]]);
+    const relaxed = dropCycleClosingEdges(g, ["soft"]);
+    expect(relaxed.dropped.map((e) => e.dependencyId)).toEqual(["dep_a_e"]);
+    expect(findCycles(relaxed.graph)).toEqual([]);
+    expect(topologicalWaves(relaxed.graph).waves).toEqual([["wi_a"], ["wi_b", "wi_d"], ["wi_c", "wi_e"]]);
+    // A cycle made only of required edges survives untouched.
+    const hard = buildDependencyGraph(items.map((i) => i.id), [...deps, dep("a", "c")]);
+    expect(dropCycleClosingEdges(hard, ["soft"])).toMatchObject({ dropped: [] });
+    expect(findCycles(dropCycleClosingEdges(hard, ["soft"]).graph)).toEqual([["wi_a", "wi_b", "wi_c"]]);
+  });
+  it("detects cycles and keeps the rest schedulable", () => {
+    const g = buildDependencyGraph(items.map((i) => i.id), [...deps, dep("a", "c")]);
+    expect(findCycles(g)).toEqual([["wi_a", "wi_b", "wi_c"]]);
+    const { waves, cyclic } = topologicalWaves(g);
+    expect(waves).toEqual([]); // d and e sit behind the cycle
+    expect(cyclic.sort()).toEqual(["wi_a", "wi_b", "wi_c", "wi_d", "wi_e"]);
+  });
+});
+
+describe("decision matrix", () => {
+  const criteria = [
+    { key: "fit", name: "Fit", weight: 3, direction: "maximize" as const },
+    { key: "cost", name: "Cost", weight: 1, direction: "minimize" as const },
+  ];
+  const options = [
+    { key: "a", name: "A", scores: { fit: 8, cost: 8 }, pros: [], cons: [], risks: [] },
+    { key: "b", name: "B", scores: { fit: 6, cost: 2 }, pros: [], cons: [], risks: [] },
+  ];
+  it("ranks with weights and inverts minimize criteria", () => {
+    const r = evaluateDecisionMatrix({ criteria, options, scale: 10 }, T);
+    // a: 0.75*8 + 0.25*(10-8) = 6.5 ; b: 0.75*6 + 0.25*(10-2) = 6.5 -> tie, authoring order wins
+    expect(r.ranking.map((x) => [x.option, x.score])).toEqual([["a", 6.5], ["b", 6.5]]);
+    expect(r).toMatchObject({ recommended: "a", margin: 0, confidence: "tie" });
+    const clear = evaluateDecisionMatrix({ criteria, options: [options[0]!, { ...options[1]!, scores: { fit: 2, cost: 9 } }], scale: 10 }, T);
+    expect(clear).toMatchObject({ recommended: "a", confidence: "clear" });
+    expect(clear.pivotalCriteria).toEqual([]);
+  });
+  it("reports pivotal criteria", () => {
+    const r = evaluateDecisionMatrix({ criteria, options: [{ ...options[0]!, scores: { fit: 7, cost: 9 } }, options[1]!], scale: 10 }, T);
+    // a: 5.25+0.25 = 5.5 ; b: 4.5+2 = 6.5 -> b; dropping cost flips it to a
+    expect(r.recommended).toBe("b");
+    expect(r.pivotalCriteria).toEqual(["cost"]);
+    expect(renderDecisionMatrix({ criteria, options, scale: 10 }, r)).toContain("Recommended: **b**");
+  });
+  it("validates shape", () => {
+    const issues = validateDecisionMatrix({ criteria, options: [{ key: "a", name: "A", scores: { fit: 11 }, pros: [], cons: [], risks: [] }], scale: 10 });
+    expect(issues.map((i) => i.path)).toEqual(["options[0].scores.fit", "options[0].scores.cost"]);
+    expect(() => evaluateDecisionMatrix({ criteria: [], options, scale: 10 }, T)).toThrow(/at least one criterion/);
+  });
+});
+
+describe("scheduler", () => {
+  const items = [item("core", { estimate: "M" }), item("api", { priority: "high" }), item("ui"), item("risky"), item("ext"), item("done-item", { status: "done" })];
+  const decisions = [decision("store")];
+  const deps: Dependency[] = [
+    dep("api", "core", { stage: "spec" }), // stage-level
+    { ...dep("api", "core"), id: "dep_api_store", target: { kind: "decision", decisionId: "dec_store" } },
+    dep("ui", "api", { requiredBy: "build" }), // later phase
+    { ...dep("ext", "core"), id: "dep_ext", target: { kind: "external", key: "vendor" } },
+  ];
+  const risks = [risk("boom", 5, 5, ["risky"]), risk("meh", 2, 2, ["core"], { mitigatedBy: ["wi_api"] })];
+
+  it("separates ready, waiting, held and settled with reasons", () => {
+    const s = computeSchedule({ plan, items, dependencies: deps, risks, decisions, now: T });
+    expect(s.ready.map((r) => r.slug)).toEqual(["core"]);
+    expect(s.waiting.map((w) => [w.slug, w.waitingOn.map((x) => x.detail)])).toEqual([
+      ["api", ["waiting for core to produce spec", "waiting for decision store"]],
+      ["ui", ["waiting for api to start (needed by build)"]],
+      ["ext", ["waiting for external 'vendor'"]],
+    ]);
+    expect(s.held).toEqual([{ workItemId: "wi_risky", slug: "risky", level: "critical", reason: expect.stringMatching(/boom.*exceeds the plan's appetite \(high\)/) }]);
+    expect(s.settled.done).toEqual(["wi_done-item"]);
+    expect(s.priorities["wi_core"]!.reasons).toEqual(expect.arrayContaining([expect.stringMatching(/unblocks 2 items \(api, ui\)/), "on the critical path (length 4)", "exposed to low risk: meh"]));
+    expect(s.priorities["wi_api"]!.reasons).toEqual(expect.arrayContaining(["mitigates meh (low)", "priority high"]));
+    expect(s.openDecisions).toEqual([{ decisionId: "dec_store", key: "store", title: "store", blocks: ["wi_api"] }]);
+    expect(s.criticalPath.workItemIds).toEqual(["wi_core", "wi_api", "wi_ui"]);
+    expect(explainWorkItem(s, items, "wi_api")).toEqual(expect.arrayContaining([expect.stringMatching(/^api: pending \(priority high\)/), "waiting: waiting for core to produce spec", "why: priority high", "wave 2 of 3"]));
+  });
+
+  it("unblocks on produced stages, decisions, accepted risks and satisfied externals", () => {
+    const later = {
+      plan,
+      items: items.map((i) => (i.slug === "core" ? { ...i, status: "in-progress" as const, produced: { spec: "art_1" } } : i)),
+      dependencies: deps.map((d) => (d.id === "dep_ext" ? { ...d, status: "satisfied" as const } : d)),
+      risks: risks.map((r) => (r.key === "boom" ? { ...r, status: "accepted" as const } : r)),
+      decisions: [{ ...decisions[0]!, status: "decided" as const, chosen: "sqlite" }],
+      now: T,
+    };
+    const s = computeSchedule(later);
+    expect(s.running).toEqual(["wi_core"]);
+    expect(s.ready.map((r) => r.slug)).toEqual(["api", "ext", "risky"]); // api by priority + mitigation, then alphabetical among equals
+    expect(s.held).toEqual([]);
+    expect(s.dependencyStates["dep_api_store"]).toEqual({ state: "satisfied", detail: "decision store = sqlite" });
+    // ui may start once api is underway.
+    const s2 = computeSchedule({ ...later, running: ["wi_api"] });
+    expect(s2.ready.map((r) => r.slug)).toContain("ui");
+  });
+
+  it("marks items behind failures as unschedulable", () => {
+    const s = computeSchedule({ plan, items: items.map((i) => (i.slug === "core" ? { ...i, status: "failed" as const } : i)), dependencies: deps, risks: [], decisions, now: T });
+    expect(s.unschedulable.map((u) => [u.slug, u.reason])).toEqual([["api", "core is failed"]]);
+    expect(s.settled.failed).toEqual(["wi_core"]);
+    // Once the dispatcher marks api blocked, ui's build-phase dependency fails too.
+    const s2 = computeSchedule({ plan, items: items.map((i) => (i.slug === "core" ? { ...i, status: "failed" as const } : i.slug === "api" ? { ...i, status: "blocked" as const } : i)), dependencies: deps, risks: [], decisions, now: T });
+    expect(s2.unschedulable.map((u) => [u.slug, u.reason])).toEqual([["api", "core is failed"], ["ui", "api is blocked"]]);
+  });
+
+  it("detects cycles among unsettled items", () => {
+    const s = computeSchedule({ plan, items: [item("x"), item("y")], dependencies: [dep("x", "y"), dep("y", "x")], risks: [], decisions: [], now: T });
+    expect(s.cycles).toEqual([["wi_x", "wi_y"]]);
+    expect(s.unschedulable.map((u) => u.reason)).toEqual(["dependency cycle: x -> y", "dependency cycle: x -> y"]);
+  });
+
+  it("ignores soft edges that close a cycle instead of stranding both items", () => {
+    const two = [item("x"), item("y")];
+    // x waits for y; y would *prefer* to come after x. The hint cannot be honoured - it is not a cycle.
+    const s = computeSchedule({ plan, items: two, dependencies: [dep("x", "y"), dep("y", "x", { type: "soft" })], risks: [], decisions: [], now: T });
+    expect(s.cycles).toEqual([]);
+    expect(s.unschedulable).toEqual([]);
+    expect(s.ready.map((r) => r.slug)).toEqual(["y"]);
+    expect(s.waiting.map((w) => [w.slug, w.waitingOn.map((o) => o.detail)])).toEqual([["x", ["waiting for y to be done (currently pending)"]]]);
+    expect(s.waves).toEqual([["wi_y"], ["wi_x"]]);
+    expect(s.ignoredSoftDependencies).toEqual([{ dependencyId: "dep_y_x", from: "wi_y", to: "wi_x" }]);
+  });
+
+  it("keeps soft edges that only order, and a soft-only ring never blocks", () => {
+    const two = [item("x"), item("y")];
+    const soft = computeSchedule({ plan, items: two, dependencies: [dep("x", "y", { type: "soft" })], risks: [], decisions: [], now: T });
+    expect(soft.ignoredSoftDependencies).toEqual([]);
+    expect(soft.waves).toEqual([["wi_y"], ["wi_x"]]); // still an ordering hint
+    expect(soft.ready.map((r) => r.slug)).toEqual(["y", "x"]); // ... that never blocks dispatch, it only ranks y first
+    const ring = computeSchedule({ plan, items: two, dependencies: [dep("x", "y", { type: "soft" }), dep("y", "x", { type: "soft" })], risks: [], decisions: [], now: T });
+    expect(ring.cycles).toEqual([]);
+    expect(ring.unschedulable).toEqual([]);
+    expect(ring.ignoredSoftDependencies.map((d) => d.dependencyId)).toEqual(["dep_y_x"]);
+  });
+
+  it("still reports a blocks cycle when soft edges are not ordering", () => {
+    const s = computeSchedule({
+      plan,
+      items: [item("x"), item("y")],
+      dependencies: [dep("x", "y"), dep("y", "x")],
+      risks: [],
+      decisions: [],
+      now: T,
+      policy: { orderSoftDependencies: false },
+    });
+    expect(s.cycles).toEqual([["wi_x", "wi_y"]]);
+    expect(s.unschedulable).toHaveLength(2);
+  });
+
+  it("strategies change the order", () => {
+    const two = [item("safe"), item("hot")];
+    const r = [risk("fire", 3, 4, ["hot"])]; // high, within the default appetite
+    const cp = computeSchedule({ plan, items: two, dependencies: [], risks: r, decisions: [], now: T, policy: { strategy: "fifo" } });
+    expect(cp.ready.map((x) => x.slug)).toEqual(["hot", "safe"]); // fifo ignores risk: equal age, alphabetical tie-break
+    expect(cp.priorities["wi_hot"]!.score).toBe(cp.priorities["wi_safe"]!.score);
+    const rf = computeSchedule({ plan, items: two, dependencies: [], risks: r, decisions: [], now: T, policy: { strategy: "risk-first" } });
+    expect(rf.ready[0]!.slug).toBe("hot");
+    const compact = compactSchedule(rf, two);
+    expect(compact).toMatchObject({ strategy: "risk-first", ready: [{ slug: "hot" }, { slug: "safe" }], risk: { open: 1, highestLevel: "high" } });
+  });
+});
+
+describe("artifact signals", () => {
+  it("lifts risks, decisions and dependencies from generic front matter", () => {
+    const s = extractPlanSignals({
+      kind: "spec",
+      name: "spec",
+      data: { status: "ready", risks: ["Flaky integration tests", { key: "pii", title: "PII in logs", likelihood: 2, impact: 5, affects: ["api"] }], dependencies: ["billing@spec", { on: "auth", requiredBy: "build" }, 42], decisions: [{ key: "cache", title: "Cache layer", options: [{ key: "redis", name: "Redis" }], chosen: "redis" }] },
+    });
+    expect(s.risks.map((r) => r.key)).toEqual(["flaky-integration-tests", "pii"]);
+    expect(s.dependencies).toHaveLength(2);
+    expect(s.decisions[0]).toMatchObject({ key: "cache", chosen: "redis" });
+    expect(s.issues).toEqual(["dependencies[2]: not a dependency reference"]);
+  });
+  it("reads risk registers and decision matrices", () => {
+    expect(extractPlanSignals({ kind: "risk-register", name: "riskRegister", data: { risks: [{ key: "a", title: "A" }] } }).risks).toHaveLength(1);
+    expect(extractPlanSignals({ kind: "risk-register", name: "riskRegister", data: { risks: [{ title: 5 }] } }).issues[0]).toMatch(/risk-register/);
+    expect(extractPlanSignals({ kind: "decision-matrix", name: "decisionMatrix", data: { key: "k", title: "K", options: [{ key: "x", name: "X" }] } }).decisions).toHaveLength(1);
+  });
+  it("runs extra extractors", () => {
+    const s = extractPlanSignals({ kind: "review", name: "review", data: { blocking: 2 } }, [() => ({ risks: [{ key: "review-blockers", title: "Blocking review findings", likelihood: 3, impact: 3, description: "", category: "technical", triggers: [], affects: [], mitigatedBy: [] }] })]);
+    expect(s.risks[0]!.key).toBe("review-blockers");
+  });
+});
+
+describe("mermaid", () => {
+  it("renders items, dependency types, decisions and externals", () => {
+    const md = planToMermaid({ items: [item("a"), item("b", { status: "done" })], dependencies: [dep("a", "b", { stage: "spec", requiredBy: "build" }), { ...dep("a", "b"), id: "d2", type: "soft" }, { ...dep("a", "b"), id: "d3", target: { kind: "decision", decisionId: "dec_k" } }, { ...dep("a", "b"), id: "d4", target: { kind: "external", key: "vendor" } }], decisions: [decision("k", { status: "decided", chosen: "x" })] });
+    expect(md).toContain("wi_a -->|@spec #build| wi_b");
+    expect(md).toContain("wi_a -.-> wi_b");
+    expect(md).toContain('dec_k{"decision: k<br/><small>decided = x</small>"}:::decision');
+    expect(md).toContain('ext_vendor[["external: vendor"]]:::external');
+    expect(md).toContain(":::done");
+  });
+});

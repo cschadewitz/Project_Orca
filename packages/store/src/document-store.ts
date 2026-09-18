@@ -12,6 +12,7 @@ import { FileClaimStore, InMemoryClaimStore, type ClaimStore } from "./claim-sto
 import { InMemoryEventStore, type EventStore } from "./event-store.js";
 import { JsonlEventStore } from "./jsonl-event-store.js";
 import { FileArtifactStore, InMemoryArtifactStore, type ArtifactStore } from "./artifact-store.js";
+import { filePlanStores, memoryPlanStores, type PlanStores } from "./plan-store.js";
 
 export interface DocumentStore<T extends { id: string }> {
   get(id: string): Promise<T | undefined>;
@@ -139,6 +140,8 @@ export interface Stores {
   workItems: DocumentStore<WorkItem>;
   /** Who owns which work item; see claim-store.ts for why this is not part of the event log. */
   claims: ClaimStore;
+  /** Long-term planning: plans, dependencies, risks, decisions and their journal. */
+  plan: PlanStores;
 }
 
 export function fileStores(dir: string, clock?: Clock): Stores {
@@ -148,6 +151,7 @@ export function fileStores(dir: string, clock?: Clock): Stores {
     requests: new JsonFileDocumentStore<Request>(join(dir, "requests.json"), RequestSchema as unknown as ZodType<Request>),
     workItems: new JsonFileDocumentStore<WorkItem>(join(dir, "work-items.json"), WorkItemSchema as unknown as ZodType<WorkItem>),
     claims: new FileClaimStore(dir),
+    plan: filePlanStores(dir, clock),
   };
 }
 
@@ -158,5 +162,6 @@ export function memoryStores(clock?: Clock): Stores {
     requests: new InMemoryDocumentStore<Request>(),
     workItems: new InMemoryDocumentStore<WorkItem>(),
     claims: new InMemoryClaimStore(),
+    plan: memoryPlanStores(clock),
   };
 }

@@ -66,6 +66,16 @@ dependency legitimately needs to build.
   with a plugin‑registered custom node.
 - `packages/integrations/test/acp-facade.test.ts` — ORCA driven *as* an ACP agent by an
   in‑process ACP client (proxy mode), including gate forwarding as a permission request.
+- `packages/core/test/plan.test.ts` — the pure planning layer: dependency grammar, risk
+  matrix, graph (waves, cycles, critical path), decision matrix, scheduler classification
+  and priorities, artifact signals, Mermaid.
+- `packages/engine/test/plan.service.test.ts` — cross‑request registration (placeholders
+  bound later, slug clashes), stage‑level and decision dependencies, artifact intake, risk
+  appetite holds, and the `custom:plan-await` node waking on plan changes.
+- `packages/engine/test/plan.e2e.test.ts` — the shipped program with decisions made by
+  matrix, stage‑level pipelining (`core@spec`), build‑phase waits (`api#build`) with
+  upstream artifacts in the build prompt, and a second request deferred then picked up by
+  `plan-resume`.
 
 ## The scripted agent
 

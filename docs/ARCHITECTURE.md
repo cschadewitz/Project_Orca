@@ -17,14 +17,19 @@
    Code, rather than replacing them.
 7. **Extensible**: new node types, artifact kinds, hosts, workspace providers,
    human‑input channels and templates plug in without touching the core.
+8. **Plan over time.** Work items from many requests live in one plan with
+   dependencies (on items, stages of items, decisions, externals), risks and
+   decisions; the scheduler orders agents' work from that graph and can explain
+   every choice.
 
 ## Layering
 
 ```
  cli ─────────────▶ integrations ──▶ engine ──▶ agents ──▶ core
-  │                   (acp-facade,     │          (acp,        (model, events,
-  │                    kepler, t3code) │           ssh, local)  expr, templates)
-  └────────────────────────────────────┴──▶ store (events, artifacts, docs)
+  │                   (acp-facade,     │ (orchestrator, (acp,      (model, events,
+  │                    kepler, t3code) │  plan service)  ssh, local) plan algorithms,
+  │                                    │                            expr, templates)
+  └────────────────────────────────────┴──▶ store (events, artifacts, docs, plan + journal)
 ```
 
 Dependencies only point right/down. `core` has no I/O beyond parsing files.
@@ -100,19 +105,33 @@ back to `build` with the review as an extra input. That *is* the hand‑off.
 
 ## The level above (program)
 
-`workflows/program.yaml` + `packages/engine/src/program/`:
+`workflows/program.yaml` + `packages/engine/src/program/` + `packages/engine/src/plan/`:
 
 - `decompose` (agent) → `decomposition` artifact whose front matter lists work
-  items with slugs, acceptance criteria and `dependsOn`.
-- `custom:materialize-work-items` → `WorkItem` records in the store.
-- `plan-gate` → auto‑approves small breakdowns, asks a human for big ones.
-- `dispatch` → a plain `parallel` node fanning out over `vars.leafWorkItems`, with
-  `forEach.key`/`dependsOn` giving the decomposition's dependency order and
-  `forEach.workItemId` binding each branch to its item. The workflow per item is
-  `forEach.workflow` = the item's own `workflowId`, else `vars.itemWorkflow`
-  (seeded from `program.itemWorkflow`, default `ai-sdlc`). Each item therefore gets
-  its own **workspace** from the `WorkspaceProvider` (a git worktree per item, a
-  Kepler task worktree, or the current directory). There is no second fan-out engine.
+  items with slugs, acceptance criteria, priorities, `dependsOn` references,
+  risks and open decisions.
+- `custom:plan-register` → `WorkItem` records **in the plan**, plus
+  `Dependency`, `Risk` and `Decision` records; references to items from earlier
+  requests resolve plan‑wide, references to items not registered yet become
+  placeholders bound later.
+- `assess-risks` (agent) → `risk-register` artifact, lifted into the plan.
+- `decide` (loop) → one `decision-matrix` artifact per open decision, scored
+  by `custom:decision-matrix`; items waiting on the decision unblock.
+- `custom:plan-schedule` → the schedule (ready order with reasons, waiting and
+  why, held for risk, waves, critical path) as `vars.schedule` and a
+  `schedule.md` artifact.
+- `plan-gate` → auto‑approves unless the breakdown is large, a risk is critical
+  or something can never run.
+- `custom:plan-dispatch` → runs the item workflow for whatever the scheduler
+  says is ready, re‑scheduling after every completion and on every plan change.
+  The workflow per item is the item's own `workflowId`, else `vars.itemWorkflow`
+  (seeded from `program.itemWorkflow`, default `ai-sdlc`); each item gets its
+  own **workspace** from the `WorkspaceProvider` (a git worktree per item, a
+  Kepler task worktree, or the current directory). Items waiting on other
+  requests are deferred and picked up by `workflows/plan-resume.yaml`
+  (`orca plan dispatch`). Unlike a `parallel` fan‑out, the set of branches is
+  not known up front: it is re‑computed from the live plan, which is why this
+  node keeps its own scheduling loop on top of `ctx.runChild`.
 - `summarize` (agent) → a program summary artifact.
 
 A `WorkItem`'s `status` is a **projection** of that fan-out, not a side-write:
@@ -128,7 +147,22 @@ it holds across processes. A second dispatcher over the same plan skips what it 
 own (`branch.skipped`, `reason: claimed`) instead of starting a rival child run.
 
 `ProgramService.submit()` is the single entry point used by the CLI and the ACP
-facade.
+facade. The original request‑scoped nodes (`custom:materialize-work-items`,
+`custom:dispatch-work-items`) remain available for workflows that do not want
+a plan.
+
+## The planning layer
+
+`PlanService` (`packages/engine/src/plan/service.ts`) owns every change to the
+plan and journals it. The orchestrator calls it inline: after each
+`artifact.recorded` it records what the item produced (stage‑level dependencies)
+and lifts planning signals from the artifact's front matter (`risks:`,
+`dependencies:`, `decisions:`, risk registers, decision matrices); when a run
+finishes it marks the item and reconciles dependencies. The scheduler
+(`packages/core/src/plan/schedule.ts`) is pure and evaluates dependencies live.
+Inside `ai-sdlc`, `custom:plan-await` holds the build until the item's
+build‑phase dependencies are satisfied and passes upstream artifacts into the
+prompt as `vars.upstream`. Full description: `docs/PLANNING.md`.
 
 ## Hosts and transports
 
@@ -165,3 +199,5 @@ Recorded as ADRs in `docs/adr/`:
 - 0003 Single‑token interpreter with child runs for containers
 - 0004 ACP as the agent boundary; SSH as a transport, not a host daemon
 - 0005 Standalone engine + facades instead of forking Kepler or T3 Code
+- 0006 The plan as a persistent cross‑request dependency graph, scheduled live
+- 0007 Risks and decisions as plan entities fed by artifacts, computed by ORCA

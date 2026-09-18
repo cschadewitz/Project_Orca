@@ -2,6 +2,7 @@ import { agentExecutor } from "./agent-step.js";
 import { decisionExecutor, endExecutor, gateExecutor, setExecutor, startExecutor } from "./basic.js";
 import { loopExecutor, parallelExecutor, subworkflowExecutor } from "./containers.js";
 import { materializeWorkItemsExecutor } from "../program/executors.js";
+import { decisionMatrixExecutor, planAwaitExecutor, planDispatchExecutor, planRegisterExecutor, planScheduleExecutor } from "../plan/executors.js";
 import { NodeExecutorRegistry } from "./types.js";
 
 export * from "./types.js";
@@ -9,7 +10,7 @@ export { agentExecutor, runAgentTurn, validateArtifact, watchForArtifacts, type 
 export { startExecutor, endExecutor, setExecutor, decisionExecutor, gateExecutor, askHuman } from "./basic.js";
 export { loopExecutor, parallelExecutor, subworkflowExecutor, pausedByChildren } from "./containers.js";
 
-/** All node types ORCA ships with, including the program-level custom nodes. */
+/** All node types ORCA ships with, including the program-level and planning custom nodes. */
 export function builtinExecutors(): NodeExecutorRegistry {
   return new NodeExecutorRegistry()
     .register(startExecutor)
@@ -21,5 +22,10 @@ export function builtinExecutors(): NodeExecutorRegistry {
     .register(loopExecutor)
     .register(parallelExecutor)
     .register(subworkflowExecutor)
-    .register(materializeWorkItemsExecutor);
+    .register(materializeWorkItemsExecutor)
+    .register(planRegisterExecutor)
+    .register(decisionMatrixExecutor)
+    .register(planScheduleExecutor)
+    .register(planDispatchExecutor)
+    .register(planAwaitExecutor);
 }

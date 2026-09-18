@@ -11,6 +11,8 @@ export * from "./model/request.js";
 export * from "./model/agent.js";
 export * from "./model/run.js";
 export * from "./model/workflow.js";
+export * from "./model/plan.js";
+export * from "./model/plan-events.js";
 
 export * from "./events/events.js";
 export * from "./events/reduce.js";
@@ -18,6 +20,7 @@ export * from "./events/reduce.js";
 export * from "./expr/index.js";
 export * from "./template/index.js";
 export * from "./workflow/index.js";
+export * from "./plan/index.js";
 
 export * from "./util/clock.js";
 export * from "./util/logger.js";

@@ -38,14 +38,14 @@ describe("program workflow (e2e)", () => {
 
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(state.run.outcome).toBe("success");
-    expect(state.stepOrder.map((id) => state.steps[id]!.nodeId)).toEqual(["start", "decompose", "materialize", "plan-gate", "dispatch", "summarize", "done"]);
+    expect(state.stepOrder.map((id) => state.steps[id]!.nodeId)).toEqual(["start", "decompose", "register", "assess-risks", "decide", "schedule", "plan-gate", "dispatch", "summarize", "done"]);
 
     const items = await h.orchestrator.stores.workItems.list();
     expect(items.map((w) => [w.slug, w.status]).sort()).toEqual([["auth-api", "done"], ["db-schema", "done"], ["docs", "done"]]);
     expect((await h.orchestrator.stores.requests.get(request.id))?.status).toBe("completed");
 
     // Dependency order: auth-api's child run must have been created after db-schema's finished.
-    const dispatch = state.steps[state.stepOrder[4]!]!;
+    const dispatch = state.steps[state.stepOrder[7]!]!;
     expect(dispatch.childRunIds).toHaveLength(3);
     const children = await Promise.all(dispatch.childRunIds.map((id) => h.orchestrator.getState(id)));
     const bySlug = new Map(children.map((c) => [items.find((w) => w.id === c.run.workItemId)!.slug, c]));
@@ -57,7 +57,7 @@ describe("program workflow (e2e)", () => {
     const artifacts = await h.orchestrator.stores.artifacts.list({ kind: "deploy-report" });
     expect(artifacts.map((a) => a.path).sort()).toEqual(["auth-api", "db-schema", "docs"].map((s) => `${h.dir}/.orca/work/${s}/deploy-report.md`));
     const summaryPrompt = (await h.prompts()).find((p) => p.text.includes("Summarise the program"))!;
-    expect(summaryPrompt.text).toContain("`auth-api`: completed");
+    expect(summaryPrompt.text).toContain("`auth-api`: done");
     expect(summaryPrompt.text).toContain("vertical slices");
 
     // Work-item status is a projection, not a side-write: scribble over the documents the way a
@@ -81,6 +81,7 @@ describe("program workflow (e2e)", () => {
     expect(state.run.status).toBe("failed");
     const items = await h.orchestrator.stores.workItems.list();
     expect(Object.fromEntries(items.map((w) => [w.slug, w.status]))).toEqual({ a: "failed", b: "blocked" });
+    expect(items.find((w) => w.slug === "b")?.deferredReason).toMatch(/a is failed/);
   }, 120_000);
 
   it("dispatches work items to the configured itemWorkflow", async () => {

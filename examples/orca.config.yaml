@@ -43,8 +43,20 @@ workflows: ["workflows/**/*.yaml"]
 templates: ["templates/**/*.md"]
 
 program:
-  workflow: program                   # accepts a Request, decomposes, dispatches
+  workflow: program                   # accepts a Request, decomposes, plans, dispatches
   itemWorkflow: ai-sdlc               # run per work item
+
+planning:                             # long-term plan defaults (docs/PLANNING.md)
+  plan: default                       # plan requests join unless `--var plan=<key>` says otherwise
+  planName: Product roadmap
+  policy:
+    strategy: critical-path           # critical-path | risk-first | most-dependents | fifo
+    concurrency: 2
+    riskAppetite: high                # hold items whose open risk exceeds this until a human accepts it
+    mitigateFirst: true               # pull items that mitigate open risks forward
+  riskMatrix:
+    scale: 5                          # likelihood and impact are 1..scale
+    thresholds: { medium: 5, high: 10, critical: 16 }
 
 workspace:
   provider: git-worktree              # local | git-worktree | kepler

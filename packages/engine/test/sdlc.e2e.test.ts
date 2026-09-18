@@ -33,7 +33,7 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
     expect(state.run.outcome).toBe("success");
     const path = state.stepOrder.map((id) => state.steps[id]!.nodeId);
     expect(path).toEqual([
-      "start", "plan", "design", "spec-gate",
+      "start", "plan", "design", "spec-gate", "await-deps",
       "bump-build", "build", "test", "tests-passed", // tests fail -> retry build
       "bump-build", "build", "test", "tests-passed", // tests pass
       "bump-review", "review", "review-verdict", // changes requested -> build again

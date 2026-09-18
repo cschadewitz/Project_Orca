@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { AgentRegistry } from "@orca/agents";
 import { consoleLogger, loadTemplates, loadWorkflows, OrcaError, parseOrcaConfig, validateWorkflow, type Logger, type OrcaConfig, type TemplateRegistry, type WorkflowRegistry } from "@orca/core";
-import { autoHumanInput, builtinExecutors, GitWorktreeProvider, LocalWorkspaceProvider, Orchestrator, PausingHumanInput, ProgramService, type HumanInputPort, type OrcaPlugin, type PluginApi, type WorkspaceProvider } from "@orca/engine";
+import { autoHumanInput, builtinExecutors, GitWorktreeProvider, LocalWorkspaceProvider, Orchestrator, PausingHumanInput, PlanService, ProgramService, type HumanInputPort, type OrcaPlugin, type PluginApi, type WorkspaceProvider } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { fileStores, memoryStores } from "@orca/store";
 import { cliHumanInput } from "./human-input-cli.js";
@@ -33,6 +33,7 @@ export interface OrcaApp {
   configDir: string;
   orchestrator: Orchestrator;
   program: ProgramService;
+  plan: PlanService;
   workflows: WorkflowRegistry;
   templates: TemplateRegistry;
   agents: AgentRegistry;
@@ -103,12 +104,19 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const executors = builtinExecutors();
   let humanInput = opts.humanInput ?? makeHumanInput(config);
   let workspaceProvider = makeWorkspaceProvider(config, configDir, agents);
+  const stores = opts.ephemeral ? memoryStores() : fileStores(resolve(configDir, config.storeDir));
+  const plan = new PlanService({
+    stores,
+    logger: logger.child({ component: "plan" }),
+    defaults: { planKey: config.planning.plan, planName: config.planning.planName, policy: stripUndefined(config.planning.policy), riskMatrix: stripUndefined(config.planning.riskMatrix) },
+  });
 
   const api: PluginApi = {
     executors,
     templates,
     workflows,
     agents,
+    plan,
     setHumanInput: (p) => (humanInput = p),
     setWorkspaceProvider: (p) => (workspaceProvider = p),
   };
@@ -128,7 +136,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   }
   if (problems.length) throw new OrcaError("WORKFLOW_INVALID", `workflow validation failed:\n${problems.map((p) => "  - " + p).join("\n")}`, { problems });
 
-  const stores = opts.ephemeral ? memoryStores() : fileStores(resolve(configDir, config.storeDir));
-  const orchestrator = new Orchestrator({ stores, agents, workflows, templates, executors, humanInput, workspaceProvider, logger });
-  return { config, configDir, orchestrator, program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow), workflows, templates, agents, logger };
+  const orchestrator = new Orchestrator({ stores, agents, workflows, templates, executors, humanInput, workspaceProvider, plan, logger });
+  return { config, configDir, orchestrator, program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow), plan, workflows, templates, agents, logger };
+}
+
+function stripUndefined<T extends object>(o: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as { [K in keyof T]?: Exclude<T[K], undefined> };
 }
