@@ -20,7 +20,9 @@ export interface ArtifactStore {
 }
 
 function matches(a: Artifact, q: ArtifactQuery): boolean {
-  return (!q.runId || a.producedBy.runId === q.runId) && (!q.kind || a.kind === q.kind) && (!q.name || a.name === q.name);
+  return (
+    (!q.runId || a.producedBy.runId === q.runId) && (!q.kind || a.kind === q.kind) && (!q.name || a.name === q.name)
+  );
 }
 
 export class InMemoryArtifactStore implements ArtifactStore {

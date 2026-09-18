@@ -10,7 +10,11 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
-function ctx(cwd: string, positionals: string[], flags: CommandContext["flags"] = {}): CommandContext & { lines: string[] } {
+function ctx(
+  cwd: string,
+  positionals: string[],
+  flags: CommandContext["flags"] = {},
+): CommandContext & { lines: string[] } {
   const lines: string[] = [];
   return { cwd, flags: { quiet: true, ...flags }, positionals, out: (l) => lines.push(l), err: () => {}, lines };
 }

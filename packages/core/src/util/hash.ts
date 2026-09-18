@@ -1,3 +1,4 @@
+/** Content hashing, used for artifact identity and cache keys. */
 import { createHash } from "node:crypto";
 
 export function sha256(content: string | Uint8Array): string {

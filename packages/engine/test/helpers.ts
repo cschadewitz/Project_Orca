@@ -2,7 +2,16 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { loadTemplates, loadWorkflows, parseOrcaConfig, readJsonl, silentLogger, type JsonlParser, type TemplateRegistry, type WorkflowRegistry } from "@orca/core";
+import {
+  loadTemplates,
+  loadWorkflows,
+  parseOrcaConfig,
+  readJsonl,
+  silentLogger,
+  type JsonlParser,
+  type TemplateRegistry,
+  type WorkflowRegistry,
+} from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, type OrchestratorOptions } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec, type PlaybookInput } from "@orca/testing";
@@ -21,7 +30,9 @@ export function loadShippedTemplates(): Promise<TemplateRegistry> {
 }
 
 /** The scripted agent's prompt log is untyped; tests only read these two fields. */
-const promptRecord: JsonlParser<{ text: string; turn: number }> = { parse: (raw) => raw as { text: string; turn: number } };
+const promptRecord: JsonlParser<{ text: string; turn: number }> = {
+  parse: (raw) => raw as { text: string; turn: number },
+};
 
 export interface TestHarness {
   dir: string;
@@ -30,12 +41,21 @@ export interface TestHarness {
   prompts(): Promise<{ text: string; turn: number }[]>;
 }
 
-export async function harness(playbook: PlaybookInput, overrides: Partial<OrchestratorOptions> = {}, opts: { sessionMode?: "per-step" | "per-run"; turnTimeoutMs?: number; cancelGraceMs?: number } = {}): Promise<TestHarness> {
+export async function harness(
+  playbook: PlaybookInput,
+  overrides: Partial<OrchestratorOptions> = {},
+  opts: { sessionMode?: "per-step" | "per-run"; turnTimeoutMs?: number; cancelGraceMs?: number } = {},
+): Promise<TestHarness> {
   const dir = await mkdtemp(join(tmpdir(), "orca-e2e-"));
   const promptLog = join(dir, ".orca-test", "prompts.jsonl");
-  const agents = new AgentRegistry()
-    .addHost(new LocalHost({ id: "local", type: "local" }))
-    .addAgent(scriptedAgentSpec({ playbookJson: playbook, stateFile: join(dir, ".orca-test", "state.json"), promptLog, ...opts }));
+  const agents = new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })).addAgent(
+    scriptedAgentSpec({
+      playbookJson: playbook,
+      stateFile: join(dir, ".orca-test", "state.json"),
+      promptLog,
+      ...opts,
+    }),
+  );
   const orchestrator = new Orchestrator({
     stores: memoryStores(),
     agents,

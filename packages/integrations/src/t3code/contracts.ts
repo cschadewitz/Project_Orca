@@ -16,8 +16,23 @@ export interface T3ModelSelection {
 
 export type T3Command =
   | { type: "project.create"; projectId: T3ProjectId; title: string; workspaceRoot: string }
-  | { type: "thread.create"; threadId: T3ThreadId; projectId: T3ProjectId; title: string; modelSelection: T3ModelSelection; runtimeMode: "full-access" | "approval-required" | "read-only" }
-  | { type: "thread.turn.start"; threadId: T3ThreadId; messageId: string; text: string; attachments: unknown[]; modelSelection: T3ModelSelection; runtimeMode: "full-access" | "approval-required" | "read-only" }
+  | {
+      type: "thread.create";
+      threadId: T3ThreadId;
+      projectId: T3ProjectId;
+      title: string;
+      modelSelection: T3ModelSelection;
+      runtimeMode: "full-access" | "approval-required" | "read-only";
+    }
+  | {
+      type: "thread.turn.start";
+      threadId: T3ThreadId;
+      messageId: string;
+      text: string;
+      attachments: unknown[];
+      modelSelection: T3ModelSelection;
+      runtimeMode: "full-access" | "approval-required" | "read-only";
+    }
   | { type: "thread.turn.interrupt"; threadId: T3ThreadId; turnId?: T3TurnId }
   | { type: "thread.approval.respond"; threadId: T3ThreadId; requestId: string; decision: "accept" | "decline" }
   | { type: "thread.session.stop"; threadId: T3ThreadId };

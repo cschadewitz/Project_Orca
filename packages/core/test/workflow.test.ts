@@ -8,7 +8,10 @@ describe("workflow definitions", () => {
   it("parses and validates the shipped workflows", async () => {
     for (const f of ["workflows/ai-sdlc.yaml", "workflows/program.yaml"]) {
       const def = parseWorkflow(await readFile(new URL(f, root), "utf8"), f);
-      const result = validateWorkflow(def, { hasTemplate: (id) => id.startsWith("sdlc/") || id.startsWith("program/"), hasWorkflow: (id) => id === "ai-sdlc" || id === "program" });
+      const result = validateWorkflow(def, {
+        hasTemplate: (id) => id.startsWith("sdlc/") || id.startsWith("program/"),
+        hasWorkflow: (id) => id === "ai-sdlc" || id === "program",
+      });
       expect(result.errors, JSON.stringify(result.errors)).toEqual([]);
       expect(result.warnings).toEqual([]);
       expect(toMermaid(def)).toContain("flowchart TD");
@@ -24,7 +27,14 @@ describe("workflow definitions", () => {
       start: "start",
       nodes: {
         start: { type: "start" },
-        a: { type: "agent", agent: "x", inputs: [], produces: [], completion: { mode: "turn-end", maxFollowUps: 1, maxAttempts: 1 }, vars: {} },
+        a: {
+          type: "agent",
+          agent: "x",
+          inputs: [],
+          produces: [],
+          completion: { mode: "turn-end", maxFollowUps: 1, maxAttempts: 1 },
+          vars: {},
+        },
         d: { type: "decision", source: { kind: "expression", expr: "a ==" }, options: ["yes"] },
         orphan: { type: "set", vars: {} },
         end: { type: "end", outcome: "success" },
@@ -50,7 +60,9 @@ describe("workflow definitions", () => {
         expect.stringMatching(/end node 'end' cannot have outgoing edges/),
       ]),
     );
-    expect(r.warnings.map((w) => w.message)).toEqual(expect.arrayContaining([expect.stringMatching(/'orphan' is unreachable/)]));
+    expect(r.warnings.map((w) => w.message)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/'orphan' is unreachable/)]),
+    );
   });
   it("warns when artifact-present has no required deliverable to wait for", () => {
     const def = parseWorkflow(`
@@ -70,7 +82,12 @@ edges: [{ from: s, to: a }, { from: a, to: e }]
 `);
     const r = validateWorkflow(def);
     expect(r.ok).toBe(true);
-    expect(r.warnings).toEqual([{ path: "workflow(optional-only).nodes.a.completion.mode", message: expect.stringMatching(/no required deliverable/) }]);
+    expect(r.warnings).toEqual([
+      {
+        path: "workflow(optional-only).nodes.a.completion.mode",
+        message: expect.stringMatching(/no required deliverable/),
+      },
+    ]);
 
     // Marking one deliverable required (the default) clears the warning.
     const a = def.nodes.a;
@@ -101,7 +118,13 @@ edges: [{ from: s, to: a }, { from: a, to: sub }, { from: sub, to: st }, { from:
 `);
     const r = validateWorkflow(def, { hasWorkflow: () => true });
     const paths = r.errors.map((e) => e.path);
-    expect(paths).toEqual(expect.arrayContaining(["workflow(bad-vars).nodes.a.vars.slug", "workflow(bad-vars).nodes.sub.vars.n", "workflow(bad-vars).nodes.st.vars.m"]));
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        "workflow(bad-vars).nodes.a.vars.slug",
+        "workflow(bad-vars).nodes.sub.vars.n",
+        "workflow(bad-vars).nodes.st.vars.m",
+      ]),
+    );
     // Valid expressions and literals are left alone.
     expect(paths).not.toContain("workflow(bad-vars).nodes.a.vars.ok");
     expect(paths).not.toContain("workflow(bad-vars).nodes.a.vars.plain");

@@ -24,16 +24,24 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   async provision(input: ProvisionInput): Promise<Workspace> {
     const host = this.o.host;
     // Runs without a work item (e.g. the program run itself) work in the main checkout.
-    if (!input.workItem) return input.parent ?? { hostId: host.id, cwd: this.o.repo, repo: this.o.repo, provider: this.name };
+    if (!input.workItem)
+      return input.parent ?? { hostId: host.id, cwd: this.o.repo, repo: this.o.repo, provider: this.name };
     const slug = input.workItem.slug;
     const branch = `${this.o.branchPrefix ?? "orca/"}${slug}`;
-    const root = this.o.worktreeRoot ?? host.joinPath(this.o.repo, "..", `${this.o.repo.split(/[\\/]/).filter(Boolean).pop() ?? "repo"}-worktrees`);
+    const root =
+      this.o.worktreeRoot ??
+      host.joinPath(this.o.repo, "..", `${this.o.repo.split(/[\\/]/).filter(Boolean).pop() ?? "repo"}-worktrees`);
     const dir = host.joinPath(root, slug);
     if (await host.fs.exists(dir)) return { hostId: host.id, cwd: dir, repo: this.o.repo, branch, provider: this.name };
     await host.fs.mkdirp(root);
     const base = this.o.baseBranch ?? "main";
-    const exists = await host.exec(`git rev-parse --verify --quiet refs/heads/${shellQuote(branch)}`, { cwd: this.o.repo });
-    const cmd = exists.code === 0 ? `git worktree add ${shellQuote(dir)} ${shellQuote(branch)}` : `git worktree add -b ${shellQuote(branch)} ${shellQuote(dir)} ${shellQuote(base)}`;
+    const exists = await host.exec(`git rev-parse --verify --quiet refs/heads/${shellQuote(branch)}`, {
+      cwd: this.o.repo,
+    });
+    const cmd =
+      exists.code === 0
+        ? `git worktree add ${shellQuote(dir)} ${shellQuote(branch)}`
+        : `git worktree add -b ${shellQuote(branch)} ${shellQuote(dir)} ${shellQuote(base)}`;
     const r = await host.exec(cmd, { cwd: this.o.repo });
     if (r.code !== 0) throw new OrcaError("INTERNAL", `git worktree add failed: ${r.stderr.trim()}`, { cmd, dir });
     return { hostId: host.id, cwd: dir, repo: this.o.repo, branch, provider: this.name };

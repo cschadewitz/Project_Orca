@@ -37,8 +37,13 @@ export function validateDecisionMatrix(m: DecisionMatrixInput): MatrixIssue[] {
     seenO.add(o.key);
     for (const c of m.criteria) {
       const s = o.scores[c.key];
-      if (s === undefined) issues.push({ path: `options[${i}].scores.${c.key}`, message: `option '${o.key}' has no score for criterion '${c.key}'` });
-      else if (!Number.isFinite(s) || s < 0 || s > m.scale) issues.push({ path: `options[${i}].scores.${c.key}`, message: `score ${s} is outside 0..${m.scale}` });
+      if (s === undefined)
+        issues.push({
+          path: `options[${i}].scores.${c.key}`,
+          message: `option '${o.key}' has no score for criterion '${c.key}'`,
+        });
+      else if (!Number.isFinite(s) || s < 0 || s > m.scale)
+        issues.push({ path: `options[${i}].scores.${c.key}`, message: `score ${s} is outside 0..${m.scale}` });
     }
   });
   return issues;
@@ -59,14 +64,18 @@ function rank(m: DecisionMatrixInput, weights: Map<string, number>): DecisionRan
     return { option: o.key, score: round(score), normalized: round(score / m.scale), byCriterion };
   });
   // Stable: ties keep the authoring order.
-  return entries.map((e, i) => ({ e, i })).sort((a, b) => b.e.score - a.e.score || a.i - b.i).map(({ e }) => e);
+  return entries
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => b.e.score - a.e.score || a.i - b.i)
+    .map(({ e }) => e);
 }
 
 const round = (n: number) => Math.round(n * 1000) / 1000;
 
 export function evaluateDecisionMatrix(m: DecisionMatrixInput, now: string): DecisionMatrixResult {
   const issues = validateDecisionMatrix(m);
-  if (issues.length) throw new Error(`invalid decision matrix: ${issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`);
+  if (issues.length)
+    throw new Error(`invalid decision matrix: ${issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`);
   const weights = new Map(m.criteria.map((c) => [c.key, c.weight]));
   const ranking = rank(m, weights);
   const top = ranking[0]!;
@@ -100,5 +109,11 @@ export function renderDecisionMatrix(m: DecisionMatrixInput, result: DecisionMat
     const name = o?.name ?? r.option;
     return `| ${r.option === result.recommended ? "**" + name + "**" : name} | ${m.criteria.map((c) => String(o?.scores[c.key] ?? "")).join(" | ")} | ${r.score} |`;
   });
-  return [header, sep, ...rows, "", `Recommended: **${result.recommended}** (${result.confidence}, margin ${result.margin})${result.pivotalCriteria.length ? `; pivotal criteria: ${result.pivotalCriteria.join(", ")}` : ""}`].join("\n");
+  return [
+    header,
+    sep,
+    ...rows,
+    "",
+    `Recommended: **${result.recommended}** (${result.confidence}, margin ${result.margin})${result.pivotalCriteria.length ? `; pivotal criteria: ${result.pivotalCriteria.join(", ")}` : ""}`,
+  ].join("\n");
 }

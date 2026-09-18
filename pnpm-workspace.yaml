@@ -1,6 +1,8 @@
 # Workspace packages. Replaces the npm `workspaces` field in package.json.
 packages:
   - "packages/*"
+  # Build/lint tooling that needs its own dependency closure, kept out of the TS build.
+  - "tools/*"
 
 # pnpm runs no dependency lifecycle scripts by default. esbuild (pulled in by
 # tsx) needs its postinstall to place the platform binary, so allow just that.

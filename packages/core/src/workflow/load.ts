@@ -26,7 +26,11 @@ export function parseWorkflow(text: string, sourceName = "<inline>"): WorkflowDe
 export async function loadWorkflowFile(file: string, ctx?: ValidationContext): Promise<WorkflowDefinition> {
   const def = parseWorkflow(await readFile(file, "utf8"), basename(file));
   const result = validateWorkflow(def, ctx);
-  if (!result.ok) throw new OrcaError("WORKFLOW_INVALID", `${file} failed validation`, { errors: result.errors, warnings: result.warnings });
+  if (!result.ok)
+    throw new OrcaError("WORKFLOW_INVALID", `${file} failed validation`, {
+      errors: result.errors,
+      warnings: result.warnings,
+    });
   return def;
 }
 
@@ -48,7 +52,8 @@ export class WorkflowRegistry {
   }
   get(id: string): WorkflowDefinition {
     const d = this.defs.get(id);
-    if (!d) throw new OrcaError("WORKFLOW_NOT_FOUND", `workflow '${id}' not registered`, { known: [...this.defs.keys()] });
+    if (!d)
+      throw new OrcaError("WORKFLOW_NOT_FOUND", `workflow '${id}' not registered`, { known: [...this.defs.keys()] });
     return d;
   }
   list(): WorkflowDefinition[] {

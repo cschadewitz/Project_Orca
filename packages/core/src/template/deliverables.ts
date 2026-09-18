@@ -36,7 +36,8 @@ export function renderDeliverablesBlock(items: Deliverable[]): string {
     .map((d) => {
       const bits = [`**${d.kind}** at \`${d.path}\`${d.required ? "" : " (optional)"}`];
       if (d.requiredFields?.length) bits.push(`front matter must include: ${d.requiredFields.join(", ")}`);
-      if (d.fieldValues) for (const [k, vs] of Object.entries(d.fieldValues)) bits.push(`\`${k}\` must be one of: ${vs.join(" | ")}`);
+      if (d.fieldValues)
+        for (const [k, vs] of Object.entries(d.fieldValues)) bits.push(`\`${k}\` must be one of: ${vs.join(" | ")}`);
       return `- ${bits.join("; ")}`;
     })
     .join("\n");

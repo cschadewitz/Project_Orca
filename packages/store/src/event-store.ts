@@ -47,7 +47,12 @@ export abstract class BaseEventStore implements EventStore {
   }
 
   async append(input: OrcaEventInput): Promise<OrcaEvent> {
-    const event = await this.write(input.runId, (seq) => ({ ...input, id: newId("evt", this.clock.now()), seq, at: this.clock.isoNow() }) as OrcaEvent);
+    const event = await this.write(input.runId, (seq) => ({
+      ...input,
+      id: newId("evt", this.clock.now()),
+      seq,
+      at: this.clock.isoNow(),
+    }));
     for (const { listener, filter } of this.listeners) {
       if (filter?.runId && filter.runId !== event.runId) continue;
       if (filter?.types && !filter.types.includes(event.type)) continue;

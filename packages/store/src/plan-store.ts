@@ -6,8 +6,23 @@
  * `<dir>/decisions.json`, `<dir>/plans/<planId>.jsonl` (journal).
  */
 import { join } from "node:path";
-import type { ZodType } from "zod";
-import { DecisionSchema, DependencySchema, newId, PlanEventSchema, PlanSchema, RiskSchema, systemClock, type Clock, type Decision, type Dependency, type Logger, type Plan, type PlanEvent, type PlanEventInput, type Risk } from "@orca/core";
+import {
+  DecisionSchema,
+  DependencySchema,
+  newId,
+  PlanEventSchema,
+  PlanSchema,
+  RiskSchema,
+  systemClock,
+  type Clock,
+  type Decision,
+  type Dependency,
+  type Logger,
+  type Plan,
+  type PlanEvent,
+  type PlanEventInput,
+  type Risk,
+} from "@orca/core";
 import { InMemoryDocumentStore, JsonFileDocumentStore, type DocumentStore } from "./document-store.js";
 import { JsonlLogDir } from "./jsonl-log.js";
 
@@ -30,7 +45,12 @@ abstract class BasePlanJournal implements PlanJournal {
   abstract listPlans(): Promise<string[]>;
 
   async append(input: PlanEventInput): Promise<PlanEvent> {
-    const event = await this.write(input.planId, (seq) => ({ ...input, id: newId("pev", this.clock.now()), seq, at: this.clock.isoNow() }) as PlanEvent);
+    const event = await this.write(input.planId, (seq) => ({
+      ...input,
+      id: newId("pev", this.clock.now()),
+      seq,
+      at: this.clock.isoNow(),
+    }));
     for (const { listener, planId } of this.listeners) {
       if (planId && planId !== event.planId) continue;
       try {
@@ -94,10 +114,10 @@ export interface PlanStores {
 
 export function filePlanStores(dir: string, clock?: Clock, logger?: Logger): PlanStores {
   return {
-    plans: new JsonFileDocumentStore<Plan>(join(dir, "plans.json"), PlanSchema as unknown as ZodType<Plan>),
-    dependencies: new JsonFileDocumentStore<Dependency>(join(dir, "dependencies.json"), DependencySchema as unknown as ZodType<Dependency>),
-    risks: new JsonFileDocumentStore<Risk>(join(dir, "risks.json"), RiskSchema as unknown as ZodType<Risk>),
-    decisions: new JsonFileDocumentStore<Decision>(join(dir, "decisions.json"), DecisionSchema as unknown as ZodType<Decision>),
+    plans: new JsonFileDocumentStore<Plan>(join(dir, "plans.json"), PlanSchema),
+    dependencies: new JsonFileDocumentStore<Dependency>(join(dir, "dependencies.json"), DependencySchema),
+    risks: new JsonFileDocumentStore<Risk>(join(dir, "risks.json"), RiskSchema),
+    decisions: new JsonFileDocumentStore<Decision>(join(dir, "decisions.json"), DecisionSchema),
     journal: new JsonlPlanJournal(dir, clock, logger),
   };
 }

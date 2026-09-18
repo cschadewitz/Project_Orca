@@ -16,7 +16,17 @@
  *   plan risk <riskKey> --status <status> [key]   accept / mitigate / close a risk
  *   plan dispatch [key]           run the plan-resume workflow: schedule -> gate -> dispatch across the plan
  */
-import { decisionBlocks, describeRiskMatrix, planToMermaid, renderDecisionMatrix, riskLevel, riskScore, OrcaError, type PlanOrigin, type RiskStatus } from "@orca/core";
+import {
+  decisionBlocks,
+  describeRiskMatrix,
+  planToMermaid,
+  renderDecisionMatrix,
+  riskLevel,
+  riskScore,
+  OrcaError,
+  type PlanOrigin,
+  type RiskStatus,
+} from "@orca/core";
 import type { PlanService } from "@orca/engine";
 import { bootstrap } from "../bootstrap.js";
 import { attachEventPrinter, finish, type CommandContext } from "./index.js";
@@ -27,12 +37,20 @@ async function open(ctx: CommandContext) {
   return bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}), logLevel: "warn" });
 }
 
-async function resolvePlan(plan: PlanService, ctx: CommandContext, positional: string | undefined, fallbackKey: string) {
+async function resolvePlan(
+  plan: PlanService,
+  ctx: CommandContext,
+  positional: string | undefined,
+  fallbackKey: string,
+) {
   const key = (ctx.flags.plan as string | undefined) ?? positional ?? fallbackKey;
   const found = await plan.getPlan(key);
   if (!found) {
     const all = await plan.listPlans();
-    throw new OrcaError("PLAN_NOT_FOUND", `plan '${key}' not found${all.length ? `; known plans: ${all.map((p) => p.key).join(", ")}` : " (no plans yet - submit a request first)"}`);
+    throw new OrcaError(
+      "PLAN_NOT_FOUND",
+      `plan '${key}' not found${all.length ? `; known plans: ${all.map((p) => p.key).join(", ")}` : " (no plans yet - submit a request first)"}`,
+    );
   }
   return found;
 }
@@ -53,7 +71,9 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       if (!plans.length) ctx.out("no plans yet (submit a request to create one)");
       for (const p of plans) {
         const items = await app.orchestrator.stores.workItems.list((w) => w.planId === p.id);
-        ctx.out(`${pad(p.key, 16)} ${pad(p.status, 9)} ${items.length} item(s), ${p.requestIds.length} request(s), strategy=${p.policy.strategy}, appetite=${p.policy.riskAppetite}  ${p.id}`);
+        ctx.out(
+          `${pad(p.key, 16)} ${pad(p.status, 9)} ${items.length} item(s), ${p.requestIds.length} request(s), strategy=${p.policy.strategy}, appetite=${p.policy.riskAppetite}  ${p.id}`,
+        );
       }
       return 0;
     }
@@ -63,25 +83,38 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       const snap = await plan.snapshot(p.id);
       if (json) return (ctx.out(JSON.stringify(snap, null, 2)), 0);
       const slug = (id: string) => snap.items.find((i) => i.id === id)?.slug ?? id;
-      ctx.out(`plan ${p.key} (${p.id})  ${p.name}  status=${p.status}  strategy=${p.policy.strategy}  concurrency=${p.policy.concurrency}  appetite=${p.policy.riskAppetite}`);
+      ctx.out(
+        `plan ${p.key} (${p.id})  ${p.name}  status=${p.status}  strategy=${p.policy.strategy}  concurrency=${p.policy.concurrency}  appetite=${p.policy.riskAppetite}`,
+      );
       ctx.out(`requests: ${p.requestIds.join(", ") || "-"}`);
       ctx.out(`risk matrix: ${describeRiskMatrix(p.riskMatrix)}`);
       ctx.out("");
       ctx.out("work items:");
       for (const w of snap.items) {
         const deps = snap.dependencies.filter((d) => d.from === w.id);
-        const depText = deps.map((d) => `${d.type === "blocks" ? "" : d.type + ":"}${d.target.kind === "work-item" ? slug(d.target.workItemId) + (d.target.stage ? "@" + d.target.stage : "") : d.target.kind === "decision" ? "decision:" + (snap.decisions.find((x) => x.id === (d.target as { decisionId: string }).decisionId)?.key ?? "?") : "external:" + d.target.key}${d.requiredBy !== "start" ? "#" + d.requiredBy : ""} [${d.status}]`);
-        ctx.out(`  ${pad(w.status, 12)} ${pad(w.slug, 24)} ${pad(w.priority, 8)} ${w.title}${w.runId ? `  run=${w.runId}` : ""}${depText.length ? `\n${" ".repeat(15)}depends on: ${depText.join(", ")}` : ""}${w.deferredReason ? `\n${" ".repeat(15)}deferred: ${w.deferredReason}` : ""}`);
+        const depText = deps.map(
+          (d) =>
+            `${d.type === "blocks" ? "" : d.type + ":"}${d.target.kind === "work-item" ? slug(d.target.workItemId) + (d.target.stage ? "@" + d.target.stage : "") : d.target.kind === "decision" ? "decision:" + (snap.decisions.find((x) => x.id === (d.target as { decisionId: string }).decisionId)?.key ?? "?") : "external:" + d.target.key}${d.requiredBy !== "start" ? "#" + d.requiredBy : ""} [${d.status}]`,
+        );
+        ctx.out(
+          `  ${pad(w.status, 12)} ${pad(w.slug, 24)} ${pad(w.priority, 8)} ${w.title}${w.runId ? `  run=${w.runId}` : ""}${depText.length ? `\n${" ".repeat(15)}depends on: ${depText.join(", ")}` : ""}${w.deferredReason ? `\n${" ".repeat(15)}deferred: ${w.deferredReason}` : ""}`,
+        );
       }
       if (snap.risks.length) {
         ctx.out("");
         ctx.out("risks:");
-        for (const r of snap.risks) ctx.out(`  ${pad(r.status, 11)} ${pad(riskLevel(riskScore(r), p.riskMatrix), 8)} ${pad(r.key, 24)} L${r.likelihood} x I${r.impact}  affects: ${r.affects.map(slug).join(", ") || "-"}`);
+        for (const r of snap.risks)
+          ctx.out(
+            `  ${pad(r.status, 11)} ${pad(riskLevel(riskScore(r), p.riskMatrix), 8)} ${pad(r.key, 24)} L${r.likelihood} x I${r.impact}  affects: ${r.affects.map(slug).join(", ") || "-"}`,
+          );
       }
       if (snap.decisions.length) {
         ctx.out("");
         ctx.out("decisions:");
-        for (const d of snap.decisions) ctx.out(`  ${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}  blocks: ${decisionBlocks(d.id, snap.dependencies).map(slug).join(", ") || "-"}`);
+        for (const d of snap.decisions)
+          ctx.out(
+            `  ${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}  blocks: ${decisionBlocks(d.id, snap.dependencies).map(slug).join(", ") || "-"}`,
+          );
       }
       return 0;
     }
@@ -90,11 +123,17 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       const p = await resolvePlan(plan, ctx, args[0], defaultKey);
       const c = await plan.compactSchedule(p.id);
       if (json) return (ctx.out(JSON.stringify(c, null, 2)), 0);
-      ctx.out(`schedule for ${p.key} (strategy ${c.strategy}; open risks ${c.risk.open}, highest ${c.risk.highestLevel})`);
+      ctx.out(
+        `schedule for ${p.key} (strategy ${c.strategy}; open risks ${c.risk.open}, highest ${c.risk.highestLevel})`,
+      );
       ctx.out("");
       ctx.out("ready (in order):");
       if (!c.ready.length) ctx.out("  -");
-      c.ready.forEach((r, i) => ctx.out(`  ${i + 1}. ${pad(r.slug, 24)} score=${r.score}${r.reasons.length ? "  " + r.reasons.join("; ") : ""}`));
+      c.ready.forEach((r, i) =>
+        ctx.out(
+          `  ${i + 1}. ${pad(r.slug, 24)} score=${r.score}${r.reasons.length ? "  " + r.reasons.join("; ") : ""}`,
+        ),
+      );
       if (c.running.length) ctx.out(`running: ${c.running.join(", ")}`);
       if (c.waiting.length) {
         ctx.out("");
@@ -136,7 +175,14 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
     case "graph": {
       const p = await resolvePlan(plan, ctx, args[0], defaultKey);
       const snap = await plan.snapshot(p.id);
-      ctx.out(planToMermaid({ items: snap.items, dependencies: snap.dependencies, decisions: snap.decisions, title: `plan ${p.key}` }));
+      ctx.out(
+        planToMermaid({
+          items: snap.items,
+          dependencies: snap.dependencies,
+          decisions: snap.decisions,
+          title: `plan ${p.key}`,
+        }),
+      );
       return 0;
     }
 
@@ -148,8 +194,12 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       const sorted = [...snap.risks].sort((a, b) => riskScore(b) - riskScore(a));
       ctx.out(`risk matrix: ${describeRiskMatrix(p.riskMatrix)}`);
       for (const r of sorted) {
-        ctx.out(`${pad(r.status, 11)} ${pad(riskLevel(riskScore(r), p.riskMatrix), 8)} ${pad(r.key, 24)} L${r.likelihood} x I${r.impact} = ${riskScore(r)}  ${r.title}`);
-        ctx.out(`${" ".repeat(12)}category=${r.category}  affects: ${r.affects.map(slug).join(", ") || "-"}  mitigated by: ${r.mitigatedBy.map(slug).join(", ") || "-"}${r.mitigation ? `\n${" ".repeat(12)}mitigation: ${r.mitigation}` : ""}`);
+        ctx.out(
+          `${pad(r.status, 11)} ${pad(riskLevel(riskScore(r), p.riskMatrix), 8)} ${pad(r.key, 24)} L${r.likelihood} x I${r.impact} = ${riskScore(r)}  ${r.title}`,
+        );
+        ctx.out(
+          `${" ".repeat(12)}category=${r.category}  affects: ${r.affects.map(slug).join(", ") || "-"}  mitigated by: ${r.mitigatedBy.map(slug).join(", ") || "-"}${r.mitigation ? `\n${" ".repeat(12)}mitigation: ${r.mitigation}` : ""}`,
+        );
       }
       if (!sorted.length) ctx.out("no risks recorded");
       return 0;
@@ -161,11 +211,19 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       if (json) return (ctx.out(JSON.stringify(snap.decisions, null, 2)), 0);
       const slug = (id: string) => snap.items.find((i) => i.id === id)?.slug ?? id;
       for (const d of snap.decisions) {
-        ctx.out(`${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}`);
+        ctx.out(
+          `${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}`,
+        );
         if (d.question) ctx.out(`${" ".repeat(12)}${d.question}`);
         const blocks = decisionBlocks(d.id, snap.dependencies);
         if (blocks.length) ctx.out(`${" ".repeat(12)}blocks: ${blocks.map(slug).join(", ")}`);
-        if (d.result && d.criteria.length && d.options.length) ctx.out(renderDecisionMatrix({ criteria: d.criteria, options: d.options, scale: d.scale }, d.result).split("\n").map((l) => " ".repeat(12) + l).join("\n"));
+        if (d.result && d.criteria.length && d.options.length)
+          ctx.out(
+            renderDecisionMatrix({ criteria: d.criteria, options: d.options, scale: d.scale }, d.result)
+              .split("\n")
+              .map((l) => " ".repeat(12) + l)
+              .join("\n"),
+          );
         if (d.rationale) ctx.out(`${" ".repeat(12)}rationale: ${d.rationale}`);
       }
       if (!snap.decisions.length) ctx.out("no decisions recorded");
@@ -183,18 +241,32 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
         }
         const pl = e.payload as Record<string, unknown>;
         const what =
-          e.type === "work-item.added" ? (pl.workItem as { slug: string }).slug
-          : e.type === "work-item.updated" ? `${slug(pl.workItemId as string)} ${JSON.stringify(pl.changes)}`
-          : e.type === "dependency.added" ? `${slug((pl.dependency as { from: string }).from)} -> ${JSON.stringify((pl.dependency as { target: unknown }).target)}`
-          : e.type === "dependency.resolved" ? `${pl.dependencyId} ${pl.status}${pl.resolution ? `: ${pl.resolution}` : ""}`
-          : e.type === "risk.raised" ? (pl.risk as { key: string }).key
-          : e.type === "risk.updated" ? `${pl.riskId} ${JSON.stringify(pl.changes)}`
-          : e.type === "decision.opened" ? (pl.decision as { key: string }).key
-          : e.type === "decision.resolved" ? `${pl.decisionId} = ${pl.chosen} (${pl.decidedBy})`
-          : e.type === "schedule.computed" ? `ready: ${(pl.ready as string[]).map(slug).join(", ") || "-"}; waiting: ${(pl.waiting as string[]).length}; held: ${(pl.held as string[]).length}`
-          : e.type === "dispatch.started" || e.type === "dispatch.finished" || e.type === "dispatch.deferred" ? `${slug(pl.workItemId as string)}${pl.status ? ` ${pl.status}` : ""}${pl.reason ? ` ${pl.reason}` : ""}`
-          : JSON.stringify(pl);
-        ctx.out(`${e.at.slice(0, 19)} ${String(e.seq).padStart(4)} ${pad(e.type, 20)} ${pad(e.origin.kind, 13)} ${what}`);
+          e.type === "work-item.added"
+            ? (pl.workItem as { slug: string }).slug
+            : e.type === "work-item.updated"
+              ? `${slug(pl.workItemId as string)} ${JSON.stringify(pl.changes)}`
+              : e.type === "dependency.added"
+                ? `${slug((pl.dependency as { from: string }).from)} -> ${JSON.stringify((pl.dependency as { target: unknown }).target)}`
+                : e.type === "dependency.resolved"
+                  ? `${pl.dependencyId} ${pl.status}${pl.resolution ? `: ${pl.resolution}` : ""}`
+                  : e.type === "risk.raised"
+                    ? (pl.risk as { key: string }).key
+                    : e.type === "risk.updated"
+                      ? `${pl.riskId} ${JSON.stringify(pl.changes)}`
+                      : e.type === "decision.opened"
+                        ? (pl.decision as { key: string }).key
+                        : e.type === "decision.resolved"
+                          ? `${pl.decisionId} = ${pl.chosen} (${pl.decidedBy})`
+                          : e.type === "schedule.computed"
+                            ? `ready: ${(pl.ready as string[]).map(slug).join(", ") || "-"}; waiting: ${(pl.waiting as string[]).length}; held: ${(pl.held as string[]).length}`
+                            : e.type === "dispatch.started" ||
+                                e.type === "dispatch.finished" ||
+                                e.type === "dispatch.deferred"
+                              ? `${slug(pl.workItemId as string)}${pl.status ? ` ${pl.status}` : ""}${pl.reason ? ` ${pl.reason}` : ""}`
+                              : JSON.stringify(pl);
+        ctx.out(
+          `${e.at.slice(0, 19)} ${String(e.seq).padStart(4)} ${pad(e.type, 20)} ${pad(e.origin.kind, 13)} ${what}`,
+        );
       }
       return 0;
     }
@@ -204,7 +276,9 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       if (!from || !ref) throw new OrcaError("CONFIG_INVALID", "plan depend needs <slug> <dependency-ref>");
       const p = await resolvePlan(plan, ctx, args[2], defaultKey);
       const dep = await plan.addDependency(p.id, from, ref, HUMAN);
-      ctx.out(`added ${dep.id}: ${from} -> ${JSON.stringify(dep.target)} (${dep.type}, by ${dep.requiredBy}) status=${dep.status}`);
+      ctx.out(
+        `added ${dep.id}: ${from} -> ${JSON.stringify(dep.target)} (${dep.type}, by ${dep.requiredBy}) status=${dep.status}`,
+      );
       return 0;
     }
 
@@ -213,7 +287,12 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       const id = args[0];
       if (!id) throw new OrcaError("CONFIG_INVALID", `plan ${sub} needs a dependency id`);
       await resolvePlan(plan, ctx, args[1], defaultKey);
-      const dep = await plan.resolveDependency(id, sub === "waive" ? "waived" : "satisfied", (ctx.flags.rationale as string | undefined) ?? `${sub} via CLI`, HUMAN);
+      const dep = await plan.resolveDependency(
+        id,
+        sub === "waive" ? "waived" : "satisfied",
+        (ctx.flags.rationale as string | undefined) ?? `${sub} via CLI`,
+        HUMAN,
+      );
       ctx.out(`${dep.id} is now ${dep.status}`);
       return 0;
     }
@@ -222,15 +301,30 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       const [key, option] = args;
       if (!key || !option) throw new OrcaError("CONFIG_INVALID", "plan decide needs <decisionKey> <optionKey>");
       const p = await resolvePlan(plan, ctx, args[2], defaultKey);
-      const r = await plan.evaluateDecision(p.id, key, { chosen: option, decidedBy: "human", ...(ctx.flags.rationale ? { rationale: String(ctx.flags.rationale) } : {}) }, HUMAN);
-      ctx.out(`decision ${r.decision.key} = ${r.choice}${r.result ? ` (matrix recommended ${r.result.recommended}, ${r.result.confidence})` : ""}`);
+      const r = await plan.evaluateDecision(
+        p.id,
+        key,
+        {
+          chosen: option,
+          decidedBy: "human",
+          ...(ctx.flags.rationale ? { rationale: String(ctx.flags.rationale) } : {}),
+        },
+        HUMAN,
+      );
+      ctx.out(
+        `decision ${r.decision.key} = ${r.choice}${r.result ? ` (matrix recommended ${r.result.recommended}, ${r.result.confidence})` : ""}`,
+      );
       return 0;
     }
 
     case "risk": {
       const key = args[0];
       const status = ctx.flags.status as RiskStatus | undefined;
-      if (!key || !status) throw new OrcaError("CONFIG_INVALID", "plan risk needs <riskKey> --status <open|mitigating|mitigated|accepted|realized|closed>");
+      if (!key || !status)
+        throw new OrcaError(
+          "CONFIG_INVALID",
+          "plan risk needs <riskKey> --status <open|mitigating|mitigated|accepted|realized|closed>",
+        );
       const p = await resolvePlan(plan, ctx, args[1], defaultKey);
       const r = await plan.updateRisk(p.id, key, { status }, HUMAN);
       ctx.out(`risk ${r.key} is now ${r.status}`);
@@ -243,7 +337,10 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       try {
         // Same exit-code contract as `orca run` / `orca submit`: 3 + the pending question when a gate parks the run.
         const itemWorkflow = app.config.program.itemWorkflow;
-        const state = await app.orchestrator.startAndRun({ workflowId: (ctx.flags.workflow as string | undefined) ?? "plan-resume", vars: { plan: p.key, planId: p.id, ...(itemWorkflow ? { itemWorkflow } : {}) } });
+        const state = await app.orchestrator.startAndRun({
+          workflowId: (ctx.flags.workflow as string | undefined) ?? "plan-resume",
+          vars: { plan: p.key, planId: p.id, ...(itemWorkflow ? { itemWorkflow } : {}) },
+        });
         return await finish(app, ctx, state);
       } finally {
         detach();
@@ -251,6 +348,9 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
     }
 
     default:
-      throw new OrcaError("CONFIG_INVALID", `unknown plan subcommand '${sub}' (list, show, schedule, explain, graph, risks, decisions, journal, depend, waive, satisfy, decide, risk, dispatch)`);
+      throw new OrcaError(
+        "CONFIG_INVALID",
+        `unknown plan subcommand '${sub}' (list, show, schedule, explain, graph, risks, decisions, journal, depend, waive, satisfy, decide, risk, dispatch)`,
+      );
   }
 }

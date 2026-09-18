@@ -7,8 +7,32 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { AgentRegistry } from "@orca/agents";
-import { consoleLogger, loadTemplates, loadWorkflows, OrcaError, parseOrcaConfig, validateWorkflow, type Logger, type OrcaConfig, type TemplateRegistry, type WorkflowRegistry } from "@orca/core";
-import { autoHumanInput, builtinExecutors, GitWorktreeProvider, LocalWorkspaceProvider, Orchestrator, PausingHumanInput, PlanService, ProgramService, type HumanInputPort, type OrcaPlugin, type PluginApi, type WorkspaceProvider } from "@orca/engine";
+import {
+  consoleLogger,
+  loadTemplates,
+  loadWorkflows,
+  OrcaError,
+  parseOrcaConfig,
+  validateWorkflow,
+  type Logger,
+  type OrcaConfig,
+  type TemplateRegistry,
+  type WorkflowRegistry,
+} from "@orca/core";
+import {
+  autoHumanInput,
+  builtinExecutors,
+  GitWorktreeProvider,
+  LocalWorkspaceProvider,
+  Orchestrator,
+  PausingHumanInput,
+  PlanService,
+  ProgramService,
+  type HumanInputPort,
+  type OrcaPlugin,
+  type PluginApi,
+  type WorkspaceProvider,
+} from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { fileStores, memoryStores } from "@orca/store";
 import { cliHumanInput } from "./human-input-cli.js";
@@ -45,7 +69,13 @@ export async function findConfig(cwd: string): Promise<string | undefined> {
   for (;;) {
     for (const name of CONFIG_FILENAMES) {
       const p = join(dir, name);
-      if (await stat(p).then((s) => s.isFile(), () => false)) return p;
+      if (
+        await stat(p).then(
+          (s) => s.isFile(),
+          () => false,
+        )
+      )
+        return p;
     }
     const parent = dirname(dir);
     if (parent === dir) return undefined;
@@ -76,10 +106,15 @@ export function makeWorkspaceProvider(config: OrcaConfig, configDir: string, age
         repo: isAbsolute(ws.repo) ? ws.repo : resolve(configDir, ws.repo),
         baseBranch: ws.baseBranch,
         branchPrefix: ws.branchPrefix,
-        ...(ws.worktreeRoot ? { worktreeRoot: isAbsolute(ws.worktreeRoot) ? ws.worktreeRoot : resolve(configDir, ws.worktreeRoot) } : {}),
+        ...(ws.worktreeRoot
+          ? { worktreeRoot: isAbsolute(ws.worktreeRoot) ? ws.worktreeRoot : resolve(configDir, ws.worktreeRoot) }
+          : {}),
       });
     case "kepler":
-      return new KeplerTaskWorkspaceProvider({ taskDir: ws.taskDir ?? process.env.KEPLER_TASK_DIR ?? configDir, hostId: ws.hostId });
+      return new KeplerTaskWorkspaceProvider({
+        taskDir: ws.taskDir ?? process.env.KEPLER_TASK_DIR ?? configDir,
+        hostId: ws.hostId,
+      });
   }
 }
 
@@ -96,7 +131,9 @@ export function makeHumanInput(config: OrcaConfig): HumanInputPort {
 
 export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const cwd = opts.cwd ?? process.cwd();
-  const { config, configDir } = opts.config ? { config: opts.config, configDir: opts.configDir ?? cwd } : await loadConfig(cwd, opts.configPath);
+  const { config, configDir } = opts.config
+    ? { config: opts.config, configDir: opts.configDir ?? cwd }
+    : await loadConfig(cwd, opts.configPath);
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
   const templates = await loadTemplates(config.templates, configDir);
@@ -104,11 +141,18 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const executors = builtinExecutors();
   let humanInput = opts.humanInput ?? makeHumanInput(config);
   let workspaceProvider = makeWorkspaceProvider(config, configDir, agents);
-  const stores = opts.ephemeral ? memoryStores() : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
+  const stores = opts.ephemeral
+    ? memoryStores()
+    : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
   const plan = new PlanService({
     stores,
     logger: logger.child({ component: "plan" }),
-    defaults: { planKey: config.planning.plan, planName: config.planning.planName, policy: stripUndefined(config.planning.policy), riskMatrix: stripUndefined(config.planning.riskMatrix) },
+    defaults: {
+      planKey: config.planning.plan,
+      planName: config.planning.planName,
+      policy: stripUndefined(config.planning.policy),
+      riskMatrix: stripUndefined(config.planning.riskMatrix),
+    },
   });
 
   const api: PluginApi = {
@@ -123,23 +167,55 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   for (const spec of config.plugins) {
     const url = spec.startsWith(".") || isAbsolute(spec) ? pathToFileURL(resolve(configDir, spec)).href : spec;
     const mod = (await import(url)) as { default?: OrcaPlugin };
-    if (!mod.default?.register) throw new OrcaError("CONFIG_INVALID", `plugin ${spec} has no default OrcaPlugin export`);
+    if (!mod.default?.register)
+      throw new OrcaError("CONFIG_INVALID", `plugin ${spec} has no default OrcaPlugin export`);
     await mod.default.register(api);
     logger.debug("plugin loaded", { plugin: mod.default.name });
   }
 
   const problems: string[] = [];
   for (const def of workflows.list()) {
-    const r = validateWorkflow(def, { hasTemplate: (id) => templates.has(id), hasWorkflow: (id) => workflows.has(id), hasAgent: (s) => agents.canResolve(s) });
+    const r = validateWorkflow(def, {
+      hasTemplate: (id) => templates.has(id),
+      hasWorkflow: (id) => workflows.has(id),
+      hasAgent: (s) => agents.canResolve(s),
+    });
     for (const e of r.errors) problems.push(`${def.id}: ${e.path}: ${e.message}`);
     for (const w of r.warnings) logger.warn(`workflow ${def.id}: ${w.path}: ${w.message}`);
   }
-  if (problems.length) throw new OrcaError("WORKFLOW_INVALID", `workflow validation failed:\n${problems.map((p) => "  - " + p).join("\n")}`, { problems });
+  if (problems.length)
+    throw new OrcaError(
+      "WORKFLOW_INVALID",
+      `workflow validation failed:\n${problems.map((p) => "  - " + p).join("\n")}`,
+      { problems },
+    );
 
-  const orchestrator = new Orchestrator({ stores, agents, workflows, templates, executors, humanInput, workspaceProvider, plan, logger });
-  return { config, configDir, orchestrator, program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow), plan, workflows, templates, agents, logger };
+  const orchestrator = new Orchestrator({
+    stores,
+    agents,
+    workflows,
+    templates,
+    executors,
+    humanInput,
+    workspaceProvider,
+    plan,
+    logger,
+  });
+  return {
+    config,
+    configDir,
+    orchestrator,
+    program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow),
+    plan,
+    workflows,
+    templates,
+    agents,
+    logger,
+  };
 }
 
 function stripUndefined<T extends object>(o: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
-  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as { [K in keyof T]?: Exclude<T[K], undefined> };
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as {
+    [K in keyof T]?: Exclude<T[K], undefined>;
+  };
 }

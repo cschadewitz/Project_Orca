@@ -30,10 +30,20 @@ export interface T3CodeSessionOptions {
   title?: string;
 }
 
-export async function openT3CodeSession(base: Pick<OpenSessionOptions, "agent" | "host" | "cwd" | "clock">, o: T3CodeSessionOptions): Promise<AgentSession> {
+export async function openT3CodeSession(
+  base: Pick<OpenSessionOptions, "agent" | "host" | "cwd" | "clock">,
+  o: T3CodeSessionOptions,
+): Promise<AgentSession> {
   const threadId = randomUUID();
   const runtimeMode = o.runtimeMode ?? "full-access";
-  await o.rpc.call(T3_WS_METHODS.dispatchCommand, { type: "thread.create", threadId, projectId: o.projectId, title: o.title ?? `orca ${base.agent.id}`, modelSelection: o.modelSelection, runtimeMode });
+  await o.rpc.call(T3_WS_METHODS.dispatchCommand, {
+    type: "thread.create",
+    threadId,
+    projectId: o.projectId,
+    title: o.title ?? `orca ${base.agent.id}`,
+    modelSelection: o.modelSelection,
+    runtimeMode,
+  });
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   const id = newId("sess");
   let turnWaiter: { resolve: (r: TurnResult) => void; started: number } | undefined;
@@ -41,11 +51,22 @@ export async function openT3CodeSession(base: Pick<OpenSessionOptions, "agent" |
 
   const unsubscribe = o.rpc.subscribe(T3_WS_METHODS.subscribeThread, { threadId }, (event: T3ThreadEvent) => {
     const summary = toSummary(event);
-    if (summary) for (const l of listeners) l({ sessionId: id, raw: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: summary.text ?? "" } }, summary, at: now() });
+    if (summary)
+      for (const l of listeners)
+        l({
+          sessionId: id,
+          raw: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: summary.text ?? "" } },
+          summary,
+          at: now(),
+        });
     if (event.type === "thread.session-set" || event.type === "thread.turn-diff-completed") {
       const sess = event.payload.session as { activeTurnId?: string | null } | undefined;
       const latestTurn = (event.payload as { latestTurn?: { state?: string } }).latestTurn;
-      const idle = sess ? sess.activeTurnId === null : latestTurn ? latestTurn.state === "completed" || latestTurn.state === "error" || latestTurn.state === "interrupted" : false;
+      const idle = sess
+        ? sess.activeTurnId === null
+        : latestTurn
+          ? latestTurn.state === "completed" || latestTurn.state === "error" || latestTurn.state === "interrupted"
+          : false;
       if (idle && turnWaiter) {
         const w = turnWaiter;
         turnWaiter = undefined;
@@ -78,7 +99,15 @@ export async function openT3CodeSession(base: Pick<OpenSessionOptions, "agent" |
       const text = typeof input === "string" ? input : input.map((b) => (b.type === "text" ? b.text : "")).join("\n");
       const started = now();
       const result = new Promise<TurnResult>((resolve) => (turnWaiter = { resolve, started }));
-      await o.rpc.call(T3_WS_METHODS.dispatchCommand, { type: "thread.turn.start", threadId, messageId: randomUUID(), text, attachments: [], modelSelection: o.modelSelection, runtimeMode });
+      await o.rpc.call(T3_WS_METHODS.dispatchCommand, {
+        type: "thread.turn.start",
+        threadId,
+        messageId: randomUUID(),
+        text,
+        attachments: [],
+        modelSelection: o.modelSelection,
+        runtimeMode,
+      });
       const timer = options.timeoutMs ? setTimeout(() => void cancel(), options.timeoutMs) : undefined;
       options.signal?.addEventListener("abort", () => void cancel(), { once: true });
       try {
@@ -108,7 +137,13 @@ function toSummary(e: T3ThreadEvent): AgentUpdateSummary | undefined {
     }
     case "thread.activity-appended": {
       const a = (e.payload as { activity?: { kind?: string; summary?: string; tone?: string } }).activity;
-      return a ? { kind: a.tone === "tool" ? "tool_call" : "agent_thought_chunk", title: a.summary ?? a.kind ?? "", text: a.summary ?? "" } : undefined;
+      return a
+        ? {
+            kind: a.tone === "tool" ? "tool_call" : "agent_thought_chunk",
+            title: a.summary ?? a.kind ?? "",
+            text: a.summary ?? "",
+          }
+        : undefined;
     }
     default:
       return undefined;

@@ -6,7 +6,14 @@
  */
 import { z } from "zod";
 import { ArtifactSchema } from "../model/artifact.js";
-import { BranchSkipReasonSchema, ErrorInfoSchema, RunOutcomeSchema, RunStatusSchema, StepResultSchema, WorkspaceSchema } from "../model/run.js";
+import {
+  BranchSkipReasonSchema,
+  ErrorInfoSchema,
+  RunOutcomeSchema,
+  RunStatusSchema,
+  StepResultSchema,
+  WorkspaceSchema,
+} from "../model/run.js";
 
 const base = <T extends string, P extends z.ZodTypeAny>(type: T, payload: P) =>
   z.object({
@@ -81,32 +88,98 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
 
   base(
     "agent.session.opened",
-    z.object({ stepRunId: z.string(), sessionId: z.string(), agentId: z.string(), hostId: z.string(), cwd: z.string() }),
+    z.object({
+      stepRunId: z.string(),
+      sessionId: z.string(),
+      agentId: z.string(),
+      hostId: z.string(),
+      cwd: z.string(),
+    }),
   ),
   base(
     "agent.turn.started",
-    z.object({ stepRunId: z.string(), sessionId: z.string(), promptHash: z.string(), promptPreview: z.string(), followUp: z.number().int().nonnegative() }),
+    z.object({
+      stepRunId: z.string(),
+      sessionId: z.string(),
+      promptHash: z.string(),
+      promptPreview: z.string(),
+      followUp: z.number().int().nonnegative(),
+    }),
   ),
   base("agent.update", z.object({ stepRunId: z.string(), sessionId: z.string(), update: AgentUpdateSummarySchema })),
   base(
     "agent.permission",
-    z.object({ stepRunId: z.string(), sessionId: z.string(), toolCallId: z.string().optional(), title: z.string(), decision: z.string() }),
+    z.object({
+      stepRunId: z.string(),
+      sessionId: z.string(),
+      toolCallId: z.string().optional(),
+      title: z.string(),
+      decision: z.string(),
+    }),
   ),
-  base("agent.turn.completed", z.object({ stepRunId: z.string(), sessionId: z.string(), stopReason: z.string(), durationMs: z.number() })),
-  base("agent.session.closed", z.object({ stepRunId: z.string(), sessionId: z.string(), error: ErrorInfoSchema.optional() })),
+  base(
+    "agent.turn.completed",
+    z.object({ stepRunId: z.string(), sessionId: z.string(), stopReason: z.string(), durationMs: z.number() }),
+  ),
+  base(
+    "agent.session.closed",
+    z.object({ stepRunId: z.string(), sessionId: z.string(), error: ErrorInfoSchema.optional() }),
+  ),
 
   base("artifact.recorded", z.object({ stepRunId: z.string(), artifact: ArtifactSchema })),
-  base("artifact.rejected", z.object({ stepRunId: z.string(), kind: z.string(), path: z.string(), reason: z.string() })),
+  base(
+    "artifact.rejected",
+    z.object({ stepRunId: z.string(), kind: z.string(), path: z.string(), reason: z.string() }),
+  ),
 
   /** Planning signals the artifact carried that the plan refused; the run keeps going without them. */
-  base("plan.signals.rejected", z.object({ stepRunId: z.string(), artifactId: z.string(), issues: z.array(z.string()) })),
+  base(
+    "plan.signals.rejected",
+    z.object({ stepRunId: z.string(), artifactId: z.string(), issues: z.array(z.string()) }),
+  ),
 
-  base("decision.resolved", z.object({ stepRunId: z.string(), choice: z.string(), source: z.string(), raw: z.unknown().optional() })),
-  base("loop.iteration", z.object({ stepRunId: z.string(), iteration: z.number().int().nonnegative(), childRunId: z.string().optional(), item: z.unknown().optional() })),
-  base("child.spawned", z.object({ stepRunId: z.string(), childRunId: z.string(), branch: z.string().optional(), workItemId: z.string().optional(), resumed: z.boolean().optional() })),
-  base("child.finished", z.object({ stepRunId: z.string(), childRunId: z.string(), status: RunStatusSchema, outcome: RunOutcomeSchema.optional() })),
+  base(
+    "decision.resolved",
+    z.object({ stepRunId: z.string(), choice: z.string(), source: z.string(), raw: z.unknown().optional() }),
+  ),
+  base(
+    "loop.iteration",
+    z.object({
+      stepRunId: z.string(),
+      iteration: z.number().int().nonnegative(),
+      childRunId: z.string().optional(),
+      item: z.unknown().optional(),
+    }),
+  ),
+  base(
+    "child.spawned",
+    z.object({
+      stepRunId: z.string(),
+      childRunId: z.string(),
+      branch: z.string().optional(),
+      workItemId: z.string().optional(),
+      resumed: z.boolean().optional(),
+    }),
+  ),
+  base(
+    "child.finished",
+    z.object({
+      stepRunId: z.string(),
+      childRunId: z.string(),
+      status: RunStatusSchema,
+      outcome: RunOutcomeSchema.optional(),
+    }),
+  ),
   /** A fan-out branch that never became a child run (unmet dependency, or a sibling settled the join). */
-  base("branch.skipped", z.object({ stepRunId: z.string(), branch: z.string(), reason: BranchSkipReasonSchema, workItemId: z.string().optional() })),
+  base(
+    "branch.skipped",
+    z.object({
+      stepRunId: z.string(),
+      branch: z.string(),
+      reason: BranchSkipReasonSchema,
+      workItemId: z.string().optional(),
+    }),
+  ),
 
   base(
     "human.requested",

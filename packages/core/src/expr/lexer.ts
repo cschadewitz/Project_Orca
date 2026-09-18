@@ -8,7 +8,30 @@ export type Token =
   | { kind: "op"; value: string; pos: number }
   | { kind: "eof"; pos: number };
 
-const OPS = ["==", "!=", "<=", ">=", "&&", "||", "<", ">", "!", "+", "-", "*", "/", "%", "(", ")", "[", "]", ".", ",", "?", ":"];
+const OPS = [
+  "==",
+  "!=",
+  "<=",
+  ">=",
+  "&&",
+  "||",
+  "<",
+  ">",
+  "!",
+  "+",
+  "-",
+  "*",
+  "/",
+  "%",
+  "(",
+  ")",
+  "[",
+  "]",
+  ".",
+  ",",
+  "?",
+  ":",
+];
 
 export function tokenize(src: string): Token[] {
   const out: Token[] = [];

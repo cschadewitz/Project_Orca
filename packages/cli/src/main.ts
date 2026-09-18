@@ -64,7 +64,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return await command.run({
       cwd: (values.cwd as string | undefined) ?? process.cwd(),
       configPath: values.config as string | undefined,
-      flags: values as Record<string, string | boolean | string[] | undefined>,
+      flags: values,
       positionals: rest,
       out: (l) => process.stdout.write(l + "\n"),
       err: (l) => process.stderr.write(l + "\n"),
@@ -79,4 +79,4 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 }
 
 const invokedDirectly = process.argv[1] && /main\.(ts|js)$/.test(process.argv[1]);
-if (invokedDirectly) main().then((code) => process.exit(code));
+if (invokedDirectly) void main().then((code) => process.exit(code));

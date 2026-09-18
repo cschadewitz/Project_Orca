@@ -15,7 +15,15 @@
  * (`PlanService.deferWorkItem`), so the two can never disagree. (A plain `parallel` fan-out
  * does project `blocked`, from `branch.skipped` with reason `dependency`.)
  */
-import { outcomeSucceeded, type Run, type RunOutcome, type RunState, type RunStatus, type WorkItem, type WorkItemStatus } from "@orca/core";
+import {
+  outcomeSucceeded,
+  type Run,
+  type RunOutcome,
+  type RunState,
+  type RunStatus,
+  type WorkItem,
+  type WorkItemStatus,
+} from "@orca/core";
 import type { Stores } from "@orca/store";
 
 export interface WorkItemProgress {
@@ -56,7 +64,8 @@ export function deriveWorkItemProgress(state: RunState): Map<string, WorkItemPro
     if (!step) continue;
     for (const b of step.skippedBranches) {
       // `claimed` says another run owns the item: its progress is that run's to project, not ours.
-      if (b.workItemId && b.reason !== "claimed") out.set(b.workItemId, { status: b.reason === "dependency" ? "blocked" : "pending" });
+      if (b.workItemId && b.reason !== "claimed")
+        out.set(b.workItemId, { status: b.reason === "dependency" ? "blocked" : "pending" });
     }
     for (const c of step.children) {
       if (!c.workItemId) continue;
@@ -78,12 +87,24 @@ export async function projectWorkItems(stores: Stores, state: RunState, now: str
  * parent, or resumed on its own after the program run that dispatched it had finished. Its
  * own log is then the only record of how it ended.
  */
-export async function projectWorkItemForRun(stores: Stores, run: Pick<Run, "id" | "workItemId" | "status" | "outcome">, now: string): Promise<ProjectedWorkItem[]> {
+export async function projectWorkItemForRun(
+  stores: Stores,
+  run: Pick<Run, "id" | "workItemId" | "status" | "outcome">,
+  now: string,
+): Promise<ProjectedWorkItem[]> {
   if (!run.workItemId) return [];
-  return mirror(stores, new Map([[run.workItemId, { status: workItemStatusOfRun(run.status, run.outcome), runId: run.id }]]), now);
+  return mirror(
+    stores,
+    new Map([[run.workItemId, { status: workItemStatusOfRun(run.status, run.outcome), runId: run.id }]]),
+    now,
+  );
 }
 
-async function mirror(stores: Stores, derived: Map<string, WorkItemProgress>, now: string): Promise<ProjectedWorkItem[]> {
+async function mirror(
+  stores: Stores,
+  derived: Map<string, WorkItemProgress>,
+  now: string,
+): Promise<ProjectedWorkItem[]> {
   const updated: WorkItem[] = [];
   const projected: ProjectedWorkItem[] = [];
   for (const [id, p] of derived) {
@@ -96,7 +117,15 @@ async function mirror(stores: Stores, derived: Map<string, WorkItemProgress>, no
     const next: WorkItem = { ...cur, status: p.status, ...(p.runId ? { runId: p.runId } : {}), updatedAt: now };
     if (clears) delete next.deferredReason;
     updated.push(next);
-    projected.push({ workItem: next, previous: cur.status, changes: { status: p.status, ...(p.runId ? { runId: p.runId } : {}), ...(clears ? { deferredReason: null } : {}) } });
+    projected.push({
+      workItem: next,
+      previous: cur.status,
+      changes: {
+        status: p.status,
+        ...(p.runId ? { runId: p.runId } : {}),
+        ...(clears ? { deferredReason: null } : {}),
+      },
+    });
   }
   if (updated.length) await stores.workItems.putMany(updated);
   return projected;

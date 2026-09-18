@@ -9,7 +9,14 @@ import type { AgentSpec } from "@orca/core";
 import { AgentSpecSchema } from "@orca/core";
 
 export { ScriptedAgent, type ScriptedAgentOptions } from "./scripted-agent/agent.js";
-export { parsePlaybook, PlaybookSchema, PlaybookEntrySchema, type Playbook, type PlaybookEntry, type PlaybookInput } from "./scripted-agent/playbook.js";
+export {
+  parsePlaybook,
+  PlaybookSchema,
+  PlaybookEntrySchema,
+  type Playbook,
+  type PlaybookEntry,
+  type PlaybookInput,
+} from "./scripted-agent/playbook.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const runningFromSource = import.meta.url.endsWith(".ts");
@@ -34,7 +41,7 @@ export function scriptedAgentSpec(options: {
 }): AgentSpec {
   const entry = join(here, "scripted-agent", runningFromSource ? "main.ts" : "main.js");
   const args: string[] = [];
-  let command = process.execPath;
+  const command = process.execPath;
   if (runningFromSource) {
     // Route through tsx with the repo tsconfig so `@orca/*` imports resolve to sources (paths mapping).
     const require = createRequire(import.meta.url);

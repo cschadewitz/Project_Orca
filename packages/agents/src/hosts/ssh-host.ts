@@ -17,7 +17,16 @@
 import { spawn } from "node:child_process";
 import { posix } from "node:path";
 import { OrcaError, type AgentSpec, type SshHost as SshHostSpec } from "@orca/core";
-import { collectChildProcess, shellQuote, wrapAgentProcess, type AgentHost, type AgentProcessHandle, type ExecResult, type HostFileSystem, type SpawnAgentOptions } from "../host.js";
+import {
+  collectChildProcess,
+  shellQuote,
+  wrapAgentProcess,
+  type AgentHost,
+  type AgentProcessHandle,
+  type ExecResult,
+  type HostFileSystem,
+  type SpawnAgentOptions,
+} from "../host.js";
 
 export class SshHost implements AgentHost {
   readonly fs: HostFileSystem;
@@ -34,7 +43,14 @@ export class SshHost implements AgentHost {
   /** ssh CLI arguments up to (not including) the remote command. */
   baseArgs(): string[] {
     const s = this.spec;
-    const args = ["-T", "-o", "BatchMode=yes", "-o", `ConnectTimeout=${Math.ceil(s.connectTimeoutMs / 1000)}`, ...s.sshArgs];
+    const args = [
+      "-T",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      `ConnectTimeout=${Math.ceil(s.connectTimeoutMs / 1000)}`,
+      ...s.sshArgs,
+    ];
     if (s.port) args.push("-p", String(s.port));
     if (s.identityFile) args.push("-i", s.identityFile);
     args.push(s.user ? `${s.user}@${s.host}` : s.host);
@@ -52,9 +68,16 @@ export class SshHost implements AgentHost {
     const envPrefix = Object.entries(env)
       .map(([k, v]) => `${k}=${shellQuote(v)}`)
       .join(" ");
-    const script = `cd ${shellQuote(options.cwd)} && exec ${envPrefix ? `env ${envPrefix} ` : ""}${shellQuote(agent.command)} ${agent.args.map(shellQuote).join(" ")}`.trim();
+    const script =
+      `cd ${shellQuote(options.cwd)} && exec ${envPrefix ? `env ${envPrefix} ` : ""}${shellQuote(agent.command)} ${agent.args.map(shellQuote).join(" ")}`.trim();
     return wrapAgentProcess(this.spawnSsh(script), {
-      onSpawnError: (e) => new OrcaError("AGENT_TRANSPORT", `cannot start ssh for host '${this.id}': ${e.message}`, { hostId: this.id }, { cause: e }),
+      onSpawnError: (e) =>
+        new OrcaError(
+          "AGENT_TRANSPORT",
+          `cannot start ssh for host '${this.id}': ${e.message}`,
+          { hostId: this.id },
+          { cause: e },
+        ),
     });
   }
 
@@ -74,13 +97,21 @@ class SshFileSystem implements HostFileSystem {
   constructor(private readonly host: SshHost) {}
   async readFile(path: string): Promise<string> {
     const r = await this.host.exec(`cat ${shellQuote(path)}`);
-    if (r.code !== 0) throw new OrcaError("AGENT_TRANSPORT", `ssh read failed for ${path}: ${r.stderr.trim()}`, { hostId: this.host.id, path });
+    if (r.code !== 0)
+      throw new OrcaError("AGENT_TRANSPORT", `ssh read failed for ${path}: ${r.stderr.trim()}`, {
+        hostId: this.host.id,
+        path,
+      });
     return r.stdout;
   }
   async writeFile(path: string, content: string): Promise<void> {
     const dir = posix.dirname(path);
     const r = await this.host.exec(`mkdir -p ${shellQuote(dir)} && cat > ${shellQuote(path)}`, { stdin: content });
-    if (r.code !== 0) throw new OrcaError("AGENT_TRANSPORT", `ssh write failed for ${path}: ${r.stderr.trim()}`, { hostId: this.host.id, path });
+    if (r.code !== 0)
+      throw new OrcaError("AGENT_TRANSPORT", `ssh write failed for ${path}: ${r.stderr.trim()}`, {
+        hostId: this.host.id,
+        path,
+      });
   }
   async exists(path: string): Promise<boolean> {
     const r = await this.host.exec(`test -e ${shellQuote(path)}`);
@@ -102,6 +133,10 @@ class SshFileSystem implements HostFileSystem {
   }
   async mkdirp(path: string): Promise<void> {
     const r = await this.host.exec(`mkdir -p ${shellQuote(path)}`);
-    if (r.code !== 0) throw new OrcaError("AGENT_TRANSPORT", `ssh mkdir failed for ${path}: ${r.stderr.trim()}`, { hostId: this.host.id, path });
+    if (r.code !== 0)
+      throw new OrcaError("AGENT_TRANSPORT", `ssh mkdir failed for ${path}: ${r.stderr.trim()}`, {
+        hostId: this.host.id,
+        path,
+      });
   }
 }

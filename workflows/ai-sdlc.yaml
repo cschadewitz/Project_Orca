@@ -145,11 +145,21 @@ edges:
   - { from: build, to: test }
   - { from: test, to: tests-passed }
   - { from: tests-passed, to: bump-review, when: "choice == 'true'", label: "passed" }
-  - { from: tests-passed, to: bump-build, when: "choice == 'false' && vars.buildAttempt < vars.maxBuildAttempts", label: "failed, retry" }
+  - {
+      from: tests-passed,
+      to: bump-build,
+      when: "choice == 'false' && vars.buildAttempt < vars.maxBuildAttempts",
+      label: "failed, retry",
+    }
   - { from: tests-passed, to: exhausted, label: "failed, give up" }
   - { from: bump-review, to: review }
   - { from: review, to: review-verdict }
   - { from: review-verdict, to: deploy, when: "choice == 'approve'" }
-  - { from: review-verdict, to: bump-build, when: "choice == 'changes-requested' && vars.reviewRound < vars.maxReviewRounds && vars.buildAttempt < vars.maxBuildAttempts", label: "changes requested" }
+  - {
+      from: review-verdict,
+      to: bump-build,
+      when: "choice == 'changes-requested' && vars.reviewRound < vars.maxReviewRounds && vars.buildAttempt < vars.maxBuildAttempts",
+      label: "changes requested",
+    }
   - { from: review-verdict, to: exhausted, label: "give up" }
   - { from: deploy, to: done }

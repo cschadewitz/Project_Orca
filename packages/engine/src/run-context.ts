@@ -4,7 +4,24 @@
  * projection in sync), and builds the expression/template context that
  * conditions and prompts are evaluated against.
  */
-import { applyEvent, latestStepForNode, OrcaError, reduceRun, type Artifact, type Clock, type Logger, type OrcaEvent, type OrcaEventInput, type Request, type Run, type RunState, type RunStatus, type WorkItem, type WorkflowDefinition, type Workspace } from "@orca/core";
+import {
+  applyEvent,
+  latestStepForNode,
+  OrcaError,
+  reduceRun,
+  type Artifact,
+  type Clock,
+  type Logger,
+  type OrcaEvent,
+  type OrcaEventInput,
+  type Request,
+  type Run,
+  type RunState,
+  type RunStatus,
+  type WorkItem,
+  type WorkflowDefinition,
+  type Workspace,
+} from "@orca/core";
 import type { Stores } from "@orca/store";
 import type { ResolvedArtifact } from "./executors/types.js";
 import { projectWorkItems, type ProjectedWorkItem } from "./program/work-items.js";
@@ -108,14 +125,16 @@ export class RunContext {
         await collect(parent, "up");
       }
       if (direction === "down" || direction === "both") {
-        for (const s of Object.values(state.steps)) for (const c of s.childRunIds) await collect(await this.deps.loadState(c), "down");
+        for (const s of Object.values(state.steps))
+          for (const c of s.childRunIds) await collect(await this.deps.loadState(c), "down");
       }
     };
     await collect(this.state, "both");
     const map = new Map<string, Artifact>();
     for (const a of all) {
       const cur = map.get(a.name);
-      if (!cur || cur.version < a.version || (cur.version === a.version && cur.createdAt < a.createdAt)) map.set(a.name, a);
+      if (!cur || cur.version < a.version || (cur.version === a.version && cur.createdAt < a.createdAt))
+        map.set(a.name, a);
     }
     return map;
   }
@@ -127,7 +146,9 @@ export class RunContext {
    * asked: a run's set of earlier siblings never changes while it executes.
    */
   private async earlierSiblings(parent: RunState, run: Run): Promise<RunState[]> {
-    const step = Object.values(parent.steps).find((s) => s.childRunIds.includes(run.id)) ?? (run.parentStepRunId ? parent.steps[run.parentStepRunId] : undefined);
+    const step =
+      Object.values(parent.steps).find((s) => s.childRunIds.includes(run.id)) ??
+      (run.parentStepRunId ? parent.steps[run.parentStepRunId] : undefined);
     if (!step) return [];
     const out: RunState[] = [];
     for (const link of step.children) {
@@ -183,7 +204,13 @@ export class RunContext {
     }
     const vars = this.state.run.vars;
     return {
-      run: { id: this.id, workflowId: this.state.run.workflowId, status: this.state.run.status, parentRunId: this.state.run.parentRunId, vars },
+      run: {
+        id: this.id,
+        workflowId: this.state.run.workflowId,
+        status: this.state.run.status,
+        parentRunId: this.state.run.parentRunId,
+        vars,
+      },
       vars,
       workspace: this.workspace,
       request,

@@ -1,0 +1,14 @@
+# Generated or vendored.
+node_modules/
+dist/
+coverage/
+.orca/
+pnpm-lock.yaml
+*.tsbuildinfo
+
+# Prose is wrapped by hand, and the wrapping carries intent (docs, ADRs, README).
+*.md
+
+# Prompt templates: leading whitespace and line breaks end up in an agent's prompt
+# verbatim, so a formatter must not touch them.
+templates/

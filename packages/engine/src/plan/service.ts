@@ -80,7 +80,9 @@ export interface EnsurePlanInput {
 }
 
 /** Fields `updatePlan` accepts. A partial `riskMatrix` replaces the plan's matrix; missing thresholds follow its scale. */
-export type PlanChanges = Partial<Pick<Plan, "name" | "description" | "status" | "policy" | "meta">> & { riskMatrix?: RiskMatrixInput };
+export type PlanChanges = Partial<Pick<Plan, "name" | "description" | "status" | "policy" | "meta">> & {
+  riskMatrix?: RiskMatrixInput;
+};
 
 export interface PlanServiceOptions {
   stores: Stores;
@@ -154,7 +156,13 @@ export class PlanService {
     this.stores = opts.stores;
     this.clock = opts.clock ?? systemClock;
     this.logger = opts.logger ?? silentLogger;
-    this.defaults = { planKey: "default", planName: "Default plan", policy: {}, riskMatrix: {}, ...(opts.defaults ?? {}) };
+    this.defaults = {
+      planKey: "default",
+      planName: "Default plan",
+      policy: {},
+      riskMatrix: {},
+      ...(opts.defaults ?? {}),
+    };
     this.extractors = opts.signalExtractors ?? [];
   }
 
@@ -223,7 +231,9 @@ export class PlanService {
   }
 
   async getPlan(idOrKey: string): Promise<Plan | undefined> {
-    return (await this.stores.plan.plans.get(idOrKey)) ?? (await this.stores.plan.plans.list((p) => p.key === idOrKey))[0];
+    return (
+      (await this.stores.plan.plans.get(idOrKey)) ?? (await this.stores.plan.plans.list((p) => p.key === idOrKey))[0]
+    );
   }
 
   async requirePlan(idOrKey: string): Promise<Plan> {
@@ -284,7 +294,13 @@ export class PlanService {
     ]);
     // Stable sort: ties keep insertion order, so registration order is preserved.
     const byCreated = <T extends { createdAt: string }>(a: T, b: T) => a.createdAt.localeCompare(b.createdAt);
-    return { plan, items: items.sort(byCreated), dependencies: dependencies.sort(byCreated), risks: risks.sort(byCreated), decisions: decisions.sort(byCreated) };
+    return {
+      plan,
+      items: items.sort(byCreated),
+      dependencies: dependencies.sort(byCreated),
+      risks: risks.sort(byCreated),
+      decisions: decisions.sort(byCreated),
+    };
   }
 
   journalOf(planId: string) {
@@ -329,7 +345,8 @@ export class PlanService {
     for (const item of parsedItems) {
       let slug = item.slug;
       for (let n = 2; planBySlug.has(slug) || created.some((c) => c.slug === slug); n++) slug = `${item.slug}-${n}`;
-      if (slug !== item.slug) warnings.push(`slug '${item.slug}' already exists in plan '${plan.key}'; registered as '${slug}'`);
+      if (slug !== item.slug)
+        warnings.push(`slug '${item.slug}' already exists in plan '${plan.key}'; registered as '${slug}'`);
       const wi: WorkItem = {
         id: newId("wi", this.clock.now()),
         requestId: input.requestId,
@@ -363,17 +380,25 @@ export class PlanService {
       await this.stores.workItems.put(wi);
       await this.journal({ type: "work-item.added", planId: plan.id, origin, payload: { workItem: wi } });
     }
-    const resolveSlug = (slug: string): WorkItem | undefined => batch.get(slug) ?? planBySlug.get(slug) ?? created.find((c) => c.slug === slug);
+    const resolveSlug = (slug: string): WorkItem | undefined =>
+      batch.get(slug) ?? planBySlug.get(slug) ?? created.find((c) => c.slug === slug);
 
     // 2. Risks declared by the decomposition (+ per-item `risks` keys).
     const risks: Risk[] = [];
     const itemRiskKeys = new Map<string, string[]>();
-    for (const item of parsedItems) for (const key of item.risks) itemRiskKeys.set(key, [...(itemRiskKeys.get(key) ?? []), batch.get(item.slug)!.id]);
-    for (const r of input.risks ?? []) risks.push(await this.upsertRisk(plan.id, r, origin, { resolveSlug, extraAffects: itemRiskKeys.get(r.key) ?? [] }));
+    for (const item of parsedItems)
+      for (const key of item.risks) itemRiskKeys.set(key, [...(itemRiskKeys.get(key) ?? []), batch.get(item.slug)!.id]);
+    for (const r of input.risks ?? [])
+      risks.push(
+        await this.upsertRisk(plan.id, r, origin, { resolveSlug, extraAffects: itemRiskKeys.get(r.key) ?? [] }),
+      );
     for (const [key, ids] of itemRiskKeys) {
       if (risks.some((r) => r.key === key)) continue;
       const known = (await this.stores.plan.risks.list((r) => r.planId === plan.id && r.key === key))[0];
-      if (known) risks.push(await this.upsertRisk(plan.id, { key, title: known.title }, origin, { resolveSlug, extraAffects: ids }));
+      if (known)
+        risks.push(
+          await this.upsertRisk(plan.id, { key, title: known.title }, origin, { resolveSlug, extraAffects: ids }),
+        );
       else warnings.push(`work item(s) reference unknown risk '${key}'`);
     }
 
@@ -389,7 +414,13 @@ export class PlanService {
           warnings.push(`decision '${d.key}' blocks unknown work item '${slug}'`);
           continue;
         }
-        const dep = await this.addDependencyRecord(plan.id, item.id, { kind: "decision", decisionId: dec.id }, { type: "blocks", requiredBy: DEPENDENCY_START_PHASE, rationale: `decision ${d.key} must be made first` }, origin);
+        const dep = await this.addDependencyRecord(
+          plan.id,
+          item.id,
+          { kind: "decision", decisionId: dec.id },
+          { type: "blocks", requiredBy: DEPENDENCY_START_PHASE, rationale: `decision ${d.key} must be made first` },
+          origin,
+        );
         if (dep) dependencies.push(dep);
       }
     }
@@ -411,15 +442,30 @@ export class PlanService {
     }
 
     // 5. Bind earlier `external` placeholders whose key matches a newly registered slug.
-    const placeholders = await this.stores.plan.dependencies.list((d) => d.planId === plan.id && d.target.kind === "external" && d.status === "open");
+    const placeholders = await this.stores.plan.dependencies.list(
+      (d) => d.planId === plan.id && d.target.kind === "external" && d.status === "open",
+    );
     for (const ph of placeholders) {
       const target = ph.target;
       if (target.kind !== "external") continue;
       const bound = created.find((c) => c.slug === target.key) ?? batch.get(target.key);
       if (!bound || bound.id === ph.from) continue;
-      const next: Dependency = { ...ph, target: { kind: "work-item", workItemId: bound.id, ...(target.description?.startsWith("stage:") ? { stage: target.description.slice(6) } : {}) }, updatedAt: now };
+      const next: Dependency = {
+        ...ph,
+        target: {
+          kind: "work-item",
+          workItemId: bound.id,
+          ...(target.description?.startsWith("stage:") ? { stage: target.description.slice(6) } : {}),
+        },
+        updatedAt: now,
+      };
       await this.stores.plan.dependencies.put(next);
-      await this.journal({ type: "dependency.bound", planId: plan.id, origin, payload: { dependencyId: ph.id, workItemId: bound.id } });
+      await this.journal({
+        type: "dependency.bound",
+        planId: plan.id,
+        origin,
+        payload: { dependencyId: ph.id, workItemId: bound.id },
+      });
     }
 
     await this.linkRequest(plan.id, input.requestId, origin);
@@ -427,21 +473,40 @@ export class PlanService {
     return { items: created, dependencies, risks, decisions, warnings };
   }
 
-  async updateWorkItem(workItemId: string, changes: Partial<Omit<WorkItem, "deferredReason">> & { deferredReason?: string | null }, origin: PlanOrigin = SYSTEM): Promise<WorkItem> {
+  async updateWorkItem(
+    workItemId: string,
+    changes: Partial<Omit<WorkItem, "deferredReason">> & { deferredReason?: string | null },
+    origin: PlanOrigin = SYSTEM,
+  ): Promise<WorkItem> {
     const cur = await this.stores.workItems.get(workItemId);
     if (!cur) throw new OrcaError("PLAN_INVALID", `work item ${workItemId} not found`);
     const apply = () => this.updateWorkItemLocked(workItemId, changes, origin);
     return cur.planId ? this.withPlan(cur.planId, apply) : apply();
   }
 
-  private async updateWorkItemLocked(workItemId: string, changes: Partial<Omit<WorkItem, "deferredReason">> & { deferredReason?: string | null }, origin: PlanOrigin): Promise<WorkItem> {
+  private async updateWorkItemLocked(
+    workItemId: string,
+    changes: Partial<Omit<WorkItem, "deferredReason">> & { deferredReason?: string | null },
+    origin: PlanOrigin,
+  ): Promise<WorkItem> {
     const cur = await this.stores.workItems.get(workItemId);
     if (!cur) throw new OrcaError("PLAN_INVALID", `work item ${workItemId} not found`);
     const { deferredReason, ...rest } = changes;
-    const next: WorkItem = { ...cur, ...rest, updatedAt: this.clock.isoNow(), ...(typeof deferredReason === "string" ? { deferredReason } : {}) };
+    const next: WorkItem = {
+      ...cur,
+      ...rest,
+      updatedAt: this.clock.isoNow(),
+      ...(typeof deferredReason === "string" ? { deferredReason } : {}),
+    };
     if (deferredReason === null) delete next.deferredReason;
     await this.stores.workItems.put(next);
-    if (cur.planId) await this.journal({ type: "work-item.updated", planId: cur.planId, origin, payload: { workItemId, changes: changes as Record<string, unknown> } });
+    if (cur.planId)
+      await this.journal({
+        type: "work-item.updated",
+        planId: cur.planId,
+        origin,
+        payload: { workItemId, changes: changes },
+      });
     return next;
   }
 
@@ -455,12 +520,21 @@ export class PlanService {
    * about it. The guard
    * makes that explicit: a status the projection wrote is never overwritten here.
    */
-  async deferWorkItem(workItemId: string, reason: string, opts: { blocked?: boolean } = {}, origin: PlanOrigin = SYSTEM): Promise<void> {
+  async deferWorkItem(
+    workItemId: string,
+    reason: string,
+    opts: { blocked?: boolean } = {},
+    origin: PlanOrigin = SYSTEM,
+  ): Promise<void> {
     const cur = await this.stores.workItems.get(workItemId);
     if (!cur?.planId) return;
     const block = opts.blocked === true && (cur.status === "pending" || cur.status === "blocked");
     if (cur.deferredReason === reason && (!block || cur.status === "blocked")) return;
-    await this.updateWorkItem(workItemId, { deferredReason: reason, ...(block ? { status: "blocked" as const } : {}) }, origin);
+    await this.updateWorkItem(
+      workItemId,
+      { deferredReason: reason, ...(block ? { status: "blocked" as const } : {}) },
+      origin,
+    );
     await this.journal({ type: "dispatch.deferred", planId: cur.planId, origin, payload: { workItemId, reason } });
   }
 
@@ -481,17 +555,37 @@ export class PlanService {
   private async recordProducedLocked(workItemId: string, artifact: Artifact, origin: PlanOrigin): Promise<void> {
     const cur = await this.stores.workItems.get(workItemId);
     if (!cur?.planId) return;
-    await this.updateWorkItem(workItemId, { produced: { ...cur.produced, [artifact.kind]: artifact.id, ...(artifact.name !== artifact.kind ? { [artifact.name]: artifact.id } : {}) } }, origin);
+    await this.updateWorkItem(
+      workItemId,
+      {
+        produced: {
+          ...cur.produced,
+          [artifact.kind]: artifact.id,
+          ...(artifact.name !== artifact.kind ? { [artifact.name]: artifact.id } : {}),
+        },
+      },
+      origin,
+    );
     await this.reconcile(cur.planId, origin);
   }
 
   // ----------------------------------------------------------- dependencies
 
-  async addDependency(planId: string, fromSlugOrId: string, ref: DependencyRef, origin: PlanOrigin = SYSTEM): Promise<Dependency> {
+  async addDependency(
+    planId: string,
+    fromSlugOrId: string,
+    ref: DependencyRef,
+    origin: PlanOrigin = SYSTEM,
+  ): Promise<Dependency> {
     return this.withPlan(planId, () => this.addDependencyLocked(planId, fromSlugOrId, ref, origin));
   }
 
-  private async addDependencyLocked(planId: string, fromSlugOrId: string, ref: DependencyRef, origin: PlanOrigin): Promise<Dependency> {
+  private async addDependencyLocked(
+    planId: string,
+    fromSlugOrId: string,
+    ref: DependencyRef,
+    origin: PlanOrigin,
+  ): Promise<Dependency> {
     const from = await this.requireItem(planId, fromSlugOrId);
     let parsed: ParsedDependencyRef;
     try {
@@ -507,28 +601,52 @@ export class PlanService {
     return dep;
   }
 
-  async resolveDependency(dependencyId: string, status: "satisfied" | "failed" | "waived" | "open", resolution: string | undefined, origin: PlanOrigin = SYSTEM): Promise<Dependency> {
+  async resolveDependency(
+    dependencyId: string,
+    status: "satisfied" | "failed" | "waived" | "open",
+    resolution: string | undefined,
+    origin: PlanOrigin = SYSTEM,
+  ): Promise<Dependency> {
     const dep = await this.stores.plan.dependencies.get(dependencyId);
     if (!dep) throw new OrcaError("PLAN_INVALID", `dependency ${dependencyId} not found`);
     return this.withPlan(dep.planId, () => this.resolveDependencyLocked(dependencyId, status, resolution, origin));
   }
 
-  private async resolveDependencyLocked(dependencyId: string, status: "satisfied" | "failed" | "waived" | "open", resolution: string | undefined, origin: PlanOrigin): Promise<Dependency> {
+  private async resolveDependencyLocked(
+    dependencyId: string,
+    status: "satisfied" | "failed" | "waived" | "open",
+    resolution: string | undefined,
+    origin: PlanOrigin,
+  ): Promise<Dependency> {
     const cur = await this.stores.plan.dependencies.get(dependencyId);
     if (!cur) throw new OrcaError("PLAN_INVALID", `dependency ${dependencyId} not found`);
     const now = this.clock.isoNow();
-    const next: Dependency = { ...cur, status, updatedAt: now, ...(status === "open" ? {} : { resolvedAt: now }), ...(resolution ? { resolution } : {}) };
+    const next: Dependency = {
+      ...cur,
+      status,
+      updatedAt: now,
+      ...(status === "open" ? {} : { resolvedAt: now }),
+      ...(resolution ? { resolution } : {}),
+    };
     if (status === "open") {
       delete next.resolvedAt;
       delete next.resolution;
     }
     await this.stores.plan.dependencies.put(next);
-    await this.journal({ type: "dependency.resolved", planId: cur.planId, origin, payload: { dependencyId, status, ...(resolution ? { resolution } : {}) } });
+    await this.journal({
+      type: "dependency.resolved",
+      planId: cur.planId,
+      origin,
+      payload: { dependencyId, status, ...(resolution ? { resolution } : {}) },
+    });
     return next;
   }
 
   /** Live evaluation of one item's dependencies (used by `custom:plan-await`). */
-  async evaluateDependenciesOf(workItemId: string, phase?: string): Promise<{ dependency: Dependency; state: ReturnType<typeof evaluateDependency>["state"]; detail: string }[]> {
+  async evaluateDependenciesOf(
+    workItemId: string,
+    phase?: string,
+  ): Promise<{ dependency: Dependency; state: ReturnType<typeof evaluateDependency>["state"]; detail: string }[]> {
     const wi = await this.stores.workItems.get(workItemId);
     if (!wi?.planId) return [];
     const snap = await this.snapshot(wi.planId);
@@ -547,7 +665,10 @@ export class PlanService {
     return this.withPlan(planId, () => this.reconcileLocked(planId, origin));
   }
 
-  private async reconcileLocked(planId: string, origin: PlanOrigin): Promise<{ satisfied: string[]; failed: string[] }> {
+  private async reconcileLocked(
+    planId: string,
+    origin: PlanOrigin,
+  ): Promise<{ satisfied: string[]; failed: string[] }> {
     const snap = await this.snapshot(planId);
     const itemsById = new Map(snap.items.map((i) => [i.id, i]));
     const decisionsById = new Map(snap.decisions.map((d) => [d.id, d]));
@@ -563,14 +684,23 @@ export class PlanService {
     return out;
   }
 
-  private async addDependencyFromRef(planId: string, from: WorkItem, ref: ParsedDependencyRef, origin: PlanOrigin, resolveSlug: ((slug: string) => WorkItem | undefined) | undefined, warnings: string[]): Promise<Dependency | undefined> {
+  private async addDependencyFromRef(
+    planId: string,
+    from: WorkItem,
+    ref: ParsedDependencyRef,
+    origin: PlanOrigin,
+    resolveSlug: ((slug: string) => WorkItem | undefined) | undefined,
+    warnings: string[],
+  ): Promise<Dependency | undefined> {
     const meta = { type: ref.type, requiredBy: ref.requiredBy, ...(ref.rationale ? { rationale: ref.rationale } : {}) };
     let target: DependencyTarget;
     switch (ref.targetKind) {
       case "work-item": {
         const up = resolveSlug?.(ref.key) ?? (await this.findItem(planId, ref.key));
         if (!up) {
-          warnings.push(`work item '${from.slug}' depends on '${ref.key}', which is not in the plan yet; recorded as an external dependency until it is registered`);
+          warnings.push(
+            `work item '${from.slug}' depends on '${ref.key}', which is not in the plan yet; recorded as an external dependency until it is registered`,
+          );
           target = { kind: "external", key: ref.key, ...(ref.stage ? { description: `stage:${ref.stage}` } : {}) };
         } else if (up.id === from.id) {
           warnings.push(`work item '${from.slug}' cannot depend on itself`);
@@ -581,7 +711,11 @@ export class PlanService {
       case "decision": {
         let dec = (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === ref.key))[0];
         if (!dec) {
-          dec = await this.upsertDecision(planId, { key: ref.key, title: ref.key, question: `Decision '${ref.key}' referenced by ${from.slug}` }, origin);
+          dec = await this.upsertDecision(
+            planId,
+            { key: ref.key, title: ref.key, question: `Decision '${ref.key}' referenced by ${from.slug}` },
+            origin,
+          );
           warnings.push(`work item '${from.slug}' depends on decision '${ref.key}', which was opened as a placeholder`);
         }
         target = { kind: "decision", decisionId: dec.id };
@@ -594,11 +728,36 @@ export class PlanService {
     return this.addDependencyRecord(planId, from.id, target, meta, origin);
   }
 
-  private async addDependencyRecord(planId: string, from: string, target: DependencyTarget, meta: { type: Dependency["type"]; requiredBy: string; rationale?: string }, origin: PlanOrigin): Promise<Dependency | undefined> {
-    const dup = await this.stores.plan.dependencies.list((d) => d.planId === planId && d.from === from && d.type === meta.type && d.requiredBy === meta.requiredBy && JSON.stringify(d.target) === JSON.stringify(target));
+  private async addDependencyRecord(
+    planId: string,
+    from: string,
+    target: DependencyTarget,
+    meta: { type: Dependency["type"]; requiredBy: string; rationale?: string },
+    origin: PlanOrigin,
+  ): Promise<Dependency | undefined> {
+    const dup = await this.stores.plan.dependencies.list(
+      (d) =>
+        d.planId === planId &&
+        d.from === from &&
+        d.type === meta.type &&
+        d.requiredBy === meta.requiredBy &&
+        JSON.stringify(d.target) === JSON.stringify(target),
+    );
     if (dup.length) return undefined;
     const now = this.clock.isoNow();
-    const dep: Dependency = { id: keyedId("dep", planId, from, meta.type, meta.requiredBy, JSON.stringify(target)), planId, from, target, type: meta.type, requiredBy: meta.requiredBy, status: "open", origin, createdAt: now, updatedAt: now, ...(meta.rationale ? { rationale: meta.rationale } : {}) };
+    const dep: Dependency = {
+      id: keyedId("dep", planId, from, meta.type, meta.requiredBy, JSON.stringify(target)),
+      planId,
+      from,
+      target,
+      type: meta.type,
+      requiredBy: meta.requiredBy,
+      status: "open",
+      origin,
+      createdAt: now,
+      updatedAt: now,
+      ...(meta.rationale ? { rationale: meta.rationale } : {}),
+    };
     await this.stores.plan.dependencies.put(dep);
     await this.journal({ type: "dependency.added", planId, origin, payload: { dependency: dep } });
     return dep;
@@ -607,11 +766,21 @@ export class PlanService {
   // ------------------------------------------------------------------ risks
 
   /** Create or update a risk by key. Slugs in `affects` / `mitigatedBy` are resolved to work item ids. */
-  async upsertRisk(planId: string, raw: RiskInputLike, origin: PlanOrigin, opts: { resolveSlug?: (slug: string) => WorkItem | undefined; extraAffects?: string[] } = {}): Promise<Risk> {
+  async upsertRisk(
+    planId: string,
+    raw: RiskInputLike,
+    origin: PlanOrigin,
+    opts: { resolveSlug?: (slug: string) => WorkItem | undefined; extraAffects?: string[] } = {},
+  ): Promise<Risk> {
     return this.withPlan(planId, () => this.upsertRiskLocked(planId, raw, origin, opts));
   }
 
-  private async upsertRiskLocked(planId: string, raw: RiskInputLike, origin: PlanOrigin, opts: { resolveSlug?: (slug: string) => WorkItem | undefined; extraAffects?: string[] }): Promise<Risk> {
+  private async upsertRiskLocked(
+    planId: string,
+    raw: RiskInputLike,
+    origin: PlanOrigin,
+    opts: { resolveSlug?: (slug: string) => WorkItem | undefined; extraAffects?: string[] },
+  ): Promise<Risk> {
     const input = RiskInputSchema.parse(raw);
     const matrix = (await this.requirePlan(planId)).riskMatrix;
     // Ratings the author left out sit in the middle of the plan's grid; the
@@ -679,22 +848,38 @@ export class PlanService {
     return this.updateRisk(planId, cur.id, changes, origin);
   }
 
-  async updateRisk(planId: string, keyOrId: string, changes: Partial<Risk>, origin: PlanOrigin = SYSTEM): Promise<Risk> {
+  async updateRisk(
+    planId: string,
+    keyOrId: string,
+    changes: Partial<Risk>,
+    origin: PlanOrigin = SYSTEM,
+  ): Promise<Risk> {
     return this.withPlan(planId, () => this.updateRiskLocked(planId, keyOrId, changes, origin));
   }
 
-  private async updateRiskLocked(planId: string, keyOrId: string, changes: Partial<Risk>, origin: PlanOrigin): Promise<Risk> {
-    const cur = (await this.stores.plan.risks.get(keyOrId)) ?? (await this.stores.plan.risks.list((r) => r.planId === planId && r.key === keyOrId))[0];
-    if (!cur || cur.planId !== planId) throw new OrcaError("PLAN_INVALID", `risk '${keyOrId}' not found in plan ${planId}`);
+  private async updateRiskLocked(
+    planId: string,
+    keyOrId: string,
+    changes: Partial<Risk>,
+    origin: PlanOrigin,
+  ): Promise<Risk> {
+    const cur =
+      (await this.stores.plan.risks.get(keyOrId)) ??
+      (await this.stores.plan.risks.list((r) => r.planId === planId && r.key === keyOrId))[0];
+    if (!cur || cur.planId !== planId)
+      throw new OrcaError("PLAN_INVALID", `risk '${keyOrId}' not found in plan ${planId}`);
     const now = this.clock.isoNow();
-    const closing = changes.status && ["mitigated", "accepted", "closed"].includes(changes.status) && !["mitigated", "accepted", "closed"].includes(cur.status);
+    const closing =
+      changes.status &&
+      ["mitigated", "accepted", "closed"].includes(changes.status) &&
+      !["mitigated", "accepted", "closed"].includes(cur.status);
     const next: Risk = { ...cur, ...changes, updatedAt: now, ...(closing ? { closedAt: now } : {}) };
     if (changes.likelihood !== undefined || changes.impact !== undefined) {
       const ratingIssue = riskRatingIssue(next, (await this.requirePlan(planId)).riskMatrix);
       if (ratingIssue) throw new OrcaError("PLAN_INVALID", `risk '${cur.key}': ${ratingIssue}`);
     }
     await this.stores.plan.risks.put(next);
-    await this.journal({ type: "risk.updated", planId, origin, payload: { riskId: cur.id, changes: changes as Record<string, unknown> } });
+    await this.journal({ type: "risk.updated", planId, origin, payload: { riskId: cur.id, changes: changes } });
     return next;
   }
 
@@ -741,16 +926,37 @@ export class PlanService {
       if (Object.keys(changes).length) {
         dec = { ...dec, ...changes, updatedAt: now };
         await this.stores.plan.decisions.put(dec);
-        await this.journal({ type: "decision.updated", planId, origin, payload: { decisionId: dec.id, changes: changes as Record<string, unknown> } });
+        await this.journal({
+          type: "decision.updated",
+          planId,
+          origin,
+          payload: { decisionId: dec.id, changes: changes },
+        });
       }
     }
     // Slugs in `blocks` become dependencies when the caller registers items; here we only handle already-known items.
     for (const slug of parsed.blocks) {
       const item = await this.findItem(planId, slug);
-      if (item) await this.addDependencyRecord(planId, item.id, { kind: "decision", decisionId: dec.id }, { type: "blocks", requiredBy: DEPENDENCY_START_PHASE, rationale: `decision ${dec.key} must be made first` }, origin);
+      if (item)
+        await this.addDependencyRecord(
+          planId,
+          item.id,
+          { kind: "decision", decisionId: dec.id },
+          { type: "blocks", requiredBy: DEPENDENCY_START_PHASE, rationale: `decision ${dec.key} must be made first` },
+          origin,
+        );
     }
     if (parsed.chosen && dec.status !== "decided") {
-      const decided = await this.evaluateDecision(planId, dec.id, { chosen: parsed.chosen, decidedBy: origin.kind === "human" ? "human" : "agent", ...(parsed.rationale ? { rationale: parsed.rationale } : {}) }, origin);
+      const decided = await this.evaluateDecision(
+        planId,
+        dec.id,
+        {
+          chosen: parsed.chosen,
+          decidedBy: origin.kind === "human" ? "human" : "agent",
+          ...(parsed.rationale ? { rationale: parsed.rationale } : {}),
+        },
+        origin,
+      );
       return decided.decision;
     }
     return dec;
@@ -765,20 +971,39 @@ export class PlanService {
    * journalled or reconciled again (a new `rationale` is still recorded). A
    * *different* choice re-decides, e.g. a human overriding via `orca plan decide`.
    */
-  async evaluateDecision(planId: string, keyOrId: string, opts: { chosen?: string; decidedBy?: Decision["decidedBy"]; rationale?: string } = {}, origin: PlanOrigin = SYSTEM): Promise<{ decision: Decision; result?: DecisionMatrixResult; choice: string }> {
+  async evaluateDecision(
+    planId: string,
+    keyOrId: string,
+    opts: { chosen?: string; decidedBy?: Decision["decidedBy"]; rationale?: string } = {},
+    origin: PlanOrigin = SYSTEM,
+  ): Promise<{ decision: Decision; result?: DecisionMatrixResult; choice: string }> {
     return this.withPlan(planId, () => this.evaluateDecisionLocked(planId, keyOrId, opts, origin));
   }
 
-  private async evaluateDecisionLocked(planId: string, keyOrId: string, opts: { chosen?: string; decidedBy?: Decision["decidedBy"]; rationale?: string }, origin: PlanOrigin): Promise<{ decision: Decision; result?: DecisionMatrixResult; choice: string }> {
-    const cur = (await this.stores.plan.decisions.get(keyOrId)) ?? (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === keyOrId))[0];
-    if (!cur || cur.planId !== planId) throw new OrcaError("PLAN_INVALID", `decision '${keyOrId}' not found in plan ${planId}`);
+  private async evaluateDecisionLocked(
+    planId: string,
+    keyOrId: string,
+    opts: { chosen?: string; decidedBy?: Decision["decidedBy"]; rationale?: string },
+    origin: PlanOrigin,
+  ): Promise<{ decision: Decision; result?: DecisionMatrixResult; choice: string }> {
+    const cur =
+      (await this.stores.plan.decisions.get(keyOrId)) ??
+      (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === keyOrId))[0];
+    if (!cur || cur.planId !== planId)
+      throw new OrcaError("PLAN_INVALID", `decision '${keyOrId}' not found in plan ${planId}`);
     const now = this.clock.isoNow();
     let result: DecisionMatrixResult | undefined;
-    if (cur.criteria.length && cur.options.length) result = evaluateDecisionMatrix({ criteria: cur.criteria, options: cur.options, scale: cur.scale }, now);
+    if (cur.criteria.length && cur.options.length)
+      result = evaluateDecisionMatrix({ criteria: cur.criteria, options: cur.options, scale: cur.scale }, now);
     const optionKeys = cur.options.map((o) => o.key);
-    const explicit = opts.chosen && (optionKeys.length === 0 || optionKeys.includes(opts.chosen)) ? opts.chosen : undefined;
+    const explicit =
+      opts.chosen && (optionKeys.length === 0 || optionKeys.includes(opts.chosen)) ? opts.chosen : undefined;
     const choice = explicit ?? result?.recommended;
-    if (!choice) throw new OrcaError("PLAN_INVALID", `decision '${cur.key}' has no options to choose from${opts.chosen ? ` ('${opts.chosen}' is not one of ${optionKeys.join(", ")})` : ""}`);
+    if (!choice)
+      throw new OrcaError(
+        "PLAN_INVALID",
+        `decision '${cur.key}' has no options to choose from${opts.chosen ? ` ('${opts.chosen}' is not one of ${optionKeys.join(", ")})` : ""}`,
+      );
     if (cur.status === "decided" && cur.chosen === choice) {
       // Already decided this way. The usual route here is the decide loop: the agent's
       // `decision-matrix` artifact carried a valid `chosen`, so intake at `artifact.recorded`
@@ -788,15 +1013,39 @@ export class PlanService {
       if (opts.rationale && opts.rationale !== cur.rationale) {
         decision = { ...cur, rationale: opts.rationale, updatedAt: now };
         await this.stores.plan.decisions.put(decision);
-        await this.journal({ type: "decision.updated", planId, origin, payload: { decisionId: cur.id, changes: { rationale: opts.rationale } } });
+        await this.journal({
+          type: "decision.updated",
+          planId,
+          origin,
+          payload: { decisionId: cur.id, changes: { rationale: opts.rationale } },
+        });
       }
       const kept = decision.result ?? result;
       return { decision, choice, ...(kept ? { result: kept } : {}) };
     }
     const decidedBy: Decision["decidedBy"] = explicit ? (opts.decidedBy ?? "agent") : "matrix";
-    const decision: Decision = { ...cur, status: "decided", chosen: choice, decidedBy, updatedAt: now, decidedAt: now, ...(result ? { result } : {}), ...(opts.rationale ? { rationale: opts.rationale } : {}) };
+    const decision: Decision = {
+      ...cur,
+      status: "decided",
+      chosen: choice,
+      decidedBy,
+      updatedAt: now,
+      decidedAt: now,
+      ...(result ? { result } : {}),
+      ...(opts.rationale ? { rationale: opts.rationale } : {}),
+    };
     await this.stores.plan.decisions.put(decision);
-    await this.journal({ type: "decision.resolved", planId, origin, payload: { decisionId: cur.id, chosen: choice, decidedBy, ...(opts.rationale ? { rationale: opts.rationale } : {}) } });
+    await this.journal({
+      type: "decision.resolved",
+      planId,
+      origin,
+      payload: {
+        decisionId: cur.id,
+        chosen: choice,
+        decidedBy,
+        ...(opts.rationale ? { rationale: opts.rationale } : {}),
+      },
+    });
     await this.reconcile(planId, origin);
     return { decision, choice, ...(result ? { result } : {}) };
   }
@@ -806,15 +1055,29 @@ export class PlanService {
   }
 
   private async reopenDecisionLocked(planId: string, keyOrId: string, origin: PlanOrigin): Promise<Decision> {
-    const cur = (await this.stores.plan.decisions.get(keyOrId)) ?? (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === keyOrId))[0];
+    const cur =
+      (await this.stores.plan.decisions.get(keyOrId)) ??
+      (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === keyOrId))[0];
     if (!cur) throw new OrcaError("PLAN_INVALID", `decision '${keyOrId}' not found`);
     const next: Decision = { ...cur, status: "open", updatedAt: this.clock.isoNow() };
     delete next.chosen;
     delete next.decidedAt;
     delete next.decidedBy;
     await this.stores.plan.decisions.put(next);
-    await this.journal({ type: "decision.updated", planId, origin, payload: { decisionId: cur.id, changes: { status: "open" } } });
-    for (const d of await this.stores.plan.dependencies.list((d) => d.planId === planId && d.target.kind === "decision" && d.target.decisionId === cur.id && d.status === "satisfied")) await this.resolveDependency(d.id, "open", undefined, origin);
+    await this.journal({
+      type: "decision.updated",
+      planId,
+      origin,
+      payload: { decisionId: cur.id, changes: { status: "open" } },
+    });
+    for (const d of await this.stores.plan.dependencies.list(
+      (d) =>
+        d.planId === planId &&
+        d.target.kind === "decision" &&
+        d.target.decisionId === cur.id &&
+        d.status === "satisfied",
+    ))
+      await this.resolveDependency(d.id, "open", undefined, origin);
     return next;
   }
 
@@ -822,7 +1085,13 @@ export class PlanService {
 
   async schedule(planId: string, opts: ScheduleOptions = {}): Promise<Schedule> {
     const snap = await this.snapshot(planId);
-    const schedule = computeSchedule({ ...snap, now: this.clock.isoNow(), ...(opts.policy ? { policy: opts.policy } : {}), ...(opts.inScope ? { inScope: opts.inScope } : {}), ...(opts.running ? { running: opts.running } : {}) });
+    const schedule = computeSchedule({
+      ...snap,
+      now: this.clock.isoNow(),
+      ...(opts.policy ? { policy: opts.policy } : {}),
+      ...(opts.inScope ? { inScope: opts.inScope } : {}),
+      ...(opts.running ? { running: opts.running } : {}),
+    });
     if (opts.record) {
       await this.journal({
         type: "schedule.computed",
@@ -851,8 +1120,12 @@ export class PlanService {
     const [schedule, snap] = await Promise.all([this.schedule(planId), this.snapshot(planId)]);
     const lines = explainWorkItem(schedule, snap.items, item.id);
     const deps = snap.dependencies.filter((d) => d.from === item.id);
-    for (const d of deps) lines.push(`dependency (${d.type}${d.requiredBy !== DEPENDENCY_START_PHASE ? `, by ${d.requiredBy}` : ""}): ${schedule.dependencyStates[d.id]?.detail ?? d.status}`);
-    for (const r of snap.risks.filter((r) => r.affects.includes(item.id))) lines.push(`risk ${r.key}: ${r.status} (L${r.likelihood} x I${r.impact})`);
+    for (const d of deps)
+      lines.push(
+        `dependency (${d.type}${d.requiredBy !== DEPENDENCY_START_PHASE ? `, by ${d.requiredBy}` : ""}): ${schedule.dependencyStates[d.id]?.detail ?? d.status}`,
+      );
+    for (const r of snap.risks.filter((r) => r.affects.includes(item.id)))
+      lines.push(`risk ${r.key}: ${r.status} (L${r.likelihood} x I${r.impact})`);
     return lines;
   }
 
@@ -860,7 +1133,9 @@ export class PlanService {
   async upstreamContext(workItemId: string): Promise<UpstreamContext[]> {
     const wi = await this.stores.workItems.get(workItemId);
     if (!wi?.planId) return [];
-    const deps = await this.stores.plan.dependencies.list((d) => d.planId === wi.planId && d.from === workItemId && d.target.kind === "work-item" && d.status !== "waived");
+    const deps = await this.stores.plan.dependencies.list(
+      (d) => d.planId === wi.planId && d.from === workItemId && d.target.kind === "work-item" && d.status !== "waived",
+    );
     const out: UpstreamContext[] = [];
     for (const d of deps) {
       if (d.target.kind !== "work-item") continue;
@@ -871,7 +1146,15 @@ export class PlanService {
         const a = await this.stores.artifacts.get(id);
         if (a) artifacts[kind] = { id: a.id, data: a.data, ...(a.path ? { path: a.path } : {}) };
       }
-      out.push({ slug: up.slug, title: up.title, status: up.status, type: d.type, requiredBy: d.requiredBy, artifacts, ...(d.target.stage ? { stage: d.target.stage } : {}) });
+      out.push({
+        slug: up.slug,
+        title: up.title,
+        status: up.status,
+        type: d.type,
+        requiredBy: d.requiredBy,
+        artifacts,
+        ...(d.target.stage ? { stage: d.target.stage } : {}),
+      });
     }
     return out;
   }
@@ -883,14 +1166,29 @@ export class PlanService {
    * producing work item unless they name others), decisions (decided when the
    * artifact says `chosen`), and dependencies discovered mid-flight.
    */
-  async ingestArtifact(artifact: Artifact, ctx: { planId: string; workItemId?: string | undefined; runId?: string | undefined }): Promise<{ risks: Risk[]; decisions: Decision[]; dependencies: Dependency[]; issues: string[] }> {
+  async ingestArtifact(
+    artifact: Artifact,
+    ctx: { planId: string; workItemId?: string | undefined; runId?: string | undefined },
+  ): Promise<{ risks: Risk[]; decisions: Decision[]; dependencies: Dependency[]; issues: string[] }> {
     return this.withPlan(ctx.planId, () => this.ingestArtifactLocked(artifact, ctx));
   }
 
-  private async ingestArtifactLocked(artifact: Artifact, ctx: { planId: string; workItemId?: string | undefined; runId?: string | undefined }): Promise<{ risks: Risk[]; decisions: Decision[]; dependencies: Dependency[]; issues: string[] }> {
+  private async ingestArtifactLocked(
+    artifact: Artifact,
+    ctx: { planId: string; workItemId?: string | undefined; runId?: string | undefined },
+  ): Promise<{ risks: Risk[]; decisions: Decision[]; dependencies: Dependency[]; issues: string[] }> {
     const signals = extractPlanSignals(artifact, [defaultSignalExtractor, ...this.extractors]);
-    const origin: PlanOrigin = { kind: "artifact", artifactId: artifact.id, ...(ctx.runId ? { runId: ctx.runId } : {}) };
-    const out = { risks: [] as Risk[], decisions: [] as Decision[], dependencies: [] as Dependency[], issues: [...signals.issues] };
+    const origin: PlanOrigin = {
+      kind: "artifact",
+      artifactId: artifact.id,
+      ...(ctx.runId ? { runId: ctx.runId } : {}),
+    };
+    const out = {
+      risks: [] as Risk[],
+      decisions: [] as Decision[],
+      dependencies: [] as Dependency[],
+      issues: [...signals.issues],
+    };
     // Each signal is applied on its own: a rejected one (an unknown `chosen`,
     // say) is reported, not allowed to drop the signals behind it.
     for (const r of signals.risks) {
@@ -913,7 +1211,14 @@ export class PlanService {
       if (from?.planId === ctx.planId) {
         for (const ref of signals.dependencies) {
           try {
-            const dep = await this.addDependencyFromRef(ctx.planId, from, parseDependencyRef(ref), origin, undefined, out.issues);
+            const dep = await this.addDependencyFromRef(
+              ctx.planId,
+              from,
+              parseDependencyRef(ref),
+              origin,
+              undefined,
+              out.issues,
+            );
             if (dep) out.dependencies.push(dep);
           } catch (e) {
             out.issues.push((e as Error).message);
@@ -924,7 +1229,12 @@ export class PlanService {
     if (out.risks.length || out.decisions.length || out.dependencies.length) await this.reconcile(ctx.planId, origin);
     if (out.issues.length) {
       this.logger.warn("plan signals with issues", { artifact: artifact.id, issues: out.issues });
-      await this.journal({ type: "signals.rejected", planId: ctx.planId, origin, payload: { artifactId: artifact.id, ...(ctx.runId ? { runId: ctx.runId } : {}), issues: out.issues } });
+      await this.journal({
+        type: "signals.rejected",
+        planId: ctx.planId,
+        origin,
+        payload: { artifactId: artifact.id, ...(ctx.runId ? { runId: ctx.runId } : {}), issues: out.issues },
+      });
     }
     return out;
   }
@@ -946,7 +1256,11 @@ export class PlanService {
       return await this.withPlan(plan.id, async () => {
         const origin: PlanOrigin = { kind: "artifact", artifactId: artifact.id, runId: run.id };
         if (run.workItemId) await this.recordProduced(run.workItemId, artifact, origin);
-        const { issues } = await this.ingestArtifact(artifact, { planId: plan.id, workItemId: run.workItemId, runId: run.id });
+        const { issues } = await this.ingestArtifact(artifact, {
+          planId: plan.id,
+          workItemId: run.workItemId,
+          runId: run.id,
+        });
         return issues;
       });
     } catch (e) {
@@ -964,7 +1278,9 @@ export class PlanService {
    * (`RunContext.syncWorkItems`); this only projects the item run that no parent is
    * driving, through the very same mapping, and then re-evaluates the plan.
    */
-  async onRunFinished(run: Pick<Run, "id" | "workItemId" | "requestId" | "status" | "outcome" | "parentRunId">): Promise<void> {
+  async onRunFinished(
+    run: Pick<Run, "id" | "workItemId" | "requestId" | "status" | "outcome" | "parentRunId">,
+  ): Promise<void> {
     try {
       if (!run.workItemId) return;
       const planId = (await this.stores.workItems.get(run.workItemId))?.planId;
@@ -973,7 +1289,8 @@ export class PlanService {
         // Re-read under the lock: a sibling's intake may have moved the item on.
         const wi = await this.stores.workItems.get(run.workItemId!);
         if (!wi || wi.planId !== planId || (wi.runId && wi.runId !== run.id)) return;
-        if (!run.parentRunId) await this.onWorkItemsProjected(await projectWorkItemForRun(this.stores, run, this.clock.isoNow()), run.id);
+        if (!run.parentRunId)
+          await this.onWorkItemsProjected(await projectWorkItemForRun(this.stores, run, this.clock.isoNow()), run.id);
         await this.reconcile(planId, { kind: "system", runId: run.id });
       });
     } catch (e) {
@@ -995,12 +1312,20 @@ export class PlanService {
         const planId = c.workItem.planId;
         if (!planId) continue;
         plans.add(planId);
-        await this.journal({ type: "work-item.updated", planId, origin, payload: { workItemId: c.workItem.id, changes: { ...c.changes, from: c.previous } } });
+        await this.journal({
+          type: "work-item.updated",
+          planId,
+          origin,
+          payload: { workItemId: c.workItem.id, changes: { ...c.changes, from: c.previous } },
+        });
       }
       // A finished item can satisfy what its dependants were waiting for.
       for (const planId of plans) await this.reconcile(planId, origin);
     } catch (e) {
-      this.logger.error("plan: work-item projection intake failed", { ...(runId ? { run: runId } : {}), error: (e as Error).message });
+      this.logger.error("plan: work-item projection intake failed", {
+        ...(runId ? { run: runId } : {}),
+        error: (e as Error).message,
+      });
     }
   }
 

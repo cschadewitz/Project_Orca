@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import { expandPatterns, loadTemplates, loadWorkflows, parseOrcaConfig } from "@orca/core";
 
 const repoRoot = join(new URL(".", import.meta.url).pathname, "..", "..", "..");
-const workflow = (id: string) => `id: ${id}\nname: ${id}\nstart: s\nnodes:\n  s: { type: start, next: e }\n  e: { type: end }\n`;
+const workflow = (id: string) =>
+  `id: ${id}\nname: ${id}\nstart: s\nnodes:\n  s: { type: start, next: e }\n  e: { type: end }\n`;
 
 describe("glob loaders", () => {
   it("picks up .yml and nested workflows, not just top-level .yaml", async () => {
@@ -15,12 +16,22 @@ describe("glob loaders", () => {
     await writeFile(join(dir, "workflows", "alt.yml"), workflow("alt"));
     await writeFile(join(dir, "workflows", "nested", "deep.yaml"), workflow("deep"));
     const reg = await loadWorkflows(parseOrcaConfig({}).workflows, dir);
-    expect(reg.list().map((d) => d.id).sort()).toEqual(["alt", "deep", "top"]);
+    expect(
+      reg
+        .list()
+        .map((d) => d.id)
+        .sort(),
+    ).toEqual(["alt", "deep", "top"]);
   });
 
   it("loads the shipped workflows and templates with the default patterns", async () => {
     const config = parseOrcaConfig({});
-    expect((await loadWorkflows(config.workflows, repoRoot)).list().map((d) => d.id).sort()).toEqual(["ai-sdlc", "plan-resume", "program"]);
+    expect(
+      (await loadWorkflows(config.workflows, repoRoot))
+        .list()
+        .map((d) => d.id)
+        .sort(),
+    ).toEqual(["ai-sdlc", "plan-resume", "program"]);
     expect((await loadTemplates(config.templates, repoRoot)).list().length).toBeGreaterThan(0);
   });
 

@@ -1,3 +1,4 @@
+/** Host construction from config (`local` / `ssh`) and the registry the engine looks agents up in. */
 import { OrcaError, type AgentSelector, type AgentSpec, type HostSpec } from "@orca/core";
 import type { AgentHost } from "../host.js";
 import { LocalHost } from "./local-host.js";
@@ -40,7 +41,8 @@ export class AgentRegistry {
 
   host(id: string): AgentHost {
     const h = this.hosts.get(id);
-    if (!h) throw new OrcaError("AGENT_HOST_NOT_FOUND", `host '${id}' not configured`, { known: [...this.hosts.keys()] });
+    if (!h)
+      throw new OrcaError("AGENT_HOST_NOT_FOUND", `host '${id}' not configured`, { known: [...this.hosts.keys()] });
     return h;
   }
   hasHost(id: string): boolean {
@@ -68,10 +70,12 @@ export class AgentRegistry {
     else if ("id" in selector) id = selector.id;
     else {
       id = this.roles.get(selector.role) ?? [...this.agents.values()].find((a) => a.roles.includes(selector.role))?.id;
-      if (!id) throw new OrcaError("AGENT_NOT_FOUND", `no agent fills role '${selector.role}'`, { role: selector.role });
+      if (!id)
+        throw new OrcaError("AGENT_NOT_FOUND", `no agent fills role '${selector.role}'`, { role: selector.role });
     }
     const agent = this.agents.get(id);
-    if (!agent) throw new OrcaError("AGENT_NOT_FOUND", `agent '${id}' not configured`, { known: [...this.agents.keys()] });
+    if (!agent)
+      throw new OrcaError("AGENT_NOT_FOUND", `agent '${id}' not configured`, { known: [...this.agents.keys()] });
     return { agent, host: this.host(agent.hostId) };
   }
 }

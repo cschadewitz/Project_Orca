@@ -36,7 +36,13 @@ export async function inspectKeplerTask(taskDir: string): Promise<KeplerTaskInfo
   for (const entry of await readdir(taskDir, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     const p = join(taskDir, entry.name);
-    if (await stat(join(p, ".git")).then(() => true, () => false)) worktrees.push({ name: entry.name, path: p });
+    if (
+      await stat(join(p, ".git")).then(
+        () => true,
+        () => false,
+      )
+    )
+      worktrees.push({ name: entry.name, path: p });
   }
   let title: string | undefined;
   let body = "";
@@ -65,7 +71,10 @@ export class KeplerTaskWorkspaceProvider implements WorkspaceProvider {
     const info = await inspectKeplerTask(this.o.taskDir);
     const hostId = this.o.hostId ?? "local";
     const wanted = input.workItem?.repo;
-    const wt = (wanted ? info.worktrees.find((w) => w.name === wanted || w.path === wanted) : undefined) ?? (input.parent && info.worktrees.find((w) => w.path === input.parent!.cwd)) ?? info.worktrees[0];
+    const wt =
+      (wanted ? info.worktrees.find((w) => w.name === wanted || w.path === wanted) : undefined) ??
+      (input.parent && info.worktrees.find((w) => w.path === input.parent!.cwd)) ??
+      info.worktrees[0];
     if (wt) return { hostId, cwd: wt.path, repo: wt.name, provider: this.name };
     return input.parent ?? { hostId, cwd: this.o.taskDir, provider: this.name };
   }

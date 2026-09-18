@@ -12,10 +12,24 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
-function ctx(cwd: string, positionals: string[], flags: CommandContext["flags"] = {}, configPath?: string): CommandContext & { lines: string[]; errs: string[] } {
+function ctx(
+  cwd: string,
+  positionals: string[],
+  flags: CommandContext["flags"] = {},
+  configPath?: string,
+): CommandContext & { lines: string[]; errs: string[] } {
   const lines: string[] = [];
   const errs: string[] = [];
-  return { cwd, configPath, flags: { quiet: true, ...flags }, positionals, out: (l) => lines.push(l), err: (l) => errs.push(l), lines, errs };
+  return {
+    cwd,
+    configPath,
+    flags: { quiet: true, ...flags },
+    positionals,
+    out: (l) => lines.push(l),
+    err: (l) => errs.push(l),
+    lines,
+    errs,
+  };
 }
 
 /** The temp workspace the demo announces on stderr when run without --dir. */
@@ -25,7 +39,11 @@ function announcedDir(c: { errs: string[] }): string {
   return line!.slice("demo workspace: ".length);
 }
 
-const exists = (p: string) => stat(p).then(() => true, () => false);
+const exists = (p: string) =>
+  stat(p).then(
+    () => true,
+    () => false,
+  );
 
 describe("orca demo", () => {
   it("writes an orca.config.yaml that later commands can run workflows with", async () => {

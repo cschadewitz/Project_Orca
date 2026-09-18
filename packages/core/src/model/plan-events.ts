@@ -33,7 +33,14 @@ export const PlanEventSchema = z.discriminatedUnion("type", [
   base("work-item.updated", z.object({ workItemId: z.string(), changes: patch })),
 
   base("dependency.added", z.object({ dependency: DependencySchema })),
-  base("dependency.resolved", z.object({ dependencyId: z.string(), status: z.enum(["satisfied", "failed", "waived", "open"]), resolution: z.string().optional() })),
+  base(
+    "dependency.resolved",
+    z.object({
+      dependencyId: z.string(),
+      status: z.enum(["satisfied", "failed", "waived", "open"]),
+      resolution: z.string().optional(),
+    }),
+  ),
   /** An `external` placeholder was bound to a work item registered later. */
   base("dependency.bound", z.object({ dependencyId: z.string(), workItemId: z.string() })),
 
@@ -41,11 +48,22 @@ export const PlanEventSchema = z.discriminatedUnion("type", [
   base("risk.updated", z.object({ riskId: z.string(), changes: patch })),
 
   /** Front-matter signals an artifact carried that the plan refused (malformed, or rejected on apply). */
-  base("signals.rejected", z.object({ artifactId: z.string(), runId: z.string().optional(), issues: z.array(z.string()) })),
+  base(
+    "signals.rejected",
+    z.object({ artifactId: z.string(), runId: z.string().optional(), issues: z.array(z.string()) }),
+  ),
 
   base("decision.opened", z.object({ decision: DecisionSchema })),
   base("decision.updated", z.object({ decisionId: z.string(), changes: patch })),
-  base("decision.resolved", z.object({ decisionId: z.string(), chosen: z.string(), decidedBy: z.enum(["matrix", "agent", "human"]), rationale: z.string().optional() })),
+  base(
+    "decision.resolved",
+    z.object({
+      decisionId: z.string(),
+      chosen: z.string(),
+      decidedBy: z.enum(["matrix", "agent", "human"]),
+      rationale: z.string().optional(),
+    }),
+  ),
 
   base(
     "schedule.computed",

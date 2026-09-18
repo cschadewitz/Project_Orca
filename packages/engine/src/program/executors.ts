@@ -34,7 +34,13 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
     const [art] = await ctx.resolveInputs([{ name, required: false }]);
     const source = art ?? (await ctx.resolveInputs([{ kind: name, required: true }]))[0]!;
     const parsed = DecompositionSchema.safeParse(source.data);
-    if (!parsed.success) return failed("ARTIFACT_INVALID", `decomposition artifact is not valid: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`, {}, false);
+    if (!parsed.success)
+      return failed(
+        "ARTIFACT_INVALID",
+        `decomposition artifact is not valid: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+        {},
+        false,
+      );
     const request = await ctx.run.request();
     const requestId = request?.id ?? ctx.run.id;
     const now = ctx.clock.isoNow();
@@ -72,7 +78,8 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
         } catch (e) {
           return failed("ARTIFACT_INVALID", `work item '${item.slug}': ${(e as Error).message}`, {}, false);
         }
-        if (ref.targetKind === "work-item" && !bySlug.has(ref.key)) return failed("ARTIFACT_INVALID", `work item '${item.slug}' depends on unknown '${ref.key}'`, {}, false);
+        if (ref.targetKind === "work-item" && !bySlug.has(ref.key))
+          return failed("ARTIFACT_INVALID", `work item '${item.slug}' depends on unknown '${ref.key}'`, {}, false);
       }
     }
     await ctx.stores.workItems.putMany([...bySlug.values()]);
@@ -83,6 +90,8 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
     const parents = new Set(workItems.map((w) => w.parentId).filter(Boolean));
     const leafWorkItems = workItems.filter((w) => !parents.has(w.id));
     await ctx.emit({ type: "vars.set", payload: { vars: { workItems, leafWorkItems } } });
-    return completed({ data: { count: workItems.length, leaves: leafWorkItems.length, slugs: workItems.map((w) => w.slug) } });
+    return completed({
+      data: { count: workItems.length, leaves: leafWorkItems.length, slugs: workItems.map((w) => w.slug) },
+    });
   },
 };

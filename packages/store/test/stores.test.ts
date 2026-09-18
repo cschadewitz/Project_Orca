@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { consoleLogger, FakeClock, type Artifact } from "@orca/core";
-import { FileArtifactStore, InMemoryDocumentStore, InMemoryEventStore, JsonFileDocumentStore, JsonlEventStore } from "@orca/store";
+import {
+  FileArtifactStore,
+  InMemoryDocumentStore,
+  InMemoryEventStore,
+  JsonFileDocumentStore,
+  JsonlEventStore,
+} from "@orca/store";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -14,20 +20,31 @@ afterEach(async () => {
 describe("event stores", () => {
   for (const [name, make] of [
     ["memory", async () => new InMemoryEventStore(new FakeClock())],
-    ["jsonl", async () => {
-      const d = await mkdtemp(join(tmpdir(), "orca-store-"));
-      dirs.push(d);
-      return new JsonlEventStore(d, new FakeClock());
-    }],
+    [
+      "jsonl",
+      async () => {
+        const d = await mkdtemp(join(tmpdir(), "orca-store-"));
+        dirs.push(d);
+        return new JsonlEventStore(d, new FakeClock());
+      },
+    ],
   ] as const) {
     it(`${name}: assigns gap-free seq per run and notifies subscribers`, async () => {
       const store = await make();
       const seen: number[] = [];
       store.subscribe((e) => seen.push(e.seq), { runId: "run_a" });
       await Promise.all([
-        store.append({ type: "run.created", runId: "run_a", payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} } }),
+        store.append({
+          type: "run.created",
+          runId: "run_a",
+          payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
+        }),
         store.append({ type: "run.started", runId: "run_a", payload: {} }),
-        store.append({ type: "run.created", runId: "run_b", payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} } }),
+        store.append({
+          type: "run.created",
+          runId: "run_b",
+          payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
+        }),
       ]);
       const a = await store.read("run_a");
       expect(a.map((e) => e.seq)).toEqual([0, 1]);
@@ -38,21 +55,39 @@ describe("event stores", () => {
   }
   for (const [name, make] of [
     ["memory", async () => new InMemoryEventStore(new FakeClock())],
-    ["jsonl", async () => {
-      const d = await mkdtemp(join(tmpdir(), "orca-store-"));
-      dirs.push(d);
-      return new JsonlEventStore(d, new FakeClock());
-    }],
+    [
+      "jsonl",
+      async () => {
+        const d = await mkdtemp(join(tmpdir(), "orca-store-"));
+        dirs.push(d);
+        return new JsonlEventStore(d, new FakeClock());
+      },
+    ],
   ] as const) {
     it(`${name}: readTypes returns only the requested types, in order`, async () => {
       const store = await make();
-      await store.append({ type: "run.created", runId: "run_a", payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} } });
+      await store.append({
+        type: "run.created",
+        runId: "run_a",
+        payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
+      });
       await store.append({ type: "run.started", runId: "run_a", payload: {} });
       // A payload that quotes an event type must not be mistaken for one.
-      await store.append({ type: "agent.update", runId: "run_a", payload: { stepRunId: "step_1", sessionId: "s", update: { kind: "agent_message_chunk", text: '"type":"run.completed"' } } });
+      await store.append({
+        type: "agent.update",
+        runId: "run_a",
+        payload: {
+          stepRunId: "step_1",
+          sessionId: "s",
+          update: { kind: "agent_message_chunk", text: '"type":"run.completed"' },
+        },
+      });
       await store.append({ type: "run.completed", runId: "run_a", payload: { outcome: "success" } });
       const got = await store.readTypes("run_a", ["run.created", "run.completed"]);
-      expect(got.map((e) => [e.type, e.seq])).toEqual([["run.created", 0], ["run.completed", 3]]);
+      expect(got.map((e) => [e.type, e.seq])).toEqual([
+        ["run.created", 0],
+        ["run.completed", 3],
+      ]);
       expect(await store.readTypes("run_missing", ["run.created"])).toEqual([]);
     });
   }
@@ -60,7 +95,11 @@ describe("event stores", () => {
     const d = await mkdtemp(join(tmpdir(), "orca-store-"));
     dirs.push(d);
     const first = new JsonlEventStore(d);
-    await first.append({ type: "run.created", runId: "run_x", payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} } });
+    await first.append({
+      type: "run.created",
+      runId: "run_x",
+      payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
+    });
     const second = new JsonlEventStore(d);
     const e = await second.append({ type: "run.started", runId: "run_x", payload: {} });
     expect(e.seq).toBe(1);
@@ -71,13 +110,33 @@ describe("event stores", () => {
     // Two processes over one store: an ACP facade beside a resume, or two CLI invocations.
     const a = new JsonlEventStore(d);
     const b = new JsonlEventStore(d);
-    await a.append({ type: "run.created", runId: "run_x", payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} } });
+    await a.append({
+      type: "run.created",
+      runId: "run_x",
+      payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
+    });
     await b.append({ type: "run.started", runId: "run_x", payload: {} });
     await a.append({ type: "run.completed", runId: "run_x", payload: { outcome: "success" } });
-    expect((await a.read("run_x")).map((e) => [e.type, e.seq])).toEqual([["run.created", 0], ["run.started", 1], ["run.completed", 2]]);
+    expect((await a.read("run_x")).map((e) => [e.type, e.seq])).toEqual([
+      ["run.created", 0],
+      ["run.started", 1],
+      ["run.completed", 2],
+    ]);
     await Promise.all([
-      ...Array.from({ length: 8 }, () => a.append({ type: "agent.update", runId: "run_x", payload: { stepRunId: "s", sessionId: "s", update: { kind: "agent_message_chunk", text: "a" } } })),
-      ...Array.from({ length: 8 }, () => b.append({ type: "agent.update", runId: "run_x", payload: { stepRunId: "s", sessionId: "s", update: { kind: "agent_message_chunk", text: "b" } } })),
+      ...Array.from({ length: 8 }, () =>
+        a.append({
+          type: "agent.update",
+          runId: "run_x",
+          payload: { stepRunId: "s", sessionId: "s", update: { kind: "agent_message_chunk", text: "a" } },
+        }),
+      ),
+      ...Array.from({ length: 8 }, () =>
+        b.append({
+          type: "agent.update",
+          runId: "run_x",
+          payload: { stepRunId: "s", sessionId: "s", update: { kind: "agent_message_chunk", text: "b" } },
+        }),
+      ),
     ]);
     expect((await b.read("run_x")).map((e) => e.seq)).toEqual(Array.from({ length: 19 }, (_, i) => i));
     expect(await a.listRuns()).toEqual(["run_x"]);
@@ -86,9 +145,21 @@ describe("event stores", () => {
     const d = await mkdtemp(join(tmpdir(), "orca-store-"));
     dirs.push(d);
     const warnings: string[] = [];
-    const store = new JsonlEventStore(d, new FakeClock(), consoleLogger("warn", {}, (l) => warnings.push(l)));
-    await store.append({ type: "run.created", runId: "run_x", payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} } });
-    await writeFile(join(d, "runs", "run_x.jsonl"), '{"type":"run.started","runId":"run_x","payload":{},"id":"evt_1","seq":1,"at":"2', { flag: "a" });
+    const store = new JsonlEventStore(
+      d,
+      new FakeClock(),
+      consoleLogger("warn", {}, (l) => warnings.push(l)),
+    );
+    await store.append({
+      type: "run.created",
+      runId: "run_x",
+      payload: { workflowId: "w", workflowVersion: "1", workspace: { hostId: "local", cwd: "/" }, vars: {} },
+    });
+    await writeFile(
+      join(d, "runs", "run_x.jsonl"),
+      '{"type":"run.started","runId":"run_x","payload":{},"id":"evt_1","seq":1,"at":"2',
+      { flag: "a" },
+    );
     expect((await store.read("run_x")).map((e) => e.seq)).toEqual([0]);
     expect((await store.readTypes("run_x", ["run.started"])).length).toBe(0);
     expect((await store.append({ type: "run.started", runId: "run_x", payload: {} })).seq).toBe(1);
@@ -102,7 +173,19 @@ describe("file artifact store", () => {
     const d = await mkdtemp(join(tmpdir(), "orca-art-"));
     dirs.push(d);
     const store = new FileArtifactStore(d);
-    const a: Artifact = { id: "art_1", kind: "spec", name: "spec", mediaType: "text/markdown", contentHash: "abc", size: 5, version: 1, producedBy: { runId: "run_1" }, parents: [], data: {}, createdAt: "t" };
+    const a: Artifact = {
+      id: "art_1",
+      kind: "spec",
+      name: "spec",
+      mediaType: "text/markdown",
+      contentHash: "abc",
+      size: 5,
+      version: 1,
+      producedBy: { runId: "run_1" },
+      parents: [],
+      data: {},
+      createdAt: "t",
+    };
     await store.put(a, "hello");
     expect(await new FileArtifactStore(d).content("art_1")).toBe("hello");
     expect((await store.list({ kind: "spec" })).map((x) => x.id)).toEqual(["art_1"]);
@@ -126,7 +209,11 @@ describe("document stores", () => {
   ] as const) {
     it(`${name}: putMany writes every doc and put/delete round-trip`, async () => {
       const store = await make();
-      await store.putMany([{ id: "a", n: 1 }, { id: "b", n: 2 }, { id: "c", n: 3 }]);
+      await store.putMany([
+        { id: "a", n: 1 },
+        { id: "b", n: 2 },
+        { id: "c", n: 3 },
+      ]);
       await store.put({ id: "b", n: 20 });
       await store.delete("c");
       await store.putMany([]);

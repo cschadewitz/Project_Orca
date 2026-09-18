@@ -8,7 +8,10 @@ import type { HostFileSystem } from "@orca/agents";
 import { watchForArtifacts } from "@orca/engine";
 
 /** A file system whose `existsMany` takes `latencyMs` and reports overlapping calls. */
-function slowFs(latencyMs: number, answer: (call: number) => boolean[] | Error): HostFileSystem & { calls: number; maxConcurrent: number; batches: number[] } {
+function slowFs(
+  latencyMs: number,
+  answer: (call: number) => boolean[] | Error,
+): HostFileSystem & { calls: number; maxConcurrent: number; batches: number[] } {
   const fs = {
     calls: 0,
     maxConcurrent: 0,
@@ -30,7 +33,7 @@ function slowFs(latencyMs: number, answer: (call: number) => boolean[] | Error):
       return a;
     },
   };
-  return fs as unknown as HostFileSystem & { calls: number; maxConcurrent: number; batches: number[] };
+  return fs;
 }
 
 describe("watchForArtifacts", () => {

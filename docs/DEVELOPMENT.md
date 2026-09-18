@@ -3,8 +3,11 @@
 ```bash
 mise install                 # Node 24 + pnpm 12 (any Node >= 22 works)
 pnpm install
-pnpm run lint                # tsc --noEmit over every package + tests (paths-mapped to sources)
+pnpm run typecheck           # tsc --noEmit over every package + tests (paths-mapped to sources)
+pnpm run lint                # eslint (type-aware) over the same set; --fix as `pnpm run lint:fix`
+pnpm run format              # prettier --write . (`format:check` to only report)
 pnpm test                    # vitest: unit tests + e2e against a real ACP subprocess
+pnpm run test:coverage       # the same run, with coverage and its thresholds
 pnpm run build               # tsc -b project references -> packages/*/dist
 pnpm run demo                # program run with scripted agents (from sources via tsx)
 node packages/cli/dist/main.js demo   # same, from the compiled build
@@ -45,10 +48,63 @@ its postinstall, so it is allow-listed under `allowBuilds` in
 `pnpm-workspace.yaml`; add to that list with `pnpm approve-builds` if a new
 dependency legitimately needs to build.
 
+## Lint and format
+
+`lint` is ESLint, `typecheck` is `tsc --noEmit`, and `format` is Prettier. They do not
+overlap: `eslint-config-prettier` is applied last in the config, so ESLint has no opinion
+about whitespace and Prettier has none about correctness. CI runs all three.
+
+The config lives in `tools/eslint-config` — a workspace package rather than a root
+`eslint.config.js` — because typescript-eslint cannot load against TypeScript 7, which
+is what the repo builds with. The package depends on TypeScript 6 (the last release with
+the JS type-checker API), and pnpm's isolated `node_modules` means the linter resolves
+that copy while `tsc` keeps using 7. Nothing else in the workspace sees TypeScript 6.
+Revisit this once typescript-eslint supports 7.x.
+
+Type-aware rules are on, minus the ones that fight this codebase's idioms — async ports
+that implement a synchronous method, `unknown` event payloads rendered with `String(...)`,
+conditional spreads under `exactOptionalPropertyTypes`. Each exception is commented in
+the config with the reason; that comment is the argument to beat if you want it back.
+
+One local rule, `orca/file-header-comment`, enforces the first convention below.
+Prettier runs at `printWidth: 120` and skips `*.md` and `templates/` (see
+`.prettierignore`): prose is wrapped by hand, and a prompt template's whitespace is
+part of the prompt.
+
+The initial reformat is a single commit listed in `.git-blame-ignore-revs`. To have
+`git blame` skip it locally:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+## Coverage
+
+```bash
+pnpm run test:coverage            # v8 coverage -> coverage/ (html, lcov, json-summary)
+node tools/coverage-summary.js    # the per-package table, from the last run
+open coverage/index.html          # line-by-line
+```
+
+Thresholds live in `vitest.config.ts` and are set just under the numbers the suite
+reaches today, so they act as a ratchet: a change that drops coverage fails locally and
+in CI, and the way to turn CI green is a test, not a lower number. Raise them when
+coverage improves.
+
+`packages/testing` is excluded. The scripted agent runs as a real subprocess in the e2e
+tests, and v8 coverage collected in the test process cannot see it, so its number would
+describe the collector rather than the tests. `packages/*/src/index.ts` barrels and
+`main.ts` entry points are excluded for the same kind of reason.
+
+CI measures coverage on one Node version (24), writes the per-package table into the
+job summary, and uploads `coverage/` as an artifact — including when the thresholds
+fail, which is when the numbers are worth reading.
+
 ## Layout conventions
 
 - One concern per file; every file except a pure re‑export barrel starts with a comment
-  saying what it is for.
+  saying what it is for. `orca/file-header-comment` enforces this in `src` (tests are
+  exempt).
 - `packages/*/src/index.ts` is the public surface of a package; tests import only that
   (the CLI tests reach into `src/commands` directly).
 - `core` has no runtime I/O except reading workflow/template files. `engine` depends on

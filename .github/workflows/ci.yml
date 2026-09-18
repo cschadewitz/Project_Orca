@@ -38,10 +38,42 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Typecheck
+        run: pnpm run typecheck
+
+      # Style and lint are Node-version independent, so one leg is enough: running them on
+      # both would annotate the same finding twice on the PR.
+      - name: Format
+        if: matrix.node == 24
+        run: pnpm run format:check
+
+      - name: Lint
+        if: matrix.node == 24
         run: pnpm run lint
 
+      # Coverage is measured on one leg for the same reason, and because instrumenting
+      # slows the suite down. Thresholds live in vitest.config.ts, so this fails here
+      # exactly when it fails locally.
       - name: Test
+        if: matrix.node != 24
         run: pnpm test
+
+      - name: Test with coverage
+        if: matrix.node == 24
+        run: pnpm run test:coverage
+
+      # Both still run when the thresholds fail: a red build is exactly when the numbers
+      # are worth reading. `hashFiles` keeps them quiet when coverage never ran at all.
+      - name: Report coverage
+        if: ${{ !cancelled() && matrix.node == 24 && hashFiles('coverage/coverage-summary.json') != '' }}
+        run: node tools/coverage-summary.js >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: ${{ !cancelled() && matrix.node == 24 && hashFiles('coverage/coverage-summary.json') != '' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
 
       - name: Build
         run: pnpm run build

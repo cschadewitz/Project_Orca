@@ -43,7 +43,10 @@ export function summarizeUpdate(u: acp.SessionUpdate): AgentUpdateSummary {
     case "agent_message_chunk":
     case "agent_thought_chunk":
     case "user_message_chunk":
-      return { kind: u.sessionUpdate, ...(u.content.type === "text" ? { text: u.content.text } : { text: `[${u.content.type}]` }) };
+      return {
+        kind: u.sessionUpdate,
+        ...(u.content.type === "text" ? { text: u.content.text } : { text: `[${u.content.type}]` }),
+      };
     case "tool_call":
       return {
         kind: u.sessionUpdate,
@@ -63,7 +66,10 @@ export function summarizeUpdate(u: acp.SessionUpdate): AgentUpdateSummary {
         ...(u.locations ? { locations: u.locations.map((l) => l.path) } : {}),
       };
     case "plan":
-      return { kind: u.sessionUpdate, planEntries: u.entries.map((e) => ({ content: e.content, status: e.status, priority: e.priority })) };
+      return {
+        kind: u.sessionUpdate,
+        planEntries: u.entries.map((e) => ({ content: e.content, status: e.status, priority: e.priority })),
+      };
     default:
       return { kind: (u as { sessionUpdate: string }).sessionUpdate };
   }

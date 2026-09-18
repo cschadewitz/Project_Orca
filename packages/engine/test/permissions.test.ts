@@ -7,7 +7,14 @@ import { describe, expect, it, vi } from "vitest";
 import * as acp from "@agentclientprotocol/sdk";
 import { AgentRegistry, LocalHost, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import { AgentSpecSchema, FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
-import { humanInputCancelled, LocalWorkspaceProvider, Orchestrator, type HumanInputPort, type HumanInputQuery, type SessionFactory } from "@orca/engine";
+import {
+  humanInputCancelled,
+  LocalWorkspaceProvider,
+  Orchestrator,
+  type HumanInputPort,
+  type HumanInputQuery,
+  type SessionFactory,
+} from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
 /**
@@ -74,7 +81,12 @@ function fakeSessions(asksPerTurn: number) {
       async prompt() {
         const reqs = Array.from({ length: asksPerTurn }, () => permissionRequest(`tool-${++calls}`));
         const got = await Promise.all(reqs.map((r) => o.askPermission!(r)));
-        for (const [i, r] of reqs.entries()) o.onPermission?.({ toolCallId: r.toolCall.toolCallId, title: r.toolCall.title ?? "", decision: got[i] ? `ask:${got[i]}` : "ask:cancelled" });
+        for (const [i, r] of reqs.entries())
+          o.onPermission?.({
+            toolCallId: r.toolCall.toolCallId,
+            title: r.toolCall.title ?? "",
+            decision: got[i] ? `ask:${got[i]}` : "ask:cancelled",
+          });
         answers.push(...got);
         return { stopReason: "end_turn", durationMs: 1 };
       },
@@ -90,11 +102,26 @@ function fakeSessions(asksPerTurn: number) {
 function make(yaml: string, sessionFactory: SessionFactory, opts: { sessionMode?: "per-step" | "per-run" } = {}) {
   const workflows = new WorkflowRegistry();
   workflows.register(parseWorkflow(yaml));
-  const agents = new AgentRegistry()
-    .addHost(new LocalHost({ id: "local", type: "local" }))
-    .addAgent(AgentSpecSchema.parse({ id: "fake", command: "x", roles: ["builder"], permissions: { default: "ask" }, ...(opts.sessionMode ? { sessionMode: opts.sessionMode } : {}) }));
+  const agents = new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })).addAgent(
+    AgentSpecSchema.parse({
+      id: "fake",
+      command: "x",
+      roles: ["builder"],
+      permissions: { default: "ask" },
+      ...(opts.sessionMode ? { sessionMode: opts.sessionMode } : {}),
+    }),
+  );
   const humanInput = new InProcessHumanInput();
-  const orchestrator = new Orchestrator({ stores: memoryStores(), agents, workflows, templates: new TemplateRegistry(), workspaceProvider: new LocalWorkspaceProvider("/tmp"), clock: new FakeClock(), humanInput, sessionFactory });
+  const orchestrator = new Orchestrator({
+    stores: memoryStores(),
+    agents,
+    workflows,
+    templates: new TemplateRegistry(),
+    workspaceProvider: new LocalWorkspaceProvider("/tmp"),
+    clock: new FakeClock(),
+    humanInput,
+    sessionFactory,
+  });
   return { orchestrator, humanInput };
 }
 
@@ -136,7 +163,12 @@ describe("ask permissions as human input", () => {
 
     // Both asks are visible on the run while pending, and the step is waiting on human input.
     const mid = await orchestrator.getState(a!.runId);
-    expect(Object.values(mid.humanInputs).filter((h) => h.answer === undefined).map((h) => h.id).sort()).toEqual([a!.requestId, b!.requestId].sort());
+    expect(
+      Object.values(mid.humanInputs)
+        .filter((h) => h.answer === undefined)
+        .map((h) => h.id)
+        .sort(),
+    ).toEqual([a!.requestId, b!.requestId].sort());
     expect(mid.steps[a!.stepRunId]).toMatchObject({ nodeId: "work", status: "waiting", waitingOn: "human-input" });
     expect(mid.run.status).toBe("waiting");
 
@@ -146,14 +178,33 @@ describe("ask permissions as human input", () => {
 
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(fake.answers).toEqual(["allow", "deny"]);
-    expect(state.humanInputs[a!.requestId]).toMatchObject({ kind: "permission", question: "Write tool-1", answer: "allow" });
-    expect(state.humanInputs[b!.requestId]).toMatchObject({ kind: "permission", question: "Write tool-2", answer: "deny" });
+    expect(state.humanInputs[a!.requestId]).toMatchObject({
+      kind: "permission",
+      question: "Write tool-1",
+      answer: "allow",
+    });
+    expect(state.humanInputs[b!.requestId]).toMatchObject({
+      kind: "permission",
+      question: "Write tool-2",
+      answer: "deny",
+    });
 
     const events = await orchestrator.events(state.run.id);
     const types = (t: string) => events.filter((e) => e.type === t);
-    expect(types("human.requested").map((e) => (e.payload as { requestId: string }).requestId).sort()).toEqual([a!.requestId, b!.requestId].sort());
-    expect(types("human.answered").map((e) => (e.payload as { answer: string }).answer).sort()).toEqual(["allow", "deny"]);
-    expect(types("agent.permission").map((e) => (e.payload as { decision: string }).decision)).toEqual(["ask:allow", "ask:deny"]);
+    expect(
+      types("human.requested")
+        .map((e) => (e.payload as { requestId: string }).requestId)
+        .sort(),
+    ).toEqual([a!.requestId, b!.requestId].sort());
+    expect(
+      types("human.answered")
+        .map((e) => (e.payload as { answer: string }).answer)
+        .sort(),
+    ).toEqual(["allow", "deny"]);
+    expect(types("agent.permission").map((e) => (e.payload as { decision: string }).decision)).toEqual([
+      "ask:allow",
+      "ask:deny",
+    ]);
     // The step went back to waiting on the agent turn once the last ask was answered.
     const waits = types("step.waiting").map((e) => (e.payload as { on: string }).on);
     expect(waits).toEqual(["agent-turn", "human-input", "human-input", "agent-turn"]);
@@ -178,7 +229,9 @@ describe("ask permissions as human input", () => {
     expect(state.steps[first.stepRunId]?.nodeId).toBe("first");
     expect(state.steps[second.stepRunId]?.nodeId).toBe("second");
     const events = await orchestrator.events(state.run.id);
-    const perms = events.filter((e) => e.type === "agent.permission").map((e) => state.steps[(e.payload as { stepRunId: string }).stepRunId]?.nodeId);
+    const perms = events
+      .filter((e) => e.type === "agent.permission")
+      .map((e) => state.steps[(e.payload as { stepRunId: string }).stepRunId]?.nodeId);
     expect(perms).toEqual(["first", "second"]);
   });
 });

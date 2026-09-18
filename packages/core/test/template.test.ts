@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { parseDeliverablesBlock, parsePromptTemplate, renderDeliverablesBlock, renderTemplate, TemplateRegistry } from "@orca/core";
+import {
+  parseDeliverablesBlock,
+  parsePromptTemplate,
+  renderDeliverablesBlock,
+  renderTemplate,
+  TemplateRegistry,
+} from "@orca/core";
 
 describe("template renderer", () => {
   it("interpolates expressions, conditionals and loops", () => {
     const out = renderTemplate(
-      ["Hi {{ workItem.title }}", "{{#if artifacts.spec}}spec: {{ artifacts.spec.data.risk }}{{else}}no spec{{/if}}", "{{#each items as it, i}}{{ i }}:{{ it }} {{/each}}", "{{!-- comment --}}done"].join("\n"),
+      [
+        "Hi {{ workItem.title }}",
+        "{{#if artifacts.spec}}spec: {{ artifacts.spec.data.risk }}{{else}}no spec{{/if}}",
+        "{{#each items as it, i}}{{ i }}:{{ it }} {{/each}}",
+        "{{!-- comment --}}done",
+      ].join("\n"),
       { workItem: { title: "Auth" }, artifacts: { spec: { data: { risk: "low" } } }, items: ["a", "b"] },
     );
     expect(out).toBe("Hi Auth\nspec: low\n0:a 1:b \ndone");
@@ -25,7 +36,9 @@ describe("template renderer", () => {
     expect(t.body).toBe("Body {{ x }}");
   });
   it("round-trips the deliverables block", () => {
-    const block = renderDeliverablesBlock([{ kind: "spec", path: "/w/spec.md", required: true, requiredFields: ["status"] }]);
+    const block = renderDeliverablesBlock([
+      { kind: "spec", path: "/w/spec.md", required: true, requiredFields: ["status"] },
+    ]);
     expect(block).toContain("## Deliverables");
     const parsed = parseDeliverablesBlock("prompt text\n\n" + block);
     expect(parsed).toEqual([{ kind: "spec", path: "/w/spec.md", required: true, requiredFields: ["status"] }]);

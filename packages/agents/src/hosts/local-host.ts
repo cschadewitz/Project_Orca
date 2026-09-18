@@ -1,8 +1,17 @@
+/** LocalHost - runs ACP agents as child processes of this one, against the local filesystem. */
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
 import { OrcaError, type AgentSpec, type LocalHost as LocalHostSpec } from "@orca/core";
-import { collectChildProcess, wrapAgentProcess, type AgentHost, type AgentProcessHandle, type ExecResult, type HostFileSystem, type SpawnAgentOptions } from "../host.js";
+import {
+  collectChildProcess,
+  wrapAgentProcess,
+  type AgentHost,
+  type AgentProcessHandle,
+  type ExecResult,
+  type HostFileSystem,
+  type SpawnAgentOptions,
+} from "../host.js";
 
 const exists = (p: string): Promise<boolean> =>
   access(p).then(
@@ -42,12 +51,22 @@ export class LocalHost implements AgentHost {
       stdio: ["pipe", "pipe", "pipe"],
     });
     return wrapAgentProcess(child, {
-      onSpawnError: (e) => new OrcaError("AGENT_TRANSPORT", `cannot spawn agent '${agent.id}' (${agent.command}): ${e.message}`, { agentId: agent.id }, { cause: e }),
+      onSpawnError: (e) =>
+        new OrcaError(
+          "AGENT_TRANSPORT",
+          `cannot spawn agent '${agent.id}' (${agent.command}): ${e.message}`,
+          { agentId: agent.id },
+          { cause: e },
+        ),
     });
   }
 
   exec(command: string, options: { cwd?: string; stdin?: string; timeoutMs?: number } = {}): Promise<ExecResult> {
-    const child = spawn(command, { ...(options.cwd ? { cwd: options.cwd } : {}), shell: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, {
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      shell: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     return collectChildProcess(child, options);
   }
 }

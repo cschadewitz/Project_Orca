@@ -39,7 +39,18 @@ export const HostSpecSchema = z.discriminatedUnion("type", [LocalHostSchema, Ssh
 export type HostSpec = z.infer<typeof HostSpecSchema>;
 
 /** ACP tool kinds, mirrored here so policies do not depend on the SDK types. */
-export const ToolKindSchema = z.enum(["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"]);
+export const ToolKindSchema = z.enum([
+  "read",
+  "edit",
+  "delete",
+  "move",
+  "search",
+  "execute",
+  "think",
+  "fetch",
+  "switch_mode",
+  "other",
+]);
 export type ToolKind = z.infer<typeof ToolKindSchema>;
 
 export const PermissionDecisionSchema = z.enum(["allow", "deny", "ask"]);
@@ -91,7 +102,11 @@ export const AgentSpecSchema = z.object({
   /** Reuse one ACP session for a whole run, or open a fresh one per step. */
   sessionMode: z.enum(["per-step", "per-run"]).default("per-step"),
   /** Per-turn wall clock limit. */
-  turnTimeoutMs: z.number().int().positive().default(30 * 60_000),
+  turnTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .default(30 * 60_000),
   /**
    * How long a turn may keep running after `session/cancel` (turn timeout, run
    * cancellation, artifact-present completion) before the agent is treated as

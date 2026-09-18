@@ -9,18 +9,42 @@
  * spawned instead of starting them again (see Orchestrator.runChild).
  */
 import { INLINE_SEP } from "../orchestrator.js";
-import { evaluateVars, succeeded, type BranchSkipReason, type LoopNode, type ParallelForEach, type ParallelNode, type RunState, type SubworkflowNode, type SubworkflowRef } from "@orca/core";
+import {
+  evaluateVars,
+  succeeded,
+  type BranchSkipReason,
+  type LoopNode,
+  type ParallelForEach,
+  type ParallelNode,
+  type RunState,
+  type SubworkflowNode,
+  type SubworkflowRef,
+} from "@orca/core";
 import { ownsClaim } from "@orca/store";
 import { completed, failed, paused, type NodeExecutor, type StepContext, type StepOutcome } from "./types.js";
 
-function target(ctx: StepContext, ref: SubworkflowRef, suffix: string[]): { workflow: string } | { graph: import("@orca/core").WorkflowGraph; inlineId: string } {
+function target(
+  ctx: StepContext,
+  ref: SubworkflowRef,
+  suffix: string[],
+): { workflow: string } | { graph: import("@orca/core").WorkflowGraph; inlineId: string } {
   if ("workflow" in ref) return { workflow: ref.workflow };
   return { graph: ref.graph, inlineId: [ctx.definition.id, ctx.nodeId, ...suffix].join(INLINE_SEP) };
 }
 
 function childOutcome(states: RunState[]): { ok: boolean; data: Record<string, unknown> } {
   const ok = states.every(succeeded);
-  return { ok, data: { children: states.map((s) => ({ runId: s.run.id, status: s.run.status, outcome: s.run.outcome, vars: s.run.vars })) } };
+  return {
+    ok,
+    data: {
+      children: states.map((s) => ({
+        runId: s.run.id,
+        status: s.run.status,
+        outcome: s.run.outcome,
+        vars: s.run.vars,
+      })),
+    },
+  };
 }
 
 /**
@@ -41,8 +65,15 @@ export const loopExecutor: NodeExecutor<LoopNode> = {
   async execute(ctx): Promise<StepOutcome> {
     const n = ctx.node;
     const results: RunState[] = [];
-    const items = n.mode === "forEach" ? ((await ctx.evaluate(n.items!)) as unknown) : undefined;
-    const list = n.mode === "forEach" ? (Array.isArray(items) ? items : items && typeof items === "object" ? Object.values(items) : []) : undefined;
+    const items = n.mode === "forEach" ? await ctx.evaluate(n.items!) : undefined;
+    const list =
+      n.mode === "forEach"
+        ? Array.isArray(items)
+          ? items
+          : items && typeof items === "object"
+            ? Object.values(items)
+            : []
+        : undefined;
     const limit = n.mode === "forEach" ? Math.min(list!.length, n.maxIterations) : n.maxIterations;
 
     for (let i = 0; i < limit; i++) {
@@ -50,13 +81,21 @@ export const loopExecutor: NodeExecutor<LoopNode> = {
       const scope: Record<string, unknown> = { iteration: i, [n.indexVar]: i };
       if (n.mode === "forEach") scope[n.itemVar] = list![i];
       if (n.mode === "while" && !(await ctx.evaluate(n.condition!, scope))) break;
-      await ctx.emit({ type: "loop.iteration", payload: { stepRunId: ctx.step.id, iteration: i, ...(n.mode === "forEach" ? { item: list![i] } : {}) } });
+      await ctx.emit({
+        type: "loop.iteration",
+        payload: { stepRunId: ctx.step.id, iteration: i, ...(n.mode === "forEach" ? { item: list![i] } : {}) },
+      });
       const state = await ctx.runChild(target(ctx, n.body, []), { branch: String(i), vars: scope });
       const parked = await pausedByChildren(ctx, [state]);
       if (parked) return parked;
       results.push(state);
       const failedChild = state.run.status !== "completed" || state.run.outcome !== "success";
-      if (failedChild && n.breakOnFailure) return failed("RUN_STATE", `loop iteration ${i} ${state.run.status} (${state.run.outcome ?? state.run.error?.message ?? ""})`, { childRunId: state.run.id });
+      if (failedChild && n.breakOnFailure)
+        return failed(
+          "RUN_STATE",
+          `loop iteration ${i} ${state.run.status} (${state.run.outcome ?? state.run.error?.message ?? ""})`,
+          { childRunId: state.run.id },
+        );
       if (n.mode === "until" && (await ctx.evaluate(n.condition!, { ...scope, child: state }))) break;
     }
     const { ok, data } = childOutcome(results);
@@ -143,6 +182,7 @@ export class FanOut {
 
   /** Re-throw the first error a child threw, once the fan-out has drained. */
   throwIfFailed(): void {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- whatever a child threw, unchanged; the caller's describeError turns it into an OrcaError.
     if (this.firstFailure !== undefined) throw this.firstFailure;
   }
 }
@@ -173,8 +213,16 @@ async function runBranches(
   const settled = (key: string) => out.get(key)?.state;
   /** A dependency that can still be met: not yet resolved, or parked and waiting for a human. */
   const pending = (key: string) => keys.has(key) && !out.has(key);
-  const met = (b: Branch) => b.dependsOn.every((d) => { const s = settled(d); return s !== undefined && succeeded(s); });
-  const unmeetable = (b: Branch) => b.dependsOn.some((d) => { const r = out.get(d); return !keys.has(d) || (r !== undefined && !(r.state && (succeeded(r.state) || r.state.run.status === "paused"))); });
+  const met = (b: Branch) =>
+    b.dependsOn.every((d) => {
+      const s = settled(d);
+      return s !== undefined && succeeded(s);
+    });
+  const unmeetable = (b: Branch) =>
+    b.dependsOn.some((d) => {
+      const r = out.get(d);
+      return !keys.has(d) || (r !== undefined && !(r.state && (succeeded(r.state) || r.state.run.status === "paused")));
+    });
   const held = (b: Branch) => b.dependsOn.some((d) => pending(d) || settled(d)?.run.status === "paused");
 
   const launch = (b: Branch) =>
@@ -194,7 +242,7 @@ async function runBranches(
 
   for (;;) {
     // Cascade: skipping one branch can make its own dependants unmeetable, so iterate to a fixed point.
-    for (let changed = true; changed; ) {
+    for (let changed = true; changed;) {
       changed = false;
       for (const b of branches) {
         if (out.has(b.key) || fan.isRunning(b.key) || !unmeetable(b)) continue;
@@ -215,7 +263,7 @@ async function runBranches(
   // Whatever is left never started: because failFast cut the fan-out short, or because a parked
   // prerequisite has not answered yet (those stay unrecorded - resume may still run them).
   // Recording one branch can release the next in a chain, so iterate to a fixed point here too.
-  for (let changed = true; changed; ) {
+  for (let changed = true; changed;) {
     changed = false;
     for (const b of branches) {
       if (out.has(b.key) || held(b)) continue;
@@ -236,9 +284,20 @@ async function runBranches(
  */
 async function claimWorkItem(ctx: StepContext, b: Branch): Promise<boolean> {
   if (!b.workItemId) return true;
-  const held = await ctx.stores.claims.claim({ workItemId: b.workItemId, runId: ctx.run.id, branch: b.key, stepRunId: ctx.step.id, at: ctx.clock.isoNow() });
+  const held = await ctx.stores.claims.claim({
+    workItemId: b.workItemId,
+    runId: ctx.run.id,
+    branch: b.key,
+    stepRunId: ctx.step.id,
+    at: ctx.clock.isoNow(),
+  });
   if (ownsClaim(held, ctx.run.id, b.key)) return true;
-  ctx.logger.warn("work item already claimed", { branch: b.key, workItemId: b.workItemId, owner: held.runId, ownerBranch: held.branch });
+  ctx.logger.warn("work item already claimed", {
+    branch: b.key,
+    workItemId: b.workItemId,
+    owner: held.runId,
+    ownerBranch: held.branch,
+  });
   return false;
 }
 
@@ -251,14 +310,21 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
       branches = Object.entries(n.branches).map(([name, ref]) => ({
         key: name,
         dependsOn: [],
-        run: (signal: AbortSignal) => ctx.runChild(target(ctx, ref, [name]), { branch: name, vars: { branch: name }, signal }),
+        run: (signal: AbortSignal) =>
+          ctx.runChild(target(ctx, ref, [name]), { branch: name, vars: { branch: name }, signal }),
       }));
     } else {
       const built = await forEachBranches(ctx, n.forEach!);
       if (built.error) return failed("WORKFLOW_INVALID", `parallel '${ctx.nodeId}': ${built.error}`, {}, false);
       branches = built.branches;
       const dup = branches.map((b) => b.key).find((k, i, all) => all.indexOf(k) !== i);
-      if (dup !== undefined) return failed("WORKFLOW_INVALID", `parallel '${ctx.nodeId}': forEach.key is not unique ('${dup}' appears twice)`, {}, false);
+      if (dup !== undefined)
+        return failed(
+          "WORKFLOW_INVALID",
+          `parallel '${ctx.nodeId}': forEach.key is not unique ('${dup}' appears twice)`,
+          {},
+          false,
+        );
     }
 
     /**
@@ -276,7 +342,16 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
       branches,
       n.concurrency,
       n.failFast ? decided : undefined,
-      (b, reason) => ctx.emit({ type: "branch.skipped", payload: { stepRunId: ctx.step.id, branch: b.key, reason, ...(b.workItemId ? { workItemId: b.workItemId } : {}) } }),
+      (b, reason) =>
+        ctx.emit({
+          type: "branch.skipped",
+          payload: {
+            stepRunId: ctx.step.id,
+            branch: b.key,
+            reason,
+            ...(b.workItemId ? { workItemId: b.workItemId } : {}),
+          },
+        }),
       (b) => claimWorkItem(ctx, b),
     );
 
@@ -288,7 +363,17 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
       return {
         branch: b.key,
         ...(b.workItemId ? { workItemId: b.workItemId } : {}),
-        ...(r?.state ? { runId: r.state.run.id, status: r.state.run.status, ...(r.state.run.outcome ? { outcome: r.state.run.outcome } : {}), ok: succeeded(r.state) } : { status: r?.skipped === "dependency" ? "blocked" : r?.skipped === "claimed" ? "claimed" : "skipped", ok: false }),
+        ...(r?.state
+          ? {
+              runId: r.state.run.id,
+              status: r.state.run.status,
+              ...(r.state.run.outcome ? { outcome: r.state.run.outcome } : {}),
+              ok: succeeded(r.state),
+            }
+          : {
+              status: r?.skipped === "dependency" ? "blocked" : r?.skipped === "claimed" ? "claimed" : "skipped",
+              ok: false,
+            }),
       };
     });
 
@@ -302,8 +387,18 @@ export const parallelExecutor: NodeExecutor<ParallelNode> = {
       const bad = states.filter((s) => !succeeded(s)).length;
       const blocked = summary.filter((s) => s.status === "blocked").length;
       const claimed = summary.filter((s) => s.status === "claimed").length;
-      const why = [blocked > 0 ? `${blocked} blocked by a dependency` : "", claimed > 0 ? `${claimed} claimed by another run` : "", notStarted - blocked - claimed > 0 ? `${notStarted - blocked - claimed} not started: failFast` : ""].filter(Boolean).join(", ");
-      return failed("RUN_STATE", `parallel '${ctx.nodeId}': ${bad} of ${branches.length} branches did not succeed${why ? ` (${why})` : ""}`, data);
+      const why = [
+        blocked > 0 ? `${blocked} blocked by a dependency` : "",
+        claimed > 0 ? `${claimed} claimed by another run` : "",
+        notStarted - blocked - claimed > 0 ? `${notStarted - blocked - claimed} not started: failFast` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return failed(
+        "RUN_STATE",
+        `parallel '${ctx.nodeId}': ${bad} of ${branches.length} branches did not succeed${why ? ` (${why})` : ""}`,
+        data,
+      );
     }
     return completed({ data: { ...data, ok } });
   },
@@ -326,13 +421,20 @@ async function forEachBranches(ctx: StepContext, fe: ParallelForEach): Promise<{
     const workItemId = await str(fe.workItemId);
     const workflow = await str(fe.workflow);
     // `body` may be omitted when `workflow` names the target for every item (see program.yaml).
-    if (!workflow && !fe.body) return { branches: [], error: `forEach.workflow resolved to nothing for item ${key} and there is no 'body' to fall back on` };
+    if (!workflow && !fe.body)
+      return {
+        branches: [],
+        error: `forEach.workflow resolved to nothing for item ${key} and there is no 'body' to fall back on`,
+      };
     const ref = workflow ? { workflow } : target(ctx, fe.body!, []);
     branches.push({
       key,
-      dependsOn: (Array.isArray(deps) ? deps : deps === undefined || deps === null || deps === "" ? [] : [deps]).map(String),
+      dependsOn: (Array.isArray(deps) ? deps : deps === undefined || deps === null || deps === "" ? [] : [deps]).map(
+        String,
+      ),
       ...(workItemId ? { workItemId } : {}),
-      run: (signal: AbortSignal) => ctx.runChild(ref, { branch: key, vars: scope, ...(workItemId ? { workItemId } : {}), signal }),
+      run: (signal: AbortSignal) =>
+        ctx.runChild(ref, { branch: key, vars: scope, ...(workItemId ? { workItemId } : {}), signal }),
     });
   }
   return { branches };
@@ -346,7 +448,12 @@ export const subworkflowExecutor: NodeExecutor<SubworkflowNode> = {
     const parked = await pausedByChildren(ctx, [state]);
     if (parked) return parked;
     const { ok, data } = childOutcome([state]);
-    if (!ok) return failed("RUN_STATE", `subworkflow '${ctx.node.workflow}' ${state.run.status}: ${state.run.error?.message ?? state.run.outcome ?? ""}`, { childRunId: state.run.id });
+    if (!ok)
+      return failed(
+        "RUN_STATE",
+        `subworkflow '${ctx.node.workflow}' ${state.run.status}: ${state.run.error?.message ?? state.run.outcome ?? ""}`,
+        { childRunId: state.run.id },
+      );
     return completed({ data: { ...data, ok, childRunId: state.run.id, childVars: state.run.vars } });
   },
 };

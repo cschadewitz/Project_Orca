@@ -15,7 +15,11 @@ import type { CommandContext } from "./index.js";
 
 export async function claimsCommand(ctx: CommandContext): Promise<number> {
   const [sub = "list", ...args] = ctx.positionals;
-  const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}), logLevel: "warn" });
+  const app = await bootstrap({
+    cwd: ctx.cwd,
+    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+    logLevel: "warn",
+  });
   const json = Boolean(ctx.flags.json);
 
   switch (sub) {
@@ -25,14 +29,20 @@ export async function claimsCommand(ctx: CommandContext): Promise<number> {
       if (!claims.length) ctx.out(ctx.flags.run ? `run ${String(ctx.flags.run)} holds no claims` : "no claims held");
       for (const c of claims) {
         const item = await app.orchestrator.stores.workItems.get(c.workItemId);
-        ctx.out(`${c.workItemId.padEnd(28)} run=${c.runId}  owner=${c.owner.padEnd(9)} branch=${c.branch}${item ? `  item=${item.status}` : ""}  ${c.at}`);
+        ctx.out(
+          `${c.workItemId.padEnd(28)} run=${c.runId}  owner=${c.owner.padEnd(9)} branch=${c.branch}${item ? `  item=${item.status}` : ""}  ${c.at}`,
+        );
       }
       return 0;
     }
 
     case "release": {
       const workItemId = args[0];
-      if (!workItemId) throw new OrcaError("CONFIG_INVALID", "claims release needs a work item id (orca claims release <workItemId> [--force])");
+      if (!workItemId)
+        throw new OrcaError(
+          "CONFIG_INVALID",
+          "claims release needs a work item id (orca claims release <workItemId> [--force])",
+        );
       const released = await app.orchestrator.releaseClaim(workItemId, { force: Boolean(ctx.flags.force) });
       if (json) return (ctx.out(JSON.stringify(released, null, 2)), 0);
       ctx.out(`released ${workItemId} from run ${released.runId} (${released.owner}, branch ${released.branch})`);
@@ -40,7 +50,10 @@ export async function claimsCommand(ctx: CommandContext): Promise<number> {
       // run's log, and a dead run's log never moves on. Say so rather than let the operator
       // wonder why `orca plan dispatch` still does not offer the item.
       const item = await app.orchestrator.stores.workItems.get(workItemId);
-      if (item?.status === "in-progress") ctx.err(`note: ${workItemId} is still in-progress${item.runId ? ` (run ${item.runId})` : ""}; the plan scheduler treats it as running until that status changes`);
+      if (item?.status === "in-progress")
+        ctx.err(
+          `note: ${workItemId} is still in-progress${item.runId ? ` (run ${item.runId})` : ""}; the plan scheduler treats it as running until that status changes`,
+        );
       return 0;
     }
 

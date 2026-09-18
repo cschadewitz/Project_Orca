@@ -73,21 +73,40 @@ export const RiskMatrixConfigSchema = RiskMatrixInputSchema.transform((m) => {
   }
   return { scale, thresholds };
 }).pipe(
-  z.object({ scale: z.number().int().min(2).max(MAX_RISK_SCALE), thresholds: RiskThresholdsSchema }).superRefine((m, ctx) => {
-    const { medium, high, critical } = m.thresholds;
-    if (!(medium < high && high < critical)) {
-      ctx.addIssue({ code: "custom", path: ["thresholds"], message: `risk matrix thresholds must be strictly increasing (medium < high < critical); got medium=${medium}, high=${high}, critical=${critical}` });
-    }
-    const max = m.scale * m.scale;
-    if (critical > max) {
-      ctx.addIssue({ code: "custom", path: ["thresholds", "critical"], message: `risk matrix threshold critical=${critical} is unreachable on a ${m.scale}x${m.scale} grid (maximum score ${max})` });
-    }
-  }),
+  z
+    .object({ scale: z.number().int().min(2).max(MAX_RISK_SCALE), thresholds: RiskThresholdsSchema })
+    .superRefine((m, ctx) => {
+      const { medium, high, critical } = m.thresholds;
+      if (!(medium < high && high < critical)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["thresholds"],
+          message: `risk matrix thresholds must be strictly increasing (medium < high < critical); got medium=${medium}, high=${high}, critical=${critical}`,
+        });
+      }
+      const max = m.scale * m.scale;
+      if (critical > max) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["thresholds", "critical"],
+          message: `risk matrix threshold critical=${critical} is unreachable on a ${m.scale}x${m.scale} grid (maximum score ${max})`,
+        });
+      }
+    }),
 );
 export type RiskMatrixConfig = z.infer<typeof RiskMatrixConfigSchema>;
 export const DEFAULT_RISK_MATRIX: RiskMatrixConfig = RiskMatrixConfigSchema.parse({});
 
-export const RiskCategorySchema = z.enum(["technical", "schedule", "security", "dependency", "operational", "product", "compliance", "other"]);
+export const RiskCategorySchema = z.enum([
+  "technical",
+  "schedule",
+  "security",
+  "dependency",
+  "operational",
+  "product",
+  "compliance",
+  "other",
+]);
 export type RiskCategory = z.infer<typeof RiskCategorySchema>;
 
 /** open -> mitigating -> mitigated | accepted | realized -> closed. */
@@ -391,8 +410,15 @@ function matchRef(text: string): RefParts {
 export function parseDependencyRef(ref: DependencyRef): ParsedDependencyRef {
   const text = typeof ref === "string" ? ref : ref.on;
   const parts = matchRef(text);
-  const pick = <T extends string>(field: "type" | "stage" | "requiredBy", inline: T | undefined, explicit: T | undefined): T | undefined => {
-    if (inline !== undefined && explicit !== undefined && inline !== explicit) throw new Error(`invalid dependency reference '${text}': ${field} '${inline}' conflicts with ${field} '${explicit}'`);
+  const pick = <T extends string>(
+    field: "type" | "stage" | "requiredBy",
+    inline: T | undefined,
+    explicit: T | undefined,
+  ): T | undefined => {
+    if (inline !== undefined && explicit !== undefined && inline !== explicit)
+      throw new Error(
+        `invalid dependency reference '${text}': ${field} '${inline}' conflicts with ${field} '${explicit}'`,
+      );
     return explicit ?? inline;
   };
   const obj = typeof ref === "string" ? undefined : ref;
@@ -460,7 +486,10 @@ export type DecisionInput = z.infer<typeof DecisionInputSchema>;
 export type DecisionInputLike = z.input<typeof DecisionInputSchema>;
 
 /** Front matter of a `risk-register` artifact. */
-export const RiskRegisterSchema = z.object({ risks: z.array(RiskInputSchema).default([]), summary: z.string().optional() });
+export const RiskRegisterSchema = z.object({
+  risks: z.array(RiskInputSchema).default([]),
+  summary: z.string().optional(),
+});
 export type RiskRegister = z.infer<typeof RiskRegisterSchema>;
 
 /** Front matter of a `decision-matrix` artifact (one decision per artifact). */

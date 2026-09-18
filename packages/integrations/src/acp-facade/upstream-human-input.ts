@@ -17,7 +17,10 @@ import type { HumanInputPort, HumanInputQuery } from "@orca/engine";
 export interface UpstreamTarget {
   sessionId: string;
   /** Typed like the SDK's `ctx.client.request`, so built-in method constants infer their params and response. */
-  request: <M extends acp.ClientRequestMethod>(method: M, params: acp.ClientRequestParamsByMethod[M]) => Promise<acp.ClientRequestResponsesByMethod[M]>;
+  request: <M extends acp.ClientRequestMethod>(
+    method: M,
+    params: acp.ClientRequestParamsByMethod[M],
+  ) => Promise<acp.ClientRequestResponsesByMethod[M]>;
 }
 
 export interface UpstreamHumanInputOptions {
@@ -64,9 +67,23 @@ export class UpstreamHumanInput implements HumanInputPort {
   async ask(q: HumanInputQuery): Promise<string | undefined> {
     const t = await this.targetFor(q.runId);
     if (!t) return this.fallback?.ask(q);
-    const options: acp.PermissionOption[] = (q.options.length ? q.options : ["ok"]).map((o, i) => ({ optionId: o, name: o, kind: i === 0 ? "allow_once" : "reject_once" }));
-    const toolCall: acp.ToolCallUpdate = { toolCallId: q.requestId, title: `[orca ${q.kind}] ${q.question}`, kind: "switch_mode", status: "pending", rawInput: q.context };
-    const res = await t.request(acp.methods.client.session.requestPermission, { sessionId: t.sessionId, toolCall, options });
+    const options: acp.PermissionOption[] = (q.options.length ? q.options : ["ok"]).map((o, i) => ({
+      optionId: o,
+      name: o,
+      kind: i === 0 ? "allow_once" : "reject_once",
+    }));
+    const toolCall: acp.ToolCallUpdate = {
+      toolCallId: q.requestId,
+      title: `[orca ${q.kind}] ${q.question}`,
+      kind: "switch_mode",
+      status: "pending",
+      rawInput: q.context,
+    };
+    const res = await t.request(acp.methods.client.session.requestPermission, {
+      sessionId: t.sessionId,
+      toolCall,
+      options,
+    });
     const outcome = res.outcome;
     return outcome.outcome === "selected" ? outcome.optionId : undefined;
   }

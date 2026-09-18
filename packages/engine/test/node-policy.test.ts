@@ -61,13 +61,9 @@ describe("node-agnostic retry and termination", () => {
     const { orchestrator } = make(flaky({ succeedOn: 3, maxAttempts: 3 }));
     const state = await orchestrator.startAndRun({ workflowId: "flaky" });
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
-    expect(state.stepOrder.map((id) => `${state.steps[id]!.nodeId}:${state.steps[id]!.attempt}:${state.steps[id]!.status}`)).toEqual([
-      "s:1:completed",
-      "work:1:failed",
-      "work:2:failed",
-      "work:3:completed",
-      "e:1:completed",
-    ]);
+    expect(
+      state.stepOrder.map((id) => `${state.steps[id]!.nodeId}:${state.steps[id]!.attempt}:${state.steps[id]!.status}`),
+    ).toEqual(["s:1:completed", "work:1:failed", "work:2:failed", "work:3:completed", "e:1:completed"]);
     expect(attempts.get("work")).toBe(3);
   });
 

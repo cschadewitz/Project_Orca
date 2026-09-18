@@ -9,9 +9,15 @@ import { parseExpression } from "./parser.js";
 export type ExprFunction = (...args: unknown[]) => unknown;
 
 export const BUILTIN_FUNCTIONS: Record<string, ExprFunction> = {
-  len: (x) => (Array.isArray(x) || typeof x === "string" ? x.length : x && typeof x === "object" ? Object.keys(x).length : 0),
+  len: (x) =>
+    Array.isArray(x) || typeof x === "string" ? x.length : x && typeof x === "object" ? Object.keys(x).length : 0,
   exists: (x) => x !== undefined && x !== null,
-  empty: (x) => x === undefined || x === null || x === "" || (Array.isArray(x) && x.length === 0) || (typeof x === "object" && Object.keys(x as object).length === 0),
+  empty: (x) =>
+    x === undefined ||
+    x === null ||
+    x === "" ||
+    (Array.isArray(x) && x.length === 0) ||
+    (typeof x === "object" && Object.keys(x).length === 0),
   default: (x, d) => (x === undefined || x === null || x === "" ? d : x),
   str: (x) => (x === undefined || x === null ? "" : typeof x === "string" ? x : JSON.stringify(x)),
   num: (x) => Number(x),
@@ -30,7 +36,10 @@ export const BUILTIN_FUNCTIONS: Record<string, ExprFunction> = {
     if (pred === undefined) return a.length;
     return a.filter((x) => x === pred).length;
   },
-  pluck: (a, key) => (Array.isArray(a) ? a.map((x) => (x && typeof x === "object" ? (x as Record<string, unknown>)[String(key)] : undefined)) : []),
+  pluck: (a, key) =>
+    Array.isArray(a)
+      ? a.map((x) => (x && typeof x === "object" ? (x as Record<string, unknown>)[String(key)] : undefined))
+      : [],
   all: (a) => Array.isArray(a) && a.every(truthy),
   any: (a) => Array.isArray(a) && a.some(truthy),
   min: (...xs) => Math.min(...xs.flat().map(Number)),
@@ -58,7 +67,8 @@ export function evaluateCondition(src: string, context: unknown, options: EvalOp
 
 function get(obj: unknown, key: string | number): unknown {
   if (obj === null || obj === undefined) return undefined;
-  if (typeof key === "string" && (key === "__proto__" || key === "constructor" || key === "prototype")) return undefined;
+  if (typeof key === "string" && (key === "__proto__" || key === "constructor" || key === "prototype"))
+    return undefined;
   if (obj instanceof Map) return obj.get(key);
   if (typeof obj === "object" || typeof obj === "string") return (obj as Record<string | number, unknown>)[key];
   return undefined;
@@ -111,7 +121,9 @@ function evalAst(e: Expr, ctx: unknown, fns: Record<string, ExprFunction>): unkn
         case ">=":
           return (l as number) >= (r as number);
         case "+":
-          return typeof l === "string" || typeof r === "string" ? String(l ?? "") + String(r ?? "") : Number(l) + Number(r);
+          return typeof l === "string" || typeof r === "string"
+            ? String(l ?? "") + String(r ?? "")
+            : Number(l) + Number(r);
         case "-":
           return Number(l) - Number(r);
         case "*":
@@ -121,9 +133,19 @@ function evalAst(e: Expr, ctx: unknown, fns: Record<string, ExprFunction>): unkn
         case "%":
           return Number(l) % Number(r);
         case "in":
-          return Array.isArray(r) ? r.some((x) => looseEq(x, l)) : typeof r === "string" ? r.includes(String(l)) : r && typeof r === "object" ? String(l) in (r as object) : false;
+          return Array.isArray(r)
+            ? r.some((x) => looseEq(x, l))
+            : typeof r === "string"
+              ? r.includes(String(l))
+              : r && typeof r === "object"
+                ? String(l) in r
+                : false;
         case "contains":
-          return Array.isArray(l) ? l.some((x) => looseEq(x, r)) : typeof l === "string" ? l.includes(String(r)) : false;
+          return Array.isArray(l)
+            ? l.some((x) => looseEq(x, r))
+            : typeof l === "string"
+              ? l.includes(String(r))
+              : false;
         case "matches":
           return new RegExp(String(r)).test(String(l ?? ""));
         case "startsWith":

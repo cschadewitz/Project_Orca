@@ -34,7 +34,11 @@ describe("JsonlLogDir", () => {
     await a.append("k", row(1));
     await b.append("k", row(2));
     await a.append("k", row(3));
-    expect((await a.read("k", Row)).map((r) => [r.seq, r.n])).toEqual([[0, 1], [1, 2], [2, 3]]);
+    expect((await a.read("k", Row)).map((r) => [r.seq, r.n])).toEqual([
+      [0, 1],
+      [1, 2],
+      [2, 3],
+    ]);
     expect(await b.read("k", Row)).toEqual(await a.read("k", Row));
   });
 
@@ -73,7 +77,9 @@ describe("JsonlLogDir", () => {
     expect((await new JsonlLogDir(d, { logger }).append("k", row(3))).seq).toBe(2);
     expect(lines.some((l) => l.includes("torn tail"))).toBe(true);
     expect((await logs.append("k", row(4))).seq).toBe(3);
-    expect(await readFile(join(d, "k.jsonl"), "utf8")).toBe('{"seq":0,"n":1}\n{"seq":1,"n":2}\n{"seq":2,"n":3}\n{"seq":3,"n":4}\n');
+    expect(await readFile(join(d, "k.jsonl"), "utf8")).toBe(
+      '{"seq":0,"n":1}\n{"seq":1,"n":2}\n{"seq":2,"n":3}\n{"seq":3,"n":4}\n',
+    );
   });
 
   it("skips a corrupt line in the middle with a warning, but a schema failure still throws", async () => {

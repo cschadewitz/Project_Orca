@@ -6,8 +6,18 @@
  */
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry, type OrcaEvent } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, PlanService, builtinExecutors, completed, definePlugin, failed, type StepContext, type StepOutcome } from "@orca/engine";
+import { FakeClock, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import {
+  LocalWorkspaceProvider,
+  Orchestrator,
+  PlanService,
+  builtinExecutors,
+  completed,
+  definePlugin,
+  failed,
+  type StepContext,
+  type StepOutcome,
+} from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
 const itemWorkflow = `
@@ -51,14 +61,24 @@ async function setup(options: string, items: ItemInput[], work: (ctx: StepContex
   const plan = new PlanService({ stores, defaults: { planKey: "roadmap", planName: "Roadmap" } });
   const p = await plan.ensurePlan({ requestId: "req_1" }, { kind: "human", actor: "test" });
   await plan.registerWorkItems(p.id, { requestId: "req_1", items }, { kind: "decomposition" });
-  const workflows = new WorkflowRegistry().register(parseWorkflow(dispatcher(options))).register(parseWorkflow(itemWorkflow));
+  const workflows = new WorkflowRegistry()
+    .register(parseWorkflow(dispatcher(options)))
+    .register(parseWorkflow(itemWorkflow));
   const executors = builtinExecutors();
-  definePlugin({
+  void definePlugin({
     name: "test",
     register: (api) => {
       api.executors.register({ type: "custom:work", execute: work });
     },
-  }).register({ executors, templates: new TemplateRegistry(), workflows, agents: new AgentRegistry(), plan, setHumanInput() {}, setWorkspaceProvider() {} });
+  }).register({
+    executors,
+    templates: new TemplateRegistry(),
+    workflows,
+    agents: new AgentRegistry(),
+    plan,
+    setHumanInput() {},
+    setWorkspaceProvider() {},
+  });
   const orchestrator = new Orchestrator({
     stores,
     agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })),
@@ -74,22 +94,31 @@ async function setup(options: string, items: ItemInput[], work: (ctx: StepContex
   return { stores, plan, planId: p.id, orchestrator, run };
 }
 
-const dispatched = (state: { run: { vars: Record<string, unknown> } }) => ((state.run.vars.dispatched as { slug: string; status: string }[]) ?? []).map((d) => `${d.slug}:${d.status}`).sort();
+const dispatched = (state: { run: { vars: Record<string, unknown> } }) =>
+  ((state.run.vars.dispatched as { slug: string; status: string }[]) ?? []).map((d) => `${d.slug}:${d.status}`).sort();
 
-const statuses = async (stores: ReturnType<typeof memoryStores>) => Object.fromEntries((await stores.workItems.list()).map((w) => [w.slug, w.status]));
+const statuses = async (stores: ReturnType<typeof memoryStores>) =>
+  Object.fromEntries((await stores.workItems.list()).map((w) => [w.slug, w.status]));
 
 describe("plan-dispatch: failFast", () => {
   it("cancels the items still running when one fails", async () => {
     const cancelled: string[] = [];
-    const { stores, run } = await setup("concurrency: 2, failFast: true", [{ slug: "boom", title: "Boom" }, { slug: "slow", title: "Slow" }], async (ctx) => {
-      if (slugOf(ctx) === "boom") {
-        // Let `slow` get into its own step before failing, so it is genuinely in flight.
-        await new Promise((r) => setTimeout(r, 20));
-        return failed("BOOM", "boom", {}, false);
-      }
-      cancelled.push(await untilCancelled(ctx));
-      return completed();
-    });
+    const { stores, run } = await setup(
+      "concurrency: 2, failFast: true",
+      [
+        { slug: "boom", title: "Boom" },
+        { slug: "slow", title: "Slow" },
+      ],
+      async (ctx) => {
+        if (slugOf(ctx) === "boom") {
+          // Let `slow` get into its own step before failing, so it is genuinely in flight.
+          await new Promise((r) => setTimeout(r, 20));
+          return failed("BOOM", "boom", {}, false);
+        }
+        cancelled.push(await untilCancelled(ctx));
+        return completed();
+      },
+    );
     const state = await run();
 
     // `slow` was asked to stop through the signal `plan-dispatch` handed it, not left to finish.
@@ -102,13 +131,20 @@ describe("plan-dispatch: failFast", () => {
 
   it("leaves unrelated items alone without it", async () => {
     const finished: string[] = [];
-    const { stores, run } = await setup("concurrency: 2", [{ slug: "boom", title: "Boom" }, { slug: "slow", title: "Slow" }], async (ctx) => {
-      if (slugOf(ctx) === "boom") return failed("BOOM", "boom", {}, false);
-      // Still running when `boom` fails; without failFast that decides nothing.
-      expect(await untilCancelled(ctx, 40)).toBe("timeout");
-      finished.push(slugOf(ctx));
-      return completed();
-    });
+    const { stores, run } = await setup(
+      "concurrency: 2",
+      [
+        { slug: "boom", title: "Boom" },
+        { slug: "slow", title: "Slow" },
+      ],
+      async (ctx) => {
+        if (slugOf(ctx) === "boom") return failed("BOOM", "boom", {}, false);
+        // Still running when `boom` fails; without failFast that decides nothing.
+        expect(await untilCancelled(ctx, 40)).toBe("timeout");
+        finished.push(slugOf(ctx));
+        return completed();
+      },
+    );
     const state = await run();
 
     expect(finished).toEqual(["slow"]);
@@ -119,10 +155,15 @@ describe("plan-dispatch: failFast", () => {
 });
 
 describe("plan-dispatch: onWaiting wait", () => {
-  const waiting = async (stores: ReturnType<typeof memoryStores>, runId: string) => ((await stores.events.read(runId)) as OrcaEvent[]).filter((e) => e.type === "step.waiting");
+  const waiting = async (stores: ReturnType<typeof memoryStores>, runId: string) =>
+    (await stores.events.read(runId)).filter((e) => e.type === "step.waiting");
 
   it("announces each distinct reason once, however many times it polls", async () => {
-    const { stores, run } = await setup("onWaiting: wait, pollMs: 20, waitTimeoutMs: 150", [{ slug: "blocked", title: "Blocked", dependsOn: ["never"] }], async () => completed());
+    const { stores, run } = await setup(
+      "onWaiting: wait, pollMs: 20, waitTimeoutMs: 150",
+      [{ slug: "blocked", title: "Blocked", dependsOn: ["never"] }],
+      async () => completed(),
+    );
     const state = await run();
 
     // Roughly seven polls over the timeout, and one `step.waiting` for the one reason they all saw.
@@ -133,12 +174,19 @@ describe("plan-dispatch: onWaiting wait", () => {
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(state.run.vars.dispatchOutcome).toBe("partial");
     expect(dispatched(state)).toEqual(["blocked:deferred"]);
-    expect((await stores.workItems.list())[0]).toMatchObject({ status: "pending", deferredReason: expect.stringMatching(/never/) });
+    expect((await stores.workItems.list())[0]).toMatchObject({
+      status: "pending",
+      deferredReason: expect.stringMatching(/never/),
+    });
   });
 
   it("wakes on a plan change rather than on the next poll", async () => {
     // A poll interval far longer than the test: only the journal subscription can end this wait.
-    const { stores, plan, planId, run } = await setup("onWaiting: wait, pollMs: 60000, waitTimeoutMs: 5000", [{ slug: "blocked", title: "Blocked", dependsOn: ["never"] }], async () => completed());
+    const { stores, plan, planId, run } = await setup(
+      "onWaiting: wait, pollMs: 60000, waitTimeoutMs: 5000",
+      [{ slug: "blocked", title: "Blocked", dependsOn: ["never"] }],
+      async () => completed(),
+    );
     const started = run();
     await new Promise((r) => setTimeout(r, 50));
     const external = (await plan.snapshot(planId)).dependencies[0]!;

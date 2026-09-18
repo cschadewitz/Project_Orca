@@ -30,7 +30,8 @@ setInterval(() => {}, 1000);
 `;
 
 const pending = Symbol("pending");
-const settled = <T>(p: Promise<T>, ms = 100) => Promise.race([p, new Promise<typeof pending>((r) => setTimeout(() => r(pending), ms))]);
+const settled = <T>(p: Promise<T>, ms = 100) =>
+  Promise.race([p, new Promise<typeof pending>((r) => setTimeout(() => r(pending), ms))]);
 
 const sessions: AgentSession[] = [];
 afterEach(async () => {
@@ -42,7 +43,13 @@ async function open(env: Record<string, string> = {}, cancelGraceMs = 200) {
   let proc: AgentProcessHandle | undefined;
   const spawn = host.spawnAgent.bind(host);
   host.spawnAgent = async (...args) => (proc = await spawn(...args));
-  const agent = AgentSpecSchema.parse({ id: "wedged", command: process.execPath, args: ["-e", wedgedAgent], env, cancelGraceMs });
+  const agent = AgentSpecSchema.parse({
+    id: "wedged",
+    command: process.execPath,
+    args: ["-e", wedgedAgent],
+    env,
+    cancelGraceMs,
+  });
   const session = await openAcpSession({ host, agent, cwd: process.cwd() });
   sessions.push(session);
   return { session, proc: proc! };
@@ -72,7 +79,10 @@ describe("acp session cancellation", () => {
     const turn = session.prompt("go", { signal: ac.signal });
     await new Promise((r) => setTimeout(r, 30));
     ac.abort("operator cancelled");
-    await expect(turn).rejects.toMatchObject({ code: "AGENT_TRANSPORT", message: expect.stringMatching(/aborted: operator cancelled/) });
+    await expect(turn).rejects.toMatchObject({
+      code: "AGENT_TRANSPORT",
+      message: expect.stringMatching(/aborted: operator cancelled/),
+    });
     expect(await settled(proc.exited, 1000)).not.toBe(pending);
     // The failed turn is over: close() must not wait on anything.
     await expect(settled(session.close(), 500)).resolves.not.toBe(pending);
@@ -108,7 +118,10 @@ describe("acp session cancellation", () => {
     const turn = session.prompt("go");
     await new Promise((r) => setTimeout(r, 30));
     await session.cancel();
-    await expect(turn).rejects.toMatchObject({ code: "AGENT_TRANSPORT", message: expect.stringMatching(/cancel requested/) });
+    await expect(turn).rejects.toMatchObject({
+      code: "AGENT_TRANSPORT",
+      message: expect.stringMatching(/cancel requested/),
+    });
     expect(await settled(proc.exited, 1000)).not.toBe(pending);
   });
 });

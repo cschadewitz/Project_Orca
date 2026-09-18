@@ -10,8 +10,27 @@
  */
 import { isAbsolute } from "node:path";
 import type { AgentSession, HostFileSystem, SessionUpdateEvent } from "@orca/agents";
-import { evaluateVars, OrcaError, renderDeliverablesBlock, sha256, type AgentNode, type AgentSelector, type Artifact, type ArtifactRef, type ArtifactSpec, type CompletionPolicy, type Deliverable } from "@orca/core";
-import { completed, failed, type NodeExecutor, type ResolvedArtifact, type StepContext, type StepOutcome } from "./types.js";
+import {
+  evaluateVars,
+  OrcaError,
+  renderDeliverablesBlock,
+  sha256,
+  type AgentNode,
+  type AgentSelector,
+  type Artifact,
+  type ArtifactRef,
+  type ArtifactSpec,
+  type CompletionPolicy,
+  type Deliverable,
+} from "@orca/core";
+import {
+  completed,
+  failed,
+  type NodeExecutor,
+  type ResolvedArtifact,
+  type StepContext,
+  type StepOutcome,
+} from "./types.js";
 
 export interface AgentTurnSpec {
   agent: AgentSelector;
@@ -24,7 +43,9 @@ export interface AgentTurnSpec {
   vars: Record<string, unknown>;
 }
 
-export type AgentTurnOutcome = { kind: "completed"; artifacts: Artifact[]; stopReason: string } | { kind: "failed"; error: { code: string; message: string; details?: Record<string, unknown> } };
+export type AgentTurnOutcome =
+  | { kind: "completed"; artifacts: Artifact[]; stopReason: string }
+  | { kind: "failed"; error: { code: string; message: string; details?: Record<string, unknown> } };
 
 interface PlannedDeliverable extends Deliverable {
   spec: ArtifactSpec;
@@ -34,7 +55,12 @@ export function absolutize(cwd: string, path: string, join: (...p: string[]) => 
   return isAbsolute(path) || /^[A-Za-z]:[\\/]/.test(path) ? path : join(cwd, path);
 }
 
-async function planDeliverables(ctx: StepContext, agent: AgentSelector, produces: ArtifactSpec[], extra: Record<string, unknown>): Promise<PlannedDeliverable[]> {
+async function planDeliverables(
+  ctx: StepContext,
+  agent: AgentSelector,
+  produces: ArtifactSpec[],
+  extra: Record<string, unknown>,
+): Promise<PlannedDeliverable[]> {
   // Paths are joined with the conventions of the host that will run the turn, so resolve
   // through the turn's own selector (decision nodes carry it under `source.agent`, not `node.agent`).
   const { host } = ctx.agents.resolve(agent);
@@ -65,14 +91,21 @@ export function validateArtifact(spec: ArtifactSpec, data: Record<string, unknow
   }
   for (const [f, allowed] of Object.entries(v.fieldValues ?? {})) {
     const val = data[f];
-    if (val !== undefined && !allowed.includes(String(val))) return `front matter field '${f}' must be one of ${allowed.join(", ")} (got '${String(val)}')`;
+    if (val !== undefined && !allowed.includes(String(val)))
+      return `front matter field '${f}' must be one of ${allowed.join(", ")} (got '${String(val)}')`;
   }
-  if (v.minBodyLength !== undefined && body.trim().length < v.minBodyLength) return `body shorter than ${v.minBodyLength} characters`;
+  if (v.minBodyLength !== undefined && body.trim().length < v.minBodyLength)
+    return `body shorter than ${v.minBodyLength} characters`;
   return undefined;
 }
 
 /** Read deliverables from the host; returns recorded artifacts and problems. */
-async function collect(ctx: StepContext, planned: PlannedDeliverable[], inputs: ResolvedArtifact[], session: AgentSession): Promise<{ artifacts: Artifact[]; problems: string[] }> {
+async function collect(
+  ctx: StepContext,
+  planned: PlannedDeliverable[],
+  inputs: ResolvedArtifact[],
+  session: AgentSession,
+): Promise<{ artifacts: Artifact[]; problems: string[] }> {
   const { extractStructuredData, parseFrontMatter } = await import("@orca/core");
   const { host } = ctx.agents.resolve(session.agentId);
   const artifacts: Artifact[] = [];
@@ -81,6 +114,7 @@ async function collect(ctx: StepContext, planned: PlannedDeliverable[], inputs: 
   // host each of these is an ssh process, and doing them serially per deliverable showed up as
   // dead time at the end of every turn.
   const present = await host.fs.existsMany(planned.map((d) => d.path));
+  // eslint-disable-next-line @typescript-eslint/await-thenable -- an absent deliverable maps to a plain `undefined`.
   const contents = await Promise.all(planned.map((d, i) => (present[i] ? host.fs.readFile(d.path) : undefined)));
   for (const [i, d] of planned.entries()) {
     const content = contents[i];
@@ -91,11 +125,21 @@ async function collect(ctx: StepContext, planned: PlannedDeliverable[], inputs: 
     const data = extractStructuredData(content, d.mediaType);
     const reason = validateArtifact(d.spec, data, parseFrontMatter(content).body);
     if (reason) {
-      await ctx.emit({ type: "artifact.rejected", payload: { stepRunId: ctx.step.id, kind: d.kind, path: d.path, reason } });
+      await ctx.emit({
+        type: "artifact.rejected",
+        payload: { stepRunId: ctx.step.id, kind: d.kind, path: d.path, reason },
+      });
       if (d.required) problems.push(`${d.kind} at ${d.path}: ${reason}`);
       continue;
     }
-    artifacts.push(await ctx.recordArtifact(d.spec, content, { path: d.path, parents: inputs.map((i) => i.id), agentSessionId: session.id, agentId: session.agentId }));
+    artifacts.push(
+      await ctx.recordArtifact(d.spec, content, {
+        path: d.path,
+        parents: inputs.map((i) => i.id),
+        agentSessionId: session.id,
+        agentId: session.agentId,
+      }),
+    );
   }
   return { artifacts, problems };
 }
@@ -118,7 +162,10 @@ class UpdateRecorder {
       return;
     }
     void this.flush();
-    void this.ctx.emit({ type: "agent.update", payload: { stepRunId: this.ctx.step.id, sessionId: this.sessionId, update: s } });
+    void this.ctx.emit({
+      type: "agent.update",
+      payload: { stepRunId: this.ctx.step.id, sessionId: this.sessionId, update: s },
+    });
   };
   async flush(): Promise<void> {
     if (!this.buffer.trim()) {
@@ -128,7 +175,10 @@ class UpdateRecorder {
     const text = this.buffer;
     const kind = this.bufferKind;
     this.buffer = "";
-    await this.ctx.emit({ type: "agent.update", payload: { stepRunId: this.ctx.step.id, sessionId: this.sessionId, update: { kind, text } } });
+    await this.ctx.emit({
+      type: "agent.update",
+      payload: { stepRunId: this.ctx.step.id, sessionId: this.sessionId, update: { kind, text } },
+    });
   }
 }
 
@@ -198,7 +248,8 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
   const extra = { inputs: inputViews, vars: { ...ctx.run.state.run.vars, ...spec.vars } };
   const deliverables = await planDeliverables(ctx, spec.agent, spec.produces, extra);
   const body = spec.template ? ctx.templates.get(spec.template).body : (spec.prompt ?? "");
-  const basePrompt = (await ctx.render(body, { ...extra, deliverables })).trim() + "\n\n" + renderDeliverablesBlock(deliverables);
+  const basePrompt =
+    (await ctx.render(body, { ...extra, deliverables })).trim() + "\n\n" + renderDeliverablesBlock(deliverables);
 
   await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "agent-turn" } });
   const { session, release } = await ctx.openSession(spec.agent);
@@ -211,7 +262,16 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
     let prompt = basePrompt;
     for (let followUp = 0; followUp <= spec.completion.maxFollowUps; followUp++) {
       if (ctx.signal.aborted) throw new OrcaError("CANCELLED", "cancelled");
-      await ctx.emit({ type: "agent.turn.started", payload: { stepRunId: ctx.step.id, sessionId: session.id, promptHash: sha256(prompt), promptPreview: prompt.slice(0, 400), followUp } });
+      await ctx.emit({
+        type: "agent.turn.started",
+        payload: {
+          stepRunId: ctx.step.id,
+          sessionId: session.id,
+          promptHash: sha256(prompt),
+          promptPreview: prompt.slice(0, 400),
+          followUp,
+        },
+      });
 
       // artifact-present mode: watch the host while the turn runs and cancel once every *required*
       // deliverable exists. With nothing required there is nothing to wait for (`[].every` is
@@ -230,7 +290,10 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
         const turn = await session.prompt(prompt, { signal: ctx.signal, timeoutMs });
         stopReason = turn.stopReason;
         await recorder.flush();
-        await ctx.emit({ type: "agent.turn.completed", payload: { stepRunId: ctx.step.id, sessionId: session.id, stopReason, durationMs: turn.durationMs } });
+        await ctx.emit({
+          type: "agent.turn.completed",
+          payload: { stepRunId: ctx.step.id, sessionId: session.id, stopReason, durationMs: turn.durationMs },
+        });
       } finally {
         stopWatching?.();
         await recorder.flush();
@@ -240,7 +303,14 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
       const { artifacts, problems } = await collect(ctx, deliverables, inputs, session);
       if (problems.length === 0) return { kind: "completed", artifacts, stopReason };
       if (followUp === spec.completion.maxFollowUps) {
-        return { kind: "failed", error: { code: "ARTIFACT_MISSING", message: `agent did not deliver required artifacts: ${problems.join("; ")}`, details: { problems, stopReason } } };
+        return {
+          kind: "failed",
+          error: {
+            code: "ARTIFACT_MISSING",
+            message: `agent did not deliver required artifacts: ${problems.join("; ")}`,
+            details: { problems, stopReason },
+          },
+        };
       }
       prompt = `Your previous turn ended (${stopReason}) but the following deliverables are missing or invalid:\n\n${problems.map((p) => `- ${p}`).join("\n")}\n\nPlease fix them now. Do not start unrelated work.\n\n${renderDeliverablesBlock(deliverables)}`;
     }

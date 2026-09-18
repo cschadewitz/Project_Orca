@@ -2,5 +2,12 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../core" },{ "path": "../store" },{ "path": "../agents" },{ "path": "../engine" },{ "path": "../testing" },{ "path": "../integrations" }]
+  "references": [
+    { "path": "../core" },
+    { "path": "../store" },
+    { "path": "../agents" },
+    { "path": "../engine" },
+    { "path": "../testing" },
+    { "path": "../integrations" }
+  ]
 }

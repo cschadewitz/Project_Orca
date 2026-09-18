@@ -37,7 +37,11 @@ export class ProgramService {
       updatedAt: now,
     });
     await this.orchestrator.stores.requests.put(request);
-    const runId = await this.orchestrator.startRun({ workflowId: input.workflowId ?? this.programWorkflowId, requestId: request.id, vars: { request, ...(this.itemWorkflowId ? { itemWorkflow: this.itemWorkflowId } : {}), ...(input.vars ?? {}) } });
+    const runId = await this.orchestrator.startRun({
+      workflowId: input.workflowId ?? this.programWorkflowId,
+      requestId: request.id,
+      vars: { request, ...(this.itemWorkflowId ? { itemWorkflow: this.itemWorkflowId } : {}), ...(input.vars ?? {}) },
+    });
     await this.orchestrator.stores.requests.put({ ...request, programRunId: runId });
     return { request: { ...request, programRunId: runId }, runId };
   }
@@ -60,7 +64,8 @@ export class ProgramService {
     if (!state.run.requestId) return undefined;
     const cur = await this.orchestrator.stores.requests.get(state.run.requestId);
     if (!cur || cur.programRunId !== state.run.id || !isTerminal(state)) return cur;
-    const status = state.run.status === "completed" ? "completed" : state.run.status === "cancelled" ? "cancelled" : "failed";
+    const status =
+      state.run.status === "completed" ? "completed" : state.run.status === "cancelled" ? "cancelled" : "failed";
     await this.orchestrator.stores.requests.put({ ...cur, status, updatedAt: this.orchestrator.clock.isoNow() });
     return cur;
   }

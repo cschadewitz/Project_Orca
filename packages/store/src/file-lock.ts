@@ -70,7 +70,8 @@ async function acquire(path: string, options: FileLockOptions): Promise<number> 
         if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       }
       if (await breakIfStale(path, staleMs, options.onBroken)) continue;
-      if (Date.now() >= deadline) throw new OrcaError("STORE_LOCK_TIMEOUT", `lock ${path} still held after ${timeoutMs}ms`, { path, timeoutMs });
+      if (Date.now() >= deadline)
+        throw new OrcaError("STORE_LOCK_TIMEOUT", `lock ${path} still held after ${timeoutMs}ms`, { path, timeoutMs });
       await sleep(backoff + Math.random() * backoff);
       backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
     }
