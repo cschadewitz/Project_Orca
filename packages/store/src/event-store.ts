@@ -32,8 +32,12 @@ export abstract class BaseEventStore implements EventStore {
   private readonly listeners = new Set<{ listener: EventListener; filter?: EventFilter | undefined }>();
   constructor(protected readonly clock: Clock = systemClock) {}
 
-  protected abstract nextSeq(runId: string): Promise<number>;
-  protected abstract persist(event: OrcaEvent): Promise<void>;
+  /**
+   * Persist `build(seq)` as the next event of `runId` and return it. Choosing `seq` and
+   * writing the event are one step, so the store decides where they are made atomic -
+   * in memory, or on disk under a lock shared with other processes.
+   */
+  protected abstract write(runId: string, build: (seq: number) => OrcaEvent): Promise<OrcaEvent>;
   abstract read(runId: string): Promise<OrcaEvent[]>;
   abstract listRuns(): Promise<string[]>;
 
@@ -43,9 +47,7 @@ export abstract class BaseEventStore implements EventStore {
   }
 
   async append(input: OrcaEventInput): Promise<OrcaEvent> {
-    const seq = await this.nextSeq(input.runId);
-    const event = { ...input, id: newId("evt", this.clock.now()), seq, at: this.clock.isoNow() } as OrcaEvent;
-    await this.persist(event);
+    const event = await this.write(input.runId, (seq) => ({ ...input, id: newId("evt", this.clock.now()), seq, at: this.clock.isoNow() }) as OrcaEvent);
     for (const { listener, filter } of this.listeners) {
       if (filter?.runId && filter.runId !== event.runId) continue;
       if (filter?.types && !filter.types.includes(event.type)) continue;
@@ -67,22 +69,14 @@ export abstract class BaseEventStore implements EventStore {
 
 export class InMemoryEventStore extends BaseEventStore {
   private readonly runs = new Map<string, OrcaEvent[]>();
-  /** Serialises appends per run so seq numbers never collide under concurrency. */
-  private readonly locks = new Map<string, Promise<unknown>>();
 
-  protected async nextSeq(runId: string): Promise<number> {
-    return this.runs.get(runId)?.length ?? 0;
-  }
-  protected async persist(event: OrcaEvent): Promise<void> {
-    const list = this.runs.get(event.runId) ?? [];
+  /** Synchronous from reading the length to pushing, so concurrent appends cannot share a seq. */
+  protected async write(runId: string, build: (seq: number) => OrcaEvent): Promise<OrcaEvent> {
+    const list = this.runs.get(runId) ?? [];
+    const event = build(list.length);
     list.push(event);
-    this.runs.set(event.runId, list);
-  }
-  override async append(input: OrcaEventInput): Promise<OrcaEvent> {
-    const prev = this.locks.get(input.runId) ?? Promise.resolve();
-    const next = prev.then(() => super.append(input));
-    this.locks.set(input.runId, next.catch(() => undefined));
-    return next;
+    this.runs.set(runId, list);
+    return event;
   }
   async read(runId: string): Promise<OrcaEvent[]> {
     return [...(this.runs.get(runId) ?? [])];
