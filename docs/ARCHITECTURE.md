@@ -146,6 +146,14 @@ settled outside the logs: each branch claims its item through the `ClaimStore`
 it holds across processes. A second dispatcher over the same plan skips what it does not
 own (`branch.skipped`, `reason: claimed`) instead of starting a rival child run.
 
+The logs themselves are safe to share the same way. The JSONL event store and the plan
+journal are one primitive, `JsonlLogDir` (`packages/store/src/jsonl-log.ts`): every append
+takes a lock file next to the log and numbers the record after the last one *on disk*, so
+two processes over one store directory — an `orca acp` facade beside an `orca resume` —
+extend one log with one gap‑free `seq` instead of each counting from its own cache. A
+process that dies mid‑append leaves a torn last line; reads skip it with a warning and the
+next append truncates it before writing, so a crash never disables a run or a plan.
+
 `ProgramService.submit()` is the single entry point used by the CLI and the ACP
 facade. The original request‑scoped nodes (`custom:materialize-work-items`,
 `custom:dispatch-work-items`) remain available for workflows that do not want
