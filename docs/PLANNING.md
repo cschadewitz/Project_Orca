@@ -283,7 +283,7 @@ Every subcommand except `list` accepts the plan key positionally or as `--plan <
 
 ## Known limitations
 
-Reviewed when the layer was rebased onto main; tracked as issues #77 and #79–#84 (label
+Reviewed when the layer was rebased onto main; tracked as issues #77, #79 and #81–#84 (label
 `planning`), #97 and #88. In short: the scheduler still re‑reads the whole plan on every
 wake, which grows with plan age (#83, `docs/ROADMAP.md` item 12); the plan journal and the
 run event store both number events from an in‑process cache, so two processes over one
