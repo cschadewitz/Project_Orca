@@ -2,61 +2,28 @@
  * File-backed event store: one newline-delimited JSON file per run under
  * `<dir>/runs/<runId>.jsonl`. Simple, greppable, and safe to commit alongside
  * artifacts if a team wants run history in git.
+ *
+ * Sequencing, locking and torn-line recovery live in `JsonlLogDir`, shared
+ * with the plan journal.
  */
-import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { OrcaEventSchema, appendJsonl, readJsonl, readJsonlLines, type Clock, type OrcaEvent } from "@orca/core";
+import { OrcaEventSchema, type Clock, type Logger, type OrcaEvent } from "@orca/core";
 import { BaseEventStore } from "./event-store.js";
+import { JsonlLogDir } from "./jsonl-log.js";
 
 export class JsonlEventStore extends BaseEventStore {
-  private readonly counts = new Map<string, number>();
-  private readonly locks = new Map<string, Promise<unknown>>();
-  private ready: Promise<void> | undefined;
+  private readonly logs: JsonlLogDir;
 
-  constructor(
-    private readonly dir: string,
-    clock?: Clock,
-  ) {
+  constructor(dir: string, clock?: Clock, logger?: Logger) {
     super(clock);
+    this.logs = new JsonlLogDir(join(dir, "runs"), { ...(logger ? { logger } : {}) });
   }
 
-  private get runsDir(): string {
-    return join(this.dir, "runs");
+  protected write(runId: string, build: (seq: number) => OrcaEvent): Promise<OrcaEvent> {
+    return this.logs.append(runId, build);
   }
-  private file(runId: string): string {
-    return join(this.runsDir, `${runId}.jsonl`);
-  }
-  private init(): Promise<void> {
-    this.ready ??= mkdir(this.runsDir, { recursive: true }).then(() => undefined);
-    return this.ready;
-  }
-
-  protected async nextSeq(runId: string): Promise<number> {
-    await this.init();
-    let n = this.counts.get(runId);
-    if (n === undefined) {
-      n = (await this.read(runId)).length;
-      this.counts.set(runId, n);
-    }
-    return n;
-  }
-  protected async persist(event: OrcaEvent): Promise<void> {
-    await appendJsonl(this.file(event.runId), event);
-    this.counts.set(event.runId, event.seq + 1);
-  }
-  override async append(input: Parameters<BaseEventStore["append"]>[0]): Promise<OrcaEvent> {
-    const prev = this.locks.get(input.runId) ?? Promise.resolve();
-    const next = prev.then(() => super.append(input));
-    this.locks.set(input.runId, next.catch(() => undefined));
-    return next;
-  }
-  private async lines(runId: string): Promise<string[]> {
-    await this.init();
-    return readJsonlLines(this.file(runId));
-  }
-  async read(runId: string): Promise<OrcaEvent[]> {
-    await this.init();
-    return readJsonl(this.file(runId), OrcaEventSchema);
+  read(runId: string): Promise<OrcaEvent[]> {
+    return this.logs.read(runId, OrcaEventSchema);
   }
   /**
    * Filters on the raw line before parsing: `agent.update` lines carry the
@@ -68,20 +35,14 @@ export class JsonlEventStore extends BaseEventStore {
   override async readTypes(runId: string, types: readonly OrcaEvent["type"][]): Promise<OrcaEvent[]> {
     const needles = types.map((t) => `"type":"${t}"`);
     const out: OrcaEvent[] = [];
-    for (const line of await this.lines(runId)) {
+    for (const line of await this.logs.lines(runId)) {
       if (!needles.some((n) => line.includes(n))) continue;
-      const event = OrcaEventSchema.parse(JSON.parse(line));
-      if (types.includes(event.type)) out.push(event);
+      const event = this.logs.parseLine(runId, line, OrcaEventSchema);
+      if (event && types.includes(event.type)) out.push(event);
     }
     return out;
   }
-
-  async listRuns(): Promise<string[]> {
-    await this.init();
-    const files = await readdir(this.runsDir);
-    return files
-      .filter((f) => f.endsWith(".jsonl"))
-      .map((f) => f.slice(0, -".jsonl".length))
-      .sort();
+  listRuns(): Promise<string[]> {
+    return this.logs.keys();
   }
 }

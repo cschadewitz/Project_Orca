@@ -104,7 +104,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const executors = builtinExecutors();
   let humanInput = opts.humanInput ?? makeHumanInput(config);
   let workspaceProvider = makeWorkspaceProvider(config, configDir, agents);
-  const stores = opts.ephemeral ? memoryStores() : fileStores(resolve(configDir, config.storeDir));
+  const stores = opts.ephemeral ? memoryStores() : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
   const plan = new PlanService({
     stores,
     logger: logger.child({ component: "plan" }),

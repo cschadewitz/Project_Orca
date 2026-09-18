@@ -56,7 +56,9 @@ Dependency references (`DependencyRef`, string or `{ on, type, stage, requiredBy
 agent | human | api | system` (+ `runId`, `artifactId`, `actor`). Types: `plan.created/updated`,
 `request.linked`, `work-item.added/updated`, `dependency.added/resolved/bound`,
 `risk.raised/updated`, `signals.rejected`, `decision.opened/updated/resolved`, `schedule.computed`,
-`dispatch.started/finished/deferred`. Stored as `plans/<planId>.jsonl`.
+`dispatch.started/finished/deferred`. Stored as `plans/<planId>.jsonl`, sequenced on disk the
+same way as a run's event log: an append holds `plans/<planId>.jsonl.lock` while it numbers
+and writes the record, so two processes over one store extend one journal.
 
 ## Artifact (`model/artifact.ts`)
 
