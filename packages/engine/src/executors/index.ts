@@ -1,7 +1,7 @@
 import { agentExecutor } from "./agent-step.js";
 import { decisionExecutor, endExecutor, gateExecutor, setExecutor, startExecutor } from "./basic.js";
 import { loopExecutor, parallelExecutor, subworkflowExecutor } from "./containers.js";
-import { dispatchWorkItemsExecutor, materializeWorkItemsExecutor } from "../program/executors.js";
+import { materializeWorkItemsExecutor } from "../program/executors.js";
 import { NodeExecutorRegistry } from "./types.js";
 
 export * from "./types.js";
@@ -21,6 +21,5 @@ export function builtinExecutors(): NodeExecutorRegistry {
     .register(loopExecutor)
     .register(parallelExecutor)
     .register(subworkflowExecutor)
-    .register(materializeWorkItemsExecutor)
-    .register(dispatchWorkItemsExecutor);
+    .register(materializeWorkItemsExecutor);
 }

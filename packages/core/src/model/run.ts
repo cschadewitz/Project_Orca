@@ -53,12 +53,30 @@ export type ErrorInfo = z.infer<typeof ErrorInfoSchema>;
 export const ChildRunLinkSchema = z.object({
   runId: z.string(),
   branch: z.string().optional(),
+  /** The work item this branch stands for, when the container bound one to it. */
+  workItemId: z.string().optional(),
   /** True when a resumed attempt re-attached to a child spawned by an interrupted attempt. */
   resumed: z.boolean().optional(),
   status: RunStatusSchema.optional(),
   outcome: RunOutcomeSchema.optional(),
 });
 export type ChildRunLink = z.infer<typeof ChildRunLinkSchema>;
+
+/** Why a fan-out branch never became a child run. */
+export const BranchSkipReasonSchema = z.enum(["dependency", "failFast"]);
+export type BranchSkipReason = z.infer<typeof BranchSkipReasonSchema>;
+
+/**
+ * A branch of a fan-out step that was never started: either a prerequisite branch did not
+ * succeed (`dependency`) or a sibling already settled the join under `failFast`. Recorded so
+ * the *whole* fan-out - not just the part that ran - is reconstructible from the event log.
+ */
+export const SkippedBranchSchema = z.object({
+  branch: z.string(),
+  reason: BranchSkipReasonSchema,
+  workItemId: z.string().optional(),
+});
+export type SkippedBranch = z.infer<typeof SkippedBranchSchema>;
 
 export const StepRunSchema = z.object({
   id: z.string(),
@@ -76,6 +94,8 @@ export const StepRunSchema = z.object({
   childRunIds: z.array(z.string()).default([]),
   /** Same children as `childRunIds`, with their branch key and last known status. */
   children: z.array(ChildRunLinkSchema).default([]),
+  /** Fan-out branches of this step that never became child runs. */
+  skippedBranches: z.array(SkippedBranchSchema).default([]),
   scheduledAt: z.string(),
   startedAt: z.string().optional(),
   completedAt: z.string().optional(),
@@ -146,3 +166,17 @@ export const RunStateSchema = z.object({
   lastSeq: z.number().int().nonnegative(),
 });
 export type RunState = z.infer<typeof RunStateSchema>;
+
+/**
+ * The one definition of "this run delivered what was asked of it". Every container join,
+ * the program-level work-item projection and the CLI exit code agree on it, so changing
+ * how e.g. `cancelled` counts is a one-line change.
+ */
+export function outcomeSucceeded(status: RunStatus | undefined, outcome?: RunOutcome): boolean {
+  return status === "completed" && outcome === "success";
+}
+
+/** `outcomeSucceeded` for a whole run state - the usual caller. */
+export function succeeded(state: Pick<RunState, "run">): boolean {
+  return outcomeSucceeded(state.run.status, state.run.outcome);
+}

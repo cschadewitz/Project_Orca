@@ -306,7 +306,7 @@ export class Orchestrator {
         graph = node.body.graph;
       } else if (node.type === "parallel") {
         if (node.forEach) {
-          if (!("graph" in node.forEach.body)) throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: forEach body is a reference`);
+          if (!node.forEach.body || !("graph" in node.forEach.body)) throw new OrcaError("WORKFLOW_NOT_FOUND", `inline workflow ${workflowId}: forEach body is a reference`);
           graph = node.forEach.body.graph;
         } else {
           const branch = path[++i];
@@ -345,6 +345,9 @@ export class Orchestrator {
   private async execute(runId: string): Promise<RunState> {
     const rc = await this.loadContext(runId);
     if (isTerminal(rc.state)) return rc.state;
+    // A run resumed after a crash may have left stale WorkItem documents behind; the log is the
+    // truth, so recompute them before doing anything else (no-op for runs without work items).
+    await rc.syncWorkItems();
     const def = rc.definition;
     const log = rc.logger;
 
@@ -515,7 +518,10 @@ export class Orchestrator {
             ...(rc.state.run.requestId ? { requestId: rc.state.run.requestId } : {}),
           }));
         if (resumedId) rc.logger.info("child re-attached", { step: step.nodeId, child: childId, ...(options.branch ? { branch: options.branch } : {}) });
-        await rc.emit({ type: "child.spawned", payload: { stepRunId: step.id, childRunId: childId, ...(options.branch ? { branch: options.branch } : {}), ...(resumedId ? { resumed: true } : {}) } });
+        await rc.emit({
+          type: "child.spawned",
+          payload: { stepRunId: step.id, childRunId: childId, ...(options.branch ? { branch: options.branch } : {}), ...(options.workItemId ? { workItemId: options.workItemId } : {}), ...(resumedId ? { resumed: true } : {}) },
+        });
         const onAbort = () => void self.cancel(childId, "parent cancelled");
         rc.abort.signal.addEventListener("abort", onAbort, { once: true });
         // The caller may also cancel this one child on its own (e.g. a fail-fast parallel

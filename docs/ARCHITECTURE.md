@@ -57,7 +57,7 @@ Every transition is an **event** (`packages/core/src/events/events.ts`); run
 state is a pure projection (`reduce.ts`). A crashed process resumes by
 re‑reducing the log: a completed last step is routed onward, an interrupted one
 is re‑attempted. When the interrupted step is a container (`loop`, `parallel`,
-`subworkflow`, `custom:dispatch-work-items`) the new attempt does not start over:
+`subworkflow`) the new attempt does not start over:
 `ctx.runChild` re‑attaches to the child runs the interrupted attempt recorded
 (`child.spawned` carries a per‑branch key), reuses the ones that already finished
 and resumes the unfinished ones from their own logs, recursively. Only branches
@@ -106,13 +106,20 @@ back to `build` with the review as an extra input. That *is* the hand‑off.
   items with slugs, acceptance criteria and `dependsOn`.
 - `custom:materialize-work-items` → `WorkItem` records in the store.
 - `plan-gate` → auto‑approves small breakdowns, asks a human for big ones.
-- `custom:dispatch-work-items` → runs the item workflow per leaf item as child
-  runs — the item's own `workflowId`, else the node's `workflow`, else
-  `vars.itemWorkflow` (seeded from `program.itemWorkflow`, default `ai-sdlc`) —
-  honouring dependencies with bounded concurrency; each item gets its own
-  **workspace** from the `WorkspaceProvider` (a git worktree per item, a Kepler
-  task worktree, or the current directory).
+- `dispatch` → a plain `parallel` node fanning out over `vars.leafWorkItems`, with
+  `forEach.key`/`dependsOn` giving the decomposition's dependency order and
+  `forEach.workItemId` binding each branch to its item. The workflow per item is
+  `forEach.workflow` = the item's own `workflowId`, else `vars.itemWorkflow`
+  (seeded from `program.itemWorkflow`, default `ai-sdlc`). Each item therefore gets
+  its own **workspace** from the `WorkspaceProvider` (a git worktree per item, a
+  Kepler task worktree, or the current directory). There is no second fan-out engine.
 - `summarize` (agent) → a program summary artifact.
+
+A `WorkItem`'s `status` is a **projection** of that fan-out, not a side-write:
+`packages/engine/src/program/work-items.ts` derives it from the `child.spawned` /
+`child.finished` / `branch.skipped` events the step recorded and mirrors it onto the
+document store, which is a cache. A process that dies mid-dispatch cannot strand an item
+in `in-progress`: `execute()` recomputes every status from the log before resuming.
 
 `ProgramService.submit()` is the single entry point used by the CLI and the ACP
 facade.

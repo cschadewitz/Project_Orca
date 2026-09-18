@@ -496,6 +496,87 @@ edges: [{ from: s, to: d }, { from: d, to: e }]
     expect(state.steps[state.stepOrder[1]!]?.status).toBe("cancelled");
   });
 
+  it("parallel forEach orders branches by dependsOn and records the ones a failure blocks", async () => {
+    // Each item's child records its slug; `c` waits for `b`, which waits for the failing `a`.
+    const child = `
+id: item
+name: item
+start: s
+nodes:
+  s: { type: start }
+  r: { type: "custom:record", value: "vars.item.slug" }
+  ok: { type: end, outcome: success }
+  bad: { type: end, outcome: failure }
+edges:
+  - { from: s, to: r }
+  - { from: r, to: bad, when: "item.fails" }
+  - { from: r, to: ok }
+`;
+    const yaml = `
+id: dag
+name: dag
+vars:
+  items:
+    - { slug: a, fails: true, needs: [] }
+    - { slug: b, fails: false, needs: [a] }
+    - { slug: c, fails: false, needs: [b] }
+    - { slug: d, fails: false, needs: [] }
+start: s
+nodes:
+  s: { type: start }
+  fan:
+    type: parallel
+    concurrency: 4
+    failFast: false
+    forEach:
+      items: vars.items
+      key: item.slug
+      dependsOn: item.needs
+      body: { workflow: item }
+  e: { type: end }
+edges: [{ from: s, to: fan }, { from: fan, to: e }]
+`;
+    const { orchestrator } = make([yaml, child]);
+    const state = await orchestrator.startAndRun({ workflowId: "dag" });
+
+    expect(state.run.status).toBe("failed");
+    // a and d ran; b was blocked by a's failure and c by b's, so their children never existed.
+    expect(calls.record).toBe(2);
+    const fan = state.steps[state.stepOrder[1]!]!;
+    expect(fan.children.map((c) => c.branch)).toEqual(["a", "d"]);
+    expect(fan.skippedBranches).toEqual([
+      { branch: "b", reason: "dependency" },
+      { branch: "c", reason: "dependency" },
+    ]);
+    expect(state.run.error?.message).toMatch(/1 of 4 branches did not succeed \(2 blocked by a dependency\)/);
+    expect(fan.result).toBeUndefined();
+    // Every skip is in the log, so the whole fan-out is reconstructible.
+    const skips = (await orchestrator.events(state.run.id)).filter((e) => e.type === "branch.skipped");
+    expect(skips.map((e) => (e.payload as { branch: string }).branch)).toEqual(["b", "c"]);
+  });
+
+  it("parallel forEach rejects duplicate branch keys", async () => {
+    const { orchestrator } = make([`
+id: dup
+name: dup
+vars: { items: [{ slug: a }, { slug: a }] }
+start: s
+nodes:
+  s: { type: start }
+  fan:
+    type: parallel
+    forEach:
+      items: vars.items
+      key: item.slug
+      body: { graph: { start: s, nodes: { s: { type: start }, e: { type: end } }, edges: [{ from: s, to: e }] } }
+  e: { type: end }
+edges: [{ from: s, to: fan }, { from: fan, to: e }]
+`]);
+    const state = await orchestrator.startAndRun({ workflowId: "dup" });
+    expect(state.run.status).toBe("failed");
+    expect(state.run.error?.message).toMatch(/forEach.key is not unique \('a' appears twice\)/);
+  });
+
   it("cancelling a run that is not live closes its open step too", async () => {
     const { orchestrator, stores } = make([gated]);
     const runId = await orchestrator.startRun({ workflowId: "gated" });

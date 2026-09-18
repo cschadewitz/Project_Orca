@@ -6,7 +6,7 @@ import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAcpSession } from "@orca/agents";
-import { toMermaid, validateWorkflow, parseWorkflow, loadTemplates, loadWorkflows, OrcaError, type OrcaConfig, type RunState, consoleLogger } from "@orca/core";
+import { succeeded, toMermaid, validateWorkflow, parseWorkflow, loadTemplates, loadWorkflows, OrcaError, type OrcaConfig, type RunState, consoleLogger } from "@orca/core";
 import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
 import { autoHumanInput } from "@orca/engine";
@@ -48,7 +48,7 @@ async function finish(app: OrcaApp, ctx: CommandContext, state: RunState): Promi
     ctx.out(formatPaused(state.run.id, await app.orchestrator.pendingInputs(state.run.id)));
     return 3;
   }
-  return state.run.status === "completed" && state.run.outcome === "success" ? 0 : 2;
+  return succeeded(state) ? 0 : 2;
 }
 
 function attachEventPrinter(app: OrcaApp, ctx: CommandContext, quiet: boolean): () => void {

@@ -146,10 +146,33 @@ export interface LoopNode extends z.infer<typeof NodeBaseSchema> {
   breakOnFailure: boolean;
 }
 
+/**
+ * Fan out over a list. Beyond the plain "one child per item" case, an item may carry a
+ * stable identity (`key`), wait for its siblings (`dependsOn`), choose its own workflow
+ * (`workflow`) and stand for a WorkItem (`workItemId`) - which is all the program level
+ * needs to drive a decomposition through the SDLC loop without a bespoke fan-out node.
+ * Every expression is evaluated per item with `itemVar`/`indexVar` in scope.
+ */
+export interface ParallelForEach {
+  items: Condition;
+  itemVar: string;
+  indexVar: string;
+  /** Stable branch key for this item (default: its index). Also the key `dependsOn` refers to. */
+  key?: Condition;
+  /** Branch keys that must succeed before this item starts; yields a string or string[]. */
+  dependsOn?: Condition;
+  /** Workflow id to run for this item instead of `body`, when it yields a non-empty string. */
+  workflow?: Condition;
+  /** WorkItem this item stands for; its child run is bound to that work item. */
+  workItemId?: Condition;
+  /** What to run per item. Optional only when `workflow` always resolves to an id. */
+  body?: SubworkflowRef;
+}
+
 export interface ParallelNode extends z.infer<typeof NodeBaseSchema> {
   type: "parallel";
   branches?: Record<string, SubworkflowRef>;
-  forEach?: { items: Condition; itemVar: string; indexVar: string; body: SubworkflowRef };
+  forEach?: ParallelForEach;
   concurrency: number;
   join: "all" | "any";
   /**
@@ -227,7 +250,11 @@ export const ParallelNodeSchema: z.ZodType<ParallelNode> = z.lazy(() =>
         items: ConditionSchema,
         itemVar: z.string().default("item"),
         indexVar: z.string().default("index"),
-        body: SubworkflowRefSchema,
+        key: ConditionSchema.optional(),
+        dependsOn: ConditionSchema.optional(),
+        workflow: ConditionSchema.optional(),
+        workItemId: ConditionSchema.optional(),
+        body: SubworkflowRefSchema.optional(),
       })
       .optional(),
     concurrency: z.number().int().positive().default(4),
