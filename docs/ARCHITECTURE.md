@@ -131,8 +131,10 @@ back to `build` with the review as an extra input. That *is* the hand‑off.
   Kepler task worktree, or the current directory). Items waiting on other
   requests are deferred and picked up by `workflows/plan-resume.yaml`
   (`orca plan dispatch`). Unlike a `parallel` fan‑out, the set of branches is
-  not known up front: it is re‑computed from the live plan, which is why this
-  node keeps its own scheduling loop on top of `ctx.runChild`.
+  not known up front: it is re‑computed from the live plan on every wake, which
+  is why this node drives the fan‑out itself — over the same `FanOut`
+  (`executors/containers.ts`), so concurrency, cancellation and `failFast` behave
+  as they do in `parallel`.
 - `summarize` (agent) → a program summary artifact.
 
 A `WorkItem`'s `status` is a **projection** of that fan-out, not a side-write:
@@ -148,6 +150,14 @@ it holds across processes. A second dispatcher over the same plan skips what it 
 own instead of starting a rival child run: a `parallel` fan‑out records `branch.skipped`
 with `reason: claimed`, `custom:plan-dispatch` journals `dispatch.deferred` and reports
 the item as `claimed` in `vars.dispatched`. Neither writes that item's status.
+
+The logs themselves are safe to share the same way. The JSONL event store and the plan
+journal are one primitive, `JsonlLogDir` (`packages/store/src/jsonl-log.ts`): every append
+takes a lock file next to the log and numbers the record after the last one *on disk*, so
+two processes over one store directory — an `orca acp` facade beside an `orca resume` —
+extend one log with one gap‑free `seq` instead of each counting from its own cache. A
+process that dies mid‑append leaves a torn last line; reads skip it with a warning and the
+next append truncates it before writing, so a crash never disables a run or a plan.
 
 `ProgramService.submit()` is the single entry point used by the CLI and the ACP
 facade. The original request‑scoped node (`custom:materialize-work-items`,

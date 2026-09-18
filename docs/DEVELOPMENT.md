@@ -78,6 +78,9 @@ dependency legitimately needs to build.
   matrix, stage‑level pipelining (`core@spec`), build‑phase waits (`api#build`) with
   upstream artifacts in the build prompt, and a second request deferred then picked up by
   `plan-resume`.
+- `packages/store/test/jsonl-log.test.ts` — the on‑disk sequencing under both JSONL stores:
+  two instances over one directory, torn‑tail recovery, and the lock file's stale‑holder
+  rules.
 
 ## The scripted agent
 

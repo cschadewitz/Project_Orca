@@ -56,7 +56,9 @@ Dependency references (`DependencyRef`, string or `{ on, type, stage, requiredBy
 agent | human | api | system` (+ `runId`, `artifactId`, `actor`). Types: `plan.created/updated`,
 `request.linked`, `work-item.added/updated`, `dependency.added/resolved/bound`,
 `risk.raised/updated`, `signals.rejected`, `decision.opened/updated/resolved`, `schedule.computed`,
-`dispatch.started/finished/deferred`. Stored as `plans/<planId>.jsonl`.
+`dispatch.started/finished/deferred`. Stored as `plans/<planId>.jsonl`, sequenced on disk the
+same way as a run's event log: an append holds `plans/<planId>.jsonl.lock` while it numbers
+and writes the record, so two processes over one store extend one journal.
 
 ## Artifact (`model/artifact.ts`)
 
@@ -135,7 +137,7 @@ Built by `RunContext.evalContext()` (`packages/engine/src/run-context.ts`):
 | `iteration`, `item`, `index` | loop scope (also present in `vars`) |
 | `request`, `workItem`, `workspace`, `run`, `now` | context records |
 | `deliverables` | (agent steps) the planned outputs with absolute paths |
-| `vars.schedule` | (after `custom:plan-schedule`) compact schedule: `ready[]`, `waiting[]`, `held[]`, `unschedulable[]`, `waves`, `criticalPath`, `risk`, `openDecisions` |
+| `vars.schedule` | (after `custom:plan-schedule`) compact schedule: `ready[]`, `waiting[]`, `held[]`, `unschedulable[]`, `waves`, `criticalPath` + `criticalPathLength` (remaining work only), `risk`, `openDecisions` (each with the items its still-waiting `blocks` dependencies hold back) |
 | `vars.upstream` | (item runs in a plan) upstream items this item depends on, with their artifacts (`slug`, `title`, `status`, `type`, `stage`, `requiredBy`, `artifacts{kind: {id, path, data}}`) |
 | `vars.openDecisions`, `vars.decision` | (program) decisions to make; the current one inside the `decide` loop |
 | `vars.planId`, `vars.plan`, `vars.workItems`, `vars.workItemIds`, `vars.registration` | (after `custom:plan-register`) the plan and the items this request registered |

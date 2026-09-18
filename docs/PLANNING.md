@@ -158,7 +158,7 @@ reported as human‑readable reasons (`orca plan explain <slug>`):
 | `criticalPath` | heaviest chain of dependents below the item (estimates: XS .5, S 1, M 2, L 3, XL 5) |
 | `dependents` | how many items it transitively unblocks |
 | `risk` | its own exposure (surface problems early) |
-| `mitigation` | it mitigates an open risk (level-weighted) |
+| `mitigation` | it mitigates an open risk (level-weighted: low .25 ... critical 1) |
 | `priority` | `critical` / `high` / `normal` / `low` from the decomposition |
 | `age` | older items first |
 
@@ -169,11 +169,20 @@ shape the **waves**, the **critical path** and the dependent counts - except
 for the ones that would close a cycle, which are left out of that view and
 listed in `schedule.ignoredSoftDependencies`.
 
+Waves and the critical path describe the **remaining** work: settled items
+(done, failed, cancelled) are left out of the graph, so an edge to a done item
+disappears and `criticalPath.length` is the estimate still ahead. A stage-level
+edge (`other@spec`) exists so that work can overlap, so along it the chain is
+charged half of the upstream estimate rather than all of it. Every item on the
+reported path carries the reason `on the critical path`, and a cycle is listed
+in edge order from its smallest slug (`a -> c -> b -> a`).
+
 Strategies are weight presets: `critical-path` (default), `risk-first`,
 `most-dependents`, `fifo`; `policy.weights` overrides individual weights. The
 schedule also reports topological **waves**, the **critical path**, cycles, a
-risk summary and open decisions - all of which `custom:plan-schedule` writes
-into a `schedule` artifact for the gate and exposes as `vars.schedule`.
+risk summary and open decisions (with the items whose `blocks` dependency on
+them is still waiting) - all of which `custom:plan-schedule` writes into a
+`schedule` artifact for the gate and exposes as `vars.schedule`.
 
 ## Node types
 
@@ -182,7 +191,7 @@ into a `schedule` artifact for the gate and exposes as `vars.schedule`.
 | `custom:plan-register` | program, after `decompose` | decomposition -> plan; sets `vars.planId`, `vars.workItems`, `vars.openDecisions` |
 | `custom:decision-matrix` | inside the `decide` loop (or anywhere) | evaluates a `decision-matrix` artifact, records the decision, returns the choice (`decision:` is a template, e.g. `{{ vars.decision.key }}`) |
 | `custom:plan-schedule` | before the gate | computes the schedule, writes `schedule.md`, sets `vars.schedule`, journals; `plan`, `artifactPath` (default `.orca/plans/{{ vars.plan }}/schedule.md`, empty disables), `policy`, `record` |
-| `custom:plan-dispatch` | after the gate | runs the item workflow for ready items, re-schedules after every completion *and* on every plan change; `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope: request \| plan`, `leavesOnly` (default true), `failFast`, `onWaiting: defer \| wait`, `pollMs` (5 s), `waitTimeoutMs`, `policy` |
+| `custom:plan-dispatch` | after the gate | runs the item workflow for ready items, re-schedules after every completion *and* on every plan change; `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope: request \| plan`, `leavesOnly` (default true), `failFast`, `onWaiting: defer \| wait`, `pollMs` (5 s), `waitTimeoutMs` (default 30 min, `0` = forever), `policy` |
 | `custom:plan-await` | inside `ai-sdlc` before `build` | blocks until the item's dependencies for `phase` are satisfied; refreshes `vars.upstream`; a no-op without a plan; `pollMs`, `timeoutMs` (default 30 min) |
 
 The `decision` node also accepts `source: { kind: matrix, artifact, decision }`
@@ -207,6 +216,17 @@ decision, or held; claimed by another dispatcher; or in scope but never offered)
 or fails when items failed/blocked. Deferred items keep `deferredReason` and are picked up by the
 next dispatch that sees them: `orca plan dispatch <key>` runs
 `workflows/plan-resume.yaml` (schedule -> gate -> dispatch with `scope: plan`).
+
+The loop itself is the `FanOut` `parallel` uses (`engine/executors/containers.ts`), driven
+over a ready set recomputed from the live plan instead of a branch list fixed up front. So
+`concurrency` and `failFast` mean the same thing in both: with `failFast` the first failure
+stops new launches *and* cancels the items still running, which report as `cancelled` in
+`vars.dispatched` rather than as failures of their own. Each pass subscribes to the plan
+journal before it reads the plan, so a change landing while the scheduler runs wakes it
+immediately rather than at the next `pollMs`; changes this run wrote itself are skipped, since
+it already knows about them. `onWaiting: wait` emits one `step.waiting` per distinct reason
+(not per poll) and gives up after `waitTimeoutMs` — 30 minutes by default, `0` to wait
+indefinitely — after which what is left is deferred exactly as `onWaiting: defer` leaves it.
 
 `plan.policy.concurrency` bounds *one* dispatcher, so it cannot stop two of them —
 a program run dispatching with `scope: request` while an operator runs `orca plan
@@ -263,19 +283,22 @@ Every subcommand except `list` accepts the plan key positionally or as `--plan <
 
 ## Known limitations
 
-Reviewed when the layer was rebased onto main; tracked as issues #77 and #80–#84 (label
-`planning`), #96, #97, #88, #104 and #105. In short: `custom:plan-dispatch` has its own fan‑out loop
-that does not cancel in‑flight children on `failFast`, logs a `step.waiting` event per
-poll under `onWaiting: wait`, and recomputes the whole plan on every wake (#96); the plan
-journal and the run event store both number events from an in‑process cache, so two
-processes over one store can duplicate `seq` (#97); a dead run's claims can only be
-released by editing the store (#88). See `docs/ROADMAP.md` item 13. Fixed since: cycle
+Reviewed when the layer was rebased onto main; tracked as issues #77 and #81–#84 (label
+`planning`), #88, #104 and #105. In short: the scheduler still re‑reads the whole plan on every
+wake, which grows with plan age (#83, `docs/ROADMAP.md` item 12); a dead run's claims can
+only be released by editing the store (#88); a *different* choice re-decides a `decided`
+decision without `reopenDecision`, so the decide loop can undo a human's `orca plan decide`
+(#104); artifact intake reconciles even when a signal changed nothing (#105). See
+`docs/ROADMAP.md` item 13. Fixed since: cycle
 detection ignores `soft` edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
 artifact intake is serialised per plan (#73); work‑item status is projected from the event
-log, with the plan side following it (#74); a decision the artifact intake already made is
-not re-decided by `custom:decision-matrix` (#79). Still open around decisions: a different
-choice overrides a decided decision without `reopenDecision`, so the decide loop can undo a
-human's pick (#104), and intake reconciles even when a signal changed nothing (#105).
+log, with the plan side following it (#74); the dispatcher loop runs on the same `FanOut` as
+`parallel`, so `failFast` cancels the items still in flight, and `onWaiting: wait` announces
+one `step.waiting` per distinct reason under a default `waitTimeoutMs` instead of one per
+poll (#96); scheduler explanations, the critical path and cycle messages agree with each
+other (#80); the JSONL event store and plan journal number events on disk under a lock
+file, so two processes over one store extend one log (#97); a decision the artifact intake
+already made is not re-decided by `custom:decision-matrix` (#79).
 
 ## Configuration
 
