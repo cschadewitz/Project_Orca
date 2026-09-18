@@ -173,7 +173,7 @@ into a `schedule` artifact for the gate and exposes as `vars.schedule`.
 | `custom:plan-register` | program, after `decompose` | decomposition -> plan; sets `vars.planId`, `vars.workItems`, `vars.openDecisions` |
 | `custom:decision-matrix` | inside the `decide` loop (or anywhere) | evaluates a `decision-matrix` artifact, records the decision, returns the choice (`decision:` is a template, e.g. `{{ vars.decision.key }}`) |
 | `custom:plan-schedule` | before the gate | computes the schedule, writes `schedule.md`, sets `vars.schedule`, journals |
-| `custom:plan-dispatch` | after the gate | runs the item workflow for ready items, re-schedules after every completion *and* on every plan change; `scope: request \| plan`, `onWaiting: defer \| wait` |
+| `custom:plan-dispatch` | after the gate | runs the item workflow for ready items, re-schedules after every completion *and* on every plan change; `scope: request \| plan`, `onWaiting: defer \| wait`, `failFast`, `pollMs`, `waitTimeoutMs` |
 | `custom:plan-await` | inside `ai-sdlc` before `build` | blocks until the item's dependencies for `phase` are satisfied; refreshes `vars.upstream`; a no-op without a plan |
 
 The `decision` node also accepts `source: { kind: matrix, artifact }` for
@@ -195,6 +195,17 @@ decision, or held; or claimed by another dispatcher) or fails when items
 failed/blocked. Deferred items keep `deferredReason` and are picked up by the
 next dispatch that sees them: `orca plan dispatch <key>` runs
 `workflows/plan-resume.yaml` (schedule -> gate -> dispatch with `scope: plan`).
+
+The loop itself is the `FanOut` `parallel` uses (`engine/executors/containers.ts`), driven
+over a ready set recomputed from the live plan instead of a branch list fixed up front. So
+`concurrency` and `failFast` mean the same thing in both: with `failFast` the first failure
+stops new launches *and* cancels the items still running, which report as `cancelled` in
+`vars.dispatched` rather than as failures of their own. Each pass subscribes to the plan
+journal before it reads the plan, so a change landing while the scheduler runs wakes it
+immediately rather than at the next `pollMs`; changes this run wrote itself are skipped, since
+it already knows about them. `onWaiting: wait` emits one `step.waiting` per distinct reason
+(not per poll) and gives up after `waitTimeoutMs` — 30 minutes by default, `0` to wait
+indefinitely — after which what is left is deferred exactly as `onWaiting: defer` leaves it.
 
 `plan.policy.concurrency` bounds *one* dispatcher, so it cannot stop two of them —
 a program run dispatching with `scope: request` while an operator runs `orca plan
@@ -252,12 +263,14 @@ configured `planning.plan`). The read-only ones (`list`, `show`, `schedule`, `ri
 ## Known limitations
 
 Reviewed when the layer was rebased onto main; tracked as issues #71–#84 (label
-`planning`). In short: `custom:plan-dispatch` has its own fan‑out loop and does not cancel
-in‑flight children on `failFast` (#75); `onWaiting: wait` logs a `step.waiting` event per
-poll (#76). See `docs/ROADMAP.md` item 13. Fixed since: cycle detection ignores `soft`
-edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
-artifact intake is serialised per plan (#73); work‑item status is projected from the event
-log, with the plan side following it (#74).
+`planning`). In short: the scheduler re‑reads the whole plan on every wake, which grows with
+plan age (#83, `docs/ROADMAP.md` item 12). See `docs/ROADMAP.md` item 13. Fixed since: cycle
+detection ignores `soft` edges (#71); a work-item claim stops two dispatchers from launching
+one item twice (#72); artifact intake is serialised per plan (#73); work‑item status is
+projected from the event log, with the plan side following it (#74); the dispatcher loop runs
+on the same `FanOut` as `parallel`, so `failFast` cancels the items still in flight, and
+`onWaiting: wait` announces one `step.waiting` per distinct reason under a default
+`waitTimeoutMs` instead of one per poll (#75, #76, #96).
 
 ## Configuration
 

@@ -50,7 +50,7 @@ edges:
 | `custom:plan-register` | decomposition artifact → plan (items, dependencies, risks, decisions) | `artifact`, `plan`, `planName` |
 | `custom:decision-matrix` | score a `decision-matrix` artifact, record the decision, expose `choice` | `artifact`, `decision` (template) |
 | `custom:plan-schedule` | compute the schedule → `vars.schedule` + `schedule.md` | `artifactPath`, `policy`, `record` |
-| `custom:plan-dispatch` | run the item workflow for ready items, dependency‑ordered across the plan; claims each item so two dispatchers cannot both launch it | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request` \| `plan`), `onWaiting` (`defer` \| `wait`), `failFast`, `policy` |
+| `custom:plan-dispatch` | run the item workflow for ready items, dependency‑ordered across the plan; claims each item so two dispatchers cannot both launch it | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request` \| `plan`), `onWaiting` (`defer` \| `wait`), `pollMs`, `waitTimeoutMs` (default 30 min, `0` = forever), `failFast` (cancels the items still running), `policy` |
 | `custom:plan-await` | (in item workflows) wait for this item's `phase` dependencies | `phase`, `pollMs`, `timeoutMs` |
 
 The plan nodes are described in `docs/PLANNING.md`.

@@ -8,9 +8,11 @@ engine with join semantics inside one run is large and hard to reason about.
 
 ## Decision
 One run executes one node at a time. `loop`, `parallel` and `subworkflow` spawn **child
-runs** (own id, own log, parent links) and wait. `parallel` is the *only* fan-out engine:
+runs** (own id, own log, parent links) and wait. `parallel` is the *only* fan-out node:
 `forEach.dependsOn` makes it a small DAG, so the program level needs no fan-out node of
-its own.
+its own. `custom:plan-dispatch` recomputes its branch set from the live plan rather than
+from a list fixed up front, so it drives the fan-out itself — but over the same `FanOut`
+(`executors/containers.ts`), so concurrency, cancellation and fail-fast are defined once.
 Inline nested graphs are addressable (`parent::node::branch`) so they resolve on resume.
 Graph back‑edges are allowed for simple retry loops, bounded by vars.
 

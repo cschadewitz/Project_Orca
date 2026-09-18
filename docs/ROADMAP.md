@@ -35,6 +35,8 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     rebased onto main. Done: cycle detection ignores `soft` edges (#71); a work‑item claim
     stops two dispatchers from launching one item twice (#72); artifact intake is
     serialised per plan (#73); work‑item status is projected from the event log, with the
-    plan side following it (#74). The one that still shapes the design:
-    `custom:plan-dispatch` keeps its own fan‑out loop next to `runBranches` (#75). The
-    rest are smaller: #76–#84.
+    plan side following it (#74); `custom:plan-dispatch` drives the same `FanOut` as
+    `parallel`, so `failFast` cancels in‑flight items, the journal is watched before the
+    plan is read, and `onWaiting: wait` logs one event per reason under a default timeout
+    (#75, #76, #96). The rest are smaller: #77–#84, with the per‑wake full‑plan recompute
+    (#83) folded into item 12.
