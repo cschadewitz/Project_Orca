@@ -35,6 +35,7 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     rebased onto main. Done: cycle detection ignores `soft` edges (#71); a work‑item claim
     stops two dispatchers from launching one item twice (#72); artifact intake is
     serialised per plan (#73); work‑item status is projected from the event log, with the
-    plan side following it (#74). The one that still shapes the design:
+    plan side following it (#74); scheduler explanations, the critical path and cycle
+    messages agree with each other (#80). The one that still shapes the design:
     `custom:plan-dispatch` keeps its own fan‑out loop next to `runBranches` (#75). The
     rest are smaller: #76–#84.

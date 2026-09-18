@@ -149,7 +149,7 @@ contributed becomes a reason (`orca plan explain <slug>`):
 | `criticalPath` | heaviest chain of dependents below the item (estimates: XS .5, S 1, M 2, L 3, XL 5) |
 | `dependents` | how many items it transitively unblocks |
 | `risk` | its own exposure (surface problems early) |
-| `mitigation` | it mitigates an open risk (level-weighted) |
+| `mitigation` | it mitigates an open risk (level-weighted: low .25 ... critical 1) |
 | `priority` | `critical` / `high` / `normal` / `low` from the decomposition |
 | `age` | older items first |
 
@@ -160,11 +160,20 @@ shape the **waves**, the **critical path** and the dependent counts - except
 for the ones that would close a cycle, which are left out of that view and
 listed in `schedule.ignoredSoftDependencies`.
 
+Waves and the critical path describe the **remaining** work: settled items
+(done, failed, cancelled) are left out of the graph, so an edge to a done item
+disappears and `criticalPath.length` is the estimate still ahead. A stage-level
+edge (`other@spec`) exists so that work can overlap, so along it the chain is
+charged half of the upstream estimate rather than all of it. Every item on the
+reported path carries the reason `on the critical path`, and a cycle is listed
+in edge order from its smallest slug (`a -> c -> b -> a`).
+
 Strategies are weight presets: `critical-path` (default), `risk-first`,
 `most-dependents`, `fifo`; `policy.weights` overrides individual weights. The
 schedule also reports topological **waves**, the **critical path**, cycles, a
-risk summary and open decisions - all of which `custom:plan-schedule` writes
-into a `schedule` artifact for the gate and exposes as `vars.schedule`.
+risk summary and open decisions (with the items whose `blocks` dependency on
+them is still waiting) - all of which `custom:plan-schedule` writes into a
+`schedule` artifact for the gate and exposes as `vars.schedule`.
 
 ## Node types
 
@@ -257,7 +266,8 @@ in‑flight children on `failFast` (#75); `onWaiting: wait` logs a `step.waiting
 poll (#76). See `docs/ROADMAP.md` item 13. Fixed since: cycle detection ignores `soft`
 edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
 artifact intake is serialised per plan (#73); work‑item status is projected from the event
-log, with the plan side following it (#74).
+log, with the plan side following it (#74); scheduler explanations, the critical path and
+cycle messages agree with each other (#80).
 
 ## Configuration
 
