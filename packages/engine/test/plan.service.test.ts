@@ -1,6 +1,6 @@
 /** PlanService without agents: registration across requests, dependency resolution, risks, decisions, artifact intake, scheduling. */
 import { describe, expect, it } from "vitest";
-import { FakeClock, silentLogger, type Artifact, type OrcaEventInput } from "@orca/core";
+import { FakeClock, decisionBlocks, silentLogger, type Artifact, type OrcaEventInput } from "@orca/core";
 import { PlanService, planAwaitExecutor, projectWorkItems, type PlanAwaitNode, type StepContext } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
@@ -50,7 +50,8 @@ describe("PlanService", () => {
       ].sort(),
     );
     expect(snap.risks[0]).toMatchObject({ key: "migration", affects: [bySlug.schema!.id], mitigatedBy: [bySlug.api!.id] });
-    expect(snap.decisions[0]).toMatchObject({ key: "store", status: "open", blocks: [bySlug.api!.id] });
+    expect(snap.decisions[0]).toMatchObject({ key: "store", status: "open" });
+    expect(decisionBlocks(snap.decisions[0]!.id, snap.dependencies)).toEqual([bySlug.api!.id]);
     expect(p.requestIds).toEqual(["req_1"]);
 
     // Schedule: only schema is ready; api waits on spec + decision; docs on the external; later on billing.
@@ -119,6 +120,41 @@ describe("PlanService", () => {
     expect((await plan.evaluateDependenciesOf(a!.id, "build"))[0]).toMatchObject({ state: "satisfied", detail: "b is done" });
   });
 
+  it("does not re-decide a decision the artifact intake already decided with the same choice (#79)", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "api", title: "API", dependsOn: ["decision:store"] }], decisions: [{ key: "store", title: "Session store", options: [{ key: "cookie", name: "Cookie" }, { key: "redis", name: "Redis" }], blocks: ["api"] }] }, { kind: "decomposition" });
+    const criteria = [{ key: "simple", name: "Simplicity", weight: 1 }];
+    const options = [{ key: "cookie", name: "Cookie", scores: { simple: 9 } }, { key: "redis", name: "Redis", scores: { simple: 4 } }];
+    const matrix = art("art_m", "decision-matrix", { key: "store", title: "Session store", criteria, options, chosen: "cookie", rationale: "v1 favours simplicity" }, "run_decide");
+
+    // The decide loop's agent step records the matrix: intake decides it, since it carries a valid `chosen`.
+    await plan.onArtifactRecorded({ id: "run_decide", requestId: "req_1" }, matrix);
+    expect((await plan.snapshot(p.id)).decisions[0]).toMatchObject({ key: "store", status: "decided", chosen: "cookie", decidedBy: "agent" });
+
+    // Then `custom:decision-matrix` submits the very same artifact (see resolveMatrixChoice): upsert, then evaluate.
+    const origin = { kind: "agent" as const, runId: "run_decide", artifactId: "art_m" };
+    const dec = await plan.upsertDecision(p.id, { key: "store", title: "Session store", criteria, options }, origin);
+    const evaluated = await plan.evaluateDecision(p.id, dec.id, { chosen: "cookie", decidedBy: "agent", rationale: "v1 favours simplicity" }, origin);
+    expect(evaluated).toMatchObject({ choice: "cookie", decision: { status: "decided", chosen: "cookie", decidedBy: "agent", rationale: "v1 favours simplicity" } });
+    expect(evaluated.result?.recommended).toBe("cookie");
+
+    let journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toEqual([expect.objectContaining({ origin: { kind: "artifact", artifactId: "art_m", runId: "run_decide" }, payload: expect.objectContaining({ chosen: "cookie", decidedBy: "agent" }) })]);
+    expect(journal.filter((e) => e.type === "dependency.resolved")).toHaveLength(1);
+
+    // A different choice is a real re-decision (a human overriding via `orca plan decide`) and is journalled ...
+    const overridden = await plan.evaluateDecision(p.id, "store", { chosen: "redis", decidedBy: "human", rationale: "revocation matters" }, human);
+    expect(overridden.decision).toMatchObject({ chosen: "redis", decidedBy: "human", rationale: "revocation matters" });
+    journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toHaveLength(2);
+    // ... while repeating it changes nothing.
+    await plan.evaluateDecision(p.id, "store", { chosen: "redis", decidedBy: "human" }, human);
+    journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toHaveLength(2);
+    expect((await plan.snapshot(p.id)).decisions[0]).toMatchObject({ chosen: "redis", decidedBy: "human", rationale: "revocation matters" });
+  });
+
   it("serialises intake, so concurrent sibling runs cannot duplicate a risk or re-resolve a dependency", async () => {
     const { plan } = make();
     const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
@@ -163,6 +199,32 @@ describe("PlanService", () => {
     expect((await plan.journalOf(p.id)).filter((e) => e.type === "signals.rejected")).toEqual([expect.objectContaining({ payload: { artifactId: "art_1", runId: "run_a", issues } })]);
   });
 
+  it("scores risks on the plan's matrix: thresholds follow the scale, ratings must fit it, omitted ratings sit mid-grid", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "small", riskMatrix: { scale: 3 } });
+    expect(p.riskMatrix).toEqual({ scale: 3, thresholds: { medium: 2, high: 4, critical: 6 } });
+    const [a] = (await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "a", title: "A" }] }, { kind: "decomposition" })).items;
+
+    // A 3 x 3 is critical on this grid (it would be low-medium on the 5x5 defaults) ...
+    await plan.upsertRisk(p.id, { key: "worst", title: "Worst", likelihood: 3, impact: 3, affects: ["a"] }, human);
+    expect((await plan.schedule(p.id)).held.map((h) => [h.slug, h.level])).toEqual([["a", "critical"]]);
+    // ... an omitted rating is the midpoint of the grid, not a fixed 3 ...
+    expect(await plan.upsertRisk(p.id, { key: "vague", title: "Vague" }, human)).toMatchObject({ likelihood: 2, impact: 2 });
+    // ... and a rating off the grid is refused, on creation and on update.
+    await expect(plan.upsertRisk(p.id, { key: "big", title: "Big", likelihood: 4, impact: 1 }, human)).rejects.toThrow(/risk 'big': likelihood=4 outside the plan's risk matrix \(1\.\.3\)/);
+    await expect(plan.updateRisk(p.id, "vague", { impact: 5 }, human)).rejects.toThrow(/risk 'vague': impact=5 outside/);
+    expect((await plan.snapshot(p.id)).risks.map((r) => r.key).sort()).toEqual(["vague", "worst"]);
+
+    // Artifact intake reports the bad rating as a rejected signal and keeps the rest.
+    const issues = await plan.onArtifactRecorded({ id: "run_a", workItemId: a!.id, requestId: "req_1" }, art("art_1", "spec", { status: "ready", risks: [{ key: "off-grid", title: "Off grid", likelihood: 5, impact: 5 }, { key: "fine", title: "Fine", likelihood: 1, impact: 2 }] }, "run_a"));
+    expect(issues).toEqual([expect.stringMatching(/risk 'off-grid': likelihood=5, impact=5 outside/)]);
+    expect((await plan.snapshot(p.id)).risks.map((r) => r.key).sort()).toEqual(["fine", "vague", "worst"]);
+
+    // A matrix that cannot be satisfied is refused up front.
+    await expect(plan.ensurePlan({ key: "broken", riskMatrix: { scale: 3, thresholds: { critical: 16 } } })).rejects.toThrow(/critical=16 is unreachable on a 3x3 grid/);
+    await expect(plan.updatePlan(p.id, { riskMatrix: { thresholds: { medium: 4, high: 2 } } }, human)).rejects.toThrow(/strictly increasing/);
+  });
+
   it("holds items above the risk appetite until the risk is accepted, honouring plan policy", async () => {
     const { plan } = make();
     const p = await plan.ensurePlan({ key: "strict", policy: { riskAppetite: "low", strategy: "risk-first" } });
@@ -175,6 +237,78 @@ describe("PlanService", () => {
     expect(s.ready.map((r) => r.slug)).toEqual(["x", "y"]);
     expect(reg.items[0]!.priority).toBe("normal");
     expect((await plan.journalOf(p.id)).filter((e) => e.type === "risk.updated")).toHaveLength(1);
+  });
+
+  it("refuses a self-dependency and an unparsable reference with a warning, applying the rest", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    const reg = await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "a", title: "A", dependsOn: ["a", "@spec", "b"] }, { slug: "b", title: "B" }] }, { kind: "decomposition" });
+    const [a, b] = reg.items;
+    expect(reg.warnings).toEqual([expect.stringMatching(/work item 'a' cannot depend on itself/), "work item 'a': invalid dependency reference '@spec'"]);
+    expect(reg.dependencies.map((d) => [d.from, d.target])).toEqual([[a!.id, { kind: "work-item", workItemId: b!.id }]]);
+    expect(await plan.compactSchedule(p.id)).toMatchObject({ cycles: [], ready: [{ slug: "b" }], waiting: [{ slug: "a" }] });
+    await expect(plan.addDependency(p.id, "a", "a", human)).rejects.toThrow(/cannot depend on itself/);
+    await expect(plan.addDependency(p.id, "a", "b@", human)).rejects.toThrow(/invalid dependency reference 'b@'/);
+    // Artifact intake reports the bad reference as an issue and keeps the one behind it.
+    const issues = await plan.onArtifactRecorded({ id: "run_a", workItemId: a!.id, requestId: "req_1" }, art("art_1", "spec", { status: "ready", dependencies: ["#build", "external:legal#build"] }, "run_a"));
+    expect(issues).toEqual(["dependencies[0]: invalid dependency reference '#build'"]);
+    const targets = (await plan.snapshot(p.id)).dependencies.map((d) => d.target);
+    expect(targets).toHaveLength(2);
+    expect(targets).toEqual(expect.arrayContaining([{ kind: "work-item", workItemId: b!.id }, { kind: "external", key: "legal" }]));
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "signals.rejected")).toHaveLength(1);
+  });
+
+  it("keeps a satisfied stage dependency when its upstream fails after producing the stage", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    const [up, byStage, whole] = (await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "up", title: "Up" }, { slug: "by-stage", title: "By stage", dependsOn: ["up@spec"] }, { slug: "whole", title: "Whole", dependsOn: ["up"] }] }, { kind: "decomposition" })).items;
+    const depOf = async (from: string) => (await plan.snapshot(p.id)).dependencies.find((d) => d.from === from)!;
+    await plan.recordProduced(up!.id, art("art_spec", "spec", { status: "ready" }), { kind: "system" });
+    expect(await depOf(byStage!.id)).toMatchObject({ status: "satisfied", resolution: "up produced spec" });
+    expect(await depOf(whole!.id)).toMatchObject({ status: "open" });
+
+    await plan.updateWorkItem(up!.id, { status: "failed" }, { kind: "system" });
+    expect(await plan.reconcile(p.id)).toEqual({ satisfied: [], failed: [(await depOf(whole!.id)).id] });
+    expect(await depOf(byStage!.id)).toMatchObject({ status: "satisfied", resolution: "up produced spec" }); // sticky
+    expect(await depOf(whole!.id)).toMatchObject({ status: "failed", resolution: "up is failed" });
+    const s = await plan.compactSchedule(p.id);
+    expect(s.ready.map((r) => r.slug)).toEqual(["by-stage"]);
+    expect(s.unschedulable).toEqual([{ slug: "whole", reason: "up is failed" }]);
+    expect(s.failed).toEqual(["up"]);
+    // The journal records when the stage cleared and when the plain edge failed - once each, whatever reconciles again.
+    await plan.reconcile(p.id);
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "dependency.resolved").map((e) => (e.payload as { status: string }).status)).toEqual(["satisfied", "failed"]);
+    expect(await plan.explain(p.id, "by-stage")).toContain("dependency (blocks): up produced spec");
+  });
+
+  it("a superseded decision fails its dependants on reconcile, a deferred one keeps them waiting, and reopening is evaluated live", async () => {
+    const { plan, stores } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    const [api] = (await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "api", title: "API", dependsOn: ["decision:store"] }], decisions: [{ key: "store", title: "Session store", options: [{ key: "cookie", name: "Cookie" }] }] }, { kind: "decomposition" })).items;
+    const dec = (await plan.snapshot(p.id)).decisions[0]!;
+    const dep = async () => (await plan.snapshot(p.id)).dependencies[0]!;
+
+    await stores.plan.decisions.put({ ...dec, status: "deferred" });
+    expect(await plan.reconcile(p.id)).toEqual({ satisfied: [], failed: [] });
+    let s = await plan.schedule(p.id);
+    expect(s.waiting.map((w) => w.waitingOn.map((o) => o.detail))).toEqual([["waiting for decision store (deferred)"]]);
+    expect(s.openDecisions).toEqual([expect.objectContaining({ key: "store", blocks: [api!.id] })]);
+
+    await stores.plan.decisions.put({ ...dec, status: "superseded" });
+    expect(await plan.reconcile(p.id)).toEqual({ satisfied: [], failed: [(await dep()).id] });
+    expect(await dep()).toMatchObject({ status: "failed", resolution: "decision store was superseded" });
+    s = await plan.schedule(p.id);
+    expect(s.unschedulable.map((u) => [u.slug, u.reason])).toEqual([["api", "decision store was superseded"]]);
+    expect(s.openDecisions).toEqual([]);
+    expect(await plan.explain(p.id, "api")).toContain("cannot run: decision store was superseded");
+
+    // Reopening resets only satisfied dependencies, but a failed one is evaluated live anyway: api waits again.
+    await plan.reopenDecision(p.id, "store", human);
+    expect(await dep()).toMatchObject({ status: "failed" });
+    s = await plan.schedule(p.id);
+    expect(s.unschedulable).toEqual([]);
+    expect(s.waiting.map((w) => w.waitingOn.map((o) => o.detail))).toEqual([["waiting for decision store"]]);
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "dependency.resolved")).toHaveLength(1);
   });
 
   it("follows the run-log projection: journals what it wrote, and never overwrites a projected status", async () => {

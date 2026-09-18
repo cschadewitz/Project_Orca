@@ -7,7 +7,7 @@
  */
 import { z } from "zod";
 import { AgentSpecSchema, HostSpecSchema, LOCAL_HOST_ID } from "./model/agent.js";
-import { RiskMatrixConfigSchema, SchedulingPolicySchema } from "./model/plan.js";
+import { RiskMatrixInputSchema, SchedulingPolicySchema } from "./model/plan.js";
 
 export const WorkspaceProviderConfigSchema = z.discriminatedUnion("provider", [
   /** Use `root` (or the current directory) as-is for every run. */
@@ -67,7 +67,8 @@ export const OrcaConfigSchema = z.object({
       plan: z.string().default("default"),
       planName: z.string().default("Default plan"),
       policy: SchedulingPolicySchema.partial().default({}),
-      riskMatrix: RiskMatrixConfigSchema.partial().default({}),
+      /** Partial: thresholds left out follow `scale` (see `RiskMatrixConfigSchema`). */
+      riskMatrix: RiskMatrixInputSchema.default({}),
     })
     .default({ plan: "default", planName: "Default plan", policy: {}, riskMatrix: {} }),
   workspace: WorkspaceProviderConfigSchema.default({ provider: "local", hostId: LOCAL_HOST_ID }),

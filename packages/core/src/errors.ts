@@ -17,6 +17,7 @@ export type OrcaErrorCode =
   | "AGENT_PROTOCOL"
   | "RUN_NOT_FOUND"
   | "RUN_STATE"
+  | "CLAIM_NOT_FOUND"
   | "STEP_TIMEOUT"
   | "CANCELLED"
   | "HUMAN_INPUT_PENDING"
@@ -25,6 +26,7 @@ export type OrcaErrorCode =
   | "PLAN_NOT_FOUND"
   | "PLAN_INVALID"
   | "DEPENDENCY_CYCLE"
+  | "STORE_LOCK_TIMEOUT"
   | "INTERNAL";
 
 export class OrcaError extends Error {

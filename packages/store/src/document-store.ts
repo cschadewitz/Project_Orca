@@ -6,7 +6,7 @@
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ZodType } from "zod";
-import type { Clock, Request, WorkItem } from "@orca/core";
+import type { Clock, Logger, Request, WorkItem } from "@orca/core";
 import { RequestSchema, WorkItemSchema } from "@orca/core";
 import { FileClaimStore, InMemoryClaimStore, type ClaimStore } from "./claim-store.js";
 import { InMemoryEventStore, type EventStore } from "./event-store.js";
@@ -144,14 +144,15 @@ export interface Stores {
   plan: PlanStores;
 }
 
-export function fileStores(dir: string, clock?: Clock): Stores {
+/** `logger` receives what the file-backed stores notice and survive: torn log lines, stale locks. */
+export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores {
   return {
-    events: new JsonlEventStore(dir, clock),
+    events: new JsonlEventStore(dir, clock, logger),
     artifacts: new FileArtifactStore(dir),
     requests: new JsonFileDocumentStore<Request>(join(dir, "requests.json"), RequestSchema as unknown as ZodType<Request>),
     workItems: new JsonFileDocumentStore<WorkItem>(join(dir, "work-items.json"), WorkItemSchema as unknown as ZodType<WorkItem>),
     claims: new FileClaimStore(dir),
-    plan: filePlanStores(dir, clock),
+    plan: filePlanStores(dir, clock, logger),
   };
 }
 

@@ -131,11 +131,30 @@ export function findCycles(graph: DependencyGraph): string[][] {
         scc.push(w);
       } while (w !== v);
       const selfLoop = scc.length === 1 && (graph.upstreamOf.get(v) ?? []).some((e) => e.to === v);
-      if (scc.length > 1 || selfLoop) cycles.push(scc.sort());
+      if (scc.length > 1 || selfLoop) cycles.push(inEdgeOrder(graph, scc));
     }
   };
   for (const n of graph.nodes) if (!idx.has(n)) visit(n);
   return cycles;
+}
+
+/**
+ * Members of a strongly connected component in edge order: starting from the
+ * smallest id (so the result does not depend on input order), follow
+ * `from -> to` edges inside the component. For a simple cycle that is the ring
+ * itself, so `a -> b -> c` reads "a waits for b, which waits for c, which waits for a".
+ */
+function inEdgeOrder(graph: DependencyGraph, members: readonly string[]): string[] {
+  const inside = new Set(members);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visit = (v: string) => {
+    seen.add(v);
+    out.push(v);
+    for (const e of graph.upstreamOf.get(v) ?? []) if (inside.has(e.to) && !seen.has(e.to)) visit(e.to);
+  };
+  visit([...members].sort()[0]!);
+  return out;
 }
 
 /** Every item that (transitively) depends on `id`. */
@@ -201,27 +220,44 @@ export interface PathInfo {
 }
 
 /**
+ * Share (0..1) of an upstream node's weight that must elapse before the
+ * dependent on `edge` can begin: 1 for a plain edge (wait for all of it), less
+ * for an edge that allows overlap (a stage-level dependency).
+ */
+export type EdgeLag = (edge: GraphEdge) => number;
+
+/**
  * For each node, the heaviest chain of dependents starting at it. The maximum
  * over all nodes is the plan's critical path. Nodes inside cycles get length 0.
+ *
+ * A chain through an edge costs `lag(edge) * weight(node) + length(dependent)`
+ * and a node alone costs its own weight, so with every lag at 1 (the default)
+ * this is the plain longest path over node weights.
  */
-export function longestDownstreamPaths(graph: DependencyGraph, weight: (id: string) => number): Map<string, PathInfo> {
+export function longestDownstreamPaths(graph: DependencyGraph, weight: (id: string) => number, lag: EdgeLag = () => 1): Map<string, PathInfo> {
   const cyclic = new Set(findCycles(graph).flat());
   const memo = new Map<string, PathInfo>();
   const visiting = new Set<string>();
   const visit = (id: string): PathInfo => {
     const cached = memo.get(id);
     if (cached) return cached;
-    if (cyclic.has(id) || visiting.has(id)) return { length: 0, path: [] };
+    if (visiting.has(id)) return { length: 0, path: [] };
+    if (cyclic.has(id)) {
+      const none = { length: 0, path: [] };
+      memo.set(id, none);
+      return none;
+    }
     visiting.add(id);
-    let best: PathInfo = { length: 0, path: [] };
+    const own = weight(id);
+    let best: PathInfo = { length: own, path: [id] };
     for (const e of graph.downstreamOf.get(id) ?? []) {
       const p = visit(e.from);
-      if (p.length > best.length) best = p;
+      const length = Math.min(1, Math.max(0, lag(e))) * own + p.length;
+      if (length > best.length) best = { length, path: [id, ...p.path] };
     }
     visiting.delete(id);
-    const info: PathInfo = { length: weight(id) + best.length, path: [id, ...best.path] };
-    memo.set(id, info);
-    return info;
+    memo.set(id, best);
+    return best;
   };
   for (const n of graph.nodes) visit(n);
   return memo;

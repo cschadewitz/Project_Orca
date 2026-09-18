@@ -10,8 +10,9 @@ pnpm run demo                # program run with scripted agents (from sources vi
 node packages/cli/dist/main.js demo   # same, from the compiled build
 ```
 
-`demo --dir <path>` leaves a complete setup behind — `orca.config.yaml` wired to the
-scripted agent plus its `demo-playbook.yaml` — so `orca --config <path>/orca.config.yaml
+`demo --dir <path>` (or `demo --keep`, which keeps the temp workspace instead of
+removing it afterwards) leaves a complete setup behind — `orca.config.yaml` wired to
+the scripted agent plus its `demo-playbook.yaml` — so `orca --config <path>/orca.config.yaml
 run <workflow>` exercises any workflow without an LLM. Edit the playbook to change what
 the agent delivers per artifact kind.
 
@@ -46,8 +47,10 @@ dependency legitimately needs to build.
 
 ## Layout conventions
 
-- One concern per file; every file starts with a comment saying what it is for.
-- `packages/*/src/index.ts` is the public surface of a package; tests import only that.
+- One concern per file; every file except a pure re‑export barrel starts with a comment
+  saying what it is for.
+- `packages/*/src/index.ts` is the public surface of a package; tests import only that
+  (the CLI tests reach into `src/commands` directly).
 - `core` has no runtime I/O except reading workflow/template files. `engine` depends on
   ports (`EventStore`, `ArtifactStore`, `AgentHost`, `AgentSession`), never on concrete
   transports, so it is testable with in‑memory stores and the scripted agent.
@@ -67,16 +70,25 @@ dependency legitimately needs to build.
 - `packages/integrations/test/acp-facade.test.ts` — ORCA driven *as* an ACP agent by an
   in‑process ACP client (proxy mode), including gate forwarding as a permission request.
 - `packages/core/test/plan.test.ts` — the pure planning layer: dependency grammar, risk
-  matrix, graph (waves, cycles, critical path), decision matrix, scheduler classification
-  and priorities, artifact signals, Mermaid.
+  matrix, graph (waves, cycles incl. self‑loops, critical path around a partial cycle),
+  decision matrix, scheduler classification and priorities (policy flags, weight overrides,
+  superseded / deferred decisions), artifact signals, Mermaid.
 - `packages/engine/test/plan.service.test.ts` — cross‑request registration (placeholders
-  bound later, slug clashes), stage‑level and decision dependencies, artifact intake, risk
-  appetite holds, and the `custom:plan-await` node waking on plan changes.
+  bound later, slug clashes, self‑references and unparsable refs), stage‑level and decision
+  dependencies (a stage stays satisfied after its upstream fails; superseded / deferred
+  decisions), artifact intake, risk appetite holds, and the `custom:plan-await` node waking
+  on plan changes.
+- `packages/engine/test/plan-dispatch.test.ts` — `custom:plan-dispatch` with `onWaiting: wait`
+  (gives up after `waitTimeoutMs`, woken by a plan change rather than the poll) and `failFast`
+  cancelling a sibling still running.
 - `packages/engine/test/plan.e2e.test.ts` — the shipped program with decisions made by
   matrix, stage‑level pipelining (`core@spec`), build‑phase waits (`api#build`) with
   upstream artifacts in the build prompt, and a second request deferred then picked up by
   `plan-resume` (which dispatches to `vars.itemWorkflow`, i.e. `program.itemWorkflow`, not a
   pinned `ai-sdlc`).
+- `packages/store/test/jsonl-log.test.ts` — the on‑disk sequencing under both JSONL stores:
+  two instances over one directory, torn‑tail recovery, and the lock file's stale‑holder
+  rules.
 
 ## The scripted agent
 

@@ -44,7 +44,7 @@ import {
   type Workspace,
 } from "@orca/core";
 import { reduceRun } from "@orca/core";
-import type { EventFilter, EventListener, Stores } from "@orca/store";
+import type { EventFilter, EventListener, Stores, WorkItemClaim } from "@orca/store";
 import { builtinExecutors } from "./executors/index.js";
 import { NodeExecutorRegistry, paused, type ResolvedArtifact, type StepContext, type StepOutcome } from "./executors/types.js";
 import { abortableHumanInput, askHumanInput, autoHumanInput, isHumanInputPending, type HumanInputPort } from "./human-input.js";
@@ -69,6 +69,9 @@ export interface OrchestratorOptions {
   clock?: Clock;
   logger?: Logger;
 }
+
+/** A work-item claim together with the state of the run that holds it. */
+export type HeldClaim = WorkItemClaim & { owner: RunSummary["status"] | "missing" };
 
 export interface StartRunOptions {
   workflowId?: string;
@@ -293,6 +296,48 @@ export class Orchestrator {
       id = state.run.parentRunId;
     }
     return this.run(id);
+  }
+
+  // ------------------------------------------------------------------ claims
+
+  /**
+   * Who owns which work item (see store/claim-store.ts), each with the status of the run
+   * holding it - `missing` when that run's log is gone, e.g. the store was rolled back under a
+   * claim. Optionally only the claims one run holds.
+   */
+  async listClaims(runId?: string): Promise<HeldClaim[]> {
+    const claims = (await this.stores.claims.list()).filter((c) => !runId || c.runId === runId);
+    const out: HeldClaim[] = [];
+    for (const claim of claims.sort((a, b) => a.at.localeCompare(b.at) || a.workItemId.localeCompare(b.workItemId))) out.push({ ...claim, owner: await this.ownerStatus(claim.runId) });
+    return out;
+  }
+
+  /**
+   * Take a work item away from the run that claimed it, so another dispatcher may launch it.
+   * A claim is never released on its own - a finished run keeps its items so they are not
+   * dispatched twice, and a claim outlives the process that took it - so this is the
+   * operator's act, for a run that is dead: it is refused while the owner could still resume
+   * (running, paused or waiting) unless `force`, which is what a paused-and-abandoned run needs.
+   */
+  async releaseClaim(workItemId: string, opts: { force?: boolean } = {}): Promise<HeldClaim> {
+    const claim = await this.stores.claims.get(workItemId);
+    if (!claim) throw new OrcaError("CLAIM_NOT_FOUND", `work item ${workItemId} is not claimed`, { workItemId });
+    const owner = await this.ownerStatus(claim.runId);
+    const dead = owner === "missing" || owner === "completed" || owner === "failed" || owner === "cancelled";
+    if (!dead && !opts.force) throw new OrcaError("RUN_STATE", `work item ${workItemId} is claimed by run ${claim.runId}, which is ${owner}, not finished: resume or cancel that run, or release with force`, { workItemId, runId: claim.runId, status: owner });
+    // Compare-and-delete against the incumbent we inspected: a claim another run took in the meantime survives.
+    await this.stores.claims.release(workItemId, claim.runId);
+    this.logger.info("work item claim released", { workItemId, runId: claim.runId, branch: claim.branch, owner, forced: !dead });
+    return { ...claim, owner };
+  }
+
+  private async ownerStatus(runId: string): Promise<HeldClaim["owner"]> {
+    try {
+      return (await this.getSummary(runId)).status;
+    } catch (e) {
+      if (e instanceof OrcaError && e.code === "RUN_NOT_FOUND") return "missing";
+      throw e;
+    }
   }
 
   // ------------------------------------------------------------- definitions

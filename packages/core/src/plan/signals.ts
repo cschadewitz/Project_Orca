@@ -7,7 +7,7 @@
  * module normalises it so the PlanService can update the plan as the artifacts
  * are recorded. Unknown or malformed entries are reported, never thrown.
  */
-import { DecisionInputSchema, DependencyRefSchema, RiskInputSchema, RiskRegisterSchema, type DecisionInput, type DependencyRef, type RiskInput } from "../model/plan.js";
+import { DecisionInputSchema, DependencyRefSchema, RiskInputSchema, RiskRegisterSchema, parseDependencyRef, type DecisionInput, type DependencyRef, type RiskInput } from "../model/plan.js";
 
 export interface PlanSignals {
   risks: RiskInput[];
@@ -18,13 +18,17 @@ export interface PlanSignals {
 
 export type SignalExtractor = (artifact: { kind: string; name: string; data: Record<string, unknown> }) => Partial<PlanSignals> | undefined;
 
+export const SLUG_MAX_LENGTH = 48;
+
+/** Kebab-case key from free text, at most SLUG_MAX_LENGTH characters and never starting or ending in `-`. */
 export function slugify(text: string): string {
   return (
     text
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 48) || "item"
+      .slice(0, SLUG_MAX_LENGTH)
+      .replace(/-+$/, "") || "item"
   );
 }
 
@@ -48,6 +52,22 @@ function decisionFrom(raw: unknown, i: number, issues: string[]): DecisionInput 
   const parsed = DecisionInputSchema.safeParse(candidate);
   if (!parsed.success) {
     issues.push(`decisions[${i}]: ${parsed.error.issues.map((x) => `${x.path.join(".")}: ${x.message}`).join("; ")}`);
+    return undefined;
+  }
+  return parsed.data;
+}
+
+/** Shape-check, then run the grammar, so the service never sees a ref `parseDependencyRef` would throw on. */
+function dependencyFrom(raw: unknown, i: number, issues: string[]): DependencyRef | undefined {
+  const parsed = DependencyRefSchema.safeParse(raw);
+  if (!parsed.success) {
+    issues.push(`dependencies[${i}]: not a dependency reference`);
+    return undefined;
+  }
+  try {
+    parseDependencyRef(parsed.data);
+  } catch (e) {
+    issues.push(`dependencies[${i}]: ${(e as Error).message}`);
     return undefined;
   }
   return parsed.data;
@@ -81,9 +101,8 @@ export const defaultSignalExtractor: SignalExtractor = (artifact) => {
     if (dec) out.decisions.push(dec);
   });
   asList(data.dependencies ?? data.discoveredDependencies).forEach((ref, i) => {
-    const parsed = DependencyRefSchema.safeParse(ref);
-    if (parsed.success) out.dependencies.push(parsed.data);
-    else issues.push(`dependencies[${i}]: not a dependency reference`);
+    const dep = dependencyFrom(ref, i, issues);
+    if (dep) out.dependencies.push(dep);
   });
   return out;
 };

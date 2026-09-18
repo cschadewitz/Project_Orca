@@ -111,6 +111,9 @@ describe("planning layer (e2e)", () => {
     expect(started).toEqual(["core", "api", "ui"]);
     const resolved = journal.filter((e) => e.type === "dependency.resolved").map((e) => (e.payload as { dependencyId: string }).dependencyId);
     expect(new Set(resolved).size).toBe(resolved.length);
+    // The decision was resolved once, although the artifact was ingested at `artifact.recorded`
+    // and then handed to `custom:decision-matrix` (#79).
+    expect(journal.filter((e) => e.type === "decision.resolved")).toHaveLength(1);
     // Every status `orca plan show` reports is backed by a `work-item.updated` entry the run-log
     // projection wrote: the plan side no longer sets the field alongside it, so the journal and
     // the read model cannot drift apart when a run dies mid-dispatch.

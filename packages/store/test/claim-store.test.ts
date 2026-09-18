@@ -58,6 +58,18 @@ describe("claim stores", () => {
       expect(ownsClaim(await store.claim(claim("wi_1", "run_b")), "run_b", "b")).toBe(true);
     });
 
+    it(`${name}: list shows every held claim and nothing once released`, async () => {
+      const store = await make();
+      expect(await store.list()).toEqual([]);
+      await store.claim(claim("wi_1", "run_a", "api"));
+      await store.claim(claim("wi_2", "run_b", "ui"));
+      await store.claim(claim("wi_2", "run_c", "ui")); // loses; not a second entry
+      const listed = (await store.list()).sort((x, y) => x.workItemId.localeCompare(y.workItemId));
+      expect(listed).toEqual([claim("wi_1", "run_a", "api"), claim("wi_2", "run_b", "ui")]);
+      await store.release("wi_1", "run_a");
+      expect(await store.list()).toEqual([claim("wi_2", "run_b", "ui")]);
+    });
+
     it(`${name}: concurrent claims on one item elect a single owner`, async () => {
       const store = await make();
       const runs = ["run_a", "run_b", "run_c", "run_d", "run_e"];

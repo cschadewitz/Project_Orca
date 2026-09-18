@@ -16,7 +16,7 @@
  *   plan risk <riskKey> --status <status> [key]   accept / mitigate / close a risk
  *   plan dispatch [key]           run the plan-resume workflow: schedule -> gate -> dispatch across the plan
  */
-import { planToMermaid, renderDecisionMatrix, riskLevel, riskScore, OrcaError, type PlanOrigin, type RiskStatus } from "@orca/core";
+import { decisionBlocks, describeRiskMatrix, planToMermaid, renderDecisionMatrix, riskLevel, riskScore, OrcaError, type PlanOrigin, type RiskStatus } from "@orca/core";
 import type { PlanService } from "@orca/engine";
 import { bootstrap } from "../bootstrap.js";
 import { attachEventPrinter, finish, type CommandContext } from "./index.js";
@@ -65,6 +65,7 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       const slug = (id: string) => snap.items.find((i) => i.id === id)?.slug ?? id;
       ctx.out(`plan ${p.key} (${p.id})  ${p.name}  status=${p.status}  strategy=${p.policy.strategy}  concurrency=${p.policy.concurrency}  appetite=${p.policy.riskAppetite}`);
       ctx.out(`requests: ${p.requestIds.join(", ") || "-"}`);
+      ctx.out(`risk matrix: ${describeRiskMatrix(p.riskMatrix)}`);
       ctx.out("");
       ctx.out("work items:");
       for (const w of snap.items) {
@@ -80,7 +81,7 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       if (snap.decisions.length) {
         ctx.out("");
         ctx.out("decisions:");
-        for (const d of snap.decisions) ctx.out(`  ${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}  blocks: ${d.blocks.map(slug).join(", ") || "-"}`);
+        for (const d of snap.decisions) ctx.out(`  ${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}  blocks: ${decisionBlocks(d.id, snap.dependencies).map(slug).join(", ") || "-"}`);
       }
       return 0;
     }
@@ -145,6 +146,7 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       if (json) return (ctx.out(JSON.stringify(snap.risks, null, 2)), 0);
       const slug = (id: string) => snap.items.find((i) => i.id === id)?.slug ?? id;
       const sorted = [...snap.risks].sort((a, b) => riskScore(b) - riskScore(a));
+      ctx.out(`risk matrix: ${describeRiskMatrix(p.riskMatrix)}`);
       for (const r of sorted) {
         ctx.out(`${pad(r.status, 11)} ${pad(riskLevel(riskScore(r), p.riskMatrix), 8)} ${pad(r.key, 24)} L${r.likelihood} x I${r.impact} = ${riskScore(r)}  ${r.title}`);
         ctx.out(`${" ".repeat(12)}category=${r.category}  affects: ${r.affects.map(slug).join(", ") || "-"}  mitigated by: ${r.mitigatedBy.map(slug).join(", ") || "-"}${r.mitigation ? `\n${" ".repeat(12)}mitigation: ${r.mitigation}` : ""}`);
@@ -161,7 +163,8 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       for (const d of snap.decisions) {
         ctx.out(`${pad(d.status, 11)} ${pad(d.key, 24)} ${d.title}${d.chosen ? `  = ${d.chosen} (${d.decidedBy})` : ""}`);
         if (d.question) ctx.out(`${" ".repeat(12)}${d.question}`);
-        if (d.blocks.length) ctx.out(`${" ".repeat(12)}blocks: ${d.blocks.map(slug).join(", ")}`);
+        const blocks = decisionBlocks(d.id, snap.dependencies);
+        if (blocks.length) ctx.out(`${" ".repeat(12)}blocks: ${blocks.map(slug).join(", ")}`);
         if (d.result && d.criteria.length && d.options.length) ctx.out(renderDecisionMatrix({ criteria: d.criteria, options: d.options, scale: d.scale }, d.result).split("\n").map((l) => " ".repeat(12) + l).join("\n"));
         if (d.rationale) ctx.out(`${" ".repeat(12)}rationale: ${d.rationale}`);
       }

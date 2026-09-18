@@ -236,3 +236,62 @@ describe("work item claims: plan-dispatch", () => {
     for (const item of await stores.workItems.list()) expect(item.status).toBe("done");
   });
 });
+
+/**
+ * A claim is never released on its own (a finished run keeps its items; a claim outlives its
+ * process), so an item held by a run that died for good stays `claimed` for every later
+ * dispatcher. The operator frees it - and only while the owner can no longer resume.
+ */
+describe("work item claims: release", () => {
+  it("a finished run's claim can be released, and the next dispatcher launches the item", async () => {
+    gate = { wait: Promise.resolve(), release: () => {} };
+    const { orchestrator, stores } = make();
+    const owner = await orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } });
+    expect(owner.run.status).toBe("completed");
+    // The claims survive the run: a second dispatcher gets nothing.
+    const again = await make({ stores }).orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } });
+    expect(skips(again)).toEqual(["api:claimed", "ui:claimed"]);
+
+    const held = await orchestrator.listClaims();
+    expect(held.map((c) => `${c.workItemId}:${c.runId}:${c.owner}`).sort()).toEqual([`wi_api:${owner.run.id}:completed`, `wi_ui:${owner.run.id}:completed`]);
+    expect(await orchestrator.listClaims("run_nobody")).toEqual([]);
+
+    const released = await orchestrator.releaseClaim("wi_api");
+    expect(released).toMatchObject({ workItemId: "wi_api", runId: owner.run.id, branch: "api", owner: "completed" });
+    expect((await orchestrator.listClaims()).map((c) => c.workItemId)).toEqual(["wi_ui"]);
+    await expect(orchestrator.releaseClaim("wi_api")).rejects.toMatchObject({ code: "CLAIM_NOT_FOUND" });
+
+    // Only the released item is launched again; the other is still the first run's.
+    const third = await make({ stores }).orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } });
+    expect(skips(third)).toEqual(["ui:claimed"]);
+    expect(await launched(stores)).toEqual(["wi_api", "wi_api", "wi_ui"]);
+    expect((await stores.claims.get("wi_api"))?.runId).toBe(third.run.id);
+  });
+
+  it("a live run's claim is refused unless forced", async () => {
+    gate = { wait: Promise.resolve(), release: () => {} };
+    const { orchestrator } = make();
+    openGate();
+    const runId = await orchestrator.startRun({ workflowId: "dispatch", vars: { items } });
+    const running = orchestrator.run(runId);
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect((await orchestrator.listClaims(runId)).map((c) => `${c.workItemId}:${c.owner}`).sort()).toEqual(["wi_api:running", "wi_ui:running"]);
+    await expect(orchestrator.releaseClaim("wi_api")).rejects.toMatchObject({ code: "RUN_STATE", details: { workItemId: "wi_api", runId, status: "running" } });
+    expect(await orchestrator.stores.claims.get("wi_api")).toMatchObject({ runId });
+
+    expect(await orchestrator.releaseClaim("wi_api", { force: true })).toMatchObject({ runId, owner: "running" });
+    expect(await orchestrator.stores.claims.get("wi_api")).toBeUndefined();
+
+    gate.release();
+    expect((await running).run.status).toBe("completed");
+  });
+
+  it("a claim whose run's log is gone counts as dead", async () => {
+    const { orchestrator, stores } = make();
+    await stores.claims.claim({ workItemId: "wi_api", runId: "run_rolled_back", branch: "api", at: "2026-01-01T00:00:00.000Z" });
+    expect(await orchestrator.listClaims()).toMatchObject([{ workItemId: "wi_api", owner: "missing" }]);
+    expect(await orchestrator.releaseClaim("wi_api")).toMatchObject({ runId: "run_rolled_back", owner: "missing" });
+    expect(await stores.claims.list()).toEqual([]);
+  });
+});
