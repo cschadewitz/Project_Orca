@@ -85,13 +85,20 @@ export function evaluateDecisionMatrix(m: DecisionMatrixInput, now: string): Dec
   return { ranking, recommended: top.option, margin, confidence, pivotalCriteria, evaluatedAt: now };
 }
 
-/** Markdown rendering of a matrix result, for schedule artifacts and CLI output. */
+/**
+ * Markdown rendering of a matrix result, for schedule artifacts and CLI output.
+ *
+ * The result may have been computed from an earlier version of the matrix
+ * (options renamed or removed since); a ranked option the matrix no longer
+ * knows is rendered by its key with blank scores rather than crashing.
+ */
 export function renderDecisionMatrix(m: DecisionMatrixInput, result: DecisionMatrixResult): string {
   const header = `| option | ${m.criteria.map((c) => `${c.name} (w${c.weight}${c.direction === "minimize" ? ", min" : ""})`).join(" | ")} | score |`;
   const sep = `| --- | ${m.criteria.map(() => "---").join(" | ")} | --- |`;
   const rows = result.ranking.map((r) => {
-    const o = m.options.find((x) => x.key === r.option)!;
-    return `| ${r.option === result.recommended ? "**" + o.name + "**" : o.name} | ${m.criteria.map((c) => String(o.scores[c.key] ?? "")).join(" | ")} | ${r.score} |`;
+    const o = m.options.find((x) => x.key === r.option);
+    const name = o?.name ?? r.option;
+    return `| ${r.option === result.recommended ? "**" + name + "**" : name} | ${m.criteria.map((c) => String(o?.scores[c.key] ?? "")).join(" | ")} | ${r.score} |`;
   });
   return [header, sep, ...rows, "", `Recommended: **${result.recommended}** (${result.confidence}, margin ${result.margin})${result.pivotalCriteria.length ? `; pivotal criteria: ${result.pivotalCriteria.join(", ")}` : ""}`].join("\n");
 }

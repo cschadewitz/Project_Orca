@@ -25,7 +25,8 @@ The **scheduler** is a pure function over a snapshot. It evaluates dependencies 
 (against item status, `produced` artifacts and decision status), classifies items as
 ready / waiting (with the reason) / held (risk) / unschedulable, ranks ready items with
 explainable factors, and reports waves and the critical path. `custom:plan-dispatch`
-re‑schedules after every child completion **and** on every journal change, so stage‑level
+re‑schedules after every child completion **and** on every plan‑changing journal event
+(work items, dependencies, decisions, risks; plus a poll every `pollMs`), so stage‑level
 dependencies (`other@spec`) pipeline runs instead of waiting for a slot to free.
 
 ## Consequences

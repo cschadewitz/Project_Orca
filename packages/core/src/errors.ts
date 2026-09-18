@@ -26,6 +26,7 @@ export type OrcaErrorCode =
   | "PLAN_NOT_FOUND"
   | "PLAN_INVALID"
   | "DEPENDENCY_CYCLE"
+  | "STORE_LOCK_TIMEOUT"
   | "INTERNAL";
 
 export class OrcaError extends Error {

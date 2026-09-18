@@ -2,7 +2,7 @@
  * CLI command implementations. Each command receives parsed positionals and
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
-import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAcpSession } from "@orca/agents";
@@ -273,9 +273,12 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   demo: {
-    help: "demo [--dir path] [--keep]  Run the program workflow end-to-end with scripted agents (no LLM needed).",
+    help: "demo [--dir path] [--keep]  Run the program workflow end-to-end with scripted agents (no LLM needed). Without --dir the workspace is a temp dir, removed afterwards unless --keep.",
     async run(ctx) {
+      // A --dir workspace belongs to the user and always survives; a temp
+      // workspace is removed after the run unless --keep asks for it.
       const dir = ctx.flags.dir ? String(ctx.flags.dir) : await mkdtemp(join(tmpdir(), "orca-demo-"));
+      const keep = Boolean(ctx.flags.dir) || Boolean(ctx.flags.keep);
       await mkdir(dir, { recursive: true });
       // commands/ -> (src|dist) -> cli -> packages -> repo root
       const here = new URL(".", import.meta.url).pathname;
@@ -338,12 +341,17 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
           ctx.out(`\nplan '${plan.key}': ${snap.dependencies.length} dependencies, ${snap.risks.length} risks, ${snap.decisions.length} decisions (${snap.decisions.filter((d) => d.status === "decided").map((d) => `${d.key}=${d.chosen}`).join(", ")})`);
           for (const line of await app.plan.explain(plan.id, "login-api")) ctx.out(`  ${line}`);
         }
-        ctx.out(`\nartifacts and event logs are under ${join(dir, ".orca")}; inspect with: orca runs / orca status <runId> / orca events <runId> / orca plan show demo / orca plan journal demo  (run from ${dir})`);
-        ctx.out(`the workspace also holds a ready-to-use ${join(dir, "orca.config.yaml")} (scripted agents, playbook in demo-playbook.yaml); e.g.`);
-        ctx.out(`  orca --config ${join(dir, "orca.config.yaml")} run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'`);
+        if (keep) {
+          ctx.out(`\nartifacts and event logs are under ${join(dir, ".orca")}; inspect with: orca runs / orca status <runId> / orca events <runId> / orca plan show demo / orca plan journal demo  (run from ${dir})`);
+          ctx.out(`the workspace also holds a ready-to-use ${join(dir, "orca.config.yaml")} (scripted agents, playbook in demo-playbook.yaml); e.g.`);
+          ctx.out(`  orca --config ${join(dir, "orca.config.yaml")} run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'`);
+        } else {
+          ctx.out(`\nremoving demo workspace ${dir} (pass --keep or --dir <path> to inspect it afterwards)`);
+        }
         return code;
       } finally {
         detach();
+        if (!keep) await rm(dir, { recursive: true, force: true });
       }
     },
   },

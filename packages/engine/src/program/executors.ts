@@ -66,8 +66,13 @@ export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode
         if (parent) bySlug.get(item.slug)!.parentId = parent.id;
       }
       for (const dep of item.dependsOn) {
-        const key = parseDependencyRef(dep).key;
-        if (!bySlug.has(key)) return failed("ARTIFACT_INVALID", `work item '${item.slug}' depends on unknown '${key}'`, {}, false);
+        let ref;
+        try {
+          ref = parseDependencyRef(dep);
+        } catch (e) {
+          return failed("ARTIFACT_INVALID", `work item '${item.slug}': ${(e as Error).message}`, {}, false);
+        }
+        if (ref.targetKind === "work-item" && !bySlug.has(ref.key)) return failed("ARTIFACT_INVALID", `work item '${item.slug}' depends on unknown '${ref.key}'`, {}, false);
       }
     }
     await ctx.stores.workItems.putMany([...bySlug.values()]);

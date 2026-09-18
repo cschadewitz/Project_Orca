@@ -30,20 +30,60 @@ export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 export const RISK_LEVELS: readonly RiskLevel[] = ["low", "medium", "high", "critical"];
 
+export const DEFAULT_RISK_SCALE = 5;
+export const MAX_RISK_SCALE = 10;
+
+/** The *minimum* score for each level above `low`. */
+export const RiskThresholdsSchema = z.object({
+  medium: z.number().positive(),
+  high: z.number().positive(),
+  critical: z.number().positive(),
+});
+export type RiskThresholds = z.infer<typeof RiskThresholdsSchema>;
+
+/**
+ * Thresholds for a `scale` x `scale` grid. The 5x5 defaults (5 / 10 / 16) are
+ * kept as fractions of the maximum score, so a smaller grid still reaches
+ * every level: 3x3 gives 2 / 4 / 6, 10x10 gives 20 / 40 / 64.
+ */
+export function defaultRiskThresholds(scale: number): RiskThresholds {
+  const max = scale * scale;
+  return { medium: Math.ceil(max * 0.2), high: Math.ceil(max * 0.4), critical: Math.ceil(max * 0.64) };
+}
+
+/** What config files and callers may pass: everything optional; missing thresholds follow `scale`. */
+export const RiskMatrixInputSchema = z.object({
+  scale: z.number().int().min(2).max(MAX_RISK_SCALE).optional(),
+  thresholds: RiskThresholdsSchema.partial().optional(),
+});
+export type RiskMatrixInput = z.infer<typeof RiskMatrixInputSchema>;
+
 /**
  * A likelihood x impact matrix. Scores are `likelihood * impact` on a 1..scale
  * grid; `thresholds` are the *minimum* score for each level above `low`.
+ * Parsing fills thresholds the input leaves out from the scale, then checks
+ * that the levels are ordered and that `critical` is reachable on the grid.
  */
-export const RiskMatrixConfigSchema = z.object({
-  scale: z.number().int().min(2).max(10).default(5),
-  thresholds: z
-    .object({
-      medium: z.number().positive().default(5),
-      high: z.number().positive().default(10),
-      critical: z.number().positive().default(16),
-    })
-    .default({ medium: 5, high: 10, critical: 16 }),
-});
+export const RiskMatrixConfigSchema = RiskMatrixInputSchema.transform((m) => {
+  const scale = m.scale ?? DEFAULT_RISK_SCALE;
+  const thresholds = defaultRiskThresholds(scale);
+  for (const level of ["medium", "high", "critical"] as const) {
+    const given = m.thresholds?.[level];
+    if (given !== undefined) thresholds[level] = given;
+  }
+  return { scale, thresholds };
+}).pipe(
+  z.object({ scale: z.number().int().min(2).max(MAX_RISK_SCALE), thresholds: RiskThresholdsSchema }).superRefine((m, ctx) => {
+    const { medium, high, critical } = m.thresholds;
+    if (!(medium < high && high < critical)) {
+      ctx.addIssue({ code: "custom", path: ["thresholds"], message: `risk matrix thresholds must be strictly increasing (medium < high < critical); got medium=${medium}, high=${high}, critical=${critical}` });
+    }
+    const max = m.scale * m.scale;
+    if (critical > max) {
+      ctx.addIssue({ code: "custom", path: ["thresholds", "critical"], message: `risk matrix threshold critical=${critical} is unreachable on a ${m.scale}x${m.scale} grid (maximum score ${max})` });
+    }
+  }),
+);
 export type RiskMatrixConfig = z.infer<typeof RiskMatrixConfigSchema>;
 export const DEFAULT_RISK_MATRIX: RiskMatrixConfig = RiskMatrixConfigSchema.parse({});
 
@@ -53,6 +93,12 @@ export type RiskCategory = z.infer<typeof RiskCategorySchema>;
 /** open -> mitigating -> mitigated | accepted | realized -> closed. */
 export const RiskStatusSchema = z.enum(["open", "mitigating", "mitigated", "accepted", "realized", "closed"]);
 export type RiskStatus = z.infer<typeof RiskStatusSchema>;
+/**
+ * Statuses that count towards an item's exposure. `realized` is deliberately
+ * open: the harm is happening, so exposed items stay held above the appetite
+ * until a human closes or accepts the risk. `mitigated`, `accepted` and
+ * `closed` no longer count.
+ */
 export const OPEN_RISK_STATUSES: readonly RiskStatus[] = ["open", "mitigating", "realized"];
 
 export const PlanKeySchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "keys are kebab-case");
@@ -65,8 +111,9 @@ export const RiskSchema = z.object({
   title: z.string().min(1),
   description: z.string().default(""),
   category: RiskCategorySchema.default("technical"),
-  likelihood: z.number().int().min(1),
-  impact: z.number().int().min(1),
+  /** 1..scale of the plan's risk matrix (PlanService enforces the scale). */
+  likelihood: z.number().int().min(1).max(MAX_RISK_SCALE),
+  impact: z.number().int().min(1).max(MAX_RISK_SCALE),
   status: RiskStatusSchema.default("open"),
   mitigation: z.string().optional(),
   contingency: z.string().optional(),
@@ -154,8 +201,10 @@ export const DecisionSchema = z.object({
   rationale: z.string().optional(),
   /** Follow-ups the choice implies (new work, constraints). Informational. */
   consequences: z.array(z.string()).default([]),
-  /** Work items that must not start before this decision is made (denormalised from dependencies). */
-  blocks: z.array(z.string()).default([]),
+  /**
+   * The work items a decision gates are not stored here: they are the
+   * `Dependency` records targeting it (see `decisionBlocks` in `plan/schedule`).
+   */
   supersedes: z.string().optional(),
   dueBy: z.string().optional(),
   origin: PlanOriginSchema,
@@ -283,10 +332,14 @@ export type Plan = z.infer<typeof PlanSchema>;
  *   ...#build            (suffix) the dependency must hold before this item's `build` phase
  */
 export const DependencyRefObjectSchema = z.object({
+  /** A reference in the string grammar above. Prefixes/suffixes it carries are honoured. */
   on: z.string().min(1),
-  type: DependencyTypeSchema.default("blocks"),
+  /** Defaults to the `on` prefix, else `blocks`. Must agree with the prefix when both are given. */
+  type: DependencyTypeSchema.optional(),
+  /** Defaults to the `@stage` in `on`. Must agree with it when both are given. */
   stage: z.string().optional(),
-  requiredBy: z.string().default(DEPENDENCY_START_PHASE),
+  /** Defaults to the `#phase` in `on`, else `start`. Must agree with it when both are given. */
+  requiredBy: z.string().optional(),
   rationale: z.string().optional(),
 });
 export type DependencyRefObject = z.infer<typeof DependencyRefObjectSchema>;
@@ -303,20 +356,55 @@ export interface ParsedDependencyRef {
   rationale?: string;
 }
 
-const REF_RE = /^(?:(soft|informs|blocks):)?(?:(decision|external):)?([^@#]+?)(?:@([^#]+))?(?:#(.+))?$/;
+/** Keys may not contain the grammar's separators, so a stray prefix (`decision:`) never becomes a key. */
+const REF_RE = /^(?:(soft|informs|blocks):)?(?:(decision|external):)?([^@#:]+)(?:@([^@#]+))?(?:#([^@#]+))?$/;
 
+/** The parts a reference string spells out explicitly; `type`/`stage`/`requiredBy` are absent when the string omits them. */
+interface RefParts {
+  targetKind: ParsedDependencyRef["targetKind"];
+  key: string;
+  type?: DependencyType;
+  stage?: string;
+  requiredBy?: string;
+}
+
+function matchRef(text: string): RefParts {
+  const m = REF_RE.exec(text.trim());
+  const key = m?.[3]?.trim();
+  const stage = m?.[4]?.trim();
+  const requiredBy = m?.[5]?.trim();
+  if (!m || !key || stage === "" || requiredBy === "") throw new Error(`invalid dependency reference '${text}'`);
+  return {
+    targetKind: (m[2] as "decision" | "external" | undefined) ?? "work-item",
+    key,
+    ...(m[1] ? { type: m[1] as DependencyType } : {}),
+    ...(stage ? { stage } : {}),
+    ...(requiredBy ? { requiredBy } : {}),
+  };
+}
+
+/**
+ * Normalise a reference. Throws on text the grammar does not accept, and on an
+ * object whose `on` string spells out a type/stage/phase that disagrees with
+ * the object's own field, so the two forms can never silently mean different things.
+ */
 export function parseDependencyRef(ref: DependencyRef): ParsedDependencyRef {
-  if (typeof ref !== "string") {
-    const m = REF_RE.exec(ref.on.trim());
-    const base = m ? { targetKind: (m[2] as "decision" | "external" | undefined) ?? "work-item", key: m[3]!.trim(), stage: m[4]?.trim() } : { targetKind: "work-item" as const, key: ref.on.trim(), stage: undefined };
-    const stage = ref.stage ?? base.stage;
-    return { ...base, type: ref.type, requiredBy: ref.requiredBy, ...(stage ? { stage } : {}), ...(ref.rationale ? { rationale: ref.rationale } : {}) } as ParsedDependencyRef;
-  }
-  const m = REF_RE.exec(ref.trim());
-  if (!m) throw new Error(`invalid dependency reference '${ref}'`);
-  const targetKind = (m[2] as "decision" | "external" | undefined) ?? "work-item";
-  const out: ParsedDependencyRef = { targetKind, key: m[3]!.trim(), type: (m[1] as DependencyType | undefined) ?? "blocks", requiredBy: m[5]?.trim() || DEPENDENCY_START_PHASE };
-  if (m[4]) out.stage = m[4].trim();
+  const text = typeof ref === "string" ? ref : ref.on;
+  const parts = matchRef(text);
+  const pick = <T extends string>(field: "type" | "stage" | "requiredBy", inline: T | undefined, explicit: T | undefined): T | undefined => {
+    if (inline !== undefined && explicit !== undefined && inline !== explicit) throw new Error(`invalid dependency reference '${text}': ${field} '${inline}' conflicts with ${field} '${explicit}'`);
+    return explicit ?? inline;
+  };
+  const obj = typeof ref === "string" ? undefined : ref;
+  const stage = pick("stage", parts.stage, obj?.stage);
+  const out: ParsedDependencyRef = {
+    targetKind: parts.targetKind,
+    key: parts.key,
+    type: pick("type", parts.type, obj?.type) ?? "blocks",
+    requiredBy: pick("requiredBy", parts.requiredBy, obj?.requiredBy) ?? DEPENDENCY_START_PHASE,
+  };
+  if (stage) out.stage = stage;
+  if (obj?.rationale) out.rationale = obj.rationale;
   return out;
 }
 
@@ -335,8 +423,9 @@ export const RiskInputSchema = z.object({
   title: z.string().min(1),
   description: z.string().default(""),
   category: RiskCategorySchema.default("technical"),
-  likelihood: z.number().int().min(1).default(3),
-  impact: z.number().int().min(1).default(3),
+  /** 1..scale of the plan's risk matrix; the plan fills the midpoint when omitted. */
+  likelihood: z.number().int().min(1).max(MAX_RISK_SCALE).optional(),
+  impact: z.number().int().min(1).max(MAX_RISK_SCALE).optional(),
   status: RiskStatusSchema.optional(),
   mitigation: z.string().optional(),
   contingency: z.string().optional(),

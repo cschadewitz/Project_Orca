@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { anyJson, appendJsonl, parseJsonl, readJsonl, readJsonlLines, splitJsonlLines } from "@orca/core";
+import { anyJson, appendJsonl, parseJsonl, parseJsonlLine, readJsonl, readJsonlLines, splitJsonlLines } from "@orca/core";
 
 const Row = z.object({ n: z.number() });
 
@@ -28,6 +28,20 @@ describe("jsonl", () => {
     await appendJsonl(file, { n: 1 });
     await appendJsonl(file, { n: 2 });
     expect(await readJsonl(file, Row)).toEqual([{ n: 1 }, { n: 2 }]);
+  });
+  it("skips lines that are not JSON only when asked, and never hides a schema failure", async () => {
+    const corrupt: string[] = [];
+    const onCorrupt = (line: string) => corrupt.push(line);
+    expect(() => parseJsonl('{"n":1}\n{"n":', Row)).toThrow();
+    expect(parseJsonl('{"n":1}\n{"n":\n{"n":2}\n', Row, { onCorrupt })).toEqual([{ n: 1 }, { n: 2 }]);
+    expect(corrupt).toEqual(['{"n":']);
+    expect(parseJsonlLine("nope", Row, { onCorrupt })).toBeUndefined();
+    expect(() => parseJsonlLine('{"n":"x"}', Row, { onCorrupt })).toThrow();
+    const file = join(await mkdtemp(join(tmpdir(), "orca-jsonl-")), "rows.jsonl");
+    await writeFile(file, '{"n":1}\n{"n"');
+    await expect(readJsonl(file, Row)).rejects.toThrow();
+    expect(await readJsonl(file, Row, { onCorrupt })).toEqual([{ n: 1 }]);
+    expect(corrupt).toHaveLength(3);
   });
   it("still surfaces read errors other than a missing file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-jsonl-"));

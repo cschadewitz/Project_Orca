@@ -7,9 +7,9 @@
  * current work items and decisions, so the schedule never trusts a stale
  * `Dependency.status` (the PlanService persists status transitions afterwards).
  */
-import { DEPENDENCY_START_PHASE, PRIORITY_RANK, PriorityWeightsSchema, SchedulingPolicySchema, estimateWeight, type Decision, type Dependency, type Plan, type PriorityWeights, type RiskLevel, type SchedulingPolicy, type SchedulingStrategy, type Risk } from "../model/plan.js";
+import { DEPENDENCY_START_PHASE, PRIORITY_RANK, PriorityWeightsSchema, RISK_LEVELS, SchedulingPolicySchema, estimateWeight, type Decision, type Dependency, type Plan, type PriorityWeights, type RiskLevel, type SchedulingPolicy, type SchedulingStrategy, type Risk } from "../model/plan.js";
 import type { WorkItem } from "../model/request.js";
-import { buildDependencyGraph, criticalPath, dropCycleClosingEdges, findCycles, longestDownstreamPaths, topologicalWaves, transitiveDownstream, type DependencyGraph, type GraphEdge } from "./graph.js";
+import { buildDependencyGraph, criticalPath, dropCycleClosingEdges, findCycles, longestDownstreamPaths, topologicalWaves, transitiveDownstream, type DependencyGraph, type GraphEdge, type PathInfo } from "./graph.js";
 import { itemRiskExposure, levelRank, risksMitigatedBy, summarizeRisks, type RiskExposure, type RiskSummary } from "./risk.js";
 
 export const STRATEGY_WEIGHTS: Record<SchedulingStrategy, PriorityWeights> = {
@@ -20,6 +20,21 @@ export const STRATEGY_WEIGHTS: Record<SchedulingStrategy, PriorityWeights> = {
 };
 
 export type DependencyState = "satisfied" | "waiting" | "failed" | "waived";
+
+/**
+ * Work item ids gated by a decision: the `from` side of every `blocks`
+ * dependency targeting it in one of `statuses` (by default the ones that still
+ * express an ordering - open or satisfied; waived and failed no longer gate).
+ * This is the only source of truth; `Decision` carries no copy.
+ */
+export function decisionBlocks(decisionId: string, dependencies: readonly Dependency[], statuses: readonly Dependency["status"][] = ["open", "satisfied"]): string[] {
+  const out: string[] = [];
+  for (const d of dependencies) {
+    if (d.target.kind !== "decision" || d.target.decisionId !== decisionId || d.type !== "blocks" || !statuses.includes(d.status)) continue;
+    if (!out.includes(d.from)) out.push(d.from);
+  }
+  return out;
+}
 
 export interface DependencyEvaluation {
   state: DependencyState;
@@ -34,6 +49,12 @@ export interface EvaluationContext {
 
 const SETTLED: readonly WorkItem["status"][] = ["done", "failed", "cancelled"];
 const TERMINAL_FAILURE: readonly WorkItem["status"][] = ["failed", "cancelled"];
+/**
+ * Share of an upstream estimate that elapses before a stage-level dependent (`other@spec`)
+ * can start. Such edges exist to let work overlap, so the critical path charges them half
+ * the upstream weight instead of all of it; a plain edge waits for the whole item.
+ */
+export const STAGE_EDGE_LAG = 0.5;
 
 export function evaluateDependency(d: Dependency, ctx: EvaluationContext): DependencyEvaluation {
   if (d.status === "waived") return { state: "waived", detail: `waived${d.resolution ? `: ${d.resolution}` : ""}` };
@@ -101,10 +122,11 @@ export interface Schedule {
   held: HeldItem[];
   unschedulable: UnschedulableItem[];
   settled: { done: string[]; failed: string[]; cancelled: string[] };
-  /** Topological layers over every item in scope (plan view, not dispatch order). */
+  /** Topological layers over every unsettled item (plan view, not dispatch order). */
   waves: string[][];
+  /** Heaviest remaining chain (settled items excluded); `length` is in estimate units. */
   criticalPath: { workItemIds: string[]; length: number };
-  /** Cycles among `blocks` edges; every item in one is unschedulable. */
+  /** Cycles among `blocks` edges, each in edge order; every item in one is unschedulable. */
   cycles: string[][];
   /** `soft` edges left out of the ordering view because they pointed back into a cycle. */
   ignoredSoftDependencies: { dependencyId: string; from: string; to: string }[];
@@ -146,10 +168,14 @@ export function computeSchedule(input: ScheduleInput): Schedule {
   const inScope = input.inScope ?? (() => true);
   const running = new Set<string>([...items.filter((i) => i.status === "in-progress").map((i) => i.id), ...(input.running ?? [])]);
 
+  // The graph spans the *remaining* work: settled items are neither nodes nor edges, so an
+  // edge to a done item simply disappears, waves show what is left and the critical path
+  // length is the remaining estimate (an in-progress item still counts in full).
+  const candidates = items.filter((i) => !SETTLED.includes(i.status));
+  const itemIds = candidates.map((i) => i.id);
   // Only `blocks` edges can make work impossible, so cycle detection runs on them alone:
   // a `soft` edge never blocks (see `DependencyType`), and a soft back-reference must not
   // strand the items it points at.
-  const itemIds = items.map((i) => i.id);
   const blockingGraph = buildDependencyGraph(itemIds, input.dependencies, { orderingTypes: ["blocks"] });
   const cycles = findCycles(blockingGraph);
   const cyclic = new Set(cycles.flat());
@@ -159,7 +185,7 @@ export function computeSchedule(input: ScheduleInput): Schedule {
     ? dropCycleClosingEdges(buildDependencyGraph(itemIds, input.dependencies, { orderingTypes: ["blocks", "soft"] }), ["soft"])
     : { graph: blockingGraph, dropped: [] as GraphEdge[] };
   const ignoredSoftDependencies = dropped.map((e) => ({ dependencyId: e.dependencyId, from: e.from, to: e.to }));
-  const paths = longestDownstreamPaths(graph, (id) => estimateWeight(itemsById.get(id)?.estimate));
+  const paths = longestDownstreamPaths(graph, (id) => estimateWeight(itemsById.get(id)?.estimate), (e) => (e.stage ? STAGE_EDGE_LAG : 1));
   const cp = criticalPath(paths);
   const { waves } = topologicalWaves(graph);
 
@@ -178,8 +204,7 @@ export function computeSchedule(input: ScheduleInput): Schedule {
   for (const i of items) exposure[i.id] = itemRiskExposure(i.id, input.risks, matrix);
 
   // Priorities for every unsettled item (so explanations exist for waiting items too).
-  const candidates = items.filter((i) => !SETTLED.includes(i.status));
-  const priorities = computePriorities(candidates, graph, paths, exposure, input.risks, matrix, weights, policy, input.now, itemsById);
+  const priorities = computePriorities(candidates, graph, paths, cp, exposure, input.risks, matrix, weights, policy, input.now, itemsById);
 
   const ready: ScheduledItem[] = [];
   const waiting: WaitingItem[] = [];
@@ -195,7 +220,8 @@ export function computeSchedule(input: ScheduleInput): Schedule {
     if (running.has(item.id) || !inScope(item)) continue;
     if (cyclic.has(item.id)) {
       const cycle = cycles.find((c) => c.includes(item.id))!;
-      unschedulable.push({ workItemId: item.id, slug: item.slug, reason: `dependency cycle: ${cycle.map((id) => itemsById.get(id)?.slug ?? id).join(" -> ")}`, dependencyIds: [] });
+      // Members come in edge order; repeat the head so the ring reads as one.
+      unschedulable.push({ workItemId: item.id, slug: item.slug, reason: `dependency cycle: ${[...cycle, cycle[0]!].map((id) => itemsById.get(id)?.slug ?? id).join(" -> ")}`, dependencyIds: [] });
       continue;
     }
     const blocking = (depsByItem.get(item.id) ?? []).filter((d) => d.type === "blocks");
@@ -228,13 +254,18 @@ export function computeSchedule(input: ScheduleInput): Schedule {
   }
   ready.sort((a, b) => b.priority.score - a.priority.score || a.slug.localeCompare(b.slug));
 
+  // `blocks` follows the live dependency states like everything else: an unsettled item whose
+  // `blocks` dependency on the decision is still waiting (not a persisted `status`).
   const openDecisions = input.decisions
     .filter((d) => d.status === "open" || d.status === "deferred")
     .map((d) => ({
       decisionId: d.id,
       key: d.key,
       title: d.title,
-      blocks: input.dependencies.filter((x) => x.target.kind === "decision" && x.target.decisionId === d.id && x.status === "open").map((x) => x.from),
+      blocks: input.dependencies
+        .filter((x) => x.target.kind === "decision" && x.target.decisionId === d.id && x.type === "blocks" && dependencyStates[x.id]!.state === "waiting")
+        .map((x) => x.from)
+        .filter((id) => itemsById.has(id) && !SETTLED.includes(itemsById.get(id)!.status)),
     }));
 
   return {
@@ -268,6 +299,7 @@ function computePriorities(
   candidates: readonly WorkItem[],
   graph: DependencyGraph,
   paths: ReturnType<typeof longestDownstreamPaths>,
+  cp: PathInfo,
   exposure: Record<string, RiskExposure>,
   risks: readonly Risk[],
   matrix: Plan["riskMatrix"],
@@ -277,6 +309,7 @@ function computePriorities(
   itemsById: ReadonlyMap<string, WorkItem>,
 ): Record<string, ItemPriority> {
   const nowMs = Date.parse(now) || 0;
+  const onCriticalPath = new Set(cp.path);
   const raw = candidates.map((item) => {
     const dependents = transitiveDownstream(graph, item.id);
     const mitigates = policy.mitigateFirst ? risksMitigatedBy(item.id, risks, matrix) : [];
@@ -286,7 +319,9 @@ function computePriorities(
       mitigates,
       cp: paths.get(item.id)?.length ?? 0,
       risk: exposure[item.id]?.score ?? 0,
-      mitigation: mitigates.length ? Math.max(...mitigates.map((r) => levelRank(r.level))) / 3 : 0,
+      // Level-weighted so that mitigating even a `low` risk counts for something (0.25 .. 1);
+      // the "mitigates ..." reason below only appears when this factor is non-zero.
+      mitigation: mitigates.length ? (Math.max(...mitigates.map((r) => levelRank(r.level))) + 1) / RISK_LEVELS.length : 0,
       priority: PRIORITY_RANK[item.priority] / 3,
       age: Math.max(0, nowMs - (Date.parse(item.createdAt) || nowMs)),
     };
@@ -309,7 +344,9 @@ function computePriorities(
     const score = Object.entries(factors).reduce((s, [k, v]) => s + v * weights[k as keyof PriorityWeights], 0);
     const reasons: string[] = [];
     if (r.dependents.size) reasons.push(`unblocks ${r.dependents.size} item${r.dependents.size > 1 ? "s" : ""} (${[...r.dependents].map((id) => itemsById.get(id)?.slug ?? id).join(", ")})`);
-    if (r.cp > 0 && r.cp === maxCp && r.dependents.size) reasons.push(`on the critical path (length ${r.cp})`);
+    // Membership in `schedule.criticalPath` itself, so the reason, `explainWorkItem` and the
+    // reported path never disagree (ties, or a chain that is not the heaviest from this item).
+    if (onCriticalPath.has(r.item.id)) reasons.push(`on the critical path (length ${cp.length})`);
     const exp = exposure[r.item.id];
     if (exp && exp.level !== "none") reasons.push(`exposed to ${exp.level} risk: ${exp.risks.map((x) => x.key).join(", ")}`);
     if (r.mitigates.length) reasons.push(`mitigates ${r.mitigates.map((x) => `${x.key} (${x.level})`).join(", ")}`);

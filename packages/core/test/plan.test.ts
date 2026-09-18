@@ -5,6 +5,10 @@ import {
   compactSchedule,
   computeSchedule,
   criticalPath,
+  decisionBlocks,
+  defaultRiskRating,
+  defaultRiskThresholds,
+  describeRiskMatrix,
   dropCycleClosingEdges,
   DEFAULT_RISK_MATRIX,
   evaluateDecisionMatrix,
@@ -18,7 +22,10 @@ import {
   PlanSchema,
   planToMermaid,
   renderDecisionMatrix,
+  RiskMatrixConfigSchema,
   riskLevel,
+  riskRatingIssue,
+  slugify,
   summarizeRisks,
   topologicalWaves,
   transitiveDownstream,
@@ -44,7 +51,7 @@ function risk(key: string, likelihood: number, impact: number, affects: string[]
   return { id: `risk_${key}`, planId: plan.id, key, title: key, description: "", category: "technical", likelihood, impact, status: "open", triggers: [], affects: affects.map((s) => `wi_${s}`), mitigatedBy: [], origin, createdAt: T, updatedAt: T, ...extra };
 }
 function decision(key: string, extra: Partial<Decision> = {}): Decision {
-  return { id: `dec_${key}`, planId: plan.id, key, title: key, question: "", status: "open", criteria: [], options: [], scale: 10, consequences: [], blocks: [], origin, createdAt: T, updatedAt: T, ...extra };
+  return { id: `dec_${key}`, planId: plan.id, key, title: key, question: "", status: "open", criteria: [], options: [], scale: 10, consequences: [], origin, createdAt: T, updatedAt: T, ...extra };
 }
 
 describe("dependency references", () => {
@@ -57,6 +64,24 @@ describe("dependency references", () => {
     expect(parseDependencyRef("external:vendor-contract#deploy")).toMatchObject({ targetKind: "external", key: "vendor-contract", requiredBy: "deploy" });
     expect(parseDependencyRef({ on: "auth-api", type: "soft", stage: "spec", requiredBy: "build", rationale: "r" })).toMatchObject({ key: "auth-api", type: "soft", stage: "spec", requiredBy: "build", rationale: "r" });
   });
+  it("object form honours the prefixes and suffixes written in `on`", () => {
+    expect(parseDependencyRef({ on: "soft:auth-api@spec#build" })).toEqual(parseDependencyRef("soft:auth-api@spec#build"));
+    expect(parseDependencyRef({ on: "decision:storage" })).toMatchObject({ targetKind: "decision", key: "storage", type: "blocks", requiredBy: "start" });
+    // Object fields fill in what `on` leaves out, and may restate it.
+    expect(parseDependencyRef({ on: "auth-api@spec", requiredBy: "build" })).toMatchObject({ stage: "spec", requiredBy: "build", type: "blocks" });
+    expect(parseDependencyRef({ on: "soft:auth-api", type: "soft" })).toMatchObject({ type: "soft" });
+  });
+  it("rejects an object whose fields disagree with `on`", () => {
+    expect(() => parseDependencyRef({ on: "soft:auth-api", type: "blocks" })).toThrow(/type 'soft' conflicts with type 'blocks'/);
+    expect(() => parseDependencyRef({ on: "auth-api@spec", stage: "build" })).toThrow(/stage 'spec' conflicts with stage 'build'/);
+    expect(() => parseDependencyRef({ on: "auth-api#build", requiredBy: "deploy" })).toThrow(/requiredBy 'build' conflicts with requiredBy 'deploy'/);
+  });
+  it("rejects references the grammar does not cover, in both forms", () => {
+    for (const bad of ["@spec", "#build", "decision:", "soft:", "external:", "foo:bar", "auth@", "auth#", "auth@spec@x", "  ", "auth@ #build"]) {
+      expect(() => parseDependencyRef(bad), bad).toThrow(/invalid dependency reference/);
+      expect(() => parseDependencyRef({ on: bad }), bad).toThrow(/invalid dependency reference/);
+    }
+  });
   it("round-trips through formatDependencyRef", () => {
     for (const s of ["auth-api", "auth-api@spec", "soft:auth-api", "informs:auth-api@spec#build", "decision:storage", "external:x"]) expect(formatDependencyRef(parseDependencyRef(s))).toBe(s);
   });
@@ -68,6 +93,36 @@ describe("risk matrix", () => {
     expect(riskLevel(5, DEFAULT_RISK_MATRIX)).toBe("medium");
     expect(riskLevel(12, DEFAULT_RISK_MATRIX)).toBe("high");
     expect(riskLevel(20, DEFAULT_RISK_MATRIX)).toBe("critical");
+    expect(DEFAULT_RISK_MATRIX).toEqual({ scale: 5, thresholds: { medium: 5, high: 10, critical: 16 } });
+  });
+  it("derives thresholds from the scale, so every level stays reachable on any grid", () => {
+    expect(RiskMatrixConfigSchema.parse({ scale: 3 })).toEqual({ scale: 3, thresholds: { medium: 2, high: 4, critical: 6 } });
+    expect(riskLevel(9, RiskMatrixConfigSchema.parse({ scale: 3 }))).toBe("critical");
+    for (let scale = 2; scale <= 10; scale++) {
+      const t = defaultRiskThresholds(scale);
+      expect(t.medium, `scale ${scale}`).toBeLessThan(t.high);
+      expect(t.high, `scale ${scale}`).toBeLessThan(t.critical);
+      expect(t.critical, `scale ${scale}`).toBeLessThanOrEqual(scale * scale);
+      expect(riskLevel(scale * scale, RiskMatrixConfigSchema.parse({ scale }))).toBe("critical");
+      expect(defaultRiskRating({ scale })).toBe(Math.ceil(scale / 2));
+    }
+    // Thresholds given explicitly win; the rest still follow the scale.
+    expect(RiskMatrixConfigSchema.parse({ scale: 4, thresholds: { critical: 12 } })).toEqual({ scale: 4, thresholds: { medium: 4, high: 7, critical: 12 } });
+    expect(describeRiskMatrix(RiskMatrixConfigSchema.parse({ scale: 4 }))).toBe("4x4 (medium >= 4, high >= 7, critical >= 11)");
+  });
+  it("rejects thresholds that are out of order or unreachable on the grid", () => {
+    const unordered = RiskMatrixConfigSchema.safeParse({ thresholds: { medium: 10, high: 5 } });
+    expect(unordered.success).toBe(false);
+    expect(unordered.error!.issues.map((i) => i.message)).toEqual([expect.stringMatching(/strictly increasing.*medium=10, high=5, critical=16/)]);
+    const unreachable = RiskMatrixConfigSchema.safeParse({ scale: 3, thresholds: { medium: 5, high: 10, critical: 16 } });
+    expect(unreachable.success).toBe(false);
+    expect(unreachable.error!.issues.map((i) => i.message)).toEqual([expect.stringMatching(/critical=16 is unreachable on a 3x3 grid \(maximum score 9\)/)]);
+    expect(RiskMatrixConfigSchema.safeParse({ scale: 11 }).success).toBe(false);
+  });
+  it("tells a rating that does not fit the matrix", () => {
+    const m = RiskMatrixConfigSchema.parse({ scale: 3 });
+    expect(riskRatingIssue({ likelihood: 3, impact: 1 }, m)).toBeUndefined();
+    expect(riskRatingIssue({ likelihood: 4, impact: 0 }, m)).toBe("likelihood=4, impact=0 outside the plan's risk matrix (1..3)");
   });
   it("computes exposure from open risks only and summarises", () => {
     const risks = [risk("a", 5, 5, ["x"]), risk("b", 2, 2, ["x", "y"]), risk("c", 4, 4, ["y"], { status: "accepted" })];
@@ -92,10 +147,22 @@ describe("dependency graph", () => {
     const g = buildDependencyGraph(items.map((i) => i.id), deps);
     const paths = longestDownstreamPaths(g, (id) => (id === "wi_b" ? 3 : 1));
     expect(criticalPath(paths)).toEqual({ length: 5, path: ["wi_a", "wi_b", "wi_c"] });
+    // A node with no dependents is a chain of one, so a lone heavy item can be the critical path.
+    expect(paths.get("wi_c")).toEqual({ length: 1, path: ["wi_c"] });
+  });
+  it("charges an overlapping edge only part of the upstream weight", () => {
+    // c waits for b's spec: c can start partway through b, so the chain is not a + b + c.
+    const g = buildDependencyGraph(items.map((i) => i.id), [dep("b", "a"), dep("c", "b", { stage: "spec" })]);
+    const weight = (id: string) => ({ wi_a: 1, wi_b: 4, wi_c: 3 })[id] ?? 1;
+    const lag = (e: { stage?: string }) => (e.stage ? 0.5 : 1);
+    expect(criticalPath(longestDownstreamPaths(g, weight, lag))).toEqual({ length: 6, path: ["wi_a", "wi_b", "wi_c"] }); // 1 + 0.5*4 + 3
+    expect(criticalPath(longestDownstreamPaths(g, weight))).toEqual({ length: 8, path: ["wi_a", "wi_b", "wi_c"] });
+    // When the overlapped chain is lighter than the node itself, the node stands alone (c finishes before b does).
+    expect(longestDownstreamPaths(g, weight, () => 0).get("wi_b")).toEqual({ length: 4, path: ["wi_b"] });
   });
   it("drops the soft edges that close a cycle, keeping the required ones", () => {
     const g = buildDependencyGraph(items.map((i) => i.id), [...deps, dep("a", "e", { type: "soft" })]);
-    expect(findCycles(g)).toEqual([["wi_a", "wi_d", "wi_e"]]);
+    expect(findCycles(g)).toEqual([["wi_a", "wi_e", "wi_d"]]); // edge order: a waits for e waits for d waits for a
     const relaxed = dropCycleClosingEdges(g, ["soft"]);
     expect(relaxed.dropped.map((e) => e.dependencyId)).toEqual(["dep_a_e"]);
     expect(findCycles(relaxed.graph)).toEqual([]);
@@ -103,11 +170,13 @@ describe("dependency graph", () => {
     // A cycle made only of required edges survives untouched.
     const hard = buildDependencyGraph(items.map((i) => i.id), [...deps, dep("a", "c")]);
     expect(dropCycleClosingEdges(hard, ["soft"])).toMatchObject({ dropped: [] });
-    expect(findCycles(dropCycleClosingEdges(hard, ["soft"]).graph)).toEqual([["wi_a", "wi_b", "wi_c"]]);
+    expect(findCycles(dropCycleClosingEdges(hard, ["soft"]).graph)).toEqual([["wi_a", "wi_c", "wi_b"]]);
   });
   it("detects cycles and keeps the rest schedulable", () => {
     const g = buildDependencyGraph(items.map((i) => i.id), [...deps, dep("a", "c")]);
-    expect(findCycles(g)).toEqual([["wi_a", "wi_b", "wi_c"]]);
+    expect(findCycles(g)).toEqual([["wi_a", "wi_c", "wi_b"]]);
+    // Same ring, different input order: still reported from the smallest id, in edge order.
+    expect(findCycles(buildDependencyGraph(["wi_c", "wi_b", "wi_a"], [dep("a", "c"), dep("c", "b"), dep("b", "a")]))).toEqual([["wi_a", "wi_c", "wi_b"]]);
     const { waves, cyclic } = topologicalWaves(g);
     expect(waves).toEqual([]); // d and e sit behind the cycle
     expect(cyclic.sort()).toEqual(["wi_a", "wi_b", "wi_c", "wi_d", "wi_e"]);
@@ -139,6 +208,13 @@ describe("decision matrix", () => {
     expect(r.pivotalCriteria).toEqual(["cost"]);
     expect(renderDecisionMatrix({ criteria, options, scale: 10 }, r)).toContain("Recommended: **b**");
   });
+  it("renders a result whose options the matrix no longer has", () => {
+    const r = evaluateDecisionMatrix({ criteria, options, scale: 10 }, T);
+    const renamed = renderDecisionMatrix({ criteria, options: [{ key: "c", name: "C", scores: { fit: 1, cost: 1 }, pros: [], cons: [], risks: [] }], scale: 10 }, r);
+    expect(renamed).toContain("| **a** |  |  | 6.5 |");
+    expect(renamed).toContain("| b |  |  | 6.5 |");
+    expect(renderDecisionMatrix({ criteria, options: [], scale: 10 }, r)).toContain("Recommended: **a**");
+  });
   it("validates shape", () => {
     const issues = validateDecisionMatrix({ criteria, options: [{ key: "a", name: "A", scores: { fit: 11 }, pros: [], cons: [], risks: [] }], scale: 10 });
     expect(issues.map((i) => i.path)).toEqual(["options[0].scores.fit", "options[0].scores.cost"]);
@@ -167,11 +243,49 @@ describe("scheduler", () => {
     ]);
     expect(s.held).toEqual([{ workItemId: "wi_risky", slug: "risky", level: "critical", reason: expect.stringMatching(/boom.*exceeds the plan's appetite \(high\)/) }]);
     expect(s.settled.done).toEqual(["wi_done-item"]);
-    expect(s.priorities["wi_core"]!.reasons).toEqual(expect.arrayContaining([expect.stringMatching(/unblocks 2 items \(api, ui\)/), "on the critical path (length 4)", "exposed to low risk: meh"]));
+    // core (M = 2) -> api (S, via core@spec, so only half of core is charged) -> ui (S): 1 + 1 + 1.
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_core", "wi_api", "wi_ui"], length: 3 });
+    expect(s.priorities["wi_core"]!.reasons).toEqual(expect.arrayContaining([expect.stringMatching(/unblocks 2 items \(api, ui\)/), "on the critical path (length 3)", "exposed to low risk: meh"]));
+    // Every member of the reported path says so, not only its head.
+    for (const id of s.criticalPath.workItemIds) expect(s.priorities[id]!.reasons).toContain("on the critical path (length 3)");
+    expect(s.priorities["wi_risky"]!.reasons.some((r) => r.includes("critical path"))).toBe(false);
+    // The "mitigates" reason is backed by a non-zero factor even for a low risk.
     expect(s.priorities["wi_api"]!.reasons).toEqual(expect.arrayContaining(["mitigates meh (low)", "priority high"]));
+    expect(s.priorities["wi_api"]!.factors.mitigation).toBe(0.25);
     expect(s.openDecisions).toEqual([{ decisionId: "dec_store", key: "store", title: "store", blocks: ["wi_api"] }]);
-    expect(s.criticalPath.workItemIds).toEqual(["wi_core", "wi_api", "wi_ui"]);
-    expect(explainWorkItem(s, items, "wi_api")).toEqual(expect.arrayContaining([expect.stringMatching(/^api: pending \(priority high\)/), "waiting: waiting for core to produce spec", "why: priority high", "wave 2 of 3"]));
+    expect(explainWorkItem(s, items, "wi_api")).toEqual(expect.arrayContaining([expect.stringMatching(/^api: pending \(priority high\)/), "waiting: waiting for core to produce spec", "why: priority high", "why: on the critical path (length 3)", "critical path: core -> api -> ui", "wave 2 of 3"]));
+  });
+
+  it("keeps settled items out of the waves and the critical path", () => {
+    // core is done; everything that waited for it is now the head of the remaining chain.
+    const s = computeSchedule({ plan, items: items.map((i) => (i.slug === "core" ? { ...i, status: "done" as const } : i)), dependencies: deps, risks: [], decisions: [], now: T });
+    expect(s.settled.done).toEqual(["wi_core", "wi_done-item"]);
+    expect(s.waves.flat()).not.toContain("wi_core");
+    expect(s.waves).toEqual([["wi_api", "wi_risky", "wi_ext"], ["wi_ui"]]);
+    expect(s.criticalPath).toEqual({ workItemIds: ["wi_api", "wi_ui"], length: 2 });
+    expect(s.priorities["wi_api"]!.reasons).toContain("on the critical path (length 2)");
+    expect(explainWorkItem(s, items, "wi_core").some((l) => l.startsWith("wave ") || l.includes("critical path"))).toBe(false);
+  });
+
+  it("reports what an open decision blocks from the live dependency states", () => {
+    const decided = computeSchedule({ plan, items, dependencies: deps, risks: [], decisions: [{ ...decisions[0]!, status: "deferred" as const }], now: T });
+    expect(decided.openDecisions).toEqual([expect.objectContaining({ key: "store", blocks: ["wi_api"] })]);
+    // A waived dependency, a settled dependent or a non-blocking edge is not "blocked" whatever the persisted status says.
+    const waived = computeSchedule({ plan, items, dependencies: deps.map((d) => (d.id === "dep_api_store" ? { ...d, status: "waived" as const } : d)), risks: [], decisions, now: T });
+    expect(waived.openDecisions[0]!.blocks).toEqual([]);
+    const apiDone = computeSchedule({ plan, items: items.map((i) => (i.slug === "api" ? { ...i, status: "done" as const } : i)), dependencies: deps, risks: [], decisions, now: T });
+    expect(apiDone.openDecisions[0]!.blocks).toEqual([]);
+    const soft = computeSchedule({ plan, items, dependencies: deps.map((d) => (d.id === "dep_api_store" ? { ...d, type: "soft" as const } : d)), risks: [], decisions, now: T });
+    expect(soft.openDecisions[0]!.blocks).toEqual([]);
+  });
+  it("derives what a decision blocks from its dependencies", () => {
+    const decided = { ...dep("ui", "core"), id: "dep_ui_store", target: { kind: "decision" as const, decisionId: "dec_store" }, status: "satisfied" as const };
+    const waived = { ...decided, id: "dep_docs_store", from: "wi_docs", status: "waived" as const };
+    const soft = { ...decided, id: "dep_x_store", from: "wi_x", type: "soft" as const, status: "open" as const };
+    const deps: Dependency[] = [dep("api", "core"), { ...decided, id: "dep_api_store", from: "wi_api", status: "open" }, decided, waived, soft, { ...decided, id: "dep_api_store_build", from: "wi_api", status: "open", requiredBy: "build" }];
+    expect(decisionBlocks("dec_store", deps)).toEqual(["wi_api", "wi_ui"]);
+    expect(decisionBlocks("dec_store", deps, ["open"])).toEqual(["wi_api"]);
+    expect(decisionBlocks("dec_other", deps)).toEqual([]);
   });
 
   it("unblocks on produced stages, decisions, accepted risks and satisfied externals", () => {
@@ -205,7 +319,14 @@ describe("scheduler", () => {
   it("detects cycles among unsettled items", () => {
     const s = computeSchedule({ plan, items: [item("x"), item("y")], dependencies: [dep("x", "y"), dep("y", "x")], risks: [], decisions: [], now: T });
     expect(s.cycles).toEqual([["wi_x", "wi_y"]]);
-    expect(s.unschedulable.map((u) => u.reason)).toEqual(["dependency cycle: x -> y", "dependency cycle: x -> y"]);
+    expect(s.unschedulable.map((u) => u.reason)).toEqual(["dependency cycle: x -> y -> x", "dependency cycle: x -> y -> x"]);
+    // Three items, listed in edge order from the smallest slug, whatever order they were registered in.
+    const ring = computeSchedule({ plan, items: [item("c"), item("b"), item("a")], dependencies: [dep("a", "c"), dep("c", "b"), dep("b", "a")], risks: [], decisions: [], now: T });
+    expect(ring.unschedulable[0]!.reason).toBe("dependency cycle: a -> c -> b -> a");
+    // A done item cannot be part of a cycle any more.
+    const stale = computeSchedule({ plan, items: [item("x", { status: "done" }), item("y")], dependencies: [dep("x", "y"), dep("y", "x")], risks: [], decisions: [], now: T });
+    expect(stale.cycles).toEqual([]);
+    expect(stale.ready.map((r) => r.slug)).toEqual(["y"]);
   });
 
   it("ignores soft edges that close a cycle instead of stranding both items", () => {
@@ -260,16 +381,28 @@ describe("scheduler", () => {
 });
 
 describe("artifact signals", () => {
+  it("slugifies without a leading or trailing hyphen, even when cut", () => {
+    expect(slugify("  Where do Sessions live?  ")).toBe("where-do-sessions-live");
+    const long = slugify("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbb"); // 47 a's, cut lands on the "-"
+    expect(long).toBe("a".repeat(47));
+    expect(long.length).toBeLessThanOrEqual(48);
+    expect(slugify("***")).toBe("item");
+  });
   it("lifts risks, decisions and dependencies from generic front matter", () => {
     const s = extractPlanSignals({
       kind: "spec",
       name: "spec",
-      data: { status: "ready", risks: ["Flaky integration tests", { key: "pii", title: "PII in logs", likelihood: 2, impact: 5, affects: ["api"] }], dependencies: ["billing@spec", { on: "auth", requiredBy: "build" }, 42], decisions: [{ key: "cache", title: "Cache layer", options: [{ key: "redis", name: "Redis" }], chosen: "redis" }] },
+      data: { status: "ready", risks: ["Flaky integration tests", { key: "pii", title: "PII in logs", likelihood: 2, impact: 5, affects: ["api"] }], dependencies: ["billing@spec", { on: "auth", requiredBy: "build" }, 42, "@spec", "decision:", { on: "soft:x", type: "blocks" }], decisions: [{ key: "cache", title: "Cache layer", options: [{ key: "redis", name: "Redis" }], chosen: "redis" }] },
     });
     expect(s.risks.map((r) => r.key)).toEqual(["flaky-integration-tests", "pii"]);
-    expect(s.dependencies).toHaveLength(2);
+    expect(s.dependencies).toEqual(["billing@spec", { on: "auth", requiredBy: "build" }]);
     expect(s.decisions[0]).toMatchObject({ key: "cache", chosen: "redis" });
-    expect(s.issues).toEqual(["dependencies[2]: not a dependency reference"]);
+    expect(s.issues).toEqual([
+      "dependencies[2]: not a dependency reference",
+      "dependencies[3]: invalid dependency reference '@spec'",
+      "dependencies[4]: invalid dependency reference 'decision:'",
+      "dependencies[5]: invalid dependency reference 'soft:x': type 'soft' conflicts with type 'blocks'",
+    ]);
   });
   it("reads risk registers and decision matrices", () => {
     expect(extractPlanSignals({ kind: "risk-register", name: "riskRegister", data: { risks: [{ key: "a", title: "A" }] } }).risks).toHaveLength(1);

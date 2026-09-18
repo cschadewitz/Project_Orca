@@ -1,6 +1,6 @@
 /** PlanService without agents: registration across requests, dependency resolution, risks, decisions, artifact intake, scheduling. */
 import { describe, expect, it } from "vitest";
-import { FakeClock, silentLogger, type Artifact, type OrcaEventInput } from "@orca/core";
+import { FakeClock, decisionBlocks, silentLogger, type Artifact, type OrcaEventInput } from "@orca/core";
 import { PlanService, planAwaitExecutor, projectWorkItems, type PlanAwaitNode, type StepContext } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
@@ -50,7 +50,8 @@ describe("PlanService", () => {
       ].sort(),
     );
     expect(snap.risks[0]).toMatchObject({ key: "migration", affects: [bySlug.schema!.id], mitigatedBy: [bySlug.api!.id] });
-    expect(snap.decisions[0]).toMatchObject({ key: "store", status: "open", blocks: [bySlug.api!.id] });
+    expect(snap.decisions[0]).toMatchObject({ key: "store", status: "open" });
+    expect(decisionBlocks(snap.decisions[0]!.id, snap.dependencies)).toEqual([bySlug.api!.id]);
     expect(p.requestIds).toEqual(["req_1"]);
 
     // Schedule: only schema is ready; api waits on spec + decision; docs on the external; later on billing.
@@ -119,6 +120,41 @@ describe("PlanService", () => {
     expect((await plan.evaluateDependenciesOf(a!.id, "build"))[0]).toMatchObject({ state: "satisfied", detail: "b is done" });
   });
 
+  it("does not re-decide a decision the artifact intake already decided with the same choice (#79)", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "api", title: "API", dependsOn: ["decision:store"] }], decisions: [{ key: "store", title: "Session store", options: [{ key: "cookie", name: "Cookie" }, { key: "redis", name: "Redis" }], blocks: ["api"] }] }, { kind: "decomposition" });
+    const criteria = [{ key: "simple", name: "Simplicity", weight: 1 }];
+    const options = [{ key: "cookie", name: "Cookie", scores: { simple: 9 } }, { key: "redis", name: "Redis", scores: { simple: 4 } }];
+    const matrix = art("art_m", "decision-matrix", { key: "store", title: "Session store", criteria, options, chosen: "cookie", rationale: "v1 favours simplicity" }, "run_decide");
+
+    // The decide loop's agent step records the matrix: intake decides it, since it carries a valid `chosen`.
+    await plan.onArtifactRecorded({ id: "run_decide", requestId: "req_1" }, matrix);
+    expect((await plan.snapshot(p.id)).decisions[0]).toMatchObject({ key: "store", status: "decided", chosen: "cookie", decidedBy: "agent" });
+
+    // Then `custom:decision-matrix` submits the very same artifact (see resolveMatrixChoice): upsert, then evaluate.
+    const origin = { kind: "agent" as const, runId: "run_decide", artifactId: "art_m" };
+    const dec = await plan.upsertDecision(p.id, { key: "store", title: "Session store", criteria, options }, origin);
+    const evaluated = await plan.evaluateDecision(p.id, dec.id, { chosen: "cookie", decidedBy: "agent", rationale: "v1 favours simplicity" }, origin);
+    expect(evaluated).toMatchObject({ choice: "cookie", decision: { status: "decided", chosen: "cookie", decidedBy: "agent", rationale: "v1 favours simplicity" } });
+    expect(evaluated.result?.recommended).toBe("cookie");
+
+    let journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toEqual([expect.objectContaining({ origin: { kind: "artifact", artifactId: "art_m", runId: "run_decide" }, payload: expect.objectContaining({ chosen: "cookie", decidedBy: "agent" }) })]);
+    expect(journal.filter((e) => e.type === "dependency.resolved")).toHaveLength(1);
+
+    // A different choice is a real re-decision (a human overriding via `orca plan decide`) and is journalled ...
+    const overridden = await plan.evaluateDecision(p.id, "store", { chosen: "redis", decidedBy: "human", rationale: "revocation matters" }, human);
+    expect(overridden.decision).toMatchObject({ chosen: "redis", decidedBy: "human", rationale: "revocation matters" });
+    journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toHaveLength(2);
+    // ... while repeating it changes nothing.
+    await plan.evaluateDecision(p.id, "store", { chosen: "redis", decidedBy: "human" }, human);
+    journal = await plan.journalOf(p.id);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toHaveLength(2);
+    expect((await plan.snapshot(p.id)).decisions[0]).toMatchObject({ chosen: "redis", decidedBy: "human", rationale: "revocation matters" });
+  });
+
   it("serialises intake, so concurrent sibling runs cannot duplicate a risk or re-resolve a dependency", async () => {
     const { plan } = make();
     const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
@@ -161,6 +197,32 @@ describe("PlanService", () => {
     expect(snap.decisions.map((d) => [d.key, d.status, d.chosen])).toEqual([["queue", "open", undefined], ["cache", "decided", "redis"]]);
     expect(snap.risks.map((r) => r.key)).toEqual(["rate-limits"]);
     expect((await plan.journalOf(p.id)).filter((e) => e.type === "signals.rejected")).toEqual([expect.objectContaining({ payload: { artifactId: "art_1", runId: "run_a", issues } })]);
+  });
+
+  it("scores risks on the plan's matrix: thresholds follow the scale, ratings must fit it, omitted ratings sit mid-grid", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "small", riskMatrix: { scale: 3 } });
+    expect(p.riskMatrix).toEqual({ scale: 3, thresholds: { medium: 2, high: 4, critical: 6 } });
+    const [a] = (await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "a", title: "A" }] }, { kind: "decomposition" })).items;
+
+    // A 3 x 3 is critical on this grid (it would be low-medium on the 5x5 defaults) ...
+    await plan.upsertRisk(p.id, { key: "worst", title: "Worst", likelihood: 3, impact: 3, affects: ["a"] }, human);
+    expect((await plan.schedule(p.id)).held.map((h) => [h.slug, h.level])).toEqual([["a", "critical"]]);
+    // ... an omitted rating is the midpoint of the grid, not a fixed 3 ...
+    expect(await plan.upsertRisk(p.id, { key: "vague", title: "Vague" }, human)).toMatchObject({ likelihood: 2, impact: 2 });
+    // ... and a rating off the grid is refused, on creation and on update.
+    await expect(plan.upsertRisk(p.id, { key: "big", title: "Big", likelihood: 4, impact: 1 }, human)).rejects.toThrow(/risk 'big': likelihood=4 outside the plan's risk matrix \(1\.\.3\)/);
+    await expect(plan.updateRisk(p.id, "vague", { impact: 5 }, human)).rejects.toThrow(/risk 'vague': impact=5 outside/);
+    expect((await plan.snapshot(p.id)).risks.map((r) => r.key).sort()).toEqual(["vague", "worst"]);
+
+    // Artifact intake reports the bad rating as a rejected signal and keeps the rest.
+    const issues = await plan.onArtifactRecorded({ id: "run_a", workItemId: a!.id, requestId: "req_1" }, art("art_1", "spec", { status: "ready", risks: [{ key: "off-grid", title: "Off grid", likelihood: 5, impact: 5 }, { key: "fine", title: "Fine", likelihood: 1, impact: 2 }] }, "run_a"));
+    expect(issues).toEqual([expect.stringMatching(/risk 'off-grid': likelihood=5, impact=5 outside/)]);
+    expect((await plan.snapshot(p.id)).risks.map((r) => r.key).sort()).toEqual(["fine", "vague", "worst"]);
+
+    // A matrix that cannot be satisfied is refused up front.
+    await expect(plan.ensurePlan({ key: "broken", riskMatrix: { scale: 3, thresholds: { critical: 16 } } })).rejects.toThrow(/critical=16 is unreachable on a 3x3 grid/);
+    await expect(plan.updatePlan(p.id, { riskMatrix: { thresholds: { medium: 4, high: 2 } } }, human)).rejects.toThrow(/strictly increasing/);
   });
 
   it("holds items above the risk appetite until the risk is accepted, honouring plan policy", async () => {

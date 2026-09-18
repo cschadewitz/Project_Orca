@@ -10,8 +10,9 @@ pnpm run demo                # program run with scripted agents (from sources vi
 node packages/cli/dist/main.js demo   # same, from the compiled build
 ```
 
-`demo --dir <path>` leaves a complete setup behind — `orca.config.yaml` wired to the
-scripted agent plus its `demo-playbook.yaml` — so `orca --config <path>/orca.config.yaml
+`demo --dir <path>` (or `demo --keep`, which keeps the temp workspace instead of
+removing it afterwards) leaves a complete setup behind — `orca.config.yaml` wired to
+the scripted agent plus its `demo-playbook.yaml` — so `orca --config <path>/orca.config.yaml
 run <workflow>` exercises any workflow without an LLM. Edit the playbook to change what
 the agent delivers per artifact kind.
 
@@ -46,8 +47,10 @@ dependency legitimately needs to build.
 
 ## Layout conventions
 
-- One concern per file; every file starts with a comment saying what it is for.
-- `packages/*/src/index.ts` is the public surface of a package; tests import only that.
+- One concern per file; every file except a pure re‑export barrel starts with a comment
+  saying what it is for.
+- `packages/*/src/index.ts` is the public surface of a package; tests import only that
+  (the CLI tests reach into `src/commands` directly).
 - `core` has no runtime I/O except reading workflow/template files. `engine` depends on
   ports (`EventStore`, `ArtifactStore`, `AgentHost`, `AgentSession`), never on concrete
   transports, so it is testable with in‑memory stores and the scripted agent.
@@ -76,6 +79,9 @@ dependency legitimately needs to build.
   matrix, stage‑level pipelining (`core@spec`), build‑phase waits (`api#build`) with
   upstream artifacts in the build prompt, and a second request deferred then picked up by
   `plan-resume`.
+- `packages/store/test/jsonl-log.test.ts` — the on‑disk sequencing under both JSONL stores:
+  two instances over one directory, torn‑tail recovery, and the lock file's stale‑holder
+  rules.
 
 ## The scripted agent
 
