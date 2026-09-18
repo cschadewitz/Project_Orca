@@ -157,6 +157,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
     case "agent.turn.completed":
     case "agent.session.closed":
     case "artifact.rejected":
+    case "plan.signals.rejected":
     case "loop.iteration":
       break;
     case "artifact.recorded": {

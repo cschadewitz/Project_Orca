@@ -98,6 +98,9 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
   base("artifact.recorded", z.object({ stepRunId: z.string(), artifact: ArtifactSchema })),
   base("artifact.rejected", z.object({ stepRunId: z.string(), kind: z.string(), path: z.string(), reason: z.string() })),
 
+  /** Planning signals the artifact carried that the plan refused; the run keeps going without them. */
+  base("plan.signals.rejected", z.object({ stepRunId: z.string(), artifactId: z.string(), issues: z.array(z.string()) })),
+
   base("decision.resolved", z.object({ stepRunId: z.string(), choice: z.string(), source: z.string(), raw: z.unknown().optional() })),
   base("loop.iteration", z.object({ stepRunId: z.string(), iteration: z.number().int().nonnegative(), childRunId: z.string().optional(), item: z.unknown().optional() })),
   base("child.spawned", z.object({ stepRunId: z.string(), childRunId: z.string(), branch: z.string().optional(), workItemId: z.string().optional(), resumed: z.boolean().optional() })),
