@@ -70,11 +70,17 @@ dependency legitimately needs to build.
 - `packages/integrations/test/acp-facade.test.ts` — ORCA driven *as* an ACP agent by an
   in‑process ACP client (proxy mode), including gate forwarding as a permission request.
 - `packages/core/test/plan.test.ts` — the pure planning layer: dependency grammar, risk
-  matrix, graph (waves, cycles, critical path), decision matrix, scheduler classification
-  and priorities, artifact signals, Mermaid.
+  matrix, graph (waves, cycles incl. self‑loops, critical path around a partial cycle),
+  decision matrix, scheduler classification and priorities (policy flags, weight overrides,
+  superseded / deferred decisions), artifact signals, Mermaid.
 - `packages/engine/test/plan.service.test.ts` — cross‑request registration (placeholders
-  bound later, slug clashes), stage‑level and decision dependencies, artifact intake, risk
-  appetite holds, and the `custom:plan-await` node waking on plan changes.
+  bound later, slug clashes, self‑references and unparsable refs), stage‑level and decision
+  dependencies (a stage stays satisfied after its upstream fails; superseded / deferred
+  decisions), artifact intake, risk appetite holds, and the `custom:plan-await` node waking
+  on plan changes.
+- `packages/engine/test/plan-dispatch.test.ts` — `custom:plan-dispatch` with `onWaiting: wait`
+  (gives up after `waitTimeoutMs`, woken by a plan change rather than the poll) and `failFast`
+  cancelling a sibling still running.
 - `packages/engine/test/plan.e2e.test.ts` — the shipped program with decisions made by
   matrix, stage‑level pipelining (`core@spec`), build‑phase waits (`api#build`) with
   upstream artifacts in the build prompt, and a second request deferred then picked up by

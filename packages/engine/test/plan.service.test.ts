@@ -239,6 +239,78 @@ describe("PlanService", () => {
     expect((await plan.journalOf(p.id)).filter((e) => e.type === "risk.updated")).toHaveLength(1);
   });
 
+  it("refuses a self-dependency and an unparsable reference with a warning, applying the rest", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    const reg = await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "a", title: "A", dependsOn: ["a", "@spec", "b"] }, { slug: "b", title: "B" }] }, { kind: "decomposition" });
+    const [a, b] = reg.items;
+    expect(reg.warnings).toEqual([expect.stringMatching(/work item 'a' cannot depend on itself/), "work item 'a': invalid dependency reference '@spec'"]);
+    expect(reg.dependencies.map((d) => [d.from, d.target])).toEqual([[a!.id, { kind: "work-item", workItemId: b!.id }]]);
+    expect(await plan.compactSchedule(p.id)).toMatchObject({ cycles: [], ready: [{ slug: "b" }], waiting: [{ slug: "a" }] });
+    await expect(plan.addDependency(p.id, "a", "a", human)).rejects.toThrow(/cannot depend on itself/);
+    await expect(plan.addDependency(p.id, "a", "b@", human)).rejects.toThrow(/invalid dependency reference 'b@'/);
+    // Artifact intake reports the bad reference as an issue and keeps the one behind it.
+    const issues = await plan.onArtifactRecorded({ id: "run_a", workItemId: a!.id, requestId: "req_1" }, art("art_1", "spec", { status: "ready", dependencies: ["#build", "external:legal#build"] }, "run_a"));
+    expect(issues).toEqual(["invalid dependency reference '#build'"]);
+    const targets = (await plan.snapshot(p.id)).dependencies.map((d) => d.target);
+    expect(targets).toHaveLength(2);
+    expect(targets).toEqual(expect.arrayContaining([{ kind: "work-item", workItemId: b!.id }, { kind: "external", key: "legal" }]));
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "signals.rejected")).toHaveLength(1);
+  });
+
+  it("keeps a satisfied stage dependency when its upstream fails after producing the stage", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    const [up, byStage, whole] = (await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "up", title: "Up" }, { slug: "by-stage", title: "By stage", dependsOn: ["up@spec"] }, { slug: "whole", title: "Whole", dependsOn: ["up"] }] }, { kind: "decomposition" })).items;
+    const depOf = async (from: string) => (await plan.snapshot(p.id)).dependencies.find((d) => d.from === from)!;
+    await plan.recordProduced(up!.id, art("art_spec", "spec", { status: "ready" }), { kind: "system" });
+    expect(await depOf(byStage!.id)).toMatchObject({ status: "satisfied", resolution: "up produced spec" });
+    expect(await depOf(whole!.id)).toMatchObject({ status: "open" });
+
+    await plan.updateWorkItem(up!.id, { status: "failed" }, { kind: "system" });
+    expect(await plan.reconcile(p.id)).toEqual({ satisfied: [], failed: [(await depOf(whole!.id)).id] });
+    expect(await depOf(byStage!.id)).toMatchObject({ status: "satisfied", resolution: "up produced spec" }); // sticky
+    expect(await depOf(whole!.id)).toMatchObject({ status: "failed", resolution: "up is failed" });
+    const s = await plan.compactSchedule(p.id);
+    expect(s.ready.map((r) => r.slug)).toEqual(["by-stage"]);
+    expect(s.unschedulable).toEqual([{ slug: "whole", reason: "up is failed" }]);
+    expect(s.failed).toEqual(["up"]);
+    // The journal records when the stage cleared and when the plain edge failed - once each, whatever reconciles again.
+    await plan.reconcile(p.id);
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "dependency.resolved").map((e) => (e.payload as { status: string }).status)).toEqual(["satisfied", "failed"]);
+    expect(await plan.explain(p.id, "by-stage")).toContain("dependency (blocks): up produced spec");
+  });
+
+  it("a superseded decision fails its dependants on reconcile, a deferred one keeps them waiting, and reopening is evaluated live", async () => {
+    const { plan, stores } = make();
+    const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    const [api] = (await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "api", title: "API", dependsOn: ["decision:store"] }], decisions: [{ key: "store", title: "Session store", options: [{ key: "cookie", name: "Cookie" }] }] }, { kind: "decomposition" })).items;
+    const dec = (await plan.snapshot(p.id)).decisions[0]!;
+    const dep = async () => (await plan.snapshot(p.id)).dependencies[0]!;
+
+    await stores.plan.decisions.put({ ...dec, status: "deferred" });
+    expect(await plan.reconcile(p.id)).toEqual({ satisfied: [], failed: [] });
+    let s = await plan.schedule(p.id);
+    expect(s.waiting.map((w) => w.waitingOn.map((o) => o.detail))).toEqual([["waiting for decision store (deferred)"]]);
+    expect(s.openDecisions).toEqual([expect.objectContaining({ key: "store", blocks: [api!.id] })]);
+
+    await stores.plan.decisions.put({ ...dec, status: "superseded" });
+    expect(await plan.reconcile(p.id)).toEqual({ satisfied: [], failed: [(await dep()).id] });
+    expect(await dep()).toMatchObject({ status: "failed", resolution: "decision store was superseded" });
+    s = await plan.schedule(p.id);
+    expect(s.unschedulable.map((u) => [u.slug, u.reason])).toEqual([["api", "decision store was superseded"]]);
+    expect(s.openDecisions).toEqual([]);
+    expect(await plan.explain(p.id, "api")).toContain("cannot run: decision store was superseded");
+
+    // Reopening resets only satisfied dependencies, but a failed one is evaluated live anyway: api waits again.
+    await plan.reopenDecision(p.id, "store", human);
+    expect(await dep()).toMatchObject({ status: "failed" });
+    s = await plan.schedule(p.id);
+    expect(s.unschedulable).toEqual([]);
+    expect(s.waiting.map((w) => w.waitingOn.map((o) => o.detail))).toEqual([["waiting for decision store"]]);
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "dependency.resolved")).toHaveLength(1);
+  });
+
   it("follows the run-log projection: journals what it wrote, and never overwrites a projected status", async () => {
     const { plan, stores, clock } = make();
     const p = await plan.ensurePlan({ key: "proj" });
