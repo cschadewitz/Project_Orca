@@ -4,9 +4,12 @@
  * projection in sync), and builds the expression/template context that
  * conditions and prompts are evaluated against.
  */
-import { applyEvent, latestStepForNode, OrcaError, reduceRun, type Artifact, type Clock, type Logger, type OrcaEvent, type OrcaEventInput, type Request, type RunState, type WorkItem, type WorkflowDefinition, type Workspace } from "@orca/core";
+import { applyEvent, latestStepForNode, OrcaError, reduceRun, type Artifact, type Clock, type Logger, type OrcaEvent, type OrcaEventInput, type Request, type Run, type RunState, type RunStatus, type WorkItem, type WorkflowDefinition, type Workspace } from "@orca/core";
 import type { Stores } from "@orca/store";
 import type { ResolvedArtifact } from "./executors/types.js";
+
+/** Run statuses a child can no longer leave on its own. */
+const FINISHED: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "failed", "cancelled"]);
 
 export interface RunContextDeps {
   stores: Stores;
@@ -57,7 +60,16 @@ export class RunContext {
     return this.state.run.workItemId ? this.deps.stores.workItems.get(this.state.run.workItemId) : undefined;
   }
 
-  /** Own artifacts + every ancestor's + every descendant's, newest version per name. */
+  /**
+   * Own artifacts + every ancestor's + every ancestor's *earlier siblings* (with their
+   * descendants) + every descendant's, newest version per name.
+   *
+   * "Earlier sibling" = another child of the same container step that was spawned before
+   * this run and had already finished when this run was created. That is what lets loop
+   * iteration N read what iteration N-1 produced (a review-then-fix `loop` node) while
+   * keeping concurrent `parallel` branches - which do not precede each other - from
+   * observing each other mid-flight.
+   */
   async visibleArtifacts(): Promise<Map<string, Artifact>> {
     const all: Artifact[] = [];
     const seen = new Set<string>();
@@ -66,7 +78,9 @@ export class RunContext {
       seen.add(state.run.id);
       all.push(...Object.values(state.artifacts));
       if ((direction === "up" || direction === "both") && state.run.parentRunId) {
-        await collect(await this.deps.loadState(state.run.parentRunId), "up");
+        const parent = await this.deps.loadState(state.run.parentRunId);
+        for (const sibling of await this.earlierSiblings(parent, state.run)) await collect(sibling, "down");
+        await collect(parent, "up");
       }
       if (direction === "down" || direction === "both") {
         for (const s of Object.values(state.steps)) for (const c of s.childRunIds) await collect(await this.deps.loadState(c), "down");
@@ -79,6 +93,25 @@ export class RunContext {
       if (!cur || cur.version < a.version || (cur.version === a.version && cur.createdAt < a.createdAt)) map.set(a.name, a);
     }
     return map;
+  }
+
+  /**
+   * The children of `run`'s container step that were spawned before it and had already
+   * finished when it was created, oldest first. The spawn-order cut (`children` is in
+   * `child.spawned` order) plus the `completedAt` cut keep this independent of when it is
+   * asked: a run's set of earlier siblings never changes while it executes.
+   */
+  private async earlierSiblings(parent: RunState, run: Run): Promise<RunState[]> {
+    const step = Object.values(parent.steps).find((s) => s.childRunIds.includes(run.id)) ?? (run.parentStepRunId ? parent.steps[run.parentStepRunId] : undefined);
+    if (!step) return [];
+    const out: RunState[] = [];
+    for (const link of step.children) {
+      if (link.runId === run.id) break; // everything from here on was spawned after us
+      if (!link.status || !FINISHED.has(link.status)) continue;
+      const state = await this.deps.loadState(link.runId).catch(() => undefined);
+      if (state?.run.completedAt && state.run.completedAt <= run.createdAt) out.push(state);
+    }
+    return out;
   }
 
   /** Artifact body, read once per content hash for the lifetime of this context. */

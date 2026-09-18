@@ -68,7 +68,8 @@ that never started get a fresh child run.
 `packages/engine/src/executors/agent-step.ts`:
 
 1. Resolve **input artifacts** (`inputs:` refs by kind/name/producing node;
-   visibility = own run + ancestors + descendants, newest version wins).
+   visibility = own run + ancestors + descendants + earlier finished siblings of
+   each ancestor, newest version wins).
 2. Render the **prompt**: template body (`templates/…md`) against the step
    context, then append the **deliverables block** — a human list *and* an
    HTML‑comment YAML block listing every artifact the step must produce with its

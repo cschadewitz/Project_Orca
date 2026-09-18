@@ -52,6 +52,15 @@ Wherever a node takes `vars` (`set`, `agent`, `subworkflow`), a string value sta
 with `=` is evaluated as an expression and anything else is a literal, e.g.
 `vars: { slug: "=vars.workItem.slug", stage: "build" }`.
 
+### Loop iterations
+
+Each iteration is its own child run, but an iteration can read what the previous ones
+produced: artifact visibility includes earlier siblings — children of the same `loop` step
+that finished before this one was spawned. A review‑then‑fix loop therefore works as a
+`loop` node, with the builder declaring `inputs: [{ kind: review, required: false }]` and
+picking up iteration N‑1's review (unresolved on the first iteration). `parallel` branches
+run concurrently and so never see each other.
+
 ### Parallel fan-out
 
 `concurrency` bounds how many branches are in flight; `join` decides the node's outcome
