@@ -163,6 +163,32 @@ describe("PlanService", () => {
     expect((await plan.journalOf(p.id)).filter((e) => e.type === "signals.rejected")).toEqual([expect.objectContaining({ payload: { artifactId: "art_1", runId: "run_a", issues } })]);
   });
 
+  it("scores risks on the plan's matrix: thresholds follow the scale, ratings must fit it, omitted ratings sit mid-grid", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({ key: "small", riskMatrix: { scale: 3 } });
+    expect(p.riskMatrix).toEqual({ scale: 3, thresholds: { medium: 2, high: 4, critical: 6 } });
+    const [a] = (await plan.registerWorkItems(p.id, { requestId: "req_1", items: [{ slug: "a", title: "A" }] }, { kind: "decomposition" })).items;
+
+    // A 3 x 3 is critical on this grid (it would be low-medium on the 5x5 defaults) ...
+    await plan.upsertRisk(p.id, { key: "worst", title: "Worst", likelihood: 3, impact: 3, affects: ["a"] }, human);
+    expect((await plan.schedule(p.id)).held.map((h) => [h.slug, h.level])).toEqual([["a", "critical"]]);
+    // ... an omitted rating is the midpoint of the grid, not a fixed 3 ...
+    expect(await plan.upsertRisk(p.id, { key: "vague", title: "Vague" }, human)).toMatchObject({ likelihood: 2, impact: 2 });
+    // ... and a rating off the grid is refused, on creation and on update.
+    await expect(plan.upsertRisk(p.id, { key: "big", title: "Big", likelihood: 4, impact: 1 }, human)).rejects.toThrow(/risk 'big': likelihood=4 outside the plan's risk matrix \(1\.\.3\)/);
+    await expect(plan.updateRisk(p.id, "vague", { impact: 5 }, human)).rejects.toThrow(/risk 'vague': impact=5 outside/);
+    expect((await plan.snapshot(p.id)).risks.map((r) => r.key).sort()).toEqual(["vague", "worst"]);
+
+    // Artifact intake reports the bad rating as a rejected signal and keeps the rest.
+    const issues = await plan.onArtifactRecorded({ id: "run_a", workItemId: a!.id, requestId: "req_1" }, art("art_1", "spec", { status: "ready", risks: [{ key: "off-grid", title: "Off grid", likelihood: 5, impact: 5 }, { key: "fine", title: "Fine", likelihood: 1, impact: 2 }] }, "run_a"));
+    expect(issues).toEqual([expect.stringMatching(/risk 'off-grid': likelihood=5, impact=5 outside/)]);
+    expect((await plan.snapshot(p.id)).risks.map((r) => r.key).sort()).toEqual(["fine", "vague", "worst"]);
+
+    // A matrix that cannot be satisfied is refused up front.
+    await expect(plan.ensurePlan({ key: "broken", riskMatrix: { scale: 3, thresholds: { critical: 16 } } })).rejects.toThrow(/critical=16 is unreachable on a 3x3 grid/);
+    await expect(plan.updatePlan(p.id, { riskMatrix: { thresholds: { medium: 4, high: 2 } } }, human)).rejects.toThrow(/strictly increasing/);
+  });
+
   it("holds items above the risk appetite until the risk is accepted, honouring plan policy", async () => {
     const { plan } = make();
     const p = await plan.ensurePlan({ key: "strict", policy: { riskAppetite: "low", strategy: "risk-first" } });

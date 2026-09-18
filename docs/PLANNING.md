@@ -67,10 +67,21 @@ deliver.
 ### The risk matrix
 
 `score = likelihood x impact` on a 1..`scale` grid (default 5). Levels come
-from `riskMatrix.thresholds` (defaults: medium >= 5, high >= 10, critical >= 16).
+from `riskMatrix.thresholds`, the minimum score for each level above `low`.
+Thresholds you leave out follow the scale, keeping the 5x5 defaults
+(medium >= 5, high >= 10, critical >= 16) as fractions of the maximum score:
+a 3x3 grid gets 2 / 4 / 6, a 10x10 gets 20 / 40 / 64. The matrix is validated
+when a plan is created or updated: thresholds must be strictly increasing and
+`critical` must be reachable on the grid. A risk's `likelihood` and `impact`
+must fit the plan's scale (omitted ratings sit at the midpoint), otherwise the
+risk is refused, or reported as a rejected signal when it arrived in an
+artifact. `orca plan show` and `orca plan risks` print the matrix in force.
+
 An item's **exposure** is the highest level (and the sum of scores) of the
 *open* risks that list it in `affects`. Open means `open`, `mitigating` or
 `realized`; `mitigated`, `accepted` and `closed` risks no longer count.
+`realized` stays open on purpose: the harm is under way, so the exposed items
+stay held above the appetite until a human accepts or closes the risk.
 
 The policy's `riskAppetite` (default `high`) is the highest exposure an item
 may carry and still be dispatched. Above it the item is **held** until a human
@@ -274,8 +285,8 @@ planning:
     orderSoftDependencies: true
     weights: { risk: 3 }     # optional per-factor overrides
   riskMatrix:
-    scale: 5
-    thresholds: { medium: 5, high: 10, critical: 16 }
+    scale: 5                 # likelihood and impact are 1..scale
+    thresholds: { medium: 5, high: 10, critical: 16 }   # optional; omitted ones follow the scale
 ```
 
 Per-plan values can be changed later through `PlanService.updatePlan`; the
