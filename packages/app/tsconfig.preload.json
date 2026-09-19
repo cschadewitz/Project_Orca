@@ -1,0 +1,30 @@
+// The preload script's own compilation, separate from main's because it is the one file in
+// the app that must come out as CommonJS: Electron evaluates a sandboxed preload as a plain
+// script, and `packages/app` is `"type": "module"`, so a `.js` here would be read as ESM and
+// rejected ("Cannot use import statement outside a module"). See src/preload/index.cts.
+//
+// The `.cts` extension is what does the work: TypeScript has no option for an output
+// extension, so the extension of the input is the only lever that yields `index.cjs`, and
+// `module: NodeNext` from the base config already emits a `.cts` as CommonJS.
+//
+// It is a project of its own rather than another `include` in tsconfig.json only because
+// tsconfig.json's `include` is `src/**/*.ts`, which does not match `.cts`, and because the
+// two halves want separate `tsc -b` outputs. It references tsconfig.json so the type-only
+// imports of `../bridge.js` and `../preferences/schema.js` resolve through that project's
+// declarations rather than dragging its sources into this project's file set (composite
+// projects must list every file they compile). `tsconfig.build.json` lists this project, so
+// `pnpm run build` and `tsc -b packages/app/tsconfig.preload.json` (scripts/dev.js) both
+// build main first and the preload after.
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    // Inside `dist` rather than beside this file: `pnpm run clean` removes `packages/*/dist`
+    // and `packages/*/tsconfig.tsbuildinfo`, and a second project's build info at the top
+    // level would survive both — leaving `tsc -b` convinced of an output that is gone.
+    "tsBuildInfoFile": "dist/tsconfig.preload.tsbuildinfo"
+  },
+  "include": ["src/preload/**/*.cts"],
+  "references": [{ "path": "./tsconfig.json" }]
+}

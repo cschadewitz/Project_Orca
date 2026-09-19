@@ -11,6 +11,7 @@
     { "path": "packages/protocol" },
     { "path": "packages/daemon" },
     { "path": "packages/design" },
-    { "path": "packages/app" }
+    { "path": "packages/app" },
+    { "path": "packages/app/tsconfig.preload.json" }
   ]
 }
