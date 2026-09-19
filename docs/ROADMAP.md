@@ -25,7 +25,18 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    through ORCA (currently `terminal: false`).
 7. **Session resume** — use `session/load` for agents that support it so a retried step can
    continue the same conversation.
-8. **Desktop app** — the Electron shell in `packages/app` is a placeholder renderer that
+8. **Client‑surfaced selection of agent, model and workflow** — the client above ORCA should
+   pick these the way Kepler picks a model for Claude Code. The mechanism is ACP
+   [session config options](https://agentclientprotocol.com/protocol/session-config-options)
+   (the successor to session modes, already in `@agentclientprotocol/sdk@^1.4.0`): the facade
+   advertises `configOptions` from `session/new` and honours `session/set_config_option`
+   (#188), proxying the sub‑agents' own model lists upstream with `config_option_update`
+   (#189, over the downstream session surface #185). Underneath it, a run needs an override
+   record for role→agent, model and item workflow that replays faithfully and children
+   inherit (#186), the model has to reach the turn (#187), the CLI needs the same flags so
+   it is not ACP‑only (#190), and prompt templates become selectable packs (#191). `/run`
+   and `/status` become advertised slash commands in the same pass (#192).
+9. **Desktop app** — the Electron shell in `packages/app` is a placeholder renderer that
    proves the app → preload → main → daemon path, styled with the design system's CSS.
    The design system itself is done: tokens in both themes, the CSS component layer, the
    typed status maps (`packages/design`) and the brand book, rules and surface specs
@@ -40,17 +51,17 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    (`docs/design/70-workflow-editing.md`) comes after the viewer and needs the runtime to
    execute a run against the workflow version it started with, not only the newest; a run
    already records its workflow version.
-9. **Planning: capacity and milestones** — the scheduler orders by dependencies, risk and
-   priority but has no notion of agent capacity per host, calendar milestones or due dates
-   beyond `Decision.dueBy`; add `Milestone` records and a capacity model per host/agent.
-10. **Planning: realised risks reopen work** — `risk.status: realized` is recorded but does
+10. **Planning: capacity and milestones** — the scheduler orders by dependencies, risk and
+    priority but has no notion of agent capacity per host, calendar milestones or due dates
+    beyond `Decision.dueBy`; add `Milestone` records and a capacity model per host/agent.
+11. **Planning: realised risks reopen work** — `risk.status: realized` is recorded but does
     not yet create a follow‑up Request (ties into the Maintain stage, item 4).
-11. **Planning: matrix confidence gates** — the shipped program auto‑decides from the matrix;
+12. **Planning: matrix confidence gates** — the shipped program auto‑decides from the matrix;
     a `decision` node with `source: matrix` plus a gate on `confidence == 'close'` would
     route close calls to a human. All inputs exist.
-12. **Planning: cross‑plan dependencies and indexes** — one plan per product is assumed and
+13. **Planning: cross‑plan dependencies and indexes** — one plan per product is assumed and
     the scheduler re‑reads the whole plan per pass.
-13. **Planning: review findings** — filed as issues #71–#84 when the planning layer was
+14. **Planning: review findings** — filed as issues #71–#84 when the planning layer was
     rebased onto main. Done: cycle detection ignores `soft` edges (#71); a work‑item claim
     stops two dispatchers from launching one item twice (#72); artifact intake is
     serialised per plan (#73); work‑item status is projected from the event log, with the
@@ -58,7 +69,7 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     `parallel`, so `failFast` cancels in‑flight items, the journal is watched before the
     plan is read, and `onWaiting: wait` logs one event per reason under a default timeout
     (#96, consolidating #75/#76; the per‑wake full‑plan recompute #83 named there is item
-    12's); scheduler explanations, the critical path and cycle messages agree with each
+    13's); scheduler explanations, the critical path and cycle messages agree with each
     other (#80; the remaining critical‑path overlaps are #108); the JSONL event store and
     plan journal number events on disk under a lock file, so two processes over one store
     extend one log (#97, consolidating #78/#87); `custom:decision-matrix` no longer
