@@ -7,6 +7,7 @@
  * There is deliberately no state library and no router yet; both are their own decisions.
  */
 import { useEffect, useRef, useState, type JSX } from "react";
+import { useSurfaceDensity } from "./appearance-context.js";
 import { connectionState, handshakeDetail, type Handshake } from "./connection.js";
 import { ConnectionIndicator, Text, Well } from "./ui/index.js";
 
@@ -15,6 +16,8 @@ export function App(): JSX.Element {
   /* When the attempt started, for the indicator's elapsed reading. A ref, not state: it
      is set once and must not itself cause a render. */
   const startedAt = useRef(new Date());
+  // The placeholder is a surface root too, so ⌘⇧D has something to act on.
+  useSurfaceDensity();
 
   useEffect(() => {
     let live = true;
@@ -27,7 +30,7 @@ export function App(): JSX.Element {
   }, []);
 
   return (
-    <main className="orca-surface placeholder">
+    <main className="orca-surface placeholder" data-surface="placeholder" tabIndex={-1}>
       <Text style="title" as="h1">
         ORCA
       </Text>

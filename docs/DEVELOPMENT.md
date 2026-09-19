@@ -207,6 +207,14 @@ shows a green check rather than none — see the comments in `.github/workflows/
   the app needs from ORCA is a protocol method the daemon serves; add the schemas to
   `protocol`, the handler to the daemon's method table, then call it from the app's
   `DaemonClient` and expose it on the preload bridge. See "The renderer build" above.
+- The app's own preferences (theme, per-surface density) are `packages/app/src/preferences`:
+  plain Node, owned by the main process as `preferences.json` under the Electron user-data
+  directory, reached from the renderer through `window.orca.preferences` and shared with it
+  as types only. They are about the person, not about ORCA, so they never go in the YAML.
+- Renderer tests run in `happy-dom` against the real `tokens.css` and `components.css` (see
+  `packages/app/test/appearance.test.ts`). Build one `Window` per scenario: happy-dom caches
+  computed style per document and does not invalidate it when the device settings (colour
+  scheme, reduced motion) change.
 - UI code follows `docs/design/RULES.md`: no literal colours, sizes, radii or durations,
   only tokens. `packages/design/css/tokens.css` and `src/tokens.ts` are generated from
   `tokens.json` and `semantics.json` — edit the JSON, run `pnpm run design:build`, commit
@@ -266,6 +274,10 @@ shows a green check rather than none — see the comments in `.github/workflows/
   (`/status`, `/run <id> k=v`, plain text as a Request) without an agent subprocess behind it.
 - `packages/integrations/test/t3code-session.test.ts` — the T3 Code adapter against a fake
   RPC: dispatched commands, event → update mapping, and when a turn is considered finished.
+- `packages/app/test/appearance.test.ts` — the renderer under the real design CSS: a custom
+  property resolves from the dark block under `[data-theme="dark"]` and follows the OS
+  without it, `data-density` rebinds `--row-h` on one surface only, the running pulse is
+  static under reduced motion, and `⌘⇧L` / `⌘⇧D` go through the keyboard map.
 
 ## The scripted agent
 

@@ -66,6 +66,16 @@ the next attach.
   breadcrumb separator are covered by the bundled-font check like every other glyph.
   `components.css` gains `orca-well`, `orca-menu` and the object header's trail and
   disclosure classes.
+- **app:** theme and density (#146). `data-theme` on `<html>` with a persisted preference of
+  system, light or dark, cycled by `⌘⇧L`; `data-density="compact"` per surface root,
+  toggled on the focused surface by `⌘⇧D` and remembered per surface. Preferences live in
+  `preferences.json` under the Electron user-data directory, never in the ORCA YAML. The
+  window's native background is the theme's `surface-canvas`, so opening in dark no longer
+  flashes white. `installAppearance` sets the attributes before React mounts and
+  `AppearanceProvider` hands components its actions, never its state; the keyboard map
+  every shortcut registers with (`KeyboardMap`) is the seed of the palette's registry (#149).
+- **design:** the generated `prefers-color-scheme` block now sets `color-scheme` too, so
+  native scrollbars and form controls follow the OS theme when no `data-theme` is set.
 
 ### Changed
 

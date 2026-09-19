@@ -8,10 +8,23 @@
  * nothing it can render; a `BridgeResult` carries the protocol's own error code instead.
  */
 import type { HelloResult, ProtocolError } from "@orca/protocol";
+import type { Preferences, PreferencesPatch } from "./preferences/schema.js";
 
 export type BridgeResult<T> = { ok: true; result: T } | { ok: false; error: ProtocolError };
 
 export interface OrcaBridge {
+  /** `process.platform` of the main process: `darwin` puts shortcuts on ⌘, everything else on Ctrl. */
+  readonly platform: string;
   /** The daemon handshake: protocol version, ORCA version and the daemon's capabilities. */
   hello: () => Promise<BridgeResult<HelloResult>>;
+  /** The app's own preferences (theme, per-surface density) — the main process owns the file. */
+  preferences: {
+    /**
+     * Synchronous on purpose: the renderer sets `data-theme` before it mounts anything, and a
+     * round trip through a promise would paint the OS theme for a frame first.
+     */
+    read: () => Preferences;
+    /** Merge a patch over what is on disk (`theme` replaces, `density` merges by surface). */
+    write: (patch: PreferencesPatch) => Promise<BridgeResult<Preferences>>;
+  };
 }
