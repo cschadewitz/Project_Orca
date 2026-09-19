@@ -15,9 +15,19 @@ export function LayerStackProvider({ value, children }: { value: LayerStack; chi
 }
 
 export function useLayerStack(): LayerStack {
-  const stack = useContext(LayerContext);
+  const stack = useOptionalLayerStack();
   if (!stack) throw new Error("useLayerStack needs a <LayerStackProvider> above it");
   return stack;
+}
+
+/**
+ * The stack if there is one. For a primitive that must still *render* in a tree with no
+ * providers — `renderToStaticMarkup` in a test, the `#preview` gallery — while still
+ * needing the stack the moment it opens. Effects do not run in a static render, which is
+ * why `useTransientLayer` can defer the requirement to the one below.
+ */
+export function useOptionalLayerStack(): LayerStack | null {
+  return useContext(LayerContext);
 }
 
 /**
@@ -26,12 +36,15 @@ export function useLayerStack(): LayerStack {
  * re-pushing itself — which would otherwise move it above a layer that opened after it.
  */
 export function useTransientLayer(active: boolean, layer: TransientLayer): void {
-  const stack = useLayerStack();
+  const stack = useOptionalLayerStack();
   const current = useRef(layer);
   current.current = layer;
 
   useEffect(() => {
     if (!active) return;
+    // Loud, but at the moment the layer actually opens rather than at every render: a
+    // closed menu in a provider-less tree is fine, an open one is a missing provider.
+    if (!stack) throw new Error(`the ${current.current.name} layer needs a <LayerStackProvider> above it`);
     return stack.push({
       name: current.current.name,
       close: () => current.current.close(),

@@ -12,10 +12,23 @@
  * in `list` — and why binding it twice in one scope throws instead.
  */
 
-/** The scopes in docs/design/50-accessibility-and-keyboard.md's table. */
-export type ShortcutScope = "global" | "list" | "run-tree" | "stream" | "card" | "panel";
+/**
+ * The scopes in docs/design/50-accessibility-and-keyboard.md's table, plus `menu`: an open
+ * popover is a place focus can be, and its roving keys have to out-rank the `↑`/`↓` of the
+ * list underneath it. Scope resolution is innermost first, so marking the open list with
+ * `scopeProps("menu")` is all that takes.
+ */
+export type ShortcutScope = "global" | "list" | "run-tree" | "stream" | "card" | "panel" | "menu";
 
-export const SHORTCUT_SCOPES: readonly ShortcutScope[] = ["global", "list", "run-tree", "stream", "card", "panel"];
+export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
+  "global",
+  "list",
+  "run-tree",
+  "stream",
+  "card",
+  "panel",
+  "menu",
+];
 
 /** Which of the palette's three sections a shortcut belongs in. Search is not a command. */
 export type ShortcutSection = "actions" | "navigation";
