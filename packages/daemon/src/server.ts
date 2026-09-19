@@ -1,26 +1,35 @@
 /**
  * The daemon's HTTP surface: `POST /rpc` takes one request envelope and answers with one
- * response envelope; `GET /health` is for process supervisors. Notifications (the live
- * event stream) need a WebSocket, which comes with the first subscribe method - the
- * envelope already has the message kind for it.
+ * response envelope; `GET /health` is for process supervisors.
+ *
+ * Notifications need a connection the daemon can push on, which HTTP has not got, so a
+ * `MethodContext.source` also brings up a WebSocket endpoint on `/socket` (socket.ts). That
+ * is strictly additive: without a `source` this is exactly the server it always was, and
+ * even with one, `hello` and every read method still work over `/rpc` with no socket in
+ * sight. A client subscribes by opening a socket, not by changing how it reads.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describeError } from "@orca/core";
-import { parseMessage, protocolError, type ProtocolError, type ResponseMessage } from "@orca/protocol";
+import { parseMessage, protocolError, socketUrlFor, type ProtocolError, type ResponseMessage } from "@orca/protocol";
 import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
+import { attachSocket } from "./socket.js";
 
 export interface DaemonOptions extends MethodContext {
   host?: string | undefined;
   /** `0` (the default) picks a free port; read the real one from `DaemonHandle.port`. */
   port?: number | undefined;
   methods?: MethodTable | undefined;
+  /** Overridable so a test can close the agent-output batch window by hand. */
+  batchMs?: number | undefined;
 }
 
 export interface DaemonHandle {
   host: string;
   port: number;
   url: string;
+  /** The WebSocket URL, when this daemon was given an engine feed to subscribe to. */
+  socketUrl?: string | undefined;
   close: () => Promise<void>;
 }
 
@@ -78,6 +87,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     storeDir: opts.storeDir,
     capabilities: opts.capabilities,
     reads: opts.reads,
+    source: opts.source,
   };
   // A daemon without a store serves `hello` alone, and says so in `hello.methods`: a read
   // method it cannot answer is an unknown method, not a method that fails.
@@ -97,19 +107,33 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       sendJson(res, 404, { kind: "response", id: 0, ok: false, error: protocolError("PROTOCOL_METHOD", "not found") });
     })();
   });
+  const detachSocket = ctx.source
+    ? attachSocket(server, {
+        methods,
+        ctx,
+        source: ctx.source,
+        ...(opts.batchMs === undefined ? {} : { batchMs: opts.batchMs }),
+      })
+    : undefined;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(opts.port ?? 0, host, () => resolve());
   });
   const { port } = server.address() as AddressInfo;
+  const url = `http://${host}:${port}`;
   return {
     host,
     port,
-    url: `http://${host}:${port}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    url,
+    ...(detachSocket ? { socketUrl: socketUrlFor(url) } : {}),
+    close: async () => {
+      // Sockets first: an open upgraded connection is not an HTTP connection, so
+      // `closeAllConnections` does not reach it and `server.close` would wait on it forever.
+      await detachSocket?.();
+      await new Promise<void>((resolve, reject) => {
         server.close((e) => (e ? reject(e) : resolve()));
         server.closeAllConnections();
-      }),
+      });
+    },
   };
 }

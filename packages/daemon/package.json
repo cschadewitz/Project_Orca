@@ -19,9 +19,11 @@
     "@orca/engine": "workspace:*",
     "@orca/protocol": "workspace:*",
     "@orca/store": "workspace:*",
+    "ws": "^8.21.3",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@orca/agents": "workspace:*"
+    "@orca/agents": "workspace:*",
+    "@types/ws": "^8.18.1"
   }
 }

@@ -22,13 +22,38 @@
 import electron = require("electron");
 import type { BridgeResult, OrcaBridge } from "../bridge.js";
 import type { Preferences } from "../preferences/schema.js";
-import type { HelloResult } from "@orca/protocol";
+import type { NotificationMessage } from "@orca/protocol";
 
 const { contextBridge, ipcRenderer } = electron;
 
+/**
+ * One `invoke` channel per read method; the main process's handler names match one-for-one.
+ * The trailing comma in `<T,>` is not a typo: a `.cts` file is parsed with the JSX-adjacent
+ * rules that make a bare `<T>` on an arrow ambiguous, and the comma is the disambiguator.
+ */
+const call = <T,>(channel: string, params?: unknown): Promise<BridgeResult<T>> =>
+  ipcRenderer.invoke(channel, params) as Promise<BridgeResult<T>>;
+
 const bridge: OrcaBridge = {
   platform: process.platform,
-  hello: () => ipcRenderer.invoke("orca:hello") as Promise<BridgeResult<HelloResult>>,
+  hello: () => call("orca:hello"),
+  runs: {
+    list: (params = {}) => call("orca:runs.list", params),
+    get: (params) => call("orca:runs.get", params),
+    events: (params) => call("orca:runs.events", params),
+  },
+  inputs: { list: (params = {}) => call("orca:inputs.list", params) },
+  claims: { list: (params = {}) => call("orca:claims.list", params) },
+  notifications: {
+    // The one channel the main process pushes on rather than answers on. Each renderer
+    // listener gets its own `ipcRenderer` listener so that unsubscribing one cannot silence
+    // another, and so nothing here has to keep a registry across the context bridge.
+    subscribe: (listener: (notification: NotificationMessage) => void) => {
+      const forward = (_event: unknown, notification: NotificationMessage): void => listener(notification);
+      ipcRenderer.on("orca:notification", forward);
+      return () => void ipcRenderer.off("orca:notification", forward);
+    },
+  },
   preferences: {
     read: () => ipcRenderer.sendSync("orca:preferences.read") as Preferences,
     write: (patch) => ipcRenderer.invoke("orca:preferences.write", patch) as Promise<BridgeResult<Preferences>>,

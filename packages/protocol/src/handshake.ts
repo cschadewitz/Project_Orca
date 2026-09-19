@@ -9,6 +9,7 @@ import { ProtocolVersionSchema } from "./version.js";
 import { CLAIMS_LIST_METHOD } from "./claims.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import { RUNS_EVENTS_METHOD, RUNS_GET_METHOD, RUNS_LIST_METHOD } from "./runs.js";
+import { SUBSCRIBE_METHOD, UNSUBSCRIBE_METHOD } from "./subscriptions.js";
 
 export const HELLO_METHOD = "hello";
 
@@ -25,6 +26,14 @@ export const READ_METHODS = [
   INPUTS_LIST_METHOD,
   CLAIMS_LIST_METHOD,
 ] as const;
+
+/**
+ * The methods behind the `runs.subscribe` capability. They are answered on the WebSocket
+ * endpoint only - `/rpc` has nowhere to push a notification to - so a daemon lists them in
+ * `HelloResult.methods` whether the handshake arrived over HTTP or over the socket, and a
+ * client that wants them opens a socket.
+ */
+export const SUBSCRIPTION_METHODS = [SUBSCRIBE_METHOD, UNSUBSCRIBE_METHOD] as const;
 
 export const HelloParamsSchema = z.object({
   /** Client identity for logs and the daemon's session list, e.g. `orca-app/0.3.1`. */
