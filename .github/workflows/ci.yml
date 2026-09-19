@@ -1,4 +1,9 @@
 # Lint, test and build every PR and every push to main, on each supported Node version.
+#
+# Docs-only changes skip all of that: the `changes` job diffs the push or PR against its
+# merge base and the `check` matrix only runs when something other than documentation
+# moved. This is a job-level `if` rather than `paths-ignore` on the trigger so a docs-only
+# PR still gets a (green, skipped) check run, which is what a required status check needs.
 name: CI
 
 on:
@@ -15,8 +20,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: classify changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Three-dot diff below needs the merge base, so the full history.
+          fetch-depth: 0
+
+      # Documentation is `docs/**` and any Markdown outside `templates/`. The prompt
+      # templates are Markdown too, but the engine loads them and the tests and the
+      # `demo` smoke test read them, so they count as code. Anything else counts as code.
+      # When the base commit is unknown (first push of a branch, or a force-push that
+      # rewrote it away) the job errs on the side of running everything.
+      - name: Classify
+        id: classify
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "base commit unavailable; treating the change as code"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code_paths=$(git diff --name-only "$BASE...$HEAD" \
+            | awk '!/^docs\// && !(/\.md$/ && !/^templates\//)')
+          if [ -n "$code_paths" ]; then
+            echo "code changed:"; printf '  %s\n' $code_paths
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs-only change; skipping the check matrix"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
     name: check (node ${{ matrix.node }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
