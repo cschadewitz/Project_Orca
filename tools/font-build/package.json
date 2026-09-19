@@ -1,0 +1,16 @@
+{
+  "name": "@orca/font-build",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Subsets the upstream IBM Plex and Noto symbol releases into the woff2 files bundled in packages/design/fonts. Run by hand (pnpm run design:fonts) when a face, a weight or a glyph changes; the outputs are committed.",
+  "main": "./build-fonts.js",
+  "dependencies": {
+    "@fontsource/noto-sans-math": "^5.3.0",
+    "@fontsource/noto-sans-symbols-2": "^5.3.0",
+    "@ibm/plex-mono": "^2.5.0",
+    "@ibm/plex-sans": "^1.1.0",
+    "fontkit": "^2.0.4",
+    "subset-font": "^2.7.0"
+  }
+}

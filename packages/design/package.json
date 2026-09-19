@@ -11,11 +11,13 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./css/*": "./css/*"
+    "./css/*": "./css/*",
+    "./fonts/*": "./fonts/*"
   },
   "files": [
     "dist",
-    "css"
+    "css",
+    "fonts"
   ],
   "scripts": {
     "build:tokens": "node build-tokens.js",

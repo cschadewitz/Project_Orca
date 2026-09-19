@@ -138,9 +138,19 @@ Write in the app the way a careful engineer writes a commit message.
   truncated ids can be compared by eye.
 - The font stack is `IBM Plex Sans` and `IBM Plex Mono`, both bundled with the application as
   woff2 rather than fetched at runtime — an Electron app that needs a CDN to render its own
-  text is broken offline. The fallbacks in `type.families` are ordered so that Linux, macOS
-  and Windows each land on a reasonable face if a font file fails to load; no OS's system
-  font is assumed.
+  text is broken offline. The files are in `packages/design/fonts`, subset to Latin plus the
+  punctuation the UI sets (mono also carries box drawing, for the stream rules), and
+  `tokens.css` declares them with `font-display: block`: a flash of the fallback face on
+  window open reads as a bug. The fallbacks in `type.families` are ordered so that Linux,
+  macOS and Windows each land on a reasonable face if a font file fails to load; no OS's
+  system font is assumed.
+- **The status glyphs are bundled too, and they are not Plex.** Plex contains none of
+  ◐ ◆ ✕ ⊘ ▣ ⏸ ◷ ● — left to the fallback stack they render in whatever face the OS supplies,
+  differently on each platform, at 11px next to the word they qualify. Two subsets of Noto
+  (Symbols 2, and Math for ⊘ alone) carry exactly the glyphs ORCA renders and no Latin at
+  all, so they sit in front of Plex in both stacks without their metrics touching text.
+  Adding a glyph to `semantics.json` means adding it to `tools/font-build/build-fonts.js` and
+  rerunning `pnpm run design:fonts`; the suite fails if you do not.
 
 ## Structure, not shadow
 

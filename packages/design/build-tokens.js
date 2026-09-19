@@ -44,6 +44,14 @@ function buildCss() {
   const themed = [...T.color.tokens, ...(T.shadow?.tokens ?? [])];
   const out = [BANNER];
 
+  /* Faces first: they are bundled, so `block` is right — a flash of fallback in a desktop
+     app reads as a bug, and the files are local and small enough that the block is a frame. */
+  for (const f of T.type.fonts ?? []) {
+    out.push(
+      `@font-face {\n  font-family: "${f.family}";\n  src: url("${f.file}") format("woff2");\n  font-weight: ${f.weight ?? 400};\n  font-style: ${f.style ?? "normal"};\n  font-display: block;\n}\n`,
+    );
+  }
+
   out.push(`:root,\n[data-theme="${first}"] {\n  color-scheme: ${first};\n${decls(themed, first)}\n}\n`);
 
   for (const theme of rest) {
@@ -78,12 +86,6 @@ function buildCss() {
       if (s.fontStyle) lines.push(`  font-style: ${s.fontStyle};`);
       out.push(`.orca-text-${s.name} {\n${lines.join("\n")}\n}\n`);
     }
-  }
-
-  for (const f of T.type.fonts ?? []) {
-    out.push(
-      `@font-face {\n  font-family: "${f.family}";\n  src: url("${f.file}") format("woff2");\n  font-weight: ${f.weight ?? 400};\n  font-style: ${f.style ?? "normal"};\n  font-display: swap;\n}\n`,
-    );
   }
 
   return out.join("\n");

@@ -20,6 +20,7 @@
     "format:check": "prettier --check .",
     "design:build": "node packages/design/build-tokens.js",
     "design:check": "node packages/design/build-tokens.js --check",
+    "design:fonts": "node tools/font-build/build-fonts.js",
     "orca": "tsx packages/cli/src/main.ts",
     "demo": "tsx packages/cli/src/main.ts demo",
     "typecheck": "tsc -p tsconfig.json --noEmit"

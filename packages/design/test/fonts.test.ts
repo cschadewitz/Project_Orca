@@ -1,0 +1,121 @@
+/**
+ * The bundled faces. These tests guard the three ways the type track silently breaks:
+ * a `url()` that resolves to nothing, a family the stacks name but no `@font-face`
+ * declares, and a status glyph no bundled face carries — which is not a missing glyph but a
+ * different typeface per platform, at chip scale, next to the word.
+ *
+ * Glyph *coverage* inside the woff2 files is verified where the files are made, by
+ * `tools/font-build/build-fonts.js`; it has the font parser and this suite does not. What is
+ * checked here is that the declarations and the files on disk still agree.
+ */
+import { describe, test } from "vitest";
+import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const pkg = join(here, "..");
+const read = (f: string) => readFileSync(join(pkg, f), "utf8");
+
+interface Face {
+  family: string;
+  file: string;
+  weight: number;
+  style: string;
+}
+
+const tokens = JSON.parse(read("tokens.json")) as {
+  type: { fonts: Face[]; families: Record<string, string> };
+};
+const css = read("css/tokens.css");
+
+/** `file` is relative to css/tokens.css, which is what the browser resolves it against. */
+const onDisk = (face: Face) => join(pkg, "css", face.file);
+
+describe("bundled faces", () => {
+  test("every declared face has a file", () => {
+    assert.ok(tokens.type.fonts.length > 0, "type.fonts is empty: nothing would be bundled");
+    for (const face of tokens.type.fonts) {
+      assert.ok(existsSync(onDisk(face)), `${face.file} is declared in tokens.json but not in packages/design/fonts`);
+    }
+  });
+
+  test("the licences ship beside the fonts", () => {
+    for (const licence of ["fonts/LICENSE-IBM-Plex.txt", "fonts/LICENSE-Noto.txt"]) {
+      assert.ok(existsSync(join(pkg, licence)), `${licence} is missing`);
+      assert.match(read(licence), /SIL Open Font License/, `${licence} is not the OFL`);
+    }
+  });
+
+  test("the package ships the fonts folder", () => {
+    const manifest = JSON.parse(read("package.json")) as { files: string[] };
+    assert.ok(
+      manifest.files.includes("fonts"),
+      "package.json `files` must include fonts, or url() resolves to nothing",
+    );
+  });
+});
+
+describe("tokens.css", () => {
+  test("declares an @font-face per bundled file, with font-display: block", () => {
+    for (const face of tokens.type.fonts) {
+      const rule = css.match(
+        new RegExp(`@font-face \\{[^}]*${face.file.replace(/[.*+?^$()|[\]\\]/g, "\\$&")}[^}]*\\}`),
+      );
+      assert.ok(rule, `no @font-face for ${face.file}`);
+      assert.match(rule[0], new RegExp(`font-family: "${face.family}"`));
+      assert.match(rule[0], new RegExp(`font-weight: ${face.weight}\\b`));
+      assert.match(rule[0], new RegExp(`font-style: ${face.style}\\b`));
+      /* swap would flash the fallback face on every window open; in a desktop app that
+         reads as a bug, and the files are local. */
+      assert.match(rule[0], /font-display: block/, `${face.file} must not swap`);
+    }
+  });
+
+  test("the symbol faces lead every stack, and every bundled face is reachable", () => {
+    const bundled = new Set(tokens.type.fonts.map((f) => f.family));
+    const named = new Set<string>();
+    for (const [name, stack] of Object.entries(tokens.type.families)) {
+      const quoted = [...stack.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+      quoted.forEach((f) => named.add(f));
+      /* The symbol faces carry the status glyphs and no text, so they go first: anything
+         later in the stack would only be reached for a glyph Plex already lacks. */
+      assert.deepEqual(
+        quoted.slice(0, 2),
+        ["Noto Sans Symbols 2", "Noto Sans Math"],
+        `--font-${name} must lead with the bundled symbol faces`,
+      );
+    }
+    for (const family of bundled) {
+      assert.ok(named.has(family), `${family} is bundled but no stack in type.families names it`);
+    }
+  });
+});
+
+describe("status glyphs", () => {
+  const semantics = JSON.parse(read("semantics.json")) as Record<string, unknown>;
+
+  const glyphs = (node: unknown, found = new Set<string>()): Set<string> => {
+    if (!node || typeof node !== "object") return found;
+    const record = node as Record<string, unknown>;
+    if (typeof record.glyph === "string") found.add(record.glyph);
+    for (const value of Object.values(record)) glyphs(value, found);
+    return found;
+  };
+
+  test("come from a face we bundle, not from the OS", () => {
+    /* The set tools/font-build/build-fonts.js subsets into the two Noto faces. Adding a
+       glyph to semantics.json without adding it there is the failure this catches. */
+    const build = readFileSync(join(here, "..", "..", "..", "tools", "font-build", "build-fonts.js"), "utf8");
+    for (const glyph of glyphs(semantics)) {
+      const cp = `0x${glyph.codePointAt(0)!.toString(16)}`;
+      assert.ok(
+        build.includes(cp),
+        `semantics.json renders ${glyph} (${cp}) but no bundled face carries it — it would fall ` +
+          `back to a different typeface on every platform. Add it to build-fonts.js and rerun ` +
+          `pnpm run design:fonts.`,
+      );
+    }
+  });
+});
