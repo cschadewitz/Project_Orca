@@ -1,0 +1,19 @@
+{
+  "name": "@orca/app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ORCA desktop app (Electron): monitoring, configuration and later orchestration over the daemon protocol.",
+  "type": "module",
+  "main": "./dist/main/index.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@orca/protocol": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@orca/daemon": "workspace:*",
+    "electron": "^44.3.0"
+  }
+}

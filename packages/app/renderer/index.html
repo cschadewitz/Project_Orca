@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- Placeholder renderer: proves the app → preload → main → daemon path until the design
+     system lands. No framework yet; that choice belongs with the design system. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    />
+    <title>ORCA</title>
+    <style>
+      body {
+        font:
+          14px system-ui,
+          sans-serif;
+        margin: 2rem;
+        color: #222;
+        background: #fafafa;
+      }
+      pre {
+        background: #eee;
+        padding: 1rem;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>ORCA</h1>
+    <p id="status">Connecting to the daemon…</p>
+    <pre id="hello"></pre>
+    <script src="./index.js"></script>
+  </body>
+</html>

@@ -13,6 +13,8 @@ export default defineConfig({
       "@orca/engine": pkg("engine"),
       "@orca/testing": pkg("testing"),
       "@orca/integrations": pkg("integrations"),
+      "@orca/protocol": pkg("protocol"),
+      "@orca/daemon": pkg("daemon"),
     },
   },
   test: {
@@ -27,7 +29,15 @@ export default defineConfig({
       // Barrels re-export and nothing else. `testing` (the scripted agent) is test
       // infrastructure, and the e2e tests drive it as a real subprocess - v8 coverage
       // collected in this process cannot see any of it, so its number would be fiction.
-      exclude: ["packages/*/src/index.ts", "**/main.ts", "packages/testing/**"],
+      // The app's main and preload processes only run inside Electron; its daemon client
+      // is plain Node and is covered.
+      exclude: [
+        "packages/*/src/index.ts",
+        "**/main.ts",
+        "packages/testing/**",
+        "packages/app/src/main/**",
+        "packages/app/src/preload/**",
+      ],
       reporter: ["text-summary", "html", "lcov", "json-summary"],
       // A ratchet, set just under what the suite covers today (79.0 / 66.2 / 81.5 / 81.9).
       // Raise these as coverage improves; never lower them to make a red CI go green.

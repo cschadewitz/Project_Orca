@@ -8,6 +8,8 @@
     { "path": "../agents" },
     { "path": "../engine" },
     { "path": "../testing" },
-    { "path": "../integrations" }
+    { "path": "../integrations" },
+    { "path": "../protocol" },
+    { "path": "../daemon" }
   ]
 }

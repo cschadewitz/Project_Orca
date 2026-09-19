@@ -39,6 +39,11 @@ processes writing one store no longer collide (#97).
 
 ### Added
 
+- **daemon:** `orca serve` and the packages behind the desktop app — `protocol` (the wire
+  contract: envelope, `hello` handshake, versioning, error codes), `daemon` (HTTP transport
+  and the method table; only `hello` so far) and `app` (an Electron shell that completes
+  the handshake through the protocol package and nothing else). ADR 0008 records the
+  layering; the design brief for the app is in `docs/design/`.
 - **plan:** a planning layer over the engine — cross-request dependencies, a risk matrix,
   decision matrices and an explainable scheduler that orders work by dependency, risk and
   priority (#85).

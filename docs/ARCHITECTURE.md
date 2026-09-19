@@ -25,6 +25,9 @@
 ## Layering
 
 ```
+ app ──▶ protocol ◀── daemon
+ (electron)  │           │
+             ▼           ▼
  cli ─────────────▶ integrations ──▶ engine ──▶ agents ──▶ core
   │                   (acp-facade,     │ (orchestrator, (acp,      (model, events,
   │                    kepler, t3code) │  plan service)  ssh, local) plan algorithms,
@@ -35,6 +38,12 @@
 Dependencies only point right/down. `core` has no I/O beyond parsing files.
 `engine` depends on the *ports* in `store` and `agents`, never on concrete
 transports, so tests use in‑memory stores and a scripted ACP agent.
+
+`protocol` is the wire contract (Zod schemas, depends on `core` only). `daemon`
+serves it over the network in front of the engine; `cli` starts one with `orca
+serve`. `app` depends on `protocol` and nothing else in the workspace, enforced by
+the lint config: the desktop app can only see what a daemon tells it, so attaching
+to a daemon on another machine is the same code path as the local one (ADR 0008).
 
 ## The interpreter
 
@@ -217,3 +226,4 @@ Recorded as ADRs in `docs/adr/`:
 - 0005 Standalone engine + facades instead of forking Kepler or T3 Code
 - 0006 The plan as a persistent cross‑request dependency graph, scheduled live
 - 0007 Risks and decisions as plan entities fed by artifacts, computed by ORCA
+- 0008 Daemon, protocol package and desktop app in one workspace; the app sees only the protocol

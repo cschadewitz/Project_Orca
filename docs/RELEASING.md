@@ -109,5 +109,12 @@ merge the result, and `gh release create vX.Y.Z --notes-file <(node tools/releas
 - **Labels**: `release`, `release:major`, `release:minor`, `release:patch`, `release:none`.
 - The repository is private, so releases are visible to collaborators only. Making them a
   distribution channel means making the repository public first.
-- Nothing is attached to a release beyond the source tag. If a built artifact is ever
-  wanted, add it to `release-publish.yml` after the build step.
+- Nothing is attached to a release beyond the source tag. When built artifacts are
+  wanted, add them to `release-publish.yml` after the build step. Two are planned, both
+  from the same commit so their protocol versions agree by construction: a **daemon**
+  artifact (the CLI with `orca serve`, no Electron) and a **desktop** artifact (the
+  Electron app with that same daemon build bundled inside it, spawned on launch unless
+  `ORCA_DAEMON_URL` points elsewhere). The `hello` handshake still carries the protocol
+  version, because a desktop build will eventually attach to an older daemon on another
+  machine. Desktop packaging needs platform runners and its own workflow; it must not be
+  bolted onto `ci.yml`, which never launches the app.

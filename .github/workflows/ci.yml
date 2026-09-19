@@ -79,7 +79,11 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
 
+      # CI typechecks and lints the Electron app but never launches it, so skip the
+      # ~100 MB binary that electron's postinstall would otherwise fetch.
       - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
       - name: Typecheck
         run: pnpm run typecheck

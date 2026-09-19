@@ -5,6 +5,9 @@ packages:
   - "tools/*"
 
 # pnpm runs no dependency lifecycle scripts by default. esbuild (pulled in by
-# tsx) needs its postinstall to place the platform binary, so allow just that.
+# tsx) needs its postinstall to place the platform binary; electron's postinstall
+# downloads the Electron binary (CI sets ELECTRON_SKIP_BINARY_DOWNLOAD=1, since it
+# never launches the app). Allow just those two.
 allowBuilds:
   esbuild: true
+  electron: true

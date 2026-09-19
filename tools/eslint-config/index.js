@@ -91,6 +91,30 @@ export default tseslint.config(
     rules: { "no-console": "off" },
   },
   {
+    // The app's renderer runs in Chromium, not Node.
+    files: ["packages/app/renderer/**/*.js"],
+    languageOptions: { globals: globals.browser },
+  },
+  {
+    // The desktop app sees ORCA only through the wire contract (ADR 0008). Reaching past
+    // `@orca/protocol` into the engine or the stores would tie the renderer to internals
+    // the daemon is supposed to own, and would break the "attach to a remote daemon" case.
+    files: ["packages/app/src/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@orca/*", "!@orca/protocol"],
+              message: "The app may only import @orca/protocol; everything else goes through the daemon.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // Tests poke at internals and fake ports; the strictness that protects src gets in the way.
     files: ["packages/*/test/**/*.ts"],
     rules: {

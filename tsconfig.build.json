@@ -7,6 +7,9 @@
     { "path": "packages/engine" },
     { "path": "packages/testing" },
     { "path": "packages/integrations" },
-    { "path": "packages/cli" }
+    { "path": "packages/cli" },
+    { "path": "packages/protocol" },
+    { "path": "packages/daemon" },
+    { "path": "packages/app" }
   ]
 }
