@@ -9,7 +9,7 @@
   },
   "packageManager": "pnpm@12.4.2",
   "scripts": {
-    "build": "tsc -b tsconfig.build.json",
+    "build": "tsc -b tsconfig.build.json && pnpm --filter @orca/app run build:renderer",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -23,7 +23,7 @@
     "design:fonts": "node tools/font-build/build-fonts.js",
     "orca": "tsx packages/cli/src/main.ts",
     "demo": "tsx packages/cli/src/main.ts demo",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @orca/app run typecheck:renderer"
   },
   "devDependencies": {
     "@orca/eslint-config": "workspace:*",

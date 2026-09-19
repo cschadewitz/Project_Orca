@@ -57,8 +57,13 @@ over them. Build on those rather than re-deriving values. If a screen seems to n
 component that does not exist, check `docs/design/` before inventing one — most of them are
 already specced.
 
+Screens live in `packages/app/renderer` — React, bundled by Vite, with `tokens.css` and
+`components.css` imported at the top of `renderer/src/main.tsx`. `pnpm --filter @orca/app dev`
+runs it with hot reload; `docs/DEVELOPMENT.md` ("The renderer build") has the rest.
+
 The app (`packages/app`) may import only `@orca/protocol` and `@orca/design` from the
-workspace; everything it knows about a run comes over the wire from the daemon (ADR 0008).
+workspace — the renderer included; everything it knows about a run comes over the wire from
+the daemon (ADR 0008).
 
 ## When the data is not there
 

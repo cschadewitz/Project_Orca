@@ -1,0 +1,31 @@
+{
+  // The renderer is its own TypeScript project: it runs in Chromium, so it needs the DOM
+  // lib, and Vite resolves its imports rather than Node, so it is `moduleResolution:
+  // bundler`. `pnpm run typecheck` runs this alongside the root project; `tsc -b` never
+  // emits from it (Vite owns the renderer's output).
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    // `vite/client` supplies the `*.css` / `?url` module declarations and import.meta.env.
+    // `node` is not here for the renderer's benefit — nothing under `src/` may use it —
+    // but because this program compiles `@orca/core`'s sources transitively (the paths
+    // below), and those are Node code. The guard against the renderer actually reaching
+    // Node is Electron's `sandbox: true` + `contextIsolation`, not this list.
+    "types": ["vite/client", "node"],
+    // Matches the aliases in vite.config.ts: the two packages ADR 0008 allows the app to
+    // import, resolved to sources, plus core because protocol type-imports it.
+    "paths": {
+      "@orca/protocol": ["../../protocol/src/index.ts"],
+      "@orca/design": ["../../design/src/index.ts"],
+      "@orca/core": ["../../core/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "../src/bridge.ts"]
+}

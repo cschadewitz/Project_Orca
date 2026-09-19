@@ -15,6 +15,25 @@ import orca from "./rules/index.js";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
+// The desktop app sees ORCA only through the wire contract (ADR 0008) and renders with the
+// design system. Reaching past `@orca/protocol` into the engine or the stores would tie the
+// app to internals the daemon is supposed to own, and would break the "attach to a remote
+// daemon" case. It binds to the main/preload side and to the renderer alike — the renderer
+// is the half most likely to be tempted, since it is where the screens are.
+const appImportBoundary = {
+  "no-restricted-imports": [
+    "error",
+    {
+      patterns: [
+        {
+          group: ["@orca/*", "!@orca/protocol", "!@orca/design"],
+          message: "The app may only import @orca/protocol and @orca/design; everything else goes through the daemon.",
+        },
+      ],
+    },
+  ],
+};
+
 export default tseslint.config(
   {
     // packages/design/src/tokens.ts is generated; its formatting is the generator's.
@@ -94,34 +113,24 @@ export default tseslint.config(
       "examples/**/*.ts",
       "tools/**/*.js",
       "packages/design/build-tokens.js",
+      "packages/app/scripts/**/*.js",
     ],
     rules: { "no-console": "off" },
   },
   {
-    // The app's renderer runs in Chromium, not Node.
-    files: ["packages/app/renderer/**/*.js"],
-    languageOptions: { globals: globals.browser },
+    // The app's renderer runs in Chromium, not Node, and is its own TypeScript project
+    // (DOM lib, no @types/node, bundler resolution) — so the type-aware rules have to be
+    // pointed at that project rather than the root one.
+    files: ["packages/app/renderer/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: globals.browser,
+      parserOptions: { project: "./packages/app/renderer/tsconfig.json", tsconfigRootDir: repoRoot },
+    },
+    rules: appImportBoundary,
   },
   {
-    // The desktop app sees ORCA only through the wire contract (ADR 0008) and renders with
-    // the design system. Reaching past `@orca/protocol` into the engine or the stores would
-    // tie the renderer to internals the daemon is supposed to own, and would break the
-    // "attach to a remote daemon" case.
     files: ["packages/app/src/**/*.ts"],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: [
-            {
-              group: ["@orca/*", "!@orca/protocol", "!@orca/design"],
-              message:
-                "The app may only import @orca/protocol and @orca/design; everything else goes through the daemon.",
-            },
-          ],
-        },
-      ],
-    },
+    rules: appImportBoundary,
   },
   {
     // Tests poke at internals and fake ports; the strictness that protects src gets in the way.

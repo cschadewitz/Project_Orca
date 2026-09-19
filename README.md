@@ -83,7 +83,7 @@ crash is picked up with `orca resume <runId>`.
 | `packages/cli` | `orca` command line and config bootstrap. |
 | `packages/protocol` | The wire contract between the daemon and its clients: message envelope, handshake, error codes, protocol version. Zod schemas; depends on `core` only. |
 | `packages/daemon` | `orca serve`: the long‑lived process that exposes the orchestrator over `protocol` (HTTP today, WebSocket for the event stream next). |
-| `packages/app` | The Electron desktop app. Imports only `protocol` and `design`; everything it knows about ORCA comes over the wire from a daemon. |
+| `packages/app` | The Electron desktop app: `tsc`-built main and preload, a React renderer bundled by Vite. Imports only `protocol` and `design`; everything it knows about ORCA comes over the wire from a daemon. |
 | `packages/design` | The design system as code: token sources (`tokens.json`, `semantics.json`), the generator, the generated `css/tokens.css` and `src/tokens.ts`, the CSS component layer, and the contrast tests. |
 | `packages/testing` | A deterministic scripted ACP agent used by tests and the demo. |
 | `workflows/` | Shipped workflow definitions: `ai-sdlc.yaml`, `program.yaml`, `plan-resume.yaml`. |

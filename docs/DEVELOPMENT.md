@@ -12,7 +12,8 @@ pnpm run build               # tsc -b project references -> packages/*/dist
 pnpm run demo                # program run with scripted agents (from sources via tsx)
 node packages/cli/dist/main.js demo   # same, from the compiled build
 pnpm run orca serve          # the daemon, on 127.0.0.1:6722 until Ctrl-C
-pnpm run build && pnpm --filter @orca/app start   # the Electron app against that daemon
+pnpm --filter @orca/app dev  # the app against that daemon, renderer hot-reloading
+pnpm run build && pnpm --filter @orca/app start   # the same app from the built output
 pnpm run design:build        # regenerate packages/design css/tokens.css + src/tokens.ts from tokens.json
 pnpm run design:check        # fail if those generated files are behind (CI runs this)
 pnpm run design:fonts        # re-subset packages/design/fonts from the upstream releases (by hand)
@@ -20,9 +21,53 @@ pnpm run design:fonts        # re-subset packages/design/fonts from the upstream
 
 The app needs the Electron binary, which `pnpm install` downloads through electron's
 postinstall (allow-listed in `pnpm-workspace.yaml`). CI sets
-`ELECTRON_SKIP_BINARY_DOWNLOAD=1` because it only typechecks and lints the app; do the
-same locally if you never launch it. The app reads `ORCA_DAEMON_URL` to attach to a
-daemon elsewhere.
+`ELECTRON_SKIP_BINARY_DOWNLOAD=1` because it never launches the app — it still typechecks,
+lints and builds the renderer, none of which need the binary; do the same locally if you
+never launch it. The app reads `ORCA_DAEMON_URL` to attach to a daemon elsewhere.
+
+## The renderer build
+
+The app is three programs with three different runtimes, and they are built by two tools:
+
+| part       | runtime  | built by                     | output          |
+| ---------- | -------- | ---------------------------- | --------------- |
+| `main`     | Node     | `tsc -b` with the workspace  | `dist/main`     |
+| `preload`  | Node     | `tsc -b` with the workspace  | `dist/preload`  |
+| `renderer` | Chromium | Vite (`packages/app/vite.config.ts`) | `dist/renderer` |
+
+**Vite, on the renderer only.** Plain Vite rather than `electron-vite` or `electron-forge`:
+the renderer is the only part that needs bundling (JSX, CSS imports, HMR), while main and
+preload are ordinary Node ESM that the workspace's `tsc -b` already builds in dependency
+order with the project references and declaration output the rest of the repo relies on.
+Handing all three to a bundler would mean a second, parallel build graph for `protocol` and
+`core` and would take `packages/app` out of `tsconfig.build.json` for no gain. Revisit when
+packaging (`electron-builder`) lands and wants to own the whole app — that is its own ADR.
+
+`pnpm run build` runs both: `tsc -b` then `vite build`. `emptyOutDir` in the Vite config is
+scoped to `dist/renderer`, so the two never clear each other's output.
+
+**`pnpm --filter @orca/app dev`** (`packages/app/scripts/dev.js`) compiles main and preload
+once, starts the Vite dev server, and launches Electron with `ORCA_RENDERER_URL` pointed at
+it; the main process loads that URL instead of the built `index.html` and opens devtools.
+The renderer hot-reloads. Main and preload changes need a restart — see the comment at the
+top of that script for why it is not worth watching them.
+
+**The CSP is not relaxed by the dev loop.** `renderer/index.html` carries the production
+policy (`default-src 'self'`, no `unsafe-inline`) and the build ships it verbatim. The dev
+server swaps in a wider one *in memory only* — React Refresh injects an inline preamble and
+Vite injects styles through JS, and HMR needs a websocket back to the dev server. Nothing
+that relaxation allows can reach a built artifact, because the substitution is keyed on
+`ctx.server` being present (`htmlPlugin` in `vite.config.ts`).
+
+**What the renderer may import.** The same boundary as the rest of the app (ADR 0008):
+`@orca/protocol` and `@orca/design`, nothing else from the workspace. `no-restricted-imports`
+covers `packages/app/renderer/**` as well as `packages/app/src/**`. `window.orca` is the only
+other way out, and its shape is `packages/app/src/bridge.ts`, imported as a type by both the
+preload that builds it and the renderer that calls it.
+
+The renderer is its own TypeScript project (`packages/app/renderer/tsconfig.json`): DOM lib,
+`jsx: react-jsx`, bundler resolution, and `@orca/*` mapped to sources so neither `dev` nor
+`typecheck` needs a prior build. `pnpm run typecheck` runs it after the root project.
 
 `demo --dir <path>` (or `demo --keep`, which keeps the temp workspace instead of
 removing it afterwards) leaves a complete setup behind — `orca.config.yaml` wired to
@@ -127,10 +172,11 @@ shows a green check rather than none — see the comments in `.github/workflows/
 - `core` has no runtime I/O except reading workflow/template files. `engine` depends on
   ports (`EventStore`, `ArtifactStore`, `AgentHost`, `AgentSession`), never on concrete
   transports, so it is testable with in‑memory stores and the scripted agent.
-- `packages/app/src` imports `@orca/protocol` and `@orca/design` and nothing else from
-  the workspace (`no-restricted-imports` in the lint config). Anything the app needs from
-  ORCA is a protocol method the daemon serves; add the schemas to `protocol`, the handler
-  to the daemon's method table, then call it from the app's `DaemonClient`.
+- `packages/app/src` and `packages/app/renderer` import `@orca/protocol` and `@orca/design`
+  and nothing else from the workspace (`no-restricted-imports` in the lint config). Anything
+  the app needs from ORCA is a protocol method the daemon serves; add the schemas to
+  `protocol`, the handler to the daemon's method table, then call it from the app's
+  `DaemonClient` and expose it on the preload bridge. See "The renderer build" above.
 - UI code follows `docs/design/RULES.md`: no literal colours, sizes, radii or durations,
   only tokens. `packages/design/css/tokens.css` and `src/tokens.ts` are generated from
   `tokens.json` and `semantics.json` — edit the JSON, run `pnpm run design:build`, commit

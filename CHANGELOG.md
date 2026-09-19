@@ -45,6 +45,12 @@ the next attach.
   generator, generated CSS and TypeScript tokens for light and dark, the CSS component
   layer, WCAG AA contrast tests) and `docs/design/` (the brief, brand book, UI rules and
   surface specs). `pnpm run design:check` in CI keeps the generated files current.
+- **app:** the renderer is React, bundled by Vite, with `pnpm --filter @orca/app dev` for a
+  hot-reloading dev loop against a running daemon (#145). Main and preload stay on the
+  workspace's `tsc -b`; `pnpm run build` produces `packages/app/dist/renderer` alongside
+  them. The production CSP (`default-src 'self'`, no `unsafe-inline`) is what ships — the
+  dev server's wider policy exists only in memory. The import boundary from ADR 0008 now
+  covers the renderer as well as `packages/app/src`.
 
 ### Changed
 
