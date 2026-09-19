@@ -1,0 +1,54 @@
+/* Layout for the dev-only primitive preview. Token references only (docs/design/RULES.md
+   rule 1) — the point of the page is to show the tokens working, so it cannot cheat.
+
+   The two theme columns are ordinary subtrees carrying `data-theme`, which is exactly how
+   docs/design/60-implementation.md says a light pane inside a dark app would be built. */
+.preview {
+  min-height: 100vh;
+  background: var(--surface-canvas);
+}
+.preview__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+.preview__themes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+}
+.preview__theme {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  min-width: 0;
+  background: var(--surface-base);
+}
+.preview__theme + .preview__theme {
+  border-left: var(--stroke-hairline) solid var(--border-hairline);
+}
+.preview__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.preview__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.preview__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.preview__pane {
+  border: var(--stroke-hairline) solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}

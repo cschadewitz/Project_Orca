@@ -73,13 +73,37 @@ preload that builds it and the renderer that calls it.
 
 The renderer is its own TypeScript project (`packages/app/renderer/tsconfig.json`): DOM lib,
 `jsx: react-jsx`, bundler resolution, and `@orca/*` mapped to sources so neither `dev` nor
-`typecheck` needs a prior build. `pnpm run typecheck` runs it after the root project.
+`typecheck` needs a prior build. `pnpm run typecheck` runs it after the root project. Its
+tests live beside it in `packages/app/renderer/test/**/*.test.tsx` rather than in
+`packages/app/test` for the same reason — they compile against that project, not the root
+one — and `vitest.config.ts` includes both globs.
 
 `demo --dir <path>` (or `demo --keep`, which keeps the temp workspace instead of
 removing it afterwards) leaves a complete setup behind — `orca.config.yaml` wired to
 the scripted agent plus its `demo-playbook.yaml` — so `orca --config <path>/orca.config.yaml
 run <workflow>` exercises any workflow without an LLM. Edit the playbook to change what
 the agent delivers per artifact kind.
+
+## The primitive preview
+
+`packages/app/renderer/src/ui` is the React layer over `packages/design/css/components.css`:
+`StatusChip`, `Button`, `Text`, `Duration`, `ObjectHeader`, `StateView` and the rest, each a
+thin wrapper over the `orca-*` classes with no values of its own. Build screens out of these
+rather than writing class names by hand; `packages/design/src/component-api.d.ts` is the
+signature reference and is corrected in the PR that makes an implementation diverge from it.
+
+```sh
+pnpm --filter @orca/app dev     # then open #preview in the app window
+```
+
+`#preview` renders every primitive, both themes side by side, driven by the design system's
+own lists (`RUN_STATUSES`, `SCHEDULE_CLASSES`, `STATE_VIEW_KINDS`, `THEMES`) — so a status
+added to `semantics.json` appears there without anyone editing the page. It is the visual
+review surface for the desktop-app milestone.
+
+It is dev-only in the strong sense: `routes.tsx` reaches it through a dynamic `import()`
+inside an `import.meta.env.DEV` branch, which Vite folds to `false` in a build, so neither
+the page nor its CSS is emitted. Keep it that way if you add to it.
 
 ## Package manager
 

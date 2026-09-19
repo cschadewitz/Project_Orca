@@ -108,6 +108,10 @@ function buildTs() {
     ]),
   );
 
+  /* A semantics key is a design word, not an identifier: 'no-results' is the name the
+     spec uses, so quote anything that is not a bare JS property name. */
+  const key = (k) => (/^[A-Za-z_$][\w$]*$/.test(k) ? k : quote(k));
+
   const presentation = (obj, withGlyph) =>
     Object.entries(obj)
       .map(([k, v]) => {
@@ -116,7 +120,7 @@ function buildTs() {
         if (v.fg) parts.push(`fg: 'var(--${v.fg})'`, `fgToken: ${quote(v.fg)}`);
         if (v.bg) parts.push(`bg: 'var(--${v.bg})'`, `bgToken: ${quote(v.bg)}`);
         if (v.writes) parts.push(`writes: ${quote(v.writes)}`);
-        return `  ${k}: { ${parts.join(", ")} },`;
+        return `  ${key(k)}: { ${parts.join(", ")} },`;
       })
       .join("\n");
 
@@ -173,6 +177,23 @@ export const CONNECTION_PRESENTATION: Record<ConnectionState, {
   word: string; glyph: string; fg: string; fgToken: ColorToken; writes: string;
 }> = {
 ${presentation(S.connectionState, true)}
+};
+
+export type StateViewKind = ${union(Object.keys(S.stateView))};
+export const STATE_VIEW_KINDS: readonly StateViewKind[] = [${Object.keys(S.stateView).map(quote).join(", ")}] as const;
+/** The word is the accessible name of the view; 'loading' has no glyph because it draws skeletons. */
+export const STATE_VIEW_PRESENTATION: Record<StateViewKind, {
+  word: string; glyph?: string; fg: string; fgToken: ColorToken;
+}> = {
+${presentation(S.stateView, true)}
+};
+
+/** Glyphs the chrome renders that are not a state: the crumb separator and the command key. */
+export type ChromeGlyph = ${union(Object.keys(S.chrome))};
+export const CHROME_GLYPHS: Record<ChromeGlyph, string> = {
+${Object.entries(S.chrome)
+  .map(([k, g]) => `  ${key(k)}: ${quote(g.glyph)},`)
+  .join("\n")}
 };
 
 export type DependencyKind = ${union(Object.keys(S.dependencyKind))};

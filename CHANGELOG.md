@@ -51,6 +51,21 @@ the next attach.
   them. The production CSP (`default-src 'self'`, no `unsafe-inline`) is what ships — the
   dev server's wider policy exists only in memory. The import boundary from ADR 0008 now
   covers the renderer as well as `packages/app/src`.
+- **app:** the React primitives over `components.css`, in `packages/app/renderer/src/ui`
+  (#147) — `StatusChip` and `StatusDot`, `ScheduleBadge`, `ConnectionIndicator`, `Button`,
+  `Chip`, `Card`, `Well`, `ConfigField`, `ObjectHeader` with the counterpart menu per crumb
+  type, `StateView`, and `Text` / `Duration` / `Time` over the generated type styles. No
+  primitive carries a literal colour, size or glyph: the statuses come from
+  `STATUS_PRESENTATION` and the durations render two units at most, ticking at 1Hz off one
+  clock shared by the whole renderer.
+- **app:** `#preview` in a dev build renders every primitive in both themes side by side,
+  driven by the design system's own lists. It is the visual review surface for the rest of
+  the desktop-app milestone and is dead code in a production build.
+- **design:** `STATE_VIEW_PRESENTATION` and `CHROME_GLYPHS` are generated from a new
+  `stateView` and `chrome` section in `semantics.json`, so the state views' glyphs and the
+  breadcrumb separator are covered by the bundled-font check like every other glyph.
+  `components.css` gains `orca-well`, `orca-menu` and the object header's trail and
+  disclosure classes.
 
 ### Changed
 

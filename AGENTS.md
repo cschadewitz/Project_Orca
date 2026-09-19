@@ -61,6 +61,12 @@ Screens live in `packages/app/renderer` — React, bundled by Vite, with `tokens
 `components.css` imported at the top of `renderer/src/main.tsx`. `pnpm --filter @orca/app dev`
 runs it with hot reload; `docs/DEVELOPMENT.md` ("The renderer build") has the rest.
 
+The primitives are already built: `renderer/src/ui` wraps the `orca-*` classes as
+`StatusChip`, `Button`, `Chip`, `Card`, `Well`, `Text`, `Duration`, `Time`, `ConfigField`,
+`ObjectHeader`, `StateView`, `ScheduleBadge` and `ConnectionIndicator`. Compose those rather
+than writing class names, and see them all in both themes at `#preview` in a dev build. If
+an implementation has to diverge from `component-api.d.ts`, correct that file in the same PR.
+
 The app (`packages/app`) may import only `@orca/protocol` and `@orca/design` from the
 workspace — the renderer included; everything it knows about a run comes over the wire from
 the daemon (ADR 0008).

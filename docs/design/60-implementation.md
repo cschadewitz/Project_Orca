@@ -28,6 +28,13 @@ more useful than a component bundle they must wrap. Names are `orca-` prefixed a
 `packages/design/src/component-api.d.ts` describes the props the React layer should expose
 over those classes. It is documentation, not a shipped type package.
 
+The React layer itself lives in `packages/app/renderer/src/ui` — the foundation set every
+surface uses (status, text, controls, the object header, the state views) — and `#preview`
+in a dev build renders all of it in both themes side by side. Primitives that belong to one
+surface arrive with that surface; the shared ones belong here. When an implementation has to
+diverge from `component-api.d.ts`, that file is corrected in the same change, so it stays a
+description of what exists rather than a draft of what was once intended.
+
 ## Density
 
 Density is one attribute, `data-density="compact"`, set on a surface's root element. It

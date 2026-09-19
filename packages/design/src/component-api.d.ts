@@ -4,6 +4,11 @@
  * This file is documentation, not a shipped package. The CSS layer is the
  * implementation; these signatures say what each primitive needs from the
  * caller so two developers build the same component.
+ *
+ * The primitives marked "built" below exist in `packages/app/renderer/src/ui`; where the
+ * implementation had to diverge from the signature drafted here, this file was corrected
+ * rather than the code. The rest are still drafts and will be corrected the same way as
+ * the surfaces that need them land.
  */
 
 export type RunStatus = "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "blocked" | "held" | "stale";
@@ -19,13 +24,106 @@ export type WorkflowNodeType =
 export type DependencyKind = "blocks" | "soft" | "informs";
 export type DependencyState = "open" | "satisfied" | "failed" | "waived";
 
-/** Status chip. `label` is required — status is never colour alone. */
+/** Status chip (built). `label` is required — status is never colour alone. */
 export interface StatusChipProps {
   status: RunStatus;
   /** Defaults to the status word. Override only to add a count ("failed ×3"). */
   label?: string;
   /** Glyph-only form for a dense tree row; the word moves to the accessible name. */
   glyphOnly?: boolean;
+}
+
+/**
+ * The chip's minimap form (built): a status where there is only room for a swatch — the
+ * scrollbar gutter, a legend, a nav count. The one place colour carries a status alone,
+ * so it is only ever drawn beside something that also says the word. Without a `label` it
+ * is decorative and hidden from assistive technology.
+ */
+export interface StatusDotProps {
+  status: RunStatus;
+  label?: string;
+}
+
+/** A chip that is not a status (built): a count, a filter, a role. Always `orca-chip--plain`. */
+export interface ChipProps {
+  children: unknown;
+  /** Decorative; the label beside it carries the meaning. */
+  glyph?: string;
+}
+
+/**
+ * Button (built). Tone is meaning: `primary` is the accent (interactive, never a state),
+ * `danger` is the control that cancels or denies, `ghost` must not compete with content.
+ *
+ * Disabled is `aria-disabled` plus a swallowed click, not the `disabled` attribute: a
+ * disabled button is unfocusable, and 40-connection-states.md requires its reason to be
+ * reachable on the control itself.
+ */
+export interface ButtonProps {
+  children: unknown;
+  tone?: "default" | "primary" | "danger" | "ghost";
+  size?: "sm" | "md" | "lg";
+  disabled?: boolean;
+  disabledReason?: string;
+  onClick?(): void;
+}
+
+/**
+ * The raised block an interruption arrives in (built). `interrupt` is what makes it
+ * announce assertively; a card replayed in a finished run must not announce at all, which
+ * is why it is a prop rather than a consequence of the tone.
+ */
+export interface CardProps {
+  children: unknown;
+  tone?: "default" | "gate" | "permission";
+  eyebrow?: unknown;
+  interrupt?: boolean;
+}
+
+/**
+ * A sunken block for text ORCA produced (built): a command, a payload, a stack trace.
+ * `surface-sunken` is what says "machine output"; it is a `<pre>`, so whitespace the
+ * machine emitted is whitespace the reader sees.
+ */
+export interface WellProps {
+  children: unknown;
+  /** Defaults to `mono-log`. */
+  style?: TextStyleName;
+  /** Names the block, which a screen reader then reads as a region on demand. */
+  label?: string;
+}
+
+/** The generated union of `orca-text-*` class names; see `TextStyle` in src/tokens.ts. */
+export type TextStyleName = string;
+
+/**
+ * The one way to pick a type style (built). `style` deliberately shadows the DOM `style`
+ * prop, so a `<Text>` cannot carry an inline value (rule 1).
+ */
+export interface TextProps {
+  style: TextStyleName;
+  children: unknown;
+  /** The element to render. Defaults to `span`. */
+  as?: unknown;
+}
+
+/**
+ * An elapsed span (built), to two units at most. Exactly one of `ms` (finished) or
+ * `since` (accruing) — `since` ticks at 1Hz off one clock shared by the whole renderer.
+ */
+export interface DurationProps {
+  ms?: number;
+  since?: Date;
+}
+
+/**
+ * A timestamp (built). Absolute in `mono-id`, relative in `caption`, together by default
+ * ("14:02:31 · 6m ago"). Drop to `absolute` when the connection is not live: a relative
+ * time computed against a stale clock is a lie (40-connection-states.md).
+ */
+export interface TimeProps {
+  at: Date;
+  show?: "absolute" | "relative" | "both";
 }
 
 export interface RunTreeRowProps {
@@ -132,6 +230,7 @@ export interface PermissionCardProps {
   onAnswer(option: string): void;
 }
 
+/** Built. */
 export interface ScheduleBadgeProps {
   classification: ScheduleClass;
   /** Opens the explanation popover. Every classification can explain itself. */
@@ -181,11 +280,16 @@ export interface AgentHealthCardProps {
   claim?: { runId: string; itemId: string; itemTitle: string };
 }
 
+/**
+ * Built. `children` is a render function, not a node: the field owns no control, but it
+ * does own the ids that tie the label, the help and the error to whatever control the
+ * caller puts inside it, and it has to hand them over to do that.
+ */
 export interface ConfigFieldProps {
   label: string;
   /** Dotted path into the YAML — always shown, it is how the form maps to the file. */
   path: string;
-  children: unknown;
+  children(control: { id: string; "aria-describedby"?: string; "aria-invalid"?: true }): unknown;
   help?: string;
   error?: string;
   /** Opens the raw YAML view scrolled to and highlighting this path. */
@@ -202,28 +306,62 @@ export interface WorkflowNodeProps {
   onOpen(name: string): void;
 }
 
-export interface ObjectHeaderProps {
-  crumbs: ReadonlyArray<{
-    type: "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
-    id: string;
-    label: string;
-    current?: boolean;
-  }>;
-  actions?: unknown;
+export type CrumbType = "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
+
+export interface Crumb {
+  type: CrumbType;
+  id: string;
+  label: string;
+  current?: boolean;
 }
 
+/**
+ * The counterpart objects a crumb can lead to. The four 10-information-architecture.md
+ * names, and no more: a crumb type with none renders no menu rather than an empty one.
+ */
+export interface Counterpart {
+  id: string;
+  label: string;
+  leadsTo: CrumbType;
+}
+
+/**
+ * Built. The two navigation callbacks were not in the original draft, and without them
+ * the header cannot be the app's only breadcrumb: `onOpen` for the crumb itself (never
+ * called for the current crumb, which is not a link) and `onOpenCounterpart` for its
+ * menu. Omitting `onOpenCounterpart` suppresses the menus entirely.
+ */
+export interface ObjectHeaderProps {
+  crumbs: ReadonlyArray<Crumb>;
+  actions?: unknown;
+  onOpen?(crumb: Crumb): void;
+  onOpenCounterpart?(crumb: Crumb, counterpart: Counterpart): void;
+}
+
+/** Built — rendering only; the state machine that decides which state is live is #163. */
 export interface ConnectionIndicatorProps {
   state: ConnectionState;
-  /** For 'reconnecting': seconds elapsed. For 'disconnected': time of last event. */
+  /** For 'reconnecting': when the attempt started. For 'disconnected': the last event. */
   since: Date;
   eventCursor?: number;
   versions?: { app: string; daemon: string };
 }
 
-export interface StateViewProps {
-  kind: "empty" | "loading" | "error" | "disconnected" | "no-results";
-  title: string;
-  /** What the person can do about it. Omit only for 'loading'. */
-  body?: string;
-  action?: { label: string; onClick(): void };
-}
+/**
+ * Built, as a union rather than a record with optional fields: "omit only for 'loading'"
+ * is a rule the types can hold, and a state view with no body and no way out is the dead
+ * end the information architecture exists to prevent. `loading` takes neither; every
+ * other kind requires a body and may carry an action.
+ *
+ * The glyph per kind comes from `STATE_VIEW_PRESENTATION` in semantics.json, so it is
+ * covered by the bundled-font check like every other glyph the app draws.
+ */
+export type StateViewProps =
+  | { kind: "loading"; title: string }
+  | {
+      kind: "empty" | "error" | "disconnected" | "no-results";
+      title: string;
+      /** What the person can do about it. */
+      body: string;
+      action?: { label: string; onClick(): void };
+    };

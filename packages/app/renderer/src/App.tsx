@@ -6,12 +6,15 @@
  * daemon — and to be the first thing a real screen replaces (docs/design/60-implementation.md).
  * There is deliberately no state library and no router yet; both are their own decisions.
  */
-import { useEffect, useState, type JSX } from "react";
-import { CONNECTION_PRESENTATION } from "@orca/design";
+import { useEffect, useRef, useState, type JSX } from "react";
 import { connectionState, handshakeDetail, type Handshake } from "./connection.js";
+import { ConnectionIndicator, Text, Well } from "./ui/index.js";
 
 export function App(): JSX.Element {
   const [handshake, setHandshake] = useState<Handshake>({ phase: "connecting" });
+  /* When the attempt started, for the indicator's elapsed reading. A ref, not state: it
+     is set once and must not itself cause a render. */
+  const startedAt = useRef(new Date());
 
   useEffect(() => {
     let live = true;
@@ -23,18 +26,14 @@ export function App(): JSX.Element {
     };
   }, []);
 
-  const state = connectionState(handshake);
-  const presentation = CONNECTION_PRESENTATION[state];
-
   return (
     <main className="orca-surface placeholder">
-      <h1 className="orca-text-title">ORCA</h1>
+      <Text style="title" as="h1">
+        ORCA
+      </Text>
       {/* Glyph and word together, never colour alone — docs/design/RULES.md. */}
-      <p className={`orca-conn orca-conn--${state}`}>
-        <span aria-hidden="true">{presentation.glyph}</span>
-        <span>{presentation.word}</span>
-      </p>
-      <pre className="orca-text-mono-log placeholder__well">{handshakeDetail(handshake)}</pre>
+      <ConnectionIndicator state={connectionState(handshake)} since={startedAt.current} />
+      <Well label="Handshake result">{handshakeDetail(handshake)}</Well>
     </main>
   );
 }

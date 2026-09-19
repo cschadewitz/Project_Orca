@@ -171,6 +171,26 @@ export const CONNECTION_PRESENTATION: Record<ConnectionState, {
   mismatch: { word: 'version mismatch', glyph: '▣', fg: 'var(--status-blocked)', fgToken: 'status-blocked', writes: 'disabled' },
 };
 
+export type StateViewKind = 'empty' | 'loading' | 'error' | 'disconnected' | 'no-results';
+export const STATE_VIEW_KINDS: readonly StateViewKind[] = ['empty', 'loading', 'error', 'disconnected', 'no-results'] as const;
+/** The word is the accessible name of the view; 'loading' has no glyph because it draws skeletons. */
+export const STATE_VIEW_PRESENTATION: Record<StateViewKind, {
+  word: string; glyph?: string; fg: string; fgToken: ColorToken;
+}> = {
+  empty: { word: 'empty', glyph: '◌', fg: 'var(--ink-tertiary)', fgToken: 'ink-tertiary' },
+  loading: { word: 'loading', fg: 'var(--ink-tertiary)', fgToken: 'ink-tertiary' },
+  error: { word: 'error', glyph: '✕', fg: 'var(--status-failed)', fgToken: 'status-failed' },
+  disconnected: { word: 'disconnected', glyph: '◷', fg: 'var(--status-stale)', fgToken: 'status-stale' },
+  'no-results': { word: 'no results', glyph: '◌', fg: 'var(--ink-tertiary)', fgToken: 'ink-tertiary' },
+};
+
+/** Glyphs the chrome renders that are not a state: the crumb separator and the command key. */
+export type ChromeGlyph = 'crumbSeparator' | 'commandKey';
+export const CHROME_GLYPHS: Record<ChromeGlyph, string> = {
+  crumbSeparator: '▸',
+  commandKey: '⌘',
+};
+
 export type DependencyKind = 'blocks' | 'soft' | 'informs';
 export type DependencyState = 'open' | 'satisfied' | 'failed' | 'waived';
 /** Kind is the stroke style, state is the stroke colour — neither is carried by colour alone. */

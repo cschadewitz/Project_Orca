@@ -66,6 +66,41 @@
     "file": { "word": "file mode", "glyph": "◷", "fg": "status-stale", "writes": "absent" },
     "mismatch": { "word": "version mismatch", "glyph": "▣", "fg": "status-blocked", "writes": "disabled" }
   },
+  "stateView": {
+    "empty": {
+      "word": "empty",
+      "glyph": "◌",
+      "fg": "ink-tertiary",
+      "note": "Nothing exists yet. The body says how to make the first one."
+    },
+    "loading": {
+      "word": "loading",
+      "fg": "ink-tertiary",
+      "note": "No glyph on purpose: loading renders skeleton rows, and a symbol would compete with them."
+    },
+    "error": {
+      "word": "error",
+      "glyph": "✕",
+      "fg": "status-failed",
+      "note": "Something failed to load. The body names what, the action retries it."
+    },
+    "disconnected": {
+      "word": "disconnected",
+      "glyph": "◷",
+      "fg": "status-stale",
+      "note": "Same glyph as the stale run status and the disconnected connection state, deliberately."
+    },
+    "no-results": {
+      "word": "no results",
+      "glyph": "◌",
+      "fg": "ink-tertiary",
+      "note": "Things exist, this filter matched none. The action clears the filter, never the data."
+    }
+  },
+  "chrome": {
+    "crumbSeparator": { "glyph": "▸", "note": "Between object-header crumbs. Decorative: aria-hidden." },
+    "commandKey": { "glyph": "⌘", "note": "In keyboard hints, the command palette and menus." }
+  },
   "dependencyKind": { "blocks": "solid", "soft": "dashed", "informs": "dotted" },
   "dependencyState": {
     "open": "graph-edge",
