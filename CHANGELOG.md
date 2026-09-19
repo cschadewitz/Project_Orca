@@ -20,6 +20,18 @@ Releases start at 0.2.0. `0.1.0` was the untagged groundwork commit (`8645f28`,
 
 ### Store format
 
+No change.
+
+### Added
+
+### Changed
+
+### Fixed
+
+## 0.3.0 - 2026-09-19
+
+### Store format
+
 New directory `.orca/leases/`, one JSON file per held lease. Nothing reads it except the
 process that wrote it, and an ORCA that never sees it behaves as before, so an existing
 store needs no migration; leftover files from a killed process lapse and are cleaned up on
