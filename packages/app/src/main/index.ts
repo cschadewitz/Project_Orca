@@ -86,7 +86,10 @@ function createWindow(): void {
     backgroundColor: canvasColor(resolveTheme(preferences.read().theme)),
     show: false,
     webPreferences: {
-      preload: fileURLToPath(new URL("../preload/index.js", import.meta.url)),
+      // `.cjs`, because a sandboxed preload is evaluated as a plain script and this package
+      // is `"type": "module"` — an ESM preload is silently refused and `window.orca` never
+      // exists. `tsconfig.preload.json` is what emits it; src/preload/index.cts has the why.
+      preload: fileURLToPath(new URL("../preload/index.cjs", import.meta.url)),
       contextIsolation: true,
       sandbox: true,
     },

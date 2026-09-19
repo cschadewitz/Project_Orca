@@ -26,10 +26,12 @@ function run(command, args, cwd) {
   });
 }
 
-// Electron loads dist/main/index.js and dist/preload/index.js; they are tsc's output, and
-// the project references mean this also builds protocol and whatever it needs.
+// Electron loads dist/main/index.js and dist/preload/index.cjs; they are tsc's output, and
+// the project references mean this also builds protocol and whatever it needs. The preload
+// is a second project because it alone is emitted as CommonJS (tsconfig.preload.json), and
+// it references packages/app/tsconfig.json, so building it builds main first.
 console.log("[orca] building main and preload…");
-await run("pnpm", ["exec", "tsc", "-b", "packages/app"], repoRoot);
+await run("pnpm", ["exec", "tsc", "-b", "packages/app/tsconfig.preload.json"], repoRoot);
 
 const server = await createServer({ configFile: fileURLToPath(new URL("../vite.config.ts", import.meta.url)) });
 await server.listen();

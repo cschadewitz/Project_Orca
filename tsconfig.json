@@ -20,6 +20,10 @@
   },
   "include": [
     "packages/*/src/**/*.ts",
+    // `*.ts` does not match `.cts`, and the app's preload is the workspace's one CommonJS
+    // source (packages/app/tsconfig.preload.json). It is listed so that `pnpm run typecheck`
+    // and ESLint's type-aware rules — which resolve files through this project — both see it.
+    "packages/app/src/preload/**/*.cts",
     "packages/*/test/**/*.ts",
     "examples/**/*.ts",
     "vitest.config.ts",
