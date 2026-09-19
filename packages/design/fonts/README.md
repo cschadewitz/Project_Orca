@@ -34,6 +34,15 @@ codepoint, and fails if `semantics.json` grows a glyph no bundled face carries.
 Two families are needed because no single OFL face covers all twelve: Noto Sans Symbols 2 has
 everything but ⊘ (Mathematical Operators is not in its coverage), and Noto Sans Math has ⊘.
 
+**To see it for yourself:** `pnpm --filter @orca/app dev`, then `#type` in the app window.
+It renders every glyph the design system declares — large, then at chip size, in both the
+sans and the mono stack, with its codepoint and what declares it — and carries a toggle that
+swaps the bundled faces for the OS stack. With the faces off, U+23F8 (`held`) renders as tofu
+on Linux and the other symbols visibly change weight and geometry. That is the argument for
+this directory, and it is worth looking at rather than taking on trust: a glyph that renders
+the *same* with the toggle either way is coming from the OS, which means the subset is
+missing it. `build-fonts.js` cannot catch that; only this can.
+
 ## Licences
 
 Both upstreams are under the SIL Open Font License 1.1, copied here as `LICENSE-IBM-Plex.txt`

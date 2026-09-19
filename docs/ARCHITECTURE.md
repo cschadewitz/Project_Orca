@@ -44,10 +44,22 @@ transports, so tests use in‑memory stores and a scripted ACP agent.
 one fold from the engine's statuses to the eight the design system draws
 (`packages/protocol/README.md`). `daemon` serves it over the network in front of the engine:
 it depends on `engine` and `store` to project them, and `cli` starts one with `orca serve`,
-read-only over the workspace's store. `app` depends on `protocol` and `design` and nothing
+read-only over the workspace's store. It has two transports on one port. `socket.ts`
+upgrades `/socket` in `ws`'s `noServer` mode, so `/health` and `/rpc` still reach the HTTP
+handler untouched; a connection carries the ordinary method table plus `subscribe` /
+`unsubscribe`, whose state is the connection's. `subscriptions.ts` owns one client's stream
+— replay, fan-out and agent batching — over a narrow `SubscriptionSource` seam
+(`subscribe(listener, filter)` + `events(runId)`) that `Orchestrator` satisfies structurally,
+and `notifications.ts` is the pure event→notification fold. The socket fans out this
+process's event store, so a run appended by a separate CLI process still lands only on the
+next read (#196).
+
+`app` depends on `protocol` and `design` and nothing
 else in the workspace, enforced by the lint config: the desktop app can only see what a
 daemon tells it, so attaching to a daemon on another machine is the same code path as the
-local one (ADR 0008). `design` is the design system as code — generated tokens in CSS and
+local one (ADR 0008). Its main process holds one store-wide subscription and broadcasts to
+every window over an IPC channel; the renderer turns those envelopes into a typed stream
+with `createNotificationStream`, which imports `@orca/protocol` and nothing else. `design` is the design system as code — generated tokens in CSS and
 TypeScript, the CSS component layer, the typed status maps — with no dependencies at
 all; the brand book and surface specs it implements are in `docs/design/`.
 

@@ -6,7 +6,8 @@ pnpm install
 pnpm run typecheck           # tsc --noEmit over every package + tests, then again over the
                               # renderer (packages/app/renderer/tsconfig.json) with JSX/DOM lib
                               # a plain Node package never needs
-pnpm run lint                # eslint (type-aware) over the same set; --fix as `pnpm run lint:fix`
+pnpm run lint                # eslint (type-aware) over the same set, then the CSS token
+                              # check; --fix as `pnpm run lint:fix` (eslint only)
 pnpm run format              # prettier --write . (`format:check` to only report)
 pnpm test                    # vitest: unit tests + e2e against a real ACP subprocess
 pnpm run test:coverage       # the same run, with coverage and its thresholds
@@ -16,6 +17,8 @@ node packages/cli/dist/main.js demo   # same, from the compiled build
 pnpm run orca serve          # the daemon, on 127.0.0.1:6722 until Ctrl-C
 pnpm --filter @orca/app dev  # the app against that daemon, renderer hot-reloading
 pnpm run build && pnpm --filter @orca/app start   # the same app from the built output
+pnpm run app:smoke           # Playwright drives the built app against a demo daemon
+                              # (needs the Electron binary; xvfb-run it on a headless box)
 pnpm run design:build        # regenerate packages/design css/tokens.css + src/tokens.ts from tokens.json
 pnpm run design:check        # fail if those generated files are behind (CI runs this)
 pnpm run design:fonts        # re-subset packages/design/fonts from the upstream releases (by hand)
@@ -34,7 +37,7 @@ The app is three programs with three different runtimes, and they are built by t
 | part       | runtime  | built by                     | output          |
 | ---------- | -------- | ---------------------------- | --------------- |
 | `main`     | Node     | `tsc -b` with the workspace  | `dist/main`     |
-| `preload`  | Node     | `tsc -b` with the workspace  | `dist/preload`  |
+| `preload`  | Node     | `tsc -b`, its own project    | `dist/preload/index.cjs` |
 | `renderer` | Chromium | Vite (`packages/app/vite.config.ts`) | `dist/renderer` |
 
 **Vite, on the renderer only.** Plain Vite rather than `electron-vite` or `electron-forge`:
@@ -47,6 +50,34 @@ packaging (`electron-builder`) lands and wants to own the whole app — that is 
 
 `pnpm run build` runs both: `tsc -b` then `vite build`. `emptyOutDir` in the Vite config is
 scoped to `dist/renderer`, so the two never clear each other's output.
+
+**The preload is CommonJS, and that is not a style choice.** `packages/app` is
+`"type": "module"` and main is emitted as ESM, but `createWindow()` sets `sandbox: true`,
+and Electron evaluates a sandboxed preload as a plain script. An ESM preload is refused
+outright — `"Unable to load preload script"`, `"Cannot use import statement outside a
+module"` — and Electron reports that to the *renderer's* console rather than failing the
+launch, so the only symptom is `window.orca === undefined` and every screen landing on a
+renderer with no bridge. The sandbox is worth more than the module format, so the format
+gives way (#198).
+
+The mechanics, in case you move the file:
+
+- The source is `src/preload/index.cts`, not `.ts`. TypeScript has no compiler option for
+  an output extension, so the input extension is the only thing that yields `.cjs`; under
+  `module: NodeNext` a `.cts` is emitted as CommonJS automatically.
+- `packages/app/tsconfig.preload.json` is its own composite project, because the package's
+  `include` is `src/**/*.ts` and does not match `.cts`. It is listed in
+  `tsconfig.build.json`, and the root `tsconfig.json` names the `.cts` explicitly so
+  `pnpm run typecheck` and ESLint's type-aware rules both still see it.
+- **Keep the preload's imports to `electron` plus type-only imports.** Nothing in it needs
+  Node, so only the single `import electron = require("electron")` is aware of the format.
+  That `require` form is what repo-wide `verbatimModuleSyntax` demands of a file emitting
+  CommonJS; it carries a documented `eslint-disable`.
+
+To check the bridge by hand on a headless box: `orca demo --dir <dir> --keep`, then
+`orca --config <dir>/orca.config.yaml serve`, then launch the built app under `xvfb-run`
+and confirm the status bar reads `connected`. `ELECTRON_RUN_AS_NODE` must not be set, and
+`xvfb-run` swallows Electron's own flags unless they sit behind `/bin/sh -c`.
 
 **`pnpm --filter @orca/app dev`** (`packages/app/scripts/dev.js`) compiles main and preload
 once, starts the Vite dev server, and launches Electron with `ORCA_RENDERER_URL` pointed at
@@ -88,7 +119,7 @@ the scripted agent plus its `demo-playbook.yaml` — so `orca --config <path>/or
 run <workflow>` exercises any workflow without an LLM. Edit the playbook to change what
 the agent delivers per artifact kind.
 
-## The primitive preview
+## The primitive preview, and the type proof
 
 `packages/app/renderer/src/ui` is the React layer over `packages/design/css/components.css`:
 `StatusChip`, `Button`, `Text`, `Duration`, `ObjectHeader`, `StateView` and the rest, each a
@@ -105,9 +136,25 @@ own lists (`RUN_STATUSES`, `SCHEDULE_CLASSES`, `STATE_VIEW_KINDS`, `THEMES`) —
 added to `semantics.json` appears there without anyone editing the page. It is the visual
 review surface for the desktop-app milestone.
 
-It is dev-only in the strong sense: `routes.tsx` reaches it through a dynamic `import()`
-inside an `import.meta.env.DEV` branch, which Vite folds to `false` in a build, so neither
-the page nor its CSS is emitted. Keep it that way if you add to it.
+`#type` is the second dev-only route, and it answers what the font build cannot (#194).
+`tools/font-build/build-fonts.js` proves every declared file contains every codepoint
+claimed for it; only a renderer can show that the glyphs look right *next to the words*, at
+chip scale, in both themes. `#type` shows every type style in `tokens.json` with real sample
+text, the eight statuses as chips and as bare glyphs, the connection states, two ids per row
+in `mono-id` so the tracking can be read, and a block of `mono-log` output with the
+box-drawing rules the stream uses.
+
+Its point is the **"bundled faces on/off" toggle**, which swaps the declared stacks for the
+same stacks minus every bundled family. The failure it catches is silent: a glyph that falls
+through to the OS still renders, just in a different typeface, and nobody notices in a
+screenshot taken on the machine that happens to have the font. With the faces off, U+23F8
+(`held`) renders as tofu on Linux. **The rule for reading it: anything that does not change
+when you flip the toggle was never coming from a bundled face.** Cross-platform screenshots
+are still done by eye.
+
+Both routes are dev-only in the strong sense: `routes.tsx` reaches them through a dynamic
+`import()` inside an `import.meta.env.DEV` branch, which Vite folds to `false` in a build,
+so neither the pages nor their CSS are emitted. Keep it that way if you add to them.
 
 ## Package manager
 
@@ -157,6 +204,43 @@ conditional spreads under `exactOptionalPropertyTypes`. Each exception is commen
 the config with the reason; that comment is the argument to beat if you want it back.
 
 One local rule, `orca/file-header-comment`, enforces the first convention below.
+
+**Rule 1 of `docs/design/RULES.md` — no literal colours, sizes, radii, durations or
+z-values in component code — is enforced by `pnpm run lint`** (#153), in two halves:
+
+| | What runs it | What it covers |
+| --- | --- | --- |
+| Stylesheets | `pnpm run lint:css`, chained from `lint` | every `.css` under `packages/app/renderer`, and `components.css` for colours and stacking order |
+| TSX | the `orca/design-tokens-only` ESLint rule | inline `style={{ … }}` objects under `packages/app` |
+
+The CSS side rejects hex colours, the colour functions, CSS colour names, `px`/`rem`/`ms`/`s`
+quantities and a `z-index` that is not a `var(--z-*)`. It allows `0`, percentages and the
+relative units (`fr`, `em`, `ch`, `vh`, `vw`, `deg`) — those describe a ratio to something
+already chosen rather than making a new decision — and it does not scan comments, quoted
+strings, `url()` or at-rule preludes, so `@media (max-width: 900px)` is fine while a literal
+inside that block is not. The TSX side rejects a colour notation or a `px`/`rem`/`ms` string
+in an inline style, and a non-zero bare number for `width`, `height` or any `padding*`, since
+React renders those as pixels. A string-valued `style` prop is the design system's own
+(`<Text style="caption">`) and is left alone.
+
+It is a hand-written scanner in `tools/eslint-config/css-tokens.js` rather than stylelint:
+the rule is one sentence, and stylelint can only express it as a regex per property — a
+check that silently stops covering new code the moment someone uses a property nobody
+listed. The fixtures are in `packages/design/test/token-lint.test.ts`, so `pnpm test`
+catches a regression too.
+
+**The escape hatch is to add the token**, and it is almost always the right fix: put the
+value in `packages/design/tokens.json` with a `usage` note, run `pnpm run design:build`,
+and reference it as `var(--your-token)` or `v('your-token')`. Both lint messages say so, so
+the fix is in the failure. For a value no token could sensibly name, an
+`/* orca-allow-literal: why */` comment suppresses the line it is on and the next; reaching
+for it twice for the same kind of value means a missing token, not a missing exemption.
+
+Known gap: `packages/design/css/components.css` is checked for colours and stacking order
+only. It still carries ~190 literal type sizes and box heights predating the check, which
+need a type-scale and control-height vocabulary `tokens.json` does not have yet. New code
+does not inherit that exemption — anything under `packages/app/renderer` is checked in full.
+
 Prettier runs at `printWidth: 120` and skips `*.md` and `templates/` (see
 `.prettierignore`): prose is wrapped by hand, and a prompt template's whitespace is
 part of the prompt.
@@ -185,6 +269,13 @@ coverage improves.
 tests, and v8 coverage collected in the test process cannot see it, so its number would
 describe the collector rather than the tests. `packages/*/src/index.ts` barrels and
 `main.ts` entry points are excluded for the same kind of reason.
+
+The renderer joined the report in #154. `renderer/src/main.tsx` and `renderer/src/preview/**`
+stay out: the entry point only runs in a real Electron window — the smoke test is what
+exercises it — and the preview routes are galleries a person looks at. `packages/app/renderer/src`
+and `packages/app/src` also carry their own glob thresholds. A glob threshold is an
+*additional* check on a subset, not a partition: the files it matches are still counted in
+the whole-report numbers as well.
 
 CI measures coverage on one Node version (24), writes the per-package table into the
 job summary, and uploads `coverage/` as an artifact — including when the thresholds
@@ -241,6 +332,49 @@ shows a green check rather than none — see the comments in `.github/workflows/
   same code, plus the three `PROTOCOL_*` codes for version, method and message problems.
 - `exactOptionalPropertyTypes` is on: use conditional spreads (`...(x ? { x } : {})`) instead
   of assigning `undefined`.
+
+## Testing the app
+
+The renderer's test kit is three modules in `packages/app/renderer/test/`, and a screen
+test uses all three.
+
+- **`harness.tsx`** assembles what `main.tsx` installs above React — the keyboard map, the
+  layer stack, the palette source registry, appearance and the notification stream — so a
+  component can be mounted the way the app mounts it. `installBridge()` is the short way to
+  a fake daemon.
+- **`themes.tsx`** mounts a component once per theme with the real `tokens.css` and
+  `components.css` in the document, and asserts on the colour the design system actually
+  resolves: `inBothThemes(ui, ({ theme, container }) => …)`, then `resolved(el, "color")`
+  against `expectedToken(theme, "status-failed")`. **Name the token, never paste the hex** —
+  naming it is what makes the assertion mean "this element is bound to this token", and a
+  pasted value proves nothing and survives the token changing. happy-dom resolves `var()`
+  against a stylesheet selected by `[data-theme]`, which is all this needs, so jsdom was not
+  added; two of its quirks are worked around inside `themes.tsx`.
+- **`fake-bridge.ts`** is a `window.orca` answering `hello`, the five read methods and
+  notifications from `fixtures.ts` — the whole of "the daemon" as far as a test is
+  concerned, since the renderer can reach exactly one thing outside itself. Its defaults
+  genuinely page, filter and count the way the daemon's `ReadModel` does, so a screen that
+  ignores `limit` cannot pass its test and then page wrongly against a real daemon.
+  `fake.fail(...)`, `fake.hold(...)` (assert a loading state), `fake.notify(...)` and
+  `fake.calls` cover the rest. The fixtures were dumped from a real `ReadModel` run over
+  `packages/daemon/test/fixture.ts` and are parsed through their protocol schemas, so a
+  protocol change breaks that file rather than a screen test much later.
+
+**The Electron smoke test** (`packages/app/test/smoke/`) is the one test that launches the
+real thing: Playwright's Electron driver against the *built* app and a daemon on an
+`orca demo` store. It asserts the window comes up with a bridge in it — which is exactly
+what an ESM preload broke (#198) — that `hello` reached the daemon, that both themes render
+and resolve different tokens, and that axe finds no violations in either. Run it with
+`pnpm run build && pnpm run app:smoke`; on a headless box, `xvfb-run -a pnpm run app:smoke`,
+and in a container without unprivileged user namespaces also set `ORCA_SMOKE_NO_SANDBOX=1`.
+That is the *OS* sandbox and is unrelated to `webPreferences.sandbox: true`, which stays on
+everywhere and is one of the things the test checks.
+
+It runs from `.github/workflows/app-smoke.yml`, not `ci.yml`, on pull requests touching
+`packages/app`, `packages/design`, `packages/daemon` or `packages/protocol`. `ci.yml` keeps
+`ELECTRON_SKIP_BINARY_DOWNLOAD=1` and so has no Electron to launch; the smoke workflow
+installs without it. No browser binaries are involved — the driver uses the workspace's own
+`electron`, so `playwright install` is never needed.
 
 ## Tests worth reading first
 

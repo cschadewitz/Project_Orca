@@ -126,11 +126,69 @@ the next attach.
   bundling the protocol for the renderer no longer drags `node:crypto` and `node:fs` in with
   it. The root still re-exports every one of them; only a browser bundle needs the subpath.
 
+- **daemon:** `WS /socket` beside the HTTP endpoint, carrying the six `notification`
+  messages off `Orchestrator.subscribe()` — `run.changed`, `step.changed`, `agent.update`,
+  `input.opened`, `input.answered`, `event.appended`, each with the sequence number (#151).
+  The HTTP path is unchanged and a read-only client never opens a socket; `subscribe` over
+  `/rpc` answers `NOT_SUPPORTED` rather than "unknown method", and `hello` advertises the
+  methods either way. Reconnect costs latency and never data: the daemon attaches its
+  listener before reading the log and drops what it already replayed, so resume from cursor
+  `n` yields `n+1` onwards with no gap and no duplicate. Agent output is coalesced to one
+  frame per step per 100ms, and a held batch is flushed before any other notification for
+  the run, so output never lands after the `step.completed` that ended it. `run.changed`
+  and `step.changed` never carry `stale` — a lapsed lease is the absence of events, which
+  no stream can announce. The socket fans out this process's event store, so a run appended
+  by a separate CLI process still appears only on the next read (#196).
+- **app:** the Runs surface (#152) — the first screen with real data behind it, and the
+  proof of the whole path live. Fixed-height rows from `--row-h` with a status chip, the run
+  name in mono, the workflow and version, elapsed or total duration and the agent; `J`/`K`
+  and the arrows select, in the `list` scope of the keyboard map. Status filtering is a
+  `runs.list` parameter so the daemon filters the whole store; text filtering is local to
+  what is held, because the protocol has no text parameter. Updates arrive on `run.changed`
+  and nothing re-reads the list; a notification for an unknown run is resolved with one
+  `runs.get` and inserted. A lost connection keeps the rows, marks them stale and stops the
+  clock rather than accruing an elapsed time against a daemon that is not talking.
+- **app:** one `Menu` primitive carrying the popover contract for every popover after it
+  (#202) — roving focus, `Home`/`End`, typeahead, `Enter`, and focus returning to the
+  trigger on close including on `Esc`. Placement flips rather than clips, decided by a pure
+  function over rects so it is testable where there is no layout engine. `ObjectHeader`
+  consumes it; its own open state, `Escape` handler and outside-click listener are gone, and
+  `Esc` is now only the layer stack's.
+- **design:** `#type` in a dev build (#194), the proof surface for the bundled faces — every
+  type style with real sample text, the statuses and connection states with their glyphs,
+  `mono-id` pairs and a `mono-log` block, in both themes, all derived from `tokens.json` and
+  `semantics.json` rather than re-declared. Its toggle swaps the bundled faces for the OS
+  stack, which is the only way to see the silent failure #144 could not rule out: a glyph
+  that falls through still renders, just in another typeface.
+- **tests:** the renderer test kit (#154) — a helper that mounts a component in both themes
+  against the real `tokens.css` and asserts on the token it resolves to, and a fake preload
+  bridge whose read methods page and filter the way the daemon's does, from fixtures dumped
+  from a real `ReadModel` run. Plus an Electron smoke test (Playwright's Electron driver
+  against the built app and a demo daemon: the bridge loaded, the handshake reached the
+  daemon, both themes, axe clean) in its own workflow, since `ci.yml` installs without the
+  Electron binary. The renderer joins the coverage report.
+- **tooling:** `pnpm run lint` now enforces rule 1 of `docs/design/RULES.md` (#153) — a CSS
+  check rejecting hex colours, colour functions and names, `px`/`rem`/`ms`/`s` quantities
+  and bare `z-index` values, and an ESLint rule rejecting colour and length literals in
+  inline `style` objects. `0`, percentages and the relative units are allowed. The escape
+  hatch is to add the token and rebuild, and both messages say so. `components.css` is
+  checked for colours and stacking order only for now; the ~190 literal type sizes and box
+  heights it still carries need a type-scale vocabulary `tokens.json` does not have yet.
+
 ### Changed
 
+- **protocol:** version 1.2 — `subscribe` / `unsubscribe` and the notification schemas.
+  Additive, like 1.1 before it.
 - **protocol:** version 1.1 — `HelloResult.methods` lists the methods a daemon answers, so a
   newer client can degrade per screen rather than per daemon. Additive: a 1.0 client is
   unaffected.
+- **app:** the preload is built as CommonJS to `dist/preload/index.cjs` (#198). `packages/app`
+  is `"type": "module"`, so it was emitted as ESM while the window was created with
+  `sandbox: true` — and Electron refuses an ESM preload in a sandboxed window, reporting it
+  to the renderer's console rather than failing the launch. `window.orca` was therefore
+  `undefined` and every screen would have landed on a renderer with no bridge. The sandbox
+  is kept and the module format gives way; the source is now `src/preload/index.cts` with
+  its own tsconfig project.
 - **engine:** `Orchestrator.cancel()` on a run this process is *not* driving now takes the
   run's lease before closing it, so cancelling a run another interpreter holds fails with
   `RUN_LEASED` rather than racing `run.cancelled` into a log that keeps growing.

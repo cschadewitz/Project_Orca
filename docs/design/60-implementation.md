@@ -93,6 +93,54 @@ Focus stays in the query field for as long as the palette is open. The highlight
 *selection* — `aria-activedescendant` on the field, the accent rail on the row — which is
 why it does not draw the focus ring.
 
+## Popovers are one primitive
+
+`Menu` (`renderer/src/ui/menu.tsx`) carries the whole popover contract, once, and every
+popover uses it — the crumb's counterparts today, the schedule badge's explanation, the
+artifact version menu and the risk cell's detail as they land.
+
+`↑`/`↓` move with wrapping, `Home`/`End` jump, `Enter` chooses, a letter jumps to the next
+item starting with it. Focus moves onto the first item on open and back to the trigger on
+close — a choice, a second press on the trigger, or `Esc`. The one exception is a press
+*outside*: focus is already going where the person clicked, and dragging it back would fight
+them. A `disabled` item is shown and named but skipped by the arrows, because a menu never
+hides what it cannot do; an empty item list renders no trigger at all, because a disclosure
+onto nothing is worse than no disclosure.
+
+The arrows, `Home`, `End` and `Enter` are registered on the `KeyboardMap` in a `menu` scope,
+so the palette lists them and innermost-first resolution stops them colliding with the
+`↑`/`↓` of a list underneath; they are registered only while a menu is open, and refcounted,
+since two open menus must not be a double-binding error. **Typeahead is deliberately not in
+the map**: a letter in a menu is typing into the widget, not a command — it has no stable
+label, and A–Z would bury the commands that matter. `Esc` is not the component's at all; the
+menu pushes onto the layer stack and the one global `Esc` closes the topmost.
+
+**Placement flips rather than clips.** `placeMenu` is a pure function from the trigger rect,
+the menu's size and the viewport to `{ block, inline }`, which the component turns into
+`.orca-menu--above` / `.orca-menu--end`. Being pure is what makes it testable with real
+numbers under a DOM that has no layout engine; the measurement is injectable for the same
+reason. A menu larger than the window does *not* flip — both sides clip, and moving it would
+only cost it the tie to its trigger.
+
+## The type and glyph proof
+
+`#type` in a dev build (`renderer/src/preview/type-proof.tsx`) is where the bundled faces get
+checked. The font build proves every declared file contains every codepoint claimed for it;
+only a renderer can show the glyphs look right next to the words, at chip scale, in both
+themes. Every type style in `tokens.json` with real sample text, the eight statuses as chips
+and as bare glyphs, the connection states, two ids per row in `mono-id` so the tracking can
+be read, and `mono-log` output with the box-drawing rules the stream uses.
+
+Nothing on it is re-declared — the scale comes from `tokens.json`, the glyphs from the
+presentation maps — and a test reads those sources off disk, so the page cannot quietly stop
+covering a style or a glyph.
+
+Its point is the **bundled-faces toggle**, which swaps the declared stacks for the same
+stacks minus every bundled family. The failure this catches is silent: a glyph that falls
+through to the OS still renders, just in a different typeface, and nobody notices in a
+screenshot taken on the machine that happens to have the font. The rule for reading it:
+anything that does not change when you flip the toggle was never coming from a bundled face.
+
 ## Virtualised rows
 
 Rows are fixed height by token, which lets the virtualiser compute offsets arithmetically. Two
@@ -118,6 +166,32 @@ under `requestAnimationFrame`; a per-token DOM write will cost more CPU than the
 Append to a detached fragment and commit once per frame. Do not re-render the run tree on
 every agent update — step status changes are a different, much rarer event stream, and the
 tree should subscribe only to those.
+
+## The shape of a surface
+
+`renderer/src/runs/` is the first surface with real data behind it and the shape the others
+should take. Four files, and the split is the point: the arithmetic most likely to be wrong
+and least well read by a DOM test (ordering, the text filter, folding a notification into a
+row) is a plain module with a plain test; the data is one hook; selection and its keys are
+another; the markup is composed from `ui/`.
+
+**A surface never polls and never re-reads a list because a notification arrived.** One read
+on mount and per filter change, then the stream. A notification about an object the list has
+never seen is resolved with a single `get` and inserted in order — a `run.changed` carries a
+status and a cursor, not a name or a creation time, so there is no row to draw from it alone.
+
+**Filtering is a filter, not a search** — the IA rules out a global search screen. The halves
+differ deliberately: a status filter is a list parameter, so the daemon applies it to the
+whole store; a text filter is applied locally to what is already held, because the protocol
+has no text parameter and a "search" that only saw the current page would be a lie. Say
+which in the count: "3 of 7 runs".
+
+Every `StateView` kind is reachable and each means one thing — `loading` while the call is
+out, `error` when the daemon answered badly, `disconnected` when there is no daemon at all,
+`empty` when the store is genuinely empty, `no-results` when a filter emptied it. With rows
+already in hand, a lost connection keeps them, marks them stale and **stops the clock**: an
+elapsed time accruing against a daemon that is not talking is an invented number, which
+rule 12 forbids as much as any other invented value.
 
 ## What the design assumes ORCA can provide
 
