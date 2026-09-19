@@ -20,11 +20,13 @@
     // Node is Electron's `sandbox: true` + `contextIsolation`, not this list.
     "types": ["vite/client", "node"],
     // Matches the aliases in vite.config.ts: the two packages ADR 0008 allows the app to
-    // import, resolved to sources, plus core because protocol type-imports it.
+    // import, resolved to sources, plus core because protocol type-imports its root and
+    // takes its runtime schemas from the node-free `@orca/core/schemas` subpath.
     "paths": {
       "@orca/protocol": ["../../protocol/src/index.ts"],
       "@orca/design": ["../../design/src/index.ts"],
-      "@orca/core": ["../../core/src/index.ts"]
+      "@orca/core": ["../../core/src/index.ts"],
+      "@orca/core/schemas": ["../../core/src/schemas.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx", "../src/bridge.ts"]

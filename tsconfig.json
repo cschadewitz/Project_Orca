@@ -6,6 +6,7 @@
     "rootDir": ".",
     "paths": {
       "@orca/core": ["./packages/core/src/index.ts"],
+      "@orca/core/schemas": ["./packages/core/src/schemas.ts"],
       "@orca/store": ["./packages/store/src/index.ts"],
       "@orca/agents": ["./packages/agents/src/index.ts"],
       "@orca/engine": ["./packages/engine/src/index.ts"],
