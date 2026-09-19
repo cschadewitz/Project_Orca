@@ -20,10 +20,22 @@ Releases start at 0.2.0. `0.1.0` was the untagged groundwork commit (`8645f28`,
 
 ### Store format
 
-No change.
+New directory `.orca/leases/`, one JSON file per held lease. Nothing reads it except the
+process that wrote it, and an ORCA that never sees it behaves as before, so an existing
+store needs no migration; leftover files from a killed process lapse and are cleaned up on
+the next attach.
 
 ### Added
 
+- **store:** `LeaseStore` — a single-writer lease with a TTL and a heartbeat
+  (`InMemoryLeaseStore`, `FileLeaseStore`, `keepLease`), reusing the lock file's
+  holder-identity and take-over logic. `Stores.leases` is new.
+- **engine:** driving a run now takes the lease `run:<runId>` and heartbeats while attached,
+  so a second interpreter over one store is refused with `RUN_LEASED` instead of
+  interleaving its steps into the same log (#101). A lease whose holder stopped heartbeating
+  — or whose process is gone on this host — lapses and is taken over on the next attach.
+  `Orchestrator.listLeases()` / `breakLease()` are the operator's way in.
+- **cli:** `orca leases [list | break <runId> [--force] [--keep]]`.
 - **daemon:** `orca serve` and the packages behind the desktop app — `protocol` (the wire
   contract: envelope, `hello` handshake, versioning, error codes), `daemon` (HTTP transport
   and the method table; only `hello` so far) and `app` (an Electron shell that completes
@@ -35,6 +47,10 @@ No change.
   surface specs). `pnpm run design:check` in CI keeps the generated files current.
 
 ### Changed
+
+- **engine:** `Orchestrator.cancel()` on a run this process is *not* driving now takes the
+  run's lease before closing it, so cancelling a run another interpreter holds fails with
+  `RUN_LEASED` rather than racing `run.cancelled` into a log that keeps growing.
 
 ### Fixed
 

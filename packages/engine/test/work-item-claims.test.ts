@@ -178,6 +178,9 @@ describe("work item claims", () => {
     // The process "dies" mid fan-out; a new one resumes the same run from its log.
     const second = make({ stores: first.stores });
     gate = { wait: Promise.resolve(), release: () => {} };
+    // The "dead" interpreter is really this process and still heartbeats, so its run lease is
+    // taken the way an operator would; a real crash lapses it without anyone asking.
+    await second.orchestrator.breakLease(runId, { force: true });
     const state = await second.orchestrator.run(runId);
 
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");

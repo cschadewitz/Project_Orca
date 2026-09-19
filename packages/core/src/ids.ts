@@ -39,6 +39,7 @@ export type IdPrefix =
   | "art" // Artifact
   | "evt" // Event
   | "sess" // AgentSession
+  | "orc" // Orchestrator instance; the holder of a run lease
   | "tpl" // PromptTemplate
   | "host" // AgentHost
   | "hi" // HumanInput request

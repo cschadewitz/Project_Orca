@@ -69,7 +69,16 @@ async function acquire(path: string, options: FileLockOptions): Promise<number> 
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       }
-      if (await breakIfStale(path, staleMs, options.onBroken)) continue;
+      let broken: LockHolder | undefined;
+      const verdict = await breakIfStale(path, (text, mtimeMs) => {
+        broken = parseLockHolder(text);
+        const age = Date.now() - (broken?.at ?? mtimeMs);
+        return (broken !== undefined && !processAlive(broken.pid)) || age >= staleMs;
+      });
+      if (verdict !== "live") {
+        if (verdict === "broken" && broken) options.onBroken?.(broken);
+        continue;
+      }
       if (Date.now() >= deadline)
         throw new OrcaError("STORE_LOCK_TIMEOUT", `lock ${path} still held after ${timeoutMs}ms`, { path, timeoutMs });
       await sleep(backoff + Math.random() * backoff);
@@ -91,11 +100,19 @@ async function release(path: string, ino: number): Promise<void> {
 }
 
 /**
- * Remove the lock at `path` if its holder is dead or too old. True when the caller should
- * retry taking the lock at once (it was broken, or it vanished on its own); false when it is
- * live and the caller should wait.
+ * Remove the holder file at `path` when `stale(contents, mtimeMs)` says its holder is gone.
+ * Shared with the lease store, which owns a longer-lived file with the same shape: a holder
+ * record linked into place, broken only by a rename followed by an inode check so two waiters
+ * that both find it stale cannot each remove a file the other has just taken.
+ *
+ * `"broken"` - it was stale and is now gone; `"gone"` - there was nothing to break (or the
+ * file we moved turned out to belong to a live successor and was put back); `"live"` - the
+ * holder is still good and the caller should wait. Only `"live"` means "do not retry yet".
  */
-async function breakIfStale(path: string, staleMs: number, onBroken?: (holder: LockHolder) => void): Promise<boolean> {
+export async function breakIfStale(
+  path: string,
+  stale: (contents: string, mtimeMs: number) => boolean,
+): Promise<"broken" | "gone" | "live"> {
   let ino: number;
   let mtimeMs: number;
   let text: string;
@@ -109,19 +126,16 @@ async function breakIfStale(path: string, staleMs: number, onBroken?: (holder: L
       await fh.close();
     }
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return true;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "gone";
     throw e;
   }
-  const holder = parseHolder(text);
-  const age = Date.now() - (holder?.at ?? mtimeMs);
-  const dead = holder !== undefined && !alive(holder.pid);
-  if (!dead && age < staleMs) return false;
+  if (!stale(text, mtimeMs)) return "live";
 
   const doomed = `${path}.stale.${tag()}`;
   try {
     await rename(path, doomed);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return true;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "gone";
     throw e;
   }
   const moved = (await stat(doomed)).ino;
@@ -133,14 +147,14 @@ async function breakIfStale(path: string, staleMs: number, onBroken?: (holder: L
       if (e.code !== "EEXIST") throw e;
     });
     await unlink(doomed).catch(() => undefined);
-    return true;
+    return "gone";
   }
   await unlink(doomed).catch(() => undefined);
-  if (holder) onBroken?.(holder);
-  return true;
+  return "broken";
 }
 
-function parseHolder(text: string): LockHolder | undefined {
+/** The `{ pid, at }` a lock file names, or undefined when the contents are not ours to read. */
+export function parseLockHolder(text: string): LockHolder | undefined {
   try {
     const raw = JSON.parse(text) as Partial<LockHolder>;
     if (typeof raw.pid === "number" && typeof raw.at === "number") return { pid: raw.pid, at: raw.at };
@@ -150,8 +164,12 @@ function parseHolder(text: string): LockHolder | undefined {
   return undefined;
 }
 
-/** Signal 0 probes without sending; EPERM means the pid exists but belongs to another user. */
-function alive(pid: number): boolean {
+/**
+ * Whether `pid` names a live process *on this host*. Signal 0 probes without sending; EPERM
+ * means the pid exists but belongs to another user. Meaningless across pid namespaces, which
+ * is why every caller pairs it with an age or heartbeat rule (#103).
+ */
+export function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

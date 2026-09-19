@@ -345,6 +345,7 @@ workflow from a shell in the task folder.
 | Step hangs, then `turn timeout` | `turnTimeoutMs` (30 min here); the agent is then cancelled and, after `cancelGraceMs`, killed |
 | A work item is "claimed" by a run that died | `orca claims` then `orca claims release <workItemId>` |
 | Run died mid-way | `orca resume <runId>` — it replays from the event log |
+| `RUN_LEASED: run … is already being interpreted by pid …` | another process is driving that run; let it finish, or if you know it is gone, `orca leases` then `orca leases break <runId> --force` |
 
 ## 10. Status against issue #98
 

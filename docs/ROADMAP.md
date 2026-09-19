@@ -11,8 +11,11 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    then the plan methods over `PlanService`. Human input already survives process
    boundaries: `pause` mode parks the run in its event log and `orca answer <requestId>
    <option>` resumes it; the daemon exposes the same `answer()` / `resume()` over the wire
-   and keeps agent sessions alive across the wait. Prerequisite for two processes over one
-   store: the single‑writer lease per run (#101).
+   and keeps agent sessions alive across the wait. Two processes over one store are now
+   safe to the extent the run log is concerned: every interpreter holds a single‑writer
+   lease per run (#101). The document stores are not — `JsonFileDocumentStore` caches the
+   whole collection and rewrites it, so a daemon and a CLI command would lose each other's
+   requests, work items and plan records (#196).
 2. **T3 Code WebSocket transport** — implement `T3CodeRpc` over T3's Effect‑RPC envelope and
    depend on `@t3tools/contracts`; map `thread.meta-updated.worktreePath` into the workspace.
 3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore`/`ClaimStore` over
@@ -61,13 +64,18 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     12's); scheduler explanations, the critical path and cycle messages agree with each
     other (#80; the remaining critical‑path overlaps are #108); the JSONL event store and
     plan journal number events on disk under a lock file, so two processes over one store
-    extend one log (#97, consolidating #78/#87); `custom:decision-matrix` no longer
-    re-decides a decision the artifact intake already made (#79); `orca claims` lists and
-    releases a dead run's work‑item claims (#88; the released item still reads
+    extend one log (#97, consolidating #78/#87); driving a run takes a single‑writer lease
+    that is heartbeated while an interpreter is attached, so a second one is refused rather
+    than interleaved, and `orca leases` lists and breaks them (#101); `custom:decision-matrix`
+    no longer re-decides a decision the artifact intake already made (#79); `orca claims`
+    lists and releases a dead run's work‑item claims (#88; the released item still reads
     `in-progress` to the dispatcher, #123). The rest are smaller:
     #77, #81, #82, #84, #104 (a
     `decided` decision is re-decided by a different choice without reopening it, so the
     decide loop can undo a human's pick), #105 (intake reconciles on unchanged signals), and
-    the #97 follow‑ups: a single‑writer lease per run (#101, the remaining prerequisite for
-    daemon mode, item 1), the artifact index appended without the lock (#102), and lock
-    liveness across pid namespaces (#103).
+    the #97 follow‑ups still open: the artifact index appended without the lock (#102), and
+    lock liveness across pid namespaces (#103) — the lease's heartbeat answers that question
+    for runs, the lock file still decides on pid and age alone. #101 left two of its own:
+    the document stores rewrite whole collections from a cache that is never invalidated, so
+    the lease's guarantee stops at the run log (#196), and breaking a live lease leaves a
+    one‑heartbeat window in which the old interpreter can still append (#197).
