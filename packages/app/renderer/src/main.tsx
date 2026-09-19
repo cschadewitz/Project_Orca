@@ -18,6 +18,7 @@ import "./app.css";
 import { installAppearance } from "./appearance.js";
 import { AppearanceProvider } from "./appearance-context.js";
 import { KeyboardMap } from "./keyboard-map.js";
+import { KeyboardProvider } from "./keyboard-context.js";
 import { Routes } from "./routes.js";
 
 const keyboard = new KeyboardMap(window.orca.platform);
@@ -29,8 +30,10 @@ if (!root) throw new Error("renderer/index.html is missing #root");
 
 createRoot(root).render(
   <StrictMode>
-    <AppearanceProvider value={appearance}>
-      <Routes />
-    </AppearanceProvider>
+    <KeyboardProvider value={keyboard}>
+      <AppearanceProvider value={appearance}>
+        <Routes />
+      </AppearanceProvider>
+    </KeyboardProvider>
   </StrictMode>,
 );

@@ -6,17 +6,18 @@ export type ColorToken = 'surface-canvas' | 'surface-base' | 'surface-raised' | 
 
 export type SpacingToken = 'space-0-5' | 'space-1' | 'space-2' | 'space-3' | 'space-4' | 'space-5' | 'space-6' | 'space-8' | 'space-12' | 'space-16';
 export type RadiusToken = 'radius-none' | 'radius-xs' | 'radius-sm' | 'radius-md' | 'radius-lg' | 'radius-full';
-export type SizeToken = 'row-comfortable' | 'row-compact' | 'control-sm' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'panel-width' | 'measure-prose';
+export type SizeToken = 'row-comfortable' | 'row-compact' | 'control-sm' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons';
 export type BorderToken = 'stroke-hairline' | 'stroke-rail' | 'stroke-focus' | 'stroke-edge-active';
 export type ShadowToken = 'shadow-none' | 'shadow-popover' | 'shadow-modal' | 'shadow-sticky';
 export type DurationToken = 'duration-instant' | 'duration-fast' | 'duration-medium' | 'duration-pulse';
 export type EasingToken = 'ease-standard' | 'ease-entrance' | 'ease-linear';
 export type OpacityToken = 'opacity-disabled' | 'opacity-stale' | 'opacity-untaken';
+export type BreakpointToken = 'bp-sidebar-collapse' | 'bp-panel-overlay';
 export type TextStyle = 'display' | 'title' | 'heading' | 'body' | 'body-strong' | 'label' | 'label-strong' | 'caption' | 'eyebrow' | 'mono-body' | 'mono-strong' | 'mono-log' | 'mono-id';
 
 export type DesignToken =
   | ColorToken | SpacingToken | RadiusToken | SizeToken
-  | BorderToken | ShadowToken | DurationToken | EasingToken | OpacityToken;
+  | BorderToken | ShadowToken | DurationToken | EasingToken | OpacityToken | BreakpointToken;
 
 /** `v('status-failed')` → `'var(--status-failed)'`. The only way to reference a token in JS. */
 export const v = (token: DesignToken): string => `var(--${token})`;
@@ -130,6 +131,12 @@ export const rawTokens: Record<ThemeId, Record<string, string>> = {
     "shadow-sticky": "0 1px 0 #36322c, 0 4px 8px #00000059"
   }
 } as const;
+
+/** Breakpoint thresholds in px, for `matchMedia` — a CSS media query cannot read a custom property. */
+export const BREAKPOINTS: Record<BreakpointToken, number> = {
+  'bp-sidebar-collapse': 960,
+  'bp-panel-overlay': 1100,
+};
 
 export type RunStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'blocked' | 'held' | 'stale';
 export const RUN_STATUSES: readonly RunStatus[] = ['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'blocked', 'held', 'stale'] as const;
