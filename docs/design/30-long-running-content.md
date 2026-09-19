@@ -45,8 +45,12 @@ disk. When the buffer trims, a marker row in `ink-tertiary` says so and offers *
 output**, which pages backwards from disk. The app never silently shows a partial log.
 
 Long single lines (a base64 blob, a minified bundle) are collapsed at 2,000 characters to a
-`⋯ 84,102 more characters` affordance rather than wrapped, because one such line can otherwise
-own a screen.
+`… 84,102 more characters` affordance rather than wrapped, because one such line can otherwise
+own a screen. The glyph is `…` (U+2026), the bundled ellipsis — not the midline `⋯` (U+22EF)
+this line used to ask for, which no bundled face carries and which would therefore have
+fallen through to the OS in exactly the way #194 exists to catch. Bundling U+22EF instead is
+a legitimate alternative; it is not a thing to reach for without adding it to
+`tools/font-build/build-fonts.js` first.
 
 ## Time
 
