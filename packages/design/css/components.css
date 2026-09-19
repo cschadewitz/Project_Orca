@@ -81,6 +81,18 @@
   color: var(--ink-tertiary);
 }
 
+/* A sunken block for text ORCA produced: a command, a payload, a handshake result. Carries
+   the ground and the shape only — the caller adds the type style (`orca-text-mono-log`),
+   because a well around prose and a well around a log are the same box. */
+.orca-well {
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- focus + selection ---------- */
 
 .orca :focus-visible,
@@ -778,6 +790,11 @@
 }
 .orca-badge__why {
   margin-left: var(--space-1);
+  /* It is a <button>: it opens the explanation popover, it does not navigate. */
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
   color: var(--accent);
   cursor: pointer;
   font-size: 11px;
@@ -1348,6 +1365,12 @@
   display: inline-flex;
   align-items: baseline;
   gap: var(--space-1);
+  /* A crumb that links is a <button> (it navigates in-app, it is not an href): reset the
+     control chrome so the button and the current crumb's <span> render identically. */
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
   font-size: 13px;
   color: var(--accent);
   cursor: pointer;
@@ -1366,6 +1389,85 @@
 .orca-crumb__sep {
   color: var(--ink-tertiary);
   font-size: 12px;
+}
+/* The trail is an <ol>; the crumbs carry their own separators. */
+.orca-objhead__trail {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* One crumb and the counterpart menu it opens; the menu is positioned against this. */
+.orca-objhead__crumb {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+/* The disclosure is the crumb separator turned a quarter: the bundled symbol face carries
+   ▸ and no downward triangle, and an unbundled glyph falls back per platform. */
+.orca-crumb__more {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 10px;
+  color: var(--ink-tertiary);
+  cursor: pointer;
+  line-height: 1;
+}
+.orca-crumb__more > span {
+  display: inline-block;
+  transform: rotate(90deg);
+}
+.orca-crumb__more:hover,
+.orca-crumb__more[aria-expanded="true"] {
+  color: var(--accent);
+}
+
+/* menus (the crumb's counterparts, and any other short list hung off a control) */
+.orca-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 3;
+  min-width: var(--panel-width);
+  margin: var(--space-1) 0 0;
+  padding: var(--space-1);
+  list-style: none;
+  background: var(--surface-overlay);
+  border: var(--stroke-hairline) solid var(--border-control);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+}
+.orca-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--ink-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.orca-menu__item:hover {
+  background: var(--surface-hover);
+}
+.orca-menu__type {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
 }
 
 /* connection indicator */
@@ -1500,6 +1602,14 @@
 }
 .orca-state--disconnected .orca-state__glyph {
   color: var(--status-stale);
+}
+/* 'loading' draws these instead of a glyph: the shape of the content that is coming. */
+.orca-state__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: var(--measure-prose);
+  max-width: 100%;
 }
 .orca-skeleton {
   background: var(--border-hairline);

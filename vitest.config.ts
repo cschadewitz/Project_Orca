@@ -19,7 +19,9 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["packages/*/test/**/*.test.ts"],
+    // The renderer is its own TypeScript project (DOM lib, bundler resolution), so its
+    // tests live next to it rather than in packages/app/test.
+    include: ["packages/*/test/**/*.test.ts", "packages/app/renderer/test/**/*.test.tsx"],
     testTimeout: 30_000,
     hookTimeout: 30_000,
     coverage: {

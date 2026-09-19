@@ -11,13 +11,13 @@ import { createRoot } from "react-dom/client";
 import "@orca/design/css/tokens.css";
 import "@orca/design/css/components.css";
 import "./app.css";
-import { App } from "./App.js";
+import { Routes } from "./routes.js";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("renderer/index.html is missing #root");
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <Routes />
   </StrictMode>,
 );
