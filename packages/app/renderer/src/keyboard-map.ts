@@ -1,14 +1,24 @@
 /// <reference lib="dom" />
 /**
  * The keyboard map: every shortcut in the app registers here as `{ scope, key, label,
- * action }`, so the command palette (#149) can list each one with its key beside it and
- * nothing is reachable by keyboard alone. Keys are written platform-neutrally as
- * `Mod+Shift+L`; `Mod` is ⌘ on macOS and Ctrl elsewhere. Today only the global scope is
- * dispatched — resolving the scope from focus is the palette's job when it lands.
+ * action }`, so the command palette can list each one with its key beside it and nothing
+ * is reachable by keyboard alone (docs/design/50-accessibility-and-keyboard.md). Keys are
+ * written platform-neutrally as `Mod+Shift+L`; `Mod` is ⌘ on macOS and Ctrl elsewhere.
+ *
+ * The scope of a keypress is resolved from focus, not from a mode flag: a component that
+ * owns a scope marks its subtree with `data-kbd-scope="run-tree"` (`scopeProps` writes the
+ * attribute), and a keypress is offered to each scope from the focused element outwards
+ * before `global`. That is why two components can both bind `F` — one in `run-tree`, one
+ * in `list` — and why binding it twice in one scope throws instead.
  */
 
 /** The scopes in docs/design/50-accessibility-and-keyboard.md's table. */
 export type ShortcutScope = "global" | "list" | "run-tree" | "stream" | "card" | "panel";
+
+export const SHORTCUT_SCOPES: readonly ShortcutScope[] = ["global", "list", "run-tree", "stream", "card", "panel"];
+
+/** Which of the palette's three sections a shortcut belongs in. Search is not a command. */
+export type ShortcutSection = "actions" | "navigation";
 
 export interface Shortcut {
   scope: ShortcutScope;
@@ -16,7 +26,67 @@ export interface Shortcut {
   key: string;
   label: string;
   action: () => void;
+  /** Where the palette files it. Defaults to `actions` — most shortcuts act on the current object. */
+  section?: ShortcutSection;
+  /** A second line for the palette: what the action is for, when the label cannot say it. */
+  detail?: string;
 }
+
+/**
+ * An event target as an element, duck-typed rather than `instanceof Element`: the target
+ * may belong to a window that is not the global one — a second window in a test, a future
+ * detached preview — and `instanceof` against the global constructor would say no.
+ */
+function asElement(target: EventTarget | null): Element | null {
+  const candidate = target as Element | null;
+  return candidate && typeof candidate.getAttribute === "function" ? candidate : null;
+}
+
+/** The attribute a component puts on its root to own a scope for everything focused inside it. */
+export const SCOPE_ATTRIBUTE = "data-kbd-scope";
+
+/** Spread onto the element that owns `scope`: `<div {...scopeProps("run-tree")}>`. */
+export function scopeProps(scope: ShortcutScope): { [SCOPE_ATTRIBUTE]: ShortcutScope } {
+  return { [SCOPE_ATTRIBUTE]: scope };
+}
+
+const isScope = (value: string | null): value is ShortcutScope =>
+  value !== null && (SHORTCUT_SCOPES as readonly string[]).includes(value);
+
+/**
+ * The scopes a keypress on `element` should be offered, innermost first, always ending in
+ * `global`. An unrecognised `data-kbd-scope` value is ignored rather than thrown on: this
+ * runs inside a keydown, and a typo there should not take the keyboard down with it.
+ */
+export function scopesFrom(element: Element | null): readonly ShortcutScope[] {
+  const scopes: ShortcutScope[] = [];
+  for (let node = element; node; node = node.parentElement) {
+    const scope = node.getAttribute(SCOPE_ATTRIBUTE);
+    if (isScope(scope) && !scopes.includes(scope)) scopes.push(scope);
+  }
+  if (!scopes.includes("global")) scopes.push("global");
+  return scopes;
+}
+
+/**
+ * Whether `element` is somewhere a person types. In a text entry only modified shortcuts
+ * and `Escape` dispatch, so `J` in the palette's query field types a J rather than moving
+ * a selection three layers below it.
+ */
+export function isTextEntry(element: Element | null): boolean {
+  if (!element) return false;
+  // `isContentEditable` is inherited, so a span inside an editable region answers true too.
+  if ((element as HTMLElement).isContentEditable) return true;
+  const tag = element.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag !== "INPUT") return false;
+  const type = (element.getAttribute("type") ?? "text").toLowerCase();
+  return !["button", "checkbox", "radio", "range", "reset", "submit", "color", "file"].includes(type);
+}
+
+/** `Escape` is the one bare key a text entry still lets through — it closes the layer, it does not type. */
+const dispatchesInTextEntry = (key: string): boolean =>
+  key.includes("Mod+") || key.includes("Alt+") || key === "Escape";
 
 const MODIFIERS = ["Mod", "Shift", "Alt"] as const;
 
@@ -73,11 +143,17 @@ export class KeyboardMap {
     return [...this.shortcuts.values()];
   }
 
-  /** Run the shortcut the event spells in the first of `scopes` that has one. Returns whether one ran. */
-  handle(event: KeyboardEvent, scopes: readonly ShortcutScope[] = ["global"]): boolean {
+  /**
+   * Run the shortcut the event spells in the first of `scopes` that has one. Returns
+   * whether one ran. `scopes` defaults to the chain resolved from the event's target, so
+   * callers normally pass nothing; pass an explicit list only to dispatch out of band.
+   */
+  handle(event: KeyboardEvent, scopes?: readonly ShortcutScope[]): boolean {
     const key = keyOfEvent(event, this.platform);
     if (!key) return false;
-    for (const scope of scopes) {
+    const target = asElement(event.target);
+    if (isTextEntry(target) && !dispatchesInTextEntry(key)) return false;
+    for (const scope of scopes ?? scopesFrom(target)) {
       const shortcut = this.shortcuts.get(`${scope}:${key}`);
       if (shortcut) {
         event.preventDefault();
@@ -88,7 +164,10 @@ export class KeyboardMap {
     return false;
   }
 
-  /** Listen for `keydown` on `target`, dispatching in the global scope. Returns the remover. */
+  /**
+   * Listen for `keydown` on `target`, resolving each press's scope from where focus is.
+   * Returns the remover.
+   */
   listen(target: EventTarget): () => void {
     // Duck-typed rather than `instanceof KeyboardEvent`, so a window that is not the global
     // one (a test's) dispatches through here too.

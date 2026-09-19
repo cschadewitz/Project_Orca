@@ -1,8 +1,9 @@
 /**
- * The window chrome: title bar, sidebar, primary pane, docked panel and status bar, per
- * docs/design/10-information-architecture.md. Routing here is which of the five surfaces
- * is active; the surfaces themselves (and the per-surface object memory ⌘2 etc. should
- * restore) arrive with the issues that give each surface real content.
+ * The window chrome: title bar, sidebar, primary pane, docked panel, status bar and the
+ * command palette, per docs/design/10-information-architecture.md. Routing here is which
+ * of the five surfaces is active; the surfaces themselves (and the per-surface object
+ * memory ⌘2 etc. should restore) arrive with the issues that give each surface real
+ * content.
  */
 import { useCallback, useState, type JSX } from "react";
 import { SURFACES, type SurfaceId } from "./chrome/surfaces.js";
@@ -14,6 +15,9 @@ import { DockedPanel } from "./chrome/docked-panel.js";
 import { useConnection } from "./chrome/use-connection.js";
 import { useSidebarCollapsed, usePanelOverlay } from "./chrome/use-breakpoints.js";
 import { useChromeShortcuts } from "./chrome/use-chrome-shortcuts.js";
+import { useEscapeClosesTopLayer, useTransientLayer } from "./layers-context.js";
+import { CommandPalette } from "./palette/command-palette.js";
+import { useCommandPalette } from "./palette/use-command-palette.js";
 import { StateView } from "./ui/index.js";
 
 // Attention is always first: the app's default landing surface (docs/design/10-information-architecture.md).
@@ -33,10 +37,16 @@ export function App(): JSX.Element {
   const togglePanel = useCallback(() => setPanelOpen((open) => !open), []);
 
   useChromeShortcuts({ onSurface: selectSurface, onTogglePanel: togglePanel });
+  useEscapeClosesTopLayer();
+  const palette = useCommandPalette();
 
   const activeSurface = SURFACES.find((s) => s.id === active) ?? SURFACES[0]!;
   const gridPanel = panelOpen && !panelOverlay;
   const bodyClassName = gridPanel ? "orca-body orca-body--panel" : "orca-body";
+
+  /* Only the overlaid panel is transient: as a grid column it is part of the layout, and
+     Esc must not close what a person put there to read alongside the pane. */
+  useTransientLayer(panelOpen && panelOverlay, { name: "docked-panel", close: togglePanel });
 
   return (
     <div className="orca-window">
@@ -44,6 +54,7 @@ export function App(): JSX.Element {
         platform={window.orca.platform}
         connection={connection}
         onOpenAttention={() => selectSurface("attention")}
+        onOpenPalette={palette.openPalette}
       />
       <div
         className={bodyClassName}
@@ -59,6 +70,9 @@ export function App(): JSX.Element {
         {panelOpen ? <DockedPanel onClose={togglePanel} /> : null}
       </div>
       <StatusBar {...(connection.orcaVersion ? { orcaVersion: connection.orcaVersion } : {})} />
+      {/* Last, so it is over the panel in paint order as well as in z-index; `onJump` is
+          omitted until the `orca://` route table exists (#165). */}
+      <CommandPalette controller={palette} />
     </div>
   );
 }

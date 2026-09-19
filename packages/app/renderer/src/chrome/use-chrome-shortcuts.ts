@@ -1,8 +1,9 @@
 /**
  * The chrome's own shortcuts from docs/design/50-accessibility-and-keyboard.md — ⌘1–⌘5
  * for the surfaces, ⌘\ for the panel — registered in the keyboard map like every other
- * shortcut, so the palette (#149) lists them with their keys and nothing here dispatches
- * its own `keydown`.
+ * shortcut, so the palette lists them with their keys and nothing here dispatches its own
+ * `keydown`. The surface keys are filed under the palette's navigation section; the panel
+ * toggle acts on the window, so it is an action.
  */
 import { useEffect } from "react";
 import { useKeyboard } from "../keyboard-context.js";
@@ -25,6 +26,7 @@ export function useChromeShortcuts({ onSurface, onTogglePanel }: ChromeShortcuts
           scope: "global",
           key: `Mod+${surface.shortcut}`,
           label: `Go to ${surface.label}`,
+          section: "navigation",
           action: () => onSurface(surface.id),
         }),
       ),

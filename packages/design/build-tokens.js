@@ -138,11 +138,13 @@ export type DurationToken = ${union(familyNames.duration)};
 export type EasingToken = ${union(familyNames.easing)};
 export type OpacityToken = ${union(familyNames.opacity)};
 export type BreakpointToken = ${union(familyNames.breakpoint)};
+export type ZToken = ${union(familyNames.z)};
 export type TextStyle = ${union(T.type.groups.flatMap((g) => g.styles.map((s) => s.name)))};
 
 export type DesignToken =
   | ColorToken | SpacingToken | RadiusToken | SizeToken
-  | BorderToken | ShadowToken | DurationToken | EasingToken | OpacityToken | BreakpointToken;
+  | BorderToken | ShadowToken | DurationToken | EasingToken | OpacityToken | BreakpointToken
+  | ZToken;
 
 /** \`v('status-failed')\` → \`'var(--status-failed)'\`. The only way to reference a token in JS. */
 export const v = (token: DesignToken): string => \`var(--\${token})\`;

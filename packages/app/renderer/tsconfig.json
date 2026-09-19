@@ -27,5 +27,5 @@
       "@orca/core": ["../../core/src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.tsx", "../src/bridge.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx", "../src/bridge.ts"]
 }

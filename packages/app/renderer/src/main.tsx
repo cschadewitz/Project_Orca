@@ -19,11 +19,18 @@ import { installAppearance } from "./appearance.js";
 import { AppearanceProvider } from "./appearance-context.js";
 import { KeyboardMap } from "./keyboard-map.js";
 import { KeyboardProvider } from "./keyboard-context.js";
+import { LayerStack } from "./layers.js";
+import { LayerStackProvider } from "./layers-context.js";
+import { PaletteSourceRegistry, PaletteSourceProvider } from "./palette/sources.js";
 import { Routes } from "./routes.js";
 
 const keyboard = new KeyboardMap(window.orca.platform);
 keyboard.listen(window);
 const appearance = installAppearance(window, window.orca.preferences, keyboard);
+/* Both outlive any one screen and neither is React state: the layer stack is what Esc
+   reads, and the source registry is what the palette reads. */
+const layers = new LayerStack();
+const paletteSources = new PaletteSourceRegistry();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("renderer/index.html is missing #root");
@@ -31,9 +38,13 @@ if (!root) throw new Error("renderer/index.html is missing #root");
 createRoot(root).render(
   <StrictMode>
     <KeyboardProvider value={keyboard}>
-      <AppearanceProvider value={appearance}>
-        <Routes />
-      </AppearanceProvider>
+      <LayerStackProvider value={layers}>
+        <PaletteSourceProvider value={paletteSources}>
+          <AppearanceProvider value={appearance}>
+            <Routes />
+          </AppearanceProvider>
+        </PaletteSourceProvider>
+      </LayerStackProvider>
     </KeyboardProvider>
   </StrictMode>,
 );
