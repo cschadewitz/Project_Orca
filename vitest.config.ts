@@ -2,11 +2,16 @@
 import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 
-const pkg = (name: string) => fileURLToPath(new URL(`./packages/${name}/src/index.ts`, import.meta.url));
+const src = (name: string, module: string) =>
+  fileURLToPath(new URL(`./packages/${name}/src/${module}.ts`, import.meta.url));
+const pkg = (name: string) => src(name, "index");
 
 export default defineConfig({
   resolve: {
+    // A string alias is a prefix match, so the `@orca/core/schemas` subpath has to come
+    // before `@orca/core` or it would be rewritten to `…/src/index.ts/schemas`.
     alias: {
+      "@orca/core/schemas": src("core", "schemas"),
       "@orca/core": pkg("core"),
       "@orca/store": pkg("store"),
       "@orca/agents": pkg("agents"),

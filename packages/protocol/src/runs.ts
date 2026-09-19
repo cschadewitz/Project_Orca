@@ -9,7 +9,9 @@
  * anything a screen only *might* show is a second call.
  */
 import { z } from "zod";
-import { RunOutcomeSchema, WorkspaceSchema, OrcaEventSchema } from "@orca/core";
+// The node-free subpath, not the package root: the renderer bundles this package, and the
+// root would drag `node:crypto` and `node:fs` into that bundle. See packages/core/src/schemas.ts.
+import { RunOutcomeSchema, WorkspaceSchema, OrcaEventSchema } from "@orca/core/schemas";
 import { DisplayStatusSchema } from "./status.js";
 import { ArtifactViewSchema, ViewErrorSchema, WorkItemViewSchema } from "./views.js";
 

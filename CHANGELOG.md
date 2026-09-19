@@ -121,6 +121,10 @@ the next attach.
   eight words `packages/design/semantics.json` draws, in one place, tested against that file
   so the two lists cannot drift. A run that claims to be running with no live lease behind it
   is `stale`.
+- **core:** `@orca/core/schemas`, a node-free subpath carrying the domain model and event
+  schemas. `protocol` takes its runtime schemas from there rather than the package root, so
+  bundling the protocol for the renderer no longer drags `node:crypto` and `node:fs` in with
+  it. The root still re-exports every one of them; only a browser bundle needs the subpath.
 
 ### Changed
 

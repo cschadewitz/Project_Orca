@@ -1,6 +1,7 @@
 # Data model
 
-All types are zod schemas in `packages/core/src/model/` and exported from `@orca/core`.
+All types are zod schemas in `packages/core/src/model/` and exported from `@orca/core`, and
+from `@orca/core/schemas` for code that has to run in a browser (see `packages/core/src/schemas.ts`).
 Identifiers are prefixed ULIDs (`req_…`, `wi_…`, `run_…`, `step_…`, `art_…`, `evt_…`, `sess_…`,
 `plan_…`, `dep_…`, `risk_…`, `dec_…`, `pev_…`, `hi_…` for human‑input requests).
 
