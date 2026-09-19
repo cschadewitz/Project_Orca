@@ -3,4 +3,7 @@ dist/
 *.tsbuildinfo
 .orca/
 coverage/
+# The Electron smoke test's output: screenshots, axe results, traces, and the HTML report.
+test-results/
+playwright-report/
 .DS_Store

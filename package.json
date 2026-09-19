@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "app:smoke": "playwright test --config packages/app/test/smoke/playwright.config.ts",
     "lint": "eslint . && pnpm run lint:css",
     "lint:css": "node tools/eslint-config/bin/check-css-tokens.js packages/app/renderer --colours-only packages/design/css/components.css",
     "lint:fix": "eslint . --fix",
@@ -27,7 +28,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @orca/app run typecheck:renderer"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@orca/eslint-config": "workspace:*",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^26.5.1",
     "@vitest/coverage-v8": "^5.0.1",
     "eslint": "^10.10.0",
