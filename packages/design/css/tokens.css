@@ -259,6 +259,8 @@
   --palette-max-height: 440px;
   --palette-offset-top: 96px;
   /* z */
+  --z-sticky: 2;
+  --z-menu: 3;
   --z-panel-overlay: 10;
   --z-palette: 100;
   /* breakpoint */

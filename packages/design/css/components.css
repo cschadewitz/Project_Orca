@@ -49,7 +49,7 @@
 .orca-pane__head--sticky {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: var(--z-sticky);
   box-shadow: var(--shadow-sticky);
 }
 .orca-spacer {
@@ -1493,7 +1493,7 @@
   position: absolute;
   top: 100%;
   left: 0;
-  z-index: 3;
+  z-index: var(--z-menu);
   min-width: var(--panel-width);
   margin: var(--space-1) 0 0;
   padding: var(--space-1);

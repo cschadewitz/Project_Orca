@@ -133,6 +133,14 @@ export default tseslint.config(
     rules: appImportBoundary,
   },
   {
+    // docs/design/RULES.md rule 1, the TSX half: no literal colours or sizes in an inline
+    // `style` object. The CSS half is `pnpm run lint:css`, which the `lint` script chains.
+    // Scoped to the app because that is where screens are written; `packages/design` owns
+    // the literals by definition, and nothing else renders.
+    files: ["packages/app/**/*.{ts,tsx}"],
+    rules: { "orca/design-tokens-only": "error" },
+  },
+  {
     // Tests poke at internals and fake ports; the strictness that protects src gets in the way.
     files: ["packages/*/test/**/*.ts", "packages/app/renderer/test/**/*.{ts,tsx}"],
     rules: {
