@@ -20,6 +20,8 @@ import { KeyboardMap } from "../src/keyboard-map.js";
 import { KeyboardProvider } from "../src/keyboard-context.js";
 import { LayerStack } from "../src/layers.js";
 import { LayerStackProvider } from "../src/layers-context.js";
+import { createNotificationStream, type NotificationSource, type NotificationStream } from "../src/notifications.js";
+import { NotificationProvider } from "../src/notifications-context.js";
 import { PaletteSourceProvider, PaletteSourceRegistry } from "../src/palette/sources.js";
 import type { BridgeResult } from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
@@ -71,27 +73,45 @@ export function installBridge(options: FakeBridgeOptions = {}): FakeBridge {
   return fake;
 }
 
-/** The handshake only, for the chrome tests: everything else keeps the fixture answers. */
-export function stubBridge(hello: () => Promise<BridgeResult<HelloResult>>, platform = "darwin"): void {
+/**
+ * The handshake only, for the chrome tests: everything else keeps the fixture answers. The
+ * fake is returned so a chrome test can still push a notification or read `calls`.
+ */
+export function stubBridge(hello: () => Promise<BridgeResult<HelloResult>>, platform = "darwin"): FakeBridge {
   const fake = fakeBridge({ platform });
   fake.script({ hello });
   fake.install();
+  return fake;
 }
 
 export interface Harness {
   keyboard: KeyboardMap;
   layers: LayerStack;
   paletteSources: PaletteSourceRegistry;
+  /** The push channel the surfaces listen on; `FakeBridge.notify` is what feeds it. */
+  notifications: NotificationStream;
   dispose: () => void;
   /** The providers `main.tsx` wraps the app in, around whatever is being tested. */
   Providers: (props: { children: ReactNode }) => JSX.Element;
 }
 
-/** Everything `main.tsx` builds before `createRoot`. Call `dispose` in `afterEach`. */
+/** A source that never pushes, for a harness built before any bridge was installed. */
+const SILENT: NotificationSource = { subscribe: () => () => {} };
+
+/**
+ * Everything `main.tsx` builds before `createRoot`. Call `dispose` in `afterEach`.
+ *
+ * Install the bridge first (`installBridge` / `stubBridge`) when the test needs
+ * notifications: the stream is built over `window.orca.notifications` here, exactly as
+ * `main.tsx` builds it, and a harness created before there is a bridge gets a silent source
+ * rather than throwing — a primitive test that only needs the keyboard map should not have
+ * to stand up a daemon.
+ */
 export function harness(platform = "darwin"): Harness {
   const keyboard = new KeyboardMap(platform);
   const layers = new LayerStack();
   const paletteSources = new PaletteSourceRegistry();
+  const notifications = createNotificationStream((window as Partial<Window>).orca?.notifications ?? SILENT);
   const appearance = installAppearance(window, memoryStore(), keyboard);
   const unlisten = keyboard.listen(window);
 
@@ -99,6 +119,7 @@ export function harness(platform = "darwin"): Harness {
     keyboard,
     layers,
     paletteSources,
+    notifications,
     dispose: () => {
       unlisten();
       appearance.dispose();
@@ -107,7 +128,9 @@ export function harness(platform = "darwin"): Harness {
       <KeyboardProvider value={keyboard}>
         <LayerStackProvider value={layers}>
           <PaletteSourceProvider value={paletteSources}>
-            <AppearanceProvider value={appearance}>{children}</AppearanceProvider>
+            <NotificationProvider value={notifications}>
+              <AppearanceProvider value={appearance}>{children}</AppearanceProvider>
+            </NotificationProvider>
           </PaletteSourceProvider>
         </LayerStackProvider>
       </KeyboardProvider>

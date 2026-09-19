@@ -57,7 +57,9 @@ describe("window chrome", () => {
 
     const runs = await screen.findByRole("button", { name: "Runs" });
     expect(runs.getAttribute("aria-current")).toBe("page");
-    expect(await screen.findByText("Runs", { selector: ".orca-state__title" })).toBeTruthy();
+    // Runs is the one surface with content behind it (#152); the other four still render
+    // the placeholder state view.
+    expect(await screen.findByRole("listbox", { name: "Runs" })).toBeTruthy();
     // The pane is the surface root density is remembered by.
     expect(document.querySelector(".orca-main")?.getAttribute("data-surface")).toBe("runs");
   });

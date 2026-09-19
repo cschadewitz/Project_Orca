@@ -1,9 +1,9 @@
 /**
  * The window chrome: title bar, sidebar, primary pane, docked panel, status bar and the
  * command palette, per docs/design/10-information-architecture.md. Routing here is which
- * of the five surfaces is active; the surfaces themselves (and the per-surface object
- * memory ⌘2 etc. should restore) arrive with the issues that give each surface real
- * content.
+ * of the five surfaces is active; Runs is the first one with real data behind it, and the
+ * other four (and the per-surface object memory ⌘2 etc. should restore) arrive with the
+ * issues that give each surface its content.
  */
 import { useCallback, useState, type JSX } from "react";
 import { SURFACES, type SurfaceId } from "./chrome/surfaces.js";
@@ -18,6 +18,7 @@ import { useChromeShortcuts } from "./chrome/use-chrome-shortcuts.js";
 import { useEscapeClosesTopLayer, useTransientLayer } from "./layers-context.js";
 import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
+import { RunsSurface } from "./runs/runs-surface.js";
 import { StateView } from "./ui/index.js";
 
 // Attention is always first: the app's default landing surface (docs/design/10-information-architecture.md).
@@ -65,7 +66,11 @@ export function App(): JSX.Element {
         {/* Keyed by surface: a switch mounts a new pane, which is what re-applies that
             surface's remembered density. */}
         <PrimaryPane key={activeSurface.id} surface={activeSurface.id}>
-          <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />
+          {activeSurface.id === "runs" ? (
+            <RunsSurface connection={connection.state} />
+          ) : (
+            <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />
+          )}
         </PrimaryPane>
         {panelOpen ? <DockedPanel onClose={togglePanel} /> : null}
       </div>
