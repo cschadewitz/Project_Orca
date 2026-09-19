@@ -78,5 +78,11 @@ export default defineConfig({
     // dist/main and dist/preload are tsc's and are written by a different command.
     emptyOutDir: true,
     sourcemap: true,
+    // No `data:` URIs. Vite inlines assets under 4 kB by default, which silently caught the
+    // two Noto symbol subsets (2.7 kB and 3.7 kB) — the faces the status glyphs come from —
+    // and `default-src 'self'` then blocks them, so every glyph renders as tofu. Emitting
+    // every asset as a file keeps the CSP tight, and there is nothing to save by inlining:
+    // the renderer loads from disk, not over a network.
+    assetsInlineLimit: 0,
   },
 });

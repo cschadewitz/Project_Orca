@@ -59,6 +59,12 @@ Vite injects styles through JS, and HMR needs a websocket back to the dev server
 that relaxation allows can reach a built artifact, because the substitution is keyed on
 `ctx.server` being present (`htmlPlugin` in `vite.config.ts`).
 
+A consequence worth knowing before you add an asset: `assetsInlineLimit` is **0**, so Vite
+emits every asset as a file instead of a `data:` URI. `default-src 'self'` blocks `data:`,
+and Vite's default 4 kB threshold happens to catch the two Noto symbol subsets — the faces
+the status glyphs come from — which would leave every glyph as tofu. Nothing is lost by
+emitting files: the renderer loads from disk, not over a network.
+
 **What the renderer may import.** The same boundary as the rest of the app (ADR 0008):
 `@orca/protocol` and `@orca/design`, nothing else from the workspace. `no-restricted-imports`
 covers `packages/app/renderer/**` as well as `packages/app/src/**`. `window.orca` is the only
