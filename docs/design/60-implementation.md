@@ -60,6 +60,39 @@ config form stays comfortable. `packages/app/renderer/src/density.ts` is the onl
 touches the attribute; a component that renders a surface root calls `useSurfaceDensity()`
 so it gets its remembered density once it is in the document.
 
+## The keyboard map and the palette
+
+There is one registry and the palette is a view of it. A component registers
+`{ scope, key, label, action }` on the `KeyboardMap` for as long as it is mounted
+(`packages/app/renderer/src/keyboard-map.ts`); `⌘K` lists every registration with its key
+beside it. That is the mechanism behind "every action in this map is also in the command
+palette" — not a second table that has to be kept in step.
+
+Three rules fall out of it:
+
+- **Scope comes from focus, not from a mode flag.** A component that owns a scope marks its
+  subtree with `data-kbd-scope="run-tree"` (`scopeProps` writes the attribute), and a press
+  is offered to each scope from the focused element outwards before `global`. Two surfaces
+  may therefore both bind `F`. Binding it twice in *one* scope throws at registration
+  rather than picking a winner at dispatch.
+- **In a text entry only modified keys and `Esc` dispatch.** `J` in the palette's query
+  field is a letter, not a selection move three layers below it.
+- **`Esc` is one shortcut over a stack, not a handler per component.** Layers push
+  themselves onto `LayerStack` while they are open, and `Esc` closes the one that opened
+  last. A layer holding text a person typed and has not sent reports `hasUnsentDraft` and
+  the key is swallowed instead — the second half of the rule, and the reason the stack
+  exists rather than a boolean.
+
+The palette's own rows come from two places. Commands come from the map. Objects — recent
+runs, work items, agents, config files, workflows — and search results come from sources
+the surfaces register (`palette/sources.tsx`), because that data belongs to the surface
+that holds it. No source is registered yet: the read methods are not there, and an empty
+Search section that says so is better than an invented recent-runs list (rule 12).
+
+Focus stays in the query field for as long as the palette is open. The highlighted row is
+*selection* — `aria-activedescendant` on the field, the accent rail on the row — which is
+why it does not draw the focus ring.
+
 ## Virtualised rows
 
 Rows are fixed height by token, which lets the virtualiser compute offsets arithmetically. Two

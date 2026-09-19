@@ -76,6 +76,38 @@ the next attach.
   every shortcut registers with (`KeyboardMap`) is the seed of the palette's registry (#149).
 - **design:** the generated `prefers-color-scheme` block now sets `color-scheme` too, so
   native scrollbars and form controls follow the OS theme when no `data-theme` is set.
+- **app:** the window chrome (#148) — title bar (drag region, platform-detected insets, the
+  connection state, the ⌘K affordance), a sidebar over the five surfaces that collapses to
+  icon-only below 960px, a primary pane with an object-header slot, a docked panel that
+  becomes an overlay below 1100px, and a status bar. Routing between the five surfaces
+  lands on Attention by default; the primary pane is the surface root density is remembered
+  by, and ⌘1–⌘5 and ⌘\ register in the keyboard map like every other shortcut, so the
+  palette (#149) will list them. New tokens: `sidebar-width-collapsed`, the title bar's
+  platform insets, and a `breakpoint` family for the two layout thresholds, exported as
+  `BREAKPOINTS` in plain numbers because a CSS media query cannot read a custom property.
+- **app:** the command palette and the keyboard map registry (#149). `⌘K` opens a palette
+  on `surface-raised` over a scrim, with three sections in the order the information
+  architecture sets — actions on the current object, navigation, search — and every
+  registered shortcut listed with its key beside it. It opens and drives entirely from the
+  keyboard, focus returns to where it was on close, and the title bar's `⌘K` affordance is
+  now a button, so nothing here is reachable by keyboard alone or by mouse alone. Typing a
+  run id or an `orca://` URL offers a jump row; resolving it is #165, so until then the row
+  is listed and disabled rather than silently doing nothing. Search sources arrive with the
+  surfaces that hold the data — no source is registered yet and the palette says so rather
+  than inventing results.
+- **app:** the keyboard map now resolves a keypress's scope from focus. A component owns a
+  scope by marking its subtree `data-kbd-scope` (`scopeProps`), and a press is offered to
+  each scope from the focused element outwards before `global`, so two surfaces can bind
+  `F` without colliding. Inside a text entry only modified keys and `Escape` dispatch.
+  `Shortcut` gained `section` and `detail`, for where the palette files it and what it
+  says underneath.
+- **app:** `Esc` goes through a transient layer stack (`LayerStack`): it closes the layer
+  that opened last — the palette above an overlaid panel — and a layer holding an unsent
+  draft swallows the key instead of discarding it. Nothing takes a draft yet; the rule now
+  has somewhere to live when gate cards do.
+- **design:** a `z` token family (`z-panel-overlay`, `z-palette`) so a floating layer's
+  stacking order is a token like every other value, and `palette-width`,
+  `palette-max-height` and `palette-offset-top` for the palette itself.
 - **daemon:** the five read methods over `Orchestrator` — `runs.list`, `runs.get`,
   `runs.events`, `inputs.list`, `claims.list` (#150). They answer display read models from
   `@orca/protocol` (`packages/protocol/README.md` is the reference), not `RunState`: a run

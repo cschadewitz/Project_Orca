@@ -137,11 +137,14 @@ export type ShadowToken = ${union((T.shadow?.tokens ?? []).map((t) => t.name))};
 export type DurationToken = ${union(familyNames.duration)};
 export type EasingToken = ${union(familyNames.easing)};
 export type OpacityToken = ${union(familyNames.opacity)};
+export type BreakpointToken = ${union(familyNames.breakpoint)};
+export type ZToken = ${union(familyNames.z)};
 export type TextStyle = ${union(T.type.groups.flatMap((g) => g.styles.map((s) => s.name)))};
 
 export type DesignToken =
   | ColorToken | SpacingToken | RadiusToken | SizeToken
-  | BorderToken | ShadowToken | DurationToken | EasingToken | OpacityToken;
+  | BorderToken | ShadowToken | DurationToken | EasingToken | OpacityToken | BreakpointToken
+  | ZToken;
 
 /** \`v('status-failed')\` → \`'var(--status-failed)'\`. The only way to reference a token in JS. */
 export const v = (token: DesignToken): string => \`var(--\${token})\`;
@@ -154,6 +157,11 @@ export const THEMES: readonly ThemeId[] = [${themes.map(quote).join(", ")}] as c
  * resolved — canvas 2D, an image export, a native menu. Prefer \`v()\` everywhere else.
  */
 export const rawTokens: Record<ThemeId, Record<string, string>> = ${JSON.stringify(raw, null, 2)} as const;
+
+/** Breakpoint thresholds in px, for \`matchMedia\` — a CSS media query cannot read a custom property. */
+export const BREAKPOINTS: Record<BreakpointToken, number> = {
+${T.breakpoint.tokens.map((t) => `  ${quote(t.name)}: ${Number.parseInt(t.value, 10)},`).join("\n")}
+};
 
 export type RunStatus = ${union(Object.keys(S.runStatus))};
 export const RUN_STATUSES: readonly RunStatus[] = [${Object.keys(S.runStatus).map(quote).join(", ")}] as const;

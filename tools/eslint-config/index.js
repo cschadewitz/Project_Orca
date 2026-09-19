@@ -121,7 +121,7 @@ export default tseslint.config(
     // The app's renderer runs in Chromium, not Node, and is its own TypeScript project
     // (DOM lib, no @types/node, bundler resolution) — so the type-aware rules have to be
     // pointed at that project rather than the root one.
-    files: ["packages/app/renderer/src/**/*.{ts,tsx}", "packages/app/renderer/test/**/*.tsx"],
+    files: ["packages/app/renderer/src/**/*.{ts,tsx}", "packages/app/renderer/test/**/*.{ts,tsx}"],
     languageOptions: {
       globals: globals.browser,
       parserOptions: { project: "./packages/app/renderer/tsconfig.json", tsconfigRootDir: repoRoot },
@@ -134,7 +134,7 @@ export default tseslint.config(
   },
   {
     // Tests poke at internals and fake ports; the strictness that protects src gets in the way.
-    files: ["packages/*/test/**/*.ts", "packages/app/renderer/test/**/*.tsx"],
+    files: ["packages/*/test/**/*.ts", "packages/app/renderer/test/**/*.{ts,tsx}"],
     rules: {
       "orca/file-header-comment": "off",
       "@typescript-eslint/no-explicit-any": "off",

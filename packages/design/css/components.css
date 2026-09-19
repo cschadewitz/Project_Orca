@@ -1266,6 +1266,18 @@
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
   font-size: 13px;
+  /* The whole bar drags the window; interactive children opt back out with
+     [data-app-region="no-drag"]. */
+  -webkit-app-region: drag;
+}
+.orca-titlebar [data-app-region="no-drag"] {
+  -webkit-app-region: no-drag;
+}
+.orca-titlebar[data-platform="darwin"] {
+  padding-left: var(--titlebar-inset-traffic-lights);
+}
+.orca-titlebar[data-platform="win32"] {
+  padding-right: var(--titlebar-inset-caption-buttons);
 }
 .orca-titlebar__brand {
   font-weight: 600;
@@ -1305,6 +1317,25 @@
 .orca-body--panel {
   grid-template-columns: var(--sidebar-width) 1fr var(--panel-width);
 }
+/* Below the sidebar breakpoint (packages/design/tokens.ts BREAKPOINTS['bp-sidebar-collapse'],
+   applied in JS since a media query cannot read a custom property): icon-only sidebar. */
+.orca-body[data-sidebar="collapsed"] {
+  grid-template-columns: var(--sidebar-width-collapsed) 1fr;
+}
+/* Below the panel breakpoint (BREAKPOINTS['bp-panel-overlay']): the panel floats over the
+   primary pane instead of taking a grid column. */
+.orca-body[data-panel="overlay"] {
+  position: relative;
+}
+.orca-body[data-panel="overlay"] .orca-panel {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  width: var(--panel-width);
+  border-left: var(--stroke-hairline) solid var(--border-hairline);
+  box-shadow: var(--shadow-modal);
+  z-index: var(--z-panel-overlay);
+}
 .orca-sidebar {
   border-right: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
@@ -1315,10 +1346,15 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  width: 100%;
   height: 28px;
   padding: 0 var(--space-2);
+  border: none;
   border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
   font-size: 13px;
+  text-align: left;
   color: var(--ink-secondary);
   cursor: default;
 }
@@ -1329,6 +1365,20 @@
   background: var(--accent-subtle);
   color: var(--accent);
   font-weight: 500;
+}
+.orca-nav__glyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-md);
+}
+.orca-body[data-sidebar="collapsed"] .orca-nav {
+  justify-content: center;
+}
+.orca-body[data-sidebar="collapsed"] .orca-nav__label,
+.orca-body[data-sidebar="collapsed"] .orca-nav__count {
+  display: none;
 }
 .orca-nav__count {
   margin-left: auto;
@@ -1350,6 +1400,17 @@
   background: var(--surface-base);
   min-width: 0;
   overflow: hidden;
+  animation: orca-panel-enter var(--duration-medium) var(--ease-entrance);
+}
+@keyframes orca-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateX(var(--space-2));
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* object header */
@@ -1514,8 +1575,24 @@
 }
 
 /* command palette */
+
+/* The scrim and the palette are one fixed layer: the scrim dismisses on click, the palette
+   is laid out against the top of the window rather than centred, so ⌘K does not move the
+   reading position of what is behind it. */
+.orca-palette-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-palette);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: var(--palette-offset-top);
+  background: var(--surface-overlay);
+  animation: orca-palette-enter var(--duration-medium) var(--ease-entrance);
+}
 .orca-palette {
-  width: 560px;
+  width: var(--palette-width);
+  max-width: 100%;
   background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-lg);
@@ -1526,11 +1603,31 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  width: 100%;
   height: var(--control-lg);
   padding: 0 var(--space-3);
+  border: 0;
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  border-radius: 0;
+  background: none;
+  font: inherit;
   font-size: 14px;
   color: var(--ink-primary);
+}
+.orca-palette__input::placeholder {
+  color: var(--ink-tertiary);
+}
+/* The ring belongs to the palette, not to the field inside it: the field is the only
+   focusable thing in the layer, so a second ring around it is noise. */
+.orca-palette__input:focus {
+  outline: none;
+}
+.orca-palette__list {
+  max-height: var(--palette-max-height);
+  margin: 0;
+  padding: 0 0 var(--space-1);
+  list-style: none;
+  overflow-y: auto;
 }
 .orca-palette__group {
   padding: var(--space-2) var(--space-3) var(--space-1);
@@ -1539,15 +1636,72 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: 28px;
+  height: var(--control-md);
   padding: 0 var(--space-3);
+  border-left: var(--stroke-rail) solid transparent;
   font-size: 13px;
+  color: var(--ink-primary);
+  cursor: default;
 }
+.orca-palette__row:hover {
+  background: var(--surface-hover);
+}
+/* Selection, not focus: focus stays in the field so typing keeps filtering, so the active
+   row gets the selection treatment — surface-selected and the accent rail
+   (docs/design/50-accessibility-and-keyboard.md, "Focus"). */
 .orca-palette__row--active {
   background: var(--surface-selected);
+  border-left-color: var(--accent);
 }
+.orca-palette__row[aria-disabled="true"] {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+.orca-palette__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orca-palette__detail {
+  color: var(--ink-tertiary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Why a row cannot be run, and the row's key: both sit hard right, and a row has one or
+   the other, never both. */
+.orca-palette__why,
 .orca-palette__row .orca-kbd {
   margin-left: auto;
+  flex: none;
+}
+.orca-palette__why {
+  color: var(--ink-tertiary);
+  font-size: 11px;
+}
+.orca-palette__note {
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  color: var(--ink-tertiary);
+  font-size: 12px;
+}
+.orca-palette__hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-md);
+  padding: 0 var(--space-3);
+  border-top: var(--stroke-hairline) solid var(--border-hairline);
+  color: var(--ink-tertiary);
+  font-size: 11px;
+}
+@keyframes orca-palette-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* meters */

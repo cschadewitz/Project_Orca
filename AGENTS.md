@@ -67,6 +67,12 @@ The primitives are already built: `renderer/src/ui` wraps the `orca-*` classes a
 than writing class names, and see them all in both themes at `#preview` in a dev build. If
 an implementation has to diverge from `component-api.d.ts`, correct that file in the same PR.
 
+**Every shortcut goes in the keyboard map.** Register `{ scope, key, label, action }` on the
+`KeyboardMap` (`renderer/src/keyboard-map.ts`) rather than adding a `keydown` listener — the
+command palette is a view of that registry, so a shortcut that skips it is a shortcut nobody
+can discover. Mark the subtree that owns a scope with `scopeProps("run-tree")`; `Esc` belongs
+to the layer stack, not to your component. `docs/design/60-implementation.md` has the rest.
+
 The app (`packages/app`) may import only `@orca/protocol` and `@orca/design` from the
 workspace — the renderer included; everything it knows about a run comes over the wire from
 the daemon (ADR 0008).

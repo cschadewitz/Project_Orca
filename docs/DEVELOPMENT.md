@@ -3,7 +3,9 @@
 ```bash
 mise install                 # Node 24 + pnpm 12 (any Node >= 22 works)
 pnpm install
-pnpm run typecheck           # tsc --noEmit over every package + tests (paths-mapped to sources)
+pnpm run typecheck           # tsc --noEmit over every package + tests, then again over the
+                              # renderer (packages/app/renderer/tsconfig.json) with JSX/DOM lib
+                              # a plain Node package never needs
 pnpm run lint                # eslint (type-aware) over the same set; --fix as `pnpm run lint:fix`
 pnpm run format              # prettier --write . (`format:check` to only report)
 pnpm test                    # vitest: unit tests + e2e against a real ACP subprocess
@@ -74,9 +76,11 @@ preload that builds it and the renderer that calls it.
 The renderer is its own TypeScript project (`packages/app/renderer/tsconfig.json`): DOM lib,
 `jsx: react-jsx`, bundler resolution, and `@orca/*` mapped to sources so neither `dev` nor
 `typecheck` needs a prior build. `pnpm run typecheck` runs it after the root project. Its
-tests live beside it in `packages/app/renderer/test/**/*.test.tsx` rather than in
+tests live beside it in `packages/app/renderer/test/**/*.test.{ts,tsx}` rather than in
 `packages/app/test` for the same reason — they compile against that project, not the root
-one — and `vitest.config.ts` includes both globs.
+one — and `vitest.config.ts` includes both globs. `renderer/test/harness.tsx` assembles
+what `main.tsx` installs above React (keyboard map, layer stack, palette sources,
+appearance) so a test can mount the chrome the way the app does.
 
 `demo --dir <path>` (or `demo --keep`, which keeps the temp workspace instead of
 removing it afterwards) leaves a complete setup behind — `orca.config.yaml` wired to
@@ -215,6 +219,13 @@ shows a green check rather than none — see the comments in `.github/workflows/
   `packages/app/test/appearance.test.ts`). Build one `Window` per scenario: happy-dom caches
   computed style per document and does not invalidate it when the device settings (colour
   scheme, reduced motion) change.
+- The window chrome is `packages/app/renderer/src/App.tsx` plus `renderer/src/chrome`: title
+  bar, sidebar, primary pane, docked panel, status bar. A screen is the child of
+  `PrimaryPane`, which is the surface root (`data-surface`) that density is remembered by;
+  the two layout thresholds come from the design system's `BREAKPOINTS` through
+  `use-breakpoints.ts`, because a CSS media query cannot read a custom property. Shortcuts
+  register in the `KeyboardMap` (`useKeyboard`), never on `window` directly, so the palette
+  (#149) can list every one of them.
 - UI code follows `docs/design/RULES.md`: no literal colours, sizes, radii or durations,
   only tokens. `packages/design/css/tokens.css` and `src/tokens.ts` are generated from
   `tokens.json` and `semantics.json` — edit the JSON, run `pnpm run design:build`, commit

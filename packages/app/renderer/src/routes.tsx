@@ -1,6 +1,7 @@
 /**
- * What the renderer mounts. Not a router — there is one screen and one dev-only page, and
- * a router is its own decision (#148 owns the shell the screens hang off).
+ * What the renderer mounts: the window chrome, or the dev-only primitive gallery. Not a
+ * router — which surface the chrome shows is its own state (`App.tsx`), and a URL-driven
+ * router is a decision the surfaces can make when they have something to address.
  *
  * `#preview` opens the primitive gallery. It is reachable only in a dev build: in a
  * production build Vite replaces `import.meta.env.DEV` with `false`, so both the branch
