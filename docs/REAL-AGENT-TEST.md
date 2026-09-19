@@ -385,6 +385,8 @@ What that run says about the untested surface:
 
 Prompt typed into a Kepler desktop session with ORCA as the agent: *"create a new file that
 contains a poem. And save it to the test repo you are in."* Store: `/srv/dev/orca-live/.orca-kepler`.
+Both event logs are saved under
+[`session-logs/2026-09-19-kepler-session-sess_01M2VHXARDM7Z6V5RTVVBE136M/`](session-logs/2026-09-19-kepler-session-sess_01M2VHXARDM7Z6V5RTVVBE136M/).
 
 | Run | What | Result |
 | --- | --- | --- |
