@@ -33,15 +33,20 @@ export default defineConfig({
       provider: "v8",
       // Every source file, not just the ones a test happened to import: a module nobody
       // covers shows up as 0%, rather than being missing from the report.
-      include: ["packages/*/src/**/*.ts"],
+      include: ["packages/*/src/**/*.ts", "packages/app/renderer/src/**/*.{ts,tsx}"],
       // Barrels re-export and nothing else. `testing` (the scripted agent) is test
       // infrastructure, and the e2e tests drive it as a real subprocess - v8 coverage
       // collected in this process cannot see any of it, so its number would be fiction.
       // The app's main and preload processes only run inside Electron; its daemon client
-      // and preferences are plain Node and are covered. (The renderer lives under
-      // packages/app/renderer, outside this include; its DOM modules are tested in
-      // happy-dom but not counted.) The design package's src is generated tokens and a
-      // documentation-only .d.ts; its tests check the JSON sources, not the output.
+      // and preferences are plain Node and are covered. The design package's src is
+      // generated tokens and a documentation-only .d.ts; its tests check the JSON sources,
+      // not the output.
+      //
+      // The renderer is in the include as of #154, with its own thresholds below. Two of
+      // its modules are not: `renderer/src/main.tsx` is the entry point, which only ever
+      // runs inside a real Electron window (the smoke test is what exercises it), and
+      // `renderer/src/preview` is the dev-build `#preview` route - a gallery of the
+      // primitives, not app code, and the thing a person looks at rather than a test.
       exclude: [
         "packages/*/src/index.ts",
         "**/main.ts",
@@ -49,11 +54,30 @@ export default defineConfig({
         "packages/app/src/main/**",
         "packages/app/src/preload/**",
         "packages/design/src/**",
+        "packages/app/renderer/src/main.tsx",
+        "packages/app/renderer/src/preview/**",
       ],
       reporter: ["text-summary", "html", "lcov", "json-summary"],
-      // A ratchet, set just under what the suite covers today (79.0 / 66.2 / 81.5 / 81.9).
-      // Raise these as coverage improves; never lower them to make a red CI go green.
-      thresholds: { statements: 78, branches: 65, functions: 80, lines: 81 },
+      // Ratchets, each set just under what the suite covers today. Raise them as coverage
+      // improves; never lower one to make a red CI go green.
+      //
+      // The bare numbers are the whole report; the glob keys are *extra* checks on a
+      // subset, not a partition of it (a file under a glob is still counted globally
+      // too). packages/app gets its own so it cannot coast on the engine's coverage, and
+      // its two halves are separate entries because they are tested in different
+      // environments - the renderer in happy-dom, the Node side as plain modules - and
+      // regress independently.
+      thresholds: {
+        // The whole report: 88.7 / 77.9 / 88.6 / 91.4 today.
+        statements: 78,
+        branches: 65,
+        functions: 80,
+        lines: 81,
+        // The renderer: 87.2 / 86.0 / 84.5 / 89.5.
+        "**/packages/app/renderer/src/**": { statements: 86, branches: 85, functions: 83, lines: 88 },
+        // The app's Node half - daemon client, preferences, connection: 100 / 92.9 / 100 / 100.
+        "**/packages/app/src/**": { statements: 99, branches: 92, functions: 99, lines: 99 },
+      },
     },
   },
 });

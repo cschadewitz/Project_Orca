@@ -2,10 +2,13 @@
  * The bits of the renderer that `main.tsx` installs above React — the keyboard map, the
  * layer stack, the palette source registry and appearance — assembled for a test.
  *
- * Deliberately small. The full renderer harness (dual-theme rendering, fake preload
- * bridge fixtures, coverage thresholds for packages/app) is #154; this is what the chrome
- * and the palette need to be rendered at all, in one place so the two test files do not
- * drift apart.
+ * The other two halves of the renderer test kit live next door and are worth knowing about
+ * before writing a screen test:
+ *
+ * - `themes.tsx` — mount a component in both themes and assert on the colour the real
+ *   `tokens.css` resolves it to (docs/design/RULES.md rule 7);
+ * - `fake-bridge.ts` — a `window.orca` that answers `hello`, the five read methods and
+ *   daemon notifications from `fixtures.ts`. `installBridge` below is the short way in.
  */
 import { render, type RenderResult } from "@testing-library/react";
 import type { JSX, ReactNode } from "react";
@@ -20,6 +23,7 @@ import { LayerStackProvider } from "../src/layers-context.js";
 import { PaletteSourceProvider, PaletteSourceRegistry } from "../src/palette/sources.js";
 import type { BridgeResult } from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
+import { fakeBridge, type FakeBridge, type FakeBridgeOptions } from "./fake-bridge.js";
 
 export const LIVE: BridgeResult<HelloResult> = {
   ok: true,
@@ -56,9 +60,22 @@ export function stubMatchMedia(width: number): void {
   Object.defineProperty(window, "matchMedia", { configurable: true, writable: true, value: matchMedia });
 }
 
+/**
+ * A fake bridge on `window.orca`, with the read methods answering from `fixtures.ts`.
+ * Call the returned `install` result — see `fake-bridge.ts` — in `afterEach` to put back
+ * whatever was there; a test that only needs the handshake can use `stubBridge` instead.
+ */
+export function installBridge(options: FakeBridgeOptions = {}): FakeBridge {
+  const fake = fakeBridge(options);
+  fake.install();
+  return fake;
+}
+
+/** The handshake only, for the chrome tests: everything else keeps the fixture answers. */
 export function stubBridge(hello: () => Promise<BridgeResult<HelloResult>>, platform = "darwin"): void {
-  const bridge = { platform, hello, preferences: { read: () => DEFAULT_PREFERENCES, write: () => {} } };
-  Object.defineProperty(window, "orca", { configurable: true, writable: true, value: bridge });
+  const fake = fakeBridge({ platform });
+  fake.script({ hello });
+  fake.install();
 }
 
 export interface Harness {

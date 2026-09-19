@@ -1,0 +1,77 @@
+# Launch the built desktop app against a real daemon, in a real Electron window.
+#
+# Separate from ci.yml on purpose. That workflow sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1` —
+# it typechecks, lints and builds the app but never runs it, and skipping the ~100 MB
+# binary keeps every one of its matrix legs fast. This one needs that binary, so it
+# installs without the flag and only on the pull requests that could break the app: the
+# app itself, the design system it renders, and the daemon and protocol it talks to.
+name: App smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/app/**"
+      - "packages/design/**"
+      - "packages/daemon/**"
+      - "packages/protocol/**"
+      - ".github/workflows/app-smoke.yml"
+      - "pnpm-lock.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: electron smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
+      # resolve the store path. Version comes from package.json packageManager.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v7
+        with:
+          # One version: this is about the app running at all, not about Node support.
+          # `mise.toml` pins 24, so that is what a developer reproduces locally.
+          node-version: 24
+          cache: pnpm
+
+      # Deliberately without ELECTRON_SKIP_BINARY_DOWNLOAD: the binary is the point.
+      # Playwright needs no browser download — the only driver used is Electron's.
+      - run: pnpm install --frozen-lockfile
+
+      # Chromium's own sandbox needs unprivileged user namespaces, and Ubuntu 24.04
+      # restricts those by default. Lifting the restriction is the right fix here:
+      # passing `--no-sandbox` would be testing the app in a configuration nobody ships.
+      # A container with no user namespaces at all cannot do this — that is what
+      # ORCA_SMOKE_NO_SANDBOX is for, and it is not set here.
+      - name: Allow unprivileged user namespaces, so the Chromium sandbox works
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # The smoke test runs the built app and the built CLI, not the sources.
+      - name: Build
+        run: pnpm run build
+
+      # No display server on a runner; the app's own flags are inside the spec, so there
+      # is nothing here for xvfb-run to swallow.
+      - name: Smoke test
+        run: xvfb-run -a pnpm run app:smoke
+
+      # Screenshots of both themes, the axe results and a trace for anything that failed.
+      - name: Upload the smoke test's output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: app-smoke
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
