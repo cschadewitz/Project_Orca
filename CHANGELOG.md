@@ -20,6 +20,18 @@ Releases start at 0.2.0. `0.1.0` was the untagged groundwork commit (`8645f28`,
 
 ### Store format
 
+No change.
+
+### Added
+
+### Changed
+
+### Fixed
+
+## 0.2.0 - 2026-09-19
+
+### Store format
+
 No change since the groundwork commit, but two additions an existing store predates:
 the plan journal (`plan-journal.jsonl`), and work-item claims. Event sequence numbers are
 now assigned on disk under a lock file rather than from an in-process counter, so two
