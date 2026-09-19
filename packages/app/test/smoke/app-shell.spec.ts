@@ -94,7 +94,10 @@ test("the window comes up on the built renderer with a bridge in it", async () =
   });
   expect(bridge.present).toBe(true);
   expect(bridge.platform).toBe(process.platform);
-  expect(bridge.methods).toEqual(["hello", "platform", "preferences"]);
+  // Exact, not a superset: this list is everything the sandboxed renderer can reach, and
+  // widening it is the kind of change that should have to be written down (ADR 0008).
+  // Add the key here in the same PR that adds it to `src/bridge.ts`.
+  expect(bridge.methods).toEqual(["claims", "hello", "inputs", "notifications", "platform", "preferences", "runs"]);
 
   // Renderer assets really loaded off file://, rather than the CSP blocking them.
   await expect(page.locator(".orca-body")).toBeVisible();
