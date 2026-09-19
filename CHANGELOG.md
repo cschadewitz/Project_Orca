@@ -76,6 +76,15 @@ the next attach.
   every shortcut registers with (`KeyboardMap`) is the seed of the palette's registry (#149).
 - **design:** the generated `prefers-color-scheme` block now sets `color-scheme` too, so
   native scrollbars and form controls follow the OS theme when no `data-theme` is set.
+- **app:** the window chrome (#148) — title bar (drag region, platform-detected insets, the
+  connection state, the ⌘K affordance), a sidebar over the five surfaces that collapses to
+  icon-only below 960px, a primary pane with an object-header slot, a docked panel that
+  becomes an overlay below 1100px, and a status bar. Routing between the five surfaces
+  lands on Attention by default; the primary pane is the surface root density is remembered
+  by, and ⌘1–⌘5 and ⌘\ register in the keyboard map like every other shortcut, so the
+  palette (#149) will list them. New tokens: `sidebar-width-collapsed`, the title bar's
+  platform insets, and a `breakpoint` family for the two layout thresholds, exported as
+  `BREAKPOINTS` in plain numbers because a CSS media query cannot read a custom property.
 
 ### Changed
 

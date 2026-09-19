@@ -1,13 +1,13 @@
-/* What this app adds on top of the design system's component layer — currently only the
-   placeholder screen's layout. Token references only (docs/design/RULES.md rule 1). */
+/* What this app adds on top of the design system's component layer: only the window
+   filling the window. `.orca-window` is a grid with `height: 100%`, so every box above it
+   has to have a height for that percentage to mean anything. Token references only
+   (docs/design/RULES.md rule 1). */
+html,
+body,
+#root {
+  height: 100%;
+}
 body {
   margin: 0;
-  min-height: 100vh;
-}
-.placeholder {
-  padding: var(--space-6);
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+  overflow: hidden;
 }

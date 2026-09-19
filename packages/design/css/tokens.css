@@ -250,8 +250,14 @@
   --icon-sm: 12px;
   --icon-md: 16px;
   --sidebar-width: 228px;
+  --sidebar-width-collapsed: 48px;
   --panel-width: 420px;
   --measure-prose: 68ch;
+  --titlebar-inset-traffic-lights: 78px;
+  --titlebar-inset-caption-buttons: 138px;
+  /* breakpoint */
+  --bp-sidebar-collapse: 960px;
+  --bp-panel-overlay: 1100px;
   /* border */
   --stroke-hairline: 1px;
   --stroke-rail: 2px;
