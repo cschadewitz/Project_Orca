@@ -100,6 +100,12 @@ CI measures coverage on one Node version (24), writes the per-package table into
 job summary, and uploads `coverage/` as an artifact — including when the thresholds
 fail, which is when the numbers are worth reading.
 
+CI skips the whole typecheck/lint/test/build matrix when a push or PR changes only
+documentation: `docs/**` and any Markdown outside `templates/` (the prompt templates are
+Markdown but the engine loads them, so they count as code). A small `changes` job diffs
+against the merge base and gates the matrix with a job-level `if`, so a docs-only PR still
+shows a green check rather than none — see the comments in `.github/workflows/ci.yml`.
+
 ## Layout conventions
 
 - One concern per file; every file except a pure re‑export barrel starts with a comment
