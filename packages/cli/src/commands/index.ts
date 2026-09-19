@@ -5,10 +5,10 @@
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { openAcpSession } from "@orca/agents";
-import { startDaemon } from "@orca/daemon";
-import { PROTOCOL_VERSION, formatProtocolVersion } from "@orca/protocol";
+import { ReadModel, startDaemon } from "@orca/daemon";
+import { PROTOCOL_VERSION, READ_METHODS, formatProtocolVersion } from "@orca/protocol";
 import {
   succeeded,
   toMermaid,
@@ -344,22 +344,28 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   serve: {
-    help: "serve [--host addr] [--port n]  Run the ORCA daemon (the desktop app's backend) until interrupted. Default 127.0.0.1:6722.",
+    help: "serve [--host addr] [--port n]  Run the ORCA daemon (the desktop app's backend) over this workspace's store, read-only, until interrupted. Default 127.0.0.1:6722.",
     async run(ctx) {
       const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new OrcaError("CONFIG_INVALID", `--port must be a port number, got '${String(ctx.flags.port)}'`);
       }
+      const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
+      const storeDir = resolvePath(app.configDir, app.config.storeDir);
       const daemon = await startDaemon({
         host: ctx.flags.host as string | undefined,
         port,
         orcaVersion: ORCA_VERSION,
-        // No run or plan methods yet: the daemon answers `hello` and nothing else.
-        capabilities: [],
+        storeDir,
+        // Reads only. The store stays single-writer (ADR 0008, #101): the daemon projects
+        // it, and a CLI or another daemon may be driving runs in it at the same time.
+        capabilities: ["runs.read"],
+        reads: new ReadModel({ orchestrator: app.orchestrator }),
       });
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
       );
+      ctx.out(`serving ${storeDir}: ${READ_METHODS.join(", ")}`);
       await new Promise<void>((resolve) => {
         const stop = () => {
           process.off("SIGINT", stop);

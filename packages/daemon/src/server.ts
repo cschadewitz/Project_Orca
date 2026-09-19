@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { describeError } from "@orca/core";
 import { parseMessage, protocolError, type ProtocolError, type ResponseMessage } from "@orca/protocol";
-import { methods as defaultMethods, type MethodContext, type MethodTable } from "./methods.js";
+import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
 
 export interface DaemonOptions extends MethodContext {
   host?: string | undefined;
@@ -73,12 +73,15 @@ export async function dispatch(text: string, methods: MethodTable, ctx: MethodCo
 
 export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const host = opts.host ?? "127.0.0.1";
-  const methods = opts.methods ?? defaultMethods;
   const ctx: MethodContext = {
     orcaVersion: opts.orcaVersion,
     storeDir: opts.storeDir,
     capabilities: opts.capabilities,
+    reads: opts.reads,
   };
+  // A daemon without a store serves `hello` alone, and says so in `hello.methods`: a read
+  // method it cannot answer is an unknown method, not a method that fails.
+  const methods = opts.methods ?? methodsFor(ctx);
   const server: Server = createServer((req, res) => {
     void (async () => {
       if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true });

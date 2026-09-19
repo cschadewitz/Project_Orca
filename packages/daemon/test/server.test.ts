@@ -39,6 +39,8 @@ describe("startDaemon", () => {
       orcaVersion: "0.1.0-test",
       storeDir: "/tmp/store",
       capabilities: ["runs.read"],
+      // This daemon was started without a store, so the read methods are not on offer.
+      methods: ["hello"],
     });
   });
 
@@ -67,7 +69,7 @@ describe("dispatch", () => {
       ok: false,
       error: { code: "PROTOCOL_MESSAGE" },
     });
-    expect(await dispatch(JSON.stringify({ kind: "request", id: 1, method: "runs.list" }), methods, ctx)).toMatchObject(
+    expect(await dispatch(JSON.stringify({ kind: "request", id: 1, method: "runs.nope" }), methods, ctx)).toMatchObject(
       {
         id: 1,
         ok: false,

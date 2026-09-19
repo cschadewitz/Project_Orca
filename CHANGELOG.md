@@ -108,14 +108,37 @@ the next attach.
 - **design:** a `z` token family (`z-panel-overlay`, `z-palette`) so a floating layer's
   stacking order is a token like every other value, and `palette-width`,
   `palette-max-height` and `palette-offset-top` for the palette itself.
+- **daemon:** the five read methods over `Orchestrator` — `runs.list`, `runs.get`,
+  `runs.events`, `inputs.list`, `claims.list` (#150). They answer display read models from
+  `@orca/protocol` (`packages/protocol/README.md` is the reference), not `RunState`: a run
+  carries a name (work item, else request, else workflow), the eight-value `DisplayStatus`,
+  durations and the wait it is in; a run tree carries every attempt, its child runs and the
+  fan-out branches that never ran; `runs.events` pages a log by sequence number in both
+  directions. `orca serve` now bootstraps the workspace's store, reports `runs.read` and
+  lists the methods it serves in `hello`.
+- **protocol:** `DisplayStatus` and the one fold onto it (`displayStatusForRun`,
+  `displayStatusForStep`) — the engine's run statuses, outcomes and step statuses become the
+  eight words `packages/design/semantics.json` draws, in one place, tested against that file
+  so the two lists cannot drift. A run that claims to be running with no live lease behind it
+  is `stale`.
+- **core:** `@orca/core/schemas`, a node-free subpath carrying the domain model and event
+  schemas. `protocol` takes its runtime schemas from there rather than the package root, so
+  bundling the protocol for the renderer no longer drags `node:crypto` and `node:fs` in with
+  it. The root still re-exports every one of them; only a browser bundle needs the subpath.
 
 ### Changed
 
+- **protocol:** version 1.1 — `HelloResult.methods` lists the methods a daemon answers, so a
+  newer client can degrade per screen rather than per daemon. Additive: a 1.0 client is
+  unaffected.
 - **engine:** `Orchestrator.cancel()` on a run this process is *not* driving now takes the
   run's lease before closing it, so cancelling a run another interpreter holds fails with
   `RUN_LEASED` rather than racing `run.cancelled` into a log that keeps growing.
 
 ### Fixed
+
+- **engine:** `Orchestrator.pendingInputs()` no longer fails for a whole run tree when one
+  child's log is missing from the store; that child is skipped, as `runTree` already did.
 
 ## 0.2.0 - 2026-09-19
 

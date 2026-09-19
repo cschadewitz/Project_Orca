@@ -13,7 +13,8 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 
-const pkg = (name: string) => fileURLToPath(new URL(`../${name}/src/index.ts`, import.meta.url));
+const src = (name: string, module: string) => fileURLToPath(new URL(`../${name}/src/${module}.ts`, import.meta.url));
+const pkg = (name: string) => src(name, "index");
 
 /** What `renderer/index.html` ships with, and what a packaged app must keep. */
 const PRODUCTION_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:";
@@ -60,7 +61,9 @@ export default defineConfig({
   resolve: {
     // The same trick vitest.config.ts uses: resolve the two packages the app is allowed
     // to see (ADR 0008) to their sources, so `dev` needs no prior `tsc -b` of them.
-    // `@orca/core` is here only because `@orca/protocol` type-imports it.
+    // `@orca/core` is here because `@orca/protocol` type-imports the root and builds its
+    // run schemas out of the node-free `@orca/core/schemas` subpath. The subpath is listed
+    // first: only its runtime code belongs in a renderer bundle.
     //
     // Anchored patterns, not bare prefixes: a prefix alias would also rewrite
     // `@orca/design/css/tokens.css` into `…/src/index.ts/css/tokens.css`. The subpaths
@@ -68,6 +71,7 @@ export default defineConfig({
     alias: [
       { find: /^@orca\/protocol$/, replacement: pkg("protocol") },
       { find: /^@orca\/design$/, replacement: pkg("design") },
+      { find: /^@orca\/core\/schemas$/, replacement: src("core", "schemas") },
       { find: /^@orca\/core$/, replacement: pkg("core") },
     ],
   },

@@ -2,13 +2,14 @@
 
 Groundwork is complete and tested end‑to‑end. Deliberately left for follow‑up:
 
-1. **Daemon mode** — `orca serve` exists (`packages/daemon`) with the transport, the method
-   table and the `hello` handshake over HTTP, and the desktop app (`packages/app`) completes
-   that handshake through `packages/protocol` (ADR 0008). Still to do, in the order the app
-   needs them: the read methods over `Orchestrator` (`runs.list`, `runs.get`, `runs.events`,
-   `inputs.list`, `claims.list`), a WebSocket carrying `notification` messages for
-   `Orchestrator.subscribe()`, the control methods (`answer`, `resume`, `cancel`, `startRun`),
-   then the plan methods over `PlanService`. Human input already survives process
+1. **Daemon mode** — `orca serve` exists (`packages/daemon`) with the transport, the
+   `hello` handshake over HTTP and the five read methods over `Orchestrator` — `runs.list`,
+   `runs.get`, `runs.events`, `inputs.list`, `claims.list` (#150), answering the display read
+   models in `packages/protocol` (its README is the method reference). The desktop app
+   (`packages/app`) reaches them through `packages/protocol` and nothing else (ADR 0008).
+   Still to do, in the order the app needs them: a WebSocket carrying `notification` messages
+   for `Orchestrator.subscribe()`, the control methods (`answer`, `resume`, `cancel`,
+   `startRun`), then the plan methods over `PlanService`. Human input already survives process
    boundaries: `pause` mode parks the run in its event log and `orca answer <requestId>
    <option>` resumes it; the daemon exposes the same `answer()` / `resume()` over the wire
    and keeps agent sessions alive across the wait. Two processes over one store are now

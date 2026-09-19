@@ -6,8 +6,25 @@
  */
 import { z } from "zod";
 import { ProtocolVersionSchema } from "./version.js";
+import { CLAIMS_LIST_METHOD } from "./claims.js";
+import { INPUTS_LIST_METHOD } from "./inputs.js";
+import { RUNS_EVENTS_METHOD, RUNS_GET_METHOD, RUNS_LIST_METHOD } from "./runs.js";
 
 export const HELLO_METHOD = "hello";
+
+/**
+ * The methods behind the `runs.read` capability. A capability says a daemon has a class of
+ * functionality; `HelloResult.methods` says exactly which calls it answers, so a newer
+ * client can light up one screen against an older daemon instead of the whole surface or
+ * none of it.
+ */
+export const READ_METHODS = [
+  RUNS_LIST_METHOD,
+  RUNS_GET_METHOD,
+  RUNS_EVENTS_METHOD,
+  INPUTS_LIST_METHOD,
+  CLAIMS_LIST_METHOD,
+] as const;
 
 export const HelloParamsSchema = z.object({
   /** Client identity for logs and the daemon's session list, e.g. `orca-app/0.3.1`. */
@@ -27,5 +44,7 @@ export const HelloResultSchema = z.object({
   /** Absolute path of the `.orca` store the daemon serves, for a client that also reads files. */
   storeDir: z.string().optional(),
   capabilities: z.array(DaemonCapabilitySchema),
+  /** Every method this daemon answers, `hello` included. Added in protocol 1.1; absent from an older daemon. */
+  methods: z.array(z.string()).optional(),
 });
 export type HelloResult = z.infer<typeof HelloResultSchema>;
