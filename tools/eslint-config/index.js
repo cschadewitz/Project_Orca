@@ -17,7 +17,8 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "coverage/**", "**/*.tsbuildinfo"],
+    // packages/design/src/tokens.ts is generated; its formatting is the generator's.
+    ignores: ["**/dist/**", "coverage/**", "**/*.tsbuildinfo", "packages/design/src/tokens.ts"],
   },
   js.configs.recommended,
   tseslint.configs.recommendedTypeChecked,
@@ -87,8 +88,40 @@ export default tseslint.config(
   {
     // The CLI, the scripted agent, the examples and the tooling scripts *are* their
     // process's stdout.
-    files: ["packages/cli/src/**/*.ts", "packages/testing/src/**/*.ts", "examples/**/*.ts", "tools/**/*.js"],
+    files: [
+      "packages/cli/src/**/*.ts",
+      "packages/testing/src/**/*.ts",
+      "examples/**/*.ts",
+      "tools/**/*.js",
+      "packages/design/build-tokens.js",
+    ],
     rules: { "no-console": "off" },
+  },
+  {
+    // The app's renderer runs in Chromium, not Node.
+    files: ["packages/app/renderer/**/*.js"],
+    languageOptions: { globals: globals.browser },
+  },
+  {
+    // The desktop app sees ORCA only through the wire contract (ADR 0008) and renders with
+    // the design system. Reaching past `@orca/protocol` into the engine or the stores would
+    // tie the renderer to internals the daemon is supposed to own, and would break the
+    // "attach to a remote daemon" case.
+    files: ["packages/app/src/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@orca/*", "!@orca/protocol", "!@orca/design"],
+              message:
+                "The app may only import @orca/protocol and @orca/design; everything else goes through the daemon.",
+            },
+          ],
+        },
+      ],
+    },
   },
   {
     // Tests poke at internals and fake ports; the strictness that protects src gets in the way.

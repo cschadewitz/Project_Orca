@@ -1,0 +1,77 @@
+{
+  "_comment": "Hand-edited vocabulary that tokens.json cannot express: the words and glyphs that go with each state. Source of truth alongside tokens.json; build-tokens.js merges both into src/tokens.ts.",
+  "runStatus": {
+    "running": {
+      "word": "running",
+      "glyph": "◐",
+      "fg": "status-running",
+      "bg": "status-running-bg",
+      "note": "Animated pulse on the dot; static under prefers-reduced-motion."
+    },
+    "waiting": {
+      "word": "waiting",
+      "glyph": "◆",
+      "fg": "status-waiting",
+      "bg": "status-waiting-bg",
+      "note": "The only status allowed in the title bar and sidebar counts."
+    },
+    "succeeded": {
+      "word": "succeeded",
+      "glyph": "✓",
+      "fg": "status-succeeded",
+      "bg": "status-succeeded-bg",
+      "note": "Chip scale only. Success never fills a row."
+    },
+    "failed": { "word": "failed", "glyph": "✕", "fg": "status-failed", "bg": "status-failed-bg", "note": "" },
+    "cancelled": {
+      "word": "cancelled",
+      "glyph": "⊘",
+      "fg": "status-cancelled",
+      "bg": "status-cancelled-bg",
+      "note": "Label is struck through. Neutral ramp: a cancel is not a fault."
+    },
+    "blocked": {
+      "word": "blocked",
+      "glyph": "▣",
+      "fg": "status-blocked",
+      "bg": "status-blocked-bg",
+      "note": "An open dependency. Nothing went wrong and nobody is being asked."
+    },
+    "held": {
+      "word": "held",
+      "glyph": "⏸",
+      "fg": "status-held",
+      "bg": "status-held-bg",
+      "note": "Restrained by risk exposure or appetite."
+    },
+    "stale": {
+      "word": "stale",
+      "glyph": "◷",
+      "fg": "status-stale",
+      "bg": "status-stale-bg",
+      "note": "Dashed border. Shares the neutral ramp with cancelled: tell them apart by glyph, never hue."
+    }
+  },
+  "scheduleClass": {
+    "unschedulable": { "word": "unschedulable", "fg": "status-cancelled", "bg": "status-cancelled-bg" },
+    "waiting": { "word": "waiting on deps", "fg": "status-blocked", "bg": "status-blocked-bg" },
+    "held": { "word": "held", "fg": "status-held", "bg": "status-held-bg" },
+    "ready": { "word": "ready", "fg": "status-succeeded", "bg": "status-succeeded-bg" },
+    "running": { "word": "running", "fg": "status-running", "bg": "status-running-bg" }
+  },
+  "connectionState": {
+    "live": { "word": "connected", "glyph": "●", "fg": "status-succeeded", "writes": "enabled" },
+    "reconnecting": { "word": "reconnecting", "glyph": "◌", "fg": "status-waiting", "writes": "queued" },
+    "disconnected": { "word": "disconnected", "glyph": "◷", "fg": "status-stale", "writes": "disabled" },
+    "file": { "word": "file mode", "glyph": "◷", "fg": "status-stale", "writes": "absent" },
+    "mismatch": { "word": "version mismatch", "glyph": "▣", "fg": "status-blocked", "writes": "disabled" }
+  },
+  "dependencyKind": { "blocks": "solid", "soft": "dashed", "informs": "dotted" },
+  "dependencyState": {
+    "open": "graph-edge",
+    "satisfied": "graph-edge-active",
+    "failed": "status-failed",
+    "waived": "graph-edge"
+  },
+  "density": { "comfortable": "row-comfortable", "compact": "row-compact" }
+}

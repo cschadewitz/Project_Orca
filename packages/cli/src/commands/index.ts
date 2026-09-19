@@ -3,9 +3,12 @@
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAcpSession } from "@orca/agents";
+import { startDaemon } from "@orca/daemon";
+import { PROTOCOL_VERSION, formatProtocolVersion } from "@orca/protocol";
 import {
   succeeded,
   toMermaid,
@@ -27,6 +30,9 @@ import { bootstrap, loadConfig, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../format.js";
 import { claimsCommand } from "./claims.js";
 import { planCommand } from "./plan.js";
+
+/** The CLI package's version, which is the release version (every package is bumped together). */
+const ORCA_VERSION = (createRequire(import.meta.url)("../../package.json") as { version: string }).version;
 
 export interface CommandContext {
   cwd: string;
@@ -327,6 +333,37 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         logger: consoleLogger((ctx.flags["log-level"] as never) ?? "info"),
       });
       await serveAcpFacade({ orchestrator: app.orchestrator, program: app.program });
+      return 0;
+    },
+  },
+
+  serve: {
+    help: "serve [--host addr] [--port n]  Run the ORCA daemon (the desktop app's backend) until interrupted. Default 127.0.0.1:6722.",
+    async run(ctx) {
+      const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
+      if (!Number.isInteger(port) || port < 0 || port > 65535) {
+        throw new OrcaError("CONFIG_INVALID", `--port must be a port number, got '${String(ctx.flags.port)}'`);
+      }
+      const daemon = await startDaemon({
+        host: ctx.flags.host as string | undefined,
+        port,
+        orcaVersion: ORCA_VERSION,
+        // No run or plan methods yet: the daemon answers `hello` and nothing else.
+        capabilities: [],
+      });
+      ctx.out(
+        `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
+      );
+      await new Promise<void>((resolve) => {
+        const stop = () => {
+          process.off("SIGINT", stop);
+          process.off("SIGTERM", stop);
+          resolve();
+        };
+        process.once("SIGINT", stop);
+        process.once("SIGTERM", stop);
+      });
+      await daemon.close();
       return 0;
     },
   },

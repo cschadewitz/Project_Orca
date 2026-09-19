@@ -11,7 +11,17 @@ pnpm run test:coverage       # the same run, with coverage and its thresholds
 pnpm run build               # tsc -b project references -> packages/*/dist
 pnpm run demo                # program run with scripted agents (from sources via tsx)
 node packages/cli/dist/main.js demo   # same, from the compiled build
+pnpm run orca serve          # the daemon, on 127.0.0.1:6722 until Ctrl-C
+pnpm run build && pnpm --filter @orca/app start   # the Electron app against that daemon
+pnpm run design:build        # regenerate packages/design css/tokens.css + src/tokens.ts from tokens.json
+pnpm run design:check        # fail if those generated files are behind (CI runs this)
 ```
+
+The app needs the Electron binary, which `pnpm install` downloads through electron's
+postinstall (allow-listed in `pnpm-workspace.yaml`). CI sets
+`ELECTRON_SKIP_BINARY_DOWNLOAD=1` because it only typechecks and lints the app; do the
+same locally if you never launch it. The app reads `ORCA_DAEMON_URL` to attach to a
+daemon elsewhere.
 
 `demo --dir <path>` (or `demo --keep`, which keeps the temp workspace instead of
 removing it afterwards) leaves a complete setup behind — `orca.config.yaml` wired to
@@ -44,9 +54,9 @@ This is deliberately machine-level rather than a committed `.npmrc`: the correct
 path differs per machine, and CI wants the default.
 
 pnpm runs no dependency lifecycle scripts by default. `esbuild` (via `tsx`) needs
-its postinstall, so it is allow-listed under `allowBuilds` in
-`pnpm-workspace.yaml`; add to that list with `pnpm approve-builds` if a new
-dependency legitimately needs to build.
+its postinstall, and `electron`'s postinstall fetches the Electron binary, so both
+are allow-listed under `allowBuilds` in `pnpm-workspace.yaml`; add to that list with
+`pnpm approve-builds` if a new dependency legitimately needs to build.
 
 ## Lint and format
 
@@ -116,8 +126,18 @@ shows a green check rather than none — see the comments in `.github/workflows/
 - `core` has no runtime I/O except reading workflow/template files. `engine` depends on
   ports (`EventStore`, `ArtifactStore`, `AgentHost`, `AgentSession`), never on concrete
   transports, so it is testable with in‑memory stores and the scripted agent.
+- `packages/app/src` imports `@orca/protocol` and `@orca/design` and nothing else from
+  the workspace (`no-restricted-imports` in the lint config). Anything the app needs from
+  ORCA is a protocol method the daemon serves; add the schemas to `protocol`, the handler
+  to the daemon's method table, then call it from the app's `DaemonClient`.
+- UI code follows `docs/design/RULES.md`: no literal colours, sizes, radii or durations,
+  only tokens. `packages/design/css/tokens.css` and `src/tokens.ts` are generated from
+  `tokens.json` and `semantics.json` — edit the JSON, run `pnpm run design:build`, commit
+  all four together. They are committed (and marked generated in `.gitattributes`) so no
+  build is needed to read a token; Prettier and ESLint skip them.
 - Errors are `OrcaError` with a stable `code`; executors return `failed(code, …)` rather
-  than throwing for expected failures.
+  than throwing for expected failures. On the wire they travel as `toJSON()`, with the
+  same code, plus the three `PROTOCOL_*` codes for version, method and message problems.
 - `exactOptionalPropertyTypes` is on: use conditional spreads (`...(x ? { x } : {})`) instead
   of assigning `undefined`.
 
