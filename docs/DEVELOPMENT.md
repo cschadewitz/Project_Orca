@@ -76,9 +76,11 @@ preload that builds it and the renderer that calls it.
 The renderer is its own TypeScript project (`packages/app/renderer/tsconfig.json`): DOM lib,
 `jsx: react-jsx`, bundler resolution, and `@orca/*` mapped to sources so neither `dev` nor
 `typecheck` needs a prior build. `pnpm run typecheck` runs it after the root project. Its
-tests live beside it in `packages/app/renderer/test/**/*.test.tsx` rather than in
+tests live beside it in `packages/app/renderer/test/**/*.test.{ts,tsx}` rather than in
 `packages/app/test` for the same reason — they compile against that project, not the root
-one — and `vitest.config.ts` includes both globs.
+one — and `vitest.config.ts` includes both globs. `renderer/test/harness.tsx` assembles
+what `main.tsx` installs above React (keyboard map, layer stack, palette sources,
+appearance) so a test can mount the chrome the way the app does.
 
 `demo --dir <path>` (or `demo --keep`, which keeps the temp workspace instead of
 removing it afterwards) leaves a complete setup behind — `orca.config.yaml` wired to

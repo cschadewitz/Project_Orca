@@ -255,6 +255,12 @@
   --measure-prose: 68ch;
   --titlebar-inset-traffic-lights: 78px;
   --titlebar-inset-caption-buttons: 138px;
+  --palette-width: 560px;
+  --palette-max-height: 440px;
+  --palette-offset-top: 96px;
+  /* z */
+  --z-panel-overlay: 10;
+  --z-palette: 100;
   /* breakpoint */
   --bp-sidebar-collapse: 960px;
   --bp-panel-overlay: 1100px;

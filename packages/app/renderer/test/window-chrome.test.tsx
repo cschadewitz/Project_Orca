@@ -8,70 +8,23 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { HelloResult } from "@orca/protocol";
-import { App } from "../src/App.js";
-import { AppearanceProvider } from "../src/appearance-context.js";
-import { installAppearance, type AppearanceStore } from "../src/appearance.js";
-import { KeyboardMap } from "../src/keyboard-map.js";
-import { KeyboardProvider } from "../src/keyboard-context.js";
-import type { BridgeResult } from "../../src/bridge.js";
-import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
-
-const LIVE: BridgeResult<HelloResult> = {
-  ok: true,
-  result: { protocol: { major: 1, minor: 0 }, orcaVersion: "0.2.0-test", capabilities: [] },
-};
-
-/** Preferences that never touch disk; the chrome only reads them through `Appearance`. */
-const store = (): AppearanceStore => {
-  let preferences: Preferences = DEFAULT_PREFERENCES;
-  return {
-    read: () => preferences,
-    write: (patch) => {
-      preferences = mergePreferences(preferences, patch);
-      return Promise.resolve({ ok: true, result: preferences });
-    },
-  };
-};
-
-function stubMatchMedia(width: number): void {
-  const matchMedia = (query: string): MediaQueryList => {
-    const threshold = /\(max-width:\s*(\d+)px\)/.exec(query);
-    const matches = threshold ? width <= Number(threshold[1]) : false;
-    return {
-      matches,
-      media: query,
-      onchange: null,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      dispatchEvent: () => false,
-    } as MediaQueryList;
-  };
-  Object.defineProperty(window, "matchMedia", { configurable: true, writable: true, value: matchMedia });
-}
-
-function stubBridge(hello: () => Promise<BridgeResult<HelloResult>>): void {
-  const bridge = { platform: "darwin", hello, preferences: { read: () => DEFAULT_PREFERENCES, write: () => {} } };
-  Object.defineProperty(window, "orca", { configurable: true, writable: true, value: bridge });
-}
+import { LIVE, harness, renderChrome as mountChrome, stubBridge, stubMatchMedia, type Harness } from "./harness.js";
 
 const teardown: (() => void)[] = [];
 
-/** The chrome with the two things `main.tsx` installs above it: the keyboard map and appearance. */
+/** The chrome with everything `main.tsx` installs above it. */
 function renderChrome(): ReturnType<typeof render> {
-  const keyboard = new KeyboardMap("darwin");
-  teardown.push(keyboard.listen(window));
-  const appearance = installAppearance(window, store(), keyboard);
-  teardown.push(appearance.dispose);
-  return render(
-    <KeyboardProvider value={keyboard}>
-      <AppearanceProvider value={appearance}>
-        <App />
-      </AppearanceProvider>
-    </KeyboardProvider>,
-  );
+  const h = harness();
+  teardown.push(h.dispose);
+  return mountChrome(h);
+}
+
+/** Same, when the test needs to reach the keyboard map the chrome registered into. */
+function renderWithHarness(): Harness {
+  const h = harness();
+  teardown.push(h.dispose);
+  mountChrome(h);
+  return h;
 }
 
 /** ⌘<key>, as the keyboard map reads it: `code` for letters and digits, `key` for the rest. */
@@ -111,16 +64,7 @@ describe("window chrome", () => {
 
   it("registers its shortcuts in the keyboard map, so the palette can list them", async () => {
     stubMatchMedia(1440);
-    const keyboard = new KeyboardMap("darwin");
-    const appearance = installAppearance(window, store(), keyboard);
-    teardown.push(appearance.dispose);
-    render(
-      <KeyboardProvider value={keyboard}>
-        <AppearanceProvider value={appearance}>
-          <App />
-        </AppearanceProvider>
-      </KeyboardProvider>,
-    );
+    const { keyboard } = renderWithHarness();
     await screen.findByRole("button", { name: "Attention" });
 
     const keys = keyboard.list().map((s) => s.key);

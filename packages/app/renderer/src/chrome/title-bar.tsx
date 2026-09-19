@@ -5,7 +5,9 @@
  */
 import type { JSX } from "react";
 import { STATUS_PRESENTATION } from "@orca/design";
-import { ConnectionIndicator } from "../ui/index.js";
+import { shortcutLabel } from "../keyboard-map.js";
+import { OPEN_PALETTE_KEY } from "../palette/use-command-palette.js";
+import { Button, ConnectionIndicator } from "../ui/index.js";
 import type { Connection } from "./use-connection.js";
 
 export interface TitleBarProps {
@@ -14,9 +16,16 @@ export interface TitleBarProps {
   /** Hidden at zero — the count itself is #161. */
   waitingCount?: number;
   onOpenAttention: () => void;
+  onOpenPalette: () => void;
 }
 
-export function TitleBar({ platform, connection, waitingCount, onOpenAttention }: TitleBarProps): JSX.Element {
+export function TitleBar({
+  platform,
+  connection,
+  waitingCount,
+  onOpenAttention,
+  onOpenPalette,
+}: TitleBarProps): JSX.Element {
   return (
     <div className="orca-titlebar" data-platform={platform}>
       <span className="orca-titlebar__brand">ORCA</span>
@@ -30,9 +39,18 @@ export function TitleBar({ platform, connection, waitingCount, onOpenAttention }
       <span data-app-region="no-drag">
         <ConnectionIndicator state={connection.state} since={connection.since} />
       </span>
-      <span className="orca-kbd" aria-hidden="true">
-        ⌘K
-      </span>
+      {/* The palette is reachable by mouse as well as by ⌘K — "nothing is reachable by
+          keyboard alone or by mouse alone" (docs/design/50-accessibility-and-keyboard.md). */}
+      <Button
+        tone="ghost"
+        size="sm"
+        data-app-region="no-drag"
+        aria-keyshortcuts={platform === "darwin" ? "Meta+K" : "Control+K"}
+        onClick={onOpenPalette}
+      >
+        Commands
+        <kbd className="orca-kbd">{shortcutLabel(OPEN_PALETTE_KEY, platform)}</kbd>
+      </Button>
     </div>
   );
 }
