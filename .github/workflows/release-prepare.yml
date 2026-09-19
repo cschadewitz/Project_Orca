@@ -1,0 +1,151 @@
+# Closing a milestone proposes the release it represents: this opens a `release: vX.Y.Z`
+# pull request that bumps the version and dates the CHANGELOG's Unreleased section.
+#
+# It deliberately stops at a pull request rather than tagging. Closing a milestone is
+# reversible and easy to do by accident; a published tag and GitHub release is neither.
+# Merging the PR is the irreversible step, and release-publish.yml takes it from there.
+#
+# The version comes from the `release:*` labels on the milestone's issues (highest wins),
+# or from a `Release: vX.Y.Z` line in the milestone description, which overrides them —
+# that is how a release candidate or a deliberate 1.0.0 is expressed. See docs/RELEASING.md.
+name: Release (prepare)
+
+on:
+  milestone:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      milestone:
+        description: "Milestone number to release"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  prepare:
+    name: propose a release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # tools/release.js has no dependencies, so no install step is needed here.
+      #
+      # Note that CI will NOT run on the pull request this opens: GitHub does not start a
+      # workflow from an event created with GITHUB_TOKEN. That is why release-publish.yml
+      # re-runs every check itself before it tags anything.
+      - name: Resolve the version from the milestone
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.milestone.number || inputs.milestone }}
+        run: |
+          set -euo pipefail
+          milestone=$(gh api "repos/$REPO/milestones/$NUMBER")
+          title=$(jq -r '.title' <<<"$milestone")
+          open=$(jq -r '.open_issues' <<<"$milestone")
+          description=$(jq -r '.description // ""' <<<"$milestone")
+
+          if [ "$open" != "0" ]; then
+            echo "::error::milestone #$NUMBER ($title) still has $open open issue(s); close or move them first"
+            exit 1
+          fi
+
+          # Pull requests come back from this endpoint too; only issues carry the labels.
+          issues=$(gh api --paginate "repos/$REPO/issues?milestone=$NUMBER&state=all&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | {number, title, labels: [.labels[].name]}' | jq -s '.')
+          labels=$(jq -r '[.[].labels[]] | join(" ")' <<<"$issues")
+
+          # Highest bump wins. An issue with no release:* label counts as release:none and
+          # is listed in the PR body, so an under-bump is visible rather than silent.
+          bump=none
+          case " $labels " in *" release:patch "*) bump=patch ;; esac
+          case " $labels " in *" release:minor "*) bump=minor ;; esac
+          case " $labels " in *" release:major "*) bump=major ;; esac
+
+          pin=$(grep -oiE 'release:[[:space:]]*v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' <<<"$description" \
+            | head -1 | sed -E 's/.*:[[:space:]]*v?//' || true)
+
+          if [ -z "$pin" ] && [ "$bump" = none ]; then
+            echo "::error::milestone #$NUMBER ($title) has no release:major/minor/patch label and no pinned version; nothing to release"
+            exit 1
+          fi
+
+          version=$(node tools/release.js version --bump "$bump" ${pin:+--pin "$pin"})
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::tag v$version already exists"
+            exit 1
+          fi
+
+          unlabelled=$(jq -r '[.[] | select([.labels[] | select(startswith("release:"))] | length == 0)
+            | "- #\(.number) \(.title)"] | join("\n")' <<<"$issues")
+
+          {
+            echo "version=$version"
+            echo "bump=$bump"
+            echo "pin=$pin"
+            echo "title=$title"
+            echo "unlabelled<<EOF"
+            echo "$unlabelled"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "milestone #$NUMBER ($title) -> v$version (bump=$bump${pin:+, pinned})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bump the version and date the changelog
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: node tools/release.js prepare "$VERSION"
+
+      - name: Open the release pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.milestone.number || inputs.milestone }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          BUMP: ${{ steps.resolve.outputs.bump }}
+          PIN: ${{ steps.resolve.outputs.pin }}
+          MILESTONE_TITLE: ${{ steps.resolve.outputs.title }}
+          UNLABELLED: ${{ steps.resolve.outputs.unlabelled }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "release/v$VERSION"
+          git commit -am "release: v$VERSION"
+          git push --set-upstream origin "release/v$VERSION"
+
+          {
+            echo "Closing milestone [$MILESTONE_TITLE](https://github.com/$REPO/milestone/$NUMBER) proposes **v$VERSION**."
+            if [ -n "$PIN" ]; then
+              echo "Version pinned by the milestone description; the \`release:*\` labels said \`$BUMP\`."
+            else
+              echo "Version derived from the \`release:$BUMP\` label on the milestone's issues."
+            fi
+            echo
+            echo "Merging this tags \`v$VERSION\` and publishes the release. Review the notes below first —"
+            echo "they are the release body verbatim, so edit \`CHANGELOG.md\` on this branch to change them."
+            if [ -n "$UNLABELLED" ]; then
+              echo
+              echo "> [!NOTE]"
+              echo "> These issues carry no \`release:*\` label and were counted as \`release:none\`:"
+              echo "$UNLABELLED" | sed 's/^/> /'
+            fi
+            echo
+            echo "---"
+            echo
+            node tools/release.js notes "$VERSION"
+          } > /tmp/pr-body.md
+
+          gh pr create --base main --head "release/v$VERSION" \
+            --title "release: v$VERSION" --body-file /tmp/pr-body.md --label release
