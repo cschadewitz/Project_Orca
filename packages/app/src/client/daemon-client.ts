@@ -3,20 +3,53 @@
  * results validated against the protocol schemas. Lives in the main process (the
  * renderer talks to it over IPC via the preload bridge) and imports nothing but
  * `@orca/protocol`, which the lint config enforces for the whole app package.
+ *
+ * Reads go over HTTP, one request per response. The one thing HTTP cannot do is let the
+ * daemon speak first, so `subscribe()` opens a WebSocket beside it (`subscription.ts`) and
+ * hands back a stream that reconnects and resumes on its own. Both halves are the same
+ * daemon on the same port; a client that only reads never opens a socket.
  */
 import {
+  CLAIMS_LIST_METHOD,
+  ClaimsListResultSchema,
   HELLO_METHOD,
   HelloResultSchema,
+  INPUTS_LIST_METHOD,
+  InputsListResultSchema,
   PROTOCOL_VERSION,
+  RUNS_EVENTS_METHOD,
+  RUNS_GET_METHOD,
+  RUNS_LIST_METHOD,
   ResponseMessageSchema,
+  RunsEventsResultSchema,
+  RunsGetResultSchema,
+  RunsListResultSchema,
+  socketUrlFor,
+  type ClaimsListParams,
+  type ClaimsListResult,
   type HelloResult,
+  type InputsListParams,
+  type InputsListResult,
   type ProtocolError,
   type RequestMessage,
+  type RunsEventsParams,
+  type RunsEventsResult,
+  type RunsGetParams,
+  type RunsGetResult,
+  type RunsListParams,
+  type RunsListResult,
 } from "@orca/protocol";
 import type { ZodType } from "zod";
+import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
 
 /** Where `orca serve` listens unless told otherwise; 6722 spells ORCA on a phone keypad. */
 export const DEFAULT_DAEMON_URL = "http://127.0.0.1:6722";
+
+/**
+ * Params as a caller passes them. The paging defaults (`limit`, `offset`) are the daemon's
+ * schema's, so a screen that does not care about them says nothing about them.
+ */
+type Params<T> = Partial<T>;
 
 export class DaemonClientError extends Error {
   override readonly name = "DaemonClientError";
@@ -32,6 +65,11 @@ export class DaemonClient {
     readonly url: string = DEFAULT_DAEMON_URL,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
+
+  /** The WebSocket beside the read endpoint, on the same host and port. */
+  get socketUrl(): string {
+    return socketUrlFor(this.url);
+  }
 
   async call<R>(method: string, params: unknown, result: ZodType<R>): Promise<R> {
     const req: RequestMessage = { kind: "request", id: this.nextId++, method, params };
@@ -53,5 +91,35 @@ export class DaemonClient {
 
   hello(client: string): Promise<HelloResult> {
     return this.call(HELLO_METHOD, { client, protocol: PROTOCOL_VERSION }, HelloResultSchema);
+  }
+
+  runsList(params: Params<RunsListParams> = {}): Promise<RunsListResult> {
+    return this.call(RUNS_LIST_METHOD, params, RunsListResultSchema);
+  }
+
+  runsGet(params: RunsGetParams): Promise<RunsGetResult> {
+    return this.call(RUNS_GET_METHOD, params, RunsGetResultSchema);
+  }
+
+  runsEvents(params: Params<RunsEventsParams> & { runId: string }): Promise<RunsEventsResult> {
+    return this.call(RUNS_EVENTS_METHOD, params, RunsEventsResultSchema);
+  }
+
+  inputsList(params: Params<InputsListParams> = {}): Promise<InputsListResult> {
+    return this.call(INPUTS_LIST_METHOD, params, InputsListResultSchema);
+  }
+
+  claimsList(params: Params<ClaimsListParams> = {}): Promise<ClaimsListResult> {
+    return this.call(CLAIMS_LIST_METHOD, params, ClaimsListResultSchema);
+  }
+
+  /**
+   * Open a push stream. Connects immediately and keeps itself connected: the returned
+   * subscription reconnects with backoff and resubscribes from the last sequence number it
+   * saw, so the caller gets a stream with gaps in *time* and none in content. Call `close()`
+   * on it when the screen behind it goes away.
+   */
+  subscribe(opts: Omit<DaemonSubscriptionOptions, "url">): DaemonSubscription {
+    return new DaemonSubscription({ ...opts, url: this.socketUrl });
   }
 }

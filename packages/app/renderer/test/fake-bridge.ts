@@ -20,13 +20,10 @@
  * fixture the way the daemon's `ReadModel` does. A list screen wired to a fake that ignored
  * `limit` would pass its test and page wrongly against a real daemon.
  *
- * ## The read methods are not on `OrcaBridge` yet
- *
- * `packages/app/src/bridge.ts` declares `platform`, `hello` and `preferences` — the preload
- * does not forward the read methods yet (#150 landed them on the daemon side). `FakeOrcaBridge`
- * below is `OrcaBridge` plus the shape they will take, so the tests that need them can be
- * written now; when the preload grows them, this file should import the real types and delete
- * the local declaration rather than keep a second opinion about it.
+ * The bridge this implements is `packages/app/src/bridge.ts`, whole: the handshake, the five
+ * read methods, the notification stream and the preferences. It is typed as `OrcaBridge`
+ * rather than as a shape of its own, so the day the real bridge grows a method this file
+ * fails to compile instead of quietly holding a second opinion about what the bridge is.
  */
 import type {
   ClaimsListParams,
@@ -50,20 +47,7 @@ import { AS_OF, CLAIMS, EVENTS, HELLO, INPUTS, RUNS, RUN_DETAILS } from "./fixtu
 /** Params as a caller passes them: the schema defaults (`limit`, `offset`) are the daemon's job. */
 type Params<T> = Partial<T>;
 
-/** The read half of the bridge, as the preload will expose it. */
-export interface ReadBridge {
-  runs: {
-    list: (params?: Params<RunsListParams>) => Promise<BridgeResult<RunsListResult>>;
-    get: (params: RunsGetParams) => Promise<BridgeResult<RunsGetResult>>;
-    events: (params: Params<RunsEventsParams> & { runId: string }) => Promise<BridgeResult<RunsEventsResult>>;
-  };
-  inputs: { list: (params?: Params<InputsListParams>) => Promise<BridgeResult<InputsListResult>> };
-  claims: { list: (params?: Params<ClaimsListParams>) => Promise<BridgeResult<ClaimsListResult>> };
-  /** Daemon-initiated messages. Returns the unsubscribe, the way the real one will. */
-  notifications: { subscribe: (listener: (notification: NotificationMessage) => void) => () => void };
-}
-
-export type FakeOrcaBridge = OrcaBridge & ReadBridge;
+export type FakeOrcaBridge = OrcaBridge;
 
 export type MethodName = "hello" | "runs.list" | "runs.get" | "runs.events" | "inputs.list" | "claims.list";
 

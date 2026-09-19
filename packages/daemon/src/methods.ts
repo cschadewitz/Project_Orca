@@ -24,6 +24,10 @@ import {
   RunsEventsParamsSchema,
   RunsGetParamsSchema,
   RunsListParamsSchema,
+  SUBSCRIBE_METHOD,
+  SubscribeParamsSchema,
+  UNSUBSCRIBE_METHOD,
+  UnsubscribeParamsSchema,
   formatProtocolVersion,
   isCompatible,
   type ClaimsListResult,
@@ -33,9 +37,14 @@ import {
   type RunsEventsResult,
   type RunsGetResult,
   type RunsListResult,
+  type SubscribeParams,
+  type SubscribeResult,
+  type UnsubscribeParams,
+  type UnsubscribeResult,
 } from "@orca/protocol";
 import type { ZodType } from "zod";
 import type { ReadModel } from "./read-model.js";
+import type { SubscriptionSource } from "./subscriptions.js";
 
 export interface MethodContext {
   /** ORCA's own version, reported in `hello`. */
@@ -44,6 +53,11 @@ export interface MethodContext {
   capabilities: readonly DaemonCapability[];
   /** The projection the read methods answer from. Without it they refuse; `hello` does not need it. */
   reads?: ReadModel | undefined;
+  /**
+   * The engine feed a subscription reads from. Present means this daemon runs a WebSocket
+   * endpoint and advertises `subscribe`/`unsubscribe`; absent means it does not.
+   */
+  source?: SubscriptionSource | undefined;
 }
 
 export interface Method<P, R> {
@@ -110,6 +124,28 @@ export const claimsList: Method<Parameters<ReadModel["claimsList"]>[0], ClaimsLi
   handle: (params, ctx) => reads(ctx).claimsList(params),
 };
 
+/**
+ * A connection's subscription state is the connection's, so these two are answered by the
+ * socket transport (socket.ts) before dispatch ever sees them. They are in the table so that
+ * `hello.methods` can advertise them, and so a client that tries them over `/rpc` - which has
+ * nowhere to push to - is told exactly that instead of "unknown method".
+ */
+function socketOnly(name: string): never {
+  throw new OrcaError("NOT_SUPPORTED", `'${name}' needs a connection to push on: call it over the WebSocket endpoint`, {
+    method: name,
+  });
+}
+
+export const subscribe: Method<SubscribeParams, SubscribeResult> = {
+  params: SubscribeParamsSchema,
+  handle: () => socketOnly(SUBSCRIBE_METHOD),
+};
+
+export const unsubscribe: Method<UnsubscribeParams, UnsubscribeResult> = {
+  params: UnsubscribeParamsSchema,
+  handle: () => socketOnly(UNSUBSCRIBE_METHOD),
+};
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the table is heterogeneous; each entry is typed at its definition.
 export type MethodTable = Record<string, Method<any, unknown>>;
 
@@ -123,7 +159,15 @@ export const methods: MethodTable = {
   [CLAIMS_LIST_METHOD]: claimsList,
 };
 
-/** What a daemon in this context actually answers - `hello` alone when it serves no store. */
+/**
+ * What a daemon in this context actually answers - `hello` alone when it serves no store,
+ * and the subscription methods only when it was given an engine feed to fan out.
+ */
 export function methodsFor(ctx: MethodContext): MethodTable {
-  return ctx.reads ? methods : { [HELLO_METHOD]: hello };
+  const table: MethodTable = ctx.reads ? { ...methods } : { [HELLO_METHOD]: hello };
+  if (ctx.source) {
+    table[SUBSCRIBE_METHOD] = subscribe;
+    table[UNSUBSCRIBE_METHOD] = unsubscribe;
+  }
+  return table;
 }

@@ -12,9 +12,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
-import type { HelloResult } from "@orca/protocol";
+import type { NotificationMessage } from "@orca/protocol";
 import type { BridgeResult } from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
+import type { DaemonSubscription } from "../client/subscription.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
 
@@ -24,14 +25,47 @@ const preferences = new PreferencesFile(join(app.getPath("userData"), "preferenc
 /** The dev server's URL when `scripts/dev.js` started one; undefined in a packaged app. */
 const rendererUrl = process.env.ORCA_RENDERER_URL;
 
-ipcMain.handle("orca:hello", async (): Promise<BridgeResult<HelloResult>> => {
-  try {
-    return { ok: true, result: await client.hello(`orca-app/${app.getVersion()}`) };
-  } catch (e) {
-    if (e instanceof DaemonClientError) return { ok: false, error: e.error };
-    return { ok: false, error: { code: "AGENT_TRANSPORT", message: e instanceof Error ? e.message : String(e) } };
+/* ---------- the daemon ---------- */
+
+/**
+ * Every bridge call answers rather than rejects: a rejection over the context bridge reaches
+ * the renderer as a stringified `Error` with the main process's stack, which no screen can
+ * render. See `../bridge.ts`.
+ */
+function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
+  ipcMain.handle(channel, async (_event, params: P): Promise<BridgeResult<R>> => {
+    try {
+      return { ok: true, result: await run(params) };
+    } catch (e) {
+      if (e instanceof DaemonClientError) return { ok: false, error: e.error };
+      return { ok: false, error: { code: "AGENT_TRANSPORT", message: e instanceof Error ? e.message : String(e) } };
+    }
+  });
+}
+
+handle("orca:hello", () => client.hello(`orca-app/${app.getVersion()}`));
+handle("orca:runs.list", (params: Parameters<DaemonClient["runsList"]>[0]) => client.runsList(params));
+handle("orca:runs.get", (params: Parameters<DaemonClient["runsGet"]>[0]) => client.runsGet(params));
+handle("orca:runs.events", (params: Parameters<DaemonClient["runsEvents"]>[0]) => client.runsEvents(params));
+handle("orca:inputs.list", (params: Parameters<DaemonClient["inputsList"]>[0]) => client.inputsList(params));
+handle("orca:claims.list", (params: Parameters<DaemonClient["claimsList"]>[0]) => client.claimsList(params));
+
+/**
+ * One socket for the whole app, store-wide, forwarded to every open window. A subscription
+ * per window would mean one daemon connection per window showing the same runs, and the
+ * renderer has no business choosing what the main process connects to — it says which
+ * notifications interest it by what it does with them.
+ *
+ * The stream reconnects and resumes on its own (`../client/subscription.ts`), so nothing
+ * here retries and nothing here notices a daemon restarting.
+ */
+let notifications: DaemonSubscription | undefined;
+
+function broadcast(notification: NotificationMessage): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send("orca:notification", notification);
   }
-});
+}
 
 ipcMain.on("orca:preferences.read", (event) => {
   event.returnValue = preferences.read();
@@ -105,6 +139,10 @@ function createWindow(): void {
 
 void app.whenReady().then(() => {
   applyTheme(preferences.read().theme);
+  notifications = client.subscribe({
+    params: {},
+    onNotification: (n) => broadcast({ kind: "notification", method: n.method, params: n.params }),
+  });
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -113,4 +151,10 @@ void app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+// Close the socket rather than leave the daemon fanning out to a process that is going.
+app.on("before-quit", () => {
+  notifications?.close();
+  notifications = undefined;
 });

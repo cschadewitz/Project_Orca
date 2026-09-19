@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { openAcpSession } from "@orca/agents";
 import { ReadModel, startDaemon } from "@orca/daemon";
-import { PROTOCOL_VERSION, READ_METHODS, formatProtocolVersion } from "@orca/protocol";
+import { PROTOCOL_VERSION, READ_METHODS, SUBSCRIPTION_METHODS, formatProtocolVersion } from "@orca/protocol";
 import {
   succeeded,
   toMermaid,
@@ -359,13 +359,20 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         storeDir,
         // Reads only. The store stays single-writer (ADR 0008, #101): the daemon projects
         // it, and a CLI or another daemon may be driving runs in it at the same time.
-        capabilities: ["runs.read"],
+        //
+        // `runs.subscribe` is a read too: the socket fans out this process's own event
+        // store, so a client sees what runs *this* daemon drives or observes. A run
+        // appended by a separate CLI process lands in that store's files, not in this
+        // orchestrator's listeners, and still shows up on the next read (#196).
+        capabilities: ["runs.read", "runs.subscribe"],
         reads: new ReadModel({ orchestrator: app.orchestrator }),
+        source: app.orchestrator,
       });
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
       );
       ctx.out(`serving ${storeDir}: ${READ_METHODS.join(", ")}`);
+      if (daemon.socketUrl) ctx.out(`notifications on ${daemon.socketUrl}: ${SUBSCRIPTION_METHODS.join(", ")}`);
       await new Promise<void>((resolve) => {
         const stop = () => {
           process.off("SIGINT", stop);
