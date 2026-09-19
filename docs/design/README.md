@@ -5,38 +5,43 @@ no account, no network, no URL needed to know what a token is worth.
 
 ## Layout
 
+The system is split between the code the app consumes and the prose that explains it:
+
 ```
-design/
-  tokens.json          ← EDIT: every colour, type, spacing, radius, shadow, size, motion value
-  semantics.json       ← EDIT: the words and glyphs for statuses, schedule classes, connections
-  build-tokens.mjs         the generator
-  tokens.css               GENERATED — custom properties, both themes, type-style classes
-  tokens.ts                GENERATED — typed token names, status maps, raw values per theme
-  components.css           the component layer: token-bound classes, no hardcoded values
-  component-api.d.ts       the props each React primitive should expose over those classes
-  RULES.md                 the checklist an agent holds in context on every task
-  docs/                    information architecture, attention, connection states, a11y,
-                           long-running content, implementation, workflow editing, plan graph
-  test/contrast.test.mjs   WCAG AA for every documented pairing, in both themes
+packages/design/               the @orca/design workspace package
+  tokens.json                ← EDIT: every colour, type, spacing, radius, shadow, size, motion value
+  semantics.json             ← EDIT: the words and glyphs for statuses, schedule classes, connections
+  build-tokens.js              the generator
+  css/tokens.css               GENERATED — custom properties, both themes, type-style classes
+  src/tokens.ts                GENERATED — typed token names, status maps, raw values per theme
+  css/components.css           the component layer: token-bound classes, no hardcoded values
+  src/component-api.d.ts       the props each React primitive should expose over those classes
+  test/contrast.test.ts        WCAG AA for every documented pairing, in both themes
+
+docs/design/                   this folder
+  README.md                    this file: layout, how to consume it, the brand book
+  RULES.md                     the checklist an agent holds in context on every task
+  claude-design-prompt.md      the brief the system was designed from
+  10-…80-*.md                  information architecture, attention, long-running content,
+                               connection states, a11y, implementation, workflow editing, plan graph
 ```
 
 ## Build and check
 
-```jsonc
-// package.json
-"scripts": {
-  "design:build": "node design/build-tokens.mjs",
-  "design:check": "node design/build-tokens.mjs --check",
-  "design:test":  "node --test \"design/test/*.test.mjs\""
-}
+```sh
+pnpm run design:build    # regenerate css/tokens.css and src/tokens.ts from tokens.json
+pnpm run design:check    # fail if the generated files are behind (CI runs this)
+pnpm test                # the contrast and invariant tests run with the rest of the suite
 ```
 
-`design:check` fails when the generated files are behind `tokens.json` — run it in CI beside
-`design:test` so a stale token file or a contrast regression cannot merge.
+`design:check` fails when the generated files are behind `tokens.json`; CI runs it beside the
+test suite so a stale token file or a contrast regression cannot merge. The generated files
+are committed, marked generated in `.gitattributes`, and skipped by Prettier and ESLint.
 
 ## Consuming it
 
-Load `tokens.css` once at the app root, then `components.css`. Put the theme on `<html>`:
+Load `@orca/design/css/tokens.css` once at the app root, then `@orca/design/css/components.css`.
+Put the theme on `<html>`:
 
 ```html
 <html data-theme="dark">
@@ -49,7 +54,7 @@ every theme after the first. Density is a second attribute on a surface root,
 From TypeScript, reference tokens through `v()` and states through the maps:
 
 ```ts
-import { v, STATUS_PRESENTATION, type RunStatus } from './design/tokens';
+import { v, STATUS_PRESENTATION, type RunStatus } from '@orca/design';
 
 const s: RunStatus = 'failed';
 const { word, glyph, fg, bg } = STATUS_PRESENTATION[s];   // '✕', 'failed', 'var(--status-failed)', …
@@ -61,9 +66,9 @@ resolved — canvas 2D, an image export, a native menu. Everywhere else, use `v(
 
 ## Adding a token
 
-1. Add it to `tokens.json` with a `usage` note that names the grounds it sits on.
-2. `npm run design:build`.
-3. `npm run design:test` — the contrast suite checks it in both themes.
+1. Add it to `packages/design/tokens.json` with a `usage` note that names the grounds it sits on.
+2. `pnpm run design:build`.
+3. `pnpm test` — the contrast suite checks it in both themes.
 4. Commit `tokens.json` and the generated files together.
 
 ---
@@ -189,14 +194,15 @@ the token; do not inline the number.
 
 | Question | File |
 | --- | --- |
-| How the surfaces relate, window layout, palette, deep links | `docs/10-information-architecture.md` |
-| Gates, permission asks, counts, notifications | `docs/20-attention-and-gates.md` |
-| Virtualisation, following vs held, buffers, time | `docs/30-long-running-content.md` |
-| Live, reconnecting, disconnected, file mode, version mismatch | `docs/40-connection-states.md` |
-| Contrast, status without colour, focus, the keyboard map, live regions | `docs/50-accessibility-and-keyboard.md` |
-| Theming, density, virtualised rows, streaming, and what ORCA cannot supply | `docs/60-implementation.md` |
-| The workflow editor: structured edits, drafts, validation, run pinning | `docs/70-workflow-editing.md` |
-| The two dependency-graph options and the recommendation | `docs/80-dependency-graph-options.md` |
+| How the surfaces relate, window layout, palette, deep links | `10-information-architecture.md` |
+| Gates, permission asks, counts, notifications | `20-attention-and-gates.md` |
+| Virtualisation, following vs held, buffers, time | `30-long-running-content.md` |
+| Live, reconnecting, disconnected, file mode, version mismatch | `40-connection-states.md` |
+| Contrast, status without colour, focus, the keyboard map, live regions | `50-accessibility-and-keyboard.md` |
+| Theming, density, virtualised rows, streaming, and what ORCA cannot supply | `60-implementation.md` |
+| The workflow editor: structured edits, drafts, validation, run pinning | `70-workflow-editing.md` |
+| The two dependency-graph options and the recommendation | `80-dependency-graph-options.md` |
+| The brief the system was designed from | `claude-design-prompt.md` |
 
 The rendered version of this system — live component previews, both themes side by side, and
 the seven key screens — lives in a Claude artifact. It is the review surface, not the source:

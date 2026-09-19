@@ -88,6 +88,12 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
+      # tokens.css and tokens.ts are committed so nothing needs a build to read a token;
+      # this fails when someone edited tokens.json and forgot to regenerate them.
+      - name: Design tokens are current
+        if: matrix.node == 24
+        run: pnpm run design:check
+
       # Style and lint are Node-version independent, so one leg is enough: running them on
       # both would annotate the same finding twice on the PR.
       - name: Format

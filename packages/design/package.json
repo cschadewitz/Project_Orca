@@ -1,0 +1,24 @@
+{
+  "name": "@orca/design",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ORCA design system: tokens (source and generated), the CSS component layer, and the typed status/state maps the desktop app renders from.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./css/*": "./css/*"
+  },
+  "files": [
+    "dist",
+    "css"
+  ],
+  "scripts": {
+    "build:tokens": "node build-tokens.js",
+    "check:tokens": "node build-tokens.js --check"
+  }
+}

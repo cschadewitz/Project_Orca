@@ -26,12 +26,20 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
 7. **Session resume** — use `session/load` for agents that support it so a retried step can
    continue the same conversation.
 8. **Desktop app** — the Electron shell in `packages/app` is a placeholder renderer that
-   proves the app → preload → main → daemon path. The design system it will be built on is
-   being worked out from the brief in `docs/design/`; the renderer framework is chosen with
-   it. Phase 1 is run monitoring (run tree, event timeline, artifacts, answering gates);
-   phase 2 makes it the first‑class configuration and monitoring surface (config, agents,
-   plan); a workflow graph editor comes after the viewer. The graph model and `toMermaid`
-   are already UI‑ready.
+   proves the app → preload → main → daemon path, styled with the design system's CSS.
+   The design system itself is done: tokens in both themes, the CSS component layer, the
+   typed status maps (`packages/design`) and the brand book, rules and surface specs
+   (`docs/design/`). Next, in order: bundle IBM Plex Sans/Mono as woff2 (the `type.fonts`
+   list in `tokens.json` is empty, so the fallback stacks are in use); pick the renderer
+   bundler and build the React layer over `components.css` to the props in
+   `component-api.d.ts`; then phase 1, run monitoring (attention, run tree, event timeline,
+   artifacts, answering gates) against the daemon methods of item 1. Phase 2 makes it the
+   first‑class configuration and monitoring surface (config, agents, plan); the dependency
+   graph goes in as a mode of Plan with a docked inspector unless use shows it is a
+   starting point (`docs/design/80-dependency-graph-options.md`). Workflow editing
+   (`docs/design/70-workflow-editing.md`) comes after the viewer and needs the runtime to
+   execute a run against the workflow version it started with, not only the newest; a run
+   already records its workflow version.
 9. **Planning: capacity and milestones** — the scheduler orders by dependencies, risk and
    priority but has no notion of agent capacity per host, calendar milestones or due dates
    beyond `Decision.dueBy`; add `Milestone` records and a capacity model per host/agent.

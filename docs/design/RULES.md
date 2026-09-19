@@ -4,11 +4,12 @@ Short enough to keep in context on every task. The reasoning is in `README.md`; 
 non-negotiables are here.
 
 1. **No literal colours, sizes, radii, durations or z-values in component code.** Reference a
-   token: `var(--status-failed)` in CSS, `v('status-failed')` from `tokens.ts` in TypeScript.
-   If no token names what you need, add one to `tokens.json` and rebuild — do not inline it.
-2. **`tokens.css` and `tokens.ts` are generated.** Edit `tokens.json` (values) or
-   `semantics.json` (words and glyphs), then run `node design/build-tokens.mjs`. Never hand-edit
-   the generated files; CI checks they are current.
+   token: `var(--status-failed)` in CSS, `v('status-failed')` from `@orca/design` in TypeScript.
+   If no token names what you need, add one to `packages/design/tokens.json` and rebuild — do
+   not inline it.
+2. **`css/tokens.css` and `src/tokens.ts` in `packages/design` are generated.** Edit
+   `tokens.json` (values) or `semantics.json` (words and glyphs), then run
+   `pnpm run design:build`. Never hand-edit the generated files; CI checks they are current.
 3. **Eight run statuses, and only eight**: running, waiting, succeeded, failed, cancelled,
    blocked, held, stale. Adding a ninth is a design change, not a patch. Use `RunStatus` and
    `STATUS_PRESENTATION` — never re-declare the list.

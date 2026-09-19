@@ -202,6 +202,9 @@ importers:
 
   packages/app:
     dependencies:
+      '@orca/design':
+        specifier: workspace:*
+        version: link:../design
       '@orca/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -266,6 +269,8 @@ importers:
       zod:
         specifier: ^4.6.5
         version: 4.6.5
+
+  packages/design: {}
 
   packages/engine:
     dependencies:

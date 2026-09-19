@@ -15,6 +15,7 @@ export default defineConfig({
       "@orca/integrations": pkg("integrations"),
       "@orca/protocol": pkg("protocol"),
       "@orca/daemon": pkg("daemon"),
+      "@orca/design": pkg("design"),
     },
   },
   test: {
@@ -30,13 +31,15 @@ export default defineConfig({
       // infrastructure, and the e2e tests drive it as a real subprocess - v8 coverage
       // collected in this process cannot see any of it, so its number would be fiction.
       // The app's main and preload processes only run inside Electron; its daemon client
-      // is plain Node and is covered.
+      // is plain Node and is covered. The design package's src is generated tokens and a
+      // documentation-only .d.ts; its tests check the JSON sources, not the output.
       exclude: [
         "packages/*/src/index.ts",
         "**/main.ts",
         "packages/testing/**",
         "packages/app/src/main/**",
         "packages/app/src/preload/**",
+        "packages/design/src/**",
       ],
       reporter: ["text-summary", "html", "lcov", "json-summary"],
       // A ratchet, set just under what the suite covers today (79.0 / 66.2 / 81.5 / 81.9).

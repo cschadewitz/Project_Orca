@@ -13,6 +13,8 @@ pnpm run demo                # program run with scripted agents (from sources vi
 node packages/cli/dist/main.js demo   # same, from the compiled build
 pnpm run orca serve          # the daemon, on 127.0.0.1:6722 until Ctrl-C
 pnpm run build && pnpm --filter @orca/app start   # the Electron app against that daemon
+pnpm run design:build        # regenerate packages/design css/tokens.css + src/tokens.ts from tokens.json
+pnpm run design:check        # fail if those generated files are behind (CI runs this)
 ```
 
 The app needs the Electron binary, which `pnpm install` downloads through electron's
@@ -124,10 +126,15 @@ shows a green check rather than none — see the comments in `.github/workflows/
 - `core` has no runtime I/O except reading workflow/template files. `engine` depends on
   ports (`EventStore`, `ArtifactStore`, `AgentHost`, `AgentSession`), never on concrete
   transports, so it is testable with in‑memory stores and the scripted agent.
-- `packages/app/src` imports `@orca/protocol` and nothing else from the workspace
-  (`no-restricted-imports` in the lint config). Anything the app needs from ORCA is a
-  protocol method the daemon serves; add the schemas to `protocol`, the handler to the
-  daemon's method table, then call it from the app's `DaemonClient`.
+- `packages/app/src` imports `@orca/protocol` and `@orca/design` and nothing else from
+  the workspace (`no-restricted-imports` in the lint config). Anything the app needs from
+  ORCA is a protocol method the daemon serves; add the schemas to `protocol`, the handler
+  to the daemon's method table, then call it from the app's `DaemonClient`.
+- UI code follows `docs/design/RULES.md`: no literal colours, sizes, radii or durations,
+  only tokens. `packages/design/css/tokens.css` and `src/tokens.ts` are generated from
+  `tokens.json` and `semantics.json` — edit the JSON, run `pnpm run design:build`, commit
+  all four together. They are committed (and marked generated in `.gitattributes`) so no
+  build is needed to read a token; Prettier and ESLint skip them.
 - Errors are `OrcaError` with a stable `code`; executors return `failed(code, …)` rather
   than throwing for expected failures. On the wire they travel as `toJSON()`, with the
   same code, plus the three `PROTOCOL_*` codes for version, method and message problems.

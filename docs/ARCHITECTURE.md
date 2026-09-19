@@ -25,9 +25,9 @@
 ## Layering
 
 ```
- app ──▶ protocol ◀── daemon
- (electron)  │           │
-             ▼           ▼
+ design ◀── app ──▶ protocol ◀── daemon
+ (tokens,  (electron)  │           │
+  css)                 ▼           ▼
  cli ─────────────▶ integrations ──▶ engine ──▶ agents ──▶ core
   │                   (acp-facade,     │ (orchestrator, (acp,      (model, events,
   │                    kepler, t3code) │  plan service)  ssh, local) plan algorithms,
@@ -41,9 +41,12 @@ transports, so tests use in‑memory stores and a scripted ACP agent.
 
 `protocol` is the wire contract (Zod schemas, depends on `core` only). `daemon`
 serves it over the network in front of the engine; `cli` starts one with `orca
-serve`. `app` depends on `protocol` and nothing else in the workspace, enforced by
-the lint config: the desktop app can only see what a daemon tells it, so attaching
-to a daemon on another machine is the same code path as the local one (ADR 0008).
+serve`. `app` depends on `protocol` and `design` and nothing else in the workspace,
+enforced by the lint config: the desktop app can only see what a daemon tells it, so
+attaching to a daemon on another machine is the same code path as the local one
+(ADR 0008). `design` is the design system as code — generated tokens in CSS and
+TypeScript, the CSS component layer, the typed status maps — with no dependencies at
+all; the brand book and surface specs it implements are in `docs/design/`.
 
 ## The interpreter
 

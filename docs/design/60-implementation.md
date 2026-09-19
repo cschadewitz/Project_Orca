@@ -19,14 +19,14 @@ match; a light scrollbar on a dark pane is the most common symptom of skipping t
 
 ## The class layer
 
-`components/bundle.css` is the reference implementation of every component in this system as
+`packages/design/css/components.css` is the reference implementation of every component in this system as
 token-bound classes, with no JavaScript and no hardcoded values. It is deliberately CSS-only:
 this app will be built by developers in React, and a CSS layer they can adopt piecemeal is
 more useful than a component bundle they must wrap. Names are `orca-` prefixed and BEM-ish
 (`orca-chip`, `orca-chip--failed`, `orca-tree-row__label`).
 
-`components/index.d.ts` describes the props the React layer should expose over those classes.
-It is documentation, not a shipped type package.
+`packages/design/src/component-api.d.ts` describes the props the React layer should expose
+over those classes. It is documentation, not a shipped type package.
 
 ## Density
 

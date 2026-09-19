@@ -43,7 +43,11 @@ processes writing one store no longer collide (#97).
   contract: envelope, `hello` handshake, versioning, error codes), `daemon` (HTTP transport
   and the method table; only `hello` so far) and `app` (an Electron shell that completes
   the handshake through the protocol package and nothing else). ADR 0008 records the
-  layering; the design brief for the app is in `docs/design/`.
+  layering.
+- **design:** the desktop app's design system — `packages/design` (token sources, the
+  generator, generated CSS and TypeScript tokens for light and dark, the CSS component
+  layer, WCAG AA contrast tests) and `docs/design/` (the brief, brand book, UI rules and
+  surface specs). `pnpm run design:check` in CI keeps the generated files current.
 - **plan:** a planning layer over the engine — cross-request dependencies, a risk matrix,
   decision matrices and an explainable scheduler that orders work by dependency, risk and
   priority (#85).
