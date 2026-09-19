@@ -171,6 +171,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --surface-canvas: #131210;
     --surface-base: #1a1815;
     --surface-raised: #221f1b;

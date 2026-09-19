@@ -10,12 +10,23 @@ show both themes side by side, and it is also how a light-on-dark preview pane i
 would work if one is ever needed.
 
 ```css
-:root { color-scheme: light dark; }
-:root[data-theme="dark"] { color-scheme: dark; }
+:root, [data-theme="light"] { color-scheme: light; … }
+[data-theme="dark"] { color-scheme: dark; … }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; … } }
 ```
 
-Set `color-scheme` so native scrollbars, form controls and the Electron window background
-match; a light scrollbar on a dark pane is the most common symptom of skipping this.
+`color-scheme` travels with every block the generator emits, so native scrollbars and form
+controls match whether the theme was chosen or followed from the OS; a light scrollbar on a
+dark pane is the most common symptom of skipping this. The Electron window's own
+background — painted before any CSS has loaded — is `surface-canvas` from `rawTokens` for
+the resolved theme, set by the main process, so opening in dark does not flash white.
+
+In the app, `packages/app/renderer/src/theme.ts` is the only code that touches
+`data-theme`, and `main.tsx` applies it before React mounts so the first paint is already
+right. The preference (`system`, `light`, `dark`) lives in the app's own `preferences.json`,
+not the ORCA YAML; `⌘⇧L` cycles it and the main process mirrors the choice into
+`nativeTheme.themeSource`, so the OS-drawn chrome follows too. `AppearanceProvider` gives
+React components the actions (cycle, toggle, refresh) and nothing to read.
 
 ## The class layer
 
@@ -41,6 +52,13 @@ Density is one attribute, `data-density="compact"`, set on a surface's root elem
 rebinds `--row-h` from `row-comfortable` to `row-compact` and tightens two paddings. Nothing
 else changes — no font size, no icon size — because the point of the toggle is more rows per
 screen, not smaller text.
+
+A surface root is the element carrying `data-surface="<id>"` (`attention`, `runs`, `plan`,
+`agents`, `config`). `⌘⇧D` toggles the surface that contains focus and the choice is
+remembered by that id in the app's preferences, so the run tree can be compact while the
+config form stays comfortable. `packages/app/renderer/src/density.ts` is the only code that
+touches the attribute; a component that renders a surface root calls `useSurfaceDensity()`
+so it gets its remembered density once it is in the document.
 
 ## Virtualised rows
 

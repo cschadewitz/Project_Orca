@@ -33,7 +33,9 @@ export default defineConfig({
       // infrastructure, and the e2e tests drive it as a real subprocess - v8 coverage
       // collected in this process cannot see any of it, so its number would be fiction.
       // The app's main and preload processes only run inside Electron; its daemon client
-      // is plain Node and is covered. The design package's src is generated tokens and a
+      // and preferences are plain Node and are covered. (The renderer lives under
+      // packages/app/renderer, outside this include; its DOM modules are tested in
+      // happy-dom but not counted.) The design package's src is generated tokens and a
       // documentation-only .d.ts; its tests check the JSON sources, not the output.
       exclude: [
         "packages/*/src/index.ts",

@@ -7,9 +7,10 @@
      `unsafe-inline`. The dev server rewrites it in memory — see `htmlPlugin` in
      ../vite.config.ts — and never touches this file.
 
-     `data-theme` lives on <html> as docs/design/60-implementation.md requires. It is
-     hardcoded to light until #146 wires the theme to a preference. -->
-<html lang="en" data-theme="light">
+     `data-theme` lives on <html> as docs/design/60-implementation.md requires. It is not
+     written here: src/main.tsx sets it from the persisted preference before React mounts,
+     and leaves it off when the preference is to follow the OS. -->
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta

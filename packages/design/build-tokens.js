@@ -58,9 +58,10 @@ function buildCss() {
     const changed = themed.filter((t) => differs(t, theme));
     const body = `  color-scheme: ${theme};\n${decls(changed, theme)}`;
     out.push(`[data-theme="${theme}"] {\n${body}\n}\n`);
-    /* follow the OS unless a theme was chosen explicitly */
+    /* follow the OS unless a theme was chosen explicitly — `color-scheme` included, so native
+       scrollbars and form controls match the OS theme even when nothing set the attribute */
     out.push(
-      `@media (prefers-color-scheme: ${theme}) {\n  :root:not([data-theme="${first}"]) {\n${decls(changed, theme, "    ")}\n  }\n}\n`,
+      `@media (prefers-color-scheme: ${theme}) {\n  :root:not([data-theme="${first}"]) {\n    color-scheme: ${theme};\n${decls(changed, theme, "    ")}\n  }\n}\n`,
     );
   }
 

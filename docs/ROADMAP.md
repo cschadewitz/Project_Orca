@@ -43,10 +43,12 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    proves the app → preload → main → daemon path, styled with the design system's CSS.
    The design system itself is done: tokens in both themes, the CSS component layer, the
    typed status maps (`packages/design`) and the brand book, rules and surface specs
-   (`docs/design/`). Next, in order: bundle IBM Plex Sans/Mono as woff2 (the `type.fonts`
-   list in `tokens.json` is empty, so the fallback stacks are in use); pick the renderer
-   bundler and build the React layer over `components.css` to the props in
-   `component-api.d.ts`; then phase 1, run monitoring (attention, run tree, event timeline,
+   (`docs/design/`), with IBM Plex bundled as woff2 (#144), the renderer on React and Vite
+   with a hot-reloading dev loop (#145), and theme and density wired through the app's own
+   preferences file with `⌘⇧L` / `⌘⇧D` (#146). Next, in order: the React layer over
+   `components.css` to the props in `component-api.d.ts` (#147); the window chrome (#148)
+   and the palette over the keyboard map (#149); then phase 1, run monitoring (attention,
+   run tree, event timeline,
    artifacts, answering gates) against the daemon methods of item 1. Phase 2 makes it the
    first‑class configuration and monitoring surface (config, agents, plan); the dependency
    graph goes in as a mode of Plan with a docked inspector unless use shows it is a

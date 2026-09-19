@@ -48,8 +48,10 @@ Put the theme on `<html>`:
 ```
 
 Omit the attribute to follow the OS — the generator emits a `prefers-color-scheme` block for
-every theme after the first. Density is a second attribute on a surface root,
-`data-density="compact"`, which rebinds `--row-h` and nothing else.
+every theme after the first, `color-scheme` included. Density is a second attribute on a
+surface root, `data-density="compact"`, which rebinds `--row-h` and nothing else. In the
+desktop app both attributes are set by `packages/app/renderer/src/appearance.ts` from the
+app's own preferences file, and nothing else reads them in JavaScript (`60-implementation.md`).
 
 From TypeScript, reference tokens through `v()` and states through the maps:
 
