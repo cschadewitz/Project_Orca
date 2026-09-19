@@ -53,7 +53,10 @@ export function Preview(): JSX.Element {
         <Text style="title" as="h1">
           Primitives
         </Text>
-        <Text style="caption">Both themes, every component, from the design system&rsquo;s own lists.</Text>
+        <Text style="caption">
+          Both themes, every component, from the design system&rsquo;s own lists. The type scale and the bundled glyphs
+          are at <a href="#type">#type</a>.
+        </Text>
       </header>
       <div className="preview__themes">
         {THEMES.map((theme) => (

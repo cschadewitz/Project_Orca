@@ -14,6 +14,11 @@
   padding: var(--space-4) var(--space-6);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
+/* accent means interactive (rule 5) — and it keeps the browser's default link blue, which
+   is in neither theme, off the page. */
+.preview__head a {
+  color: var(--accent);
+}
 .preview__themes {
   display: grid;
   grid-template-columns: 1fr 1fr;
