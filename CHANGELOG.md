@@ -25,6 +25,12 @@ process that wrote it, and an ORCA that never sees it behaves as before, so an e
 store needs no migration; leftover files from a killed process lapse and are cleaned up on
 the next attach.
 
+Nothing else in this release touches the store. The daemon and the desktop app only read
+it — the read methods and the notification stream both project from the event log without
+writing to it — and the app's own preferences live in `preferences.json` under the Electron
+user-data directory, deliberately not in the workspace. An existing `.orca` store works
+unchanged with everything below.
+
 ### Added
 
 - **store:** `LeaseStore` — a single-writer lease with a TTL and a heartbeat
