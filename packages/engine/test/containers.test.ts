@@ -385,8 +385,11 @@ edges: [{ from: s, to: loop }, { from: loop, to: e }]
     expect(interruptedStep.children.map((c) => c.branch)).toEqual(["0", "1"]);
     const recordsBeforeResume = calls.record;
 
-    // Process 2: a fresh orchestrator over the same logs resumes the parent.
+    // Process 2: a fresh orchestrator over the same logs resumes the parent. The first one is
+    // only pretending to be dead - it is this process, still heartbeating - so its run lease
+    // has to be taken the way an operator would (a real crash lapses it on its own).
     const second = make(yaml, { stores: first.stores });
+    await second.orchestrator.breakLease(runId, { force: true });
     const state = await second.orchestrator.run(runId);
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(stepSummary(state)).toEqual(["s:1:completed", "loop:1:cancelled", "loop:2:completed", "e:1:completed"]);
@@ -448,6 +451,9 @@ edges: [{ from: s, to: par }, { from: par, to: e }]
     expect(interruptedStep.children.map((c) => c.branch)).toEqual(["a", "b"]);
 
     const second = make(yaml, { stores: first.stores });
+    // See the loop case above: the "dead" interpreter is this process, so its lease is broken
+    // explicitly rather than lapsing.
+    await second.orchestrator.breakLease(runId, { force: true });
     const state = await second.orchestrator.run(runId);
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(stepSummary(state)).toEqual(["s:1:completed", "par:1:cancelled", "par:2:completed", "e:1:completed"]);

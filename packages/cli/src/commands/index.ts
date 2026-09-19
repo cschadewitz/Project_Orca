@@ -29,6 +29,7 @@ import { scriptedAgentSpec } from "@orca/testing";
 import { bootstrap, loadConfig, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../format.js";
 import { claimsCommand } from "./claims.js";
+import { leasesCommand } from "./leases.js";
 import { planCommand } from "./plan.js";
 
 /** The CLI package's version, which is the release version (every package is bumped together). */
@@ -236,6 +237,11 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   claims: {
     help: "claims [list [--run <runId>] | release <workItemId> [--force]]  Show who owns which work item; free a dead run's claim so another dispatcher may launch it.",
     run: claimsCommand,
+  },
+
+  leases: {
+    help: "leases [list | break <runId> [--force] [--keep]]  Show who is interpreting which run; free a run whose interpreter is gone.",
+    run: leasesCommand,
   },
 
   runs: {

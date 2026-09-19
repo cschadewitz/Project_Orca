@@ -17,7 +17,10 @@ export type OrcaErrorCode =
   | "AGENT_PROTOCOL"
   | "RUN_NOT_FOUND"
   | "RUN_STATE"
+  /** Another interpreter holds the run's single-writer lease; see store/lease-store.ts. */
+  | "RUN_LEASED"
   | "CLAIM_NOT_FOUND"
+  | "LEASE_NOT_FOUND"
   | "STEP_TIMEOUT"
   | "CANCELLED"
   | "HUMAN_INPUT_PENDING"

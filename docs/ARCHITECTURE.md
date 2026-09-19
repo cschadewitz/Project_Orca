@@ -174,6 +174,24 @@ extend one log with one gap‑free `seq` instead of each counting from its own c
 process that dies mid‑append leaves a torn last line; reads skip it with a warning and the
 next append truncates it before writing, so a crash never disables a run or a plan.
 
+A well‑numbered log is still not a single‑authored one. Two interpreters over one run id
+would each reduce the same log, each pick the next node, and each append their own steps,
+so **driving a run takes a lease** (`packages/store/src/lease-store.ts`): `run()` acquires
+`run:<runId>` before it writes anything, heartbeats for as long as it is attached, and
+gives the lease back when the run finishes, fails or parks. A second interpreter is
+refused with `RUN_LEASED` and told which pid on which host holds it. A holder that stops
+heartbeating — or whose process is visibly gone on this host — has **lapsed**, and the
+next attach takes the lease over without an operator in the loop, so a crash never wedges
+a run. Breaking a lease that is still live is the operator's act, the way releasing a
+claim is: `orca leases` lists them, `orca leases break <runId> --force` takes one, and
+because a resumed parent drives the children its interrupted attempt spawned, `break`
+covers the run's subtree unless `--keep` says otherwise. The broken holder finds out at
+its next heartbeat and cancels itself rather than continuing to write.
+
+Claims and leases answer different questions and neither replaces the other: a claim says
+who *owns a work item*, outlives the process that took it, and is never released on its
+own; a lease says who is *interpreting a run right now*, and is meant to expire.
+
 `ProgramService.submit()` is the single entry point used by the CLI and the ACP
 facade. The original request‑scoped node (`custom:materialize-work-items`,
 fanned out by a plain `parallel` `forEach` over `vars.leafWorkItems`) remains

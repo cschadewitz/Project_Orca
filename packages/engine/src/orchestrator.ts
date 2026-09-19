@@ -43,7 +43,19 @@ import {
   type Workspace,
 } from "@orca/core";
 import { reduceRun } from "@orca/core";
-import type { EventFilter, EventListener, Stores, WorkItemClaim } from "@orca/store";
+import {
+  DEFAULT_LEASE_TTL_MS,
+  describeLease,
+  keepLease,
+  lapsed,
+  ownsLease,
+  type EventFilter,
+  type EventListener,
+  type HeldLease,
+  type Lease,
+  type Stores,
+  type WorkItemClaim,
+} from "@orca/store";
 import { builtinExecutors } from "./executors/index.js";
 import {
   NodeExecutorRegistry,
@@ -79,7 +91,30 @@ export interface OrchestratorOptions {
   plan?: PlanService;
   clock?: Clock;
   logger?: Logger;
+  /** Single-writer lease per run; see `runLease` for what the defaults mean. */
+  lease?: RunLeaseOptions;
 }
+
+export interface RunLeaseOptions {
+  /**
+   * How long a run's lease survives without a heartbeat, in ms. Default 60 s. It has to be
+   * comfortably longer than the gap between heartbeats *and* than any pause the event loop
+   * might take, because a lease that lapses under a live interpreter is exactly the
+   * two-writer situation it exists to prevent.
+   */
+  ttlMs?: number;
+  /** Heartbeat interval, in ms. Default `ttlMs / 3`. */
+  renewMs?: number;
+  /**
+   * Identity of this attachment, shared by every run it drives. Defaults to a fresh id per
+   * Orchestrator; set it when a process must be able to reclaim its own leases after a
+   * restart (a daemon with a stable instance id).
+   */
+  holder?: string;
+}
+
+/** A lease together with whether it may be taken over without an operator saying so. */
+export type HeldRunLease = Lease & { runId: string; lapsed: boolean };
 
 /** A work-item claim together with the state of the run that holds it. */
 export type HeldClaim = WorkItemClaim & { owner: RunSummary["status"] | "missing" };
@@ -109,6 +144,14 @@ export class Orchestrator {
   readonly plan: PlanService;
   readonly clock: Clock;
   readonly logger: Logger;
+  /**
+   * Who this orchestrator is, as far as the lease store is concerned. One id for the whole
+   * instance: a run it is already driving is re-acquired rather than blocked, so nested
+   * `runChild` calls and a resumed attach never deadlock against themselves.
+   */
+  readonly leaseHolder: string;
+  private readonly leaseTtlMs: number;
+  private readonly leaseRenewMs: number | undefined;
 
   private readonly live = new Map<string, RunContext>();
   private readonly running = new Map<string, Promise<RunState>>();
@@ -135,6 +178,9 @@ export class Orchestrator {
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
     this.clock = o.clock ?? systemClock;
     this.logger = o.logger ?? silentLogger;
+    this.leaseHolder = o.lease?.holder ?? newId("orc", this.clock.now());
+    this.leaseTtlMs = o.lease?.ttlMs ?? DEFAULT_LEASE_TTL_MS;
+    this.leaseRenewMs = o.lease?.renewMs;
     this.plan =
       o.plan ??
       new PlanService({ stores: this.stores, clock: this.clock, logger: this.logger.child({ component: "plan" }) });
@@ -181,7 +227,7 @@ export class Orchestrator {
   run(runId: string): Promise<RunState> {
     const inflight = this.running.get(runId);
     if (inflight) return inflight;
-    const p = this.execute(runId)
+    const p = this.executeLeased(runId)
       .then((state) => {
         if (isTerminal(state)) this.cacheTerminalState(runId, state);
         return state;
@@ -208,9 +254,28 @@ export class Orchestrator {
       if (isTerminal(state)) return;
       // A parked run tree: cancel the children it is waiting on, then close its own open step.
       for (const s of Object.values(state.steps)) for (const c of s.childRunIds) await this.cancel(c, reason);
-      for (const s of openSteps(state))
-        await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
-      await this.stores.events.append({ type: "run.cancelled", runId, payload: reason ? { reason } : {} });
+      // Closing a run we are not driving is still writing to its log, so it goes through the
+      // same lease: cancelling a run another process is interpreting has to be refused there,
+      // not raced into the log (that process would keep appending afterwards).
+      const lease = await this.stores.leases.acquire({
+        resource: runLeaseResource(runId),
+        holder: this.leaseHolder,
+        ttlMs: this.leaseTtlMs,
+        note: "cancel",
+      });
+      if (!ownsLease(lease, this.leaseHolder))
+        throw new OrcaError(
+          "RUN_LEASED",
+          `run ${runId} is being interpreted by pid ${lease.pid} on ${lease.host}: cancel it there, or take the lease with 'orca leases break ${runId} --force'`,
+          { runId, ...describeLease(lease) },
+        );
+      try {
+        for (const s of openSteps(state))
+          await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
+        await this.stores.events.append({ type: "run.cancelled", runId, payload: reason ? { reason } : {} });
+      } finally {
+        await this.stores.leases.release(lease);
+      }
     }
   }
 
@@ -383,6 +448,90 @@ export class Orchestrator {
     }
   }
 
+  // ------------------------------------------------------------------ leases
+
+  /**
+   * The run leases on file - who is interpreting what right now - each marked with whether it
+   * has lapsed (its holder stopped heartbeating, or its process is gone). A lapsed lease is
+   * taken over by the next `run()` on its own; only a live one needs `breakLease`.
+   */
+  async listLeases(): Promise<HeldRunLease[]> {
+    const now = this.clock.now();
+    return (await this.stores.leases.list())
+      .filter((l) => l.resource.startsWith(RUN_LEASE_PREFIX))
+      .map((l) => ({ ...l, runId: l.resource.slice(RUN_LEASE_PREFIX.length), lapsed: lapsed(l, now) }))
+      .sort((a, b) => a.acquiredAt.localeCompare(b.acquiredAt) || a.runId.localeCompare(b.runId));
+  }
+
+  /**
+   * Take a run's leases away from their holder, so another interpreter may attach.
+   *
+   * The whole subtree by default, not just `runId`: resuming a parent re-attaches to the
+   * children its interrupted attempt spawned and drives them too, so an operator who takes
+   * over a parent and leaves a child leased has taken over nothing - the resume stops at the
+   * first `runChild`. Pass `descendants: false` for exactly one run.
+   *
+   * Refused while any of them is live unless `force`. A live lease means some process is
+   * heartbeating for that run this second, and breaking it is precisely what puts two writers
+   * on one log; the broken holder finds out at its next heartbeat and cancels itself, so
+   * `force` accepts a window of one heartbeat in which it may still append. It is there for
+   * what the TTL cannot see - a holder in another pid namespace or on another host that the
+   * operator knows is gone (#103) - and is the same operator act as `releaseClaim`.
+   *
+   * Returns what was broken, the named run first.
+   */
+  async breakLease(runId: string, opts: { force?: boolean; descendants?: boolean } = {}): Promise<HeldRunLease[]> {
+    const now = this.clock.now();
+    const ids = opts.descendants === false ? [runId] : await this.runTree(runId);
+    const found: HeldRunLease[] = [];
+    for (const id of ids) {
+      const lease = await this.stores.leases.get(runLeaseResource(id));
+      if (lease) found.push({ ...lease, runId: id, lapsed: lapsed(lease, now) });
+    }
+    if (!found.length)
+      throw new OrcaError("LEASE_NOT_FOUND", `no lease is held on run ${runId} or its descendants`, { runId });
+    const live = found.filter((l) => !l.lapsed);
+    if (live.length && !opts.force)
+      throw new OrcaError(
+        "RUN_STATE",
+        `${live.map((l) => `run ${l.runId} (pid ${l.pid} on ${l.host}, last heartbeat ${l.renewedAt})`).join(", ")} still heartbeating: stop that process, or break with force`,
+        { runId, live: live.map(describeLease) },
+      );
+    for (const l of found) {
+      await this.stores.leases.forceRelease(runLeaseResource(l.runId));
+      this.logger.warn("run lease broken", {
+        runId: l.runId,
+        holder: l.holder,
+        pid: l.pid,
+        host: l.host,
+        forced: !l.lapsed,
+      });
+    }
+    return found;
+  }
+
+  /** `runId` and every descendant its log knows about, parents before children. */
+  private async runTree(runId: string): Promise<string[]> {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const visit = async (id: string) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      out.push(id);
+      let state: RunState;
+      try {
+        state = await this.getState(id);
+      } catch (e) {
+        // A child whose log is gone cannot hold a lease worth breaking either.
+        if (e instanceof OrcaError && e.code === "RUN_NOT_FOUND") return;
+        throw e;
+      }
+      for (const s of Object.values(state.steps)) for (const c of s.childRunIds) await visit(c);
+    };
+    await visit(runId);
+    return out;
+  }
+
   // ------------------------------------------------------------- definitions
 
   /** Inline graphs get ids like `parent::loopNode` or `parent::parallelNode::branch`. */
@@ -444,9 +593,54 @@ export class Orchestrator {
     return rc;
   }
 
-  private async execute(runId: string): Promise<RunState> {
+  /**
+   * Take the run's single-writer lease, drive it, give the lease back. Everything that
+   * *writes* to a run's log happens inside here; reading and reducing it does not, because a
+   * reader cannot corrupt anyone's story.
+   */
+  private async executeLeased(runId: string): Promise<RunState> {
     const rc = await this.loadContext(runId);
+    // A finished run is not driven at all, so it needs no lease.
     if (isTerminal(rc.state)) return rc.state;
+    const held = await this.takeRunLease(runId, rc);
+    try {
+      return await this.execute(rc);
+    } finally {
+      await held.release();
+    }
+  }
+
+  /**
+   * Claim the right to interpret `runId`, and keep claiming it: an attached interpreter
+   * heartbeats for as long as it is attached, so a second one can tell "still working, mostly
+   * waiting on an agent" from "died an hour ago" without a human deciding. Losing the lease
+   * mid-run (only an operator can take a live one away) cancels the run rather than letting
+   * two interpreters append to one log.
+   */
+  private async takeRunLease(runId: string, rc: RunContext): Promise<HeldLease> {
+    const lease = await this.stores.leases.acquire({
+      resource: runLeaseResource(runId),
+      holder: this.leaseHolder,
+      ttlMs: this.leaseTtlMs,
+      note: rc.definition.id,
+    });
+    if (!ownsLease(lease, this.leaseHolder))
+      throw new OrcaError(
+        "RUN_LEASED",
+        `run ${runId} is already being interpreted by pid ${lease.pid} on ${lease.host} (last heartbeat ${lease.renewedAt}): wait for it, or take the lease with 'orca leases break ${runId} --force'`,
+        { runId, ...describeLease(lease) },
+      );
+    return keepLease(this.stores.leases, lease, {
+      ...(this.leaseRenewMs !== undefined ? { renewMs: this.leaseRenewMs } : {}),
+      onLost: () => {
+        rc.logger.error("run lease lost; stopping this interpreter", { resource: lease.resource });
+        rc.abort.abort(`lease on run ${runId} was taken away; another process may now be driving it`);
+      },
+    });
+  }
+
+  private async execute(rc: RunContext): Promise<RunState> {
+    const runId = rc.id;
     // A run resumed after a crash may have left stale WorkItem documents behind; the log is the
     // truth, so recompute them before doing anything else (no-op for runs without work items).
     await rc.syncWorkItems();
@@ -896,6 +1090,12 @@ export class Orchestrator {
 }
 
 const TERMINAL_STATE_CACHE_SIZE = 256;
+
+/** Lease resources are namespaced, because a store will hold leases on more than runs. */
+const RUN_LEASE_PREFIX = "run:";
+export function runLeaseResource(runId: string): string {
+  return `${RUN_LEASE_PREFIX}${runId}`;
+}
 
 export function isTerminal(state: RunState): boolean {
   return state.run.status === "completed" || state.run.status === "failed" || state.run.status === "cancelled";

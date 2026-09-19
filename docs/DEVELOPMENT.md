@@ -177,6 +177,10 @@ shows a green check rather than none — see the comments in `.github/workflows/
 - `packages/store/test/jsonl-log.test.ts` — the on‑disk sequencing under both JSONL stores:
   two instances over one directory, torn‑tail recovery, and the lock file's stale‑holder
   rules.
+- `packages/store/test/lease-store.test.ts`, `packages/engine/test/run-lease.test.ts` — the
+  single‑writer lease per run: one winner per resource, heartbeat and lapse, an unreadable
+  record broken rather than obeyed, a second interpreter refused with `RUN_LEASED`, and a
+  holder whose lease is broken under it cancelling itself instead of writing on.
 - `packages/cli/test/commands.test.ts`, `plan.test.ts`, `bootstrap.test.ts` — the CLI as a
   user meets it: every command's arguments and failures, `orca plan`'s subcommands over a
   real plan in both the human and the `--json` form, and config discovery / plugin loading.

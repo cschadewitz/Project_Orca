@@ -9,6 +9,7 @@ import type { ZodType } from "zod";
 import type { Clock, Logger, Request, WorkItem } from "@orca/core";
 import { RequestSchema, WorkItemSchema } from "@orca/core";
 import { FileClaimStore, InMemoryClaimStore, type ClaimStore } from "./claim-store.js";
+import { FileLeaseStore, InMemoryLeaseStore, type LeaseStore } from "./lease-store.js";
 import { InMemoryEventStore, type EventStore } from "./event-store.js";
 import { JsonlEventStore } from "./jsonl-event-store.js";
 import { FileArtifactStore, InMemoryArtifactStore, type ArtifactStore } from "./artifact-store.js";
@@ -140,6 +141,8 @@ export interface Stores {
   workItems: DocumentStore<WorkItem>;
   /** Who owns which work item; see claim-store.ts for why this is not part of the event log. */
   claims: ClaimStore;
+  /** Who may drive a run right now; see lease-store.ts. Claims cover items, leases cover runs. */
+  leases: LeaseStore;
   /** Long-term planning: plans, dependencies, risks, decisions and their journal. */
   plan: PlanStores;
 }
@@ -152,6 +155,7 @@ export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores 
     requests: new JsonFileDocumentStore<Request>(join(dir, "requests.json"), RequestSchema),
     workItems: new JsonFileDocumentStore<WorkItem>(join(dir, "work-items.json"), WorkItemSchema),
     claims: new FileClaimStore(dir),
+    leases: new FileLeaseStore(dir, clock),
     plan: filePlanStores(dir, clock, logger),
   };
 }
@@ -163,6 +167,7 @@ export function memoryStores(clock?: Clock): Stores {
     requests: new InMemoryDocumentStore<Request>(),
     workItems: new InMemoryDocumentStore<WorkItem>(),
     claims: new InMemoryClaimStore(),
+    leases: new InMemoryLeaseStore(clock),
     plan: memoryPlanStores(clock),
   };
 }
