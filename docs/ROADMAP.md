@@ -7,16 +7,20 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    `runs.get`, `runs.events`, `inputs.list`, `claims.list` (#150), answering the display read
    models in `packages/protocol` (its README is the method reference). The desktop app
    (`packages/app`) reaches them through `packages/protocol` and nothing else (ADR 0008).
-   Still to do, in the order the app needs them: a WebSocket carrying `notification` messages
-   for `Orchestrator.subscribe()`, the control methods (`answer`, `resume`, `cancel`,
-   `startRun`), then the plan methods over `PlanService`. Human input already survives process
+   `WS /socket` carries the six `notification` messages off `Orchestrator.subscribe()`, with
+   a per‑run cursor a client resumes from and agent output coalesced to one frame per step
+   per 100ms (#151); the HTTP path is unchanged and a read‑only client never opens a socket.
+   Still to do, in the order the app needs them: the control methods (`answer`, `resume`,
+   `cancel`, `startRun`), then the plan methods over `PlanService`. Human input already survives process
    boundaries: `pause` mode parks the run in its event log and `orca answer <requestId>
    <option>` resumes it; the daemon exposes the same `answer()` / `resume()` over the wire
    and keeps agent sessions alive across the wait. Two processes over one store are now
    safe to the extent the run log is concerned: every interpreter holds a single‑writer
    lease per run (#101). The document stores are not — `JsonFileDocumentStore` caches the
    whole collection and rewrites it, so a daemon and a CLI command would lose each other's
-   requests, work items and plan records (#196).
+   requests, work items and plan records (#196). The same boundary limits the push channel:
+   the socket fans out *this process's* event store, so a run a separate CLI process appends
+   is not pushed and only appears on the next read. A store watcher, or #196, closes that.
 2. **T3 Code WebSocket transport** — implement `T3CodeRpc` over T3's Effect‑RPC envelope and
    depend on `@t3tools/contracts`; map `thread.meta-updated.worktreePath` into the workspace.
 3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore`/`ClaimStore` over
@@ -40,17 +44,22 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    inherit (#186), the model has to reach the turn (#187), the CLI needs the same flags so
    it is not ACP‑only (#190), and prompt templates become selectable packs (#191). `/run`
    and `/status` become advertised slash commands in the same pass (#192).
-9. **Desktop app** — the Electron shell in `packages/app` is a placeholder renderer that
-   proves the app → preload → main → daemon path, styled with the design system's CSS.
-   The design system itself is done: tokens in both themes, the CSS component layer, the
-   typed status maps (`packages/design`) and the brand book, rules and surface specs
-   (`docs/design/`), with IBM Plex bundled as woff2 (#144), the renderer on React and Vite
-   with a hot-reloading dev loop (#145), and theme and density wired through the app's own
-   preferences file with `⌘⇧L` / `⌘⇧D` (#146). Next, in order: the React layer over
-   `components.css` to the props in `component-api.d.ts` (#147); the window chrome (#148)
-   and the palette over the keyboard map (#149); then phase 1, run monitoring (attention,
-   run tree, event timeline,
-   artifacts, answering gates) against the daemon methods of item 1. Phase 2 makes it the
+9. **Desktop app** — the foundation is complete (milestone v0.3.0). The design system is
+   done: tokens in both themes, the CSS component layer, the typed status maps
+   (`packages/design`) and the brand book, rules and surface specs (`docs/design/`), with
+   IBM Plex bundled as woff2 (#144) and a dev‑only `#type` route that proves the bundled
+   faces render against the OS stack rather than assuming it (#194). The app is a React
+   renderer on Vite with a hot‑reloading dev loop (#145), theme and density through its own
+   preferences file (#146), the primitives over `components.css` (#147), the window chrome
+   (#148), the command palette over the keyboard map (#149), one `Menu` primitive carrying
+   the popover keyboard and focus contract for every popover after it (#202), and the Runs
+   surface reading `runs.list` and keeping up from the notification stream (#152) — the
+   first screen with real data behind it. The preload is built as CommonJS because a
+   sandboxed preload cannot be ESM (#198), literal colours and sizes are rejected by lint
+   (#153), and the renderer is tested in both themes against the real tokens with an
+   Electron smoke test beside it (#154). Next: phase 1, run monitoring (attention, the run
+   tree, the event timeline, artifacts, answering gates) against the daemon methods of item
+   1 — which needs the control methods, since every surface so far only reads. Phase 2 makes it the
    first‑class configuration and monitoring surface (config, agents, plan); the dependency
    graph goes in as a mode of Plan with a docked inspector unless use shows it is a
    starting point (`docs/design/80-dependency-graph-options.md`). Workflow editing

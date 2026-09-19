@@ -10,8 +10,8 @@ Everything below is exported from the package root.
 ## Transport
 
 `POST /rpc` with one **request** envelope, answering with one **response** envelope;
-`GET /health` for supervisors. `notification` exists in the envelope union for the event
-stream that arrives with the first subscribe method.
+`GET /health` for supervisors. `WS /socket` is the same dispatch **plus** the direction HTTP
+has not got — the daemon speaking first, in `notification` envelopes.
 
 ```ts
 { kind: "request",  id, method, params? }
@@ -26,6 +26,11 @@ stream that arrives with the first subscribe method.
 `PROTOCOL_VERSION` is `{ major, minor }`: `major` changes when a message changes shape or
 meaning, `minor` when messages or fields are added. Compatible when the majors match and the
 daemon's minor is at least the client's.
+
+A client that only reads never opens a socket: `hello` and every read method work over
+`/rpc` with none. `DaemonHandle.socketUrl` is present only when the daemon was given an
+engine feed, and `socketUrlFor(httpUrl)` derives it (`http`→`ws`, `https`→`wss`, plus
+`SOCKET_PATH`).
 
 ## Conventions the read methods share
 
@@ -155,7 +160,81 @@ its `owner`: `runId`, `name?`, `status`, `missing` (no log for that run any more
 `stale`), and `releasable` — true when the owning run cannot resume, which is exactly when
 `orca claims release` does not need `--force`.
 
+## The push channel
+
+### `subscribe` / `unsubscribe` — socket only
+
+```ts
+params: { runId?; methods?: NotificationMethod[]; since? }
+result: { subscriptionId; replayed }
+
+params: { subscriptionId }
+result: { stopped }
+```
+
+`runId` absent means every run in the store. `methods` absent or empty means all six.
+`since` is a resume cursor and **requires `runId`** — see below. `stopped: false` means the
+id was not live; unsubscribing twice is not an error, and closing the socket ends every
+subscription on it.
+
+Over `/rpc` these answer `NOT_SUPPORTED` — there is nowhere to push to. They are listed in
+`hello.methods` regardless, so a client can tell "this daemon can stream" from "this daemon
+is old". The capability is `runs.subscribe`.
+
+### The six notifications
+
+Every one carries `subscriptionId` (one connection may hold several), `runId`, `seq` — the
+sequence number, within that run, of the event behind it, and therefore **the cursor** — and
+`at`, the event's own timestamp rather than the moment the frame was sent.
+
+- **`run.changed`** — `status`, the `run.*` `event`, and `outcome?` / `reason?` / `error?`.
+- **`step.changed`** — `stepRunId`, `status`, `event`, plus `nodeId`/`nodeType`/`attempt` on
+  the `step.scheduled` that introduces the step, `waitingOn?` on `step.waiting`, and
+  `willRetry?` / `error?` on `step.failed`.
+- **`agent.update`** — `stepRunId`, `sessionId`, `fromSeq`, and a non-empty `updates`. Batched.
+- **`input.opened`** — `stepRunId`, `requestId`, `kind`, `question`, `options`.
+- **`input.answered`** — `stepRunId`, `requestId`, `answer`.
+- **`event.appended`** — the raw `OrcaEvent`, for a timeline that renders events rather than
+  state. **Excludes `agent.update` events**, which arrive coalesced instead, so agent output
+  is never shipped twice.
+
+A folded notification is sent *before* the `event.appended` for the same event, so a client
+watching only the folded stream is never behind one watching both.
+
+`run.changed` and `step.changed` are derived from the transition alone — no store read per
+event, no lease check — so **they never carry `stale`**. A lapsed lease is the *absence* of
+events, which no stream can announce; a client that cares re-reads `runs.list`.
+
+`parseNotification(message)` validates an envelope into the `DaemonNotification` union, so
+`switch (n.method)` narrows `n.params`. It returns `undefined` for a method this build does
+not know — a newer daemon's — because dropping it is the compatible thing to do.
+
+### Resuming
+
+Sequence numbers are per-run and gap-free, which is what makes the cursor work. Keep the
+highest `seq` seen; on reconnect send `subscribe({ runId, since: seq })`; the daemon replays
+`since + 1` onwards and then the live stream takes over, with `replayed` saying how many
+frames the replay sent. There is no gap and no duplicate: the daemon attaches its listener
+**before** reading the log, buffers what arrives during the read, and drops anything at or
+below the last replayed sequence number. **A blip costs latency and never data.**
+
+`since` requires `runId` because a store-wide subscription interleaves numbers from
+unrelated logs and has no single cursor; it reconnects fresh and the screens behind it
+re-read.
+
+### Batching
+
+**At most one `agent.update` per step per 100ms, coalescing the lines.** An agent turn
+appends as fast as the agent speaks, and one frame each would make the socket, not the
+model, the slow part of watching a run. Coalescing never reorders: a held batch is flushed
+before any other notification for the same run and on unsubscribe, so agent output never
+lands after the `step.completed` that ended it.
+
+One limit worth knowing: the socket fans out *this process's* event store. A run appended by
+a separate CLI process is not pushed and appears on the next read (`docs/ROADMAP.md`, item 1;
+#196).
+
 ## What is not here yet
 
-Writes (`answer`, `resume`, `cancel`, `startRun`), the WebSocket carrying `notification`s
-for `Orchestrator.subscribe()`, and the plan methods. See `docs/ROADMAP.md`, item 1.
+Writes (`answer`, `resume`, `cancel`, `startRun`) and the plan methods. See
+`docs/ROADMAP.md`, item 1.
