@@ -21,7 +21,9 @@ packages/design/
   src/tokens.ts          GENERATED — typed token names, status maps, raw values per theme
   css/components.css     the component layer: token-bound classes, no hardcoded values
   src/component-api.d.ts the props each React primitive should expose over those classes
+  fonts/                 GENERATED — the bundled woff2 subsets and their OFL licences
   test/contrast.test.ts  WCAG AA for every documented pairing, in both themes
+  test/fonts.test.ts     every declared face has a file, every glyph has a bundled face
 ```
 
 The three rules that cause the most rework if you miss them:
@@ -33,13 +35,16 @@ The three rules that cause the most rework if you miss them:
   `semantics.json`, then `pnpm run design:build`. CI rejects stale generated files.
 - **There are eight run statuses and they always render a glyph and a word.** Import
   `RunStatus` and `STATUS_PRESENTATION` from `@orca/design`; never re-declare the list, never
-  rely on colour alone.
+  rely on colour alone. The glyphs come from a bundled symbol face, not from Plex and not
+  from the OS — a new glyph in `semantics.json` also goes into
+  `tools/font-build/build-fonts.js`, then `pnpm run design:fonts`.
 
 ## Commands
 
 ```sh
 pnpm run design:build   # regenerate css/tokens.css and src/tokens.ts from tokens.json
 pnpm run design:check   # fail if the generated files are behind (CI)
+pnpm run design:fonts   # re-subset packages/design/fonts from the upstream releases
 pnpm test               # the whole suite, including the contrast and invariant tests
 ```
 
