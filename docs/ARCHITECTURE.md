@@ -39,12 +39,15 @@ Dependencies only point right/down. `core` has no I/O beyond parsing files.
 `engine` depends on the *ports* in `store` and `agents`, never on concrete
 transports, so tests use in‑memory stores and a scripted ACP agent.
 
-`protocol` is the wire contract (Zod schemas, depends on `core` only). `daemon`
-serves it over the network in front of the engine; `cli` starts one with `orca
-serve`. `app` depends on `protocol` and `design` and nothing else in the workspace,
-enforced by the lint config: the desktop app can only see what a daemon tells it, so
-attaching to a daemon on another machine is the same code path as the local one
-(ADR 0008). `design` is the design system as code — generated tokens in CSS and
+`protocol` is the wire contract (Zod schemas, depends on `core` only) — the envelope, the
+`hello` handshake, and the display read models the read methods answer with, including the
+one fold from the engine's statuses to the eight the design system draws
+(`packages/protocol/README.md`). `daemon` serves it over the network in front of the engine:
+it depends on `engine` and `store` to project them, and `cli` starts one with `orca serve`,
+read-only over the workspace's store. `app` depends on `protocol` and `design` and nothing
+else in the workspace, enforced by the lint config: the desktop app can only see what a
+daemon tells it, so attaching to a daemon on another machine is the same code path as the
+local one (ADR 0008). `design` is the design system as code — generated tokens in CSS and
 TypeScript, the CSS component layer, the typed status maps — with no dependencies at
 all; the brand book and surface specs it implements are in `docs/design/`.
 

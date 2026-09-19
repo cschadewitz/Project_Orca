@@ -13,7 +13,7 @@ export const ProtocolVersionSchema = z.object({
 export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
 
 /** The version this package speaks. Bump `minor` for additions, `major` for anything else. */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 0 };
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 1 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
   return `${v.major}.${v.minor}`;

@@ -76,14 +76,33 @@ the next attach.
   every shortcut registers with (`KeyboardMap`) is the seed of the palette's registry (#149).
 - **design:** the generated `prefers-color-scheme` block now sets `color-scheme` too, so
   native scrollbars and form controls follow the OS theme when no `data-theme` is set.
+- **daemon:** the five read methods over `Orchestrator` — `runs.list`, `runs.get`,
+  `runs.events`, `inputs.list`, `claims.list` (#150). They answer display read models from
+  `@orca/protocol` (`packages/protocol/README.md` is the reference), not `RunState`: a run
+  carries a name (work item, else request, else workflow), the eight-value `DisplayStatus`,
+  durations and the wait it is in; a run tree carries every attempt, its child runs and the
+  fan-out branches that never ran; `runs.events` pages a log by sequence number in both
+  directions. `orca serve` now bootstraps the workspace's store, reports `runs.read` and
+  lists the methods it serves in `hello`.
+- **protocol:** `DisplayStatus` and the one fold onto it (`displayStatusForRun`,
+  `displayStatusForStep`) — the engine's run statuses, outcomes and step statuses become the
+  eight words `packages/design/semantics.json` draws, in one place, tested against that file
+  so the two lists cannot drift. A run that claims to be running with no live lease behind it
+  is `stale`.
 
 ### Changed
 
+- **protocol:** version 1.1 — `HelloResult.methods` lists the methods a daemon answers, so a
+  newer client can degrade per screen rather than per daemon. Additive: a 1.0 client is
+  unaffected.
 - **engine:** `Orchestrator.cancel()` on a run this process is *not* driving now takes the
   run's lease before closing it, so cancelling a run another interpreter holds fails with
   `RUN_LEASED` rather than racing `run.cancelled` into a log that keeps growing.
 
 ### Fixed
+
+- **engine:** `Orchestrator.pendingInputs()` no longer fails for a whole run tree when one
+  child's log is missing from the store; that child is skipped, as `runTree` already did.
 
 ## 0.2.0 - 2026-09-19
 

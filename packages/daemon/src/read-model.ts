@@ -1,0 +1,526 @@
+/**
+ * The read model: `Orchestrator` and its stores in, the display shapes of `@orca/protocol`
+ * out. The method table (methods.ts) is a thin wrapper over this, so the projection can be
+ * used directly by an embedder and tested without a socket.
+ *
+ * Three things happen here that no client should have to do for itself:
+ *
+ * - **The status fold.** Engine status + outcome + what a step waits on + whether a lease
+ *   still backs the claim to be running become one `DisplayStatus` (`@orca/protocol`'s
+ *   `displayStatusForRun`). A run whose log says `running` but whose lease has lapsed is
+ *   `stale` here, which is the only place that can know it: it takes the lease store.
+ * - **Naming.** A run is named after the work item it advances, else the request, else the
+ *   workflow. That takes two document stores and a fallback chain, once, on this side.
+ * - **Paging.** Event pages are cut by sequence number in both directions.
+ *
+ * Every method builds a `Pass`: a per-call cache of run summaries, work items, requests and
+ * leases. One `runs.list` over a hundred runs sharing one work item reads that work item
+ * once, and no cache outlives the call, so nothing here serves a name it cached earlier.
+ *
+ * The store underneath is another matter: `JsonFileDocumentStore` holds a collection in
+ * memory for the life of the process, so a long-lived daemon will keep showing the work
+ * items and requests it first read while a CLI writes new ones beside it (#196). Run logs
+ * are not affected - the event store re-reads them - so statuses and trees stay current.
+ */
+import {
+  OrcaError,
+  RUN_SUMMARY_EVENT_TYPES,
+  reduceRunSummary,
+  runSummary,
+  type Artifact,
+  type Clock,
+  type ErrorInfo,
+  type HumanInputRequest,
+  type OrcaEvent,
+  type Request,
+  type RunState,
+  type RunSummary,
+  type StepRun,
+  type WorkItem,
+} from "@orca/core";
+import type { Orchestrator } from "@orca/engine";
+import type { WorkItemClaim } from "@orca/store";
+import {
+  displayStatusForRun,
+  displayStatusForStep,
+  type ArtifactView,
+  type ChildRunView,
+  type ClaimsListParams,
+  type ClaimsListResult,
+  type ClaimView,
+  type InputsListParams,
+  type InputsListResult,
+  type OpenInputView,
+  type RunsEventsParams,
+  type RunsEventsResult,
+  type RunsGetParams,
+  type RunsGetResult,
+  type RunsListParams,
+  type RunsListResult,
+  type RunSummaryView,
+  type StepView,
+  type ViewError,
+  type WorkItemView,
+} from "@orca/protocol";
+
+/** The events a listing needs: a summary's, plus the one that says which agent worked the run. */
+const LIST_EVENT_TYPES = [
+  ...RUN_SUMMARY_EVENT_TYPES,
+  "agent.session.opened",
+] as const satisfies readonly OrcaEvent["type"][];
+
+/** What the run is parked on right now, as the last unresolved `step.waiting` recorded it. */
+interface WaitFacts {
+  stepRunId: string;
+  on: string;
+  detail?: string | undefined;
+  at: string;
+}
+
+/** Everything a `RunSummaryView` needs that is not a name or a clock. */
+interface RunFacts {
+  summary: RunSummary;
+  wait?: WaitFacts | undefined;
+  agentId?: string | undefined;
+  error?: ErrorInfo | undefined;
+}
+
+function viewError(e: ErrorInfo | undefined): ViewError | undefined {
+  return e ? { code: e.code, message: e.message } : undefined;
+}
+
+function artifactView(a: Artifact): ArtifactView {
+  return {
+    id: a.id,
+    kind: a.kind,
+    name: a.name,
+    version: a.version,
+    mediaType: a.mediaType,
+    size: a.size,
+    createdAt: a.createdAt,
+    ...(a.path ? { path: a.path } : {}),
+    ...(a.producedBy.stepRunId ? { producedByStepRunId: a.producedBy.stepRunId } : {}),
+  };
+}
+
+function workItemView(w: WorkItem): WorkItemView {
+  return { id: w.id, slug: w.slug, title: w.title, status: w.status };
+}
+
+/** Milliseconds between two ISO timestamps, never negative (clocks and ordering both drift). */
+function elapsed(from: string | undefined, to: string | number): number | undefined {
+  if (!from) return undefined;
+  const start = Date.parse(from);
+  const end = typeof to === "number" ? to : Date.parse(to);
+  if (Number.isNaN(start) || Number.isNaN(end)) return undefined;
+  return Math.max(0, end - start);
+}
+
+/**
+ * Fold a run's listing events into the facts a row needs. `reduceRunSummary` owns the
+ * status; this adds what a summary does not carry - the open wait, the agent, the error -
+ * from the same events, so a listing still costs one filtered pass over each log.
+ */
+function runFacts(events: readonly OrcaEvent[]): RunFacts {
+  const summary = reduceRunSummary(events);
+  const facts: RunFacts = { summary };
+  for (const e of events) {
+    switch (e.type) {
+      case "step.waiting":
+        facts.wait = {
+          stepRunId: e.payload.stepRunId,
+          on: e.payload.on,
+          at: e.at,
+          ...(e.payload.detail ? { detail: e.payload.detail } : {}),
+        };
+        break;
+      // `reduceRunSummary` leaves `waiting` on any step settling; stay in step with it.
+      case "step.completed":
+      case "step.failed":
+      case "run.completed":
+      case "run.cancelled":
+        facts.wait = undefined;
+        break;
+      case "run.failed":
+        facts.wait = undefined;
+        facts.error = e.payload.error;
+        break;
+      case "agent.session.opened":
+        facts.agentId = e.payload.agentId;
+        break;
+      default:
+        break;
+    }
+  }
+  return facts;
+}
+
+/** The same facts from a full projection, for `runs.get`, which has already reduced the log. */
+function factsFromState(state: RunState, agentByStep: ReadonlyMap<string, string>): RunFacts {
+  const facts: RunFacts = { summary: runSummary(state), ...(state.run.error ? { error: state.run.error } : {}) };
+  for (const id of state.stepOrder) {
+    const step = state.steps[id];
+    if (!step) continue;
+    if (step.status === "waiting" && step.waitingOn)
+      facts.wait = { stepRunId: step.id, on: step.waitingOn, at: step.startedAt ?? step.scheduledAt };
+    const agentId = agentByStep.get(step.id);
+    if (agentId) facts.agentId = agentId;
+  }
+  return facts;
+}
+
+/**
+ * One call's caches. Names come from documents that several runs share, and liveness from a
+ * lease listing that costs one directory read however many runs are in it.
+ */
+class Pass {
+  private readonly workItems = new Map<string, WorkItem | undefined>();
+  private readonly requests = new Map<string, Request | undefined>();
+  private readonly facts = new Map<string, RunFacts | undefined>();
+  private leases: Map<string, boolean> | undefined;
+
+  constructor(
+    private readonly orc: Orchestrator,
+    readonly asOf: string,
+  ) {}
+
+  get now(): number {
+    return Date.parse(this.asOf);
+  }
+
+  async workItem(id: string | undefined): Promise<WorkItem | undefined> {
+    if (!id) return undefined;
+    if (!this.workItems.has(id)) this.workItems.set(id, await this.orc.stores.workItems.get(id));
+    return this.workItems.get(id);
+  }
+
+  async request(id: string | undefined): Promise<Request | undefined> {
+    if (!id) return undefined;
+    if (!this.requests.has(id)) this.requests.set(id, await this.orc.stores.requests.get(id));
+    return this.requests.get(id);
+  }
+
+  /** `undefined` when the run has no log - a child a parent still points at, a rolled-back store. */
+  async runFacts(runId: string): Promise<RunFacts | undefined> {
+    if (!this.facts.has(runId)) {
+      const events = await this.orc.stores.events.readTypes(runId, LIST_EVENT_TYPES);
+      this.facts.set(runId, events.length ? runFacts(events) : undefined);
+    }
+    return this.facts.get(runId);
+  }
+
+  /**
+   * Whether the process that claimed a run has stopped heartbeating. A run whose log says it
+   * is going needs a live lease to back that up: a lapsed lease *or no lease at all* means
+   * nobody is driving it, because an interpreter takes the lease before it appends and
+   * releases it only once the run is parked or finished.
+   */
+  async leaseLapsed(summary: RunSummary): Promise<boolean> {
+    if (summary.status !== "running" && summary.status !== "waiting") return false;
+    if (!this.leases) {
+      this.leases = new Map();
+      for (const l of await this.orc.listLeases()) this.leases.set(l.runId, l.lapsed);
+    }
+    return this.leases.get(summary.id) ?? true;
+  }
+
+  /** The work item a run advances, the request behind it, and what to call the run. */
+  async naming(summary: RunSummary): Promise<{ name: string; workItem?: WorkItemView }> {
+    const item = await this.workItem(summary.workItemId);
+    if (item) return { name: item.title, workItem: workItemView(item) };
+    const request = await this.request(summary.requestId);
+    return { name: request?.title ?? summary.workflowId };
+  }
+
+  async runView(facts: RunFacts): Promise<RunSummaryView> {
+    const { summary, wait } = facts;
+    const { name, workItem } = await this.naming(summary);
+    const status = displayStatusForRun(summary, {
+      waitingOn: wait?.on,
+      leaseLapsed: await this.leaseLapsed(summary),
+    });
+    const duration = elapsed(summary.startedAt, summary.completedAt ?? this.now);
+    return {
+      id: summary.id,
+      name,
+      workflowId: summary.workflowId,
+      workflowVersion: summary.workflowVersion,
+      status,
+      createdAt: summary.createdAt,
+      ...(summary.outcome ? { outcome: summary.outcome } : {}),
+      ...(wait
+        ? { waitingOn: wait.on, waitingSince: wait.at, ...(wait.detail ? { waitingDetail: wait.detail } : {}) }
+        : {}),
+      ...(summary.startedAt ? { startedAt: summary.startedAt } : {}),
+      ...(summary.completedAt ? { finishedAt: summary.completedAt } : {}),
+      ...(duration === undefined ? {} : { durationMs: duration }),
+      ...(summary.parentRunId ? { parentRunId: summary.parentRunId } : {}),
+      ...(summary.requestId ? { requestId: summary.requestId } : {}),
+      ...(workItem ? { workItem } : {}),
+      ...(facts.agentId ? { agentId: facts.agentId } : {}),
+      ...(viewError(facts.error) ? { error: viewError(facts.error)! } : {}),
+    };
+  }
+}
+
+export interface ReadModelOptions {
+  orchestrator: Orchestrator;
+  /** Defaults to the orchestrator's own clock, so a test can pin every `asOf` and duration. */
+  clock?: Clock | undefined;
+}
+
+export class ReadModel {
+  private readonly orc: Orchestrator;
+  private readonly clock: Clock;
+
+  constructor(opts: ReadModelOptions) {
+    this.orc = opts.orchestrator;
+    this.clock = opts.clock ?? opts.orchestrator.clock;
+  }
+
+  private pass(): Pass {
+    return new Pass(this.orc, this.clock.isoNow());
+  }
+
+  /** Newest first, filtered, paged. A run whose log has gone missing is skipped, not faked. */
+  async runsList(params: RunsListParams): Promise<RunsListResult> {
+    const pass = this.pass();
+    const ids = await this.orc.listRuns();
+    const rows: RunSummaryView[] = [];
+    for (const id of ids) {
+      const facts = await pass.runFacts(id);
+      if (!facts) continue;
+      const s = facts.summary;
+      if (params.requestId && s.requestId !== params.requestId) continue;
+      if (params.workItemId && s.workItemId !== params.workItemId) continue;
+      if (params.parentRunId && s.parentRunId !== params.parentRunId) continue;
+      if (params.roots && s.parentRunId) continue;
+      const view = await pass.runView(facts);
+      if (params.status?.length && !params.status.includes(view.status)) continue;
+      rows.push(view);
+    }
+    // `listRuns` is oldest first and ids are time-ordered, but createdAt is what a client sorts by.
+    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    return {
+      runs: rows.slice(params.offset, params.offset + params.limit),
+      total: rows.length,
+      asOf: pass.asOf,
+    };
+  }
+
+  /** One run, whole: the tree of steps and attempts, its children, its artifacts. */
+  async runsGet(params: RunsGetParams): Promise<RunsGetResult> {
+    const pass = this.pass();
+    const state = await this.orc.getState(params.runId);
+    const agentByStep = await this.agentsByStep(params.runId);
+    const run = await pass.runView(factsFromState(state, agentByStep));
+    const steps: StepView[] = [];
+    for (const id of state.stepOrder) {
+      const step = state.steps[id];
+      if (step) steps.push(await this.stepView(pass, step, agentByStep.get(step.id)));
+    }
+    return {
+      run,
+      workspace: state.run.workspace,
+      vars: state.run.vars,
+      steps,
+      artifacts: Object.values(state.artifacts)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+        .map(artifactView),
+      lastSeq: state.lastSeq,
+      asOf: pass.asOf,
+    };
+  }
+
+  /**
+   * One page of the log. `after` walks forward from a sequence number, `before` walks back
+   * to the `limit` events immediately preceding one; either way the page reads oldest first,
+   * so the timeline renders the same code path in both directions.
+   *
+   * The run's log is read whole and cut in memory. That is deliberate for now: the store has
+   * no index by sequence number, and inventing one before the event stream (the WebSocket
+   * that will push these same events) knows what it needs would be guesswork.
+   */
+  async runsEvents(params: RunsEventsParams): Promise<RunsEventsResult> {
+    const asOf = this.clock.isoNow();
+    const all = await this.orc.events(params.runId);
+    if (!all.length) throw new OrcaError("RUN_NOT_FOUND", `run ${params.runId} not found`, { runId: params.runId });
+    const lastSeq = all[all.length - 1]!.seq;
+    const types = params.types;
+    // An unknown type matches nothing rather than failing: a newer client may ask for an
+    // event type this daemon's engine does not emit.
+    const matching = types?.length ? all.filter((e) => types.includes(e.type)) : all;
+
+    let page: OrcaEvent[];
+    let hasMore: boolean;
+    if (params.before !== undefined) {
+      const earlier = matching.filter((e) => e.seq < params.before!);
+      page = earlier.slice(Math.max(0, earlier.length - params.limit));
+      hasMore = earlier.length > page.length;
+    } else {
+      const after = params.after;
+      const later = after === undefined ? matching : matching.filter((e) => e.seq > after);
+      page = later.slice(0, params.limit);
+      hasMore = later.length > page.length;
+    }
+    const first = page[0];
+    const last = page[page.length - 1];
+    return {
+      events: page,
+      ...(last ? { nextCursor: last.seq } : {}),
+      ...(first ? { prevCursor: first.seq } : {}),
+      hasMore,
+      lastSeq,
+      asOf,
+    };
+  }
+
+  /** Every open gate and permission ask, longest-waiting first: the attention surface. */
+  async inputsList(params: InputsListParams): Promise<InputsListResult> {
+    const pass = this.pass();
+    const pending = params.runId ? await this.orc.pendingInputs(params.runId) : await this.orc.pendingInputs();
+    const kinds = params.kind;
+    const states = new Map<string, RunState>();
+    const inputs: OpenInputView[] = [];
+    for (const request of pending) {
+      if (kinds?.length && !kinds.includes(request.kind)) continue;
+      let state = states.get(request.runId);
+      if (!state) {
+        state = await this.orc.getState(request.runId);
+        states.set(request.runId, state);
+      }
+      inputs.push(await this.inputView(pass, request, state));
+    }
+    inputs.sort((a, b) => b.waitingMs - a.waitingMs || a.id.localeCompare(b.id));
+    return { inputs, waiting: inputs.length, asOf: pass.asOf };
+  }
+
+  /** Who owns which work item, and whether the run that took it is still alive. */
+  async claimsList(params: ClaimsListParams): Promise<ClaimsListResult> {
+    const pass = this.pass();
+    const held = (await this.orc.stores.claims.list()).filter(
+      (c) => (!params.runId || c.runId === params.runId) && (!params.workItemId || c.workItemId === params.workItemId),
+    );
+    held.sort((a, b) => a.at.localeCompare(b.at) || a.workItemId.localeCompare(b.workItemId));
+    const claims: ClaimView[] = [];
+    for (const claim of held) claims.push(await this.claimView(pass, claim));
+    return { claims, asOf: pass.asOf };
+  }
+
+  // ------------------------------------------------------------------ pieces
+
+  /** `stepRunId -> agentId`, from the only event that records which agent worked a step. */
+  private async agentsByStep(runId: string): Promise<Map<string, string>> {
+    const byStep = new Map<string, string>();
+    for (const e of await this.orc.stores.events.readTypes(runId, ["agent.session.opened"]))
+      if (e.type === "agent.session.opened") byStep.set(e.payload.stepRunId, e.payload.agentId);
+    return byStep;
+  }
+
+  private async stepView(pass: Pass, step: StepRun, agentId: string | undefined): Promise<StepView> {
+    const finishedAt = step.completedAt;
+    const duration = elapsed(step.startedAt, finishedAt ?? pass.now);
+    const children: ChildRunView[] = [];
+    for (const link of step.children) {
+      const facts = await pass.runFacts(link.runId);
+      const naming = facts ? await pass.naming(facts.summary) : undefined;
+      const status = facts
+        ? displayStatusForRun(facts.summary, {
+            waitingOn: facts.wait?.on,
+            leaseLapsed: await pass.leaseLapsed(facts.summary),
+          })
+        : // The parent's log says it spawned this run and the store has no log for it.
+          "stale";
+      children.push({
+        runId: link.runId,
+        name: naming?.name ?? link.runId,
+        status,
+        ...(facts?.summary.outcome ? { outcome: facts.summary.outcome } : {}),
+        ...(link.branch ? { branch: link.branch } : {}),
+        ...(link.workItemId ? { workItemId: link.workItemId } : {}),
+        ...(link.resumed ? { resumed: true } : {}),
+      });
+    }
+    return {
+      id: step.id,
+      runId: step.runId,
+      nodeId: step.nodeId,
+      nodeType: step.nodeType,
+      attempt: step.attempt,
+      status: displayStatusForStep(step),
+      scheduledAt: step.scheduledAt,
+      inputArtifactIds: [...step.inputArtifactIds],
+      outputArtifactIds: [...(step.result?.artifactIds ?? [])],
+      children,
+      skippedBranches: step.skippedBranches.map((b) => ({
+        branch: b.branch,
+        reason: b.reason,
+        ...(b.workItemId ? { workItemId: b.workItemId } : {}),
+      })),
+      ...(step.iteration === undefined ? {} : { iteration: step.iteration }),
+      ...(step.waitingOn ? { waitingOn: step.waitingOn } : {}),
+      ...(step.startedAt ? { startedAt: step.startedAt } : {}),
+      ...(finishedAt ? { finishedAt } : {}),
+      ...(duration === undefined ? {} : { durationMs: duration }),
+      ...(agentId ? { agentId } : {}),
+      ...(step.agentSessionId ? { agentSessionId: step.agentSessionId } : {}),
+      ...(step.result?.choice ? { choice: step.result.choice } : {}),
+      ...(step.result?.message ? { message: step.result.message } : {}),
+      ...(viewError(step.error) ? { error: viewError(step.error)! } : {}),
+    };
+  }
+
+  private async inputView(pass: Pass, request: HumanInputRequest, state: RunState): Promise<OpenInputView> {
+    const facts = factsFromState(state, new Map());
+    const { name, workItem } = await pass.naming(facts.summary);
+    const step = state.steps[request.stepRunId];
+    // What the asking step had in hand: the artifacts the answer is about.
+    const artifacts = (step?.inputArtifactIds ?? [])
+      .map((id) => state.artifacts[id])
+      .filter((a): a is Artifact => Boolean(a))
+      .map(artifactView);
+    return {
+      id: request.id,
+      kind: request.kind,
+      question: request.question,
+      options: [...request.options],
+      context: request.context,
+      runId: request.runId,
+      runName: name,
+      stepRunId: request.stepRunId,
+      requestedAt: request.requestedAt,
+      waitingMs: elapsed(request.requestedAt, pass.now) ?? 0,
+      artifacts,
+      ...(step?.nodeId ? { nodeId: step.nodeId } : {}),
+      ...(workItem ? { workItem } : {}),
+    };
+  }
+
+  private async claimView(pass: Pass, claim: WorkItemClaim): Promise<ClaimView> {
+    const facts = await pass.runFacts(claim.runId);
+    const item = await pass.workItem(claim.workItemId);
+    const naming = facts ? await pass.naming(facts.summary) : undefined;
+    const status = facts
+      ? displayStatusForRun(facts.summary, {
+          waitingOn: facts.wait?.on,
+          leaseLapsed: await pass.leaseLapsed(facts.summary),
+        })
+      : "stale";
+    // The same rule `Orchestrator.releaseClaim` enforces: an owner that cannot resume.
+    const dead = !facts || ["completed", "failed", "cancelled"].includes(facts.summary.status);
+    return {
+      workItemId: claim.workItemId,
+      branch: claim.branch,
+      claimedAt: claim.at,
+      owner: {
+        runId: claim.runId,
+        status,
+        missing: !facts,
+        releasable: dead,
+        ...(naming ? { name: naming.name } : {}),
+      },
+      ...(item ? { workItem: workItemView(item) } : {}),
+      ...(claim.stepRunId ? { stepRunId: claim.stepRunId } : {}),
+    };
+  }
+}

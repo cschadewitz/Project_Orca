@@ -338,7 +338,16 @@ export class Orchestrator {
     const visit = async (id: string, descend: boolean) => {
       if (seen.has(id)) return;
       seen.add(id);
-      const state = await this.getState(id);
+      let state: RunState;
+      try {
+        state = await this.getState(id);
+      } catch (e) {
+        // A child a parent's log points at, whose own log is gone (a rolled-back store) is
+        // asking nobody anything. The same tolerance `runTree` has: one missing log must not
+        // take down the answer for every other run.
+        if (e instanceof OrcaError && e.code === "RUN_NOT_FOUND") return;
+        throw e;
+      }
       out.push(...pendingHumanInputs(state));
       if (descend) for (const s of Object.values(state.steps)) for (const c of s.childRunIds) await visit(c, true);
     };
