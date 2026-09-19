@@ -80,10 +80,14 @@ crash is picked up with `orca resume <runId>`.
 | `packages/engine` | The orchestrator (graph interpreter), node executors (agent, decision, gate, loop, parallel, subworkflow, set, custom), program service, **PlanService** and the plan nodes (`plan-register`, `decision-matrix`, `plan-schedule`, `plan-dispatch`, `plan-await`), workspace providers, plugin API. |
 | `packages/integrations` | ORCA as an ACP agent (proxy mode), Kepler task awareness, T3 Code adapter (groundwork). |
 | `packages/cli` | `orca` command line and config bootstrap. |
+| `packages/protocol` | The wire contract between the daemon and its clients: message envelope, handshake, error codes, protocol version. Zod schemas; depends on `core` only. |
+| `packages/daemon` | `orca serve`: the long‑lived process that exposes the orchestrator over `protocol` (HTTP today, WebSocket for the event stream next). |
+| `packages/app` | The Electron desktop app. Imports only `protocol` and `design`; everything it knows about ORCA comes over the wire from a daemon. |
+| `packages/design` | The design system as code: token sources (`tokens.json`, `semantics.json`), the generator, the generated `css/tokens.css` and `src/tokens.ts`, the CSS component layer, and the contrast tests. |
 | `packages/testing` | A deterministic scripted ACP agent used by tests and the demo. |
 | `workflows/` | Shipped workflow definitions: `ai-sdlc.yaml`, `program.yaml`, `plan-resume.yaml`. |
 | `templates/` | Prompt templates per SDLC stage and program step (decompose, assess‑risks, decide, summary). |
-| `docs/` | Architecture, data model, planning, workflow authoring, integrations, extensibility, ADRs. |
+| `docs/` | Architecture, data model, planning, workflow authoring, integrations, extensibility, ADRs. `docs/design/` is the desktop app's brand book, UI rules and surface specs. |
 
 Start reading at `docs/ARCHITECTURE.md`, then `workflows/ai-sdlc.yaml` next to
 `templates/sdlc/*.md`, then `packages/engine/src/orchestrator.ts` and
@@ -99,5 +103,10 @@ Groundwork release: the data model, event‑sourced engine, ACP transport (local
 SSH), workflow language, SDLC templates, the long‑term planning layer
 (dependencies across requests, risk matrix, decision matrices, explainable
 scheduling) and CLI are implemented and tested end‑to‑end against a real ACP
-subprocess. See `docs/ROADMAP.md` for what is deliberately left open (T3 Code
-WebSocket transport, daemon mode, UI, capacity‑aware scheduling).
+subprocess. The daemon (`orca serve`), its wire protocol and the Electron desktop app
+exist as scaffolding: the handshake works end to end, no run or plan methods are served
+yet (ADR 0008). The app's design system — tokens, both themes, the CSS component layer
+and the surface specs — is in place (`packages/design`, `docs/design/`); the React layer
+over it is not. See
+`docs/ROADMAP.md` for what is deliberately left open (T3 Code WebSocket transport,
+daemon methods and the event stream, capacity‑aware scheduling).

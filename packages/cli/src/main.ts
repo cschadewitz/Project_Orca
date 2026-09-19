@@ -37,6 +37,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       rationale: { type: "string" },
       workflow: { type: "string" },
       run: { type: "string" },
+      host: { type: "string" },
+      port: { type: "string" },
       json: { type: "boolean" },
       force: { type: "boolean" },
       quiet: { type: "boolean" },

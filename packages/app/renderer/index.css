@@ -1,0 +1,16 @@
+/* Placeholder layout for the renderer. Token references only (docs/design/RULES.md rule 1). */
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+.placeholder {
+  padding: var(--space-6);
+  min-height: 100vh;
+}
+.placeholder__well {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-md);
+  white-space: pre-wrap;
+}

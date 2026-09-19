@@ -1,0 +1,11 @@
+/**
+ * @orca/protocol - the wire contract between the ORCA daemon and its clients (the desktop
+ * app, and later the CLI in client mode). Zod schemas so both sides validate at the
+ * boundary; the TypeScript types fall out of them. Depends on `core` for the domain
+ * types and on nothing else - a client that depends only on this package cannot reach
+ * the engine, the stores or the transports.
+ */
+export * from "./version.js";
+export * from "./errors.js";
+export * from "./envelope.js";
+export * from "./handshake.js";

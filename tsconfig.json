@@ -11,7 +11,10 @@
       "@orca/engine": ["./packages/engine/src/index.ts"],
       "@orca/testing": ["./packages/testing/src/index.ts"],
       "@orca/integrations": ["./packages/integrations/src/index.ts"],
-      "@orca/cli": ["./packages/cli/src/index.ts"]
+      "@orca/cli": ["./packages/cli/src/index.ts"],
+      "@orca/protocol": ["./packages/protocol/src/index.ts"],
+      "@orca/daemon": ["./packages/daemon/src/index.ts"],
+      "@orca/design": ["./packages/design/src/index.ts"]
     }
   },
   "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "examples/**/*.ts", "vitest.config.ts"]

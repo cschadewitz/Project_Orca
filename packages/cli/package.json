@@ -21,6 +21,8 @@
     "@orca/engine": "workspace:*",
     "@orca/testing": "workspace:*",
     "@orca/integrations": "workspace:*",
+    "@orca/daemon": "workspace:*",
+    "@orca/protocol": "workspace:*",
     "yaml": "^2.9.1"
   },
   "bin": {
