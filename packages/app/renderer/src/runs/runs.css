@@ -1,0 +1,84 @@
+/* What the Runs surface adds on top of the design system's component layer, and no more.
+
+   The row itself is `.orca-tree-row` from components.css — the system's fixed-height row,
+   `--row-h` and the selection rail included (docs/design/RULES.md rule 9) — so nothing here
+   restates a height, a colour or a radius. What is left is this surface's own geometry: the
+   filter bar above the list, the scroll region, and the widths that make the five columns
+   line up down the page.
+
+   Those widths are in `ch`, which is a ratio to the font already chosen rather than a design
+   decision of its own (see tools/eslint-config/css-tokens.js). A column measured in `ch`
+   also stays right when the type scale or the density changes, which a pixel column would
+   not. Every column truncates with an ellipsis and none of them wrap: a row never grows for
+   its content. */
+
+.orca-runs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ---------- the filter bar ---------- */
+
+.orca-runs__filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+.orca-runs__text {
+  flex: 1;
+  min-width: 0;
+  max-width: 44ch;
+}
+/* The status trigger's disclosure: the crumb separator turned a quarter, the same trick
+   `.orca-crumb__more` uses, because the bundled symbol face has no downward triangle. */
+.orca-runs__caret {
+  display: inline-block;
+  margin-left: var(--space-1);
+  transform: rotate(90deg);
+}
+/* The count sits at the trailing edge, away from the two controls. */
+.orca-runs__count {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* ---------- the list ---------- */
+
+.orca-runs__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------- the columns of a row ---------- */
+
+.orca-runs__chip {
+  flex: none;
+  width: 12ch;
+}
+/* The name is the one elastic column: everything else is sized to its content's worst case. */
+.orca-runs__name {
+  flex: 1;
+  min-width: 0;
+}
+.orca-runs__workflow {
+  flex: none;
+  width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.orca-runs__dur {
+  flex: none;
+  width: 8ch;
+  text-align: right;
+}
+.orca-runs__agent {
+  flex: none;
+  width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

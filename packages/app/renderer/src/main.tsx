@@ -21,16 +21,20 @@ import { KeyboardMap } from "./keyboard-map.js";
 import { KeyboardProvider } from "./keyboard-context.js";
 import { LayerStack } from "./layers.js";
 import { LayerStackProvider } from "./layers-context.js";
+import { createNotificationStream } from "./notifications.js";
+import { NotificationProvider } from "./notifications-context.js";
 import { PaletteSourceRegistry, PaletteSourceProvider } from "./palette/sources.js";
 import { Routes } from "./routes.js";
 
 const keyboard = new KeyboardMap(window.orca.platform);
 keyboard.listen(window);
 const appearance = installAppearance(window, window.orca.preferences, keyboard);
-/* Both outlive any one screen and neither is React state: the layer stack is what Esc
-   reads, and the source registry is what the palette reads. */
+/* All three outlive any one screen and none of them is React state: the layer stack is what
+   Esc reads, the source registry is what the palette reads, and the notification stream is
+   one bridge subscription shared by every screen that listens (see notifications.ts). */
 const layers = new LayerStack();
 const paletteSources = new PaletteSourceRegistry();
+const notifications = createNotificationStream(window.orca.notifications);
 
 const root = document.getElementById("root");
 if (!root) throw new Error("renderer/index.html is missing #root");
@@ -40,9 +44,11 @@ createRoot(root).render(
     <KeyboardProvider value={keyboard}>
       <LayerStackProvider value={layers}>
         <PaletteSourceProvider value={paletteSources}>
-          <AppearanceProvider value={appearance}>
-            <Routes />
-          </AppearanceProvider>
+          <NotificationProvider value={notifications}>
+            <AppearanceProvider value={appearance}>
+              <Routes />
+            </AppearanceProvider>
+          </NotificationProvider>
         </PaletteSourceProvider>
       </LayerStackProvider>
     </KeyboardProvider>

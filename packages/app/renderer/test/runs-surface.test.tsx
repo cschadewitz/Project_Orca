@@ -1,0 +1,331 @@
+// @vitest-environment happy-dom
+/**
+ * The Runs surface against the fake preload bridge: the rows, the filter, selection by
+ * keyboard, the four state views, and the live path — a `run.changed` repainting a row and
+ * a `run.changed` for an unknown run inserting one.
+ *
+ * Everything below goes through `window.orca`, which is the whole of "the daemon" as far as
+ * the renderer is concerned. The fake's read methods genuinely filter and page (see
+ * `fake-bridge.ts`), so a screen that sent the wrong `runs.list` params fails here rather
+ * than against a real store three waves later.
+ *
+ * The dual-theme half is at the bottom and asserts on colours the *real* tokens.css
+ * resolves, per docs/design/RULES.md rule 7.
+ */
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { STATUS_PRESENTATION, THEMES } from "@orca/design";
+import type { NotificationMessage } from "@orca/protocol";
+import { RunsSurface } from "../src/runs/runs-surface.js";
+import { AS_OF, RUNS } from "./fixtures.js";
+import { installBridge, harness, type Harness } from "./harness.js";
+import type { FakeBridge } from "./fake-bridge.js";
+import { expectedToken, installDesignSystem, resolved, setTheme } from "./themes.js";
+
+let fake: FakeBridge;
+let h: Harness;
+const teardown: (() => void)[] = [];
+
+/** The surface as the chrome mounts it, with everything `main.tsx` installs above it. */
+function renderRuns(connection: "live" | "disconnected" = "live"): void {
+  h = harness();
+  teardown.push(h.dispose);
+  const { Providers } = h;
+  render(
+    <Providers>
+      <RunsSurface connection={connection} />
+    </Providers>,
+  );
+}
+
+const rows = (): HTMLElement[] => screen.queryAllByRole("option");
+const list = (): HTMLElement => screen.getByRole("listbox", { name: "Runs" });
+const filterField = (): HTMLElement => screen.getByRole("searchbox", { name: "Filter runs" });
+
+/** A bare key on the list, as the keyboard map reads it: `code` for letters, `key` for the rest. */
+const press = (key: string, code: string): void => {
+  fireEvent.keyDown(list(), { key, code });
+};
+
+/** A `run.changed` frame, with the envelope fields every notification carries. */
+const runChanged = (runId: string, status: string, at = "2026-03-01T09:01:00.000Z"): NotificationMessage => ({
+  kind: "notification",
+  method: "run.changed",
+  params: { subscriptionId: "sub-1", runId, seq: 99, at, status, event: "run.completed" },
+});
+
+describe("the Runs surface", () => {
+  beforeEach(() => {
+    fake = installBridge();
+  });
+  afterEach(() => {
+    cleanup();
+    while (teardown.length) teardown.pop()?.();
+    setTheme(undefined);
+  });
+
+  it("lists every run the daemon sent, newest first, on fixed-height rows", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+
+    // The fixture's order is the daemon's: newest first by creation.
+    expect(rows().map((row) => row.id)).toEqual(RUNS.map((run) => `run-row-${run.id}`));
+    expect(rows().every((row) => row.classList.contains("orca-tree-row"))).toBe(true);
+
+    // Each row says the five things the surface promises: status, name, workflow, version,
+    // duration, agent. `run-old` is the failed one at the top.
+    const old = within(rows()[0]!);
+    expect(old.getByText(STATUS_PRESENTATION.failed.word)).toBeTruthy();
+    expect(old.getByText("SSO rollout")).toBeTruthy();
+    expect(old.getByText("nightly")).toBeTruthy();
+    expect(old.getByText("v1")).toBeTruthy();
+    expect(rows()[0]!.textContent).toContain("1.0s");
+  });
+
+  it("asks the daemon once, and with no paging parameters it does not need", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+
+    const listCalls = fake.calls.filter((c) => c.method === "runs.list");
+    expect(listCalls).toHaveLength(1);
+    expect(listCalls[0]!.params).toEqual({});
+  });
+
+  it("filters by text over the name, the id, the workflow and the agent", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+
+    fireEvent.change(filterField(), { target: { value: "login" } });
+    expect(rows().map((r) => r.id)).toEqual(["run-row-run-child-ok"]);
+
+    // An id the row does not show: a person pasting one should still find the run.
+    fireEvent.change(filterField(), { target: { value: "run-gate" } });
+    expect(rows().map((r) => r.id)).toEqual(["run-row-run-gate"]);
+
+    // The text filter is local, so it costs no round trip.
+    expect(fake.calls.filter((c) => c.method === "runs.list")).toHaveLength(1);
+  });
+
+  it("filters by status through runs.list, so the whole store is filtered and not one page", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Filter by status/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: STATUS_PRESENTATION.waiting.word }));
+
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    expect(rows()[0]!.id).toBe("run-row-run-gate");
+
+    const listCalls = fake.calls.filter((c) => c.method === "runs.list");
+    expect(listCalls).toHaveLength(2);
+    expect(listCalls[1]!.params).toEqual({ status: ["waiting"] });
+  });
+
+  it("moves the selection with J, K and the arrows, and registers all four in the map", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+
+    const listKeys = h.keyboard
+      .list()
+      .filter((s) => s.scope === "list")
+      .map((s) => s.key);
+    expect(listKeys).toEqual(["J", "ArrowDown", "K", "ArrowUp"]);
+
+    // Nothing selected yet: J takes the first row, which is the newest run.
+    press("j", "KeyJ");
+    expect(rows()[0]!.getAttribute("aria-selected")).toBe("true");
+    expect(list().getAttribute("aria-activedescendant")).toBe("run-row-run-old");
+
+    press("ArrowDown", "ArrowDown");
+    expect(rows()[1]!.getAttribute("aria-selected")).toBe("true");
+
+    press("k", "KeyK");
+    expect(rows()[0]!.getAttribute("aria-selected")).toBe("true");
+
+    // The ends hold: K on the first row stays on the first row.
+    press("ArrowUp", "ArrowUp");
+    expect(rows()[0]!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("does not move the selection while a letter is being typed into the filter", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+    press("j", "KeyJ");
+
+    fireEvent.keyDown(filterField(), { key: "j", code: "KeyJ" });
+
+    expect(rows()[0]!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("clears a selection whose row the filter took away", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+    press("j", "KeyJ");
+    expect(list().getAttribute("aria-activedescendant")).toBe("run-row-run-old");
+
+    fireEvent.change(filterField(), { target: { value: "login" } });
+
+    expect(list().getAttribute("aria-activedescendant")).toBeNull();
+  });
+
+  it("repaints a row from run.changed without re-reading the list", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+    const running = STATUS_PRESENTATION.running.word;
+    expect(within(rows()[4]!).getByText(running)).toBeTruthy();
+
+    act(() => fake.notify(runChanged("run-parent", "succeeded")));
+
+    await waitFor(() => expect(within(rows()[4]!).getByText(STATUS_PRESENTATION.succeeded.word)).toBeTruthy());
+    // The whole point: no second `runs.list`.
+    expect(fake.calls.filter((c) => c.method === "runs.list")).toHaveLength(1);
+    // The row has stopped accruing and shows a total: 09:00:02 to 09:01:00.
+    expect(rows()[4]!.textContent).toContain("58s");
+  });
+
+  it("inserts a run it has never seen, in creation order, with one runs.get", async () => {
+    // A page that does not carry `run-gate` — which is the real case for a run started from
+    // the CLI after the list was read. `run.changed` has no name, workflow or creation time
+    // in it, so the row has to be resolved with one `runs.get` before it can be drawn.
+    const page = RUNS.filter((run) => run.id !== "run-gate");
+    fake.script({ "runs.list": () => ({ ok: true, result: { runs: page, total: page.length, asOf: AS_OF } }) });
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+    expect(rows()).toHaveLength(page.length);
+
+    act(() => fake.notify(runChanged("run-gate", "waiting")));
+
+    await waitFor(() => expect(rows()).toHaveLength(RUNS.length));
+    // Third row: it was created after `run-child-ok` and before `run-lost`.
+    expect(rows()[2]!.id).toBe("run-row-run-gate");
+    expect(fake.calls.filter((c) => c.method === "runs.get")).toEqual([
+      { method: "runs.get", params: { runId: "run-gate" } },
+    ]);
+  });
+
+  it("drops a row that has left the status filter", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Filter by status/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: STATUS_PRESENTATION.waiting.word }));
+    await waitFor(() => expect(rows()).toHaveLength(1));
+
+    act(() => fake.notify(runChanged("run-gate", "succeeded")));
+
+    await waitFor(() => expect(screen.getByText("No runs match the filter")).toBeTruthy());
+  });
+
+  it("shows the loading state while the daemon is answering", async () => {
+    const release = fake.hold("runs.list");
+    renderRuns();
+
+    expect(await screen.findByText("Loading runs")).toBeTruthy();
+    release();
+    await screen.findByRole("listbox", { name: "Runs" });
+  });
+
+  it("shows the empty state when the store has no runs", async () => {
+    fake.script({
+      "runs.list": () => ({ ok: true, result: { runs: [], total: 0, asOf: "2026-03-01T09:00:40.000Z" } }),
+    });
+    renderRuns();
+
+    expect(await screen.findByText("No runs yet")).toBeTruthy();
+  });
+
+  it("shows the error state with the protocol code, and retries on demand", async () => {
+    fake.fail("runs.list", { code: "STORE_UNAVAILABLE", message: "the store is locked" });
+    renderRuns();
+
+    expect(await screen.findByText("Could not load the runs")).toBeTruthy();
+    expect(screen.getByText("STORE_UNAVAILABLE: the store is locked")).toBeTruthy();
+
+    fake.script({ "runs.list": () => ({ ok: true, result: { runs: [...RUNS], total: RUNS.length, asOf: "x" } }) });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await screen.findByRole("listbox", { name: "Runs" });
+  });
+
+  it("says it is disconnected rather than blaming the store, and stops the clock", async () => {
+    fake.fail("runs.list", { code: "AGENT_TRANSPORT", message: "connect ECONNREFUSED" });
+    renderRuns("disconnected");
+
+    expect(await screen.findByText("No daemon to read runs from")).toBeTruthy();
+
+    // With data in hand, a disconnected app keeps the rows and says not to trust them.
+    fake.script({ "runs.list": () => ({ ok: true, result: { runs: [...RUNS], total: RUNS.length, asOf: "x" } }) });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await screen.findByRole("listbox", { name: "Runs" });
+    expect(screen.getByText(/these runs are the last the daemon sent/)).toBeTruthy();
+    expect(document.querySelectorAll(".orca-stale-value").length).toBe(RUNS.length);
+  });
+
+  it("leaves no bridge subscription behind when it unmounts", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+    expect(fake.subscribers).toBe(1);
+
+    cleanup();
+
+    expect(h.notifications.listeners).toBe(0);
+    expect(fake.subscribers).toBe(0);
+  });
+});
+
+/**
+ * The same list, mounted once per theme against the real `tokens.css`
+ * (docs/design/RULES.md rule 7).
+ *
+ * `inBothThemes` is not used here and this loop is its asynchronous twin: that helper mounts
+ * and unmounts inside one synchronous call, and this surface needs a bridge round trip
+ * before there is a row to measure.
+ */
+describe("the Runs surface in both themes", () => {
+  beforeEach(() => {
+    fake = installBridge();
+  });
+  afterEach(() => {
+    cleanup();
+    while (teardown.length) teardown.pop()?.();
+    setTheme(undefined);
+  });
+
+  for (const theme of THEMES) {
+    it(`binds a row's status and its selection to the tokens in ${theme}`, async () => {
+      h = harness();
+      teardown.push(h.dispose);
+      const { Providers } = h;
+      /* After the harness, not before: `installAppearance` applies the stored preference to
+         `<html>`, and the default preference is `system` — which *removes* `data-theme`. */
+      installDesignSystem();
+      setTheme(theme);
+
+      const container = document.createElement("div");
+      container.className = "orca";
+      document.body.append(container);
+      render(
+        <Providers>
+          <RunsSurface connection="live" />
+        </Providers>,
+        { container },
+      );
+      await screen.findByRole("listbox", { name: "Runs" });
+      expect(rows()).toHaveLength(RUNS.length);
+
+      // Status: the chip is bound to its own token rather than to a colour typed here.
+      const chip = container.querySelector(".orca-chip--failed")!;
+      expect(resolved(chip, "color"), theme).toBe(expectedToken(theme, "status-failed"));
+
+      // Selection: `surface-selected` plus the accent rail, which is a different thing from
+      // focus and has to stay legible in both themes.
+      press("j", "KeyJ");
+      const selected = rows()[0]!;
+      expect(resolved(selected, "background-color"), theme).toBe(expectedToken(theme, "surface-selected"));
+      expect(resolved(selected, "border-left-color"), theme).toBe(expectedToken(theme, "accent"));
+
+      container.remove();
+    });
+  }
+});
