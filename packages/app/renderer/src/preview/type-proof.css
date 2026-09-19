@@ -1,0 +1,125 @@
+/* Layout for the dev-only type and glyph proof surface (`#type`). Token references only
+   (docs/design/RULES.md rule 1) — a page whose job is to show the design system working
+   cannot cheat on it.
+
+   Nothing here sets a font-family. The whole point of the page is which face the stacks in
+   tokens.css resolve to, and the fallback toggle swaps `--font-sans` / `--font-mono` on the
+   root element from TypeScript, with values derived from tokens.css itself. A stack written
+   out here would be a second opinion about what the app falls back to. */
+.type-proof {
+  min-height: 100vh;
+  background: var(--surface-canvas);
+}
+.type-proof__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+.type-proof__link {
+  color: var(--accent);
+}
+.type-proof__toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.type-proof__themes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+}
+.type-proof__theme {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  min-width: 0;
+  background: var(--surface-base);
+}
+.type-proof__theme + .type-proof__theme {
+  border-left: var(--stroke-hairline) solid var(--border-hairline);
+}
+.type-proof__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.type-proof__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.type-proof__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+/* The scale: sample on one line, the metrics it was set with on the next, dimmed so the
+   eye reads the sample first. */
+.type-proof__scale {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.type-proof__scale-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.type-proof__meta {
+  color: var(--ink-tertiary);
+}
+
+/* Two ids per row in equal columns, so a one-character difference lands in the same
+   horizontal position in both and the tracking is what does the work. */
+.type-proof__ids {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.type-proof__id-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-6);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+}
+
+/* Each glyph large enough to see the shape, then at the size a chip actually sets it,
+   in both tracks — a symbol face that is missing from one stack shows up as a mismatch
+   between the two small lines. */
+.type-proof__glyphs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.type-proof__glyph {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: var(--space-2);
+  border: var(--stroke-hairline) solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  text-align: center;
+}
+.type-proof__glyph-large {
+  color: var(--ink-primary);
+}
+.type-proof__glyph-small {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--ink-secondary);
+}
