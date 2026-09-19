@@ -1,22 +1,25 @@
 <!doctype html>
-<!-- Placeholder renderer: proves the app → preload → main → daemon path, styled with the
-     design system's CSS layer. No framework yet; the React layer over components.css is
-     the next step (docs/design/60-implementation.md). -->
-<html lang="en">
+<!-- The renderer's entry document. Vite is the bundler (docs/DEVELOPMENT.md); the module
+     below is the only script, and the stylesheets are imported from it so that tokens.css
+     and components.css load ahead of anything that builds on them.
+
+     The CSP here is the production one and it stays `default-src 'self'` with no
+     `unsafe-inline`. The dev server rewrites it in memory — see `htmlPlugin` in
+     ../vite.config.ts — and never touches this file.
+
+     `data-theme` lives on <html> as docs/design/60-implementation.md requires. It is
+     hardcoded to light until #146 wires the theme to a preference. -->
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
+    />
     <title>ORCA</title>
-    <link rel="stylesheet" href="../../design/css/tokens.css" />
-    <link rel="stylesheet" href="../../design/css/components.css" />
-    <link rel="stylesheet" href="./index.css" />
   </head>
   <body class="orca">
-    <main class="orca-surface placeholder">
-      <h1 class="orca-text-title">ORCA</h1>
-      <p id="status" class="orca-text-body">Connecting to the daemon…</p>
-      <pre id="hello" class="orca-text-mono-log placeholder__well"></pre>
-    </main>
-    <script src="./index.js"></script>
+    <div id="root"></div>
+    <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>

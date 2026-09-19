@@ -17,5 +17,11 @@
       "@orca/design": ["./packages/design/src/index.ts"]
     }
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "examples/**/*.ts", "vitest.config.ts"]
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "examples/**/*.ts",
+    "vitest.config.ts",
+    "packages/app/vite.config.ts"
+  ]
 }
