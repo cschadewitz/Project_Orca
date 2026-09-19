@@ -338,6 +338,53 @@ export interface ObjectHeaderProps {
   onOpenCounterpart?(crumb: Crumb, counterpart: Counterpart): void;
 }
 
+/**
+ * Built (#202). The app's one popover: `.orca-menu` hung off a trigger button inside
+ * `.orca-menu-anchor`. Every popover uses it — the crumb's counterparts, and the schedule
+ * explanation, artifact versions and risk detail that follow — because the behaviour the
+ * accessibility spec asks for is not per-surface work:
+ *
+ *  - roving focus over the items (`↑`/`↓`, `Home`/`End`, `Enter`, and typeahead on the
+ *    first letter), registered in the keyboard map's `menu` scope so the command palette
+ *    lists it;
+ *  - focus into the menu on open and back to the trigger on close, `Esc` included — `Esc`
+ *    is the layer stack's, never the component's;
+ *  - placement that flips rather than clips, above the trigger when the window has no room
+ *    below and aligned to the trailing edge when it has none to the right
+ *    (`.orca-menu--above`, `.orca-menu--end`).
+ *
+ * An empty `items` renders nothing at all, trigger included: a disclosure that opens an
+ * empty list is worse than no disclosure.
+ */
+export interface MenuItem {
+  id: string;
+  label: string;
+  /** Trailing meta in `.orca-menu__type` — the type a counterpart leads to, a version date. */
+  hint?: string;
+  /** Shown, named and skipped by the arrow keys rather than hidden. */
+  disabled?: boolean;
+}
+
+export interface MenuProps {
+  /** The accessible name of the trigger and of the menu it opens. */
+  label: string;
+  items: ReadonlyArray<MenuItem>;
+  onChoose(item: MenuItem): void;
+  /** The trigger's content. */
+  children: unknown;
+  /** The trigger's own class, so a surface keeps its disclosure styling (`orca-crumb__more`). */
+  triggerClassName?: string;
+  /** Injected measurement for placement; the default measures the document. */
+  measure?: (
+    trigger: Element,
+    menu: Element,
+  ) => {
+    trigger: { top: number; left: number; width: number; height: number };
+    menu: { width: number; height: number };
+    viewport: { width: number; height: number };
+  };
+}
+
 /** Built — rendering only; the state machine that decides which state is live is #163. */
 export interface ConnectionIndicatorProps {
   state: ConnectionState;

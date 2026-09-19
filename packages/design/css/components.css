@@ -1489,6 +1489,14 @@
 }
 
 /* menus (the crumb's counterparts, and any other short list hung off a control) */
+
+/* The trigger and its popover. The menu is positioned against this, so any control can
+   carry one without the surface around it needing a stacking context of its own. */
+.orca-menu-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+}
 .orca-menu {
   position: absolute;
   top: 100%;
@@ -1502,6 +1510,18 @@
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
+}
+/* Flipped rather than clipped: a control near the bottom of the window hangs its menu
+   above itself, and a crumb near the right edge aligns the menu's trailing edge instead.
+   Which one applies is decided in `ui/menu-placement.ts`. */
+.orca-menu--above {
+  top: auto;
+  bottom: 100%;
+  margin: 0 0 var(--space-1);
+}
+.orca-menu--end {
+  left: auto;
+  right: 0;
 }
 .orca-menu__item {
   display: flex;

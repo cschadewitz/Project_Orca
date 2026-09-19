@@ -5,6 +5,16 @@ export { ConfigField, type ConfigFieldControl, type ConfigFieldProps } from "./c
 export { ConnectionIndicator, type ConnectionIndicatorProps } from "./connection-indicator.js";
 export { COUNTERPARTS, counterpartsFor, type Counterpart, type CrumbType } from "./counterparts.js";
 export { formatAbsolute, formatDuration, formatRelative } from "./format-time.js";
+export { Menu, type MenuItem, type MenuMeasurer, type MenuProps } from "./menu.js";
+export {
+  DEFAULT_PLACEMENT,
+  placeMenu,
+  placementClass,
+  type Box,
+  type MenuMeasurement,
+  type MenuPlacement,
+  type Rect,
+} from "./menu-placement.js";
 export { ObjectHeader, type Crumb, type ObjectHeaderProps } from "./object-header.js";
 export { ScheduleBadge, type ScheduleBadgeProps } from "./schedule-badge.js";
 export { StateView, type StateViewAction, type StateViewProps } from "./state-view.js";

@@ -14,7 +14,17 @@ export function KeyboardProvider({ value, children }: { value: KeyboardMap; chil
 }
 
 export function useKeyboard(): KeyboardMap {
-  const keyboard = useContext(KeyboardContext);
+  const keyboard = useOptionalKeyboard();
   if (!keyboard) throw new Error("useKeyboard needs a <KeyboardProvider> above it");
   return keyboard;
+}
+
+/**
+ * The map if there is one. For a primitive that must still *render* in a tree with no
+ * providers — `renderToStaticMarkup` in a test, the `#preview` gallery — and that registers
+ * its shortcuts from an effect, which a static render never runs. A component that needs
+ * the map to render at all should use `useKeyboard` and fail.
+ */
+export function useOptionalKeyboard(): KeyboardMap | null {
+  return useContext(KeyboardContext);
 }

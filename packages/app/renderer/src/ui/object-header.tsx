@@ -11,9 +11,10 @@
  * It is a `<nav>` with an `aria-label`, and the trail is an ordered list, so the crumbs
  * read as a path rather than as a row of unrelated links.
  */
-import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
+import { type JSX, type ReactNode } from "react";
 import { CHROME_GLYPHS } from "@orca/design";
 import { counterpartsFor, type Counterpart, type CrumbType } from "./counterparts.js";
+import { Menu } from "./menu.js";
 
 export interface Crumb {
   type: CrumbType;
@@ -33,7 +34,6 @@ export interface ObjectHeaderProps {
 }
 
 export function ObjectHeader({ crumbs, actions, onOpen, onOpenCounterpart }: ObjectHeaderProps): JSX.Element {
-  const [openMenu, setOpenMenu] = useState<string | undefined>(undefined);
   const keyOf = (crumb: Crumb): string => `${crumb.type}:${crumb.id}`;
 
   return (
@@ -55,13 +55,7 @@ export function ObjectHeader({ crumbs, actions, onOpen, onOpenCounterpart }: Obj
                 <CrumbLabel crumb={crumb} />
               </button>
             )}
-            <CounterpartMenu
-              crumb={crumb}
-              open={openMenu === keyOf(crumb)}
-              onToggle={() => setOpenMenu(openMenu === keyOf(crumb) ? undefined : keyOf(crumb))}
-              onClose={() => setOpenMenu(undefined)}
-              {...(onOpenCounterpart ? { onChoose: onOpenCounterpart } : {})}
-            />
+            {onOpenCounterpart ? <CounterpartMenu crumb={crumb} onChoose={onOpenCounterpart} /> : null}
           </li>
         ))}
       </ol>
@@ -83,71 +77,33 @@ function CrumbLabel({ crumb }: { crumb: Crumb }): JSX.Element {
 
 interface CounterpartMenuProps {
   crumb: Crumb;
-  open: boolean;
-  onToggle: () => void;
-  onClose: () => void;
-  onChoose?: (crumb: Crumb, counterpart: Counterpart) => void;
+  onChoose: (crumb: Crumb, counterpart: Counterpart) => void;
 }
 
-function CounterpartMenu({ crumb, open, onToggle, onClose, onChoose }: CounterpartMenuProps): JSX.Element | null {
+/**
+ * The crumb's counterparts, over the `Menu` primitive: opening, closing, roving focus,
+ * focus return and viewport-aware placement all live there, and the only thing this knows
+ * is which counterparts a crumb type has. A crumb type with none renders no disclosure —
+ * `Menu` returns nothing for an empty list.
+ */
+function CounterpartMenu({ crumb, onChoose }: CounterpartMenuProps): JSX.Element | null {
   const options = counterpartsFor(crumb.type);
-  const ref = useRef<HTMLSpanElement>(null);
-
-  /* Esc closes the topmost transient layer and a click elsewhere dismisses it
-     (docs/design/50-accessibility-and-keyboard.md). Bound only while open. */
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    const onPointer = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("mousedown", onPointer);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.removeEventListener("mousedown", onPointer);
-    };
-  }, [open, onClose]);
-
-  if (options.length === 0 || onChoose === undefined) return null;
+  const byId = new Map(options.map((option) => [option.id, option]));
 
   return (
-    <span ref={ref}>
-      <button
-        type="button"
-        className="orca-crumb__more"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={`Counterparts of ${crumb.label}`}
-        onClick={onToggle}
-      >
-        {/* The bundled symbol face carries no downward triangle, and a glyph that falls
-            back to whatever the OS has is the one thing docs/design forbids — so this is
-            the crumb separator, turned a quarter (see `.orca-crumb__more`). */}
-        <span aria-hidden="true">{CHROME_GLYPHS.crumbSeparator}</span>
-      </button>
-      {open && (
-        <ul className="orca-menu" role="menu">
-          {options.map((option) => (
-            <li key={option.id} role="none">
-              <button
-                type="button"
-                role="menuitem"
-                className="orca-menu__item"
-                onClick={() => {
-                  onClose();
-                  onChoose(crumb, option);
-                }}
-              >
-                <span>{option.label}</span>
-                <span className="orca-menu__type">{option.leadsTo}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </span>
+    <Menu
+      label={`Counterparts of ${crumb.label}`}
+      triggerClassName="orca-crumb__more"
+      items={options.map((option) => ({ id: option.id, label: option.label, hint: option.leadsTo }))}
+      onChoose={(item) => {
+        const option = byId.get(item.id);
+        if (option) onChoose(crumb, option);
+      }}
+    >
+      {/* The bundled symbol face carries no downward triangle, and a glyph that falls
+          back to whatever the OS has is the one thing docs/design forbids — so this is
+          the crumb separator, turned a quarter (see `.orca-crumb__more`). */}
+      <span aria-hidden="true">{CHROME_GLYPHS.crumbSeparator}</span>
+    </Menu>
   );
 }
