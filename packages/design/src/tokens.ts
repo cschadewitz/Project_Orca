@@ -13,7 +13,7 @@ export type DurationToken = 'duration-instant' | 'duration-fast' | 'duration-med
 export type EasingToken = 'ease-standard' | 'ease-entrance' | 'ease-linear';
 export type OpacityToken = 'opacity-disabled' | 'opacity-stale' | 'opacity-untaken';
 export type BreakpointToken = 'bp-sidebar-collapse' | 'bp-panel-overlay';
-export type ZToken = 'z-panel-overlay' | 'z-palette';
+export type ZToken = 'z-sticky' | 'z-menu' | 'z-panel-overlay' | 'z-palette';
 export type TextStyle = 'display' | 'title' | 'heading' | 'body' | 'body-strong' | 'label' | 'label-strong' | 'caption' | 'eyebrow' | 'mono-body' | 'mono-strong' | 'mono-log' | 'mono-id';
 
 export type DesignToken =
