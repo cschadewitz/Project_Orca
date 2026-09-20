@@ -2002,6 +2002,24 @@
   }
 }
 
+/* The other half of `docs/design/50-accessibility-and-keyboard.md`'s preferences section,
+   which nothing honoured until now. Under `prefers-contrast: more` a hairline separator is
+   drawn at the control border's strength and the third ink step is folded into the second,
+   because the two quietest decisions in the system are the two that stop being legible first.
+   Deliberately a rebinding of two custom properties on the shell root rather than a set of
+   overrides — no new palette is introduced, both themes keep their own values, and no rule
+   below has to know the preference exists. The root is `<body class="orca">`, so a popover in
+   a portal is inside it too; the second selector is for a `data-theme` subtree, which declares
+   these two properties on itself and would otherwise shadow the rebinding — that is how the
+   preview galleries show both themes at once, and the preference has to be visible there. */
+@media (prefers-contrast: more) {
+  .orca,
+  .orca [data-theme] {
+    --border-hairline: var(--border-control);
+    --ink-tertiary: var(--ink-secondary);
+  }
+}
+
 /* ---------- segmented mode toggle ---------- */
 
 .orca-seg {
