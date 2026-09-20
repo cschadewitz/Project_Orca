@@ -17,9 +17,9 @@
  *   let a person approve something it could not show them), and the connection cannot write
  *   (`useWritability()`, whose sentence is shaped for `Button`'s `disabledReason` so that a
  *   control never composes its own).
- * - **A note is not something the run recorded.** `human.answered` has no field for it, so
- *   the daemon writes it to the operator log and returns it (#238) — and the field says so
- *   rather than letting a person believe the workflow will see it.
+ * - **A note is kept with the decision.** `human.answered` carries it as of unit W (#238),
+ *   while the run still branches on the answer alone — so the field says the note is kept
+ *   with the answer, and says nothing about it changing where the run goes.
  * - **"Always" is stated, not inferred.** ORCA will not read an agent's option ids and guess
  *   that `allow_always` means allow, so the two always-buttons say which way the rule goes;
  *   what they wrote comes back in `permission` and is reported verbatim (`alwaysOutcome`).
@@ -256,7 +256,9 @@ export function AnswerCard({
 
         {noteOpen && (
           <label className="orca-attn__note">
-            <Text style="caption">Note — recorded in the daemon&rsquo;s operator log, not in the run&rsquo;s log</Text>
+            <Text style="caption">
+              Note — recorded with the answer in the run&rsquo;s log. The run branches on the answer alone.
+            </Text>
             <input
               ref={noteField}
               className={`orca-input ${textClass("body")}`}

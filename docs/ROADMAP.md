@@ -19,7 +19,12 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    `runs.control` from `capabilities`. The port carries no authentication: any process on the
    machine can reach the control methods over loopback, and the per‑run lease guards against
    a second *writer* rather than against a caller — an accepted cost, said plainly in
-   `orca serve --help`. Still to do: the plan methods over `PlanService`.
+   `orca serve --help`. What a gate has to *say* caught up with them at protocol 1.6: a
+   workflow's options may be written as `{ id, label, consequence?, destructive? }` and bare
+   strings still parse (#247), an open ask names the agent whose turn it is holding and the
+   host it runs on (#248), and the note a person writes beside an answer is recorded on
+   `human.answered` rather than in the operator's log (#238, `orca answer --note`). Still to
+   do: the plan methods over `PlanService`.
    Human input survives process boundaries: `pause` mode parks the run in its event log and
    `orca answer <requestId> <option>` resumes it, through the same shared function
    `inputs.answer` calls. What the daemon does **not** do is keep an agent session alive
@@ -82,11 +87,19 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    artifacts in the dock (#155, #156, #157, #158, #159), and Agents is a grid of health cards
    fed by `agent.changed` (#166). The run's cursor is drawn per run in the timeline's header,
    which is where it belongs — the status bar outlives any one run's selection and has no
-   single number to show. Not yet true of the connection work: writes are not queued while
-   reconnecting, `reconnecting`'s give‑up threshold is decided (#239, backoff saturation) but
-   not implemented, and file mode is #164. Next in phase 1: attention and answering gates
-   against the control methods of item 1 — already on the wire, so answering a gate is a
-   bridge entry and a screen rather than a protocol change. Phase 2 makes it the
+   single number to show. Phase 1's write half is in too: Attention is the surface, and a gate
+   or a permission ask is answered in place from it or inline in the run it came from, with
+   one count (`inputs.list`'s `waiting`) on the title bar, the sidebar and the dock badge and
+   OS notifications per tier behind the preference (#161, #162); a command may have no key at
+   all and live in the palette alone (#205). The ways in are one route table: `orca://` deep
+   links with the single‑instance lock, **Copy link** on every object header, and the palette
+   listing recent runs, agents and a search over step and artifact names (#165, #206). File
+   mode is real (#164) — **File ▸ Open a store…** re‑points the running app at any workspace
+   with `orca serve --read-only` behind it, so the writes are absent rather than disabled —
+   and `reconnecting` now gives up at backoff saturation (#239). One thing in that list is
+   still not true: writes are not queued while reconnecting, and a control says the daemon is
+   not answering rather than promising a send. What remains in phase 1 is the accessibility
+   pass and the cross‑platform screenshots (#167, #213). Phase 2 makes it the
    first‑class configuration and monitoring surface (config, agents, plan); the dependency
    graph goes in as a mode of Plan with a docked inspector unless use shows it is a
    starting point (`docs/design/80-dependency-graph-options.md`). Workflow editing

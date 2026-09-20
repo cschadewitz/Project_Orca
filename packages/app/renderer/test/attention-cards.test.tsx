@@ -88,7 +88,7 @@ describe("answering with a note", () => {
     const note = within(gate).getByLabelText("Note");
     // #238: `human.answered` has no field for it, so the card must not let a person think
     // the workflow will see it.
-    expect(within(gate).getByText(/operator log, not in the run/)).toBeTruthy();
+    expect(within(gate).getByText(/recorded with the answer in the run/)).toBeTruthy();
     expect(document.activeElement).toBe(note);
 
     fireEvent.change(note, { target: { value: "checked with the release manager" } });
@@ -112,6 +112,23 @@ describe("answering with a note", () => {
     fireEvent.keyDown(gate, { key: "Enter", code: "Enter", shiftKey: true });
     await waitFor(() => expect(fake.calls.some((c) => c.method === "inputs.answer")).toBe(true));
     expect(fake.calls.find((c) => c.method === "inputs.answer")?.params).toMatchObject({ note: "on the record" });
+  });
+});
+
+describe("a permission ask naming who it blocks", () => {
+  it("says the agent and its host off the ask, and the run only when there is no agent", async () => {
+    mount([PERMISSION_ASK]);
+    const card = await screen.findByRole("region", { name: "Run a shell command?" });
+    // `OpenInputView.agent` (protocol 1.6, #248) - what makes "always allow" sizeable.
+    expect(within(card).getByText("claude")).toBeTruthy();
+    expect(card.textContent).toContain("build-box");
+
+    cleanup();
+    const { agent: _agent, ...anonymous } = PERMISSION_ASK;
+    mount([anonymous]);
+    const fallback = await screen.findByRole("region", { name: "Run a shell command?" });
+    expect(within(fallback).getByText("release 1")).toBeTruthy();
+    expect(fallback.textContent).not.toContain("build-box");
   });
 });
 

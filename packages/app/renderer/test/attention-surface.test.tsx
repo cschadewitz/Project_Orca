@@ -378,9 +378,13 @@ describe("the keyboard map and the palette", () => {
         .map((s) => s.key!);
 
     // `J` and `K` are the list's and are there as soon as there is a card to move to; the
-    // digits, `Enter` and `⇧Enter` belong to whichever card has the keyboard.
-    expect(cardKeys()).toEqual(expect.arrayContaining(["J", "K", "1", "2", "Enter", "Shift+Enter"]));
-    expect(cardKeys()).not.toContain("G");
+    // digits, `Enter`, `⇧Enter` and `G` belong to whichever card has the keyboard. `G` is
+    // among them now that the chrome passes `onOpenRun` — the route table gives it
+    // somewhere to go (#165), and it is registered because it was passed, not by default.
+    expect(cardKeys()).toEqual(expect.arrayContaining(["J", "K", "1", "2", "Enter", "Shift+Enter", "G"]));
+    // One card holds them, not five: the slot is `card:1`, and a second registration of it
+    // is the collision the duplicate-key throw exists to find.
+    expect(cardKeys().filter((key) => key === "1")).toHaveLength(1);
     expect(gate).toBeTruthy();
   });
 

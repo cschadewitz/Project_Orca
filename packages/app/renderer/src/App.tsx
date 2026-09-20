@@ -24,9 +24,19 @@ import { RunsSurface } from "./runs/runs-surface.js";
 import { AgentsSurface } from "./agents/agents-surface.js";
 import { AttentionSurface } from "./attention/attention-surface.js";
 import { useAttention } from "./attention/use-attention.js";
+import { InlineAsksProvider } from "./attention/inline-asks.js";
 import { useAlertActivation } from "./attention/use-alert-activation.js";
+import type { AlertActivation } from "../../src/bridge.js";
 import { PaletteObjectSources } from "./palette/object-sources.js";
-import { describeRoute, resolveRoute, urlForCrumb, counterpartUrl, type Route } from "./route-table.js";
+import {
+  describeRoute,
+  gateUrl,
+  resolveRoute,
+  runUrl,
+  urlForCrumb,
+  counterpartUrl,
+  type Route,
+} from "./route-table.js";
 import { Button, ObjectHeader, StateView, Text, textClass, type Crumb } from "./ui/index.js";
 
 // Attention is always first: the app's default landing surface (docs/design/10-information-architecture.md).
@@ -92,10 +102,21 @@ export function App(): JSX.Element {
 
   useChromeShortcuts({ onSurface: selectSurface, onTogglePanel: togglePanel });
   /* A notification was clicked, or a permission ask took the attention of a window that
-     already had focus: both mean "the thing that needs you is on Attention". The card's own
-     deep link is #165's, and the activation already carries what a route would be built
-     from (`use-alert-activation.ts`). */
-  useAlertActivation(useCallback(() => selectSurface("attention"), [selectSurface]));
+     already had focus. The activation carries the alert it was about, so it goes through the
+     same route table every other arrival does (#165): a waiting ask lands on its card, a
+     failure lands on its run, and an alert whose item has since been answered lands on the
+     surface, which is all that is left to say about it. */
+  useAlertActivation(
+    useCallback(
+      (activation: AlertActivation) => {
+        const item = activation.item;
+        if (item?.inputId) navigate(gateUrl(item.inputId));
+        else if (item?.runId) navigate(runUrl(item.runId));
+        else selectSurface("attention");
+      },
+      [navigate, selectSurface],
+    ),
+  );
   useEscapeClosesTopLayer();
   const palette = useCommandPalette();
 
@@ -173,12 +194,32 @@ export function App(): JSX.Element {
           }
         >
           {activeSurface.id === "attention" ? (
-            // `onOpenRun` is omitted until there is an `orca://` route table to open a run
-            // into (#165), for the same reason `CommandPalette`'s `onJump` is: `G` on a card
-            // is registered only when there is somewhere for it to go.
-            <AttentionSurface connection={connection.state} feed={attention} />
+            /* `onOpenRun` is `G` and a card's run name, and it goes through the route table
+               the rest of the app arrives by. It is a prop rather than a call into the router
+               because the card registers `G` only when there is somewhere for it to go. */
+            <AttentionSurface
+              connection={connection.state}
+              feed={attention}
+              onOpenRun={(runId) => navigate(runUrl(runId))}
+            />
           ) : activeSurface.id === "runs" ? (
-            <RunsSurface connection={connection.state} onCrumbs={setCrumbs} />
+            /* A `run` route selects the row; an `artifact` route names the run that
+               produced it, which is the run to land on while the panel opens over it. */
+            <RunsSurface
+              connection={connection.state}
+              onCrumbs={setCrumbs}
+              open={
+                route?.kind === "run"
+                  ? {
+                      runId: route.runId,
+                      ...(route.step ? { nodeId: route.step.nodeId } : {}),
+                      ...(route.step?.attempt ? { attempt: route.step.attempt } : {}),
+                    }
+                  : route?.kind === "artifact" && route.runId
+                    ? { runId: route.runId }
+                    : undefined
+              }
+            />
           ) : activeSurface.id === "agents" ? (
             <AgentsSurface connection={connection.state} />
           ) : (
@@ -200,10 +241,17 @@ export function App(): JSX.Element {
     </div>
   );
 
-  /* The docked panel's artifact is held above every surface, so a chip on a step, a gate
-     card and an `orca://artifact/spec.md@v3` deep link can all put one there; opening the
-     panel itself stays the chrome's, which is what `onOpen` hands over. */
-  return <ArtifactPanelProvider onOpen={() => setPanelOpen(true)}>{chrome}</ArtifactPanelProvider>;
+  /* Two wraps, for the same reason: both are held above every surface because more than one
+     surface reaches them. The docked panel's artifact, so that a chip on a step, a gate card
+     and an `orca://artifact/spec.md@v3` deep link can all put one there — opening the panel
+     itself stays the chrome's, which is what `onOpen` hands over. And the waiting feed, so
+     that a step parked on a gate renders the *same* card the Attention list does without a
+     second `inputs.list` and a second opinion about the one count (#161). */
+  return (
+    <ArtifactPanelProvider onOpen={() => setPanelOpen(true)}>
+      <InlineAsksProvider feed={attention}>{chrome}</InlineAsksProvider>
+    </ArtifactPanelProvider>
+  );
 }
 
 /**

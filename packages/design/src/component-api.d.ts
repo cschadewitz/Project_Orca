@@ -332,24 +332,69 @@ export interface InputAgent {
   hostType?: "local" | "ssh";
 }
 
-export interface GateCardProps {
-  gateId: string;
+/**
+ * The ask a card renders, mirroring `@orca/protocol`'s `OpenInputView` (protocol 1.6).
+ * It is restated rather than imported because this file is documentation and imports
+ * nothing from the runtime - so if the wire's view gains a field, this mirror is corrected
+ * here in the same PR, the way the rest of this file is.
+ */
+export interface OpenInputView {
+  id: string;
+  kind: "decision" | "permission" | "question";
   question: string;
+  /** The options offered, verbatim. Empty means free text; answer with an option's `id`. */
   options: ReadonlyArray<GateOption>;
-  waitingSince: Date;
-  run: { id: string; name: string };
+  /** Whatever the asking step attached (tool call, file path, policy). Rendered as-is or not at all. */
+  context: Readonly<Record<string, unknown>>;
+  runId: string;
+  runName: string;
+  stepRunId: string;
+  nodeId?: string;
   workItem?: { id: string; title: string };
-  /** Artifacts the decision is about. If these fail to load, options are disabled. */
+  /** Who is blocked, on a permission ask. Absent on a gate, and on an ask older than 1.6. */
+  agent?: InputAgent;
+  requestedAt: string;
+  /** Measured against the result's `asOf`, so a client's own clock never enters into it. */
+  waitingMs: number;
+  /** The artifacts the step had in hand when it asked: what the decision is about. */
   artifacts: ReadonlyArray<{ name: string; version: number }>;
-  artifactsReady: boolean;
+}
+
+export interface GateCardProps {
+  /**
+   * The ask whole, as `inputs.list` and `input.opened` give it, rather than the eight
+   * fields this block used to list separately. Those fields *are* that view's fields, and
+   * the card has two mountings - the Attention list and inline in a run's step detail
+   * (#158, #161) - so passing the view is what makes "identical controls and identical
+   * keyboard handling" a property of the component instead of two call sites remembering
+   * to spread the same eight things the same way.
+   */
+  input: OpenInputView;
   /** Rendered inline in a run, or in the attention list. Behaviour is identical. */
   placement: "inline" | "inbox";
   /**
-   * The note is the person's reasoning and the run does not branch on it — but it is now
+   * Whether the artifacts the decision is about are in hand. False disables the options
+   * with the reason said on the control: the app does not offer an answer it could not
+   * show the basis for. Derived from the ask when it is not given, so the list and an
+   * inline mounting cannot disagree about it.
+   */
+  artifactsReady?: boolean;
+  /** Why this app cannot write right now, from `useWritability()`. Absent means it can. */
+  cannotWrite?: string;
+  /** This card has the keyboard: it registers `1`-`9`, `Enter`, `⇧Enter` and `G`. */
+  focused?: boolean;
+  /** An answer is in flight; the controls wait rather than being pressed twice. */
+  pending?: boolean;
+  /** What the daemon said about the last answer, said on the card that is still on screen. */
+  outcome?: string;
+  /**
+   * The note is the person's reasoning and the run does not branch on it - but it is now
    * recorded on `human.answered` with the answer (#238), so the card may say it is kept.
    * Until this release it reached the daemon's own log and nothing that outlived the run.
    */
-  onAnswer(optionId: string, note?: string): void;
+  onAnswer(request: { optionId: string; note?: string; always?: { decision: "allow" | "deny" } }): void;
+  /** Present only when there is somewhere to go; `G` is registered only when it is. */
+  goToRun?: () => void;
 }
 
 /**
@@ -374,30 +419,31 @@ export interface GateCardProps {
  * and one affordance beside them, and `onAnswer` carries the two separately.
  */
 export interface PermissionCardProps {
-  askId: string;
-  /** Whose turn is held open, from `OpenInputView.agent` — which host groups the card too. */
-  agent: InputAgent;
-  /** One of the ten ACP tool kinds — drives the glyph and the wording. */
-  kind: "read" | "edit" | "delete" | "move" | "search" | "execute" | "think" | "fetch" | "switch_mode" | "other";
-  /** The exact command or path, verbatim, in mono. Never summarised. */
-  subject: string;
-  step: { id: string; name: string };
-  waitingSince: Date;
-  /** The agent's own options, in the order it offered them. Answer with an `id`. */
-  options: ReadonlyArray<GateOption>;
   /**
-   * Whether "always" can be offered at all. False when this daemon serves no workspace
-   * config: there is nowhere to write a standing rule, so the affordance is absent rather
-   * than a button that fails (`inputs.answer` refuses `always` in that case).
+   * The ask whole, for the reason `GateCardProps.input` gives. The agent and its host come
+   * off it too (`OpenInputView.agent`, protocol 1.6, #248): who is blocked is what makes
+   * "always allow" a decision a person can size, and an ask recorded before 1.6 carries
+   * none, in which case the card says the run rather than guessing a process.
+   *
+   * `kind` is not a prop: the ten ACP tool kinds live on the tool call, and what this card
+   * shows verbatim is the subject out of the ask's `context` (rule 12 - it shows what the
+   * step attached, and the question alone when it attached nothing).
    */
-  canRecordAlways: boolean;
+  input: OpenInputView;
+  placement: "inline" | "inbox";
+  cannotWrite?: string;
+  focused?: boolean;
+  pending?: boolean;
+  outcome?: string;
   /**
    * `always` says which way the standing rule goes, and is the client's statement rather
-   * than a reading of `optionId`. Absent means answer this one call: "allow once" / "deny
-   * once". A card that promises "ORCA will not ask again" must check the result's `added`
-   * and `refused` before saying so.
+   * than a reading of `optionId` - ORCA will not read an agent's own option ids and guess.
+   * Absent means answer this one call. A card that promises "ORCA will not ask again" must
+   * read the result's `added`, `alreadyPresent` and `refused` before saying so; a daemon
+   * with nowhere to write a rule answers `refused` and the card says that instead.
    */
-  onAnswer(optionId: string, always?: { decision: "allow" | "deny" }): void;
+  onAnswer(request: { optionId: string; note?: string; always?: { decision: "allow" | "deny" } }): void;
+  goToRun?: () => void;
 }
 
 /** Built. */

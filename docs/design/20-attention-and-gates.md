@@ -20,9 +20,12 @@ the window is already focused — it never raises the window.
 
 The title bar shows `◆ 2 waiting` in `status-waiting` whenever any tier-1 or tier-2 item is
 open, and nothing at all when none is. It is a button; it opens Attention. The sidebar's
-Attention row carries the same number. There is exactly one number in the app for this, and
-permission asks and gates are summed into it — a person should not have to learn two counters
-to know whether they are needed.
+Attention row carries the same number, and so does the dock or taskbar badge — the same number
+outside the window, since a person who is not looking at the app is exactly who it is for. It
+is the daemon's own count (`inputs.list`'s `waiting`) rather than a tally any of the three
+keeps, because three counters are three chances to disagree. There is exactly one number in
+the app for this, and permission asks and gates are summed into it — a person should not have
+to learn two counters to know whether they are needed.
 
 ## Answering
 
@@ -36,6 +39,10 @@ Keyboard, on a focused card: `1`–`9` select an option, `Enter` submits the sel
 `Shift+Enter` submits with a note, `G` jumps to the run the card came from, `J`/`K` move
 between cards. The destructive option is never bound to `1` and never focused by default.
 
+A note is part of the record: it is written onto `human.answered` beside the answer, so the
+reason a person gave outlives the window they gave it in. The run does not branch on it — the
+option id is the whole of the decision — and a card must not present it as anything more.
+
 ## What an answer must show before it is given
 
 Every gate card carries, without a click: the question, the run and work item it belongs to,
@@ -43,6 +50,11 @@ how long it has waited, the artifacts the decision is about (as chips that open 
 panel), and the options with their consequences. If a gate's artifacts have not loaded, the
 options are disabled with the reason stated — the app does not let a person approve something
 it could not show them.
+
+A permission card carries one thing more: **who is asking.** An agent's turn is what is being
+held open, so the card names the agent and the host it runs on — "claude-local on build-01" —
+rather than only the run, because that is what makes "always" a grant a person can size. A
+workflow gate has no agent, and saying nothing is the honest answer there.
 
 ## Notifications
 

@@ -148,10 +148,23 @@ plain test. Filtering is a filter, not a search — status is a `runs.list` para
 applies to the whole store, text is applied locally to what is held, and the count says which
 ("3 of 7 runs").
 
+`renderer/src/attention/` is the second surface in that shape and the first that writes, with
+one deliberate deviation: a card is not a row, so the cards are not virtualised — what is
+bounded there is the number of things blocked on a person — while the failed runs below them
+are rows and are a `VirtualList`. Its plain module is `card-model.ts`, and what is in it is
+the safety half: which option gets which digit (never `1` for the destructive one) and what an
+"always" answer is allowed to promise once the daemon has said what it actually wrote. The
+same two cards mount inline in step detail over the same feed (`attention/inline-asks.tsx`),
+so a gate answered in the run and a gate answered in the list are one read, one component and
+one count.
+
 **Every shortcut goes in the keyboard map.** Register `{ scope, key, label, action }` on the
 `KeyboardMap` (`renderer/src/keyboard-map.ts`) rather than adding a `keydown` listener — the
 command palette is a view of that registry, so a shortcut that skips it is a shortcut nobody
-can discover. Mark the subtree that owns a scope with `scopeProps("run-tree")`; `Esc` belongs
+can discover. **`key` is optional (#205):** a command worth doing but not worth one of the
+letters left registers without one, takes a slot of its own, and the palette lists it with no
+chip beside it — which makes the palette the only way to it, deliberately, rather than making
+it unreachable. Mark the subtree that owns a scope with `scopeProps("run-tree")`; `Esc` belongs
 to the layer stack, not to your component. `docs/design/60-implementation.md` has the rest.
 
 The app (`packages/app`) may import only `@orca/protocol` and `@orca/design` from the

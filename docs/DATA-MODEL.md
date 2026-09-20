@@ -131,7 +131,13 @@ cap — so a tool call that reads a large file leaves the size in the log, not t
 `human.requested.options` is a list of `{ id, label, consequence?, destructive? }`. `human.answered`
 carries the chosen option's `id`, never its label, so rewording a label cannot orphan an answer
 already in a log. A log written before v0.4.0 holds bare strings here; each reads as
-`{ id: s, label: s }` (`toGateOption`), which needs no migration.
+`{ id: s, label: s }` (`toGateOption`), which needs no migration. `human.requested` also
+carries `agent?` (`{ id, hostId }`) — whose turn the ask is holding open, recorded at the
+moment of asking so the `input.opened` push stays a pure function of one event — and
+`human.answered` carries `note?`, the free text a person wrote beside the answer. Both are
+absent on older logs and on the cases that have nothing to say (a workflow gate has no agent,
+an answer given without a note has no note), and a reader must not turn that into an empty
+string on screen.
 
 ## Expression / template context
 

@@ -314,7 +314,18 @@ export function statusOf(event: OrcaEvent): RunStatus | undefined {
     case "run.paused":
       return "held";
     case "run.completed":
-      return event.payload.outcome === "success" ? "succeeded" : "failed";
+      // `RunOutcome` has three values, not two (#249). Folding `cancelled` into `failed`
+      // put a red tick in the minimap for a run a person stopped on purpose - and the same
+      // run ending through `run.cancelled` below drew it correctly, so the log disagreed
+      // with itself about what had happened.
+      switch (event.payload.outcome) {
+        case "success":
+          return "succeeded";
+        case "cancelled":
+          return "cancelled";
+        default:
+          return "failed";
+      }
     case "run.failed":
     case "step.failed":
       return "failed";

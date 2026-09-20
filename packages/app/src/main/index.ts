@@ -23,13 +23,7 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
-import type {
-  AlertItem,
-  AlertsUpdate,
-  BridgeResult,
-  ConnectionSnapshot,
-  WorkspaceSnapshot,
-} from "../bridge.js";
+import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";

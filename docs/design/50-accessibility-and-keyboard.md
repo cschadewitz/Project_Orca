@@ -47,12 +47,14 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Run tree | `F` | Filter to failed and waiting descendants |
 | Streams | `G` / `⇧G` | Top / bottom, `⇧G` re-enters following |
 | Streams | `/` | Search within the stream, `N` / `⇧N` to cycle matches |
-| Cards | `1`–`9`, `Enter`, `⇧Enter` | Select option, submit, submit with a note |
+| Cards | `1`–`9`, `Enter`, `⇧Enter`, `G` | Select option, submit, submit with a note, go to the run |
 | Panel | `[` / `]` | Previous / next artifact version |
 | Anywhere | `Esc` | Close the topmost transient layer, never lose an unsent draft |
 
-Every action in this map is also in the command palette with the shortcut shown beside it;
-nothing is reachable by keyboard alone or by mouse alone.
+Every action in this map is also in the command palette, with its key shown beside it. The
+converse does not hold, and deliberately: a command may register with **no key at all** and be
+reachable from the palette alone, which is how something worth doing but not worth one of the
+letters left stays discoverable. Nothing is reachable by keyboard alone or by mouse alone.
 
 ## Screen readers and live regions
 

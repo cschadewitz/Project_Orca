@@ -89,6 +89,9 @@ export const PERMISSION_ASK: OpenInputView = {
     { id: "deny", label: "Deny", destructive: true },
   ],
   context: { command: "rm -rf build/" },
+  // Who is blocked, off the wire as of protocol 1.6 (#248) - the card names it rather than
+  // the run, because "always allow" is not a decision a person can size without it.
+  agent: { id: "claude", hostId: "build-box", hostType: "ssh" },
   runId: "run-1",
   runName: "release 1",
   stepRunId: "s-build",

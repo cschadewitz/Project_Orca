@@ -36,9 +36,9 @@ nothing else about the layout changes per platform.
 | **Config** | How the system is wired, and what the workflows are | 2 |
 
 Attention is a surface, not a notification tray: it is first in the sidebar, it has a
-permanent keyboard address (`⌘1`), and it is the app's default landing screen when anything
-is waiting. When nothing is waiting it shows the running runs instead, so the top item in the
-sidebar is never a dead end.
+permanent keyboard address (`⌘1`), and it is the app's landing screen. When nothing is waiting
+it says so and the runs that failed are still listed below, so the top item in the sidebar is
+never a dead end.
 
 ## Dual spine
 
@@ -105,8 +105,8 @@ rather than opening a second one onto the same store.
 
 `⌘K` / `Ctrl+K`. Three kinds of entry, in this order: **actions** on the current object
 (answer gate, cancel run, resume run, waive dependency, toggle density), **navigation**
-(recent runs, work items, agents, config files, workflows), and **search** (step names, event
-text, artifact contents). Typing a bare run id or an `orca://` URL jumps straight to it. The
+(recent runs, work items, agents, config files, workflows), and **search** (step and artifact
+names). Typing a bare run id or an `orca://` URL jumps straight to it. The
 palette is the only place a phase-2 write action needs to be discoverable, which keeps the
 chrome of phase-1 screens empty.
 

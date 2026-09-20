@@ -108,10 +108,12 @@ cannot outlive the window that started it.
 
 **The workspace it serves is `ORCA_WORKSPACE`, or the user's home directory.** That is a
 placeholder with a known shape rather than an answer: `orca serve` reads `<dir>/.orca` and
-answers an empty run list for a directory that has no store, so a packaged app opens on Runs
-with nothing in it unless `ORCA_WORKSPACE` points at a real workspace. Choosing one from
-inside the app is #164's, and it changes the argument passed to the spawn module, not the
-mechanism.
+answers an empty run list for a directory that has no store, so a packaged app with no
+`ORCA_WORKSPACE` set opens connected to a daemon that has nothing to show. Choosing one from
+inside the app landed with #164 — **File ▸ Open a store…** stops that daemon and starts one
+over the chosen workspace with `--read-only`, which is an argument to the same spawn module
+rather than a second mechanism — so the placeholder is now only the directory the app *starts*
+on.
 
 ### Signing and notarisation are not done
 

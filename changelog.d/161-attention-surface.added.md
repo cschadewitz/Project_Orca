@@ -4,7 +4,9 @@
   the options with their consequence clauses — answered in place with `1`–`9`, `Enter`,
   `⇧Enter` for a note and `J`/`K` between cards, so five gates clear in five keystrokes and
   the count goes five to zero without navigating. The destructive option is never bound to
-  `1` and is never what `Enter` would send. A gate whose artifacts did not load has its
+  `1` and is never the selection a card opens with — a person may still choose it, and then
+  `Enter` sends it, because the rule is that it is never hit by accident, not that it is
+  unreachable. A gate whose artifacts did not load has its
   options disabled with that reason on the control, and so does every answer when the
   connection cannot write — `useWritability()`'s sentence, verbatim, on a read-only daemon
   as much as on a dead socket. Answering "always" writes a standing rule into the workspace

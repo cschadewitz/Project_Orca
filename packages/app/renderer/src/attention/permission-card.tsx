@@ -14,9 +14,11 @@
  *   agent's own option ids and guess (#160, ADR 0009). What was written comes back on the
  *   result and is reported verbatim.
  * - **It says who is asking.** The agent and its host are what makes "allow always" a
- *   decision a person can size — and they are the one thing the wire does not carry yet:
- *   `OpenInputView` has no `agent`, which unit W adds as protocol 1.6. Until then the card
- *   takes them as props, absent by default, and says the step instead of guessing.
+ *   decision a person can size, and they come off the ask itself: `OpenInputView.agent` as
+ *   of protocol 1.6 (#248), filled by the daemon from the session that opened the ask. A
+ *   `decision` or `question` gate has no agent and this card is not used for one; an ask
+ *   recorded before 1.6 has none either, and then the card says the run rather than
+ *   guessing a process.
  */
 import type { JSX, Ref } from "react";
 import type { OpenInputView } from "@orca/protocol";
@@ -27,12 +29,6 @@ import { permissionSubject, waitedLabel } from "./card-model.js";
 export interface PermissionCardProps {
   input: OpenInputView;
   placement: "inline" | "inbox";
-  /**
-   * Who is asking. Absent until `OpenInputView.agent` exists (protocol 1.6, unit W): a
-   * card that guessed an agent from the run would be naming the wrong process as often as
-   * the right one.
-   */
-  agent?: { id: string; hostId?: string } | undefined;
   cannotWrite?: string | undefined;
   focused?: boolean;
   onAnswer: (request: AnswerRequest) => void;
@@ -43,8 +39,9 @@ export interface PermissionCardProps {
   cardRef?: Ref<HTMLElement> | undefined;
 }
 
-export function PermissionCard({ input, agent, ...rest }: PermissionCardProps): JSX.Element {
+export function PermissionCard({ input, ...rest }: PermissionCardProps): JSX.Element {
   const subject = permissionSubject(input.context);
+  const agent = input.agent;
   return (
     <AnswerCard
       id={input.id}

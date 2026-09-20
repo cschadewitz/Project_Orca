@@ -28,7 +28,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { CHROME_GLYPHS, STATUS_PRESENTATION, type ConnectionState } from "@orca/design";
-import { DISPLAY_STATUSES, type RunSummaryView } from "@orca/protocol";
+import { DISPLAY_STATUSES, type RunSummaryView, type StepView } from "@orca/protocol";
 import type { VirtualListHandle } from "../list/index.js";
 import { Menu, StateView, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
 import { StepDetail } from "../step/index.js";
@@ -56,6 +56,17 @@ export interface RunsSurfaceProps {
    * the second object header the information architecture rules out.
    */
   onCrumbs?: (crumbs: readonly Crumb[]) => void;
+  /**
+   * Where a link led: the run a URL named, and the step within it when it named one
+   * (#165). It drives the selection rather than replacing it — a deep link and a keystroke
+   * put the surface in the same state, which is what makes `orca://` an address for a thing
+   * on screen rather than a second way of looking at it.
+   *
+   * The step is resolved against the run's projection, so it lands once `runs.get` has
+   * answered; a node the run does not have leaves the run selected and says nothing, which
+   * is the honest end of a link to a step that was never scheduled.
+   */
+  open?: { runId: string; nodeId?: string; attempt?: number } | undefined;
 }
 
 /** A stable empty page, so the memos do not recompute before the data lands. */
@@ -77,7 +88,7 @@ function countLabel(shown: number, total: number): string {
   return shown === total ? runs : `${shown} of ${runs}`;
 }
 
-export function RunsSurface({ connection, onCrumbs }: RunsSurfaceProps): JSX.Element {
+export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): JSX.Element {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [text, setText] = useState("");
   const [kind, setKind] = useState<string>(ALL_KINDS);
@@ -111,10 +122,28 @@ export function RunsSurface({ connection, onCrumbs }: RunsSurfaceProps): JSX.Ele
     if (selectedRunId !== undefined) ensure(selectedRunId);
   }, [selectedRunId, ensure]);
 
+  /* A link arriving selects its run, and then its step once the projection that names the
+     step is in hand. Two effects rather than one because the second cannot run until a read
+     has answered, and the first must not wait for it: the tree shows the run immediately. */
+  const { selectRun, selectStep } = selection;
+  useEffect(() => {
+    if (open) selectRun(open.runId);
+  }, [open, selectRun]);
   useEffect(() => setFollow(true), [selectedRunId]);
   const onHold = useCallback(() => setFollow(false), []);
 
   const detail = selectedRunId === undefined ? undefined : tree.detailOf(selectedRunId);
+  useEffect(() => {
+    if (!open?.nodeId || detail?.run.id !== open.runId) return;
+    const matching = detail.steps.filter((step) => step.nodeId === open.nodeId);
+    // An attempt names one; without one the highest attempt is the step a person means,
+    // which is the same rule the tree draws the row by.
+    const step = open.attempt
+      ? matching.find((candidate) => candidate.attempt === open.attempt)
+      : matching.reduce<StepView | undefined>((best, c) => (best && best.attempt > c.attempt ? best : c), undefined);
+    if (step) selectStep(open.runId, step.id);
+  }, [open, detail, selectStep]);
+
   const events = useRunEvents(selectedRunId, detail, onPrepend);
   const entries = events.state.phase === "ready" ? events.state.entries : NO_ENTRIES;
   indexRef.current = useMemo(() => buildSelectionIndex(entries), [entries]);

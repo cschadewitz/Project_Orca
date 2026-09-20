@@ -39,6 +39,16 @@ Option 3.
 + The app cannot grow a private path into the engine or the stores. "Attach to a remote
   daemon" is the same code as the local case, and the read model is deliberately shaped
   for display rather than leaking `RunState` wholesale.
++ **File mode cost the renderer nothing, because it is the same code path (#164, v0.4.0).**
+  "Open an event log without a live daemon" was the one requirement that looked like it needed
+  a second store path in the renderer, and it was met by not giving it one: **File ▸ Open a
+  store…** stops the daemon this process started and starts one over the chosen workspace with
+  `orca serve --read-only`, then rebuilds the client and the subscription. A store on disk is
+  read through the protocol like anything else, the control methods are absent from `hello`
+  rather than present and refusing, so the writes are already hidden, and what file mode adds
+  to the app is a banner and a menu item. The one thing it costs: the mode is an *input* to the
+  connection state machine rather than something it can deduce, because nothing about the
+  socket or the handshake distinguishes a read-only daemon from a writable one.
 + The daemon stays the single owner of the domain model; the CLI can become a thin client
   of it later without another contract. `orca ping` is the first step of that: it calls
   `agents.ping` when a daemon answers, and falls back to an in-process handshake — saying

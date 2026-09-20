@@ -43,9 +43,10 @@ export interface AttentionSurfaceProps {
   /** Whether the daemon is answering. A screen nobody is updating says so rather than lying. */
   connection: ConnectionState;
   /**
-   * Open the run a card came from — `G`, and the run name on a card. Absent until there is
-   * an `orca://` route table to open one into (#165), exactly as `CommandPalette`'s
-   * `onJump` is: a shortcut that navigates nowhere is worse than one that is not there.
+   * Open the run a card came from — `G`, and the run name on a card. It stays optional
+   * even now that the route table exists (#165), for the same reason `CommandPalette`'s
+   * `onJump` is: `G` is registered only when it is passed, and a shortcut that navigates
+   * nowhere is worse than one that is not there.
    */
   onOpenRun?: (runId: string) => void;
   /**

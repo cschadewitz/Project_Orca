@@ -6,11 +6,11 @@
  * it — and sends the alert it was about over the `alerts` channel. The renderer's half is
  * this: open Attention, where the card is.
  *
- * **The seam for #165 is `activation.item`.** It carries the input's id and its run, which
- * is exactly what an `orca://run/<id>/input/<id>` route is built from, so unit I upgrades
- * this from "open the surface" to "open that card's deep link" by routing the item instead
- * of ignoring it — the same shape G's pushed connection state left for F's reconnect seam.
- * Until then, opening the surface the card is on is the honest thing a click can do.
+ * `activation.item` is what makes it a link rather than a surface change: it carries the
+ * input's id and its run, so `App.tsx` builds the same `orca://` URL a person could have
+ * pasted and hands it to the one route table every other arrival goes through (#165). An
+ * alert whose item has since been answered carries none, and then opening the surface is
+ * all that is left to say about it.
  */
 import { useEffect } from "react";
 import type { AlertActivation } from "../../../src/bridge.js";

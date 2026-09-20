@@ -62,6 +62,28 @@ describe("deep links", () => {
     expect(landing()?.textContent).toContain("build.2");
   });
 
+  it("selects the row the URL names, not only the surface it is on", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+
+    // `run-parent`'s `build` ran twice. The attempt in the URL is the one a person meant.
+    fake.link("orca://run/run-parent/step/build.1");
+
+    const detail = await screen.findByRole("complementary", { name: "Step detail" });
+    await waitFor(() => expect(detail.textContent).toContain("attempt 1"));
+    expect(detail.textContent).toContain("build");
+  });
+
+  it("takes the highest attempt when the URL names a node and no attempt", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+
+    fake.link("orca://run/run-parent/step/build");
+
+    const detail = await screen.findByRole("complementary", { name: "Step detail" });
+    await waitFor(() => expect(detail.textContent).toContain("attempt 2"));
+  });
+
   it("takes the waiting URL once, so a reload does not drag a person back", async () => {
     const { fake } = mount({ deepLink: "orca://run/run-old" });
     await waitFor(() => expect(activeSurface()).toContain("Runs"));

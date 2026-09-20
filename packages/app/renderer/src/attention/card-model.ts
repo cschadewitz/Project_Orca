@@ -11,7 +11,9 @@
  */
 import type { InputsAnswerResult, OpenInputView } from "@orca/protocol";
 
-/** The wire's own option: `{ id, label, consequence?, destructive? }` as of protocol 1.4. */
+/** The wire's own option: `{ id, label, consequence?, destructive? }`, on the wire since
+ * protocol 1.4 and settable by a workflow since #247 - so `consequence` and `destructive`
+ * reach a card from a real gate and not only from a fixture. */
 export type GateOption = OpenInputView["options"][number];
 
 /** An option with the digit that selects it, or none when there is no digit left. */

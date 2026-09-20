@@ -10,7 +10,7 @@ wrong.**
 | **Live** | `● connected` in `status-succeeded` | none | live | enabled |
 | **Reconnecting** | `◌ reconnecting… 3s` in `status-waiting`, spinner | none for the first 5s, then a thin bar on affected screens | last-known, values at `opacity-stale` | queued, buttons show "will send on reconnect" |
 | **Disconnected** | `◷ disconnected · 2m ago` in `status-stale` | persistent bar on every screen with data | last-known, values at `opacity-stale`, every timestamp switched to absolute | disabled with the reason on the control |
-| **File mode** | `◷ file mode · read-only` in `status-stale` | persistent bar naming the event-log path | whatever the event log and artifact files contain, replayed | disabled, and the buttons are absent rather than disabled |
+| **File mode** | `◷ file mode · read-only` in `status-stale` | persistent bar naming the store being replayed | whatever the event log and artifact files contain, replayed | disabled, and the buttons are absent rather than disabled |
 | **Version mismatch** | `▣ daemon 0.11 · app 0.9` in `status-blocked` | blocking dialog on first detection, then a persistent bar | last-known | disabled |
 
 ## Reconnecting
@@ -33,7 +33,9 @@ glyph becomes `◷`.
 ## File mode
 
 A genuinely different product mode, not a degraded one, and the design says so: the banner
-names the event log path and offers **Connect to a daemon**. Writes are *absent*, not
+names the store being replayed and offers **Connect to a daemon**. What is chosen is a
+workspace, not a single log file — a run's history is its event log and its artifacts
+together, and half of it is not a mode. Writes are *absent*, not
 disabled — a screen with no cancel button reads as a viewer; a screen with a greyed cancel
 button reads as broken. The event timeline and run tree are fully usable, because they are a
 replay of the event log either way; what is missing is streaming, gates and control.

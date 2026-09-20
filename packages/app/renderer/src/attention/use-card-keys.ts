@@ -23,7 +23,7 @@ export interface CardKeyActions {
   submit: () => void;
   /** `⇧Enter`: submit with a note — open the note field, which submits when it is written. */
   submitWithNote: () => void;
-  /** `G`: go to the run this card came from. Absent until there is a route table (#165). */
+  /** `G`: go to the run this card came from. Absent when the caller gives nowhere to go. */
   goToRun?: () => void;
 }
 
@@ -81,7 +81,7 @@ export function useCardKeys(options: readonly BoundOption[], focused: boolean, a
         scope: "card",
         key: "Shift+Enter",
         label: "Answer with a note",
-        detail: "The note reaches the operator log, not the run's own event log (#238)",
+        detail: "The note is recorded on the run's `human.answered` event (#238)",
         action: () => current.current.submitWithNote(),
       }),
       ...(hasGoToRun
