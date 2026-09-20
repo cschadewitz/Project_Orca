@@ -9,24 +9,20 @@ Every release carries a **Store format** section, because ORCA is event-sourced:
 to the event log, plan journal, artifact index or config schema can invalidate an existing
 `.orca` store, and that is the change most likely to bite an operator who upgrades.
 
-Add your entry to `## Unreleased` in the PR that makes the change, prefixed with the area
-the commit uses (`engine:`, `plan:`, `store:`, `cli:`, …). Releasing only dates that
-heading, so nothing has to be reconstructed from commit subjects later.
+Entries are not written into this file. The PR that makes the change adds a fragment to
+[`changelog.d/`](changelog.d/), prefixed with the area the commit uses (`engine:`, `plan:`,
+`store:`, `cli:`, …); preparing a release renders the fragments into a dated section here
+and deletes them. One file per entry is why two pull requests in flight no longer conflict
+over this one. `changelog.d/README.md` has the naming.
 
 Releases start at 0.2.0. `0.1.0` was the untagged groundwork commit (`8645f28`,
 2026-09-15); everything below landed on top of it.
 
 ## Unreleased
 
-### Store format
-
-No change.
-
-### Added
-
-### Changed
-
-### Fixed
+Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; preparing a
+release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
+to read them as they stand.
 
 ## 0.3.0 - 2026-09-19
 

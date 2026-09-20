@@ -332,6 +332,12 @@ shows a green check rather than none — see the comments in `.github/workflows/
   same code, plus the three `PROTOCOL_*` codes for version, method and message problems.
 - `exactOptionalPropertyTypes` is on: use conditional spreads (`...(x ? { x } : {})`) instead
   of assigning `undefined`.
+- Release notes are a file, not a list to edit: a pull request adds `changelog.d/<issue>-<slug>.<section>.md`
+  rather than touching `CHANGELOG.md`, which is rendered at release time. `changelog.d/README.md`
+  has the naming and `docs/RELEASING.md` the rest.
+- `tools/` is plain JavaScript run straight by node — no build, outside the workspace's
+  `tsconfig.json` — so the tests that cover it are JavaScript too, in `tools/test/`, and
+  `vitest.config.ts` includes that glob alongside the packages'.
 
 ## Testing the app
 

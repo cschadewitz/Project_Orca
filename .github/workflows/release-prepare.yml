@@ -1,5 +1,6 @@
 # Closing a milestone proposes the release it represents: this opens a `release: vX.Y.Z`
-# pull request that bumps the version and dates the CHANGELOG's Unreleased section.
+# pull request that bumps the version and renders the `changelog.d/` fragments into a dated
+# CHANGELOG section, deleting them — `git commit -am` below carries those deletions.
 #
 # It deliberately stops at a pull request rather than tagging. Closing a milestone is
 # reversible and easy to do by accident; a published tag and GitHub release is neither.
@@ -102,7 +103,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "milestone #$NUMBER ($title) -> v$version (bump=$bump${pin:+, pinned})" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Bump the version and date the changelog
+      - name: Bump the version and render the changelog fragments
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
         run: node tools/release.js prepare "$VERSION"
