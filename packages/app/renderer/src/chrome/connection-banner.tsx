@@ -26,7 +26,6 @@ import { CONNECTION_PRESENTATION } from "@orca/design";
 import { useTransientLayer } from "../layers-context.js";
 import { Button, Text, textClass } from "../ui/index.js";
 import { isStale, type Connection } from "../connection.js";
-import "./connection.css";
 
 export interface ConnectionBannerProps {
   connection: Connection;
@@ -42,7 +41,7 @@ export function ConnectionBanner({ connection }: ConnectionBannerProps): JSX.Ele
 
   if (state === "mismatch") {
     return (
-      <div className={`orca-banner ${textClass("caption")} orca-banner--mismatch orca-connbanner`} role="status">
+      <div className={`orca-banner ${textClass("caption")} orca-banner--mismatch`} role="status">
         <Text style="caption">
           {versions
             ? `This daemon speaks protocol ${versions.daemon} and this app speaks ${versions.app}. Everything on screen is readable; nothing can be sent.`
@@ -56,7 +55,7 @@ export function ConnectionBanner({ connection }: ConnectionBannerProps): JSX.Ele
 
   /* No text and no live region: the status bar has already announced the word, and the
      rule's whole job is to mark the screen below it as last-known. */
-  return <div className="orca-connrule" role="presentation" />;
+  return <div className="orca-stale-rule" role="presentation" />;
 }
 
 export interface MismatchDialogProps {

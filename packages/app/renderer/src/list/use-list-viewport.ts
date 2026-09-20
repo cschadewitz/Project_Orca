@@ -26,10 +26,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DENSITY_ATTRIBUTE, SURFACE_ATTRIBUTE } from "../density.js";
 import {
   hasContentBeneath,
+  isAtBottom,
   isMeasured,
   listWindow,
   revealAnchor,
   revealScrollTop,
+  shiftAnchor,
+  shiftScrollTop,
   type ListMetrics,
   type ListWindow,
 } from "./list-window.js";
@@ -46,8 +49,15 @@ export interface ListViewport {
   window: ListWindow;
   /** Whether anything has scrolled under the sticky header yet. */
   scrolled: boolean;
+  /** Whether the list is at its end — the pixel half of "is this stream following?". */
+  atBottom: boolean;
   /** Put row `index` on screen, moving nothing when it already is. */
   reveal: (index: number) => void;
+  /**
+   * Keep what is on screen on screen after `rows` items were prepended. Called *after* the
+   * new items are in `items`, so the metrics it reads are the ones the prepend produced.
+   */
+  shiftBy: (rows: number) => void;
 }
 
 /** The pixels, gathered in one state so a resize and a density change repaint together. */
@@ -61,8 +71,15 @@ const UNMEASURED: Geometry = { rowHeight: 0, viewportHeight: 0 };
 /**
  * `count` is the whole list's length and `rowSpan` how many `--row-h` one row occupies —
  * two for the declared two-line variant, which is a taller row, never a row that grew.
+ *
+ * `onLeaveBottom` is how a following stream finds out it has been taken off the end. It
+ * belongs here, and fires from the scroll event rather than from a render, for one reason:
+ * a stream that is following moves its own offset every time the list grows, and between
+ * that offset being computed and it being committed there is a render in which the list is
+ * *not* at the bottom and is about to be. A check over render state fires there, on the
+ * frame a person did nothing — so the check is over the scroll that actually happened.
  */
-export function useListViewport(count: number, rowSpan = 1): ListViewport {
+export function useListViewport(count: number, rowSpan = 1, onLeaveBottom?: () => void): ListViewport {
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const [geometry, setGeometry] = useState<Geometry>(UNMEASURED);
   const [scrollTop, setScrollTop] = useState(0);
@@ -122,22 +139,62 @@ export function useListViewport(count: number, rowSpan = 1): ListViewport {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   scrollerRef.current = scroller;
 
-  const reveal = useCallback((index: number) => {
-    const current = metricsRef.current;
-    if (!isMeasured(current)) {
-      setAnchor(revealAnchor(index, current));
-      return;
-    }
-    const next = revealScrollTop(index, current);
+  /* Whether the list was at its end as of the last offset anything assigned or observed.
+     A ref rather than state because it is the *previous* value that says whether a scroll
+     was the moment a person took a stream off its end, and a render cannot see that. */
+  const leave = useRef(onLeaveBottom);
+  leave.current = onLeaveBottom;
+  const bottomRef = useRef(true);
+
+  /* Assign and record: the assignment moves the real scrollbar, the state moves the window.
+     A browser answers with a scroll event too, which lands on the same number. */
+  const offsetTo = useCallback((next: number, current: ListMetrics) => {
     if (next === current.scrollTop) return;
-    // Assign and record: the assignment moves the real scrollbar, the state moves the
-    // window. A browser answers with a scroll event too, which lands on the same number.
+    bottomRef.current = isAtBottom({ ...current, scrollTop: next });
     if (scrollerRef.current) scrollerRef.current.scrollTop = next;
     setScrollTop(next);
   }, []);
 
+  const reveal = useCallback(
+    (index: number) => {
+      const current = metricsRef.current;
+      if (!isMeasured(current)) {
+        setAnchor(revealAnchor(index, current));
+        return;
+      }
+      offsetTo(revealScrollTop(index, current), current);
+    },
+    [offsetTo],
+  );
+
+  /* The same two halves as `reveal`, because a prepend has the same two cases: pixels to
+     add to when the list has been laid out, and an anchor row to move when it has not. */
+  const shiftBy = useCallback(
+    (rows: number) => {
+      if (rows === 0) return;
+      const current = metricsRef.current;
+      if (!isMeasured(current)) {
+        setAnchor(shiftAnchor(rows, current));
+        return;
+      }
+      offsetTo(shiftScrollTop(rows, current), current);
+    },
+    [offsetTo],
+  );
+
   const onScroll = useCallback(() => {
-    if (scrollerRef.current) setScrollTop(scrollerRef.current.scrollTop);
+    const element = scrollerRef.current;
+    if (!element) return;
+    const top = element.scrollTop;
+    setScrollTop(top);
+
+    const bottom = isAtBottom({ ...metricsRef.current, scrollTop: top });
+    const was = bottomRef.current;
+    bottomRef.current = bottom;
+    /* The transition off the end, and only the transition: a drag is one scroll event per
+       frame, and a surface told forty times that following stopped would say so once and
+       re-render thirty-nine times for nothing. */
+    if (was && !bottom) leave.current?.();
   }, []);
 
   return {
@@ -147,6 +204,8 @@ export function useListViewport(count: number, rowSpan = 1): ListViewport {
     metricsRef,
     window: useMemo(() => listWindow(metrics), [metrics]),
     scrolled: hasContentBeneath(scrollTop),
+    atBottom: isAtBottom(metrics),
     reveal,
+    shiftBy,
   };
 }

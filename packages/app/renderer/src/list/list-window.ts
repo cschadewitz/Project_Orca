@@ -148,6 +148,49 @@ export function revealAnchor(index: number, metrics: ListMetrics): number {
 }
 
 /**
+ * The scroll offset that keeps what is on screen on screen after `rows` items were put in
+ * front of the list.
+ *
+ * Paging backwards through a log or a timeline prepends: every index a person is looking at
+ * moves down by `rows`, so an offset left alone would jump them back by exactly the page
+ * they just asked for — the one behaviour that makes "load earlier" unusable. The fix is the
+ * whole of it: scroll down by the height of what arrived. Negative `rows` (a trim from the
+ * front) is the same arithmetic in reverse, clamped at the top.
+ */
+export function shiftScrollTop(rows: number, metrics: ListMetrics): number {
+  if (!isMeasured(metrics)) return metrics.scrollTop;
+  return Math.max(0, metrics.scrollTop + Math.trunc(rows) * metrics.rowHeight);
+}
+
+/**
+ * `shiftScrollTop`'s unmeasured twin, in rows rather than pixels: the anchor that keeps the
+ * same items in the window after `rows` were prepended. Clamped to the list the prepend
+ * produced, which is `count` rows long already — the caller shifts after the items land.
+ */
+export function shiftAnchor(rows: number, metrics: ListMetrics): number {
+  const count = Math.max(0, metrics.count);
+  if (count === 0) return 0;
+  return clampIndex((metrics.anchor ?? 0) + Math.trunc(rows), count);
+}
+
+/**
+ * Whether the list is scrolled to its end, which is the question "is this stream still
+ * following?" asked of pixels.
+ *
+ * The tolerance is one row rather than one pixel: a fractional row height, a device pixel
+ * ratio that does not divide, and a browser that rounds `scrollTop` differently on the way
+ * in and the way out all leave a stream that is visibly at the bottom a fraction of a pixel
+ * short of it, and a follow mode that dropped out there would drop out constantly. An
+ * unmeasured list is at the bottom: there is no scroll to have left.
+ */
+export function isAtBottom(metrics: ListMetrics): boolean {
+  if (!isMeasured(metrics)) return true;
+  const content = Math.max(0, metrics.count) * metrics.rowHeight;
+  const remaining = content - (metrics.scrollTop + metrics.viewportHeight);
+  return remaining <= metrics.rowHeight;
+}
+
+/**
  * Where the selection lands. `next` and `previous` take the end they point at when nothing
  * is selected — so the first `J` is the top of the list and the first `K` the bottom,
  * rather than both being row one — and every move stops at the ends rather than wrapping:

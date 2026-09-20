@@ -18,11 +18,12 @@
  * substrate's own arithmetic over those two numbers, and is asserted in pixels a reader can
  * check by hand. `list-window.test.ts` covers that arithmetic's edges without a DOM.
  */
-import { useMemo, useState, type JSX, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useMemo, useRef, useState, type JSX, type ReactNode, type RefObject } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { UNMEASURED_ROWS } from "../src/list/list-window.js";
-import { VirtualList, type VirtualListTick } from "../src/list/virtual-list.js";
+import type { ListScope } from "../src/list/list-scope.js";
+import { VirtualList, type VirtualListHandle, type VirtualListTick } from "../src/list/virtual-list.js";
 import { harness, type Harness } from "./harness.js";
 
 /** The design system's real row heights, so the numbers below are the app's numbers. */
@@ -38,6 +39,10 @@ interface ListProps {
   ticks?: readonly VirtualListTick[];
   header?: ReactNode;
   variant?: "single" | "two-line";
+  scope?: ListScope;
+  label?: string;
+  /** Row ids are namespaced by the label, so two lists on one screen do not collide. */
+  prefix?: string;
 }
 
 /**
@@ -47,17 +52,26 @@ interface ListProps {
  * `ticks` is spread rather than passed: a list with no gutter at all is a case too, and
  * under `exactOptionalPropertyTypes` an absent prop and an `undefined` one differ.
  */
-function Fixture({ count, ticks, header, variant = "single" }: ListProps): JSX.Element {
-  const items = useMemo(() => Array.from({ length: count }, (_, i) => `row-${i}`), [count]);
+function Fixture({
+  count,
+  ticks,
+  header,
+  variant = "single",
+  scope = "list",
+  label = "Rows",
+  prefix = "row",
+}: ListProps): JSX.Element {
+  const items = useMemo(() => Array.from({ length: count }, (_, i) => `${prefix}-${i}`), [count, prefix]);
   const [selected, setSelected] = useState<number | undefined>(undefined);
 
   return (
     <div className="orca-surface" data-surface="proof">
       <VirtualList
-        label="Rows"
+        label={label}
         items={items}
         header={header}
         variant={variant}
+        scope={scope}
         {...(ticks ? { ticks } : {})}
         rowId={(item) => item}
         rowClassName={(_item, _index, isSelected) => `orca-tree-row${isSelected ? " orca-tree-row--selected" : ""}`}
@@ -294,5 +308,230 @@ describe("a list nothing has measured", () => {
 
     expect(mounted(3)!.getAttribute("aria-selected")).toBe("true");
     expect(listbox().getAttribute("aria-activedescendant")).toBe("row-3");
+  });
+});
+
+/**
+ * The same two stand-ins as the measured describe above — the cascade that binds `--row-h`
+ * and a `clientHeight` on the scroller — as a helper, because the three additions below are
+ * all about pixels and none of them is about density.
+ */
+function measuredLayout(): void {
+  let cascade: HTMLStyleElement;
+  let clientHeight: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    cascade = document.createElement("style");
+    cascade.textContent = `.orca-list__scroller { --row-h: ${ROW}px; }`;
+    document.head.append(cascade);
+    clientHeight = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, "clientHeight");
+    Object.defineProperty(window.HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("orca-list__scroller") ? VIEWPORT : 0;
+      },
+    });
+  });
+
+  afterEach(() => {
+    cascade.remove();
+    Reflect.deleteProperty(window.HTMLElement.prototype, "clientHeight");
+    if (clientHeight) Object.defineProperty(window.HTMLElement.prototype, "clientHeight", clientHeight);
+  });
+}
+
+describe("the scope a list claims", () => {
+  /* The rule the substrate enforces, in both directions. Wave 2 puts a run tree, an event
+     timeline and a stream of agent output on one screen; before `scope` existed the second
+     of those threw, which was correct and also made the screen impossible. */
+
+  it("lets two lists share a screen when they are in different scopes", () => {
+    const h = harness();
+    teardown.push(h.dispose);
+    const { Providers } = h;
+
+    render(
+      <Providers>
+        <Fixture count={20} scope="run-tree" label="Steps" prefix="step" />
+        <Fixture count={20} scope="stream" label="Output" prefix="line" />
+      </Providers>,
+    );
+
+    expect(screen.getByRole("listbox", { name: "Steps" })).toBeTruthy();
+    expect(screen.getByRole("listbox", { name: "Output" })).toBeTruthy();
+    expect(document.querySelector('[data-kbd-scope="run-tree"]')).not.toBeNull();
+    expect(document.querySelector('[data-kbd-scope="stream"]')).not.toBeNull();
+  });
+
+  it("still throws when two lists claim one scope, which is how the collision is found", () => {
+    const h = harness();
+    teardown.push(h.dispose);
+    const { Providers } = h;
+
+    expect(() =>
+      render(
+        <Providers>
+          <Fixture count={20} scope="list" label="Runs" prefix="run" />
+          <Fixture count={20} scope="list" label="Also runs" prefix="other" />
+        </Providers>,
+      ),
+    ).toThrow(/already registered in scope list/);
+  });
+
+  it("registers its keys in its own scope, so J moves the list the focus is in", () => {
+    const h = harness();
+    teardown.push(h.dispose);
+    const { Providers } = h;
+    render(
+      <Providers>
+        <Fixture count={20} scope="stream" label="Output" prefix="line" />
+      </Providers>,
+    );
+
+    const box = screen.getByRole("listbox", { name: "Output" });
+    fireEvent.keyDown(box, { key: "J", code: "KeyJ" });
+
+    expect(box.getAttribute("aria-activedescendant")).toBe("line-0");
+    expect(h.keyboard.list().some((s) => s.scope === "stream" && s.key === "J")).toBe(true);
+    expect(h.keyboard.list().some((s) => s.scope === "list" && s.key === "J")).toBe(false);
+  });
+});
+
+describe("shiftBy, for a list that pages backwards", () => {
+  measuredLayout();
+
+  /** A list whose items can be prepended to, with the substrate's handle in hand. */
+  function Prependable({ handle }: { handle: RefObject<VirtualListHandle | null> }): JSX.Element {
+    const [first, setFirst] = useState(1_000);
+    const items = useMemo(() => Array.from({ length: 2_000 - first }, (_, i) => `row-${first + i}`), [first]);
+    const [selected, setSelected] = useState<number | undefined>(undefined);
+    return (
+      <div className="orca-surface" data-surface="proof">
+        <button type="button" onClick={() => setFirst((f) => f - 100)}>
+          Load earlier
+        </button>
+        <VirtualList
+          ref={handle}
+          label="Rows"
+          items={items}
+          rowId={(item) => item}
+          renderRow={(item) => <span>{item}</span>}
+          selectedIndex={selected}
+          onSelect={setSelected}
+        />
+      </div>
+    );
+  }
+
+  it("keeps what was on screen on screen after a page is prepended", () => {
+    const h = harness();
+    teardown.push(h.dispose);
+    const { Providers } = h;
+    const handle: RefObject<VirtualListHandle | null> = { current: null };
+    render(
+      <Providers>
+        <Prependable handle={handle} />
+      </Providers>,
+    );
+
+    scroller().scrollTop = ROW * 50;
+    fireEvent.scroll(scroller());
+    const onScreen = options()[0]!.id;
+
+    // A hundred rows arrive in front of the list, and then the surface says so.
+    act(() => {
+      screen.getByRole("button", { name: "Load earlier" }).click();
+    });
+    act(() => {
+      handle.current!.shiftBy(100);
+    });
+
+    // Without the shift the offset would still be 50 rows down a list that is now a hundred
+    // rows longer at the top — which is the page the person just asked for, thrown away.
+    expect(scroller().scrollTop).toBe(ROW * 150);
+    expect(options()[0]!.id).toBe(onScreen);
+  });
+
+  it("reveals an arbitrary row through the same handle, which is what a surface has instead of scrollIntoView", () => {
+    const h = harness();
+    teardown.push(h.dispose);
+    const { Providers } = h;
+    const handle: RefObject<VirtualListHandle | null> = { current: null };
+    render(
+      <Providers>
+        <Prependable handle={handle} />
+      </Providers>,
+    );
+
+    act(() => {
+      handle.current!.reveal(900);
+    });
+
+    expect(mounted(1_900)).not.toBeNull();
+  });
+});
+
+describe("follow, for a stream", () => {
+  measuredLayout();
+
+  function Stream({ count, onHold }: { count: number; onHold: () => void }): JSX.Element {
+    const [following, setFollowing] = useState(true);
+    const items = useMemo(() => Array.from({ length: count }, (_, i) => `row-${i}`), [count]);
+    const held = useRef(onHold);
+    held.current = onHold;
+    return (
+      <div className="orca-surface" data-surface="proof">
+        <VirtualList
+          label="Rows"
+          items={items}
+          follow={following}
+          onHold={() => {
+            setFollowing(false);
+            held.current();
+          }}
+          rowId={(item) => item}
+          renderRow={(item) => <span>{item}</span>}
+          selectedIndex={undefined}
+          onSelect={() => undefined}
+        />
+      </div>
+    );
+  }
+
+  it("stays at the end as the list grows, and lets go once when a scroll leaves it", () => {
+    const h = harness();
+    teardown.push(h.dispose);
+    const { Providers } = h;
+    const onHold = vi.fn();
+    const { rerender } = render(
+      <Providers>
+        <Stream count={100} onHold={onHold} />
+      </Providers>,
+    );
+
+    expect(scroller().scrollTop).toBe(100 * ROW - VIEWPORT);
+
+    rerender(
+      <Providers>
+        <Stream count={140} onHold={onHold} />
+      </Providers>,
+    );
+    expect(scroller().scrollTop).toBe(140 * ROW - VIEWPORT);
+    expect(onHold).not.toHaveBeenCalled();
+
+    // A drag is many scroll events. Following stops once, not forty times.
+    for (const top of [ROW * 60, ROW * 55, ROW * 50]) {
+      scroller().scrollTop = top;
+      fireEvent.scroll(scroller());
+    }
+    expect(onHold).toHaveBeenCalledTimes(1);
+
+    // Held: the list grew again and the window did not move.
+    rerender(
+      <Providers>
+        <Stream count={180} onHold={onHold} />
+      </Providers>,
+    );
+    expect(scroller().scrollTop).toBe(ROW * 50);
   });
 });

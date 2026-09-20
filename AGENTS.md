@@ -121,10 +121,13 @@ for `Button`'s `disabledReason`; a control must not compose its own.
 row list in the app is built on: it renders a window over the rows, reads the row height back
 off `--row-h` rather than restating it (so `data-density` needs no special case), carries the
 status minimap gutter over the *whole* list rather than the visible window, and registers
-`J`/`K`, the arrows, `Home`/`End` and the page keys on the `KeyboardMap` in scope `list`.
-Because those registrations are the substrate's, **one `list` scope holds one `VirtualList`** —
-a surface that also registers `J` in that scope will throw, which is the intended way to find
-out. Selection is `aria-activedescendant` on a single tab stop, and it is a different visual
+`J`/`K`, the arrows, `Home`/`End` and the page keys on the `KeyboardMap` in the scope its
+`scope` prop names. Because those registrations are the substrate's, **one scope holds one
+`VirtualList`** — a second list in the same scope registers `J` twice and the map will throw,
+which is the intended way to find out. There are three scopes to have: `list` (the default),
+`run-tree` and `stream`, so a screen can be a run tree above a timeline beside a stream of
+output and `J` still means "next" in whichever one the focus is in. A fourth list on one
+screen is not a missing scope. Selection is `aria-activedescendant` on a single tab stop, and it is a different visual
 from focus (rule 10). `renderer/src/runs/` is the worked adoption: there is no `scrollIntoView`
 anywhere, because it cannot reach a row that is not in the document.
 

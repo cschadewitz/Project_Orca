@@ -68,20 +68,25 @@ const TEXT = chars(
 const BOX = chars(range(0x2500, 0x257f));
 
 /**
- * The glyphs ORCA renders as glyphs: the eight run statuses, the connection states, the
- * breadcrumb separator and the command key. Kept in sync with packages/design/semantics.json
- * by the check below.
+ * The glyphs ORCA renders as glyphs: the eight run statuses, the connection states, agent
+ * health, the breadcrumb separator and the command key. Kept in sync with
+ * packages/design/semantics.json by the check below.
+ *
+ * Four glyphs carry a word in more than one domain, which is deliberate rather than an
+ * oversight: a domain gives the glyph its word, and the same shape meaning "settled" or
+ * "gone quiet" in two places reads as one vocabulary rather than two. Each comment below
+ * names every use, so a reader does not take one of them for a mistake.
  */
 const SYMBOLS = chars(
   0x25d0, // ◐ running
   0x25c6, // ◆ waiting
-  0x2713, // ✓ succeeded
-  0x2715, // ✕ failed
+  0x2713, // ✓ succeeded · agent health ok
+  0x2715, // ✕ failed · agent health down
   0x25a3, // ▣ blocked
   0x23f8, // ⏸ held
-  0x25f7, // ◷ stale / disconnected
+  0x25f7, // ◷ stale / disconnected · agent health degraded
   0x25cf, // ● connected
-  0x25cc, // ◌ reconnecting
+  0x25cc, // ◌ reconnecting · empty and no-results state views · agent health unknown
   0x25b8, // ▸ breadcrumb separator
   0x2318, // ⌘ command key, in palette and menu hints
 );

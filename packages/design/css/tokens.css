@@ -244,6 +244,11 @@
   /* size */
   --row-comfortable: 32px;
   --row-compact: 24px;
+  --row-log: var(--text-mono-log-line-height);
+  --hit-min: 24px;
+  --mark-sm: 3px;
+  --col-time: 76px;
+  --col-lineno: 44px;
   --control-sm: 24px;
   --control-md: 28px;
   --control-lg: 32px;
