@@ -272,7 +272,11 @@ export class OutputBuffer {
     const front = new OutputBuffer({ limit: this.limit, now: this.now });
     for (const update of updates) front.take(update);
     front.closeOpen();
-    const added = front.rows;
+    // `front` is a scratch buffer and starts its own key counter at zero, so its rows would
+    // collide with the ones already held — the page a person just asked for is exactly the
+    // case where React would then reuse the wrong element and draw a line's text against
+    // another line's `seq`. Keys are this buffer's to hand out; re-key on the way in.
+    const added = front.rows.map((row) => this.rekey(row));
 
     if (added.length > 0) {
       this.rows = [...added, ...this.rows];
@@ -286,6 +290,11 @@ export class OutputBuffer {
     this.trimmed = before;
     this.commit();
     return added.length;
+  }
+
+  /** The same row under a key from this buffer's counter — see `prepend`. */
+  private rekey(row: OutputRow): OutputRow {
+    return row.kind === "line" ? { ...row, key: `line-${this.nextKey++}` } : { ...row, key: `seam-${this.nextKey++}` };
   }
 
   /**

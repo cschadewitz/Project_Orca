@@ -141,6 +141,26 @@ describe("the buffer's cap and the boundary it leaves", () => {
     expect(new Set(all).size).toBe(all.length);
   });
 
+  /**
+   * A page is built in a scratch buffer, which counts its own keys from zero — so the rows
+   * it produces have to be re-keyed on the way in or they arrive wearing keys the held rows
+   * are already using. React de-duplicates a repeated key by reusing the element, which in a
+   * virtualised log means a line drawn against another line's `seq`: the trim boundary and
+   * the `before` cursor are both read off the row under the reader.
+   */
+  it("gives the page rows keys of their own, not the ones the held rows are using", () => {
+    const b = buffer({ limit: 10 });
+    b.load(Array.from({ length: 25 }, (_, i) => at(i, `line ${i}\n`)));
+    b.mark("paused", "2026-03-01T09:00:10.000Z");
+    b.prepend(
+      Array.from({ length: 5 }, (_, i) => at(10 + i, `line ${10 + i}\n`)),
+      10,
+    );
+
+    const keys = b.items.map((row) => row.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
   it("takes the marker away when the page reached the start of the output", () => {
     const b = buffer({ limit: 5 });
     b.load(Array.from({ length: 8 }, (_, i) => at(i, `line ${i}\n`)));
