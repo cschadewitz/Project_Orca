@@ -71,6 +71,28 @@ export interface ConnectionSnapshot {
   capabilities?: readonly DaemonCapability[];
 }
 
+/** How the app arrived at the store it is showing. */
+export type WorkspaceSource =
+  /** `ORCA_WORKSPACE`, or the user's home directory when nothing was said. */
+  | "default"
+  /** `ORCA_DAEMON_URL`: a daemon somebody else is running, over a store this app never chose. */
+  | "env"
+  /** Chosen in the app — the File menu, or a banner. Always read-only (#164). */
+  | "chosen";
+
+/**
+ * The store on screen. It is not part of `ConnectionSnapshot` on purpose: the connection is
+ * about whether a daemon is answering, and this is about *which* store answered — a person
+ * can be disconnected from a chosen store, and the banner still has to name it.
+ */
+export interface WorkspaceSnapshot {
+  /** The directory `orca serve` was pointed at; it reads `<path>/.orca`. */
+  path: string;
+  /** True when the daemon was started `--read-only`, which is what file mode is. */
+  readOnly: boolean;
+  source: WorkspaceSource;
+}
+
 export interface OrcaBridge {
   /** `process.platform` of the main process: `darwin` puts shortcuts on ⌘, everything else on Ctrl. */
   readonly platform: string;
@@ -140,6 +162,43 @@ export interface OrcaBridge {
     read: () => ConnectionSnapshot;
     /** Every change, until the returned unsubscribe is called. */
     subscribe: (listener: (snapshot: ConnectionSnapshot) => void) => () => void;
+  };
+  /**
+   * Which store is on screen, and how to point the app at another one (#164).
+   *
+   * File mode is not a second store path — ADR 0008 forbids the renderer reading a store
+   * directly — so `open` starts `orca serve --read-only` over the chosen directory and
+   * everything else carries on as it was: the same client, the same protocol, with the
+   * control methods absent from `hello` and therefore from every button.
+   * `src/main/workspace.ts` performs the switch.
+   */
+  workspace: {
+    /** Synchronous, like `connection.read`: the file-mode banner names the path on the first paint. */
+    read: () => WorkspaceSnapshot;
+    /** Every switch, until the returned unsubscribe is called. */
+    subscribe: (listener: (snapshot: WorkspaceSnapshot) => void) => () => void;
+    /**
+     * Open a store read-only. Without a path the main process asks for one, because a
+     * dialog may only be opened there; a cancelled dialog answers the workspace unchanged.
+     */
+    open: (params?: { path?: string }) => Promise<BridgeResult<WorkspaceSnapshot>>;
+    /** The file-mode banner's **Connect to a daemon**: back to the writable default. */
+    connectLive: () => Promise<BridgeResult<WorkspaceSnapshot>>;
+  };
+  /**
+   * `orca://` URLs from outside the app: a pasted link, another tool, a second launch. The
+   * main process folds the three ways an OS delivers one into this (`main/deep-link.ts`);
+   * the renderer resolves them through its route table, which is the only resolver.
+   */
+  deepLink: {
+    /**
+     * The URL this window was opened for, if it was opened for one. Read once and
+     * synchronously, before subscribing — a link is delivered once, so a reload must not
+     * replay it and drag a person back to a place they have left.
+     */
+    take: () => string | undefined;
+    /** Every URL that arrives while this window is open. */
+    subscribe: (listener: (url: string) => void) => () => void;
   };
   /** The app's own preferences (theme, per-surface density) — the main process owns the file. */
   preferences: {

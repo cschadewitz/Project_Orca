@@ -23,8 +23,9 @@
  * fixture the way the daemon's `ReadModel` does. A list screen wired to a fake that ignored
  * `limit` would pass its test and page wrongly against a real daemon.
  *
- * The bridge this implements is `packages/app/src/bridge.ts`, whole: the handshake, the five
- * read methods, the notification stream and the preferences. It is typed as `OrcaBridge`
+ * The bridge this implements is `packages/app/src/bridge.ts`, whole: the handshake, the
+ * read methods, the notification stream, the connection, the workspace, the deep-link queue
+ * and the preferences. It is typed as `OrcaBridge`
  * rather than as a shape of its own, so the day the real bridge grows a method this file
  * fails to compile instead of quietly holding a second opinion about what the bridge is.
  */
@@ -49,7 +50,7 @@ import type {
   RunsListParams,
   RunsListResult,
 } from "@orca/protocol";
-import type { BridgeResult, ConnectionSnapshot, OrcaBridge } from "../../src/bridge.js";
+import type { BridgeResult, ConnectionSnapshot, OrcaBridge, WorkspaceSnapshot } from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
 import { AS_OF, CLAIMS, EVENTS, HELLO, INPUTS, RUNS, RUN_DETAILS } from "./fixtures.js";
 import { AGENTS_LIST } from "./fixtures-agents.js";
@@ -97,6 +98,10 @@ export interface FakeBridgeOptions {
   preferences?: Preferences;
   /** What `connection.read()` answers before anything has been pushed. Defaults to live. */
   connection?: ConnectionSnapshot;
+  /** The store on screen. Defaults to a writable workspace, which is the ordinary case. */
+  workspace?: WorkspaceSnapshot;
+  /** The `orca://` URL this window was opened for, the way a cold start delivers one (#165). */
+  deepLink?: string;
 }
 
 export interface FakeBridge {
@@ -121,6 +126,10 @@ export interface FakeBridge {
   readonly subscribers: number;
   /** The preferences the fake is holding, after any writes a test has made. */
   readonly preferences: Preferences;
+  /** Deliver an `orca://` URL to every subscriber, the way `open-url` reaches a window. */
+  link: (url: string) => void;
+  /** What `workspace.read()` would answer right now. */
+  readonly workspace: WorkspaceSnapshot;
 }
 
 const ok = <T>(result: T): BridgeResult<T> => ({ ok: true, result });
@@ -147,6 +156,12 @@ const LIVE_CONNECTION: ConnectionSnapshot = {
   orcaVersion: HELLO.orcaVersion,
   capabilities: HELLO.capabilities,
 };
+
+/**
+ * The workspace a test gets unless it says otherwise: a writable store the app found for
+ * itself, which is what every screen but the file-mode banner is written against.
+ */
+const DEFAULT_WORKSPACE: WorkspaceSnapshot = { path: "/work/orca", readOnly: false, source: "default" };
 
 const defaults: Handlers = {
   hello: () => ok(HELLO),
@@ -279,8 +294,21 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
   const listeners = new Set<(notification: NotificationMessage) => void>();
   const held = new Map<MethodName, Promise<void>>();
   const connections = new Set<(snapshot: ConnectionSnapshot) => void>();
+  const links = new Set<(url: string) => void>();
+  const workspaces = new Set<(snapshot: WorkspaceSnapshot) => void>();
   let preferences = options.preferences ?? DEFAULT_PREFERENCES;
   let connection = options.connection ?? LIVE_CONNECTION;
+  let workspace = options.workspace ?? DEFAULT_WORKSPACE;
+  /* Taken once, like the real bridge: a deep link is delivered to one reader, so a window
+     that reads it and then reloads must not find it waiting a second time. */
+  let pendingLink = options.deepLink;
+
+  /** The main process's half of a workspace switch: set it, then push it. */
+  const setWorkspace = (next: WorkspaceSnapshot): BridgeResult<WorkspaceSnapshot> => {
+    workspace = next;
+    for (const listener of [...workspaces]) listener(next);
+    return ok(next);
+  };
 
   /** Record the call, wait out any hold, then answer. One place, so `calls` can never miss one. */
   async function call<K extends MethodName>(method: K, params: Parameters<Handlers[K]>[0]): Promise<unknown> {
@@ -292,6 +320,29 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
   const bridge: FakeOrcaBridge = {
     platform: options.platform ?? "darwin",
     hello: () => call("hello", undefined) as Promise<BridgeResult<HelloResult>>,
+    workspace: {
+      read: () => workspace,
+      subscribe: (listener) => {
+        workspaces.add(listener);
+        return () => workspaces.delete(listener);
+      },
+      // The real thing starts a read-only daemon over the chosen store; here it is the
+      // observable half of that — the snapshot the banner and the status bar read.
+      open: (params = {}) =>
+        Promise.resolve(setWorkspace({ path: params.path ?? workspace.path, readOnly: true, source: "chosen" })),
+      connectLive: () => Promise.resolve(setWorkspace(DEFAULT_WORKSPACE)),
+    },
+    deepLink: {
+      take: () => {
+        const url = pendingLink;
+        pendingLink = undefined;
+        return url;
+      },
+      subscribe: (listener) => {
+        links.add(listener);
+        return () => links.delete(listener);
+      },
+    },
     preferences: {
       read: () => preferences,
       write: (patch) => {
@@ -367,6 +418,12 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
     },
     get connection() {
       return connection;
+    },
+    link(url) {
+      for (const listener of [...links]) listener(url);
+    },
+    get workspace() {
+      return workspace;
     },
     get subscribers() {
       return listeners.size;

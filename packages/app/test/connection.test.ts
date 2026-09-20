@@ -10,7 +10,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION, formatProtocolVersion, type HelloResult } from "@orca/protocol";
 import type { ConnectionSnapshot } from "../src/bridge.js";
-import { ConnectionMachine, QUIET_MS, connectionStateFor } from "../src/main/connection-state.js";
+import { DaemonSubscription, type SocketFactory } from "../src/client/subscription.js";
+import { ConnectionMachine, GIVE_UP_AT_CAP, QUIET_MS, connectionStateFor } from "../src/main/connection-state.js";
 import { writability, toConnection, clocksRun, isStale, timeDisplay } from "../renderer/src/connection.js";
 
 const hello = (overrides: Partial<HelloResult> = {}): HelloResult => ({
@@ -21,7 +22,7 @@ const hello = (overrides: Partial<HelloResult> = {}): HelloResult => ({
 });
 
 describe("connectionStateFor", () => {
-  const base = { link: "live", compatible: true, daemonGone: false } as const;
+  const base = { link: "live", compatible: true, daemonGone: false, failuresAtCap: 0, fileMode: false } as const;
 
   it("is live only for a subscribed socket to a compatible daemon", () => {
     expect(connectionStateFor(base)).toBe("live");
@@ -39,7 +40,23 @@ describe("connectionStateFor", () => {
 
   it("is mismatch whatever the transport is doing: reachable and unusable is its own state", () => {
     expect(connectionStateFor({ ...base, compatible: false })).toBe("mismatch");
-    expect(connectionStateFor({ link: "reconnecting", compatible: false, daemonGone: true })).toBe("mismatch");
+    expect(
+      connectionStateFor({ link: "reconnecting", compatible: false, daemonGone: true, failuresAtCap: 0, fileMode: false }),
+    ).toBe("mismatch");
+  });
+
+  /* #239. The rule is a fact about the retry loop rather than a stopwatch, so the number
+     here is a count of failures at the backoff's cap and not a duration. */
+  it("gives up on reconnecting at the third consecutive failure at the backoff's cap", () => {
+    const failing = { ...base, link: "reconnecting" } as const;
+    expect(connectionStateFor({ ...failing, failuresAtCap: GIVE_UP_AT_CAP - 1 })).toBe("reconnecting");
+    expect(connectionStateFor({ ...failing, failuresAtCap: GIVE_UP_AT_CAP })).toBe("disconnected");
+  });
+
+  it("is file only while a read-only daemon is answering: a dead one is disconnected like any other", () => {
+    expect(connectionStateFor({ ...base, fileMode: true })).toBe("file");
+    expect(connectionStateFor({ ...base, fileMode: true, link: "reconnecting" })).toBe("reconnecting");
+    expect(connectionStateFor({ ...base, fileMode: true, daemonGone: true })).toBe("disconnected");
   });
 });
 
@@ -247,5 +264,59 @@ describe("can write, or why not", () => {
       const writes = at(state);
       if (!writes.can) expect(writes.reason.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * #239, driven through the real subscription: when does `reconnecting` become
+ * `disconnected`?
+ *
+ * The rule is backoff saturation — three consecutive failures at the cap — so the test
+ * drives failures rather than a clock, and the count it asserts on (seven) falls out of
+ * `RECONNECT_BACKOFF_MS` having five entries. The subscription goes on retrying either
+ * way: this is a rendering change, not a give-up.
+ */
+describe("a stream that keeps failing", () => {
+  /** A socket that never opens: the constructor closes it, which is a failed connection. */
+  const refusing = (onConnect: () => void): SocketFactory => {
+    return (_url, handlers) => {
+      onConnect();
+      queueMicrotask(() => handlers.onClose());
+      return { send: () => {}, close: () => handlers.onClose() };
+    };
+  };
+
+  it("reads reconnecting for six failures and disconnected on the seventh", async () => {
+    vi.useFakeTimers();
+    const states: string[] = [];
+    let attempts = 0;
+    const machine = new ConnectionMachine({
+      hello: () => Promise.resolve(hello()),
+      onChange: (snapshot) => states.push(snapshot.state),
+    });
+    const subscription = new DaemonSubscription({
+      url: "ws://x/socket",
+      params: {},
+      onNotification: () => {},
+      onState: (state, retries) => machine.linkChanged(state, retries),
+      socket: refusing(() => (attempts += 1)),
+    });
+
+    // Six failures: still trying, still `reconnecting` — that is twenty seconds of a dead
+    // daemon, and a person watching should see the app is still at it.
+    while (attempts < 6) await vi.advanceTimersByTimeAsync(5_000);
+    expect(machine.current.state).toBe("reconnecting");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(attempts).toBeGreaterThanOrEqual(7);
+    expect(machine.current.state).toBe("disconnected");
+    // And the retry loop has not stopped: giving up for real would need a reconnect
+    // control, and nothing has one.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(attempts).toBeGreaterThan(7);
+
+    subscription.close();
+    machine.close();
+    vi.useRealTimers();
   });
 });

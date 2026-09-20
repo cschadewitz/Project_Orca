@@ -20,7 +20,7 @@
 // and emitting CommonJS is the whole point of this file — see the header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import electron = require("electron");
-import type { BridgeResult, ConnectionSnapshot, OrcaBridge } from "../bridge.js";
+import type { BridgeResult, ConnectionSnapshot, OrcaBridge, WorkspaceSnapshot } from "../bridge.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
 
@@ -69,6 +69,28 @@ const bridge: OrcaBridge = {
       const forward = (_event: unknown, snapshot: ConnectionSnapshot): void => listener(snapshot);
       ipcRenderer.on("orca:connection", forward);
       return () => void ipcRenderer.off("orca:connection", forward);
+    },
+  },
+  workspace: {
+    // Synchronous, like the two reads above: the file-mode banner names the store on the
+    // renderer's first pass, and a promise would paint an unnamed banner for a frame.
+    read: () => ipcRenderer.sendSync("orca:workspace.read") as WorkspaceSnapshot,
+    subscribe: (listener: (snapshot: WorkspaceSnapshot) => void) => {
+      const forward = (_event: unknown, snapshot: WorkspaceSnapshot): void => listener(snapshot);
+      ipcRenderer.on("orca:workspace", forward);
+      return () => void ipcRenderer.off("orca:workspace", forward);
+    },
+    open: (params = {}) => call("orca:workspace.open", params),
+    connectLive: () => call("orca:workspace.connectLive"),
+  },
+  deepLink: {
+    // Synchronous *and* draining: a link is delivered to one reader once, so the window
+    // takes it on its first pass and subscribes for the rest.
+    take: () => ipcRenderer.sendSync("orca:deepLink.take") as string | undefined,
+    subscribe: (listener: (url: string) => void) => {
+      const forward = (_event: unknown, url: string): void => listener(url);
+      ipcRenderer.on("orca:deepLink", forward);
+      return () => void ipcRenderer.off("orca:deepLink", forward);
     },
   },
   preferences: {

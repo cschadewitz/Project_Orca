@@ -1,12 +1,18 @@
 /**
- * Electron main process. Owns the daemon connection, the preferences file and the window;
- * the renderer only sees what the preload bridge exposes.
+ * Electron main process. Owns the daemon connection, the preferences file, the application
+ * menu and the window; the renderer only sees what the preload bridge exposes.
  *
  * Which daemon, in order: `ORCA_DAEMON_URL` if it is set, then the daemon bundled inside a
  * packaged app (`./daemon-process.ts`, spawned here and stopped on quit), then the default
  * local `orca serve` — which is the development case, where a developer is running one in
  * a terminal. This is the only file that knows all three; `daemon-process.ts` is Electron-
- * free so that it can be tested as a plain module.
+ * free so that it can be tested as a plain module. **Which store that daemon serves is
+ * `./workspace.ts`'s**, because it can change while the app is running (#164), and every
+ * bridge call waits on the switch rather than on a promise that resolved once at startup.
+ *
+ * The other thing that arrives from outside is an `orca://` URL (#165). The three ways an
+ * operating system delivers one — a cold start's `argv`, `open-url`, `second-instance` —
+ * are folded into `./deep-link.ts` here and resolved by one route table in the renderer.
  *
  * The window loads the built renderer from `dist/renderer` unless `ORCA_RENDERER_URL` is
  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
@@ -14,53 +20,55 @@
  */
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
-import type { BridgeResult, ConnectionSnapshot } from "../bridge.js";
+import type { BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
-import type { DaemonSubscription } from "../client/subscription.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
+import { appMenuTemplate } from "./app-menu.js";
 import { ConnectionMachine } from "./connection-state.js";
-import { findBundledDaemon, startBundledDaemon, type BundledDaemon } from "./daemon-process.js";
+import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
+import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
+import { storeRoot, Workspace } from "./workspace.js";
 
-/**
- * Reassigned once, by `connectToADaemon()`, when the app turns out to be talking to a
- * daemon it started itself. Every bridge handler reads it at call time and waits for
- * `daemonReady` first, so nothing below has to care which daemon it got.
- */
-let client = new DaemonClient(process.env.ORCA_DAEMON_URL ?? DEFAULT_DAEMON_URL);
 const preferences = new PreferencesFile(join(app.getPath("userData"), "preferences.json"));
 
 /** The dev server's URL when `scripts/dev.js` started one; undefined in a packaged app. */
 const rendererUrl = process.env.ORCA_RENDERER_URL;
 
-/* ---------- the daemon ---------- */
+/* ---------- one app, one window onto a store ---------- */
 
 /**
- * Resolves once the app knows which daemon it is talking to — which, for a packaged build,
- * means once the bundled daemon has answered `hello` on its port. The window is created
- * without waiting for it, so the shell paints while the daemon starts; a call that arrives
- * in that second or two waits here rather than going to the wrong URL and failing.
- *
- * It never rejects: `connectToADaemon` handles its own failure, because a daemon that would
- * not start is a disconnected status bar, not a desktop app that refuses to open.
+ * A second launch is not a second app. Without the lock, following an `orca://` link on
+ * Windows or Linux starts another process with another window onto the same store — two
+ * copies of one run tree, and the link opening in the one nobody was looking at. With it,
+ * the second process exits and hands its command line to this one as `second-instance`
+ * (#165); macOS never starts a second process and sends `open-url` instead.
  */
-let daemonReady: Promise<void> = Promise.resolve();
+const primary = app.requestSingleInstanceLock();
 
-/** The daemon this process started, if it started one. Undefined means nothing to stop. */
-let bundled: BundledDaemon | undefined;
+const deepLinks = new DeepLinkQueue();
+
+/** The URL this process was started for, on the platforms that put it in the command line. */
+deepLinks.offer(urlFromArgv(process.argv));
+
+/* ---------- the daemon ---------- */
 
 /**
  * Every bridge call answers rather than rejects: a rejection over the context bridge reaches
  * the renderer as a stringified `Error` with the main process's stack, which no screen can
  * render. See `../bridge.ts`.
+ *
+ * `workspace.ready()` is what the old `daemonReady` promise was, awaited on every call
+ * rather than only on the first ones: the app can be re-pointed at another store while it
+ * runs, so "which daemon" has a new answer each time rather than a settled one.
  */
 function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
   ipcMain.handle(channel, async (_event, params: P): Promise<BridgeResult<R>> => {
     try {
-      await daemonReady;
+      await workspace.ready();
       return { ok: true, result: await run(params) };
     } catch (e) {
       if (e instanceof DaemonClientError) return { ok: false, error: e.error };
@@ -69,15 +77,25 @@ function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
   });
 }
 
-handle("orca:hello", () => client.hello(`orca-app/${app.getVersion()}`));
-handle("orca:runs.list", (params: Parameters<DaemonClient["runsList"]>[0]) => client.runsList(params));
-handle("orca:runs.get", (params: Parameters<DaemonClient["runsGet"]>[0]) => client.runsGet(params));
-handle("orca:runs.events", (params: Parameters<DaemonClient["runsEvents"]>[0]) => client.runsEvents(params));
-handle("orca:inputs.list", (params: Parameters<DaemonClient["inputsList"]>[0]) => client.inputsList(params));
-handle("orca:claims.list", (params: Parameters<DaemonClient["claimsList"]>[0]) => client.claimsList(params));
-handle("orca:artifacts.list", (params: Parameters<DaemonClient["artifactsList"]>[0]) => client.artifactsList(params));
-handle("orca:artifacts.get", (params: Parameters<DaemonClient["artifactsGet"]>[0]) => client.artifactsGet(params));
-handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) => client.agentsList(params));
+/** The client of the moment, read at call time and never captured. */
+const client = (): DaemonClient => workspace.client;
+
+handle("orca:hello", () => client().hello(`orca-app/${app.getVersion()}`));
+handle("orca:runs.list", (params: Parameters<DaemonClient["runsList"]>[0]) => client().runsList(params));
+handle("orca:runs.get", (params: Parameters<DaemonClient["runsGet"]>[0]) => client().runsGet(params));
+handle("orca:runs.events", (params: Parameters<DaemonClient["runsEvents"]>[0]) => client().runsEvents(params));
+handle("orca:inputs.list", (params: Parameters<DaemonClient["inputsList"]>[0]) => client().inputsList(params));
+handle("orca:claims.list", (params: Parameters<DaemonClient["claimsList"]>[0]) => client().claimsList(params));
+handle("orca:artifacts.list", (params: Parameters<DaemonClient["artifactsList"]>[0]) => client().artifactsList(params));
+handle("orca:artifacts.get", (params: Parameters<DaemonClient["artifactsGet"]>[0]) => client().artifactsGet(params));
+handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) => client().agentsList(params));
+
+/** Everything the main process pushes goes out the same way: every window, none destroyed. */
+function send(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(channel, payload);
+  }
+}
 
 /**
  * One socket for the whole app, store-wide, forwarded to every open window. A subscription
@@ -86,14 +104,11 @@ handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) =
  * notifications interest it by what it does with them.
  *
  * The stream reconnects and resumes on its own (`../client/subscription.ts`), so nothing
- * here retries and nothing here notices a daemon restarting.
+ * here retries and nothing here notices a daemon restarting. A daemon *swap* is a different
+ * thing and belongs to the workspace, which closes this stream and opens another.
  */
-let notifications: DaemonSubscription | undefined;
-
 function broadcast(notification: NotificationMessage): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send("orca:notification", notification);
-  }
+  send("orca:notification", notification);
 }
 
 /* ---------- the connection state ---------- */
@@ -102,16 +117,12 @@ function broadcast(notification: NotificationMessage): void {
  * One connection state for the whole app, decided here because this is the only place that
  * can see the socket, the bundled daemon's exit and the handshake at once (see
  * `./connection-state.ts`). Built before `whenReady` so that a window opening at any moment
- * has a state to read rather than a hole; `client` is read at call time, so the machine
- * follows the reassignment `connectToADaemon` may make.
+ * has a state to read rather than a hole; the client is read at call time, so the machine
+ * follows every switch the workspace makes.
  */
 const connection = new ConnectionMachine({
-  hello: () => client.hello(`orca-app/${app.getVersion()}`),
-  onChange: (snapshot) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.webContents.send("orca:connection", snapshot);
-    }
-  },
+  hello: () => client().hello(`orca-app/${app.getVersion()}`),
+  onChange: (snapshot) => send("orca:connection", snapshot),
 });
 
 // Synchronous, like `preferences.read`: the chrome draws the status bar on its first pass.
@@ -119,65 +130,143 @@ ipcMain.on("orca:connection.read", (event) => {
   event.returnValue = connection.current satisfies ConnectionSnapshot;
 });
 
-/* ---------- the bundled daemon ---------- */
+/* ---------- the workspace ---------- */
 
 /**
- * Settle on a daemon and open the push stream to it. Called once, from `whenReady`.
- *
- * `ORCA_DAEMON_URL` wins outright: someone who points the app at a daemon on another
- * machine, or at the one their terminal is running, has said what they want and starting a
- * second one beside it would only confuse the question of which store is on screen.
- *
- * The workspace the bundled daemon serves is `ORCA_WORKSPACE`, or the user's home
- * directory. Home is a placeholder with a known shape — `orca serve` reads `~/.orca` and
- * answers an empty run list rather than failing — and choosing a workspace in the app is
- * #164's. That issue changes the argument passed here, not the mechanism.
+ * The store on screen, and the daemon serving it. Everything Electron knows and the module
+ * must not — where the resources are, what the home directory is, what the environment
+ * said — arrives here as a dependency, which is what keeps the switch itself a plain test.
  */
-async function connectToADaemon(): Promise<void> {
-  const explicit = process.env.ORCA_DAEMON_URL;
-  const entry = explicit
-    ? undefined
-    : findBundledDaemon([
-        // A packaged app: electron-builder's `extraResources`, beside `app.asar`.
-        process.resourcesPath,
-        // A build run from the repository: `dist/`, one level up from `dist/main`.
-        fileURLToPath(new URL("../", import.meta.url)),
-      ]);
-  if (entry) {
-    try {
-      bundled = await startBundledDaemon({
-        entry,
-        cwd: process.env.ORCA_WORKSPACE ?? app.getPath("home"),
-        onLog: (line) => console.error(`[daemon] ${line}`),
-        onExit: (exit) => {
-          console.error(`the bundled daemon exited on its own (code ${exit.code}, signal ${exit.signal})`);
-          // The socket will go on retrying, but a daemon this process started and then
-          // watched exit is not coming back on its own: that is `disconnected`, not
-          // `reconnecting`, and the difference is the whole of what the status bar says.
-          connection.daemonExited();
-        },
-      });
-      client = new DaemonClient(bundled.url);
-    } catch (e) {
-      // The window still opens, on a status bar that reads disconnected. A desktop app
-      // that refuses to start because its daemon would not is a worse failure than one
-      // that shows you it has no daemon.
-      console.error(`the bundled daemon did not start; the app will look for one on ${client.url}`);
-      console.error(e instanceof Error ? e.message : String(e));
-    }
+const workspace = new Workspace({
+  findEntry: () =>
+    findBundledDaemon([
+      // A packaged app: electron-builder's `extraResources`, beside `app.asar`.
+      process.resourcesPath,
+      // A build run from the repository: `dist/`, one level up from `dist/main`.
+      fileURLToPath(new URL("../", import.meta.url)),
+    ]),
+  start: ({ entry, cwd, readOnly, onExit }) =>
+    startBundledDaemon({
+      entry,
+      cwd,
+      // The one flag the app passes, through the seam `daemon-process.ts` left for it:
+      // file mode *is* a read-only daemon, because ADR 0008 forbids a second store path
+      // in the renderer (#164).
+      ...(readOnly ? { args: ["--read-only"] } : {}),
+      onLog: (line) => console.error(`[daemon] ${line}`),
+      onExit: (exit) => {
+        console.error(`the bundled daemon exited on its own (code ${exit.code}, signal ${exit.signal})`);
+        // The socket will go on retrying, but a daemon this process started and then
+        // watched exit is not coming back on its own: that is `disconnected`, not
+        // `reconnecting`, and the difference is the whole of what the status bar says.
+        connection.daemonExited();
+        onExit(exit);
+      },
+    }),
+  client: (url) => new DaemonClient(url),
+  subscribe: (daemonClient) =>
+    daemonClient.subscribe({
+      params: {},
+      onNotification: (n) => {
+        broadcast({ kind: "notification", method: n.method, params: n.params });
+        // The cursor the stream would resume from. A sequence number is per-run, so this
+        // store-wide subscription has none and the status bar shows no event number — see
+        // the note on `ConnectionMachine.sawCursor`.
+        connection.sawCursor(workspace.subscription?.lastSeq);
+      },
+      // The retry count comes with the word because `reconnecting` alone cannot say how
+      // long it has been failing, which is what decides `disconnected` now (#239).
+      onState: (state, retries) => connection.linkChanged(state, retries),
+    }),
+  onSwitch: (fileMode) => connection.reset(fileMode),
+  onSnapshot: (snapshot) => send("orca:workspace", snapshot),
+  onError: (message, cause) => {
+    // The window still opens, on a status bar that reads disconnected. A desktop app that
+    // refuses to start because its daemon would not is a worse failure than one that shows
+    // you it has no daemon.
+    console.error(message);
+    console.error(cause instanceof Error ? cause.message : String(cause));
+  },
+  explicitUrl: process.env.ORCA_DAEMON_URL,
+  defaultUrl: DEFAULT_DAEMON_URL,
+  defaultPath: () => process.env.ORCA_WORKSPACE ?? app.getPath("home"),
+});
+
+ipcMain.on("orca:workspace.read", (event) => {
+  event.returnValue = workspace.snapshot satisfies WorkspaceSnapshot;
+});
+
+/** The dialog behind File ▸ Open a store…, and behind the file-mode banner's own button. */
+const OPEN_STORE_DIALOG = {
+  title: "Open a store",
+  // A workspace directory rather than a file: a store is `<workspace>/.orca`, and the
+  // daemon is pointed at the workspace above it.
+  properties: ["openDirectory" as const],
+  buttonLabel: "Open read-only",
+};
+
+/**
+ * Open a store read-only. A path from the renderer is used as given; without one the
+ * directory is asked for here, because a dialog belongs to the process that owns the
+ * window. Cancelling answers the workspace unchanged — a cancelled dialog is not an error
+ * and must not be rendered as one.
+ */
+async function openStore(path?: string): Promise<WorkspaceSnapshot> {
+  let chosen = path;
+  if (chosen === undefined) {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = await (window
+      ? dialog.showOpenDialog(window, OPEN_STORE_DIALOG)
+      : dialog.showOpenDialog(OPEN_STORE_DIALOG));
+    if (result.canceled) return workspace.snapshot;
+    chosen = result.filePaths[0];
+    if (chosen === undefined) return workspace.snapshot;
   }
-  notifications = client.subscribe({
-    params: {},
-    onNotification: (n) => {
-      broadcast({ kind: "notification", method: n.method, params: n.params });
-      // The cursor the stream would resume from. A sequence number is per-run, so this
-      // store-wide subscription has none and the status bar shows no event number — see
-      // the note on `ConnectionMachine.sawCursor`.
-      connection.sawCursor(notifications?.lastSeq);
-    },
-    onState: (state) => connection.linkChanged(state),
-  });
+  return workspace.open(storeRoot(chosen));
 }
+
+handle("orca:workspace.open", (params: { path?: string }) => openStore(params.path));
+handle("orca:workspace.connectLive", () => workspace.connectLive());
+
+/* ---------- deep links ---------- */
+
+// Synchronous and draining: a link is delivered to one reader once (`./deep-link.ts`).
+ipcMain.on("orca:deepLink.take", (event) => {
+  event.returnValue = deepLinks.take();
+});
+
+/** Bring the window forward. A link that opens behind the browser is a link that was lost. */
+function focusWindow(): void {
+  const window = BrowserWindow.getAllWindows()[0];
+  if (!window) {
+    createWindow();
+    return;
+  }
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+deepLinks.subscribe((url) => {
+  focusWindow();
+  send("orca:deepLink", url);
+});
+
+/**
+ * macOS, for a running app — and for one that is still starting, which is why the queue
+ * holds a URL rather than requiring a window. `preventDefault` is required, or Electron
+ * logs the event as unhandled.
+ */
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  deepLinks.offer(url);
+});
+
+/** Windows and Linux: the second launch's command line, courtesy of the single-instance lock. */
+app.on("second-instance", (_event, argv) => {
+  focusWindow();
+  deepLinks.offer(urlFromArgv(argv));
+});
 
 ipcMain.on("orca:preferences.read", (event) => {
   event.returnValue = preferences.read();
@@ -249,36 +338,61 @@ function createWindow(): void {
   }
 }
 
-void app.whenReady().then(() => {
-  applyTheme(preferences.read().theme);
-  daemonReady = connectToADaemon();
-  createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+if (!primary) {
+  // Another copy holds the lock and has already been handed this process's command line,
+  // so quitting here is what makes the link open over there.
+  app.quit();
+} else {
+  void app.whenReady().then(() => {
+    applyTheme(preferences.read().theme);
+    /* Registering the scheme is what makes `orca://` reach this app at all. In development
+       the executable is Electron itself and the app is an argument to it, which is what
+       `protocolClientArgs` supplies; a packaged app is its own executable and needs none. */
+    app.setAsDefaultProtocolClient(ORCA_SCHEME, process.execPath, [
+      ...(protocolClientArgs(app.isPackaged, process.argv) ?? []),
+    ]);
+    /* The app had no menu at all until there was something to put in one. Replacing the
+       default menu also replaces the Edit menu, which on macOS is where ⌘C lives — so
+       `appMenuTemplate` restates the standard roles rather than dropping them. */
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate(
+        appMenuTemplate(
+          process.platform,
+          app.getName(),
+          { openStore: () => void openStore(), connectLive: () => void workspace.connectLive() },
+          rendererUrl !== undefined,
+        ),
+      ),
+    );
+    // Not awaited: the shell paints while the daemon starts, and a call that arrives in
+    // that second or two waits on `workspace.ready()` rather than going to the wrong URL.
+    void workspace.connect();
+    createWindow();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
   });
-});
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// Close the socket rather than leave the daemon fanning out to a process that is going.
+// Stop pushing at a process that is going.
 app.on("before-quit", () => {
-  notifications?.close();
-  notifications = undefined;
   connection.close();
 });
 
 /**
  * A daemon this process started has to die with it: an orphan holding a port is the thing
  * a user notices the second time they launch the app. `will-quit` is the last event before
- * the process goes, and stopping is asynchronous, so the first pass defers the quit and the
- * second — after `bundled` is cleared — lets it through.
+ * the process goes, and closing the workspace is asynchronous, so the first pass defers the
+ * quit and the second — after `quitting` is set — lets it through.
  */
+let quitting = false;
 app.on("will-quit", (event) => {
-  const daemon = bundled;
-  if (!daemon) return;
-  bundled = undefined;
+  if (quitting) return;
+  quitting = true;
   event.preventDefault();
-  void daemon.stop().finally(() => app.quit());
+  void workspace.close().finally(() => app.quit());
 });

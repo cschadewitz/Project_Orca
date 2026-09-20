@@ -71,13 +71,32 @@ export const RECONNECT_BACKOFF_MS = [0, 250, 1_000, 2_500, 5_000] as const;
 /** What the connection indicator shows. `closed` is deliberate: nobody is trying any more. */
 export type SubscriptionState = "connecting" | "live" | "reconnecting" | "closed";
 
+/**
+ * How badly the retry loop is doing, reported beside the state.
+ *
+ * The word on its own cannot say: a socket that has failed twice and a socket that has
+ * failed twenty times are both `reconnecting`, and that difference is exactly what #239
+ * asks the status bar to tell apart. It is a fact about *this* loop rather than a
+ * stopwatch, so `atCap` survives a change to `RECONNECT_BACKOFF_MS` — it counts the
+ * failures that were already waiting the longest this subscription will ever wait.
+ */
+export interface RetryCount {
+  /** Consecutive failed connections; reset to zero by an accepted `subscribe`. */
+  consecutive: number;
+  /** How many of those waited the backoff's last, repeating delay. */
+  atCap: number;
+}
+
 export interface DaemonSubscriptionOptions {
   /** The daemon's socket URL - `DaemonClient.socketUrl`. */
   url: string;
   params: SubscribeParams;
   onNotification: (notification: DaemonNotification) => void;
-  /** Called on every transition, for the connection indicator. */
-  onState?: ((state: SubscriptionState) => void) | undefined;
+  /**
+   * Called on every transition, and on *every* failed connection even where the word does
+   * not change, because the retry count is news when `reconnecting` is not.
+   */
+  onState?: ((state: SubscriptionState, retries: RetryCount) => void) | undefined;
   socket?: SocketFactory | undefined;
   backoffMs?: readonly number[] | undefined;
 }
@@ -108,6 +127,16 @@ export class DaemonSubscription {
     return this.current;
   }
 
+  /**
+   * How many connections have failed in a row, and how many of those waited the capped
+   * delay. `atCap` is derived rather than counted: every attempt after the backoff runs
+   * out of entries waits the last one, so the first capped attempt is the `length - 1`th.
+   */
+  get retries(): RetryCount {
+    const beforeTheCap = this.backoff.length - 1;
+    return { consecutive: this.attempt, atCap: Math.max(0, this.attempt - beforeTheCap) };
+  }
+
   /** The cursor a reconnect would resume from; `undefined` until the first notification. */
   get lastSeq(): number | undefined {
     return this.cursor;
@@ -127,7 +156,7 @@ export class DaemonSubscription {
   private setState(state: SubscriptionState): void {
     if (this.current === state) return;
     this.current = state;
-    this.opts.onState?.(state);
+    this.opts.onState?.(state, this.retries);
   }
 
   // Only ever called from the constructor or from a timer `close()` would have cleared, so
@@ -187,9 +216,14 @@ export class DaemonSubscription {
     if (this.done) return;
     this.handle = undefined;
     this.pendingSubscribe = undefined;
-    this.setState("reconnecting");
     const delay = this.backoff[Math.min(this.attempt, this.backoff.length - 1)] ?? 0;
     this.attempt += 1;
+    /* Announced after the count has moved, and announced again on every further failure
+       even though the word stays `reconnecting`: the second, third and seventh failures
+       are all news to a machine that gives up at the cap (#239), and `setState` would
+       swallow every one of them after the first. */
+    this.current = "reconnecting";
+    this.opts.onState?.("reconnecting", this.retries);
     this.timer = setTimeout(() => {
       this.timer = undefined;
       this.connect();
