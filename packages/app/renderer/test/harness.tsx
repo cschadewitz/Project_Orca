@@ -7,7 +7,7 @@
  *
  * - `themes.tsx` — mount a component in both themes and assert on the colour the real
  *   `tokens.css` resolves it to (docs/design/RULES.md rule 7);
- * - `fake-bridge.ts` — a `window.orca` that answers `hello`, the five read methods and
+ * - `fake-bridge.ts` — a `window.orca` that answers `hello`, the eight read methods and
  *   daemon notifications from `fixtures.ts`. `installBridge` below is the short way in.
  */
 import { render, type RenderResult } from "@testing-library/react";

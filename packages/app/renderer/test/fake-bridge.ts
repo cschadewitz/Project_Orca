@@ -1,5 +1,5 @@
 /**
- * A `window.orca` for tests: the handshake, the five read methods and daemon notifications,
+ * A `window.orca` for tests: the handshake, the eight read methods and daemon notifications,
  * answered from `fixtures.ts`.
  *
  * This is the seam every screen test uses. The renderer can reach exactly one thing outside
