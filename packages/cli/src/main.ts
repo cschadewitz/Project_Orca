@@ -45,6 +45,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       mermaid: { type: "boolean" },
       keep: { type: "boolean" },
       "no-resume": { type: "boolean" },
+      "read-only": { type: "boolean" },
       help: { type: "boolean" },
     },
   });

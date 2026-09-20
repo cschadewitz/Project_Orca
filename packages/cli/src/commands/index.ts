@@ -4,11 +4,23 @@
  */
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
-import { openAcpSession } from "@orca/agents";
-import { ReadModel, startDaemon } from "@orca/daemon";
-import { PROTOCOL_VERSION, READ_METHODS, SUBSCRIPTION_METHODS, formatProtocolVersion } from "@orca/protocol";
+import { openAcpSession, permissionPolicyPath } from "@orca/agents";
+import { AgentModel, ControlModel, ReadModel, answerAndResume, startDaemon } from "@orca/daemon";
+import {
+  AGENTS_PING_METHOD,
+  AGENT_METHODS,
+  CONTROL_METHODS,
+  HELLO_METHOD,
+  PROTOCOL_VERSION,
+  READ_METHODS,
+  SUBSCRIPTION_METHODS,
+  AgentsPingResultSchema,
+  ResponseMessageSchema,
+  formatProtocolVersion,
+  isProtocolFault,
+} from "@orca/protocol";
 import {
   succeeded,
   toMermaid,
@@ -23,7 +35,7 @@ import {
 } from "@orca/core";
 import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
-import { autoHumanInput } from "@orca/engine";
+import { PausingHumanInput, autoHumanInput } from "@orca/engine";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { scriptedAgentSpec } from "@orca/testing";
 import { bootstrap, loadConfig, type OrcaApp } from "../bootstrap.js";
@@ -95,6 +107,89 @@ export async function finish(app: OrcaApp, ctx: CommandContext, state: RunState)
 export function attachEventPrinter(app: OrcaApp, ctx: CommandContext, quiet: boolean): () => void {
   if (quiet) return () => {};
   return app.orchestrator.subscribe((e) => ctx.err(formatEvent(e)));
+}
+
+/** Where `orca serve` is expected to be listening: the same defaults `serve` binds to. */
+function daemonAddress(ctx: CommandContext): string {
+  const host = (ctx.flags.host as string | undefined) ?? "127.0.0.1";
+  const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
+  return `http://${host}:${port}`;
+}
+
+/**
+ * One request envelope to a daemon's `/rpc`, or `undefined` when nothing answered.
+ *
+ * Deliberately `fetch` and a short timeout rather than a client class: the CLI is not a
+ * daemon client yet (roadmap item 1), this is the first call it makes, and inventing the
+ * client for one method would be guessing at what the rest of them need. "Nothing answered"
+ * covers a refused connection, a timeout and a body that is not a response envelope - every
+ * one of them means "fall back and do it here".
+ */
+async function daemonCall(url: string, method: string, params: unknown): Promise<unknown | undefined> {
+  const timeout = AbortSignal.timeout(2000);
+  let body: string;
+  try {
+    const res = await fetch(`${url}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "request", id: 1, method, params }),
+      signal: timeout,
+    });
+    if (!res.ok) return undefined;
+    body = await res.text();
+  } catch {
+    return undefined;
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  const parsed = ResponseMessageSchema.safeParse(json);
+  if (!parsed.success) return undefined;
+  if (!parsed.data.ok) {
+    const { code, message } = parsed.data.error;
+    throw new OrcaError("NOT_SUPPORTED", `daemon refused '${method}': ${message}`, { code, method });
+  }
+  return parsed.data.result;
+}
+
+/**
+ * `agents.ping` against a daemon, or `undefined` when there is none (or when the one there
+ * is too old to have the method, which `hello.methods` says before the call is made).
+ */
+async function pingViaDaemon(
+  url: string,
+  agentId: string,
+  cwd: string | undefined,
+): Promise<{ ok: boolean; line: string } | undefined> {
+  let hello: unknown;
+  try {
+    hello = await daemonCall(url, HELLO_METHOD, {
+      client: `orca-cli/${ORCA_VERSION}`,
+      protocol: PROTOCOL_VERSION,
+    });
+  } catch {
+    // A daemon that refuses the handshake - an older protocol, most likely - is a daemon
+    // this CLI cannot use. Falling back to the in-process handshake is strictly better than
+    // failing: the person asked whether an agent answers, not whether a daemon is current.
+    return undefined;
+  }
+  if (!hello) return undefined;
+  const methods = (hello as { methods?: string[] }).methods ?? [];
+  if (!methods.includes(AGENTS_PING_METHOD)) return undefined;
+  const result = AgentsPingResultSchema.safeParse(
+    await daemonCall(url, AGENTS_PING_METHOD, { agentId, ...(cwd ? { cwd } : {}) }),
+  );
+  if (!result.success) return undefined;
+  const { agent, ok, roundTripMs, error } = result.data;
+  return {
+    ok,
+    line: ok
+      ? `OK ${agent.id} on ${agent.hostId}: ACP handshake in ${roundTripMs ?? 0}ms, recorded by the daemon at ${url} (state ${agent.state})`
+      : `FAIL ${agent.id} on ${agent.hostId}: ${error?.message ?? "handshake failed"}, recorded by the daemon at ${url} (state ${agent.state})`,
+  };
 }
 
 export const commands: Record<string, { help: string; run: (ctx: CommandContext) => Promise<number> }> = {
@@ -171,10 +266,22 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   ping: {
-    help: "ping <agentId>  Spawn the agent (locally or over SSH), complete the ACP handshake, and close.",
+    help: "ping <agentId> [--host addr] [--port n]  Handshake with an agent. A daemon answering on the address does it and records the result, so the Agents surface updates; otherwise this process does it and records nothing.",
     async run(ctx) {
       const id = ctx.positionals[0];
       if (!id) throw new OrcaError("CONFIG_INVALID", "ping needs an agent id");
+
+      // Ask the daemon first, when there is one. Health is held in memory per process
+      // (`AgentHealthTracker`), so a handshake here would prove the agent is up and leave
+      // the daemon - and every screen reading from it - still saying `unknown`. Going
+      // through `agents.ping` puts the result where the surfaces can see it (#225).
+      const daemon = daemonAddress(ctx);
+      const viaDaemon = await pingViaDaemon(daemon, id, ctx.flags.cwd as string | undefined);
+      if (viaDaemon) {
+        ctx.out(viaDaemon.line);
+        return viaDaemon.ok ? 0 : 1;
+      }
+
       const app = await bootstrap({
         cwd: ctx.cwd,
         ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
@@ -193,6 +300,10 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         logger: app.logger,
       });
       ctx.out(`OK ${agent.id} on ${host.id}: ACP session ${session.acpSessionId} in ${Date.now() - started}ms`);
+      // Said plainly, because the difference matters to whoever is looking at a screen: this
+      // handshake happened in a process that is about to exit, so nothing durable and
+      // nothing any daemon can see has changed (#225).
+      ctx.out(`  recorded nothing: no daemon answered on ${daemon}, and agent health lives in the daemon's memory`);
       await session.close();
       return 0;
     },
@@ -338,12 +449,28 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
           "CONFIG_INVALID",
           "answer needs a request id and an answer (orca answer <requestId> <option>)",
         );
-      const request = await app.orchestrator.answer(requestId, value);
-      ctx.out(`answered ${request.id} (run ${request.runId}): ${value}`);
-      if (ctx.flags["no-resume"]) return 0;
-      const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
+      const resume = !ctx.flags["no-resume"];
+      const detach = resume ? attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet)) : () => {};
       try {
-        return await finish(app, ctx, await app.program.resume(request.runId));
+        // The same function the daemon's `inputs.answer` calls (`@orca/daemon`): answer,
+        // then continue, with the refusals classified in one place. The continuation is
+        // `ProgramService.resume` here so a finished program run still settles onto its
+        // Request; the daemon passes the plain orchestrator resume, which writes no
+        // documents (#196).
+        const { request, state } = await answerAndResume(app.orchestrator, {
+          requestId,
+          answer: value,
+          resume,
+          resumeWith: (id) => app.program.resume(id),
+        });
+        ctx.out(`answered ${request.id} (run ${request.runId}): ${value}`);
+        return state ? await finish(app, ctx, state) : 0;
+      } catch (e) {
+        // The shared function refuses with the wire's precise codes (`INPUT_ANSWERED`,
+        // `INPUT_OPTION_UNKNOWN`, ...). `main.ts` renders an `OrcaError`, so re-raise as one
+        // rather than showing a person a stack trace for something they simply got wrong.
+        if (isProtocolFault(e)) throw new OrcaError("RUN_STATE", e.message, { code: e.code, ...(e.details ?? {}) });
+        throw e;
       } finally {
         detach();
       }
@@ -365,34 +492,75 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   serve: {
-    help: "serve [--host addr] [--port n]  Run the ORCA daemon (the desktop app's backend) over this workspace's store, read-only, until interrupted. Default 127.0.0.1:6722.",
+    help: "serve [--host addr] [--port n] [--read-only]  Run the ORCA daemon (the desktop app's backend) over this workspace's store until interrupted. It drives runs by default - answering gates, resuming, cancelling and starting them - and --read-only serves projections alone. The port carries no authentication: any local process can call the control methods, and the per-run lease guards against a second writer, not against a caller. Default 127.0.0.1:6722.",
     async run(ctx) {
       const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new OrcaError("CONFIG_INVALID", `--port must be a port number, got '${String(ctx.flags.port)}'`);
       }
-      const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
+      const readOnly = Boolean(ctx.flags["read-only"]);
+      const app = await bootstrap({
+        cwd: ctx.cwd,
+        ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+        // Every gate parks to the log, whatever `humanInput.mode` says in the config. A
+        // daemon that prompted on a terminal nobody is watching, or auto-answered on a
+        // person's behalf, would fail worse than pausing does: parked, the question is on
+        // `inputs.list` and `inputs.answer` settles it, from this process or the next one.
+        ...(readOnly ? {} : { humanInput: new PausingHumanInput() }),
+        // A stable holder, so a run this daemon is already driving is re-acquired rather
+        // than blocked on, and so a lease in `orca leases list` names a process to go and
+        // look at instead of an opaque id.
+        lease: { holder: `orca-serve@${hostname()}:${process.pid}` },
+      });
       const storeDir = resolvePath(app.configDir, app.config.storeDir);
+      const reads = new ReadModel({ orchestrator: app.orchestrator });
+      // Agents regardless of `--read-only`: listing health reads memory, and a ping spawns
+      // an agent, shakes hands and closes without touching a run, a lease or a log.
+      const agents = new AgentModel({ orchestrator: app.orchestrator, reads });
+      const control = readOnly
+        ? undefined
+        : new ControlModel({
+            orchestrator: app.orchestrator,
+            reads,
+            permissionsFile: permissionPolicyPath(app.configDir),
+          });
       const daemon = await startDaemon({
         host: ctx.flags.host as string | undefined,
         port,
         orcaVersion: ORCA_VERSION,
         storeDir,
-        // Reads only. The store stays single-writer (ADR 0008, #101): the daemon projects
-        // it, and a CLI or another daemon may be driving runs in it at the same time.
+        // With control on - the default - this process is one of the store's writers. It
+        // takes each run's single-writer lease before it appends, exactly as a CLI does, and
+        // refuses a run another live process holds (ADR 0008, #101). `--read-only` gives
+        // back the daemon v0.3.0 shipped: projections and nothing else.
         //
-        // `runs.subscribe` is a read too: the socket fans out this process's own event
-        // store, so a client sees what runs *this* daemon drives or observes. A run
+        // `runs.subscribe` is a read either way: the socket fans out this process's own
+        // event store, so a client sees what runs *this* daemon drives or observes. A run
         // appended by a separate CLI process lands in that store's files, not in this
         // orchestrator's listeners, and still shows up on the next read (#196).
-        capabilities: ["runs.read", "runs.subscribe"],
-        reads: new ReadModel({ orchestrator: app.orchestrator }),
+        capabilities: readOnly ? ["runs.read", "runs.subscribe"] : ["runs.read", "runs.subscribe", "runs.control"],
+        reads,
+        agents,
+        ...(control ? { control } : {}),
         source: app.orchestrator,
       });
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
       );
-      ctx.out(`serving ${storeDir}: ${READ_METHODS.join(", ")}`);
+      ctx.out(`serving ${storeDir}: ${READ_METHODS.join(", ")}, ${AGENT_METHODS.join(", ")}`);
+      if (control) {
+        ctx.out(`driving runs: ${CONTROL_METHODS.join(", ")}`);
+        // Said out loud because it is a real cost that was accepted, not an oversight. The
+        // port is loopback and unauthenticated, so anything running as this user can answer
+        // a gate, cancel a run or start one. The lease is a correctness guard against two
+        // interpreters; it is not a permission check. Pass --read-only if that is not the
+        // machine you want.
+        ctx.out(
+          "  no authentication on this port: any local process may call them. The per-run lease stops a second writer, not a caller.",
+        );
+      } else {
+        ctx.out("read-only: no 'runs.control' capability, and the control methods are absent from this daemon");
+      }
       if (daemon.socketUrl) ctx.out(`notifications on ${daemon.socketUrl}: ${SUBSCRIPTION_METHODS.join(", ")}`);
       await new Promise<void>((resolve) => {
         const stop = () => {
