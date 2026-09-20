@@ -11,12 +11,14 @@
  *
  * What the substrate owns, and why each one is here rather than in a surface:
  *
- * - **the row's identity and its ARIA**: one `option` per row, `aria-selected`, and a
- *   single tab stop on the listbox with `aria-activedescendant` naming the selected row.
- *   Focus stays on the listbox; selection moves between rows. They are different things
+ * - **the row's identity and its ARIA**: one row element per row, `aria-selected`, and a
+ *   single tab stop on the container with `aria-activedescendant` naming the selected row.
+ *   Focus stays on the container; selection moves between rows. They are different things
  *   and both have to stay legible (docs/design/RULES.md rule 10) — one is the ring the
  *   `:focus-visible` rule draws, the other is `--surface-selected` and the accent rail the
- *   surface's row class carries.
+ *   surface's row class carries. Whether that is a `listbox` of `option`s or a `tree` of
+ *   `treeitem`s is the `role` prop's, and it is the substrate's to set because the row
+ *   element is the substrate's — a surface can only reach the row's *children*.
  * - **the keys**, registered on the `KeyboardMap` in the list's scope (`use-list-keys.ts`),
  *   because a list that bound its own `keydown` would be a list whose keys the command
  *   palette cannot show — and because two lists binding `J` in *one* scope is a bug the map
@@ -123,9 +125,30 @@ export interface VirtualListProps<T> {
   follow?: boolean;
   /** Called once when a scroll leaves the bottom while `follow` is set. */
   onHold?: () => void;
+  /**
+   * What the rows *are*, as ARIA sees them. `listbox` of `option`s is a flat list of
+   * choices and is the default; `tree` of `treeitem`s is a list whose rows have depth, and
+   * the run tree is one (#156, docs/design/50-accessibility-and-keyboard.md).
+   *
+   * It is the substrate's to set because the substrate owns the row element — a surface
+   * that put `aria-level` on a span inside the row, or a `treeitem` inside an `option`,
+   * would be writing invalid ARIA and a screen reader would read a flat list either way.
+   * Everything else is the same for both roles: one tab stop, `aria-activedescendant`,
+   * `aria-selected`.
+   */
+  role?: "listbox" | "tree";
+  /**
+   * Per-row ARIA only the surface can know: `aria-level` and `aria-expanded` on a tree row.
+   * Merged onto the row element the substrate renders, after the attributes the substrate
+   * owns, and intended for nothing else — a row's *content* is `renderRow`'s.
+   */
+  rowProps?: (item: T, index: number, selected: boolean) => Record<string, string | number | boolean | undefined>;
   /** The imperative half: `reveal` and `shiftBy`. */
   ref?: Ref<VirtualListHandle>;
 }
+
+/** The row role that goes with each container role. A tree of `option`s is not a tree. */
+const ROW_ROLE = { listbox: "option", tree: "treeitem" } as const;
 
 export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
   const {
@@ -144,6 +167,8 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
     scope = "list",
     follow = false,
     onHold,
+    role = "listbox",
+    rowProps,
     ref,
   } = props;
 
@@ -233,11 +258,11 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
           </div>
         )}
         {/* The rows the window left out are this element's padding rather than two spacer
-            elements, so every child of the listbox is an option. The two numbers are
+            elements, so every child of the container is a row. The two numbers are
             arithmetic over a measured row height, not values anybody chose. */}
         <div
           className="orca-list__rows"
-          role="listbox"
+          role={role}
           aria-label={label}
           tabIndex={0}
           style={{ paddingTop: slice.padTop, paddingBottom: slice.padBottom }}
@@ -251,7 +276,11 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
               <div
                 key={id}
                 id={id}
-                role="option"
+                /* The surface's attributes go on first, so the four the substrate owns —
+                   the role, the id, the selection and the click — cannot be overwritten by
+                   a surface that meant to add `aria-level` and reached too far. */
+                {...rowProps?.(item, index, isSelected)}
+                role={ROW_ROLE[role]}
                 aria-selected={isSelected}
                 className={["orca-list__row", rowClassName?.(item, index, isSelected) ?? ""].filter(Boolean).join(" ")}
                 onClick={() => onSelect(index)}

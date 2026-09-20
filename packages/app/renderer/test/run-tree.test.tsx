@@ -57,8 +57,11 @@ function renderRuns(): void {
   );
 }
 
-const list = (): HTMLElement => screen.getByRole("listbox", { name: "Run tree" });
-const rows = (): HTMLElement[] => within(list()).queryAllByRole("option");
+/* A `tree` of `treeitem`s, not a listbox of options: the rows have depth and #156 says so.
+   The timeline beside it is still a listbox, which is why these two helpers name the role
+   rather than taking whatever list is on screen. */
+const list = (): HTMLElement => screen.getByRole("tree", { name: "Run tree" });
+const rows = (): HTMLElement[] => within(list()).queryAllByRole("treeitem");
 const ids = (): string[] => rows().map((row) => row.id.replace(/^tree-row-/, ""));
 const press = (key: string, code: string, shift = false): void => {
   fireEvent.keyDown(list(), { key, code, shiftKey: shift });
@@ -70,7 +73,7 @@ const twisty = (row: HTMLElement): HTMLElement => row.querySelector(".orca-tree-
 /** Select the last root, which is `run-parent` — the fixture with everything in it. */
 async function openParent(): Promise<void> {
   renderRuns();
-  await screen.findByRole("listbox", { name: "Run tree" });
+  await screen.findByRole("tree", { name: "Run tree" });
   press("End", "End");
   await act(async () => {
     press("ArrowRight", "ArrowRight");
@@ -245,6 +248,37 @@ describe("the run tree", () => {
 
     act(() => press("f", "KeyF"));
     expect(ids()).toContain("run-child-ok");
+  });
+
+  /* #156 and docs/design/50-accessibility-and-keyboard.md: depth has to be *announced*, not
+     only drawn. Indentation and the guide lines say nothing to a screen reader, so a tree
+     rendered as a flat listbox reads every step as a sibling of the run it belongs to. */
+  it("is a tree whose rows carry their depth and whether they are open", async () => {
+    await openParent();
+    fireEvent.click(twisty(rows()[6]!));
+
+    expect(list().getAttribute("role")).toBe("tree");
+    expect(rows().every((row) => row.getAttribute("role") === "treeitem")).toBe(true);
+
+    const levelOf = (key: string) =>
+      rows()
+        .find((row) => row.id === `tree-row-${key}`)!
+        .getAttribute("aria-level");
+    // A root, its step, and a child run two levels below it.
+    expect(levelOf("run-parent")).toBe("1");
+    expect(levelOf("run-parent/s-fan")).toBe("2");
+    expect(levelOf("run-parent/s-fan/run-child-ok")).toBe("3");
+
+    const rowFor = (key: string) => rows().find((row) => row.id === `tree-row-${key}`)!;
+    expect(rowFor("run-parent").getAttribute("aria-expanded")).toBe("true");
+    expect(rowFor("run-parent/s-build-2").getAttribute("aria-expanded")).toBe("false");
+    // A child run is a run: it opens into its own steps, so it says it is closed.
+    expect(rowFor("run-parent/s-fan/run-child-ok").getAttribute("aria-expanded")).toBe("false");
+    /* A leaf has no `aria-expanded` at all. "Closed" and "nothing to open" are different
+       facts and a reader says so — `false` on a leaf promises children that do not exist.
+       The skipped branch is the leaf here: it never became a run, so there is nothing under
+       it to open. */
+    expect(rowFor("run-parent/s-fan/!auth-perf").hasAttribute("aria-expanded")).toBe(false);
   });
 
   it("puts the ancestor chain in the sticky header once a row has one", async () => {

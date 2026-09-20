@@ -21,13 +21,14 @@
  *   ancestor chain moves into the sticky header, so a step eight deep does not start 200px
  *   from the left edge (docs/design/30-long-running-content.md).
  *
- * **One thing it cannot do, and it is a finding, not an oversight.** #156 asks for
- * `role="tree"` with `treeitem` rows carrying `aria-level` and `aria-expanded`. The list
- * substrate owns the row element and hard-codes `role="listbox"` on the rows container and
- * `role="option"` per row (`list/virtual-list.tsx`), with no prop to change either and no
- * way to reach the element from `renderRow`. Adding that hook is a change in `list/`,
- * which this unit does not own, so the tree ships as a listbox whose rows are named
- * status-first and whose depth is visible but not announced. See the hand-back.
+ * **It is a `tree`, and that took a change in the substrate.** #156 asks for `role="tree"`
+ * with `treeitem` rows carrying `aria-level` and `aria-expanded`, and the substrate used to
+ * hard-code `role="listbox"` / `role="option"` with no way to reach the row element — a
+ * surface cannot fix that from `renderRow`, because `aria-level` on a span inside a row, or
+ * a `treeitem` inside an `option`, is invalid ARIA that reads as a flat list anyway. So
+ * `VirtualList` grew `role` and `rowProps` (wave 2's integration commit): the roles stay
+ * the substrate's, because it owns the element, and the two attributes only this surface
+ * can know come back through `rowProps`. Depth is now announced as well as drawn.
  */
 import { useCallback, useMemo, type CSSProperties, type JSX } from "react";
 import { CHROME_GLYPHS, STATUS_PRESENTATION } from "@orca/design";
@@ -155,6 +156,18 @@ export function RunTree({ tree, selectedRunId, selectedStepRunId, onSelect, onOp
       label="Run tree"
       noun="row"
       scope="run-tree"
+      /* A tree, not a listbox: these rows have depth, and a flat list of options would
+         read every step as a sibling of the run it belongs to (#156). The role and the
+         row's role are the substrate's, because it owns the row element; the two
+         attributes only this surface can know come back through `rowProps`. */
+      role="tree"
+      rowProps={(row) => ({
+        "aria-level": row.level + 1,
+        // Only a row that *has* children says whether it is open. On a leaf the attribute
+        // is absent rather than false: "not expanded" and "nothing to expand" are
+        // different facts, and a screen reader says so.
+        ...(row.hasChildren ? { "aria-expanded": row.expanded } : {}),
+      })}
       items={rows}
       ticks={ticks}
       header={<TreeHeader row={selected} filtered={tree.attentionOnly} />}

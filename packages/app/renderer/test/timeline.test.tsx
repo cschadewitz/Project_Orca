@@ -46,7 +46,7 @@ function serveLongRun(): void {
   });
 }
 
-const tree = (): HTMLElement => screen.getByRole("listbox", { name: "Run tree" });
+const tree = (): HTMLElement => screen.getByRole("tree", { name: "Run tree" });
 const timeline = (): HTMLElement => screen.getByRole("listbox", { name: "Event timeline" });
 const entries = (): HTMLElement[] => within(timeline()).queryAllByRole("option");
 const count = (): string => document.querySelector(".orca-runs__timeline-bar .orca-runs__count")!.textContent ?? "";
@@ -63,7 +63,7 @@ async function openTimeline(): Promise<void> {
       <RunsSurface connection="live" />
     </Providers>,
   );
-  await screen.findByRole("listbox", { name: "Run tree" });
+  await screen.findByRole("tree", { name: "Run tree" });
   await act(async () => {
     fireEvent.keyDown(tree(), { key: "j", code: "KeyJ" });
   });
@@ -219,7 +219,7 @@ describe("the event timeline", () => {
         <RunsSurface connection="live" />
       </Providers>,
     );
-    await screen.findByRole("listbox", { name: "Run tree" });
+    await screen.findByRole("tree", { name: "Run tree" });
     await act(async () => {
       fireEvent.keyDown(tree(), { key: "j", code: "KeyJ" });
     });
@@ -243,7 +243,7 @@ describe("the event timeline", () => {
         <RunsSurface connection="live" />
       </Providers>,
     );
-    await screen.findByRole("listbox", { name: "Run tree" });
+    await screen.findByRole("tree", { name: "Run tree" });
 
     expect(screen.getByText("No run selected")).toBeTruthy();
     expect(fake.calls.filter((c) => c.method === "runs.events")).toHaveLength(0);

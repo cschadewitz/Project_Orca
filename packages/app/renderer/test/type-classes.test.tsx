@@ -141,7 +141,10 @@ describe("every noted class on screen carries its type class", () => {
           <RunsSurface connection="live" />
         </Providers>,
       );
-      await waitFor(() => expect(screen.queryAllByRole("option").length).toBeGreaterThan(0));
+      // The tree's rows are `treeitem`s, not options: the run tree has depth (#156). The
+      // timeline beside it is still a listbox, but it has nothing in it until a run is
+      // selected, so the tree is what says this surface has drawn.
+      await waitFor(() => expect(screen.queryAllByRole("treeitem").length).toBeGreaterThan(0));
       expectTyped(container, 10);
     });
   });

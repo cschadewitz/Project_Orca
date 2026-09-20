@@ -603,8 +603,9 @@ export interface MinimapTickProps {
  * `rowClassName` therefore has to name a row class that does.
  *
  * **Selection and focus are different things** (docs/design/RULES.md rule 10). One tab
- * stop, on the listbox; `aria-activedescendant` carries the selection; the ring is the
- * listbox's and the accent rail is the row's.
+ * stop, on the container; `aria-activedescendant` carries the selection; the ring is the
+ * container's and the accent rail is the row's. The container is a `listbox` of `option`s
+ * by default and a `tree` of `treeitem`s when `role` says so — see `role` and `rowProps`.
  *
  * **The keys are registered, not listened for.** `J`/`K`, `↑`/`↓`, `Home`/`End` and the
  * page keys go on the `KeyboardMap` in the scope `scope` names, so the command palette
@@ -647,6 +648,25 @@ export interface VirtualListProps<T> {
    * scopes, so one screen can hold a run tree, a timeline and a stream. Defaults to `list`.
    */
   scope?: "list" | "run-tree" | "stream";
+  /**
+   * What the rows are, as ARIA sees them: a `listbox` of `option`s (the default, a flat
+   * list of choices) or a `tree` of `treeitem`s (rows with depth — the run tree, #156).
+   *
+   * It is the substrate's because the substrate owns the row element. A surface cannot fix
+   * this from `renderRow`, which returns only the row's *children*: `aria-level` on a span
+   * inside a row, or a `treeitem` nested in an `option`, is invalid ARIA and reads as a
+   * flat list either way. Everything else is identical for both roles — one tab stop,
+   * `aria-activedescendant`, `aria-selected`.
+   */
+  role?: "listbox" | "tree";
+  /**
+   * Per-row ARIA only the surface can know — `aria-level` and `aria-expanded` on a tree
+   * row — merged onto the row element. Applied *before* the attributes the substrate owns,
+   * so a surface reaching too far cannot overwrite the role, the id or the selection. A
+   * row with no children omits `aria-expanded` rather than setting it false: "closed" and
+   * "nothing to open" are different facts.
+   */
+  rowProps?(item: T, index: number, selected: boolean): Record<string, string | number | boolean | undefined>;
   /**
    * Stay at the end as the list grows — a stream that is following. A growing `items`
    * reveals the last row; a scroll away from the bottom calls `onHold` **once**, not per
