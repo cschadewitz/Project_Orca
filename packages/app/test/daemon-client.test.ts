@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  ARTIFACTS_GET_METHOD,
+  ARTIFACTS_LIST_METHOD,
+  ArtifactsGetParamsSchema,
+  ArtifactsListParamsSchema,
   CLAIMS_LIST_METHOD,
   ClaimsListParamsSchema,
   HELLO_METHOD,
@@ -133,5 +137,69 @@ describe("the read methods", () => {
     expect(seen[0]!.params).toEqual({ roots: true, limit: 100, offset: 0 });
     expect(seen[2]!.params).toEqual({ runId: "run-1", after: 3, limit: 200 });
     expect(seen[3]!.params).toEqual({ kind: ["decision"] });
+  });
+});
+
+/**
+ * The two artifact reads (#159), in their own daemon because their results are the one pair
+ * with a shape worth asserting: `list` never carries a body, and `get` may decline one with
+ * a reason in words rather than answering with an error.
+ */
+describe("the artifact methods", () => {
+  const asOf = "2026-03-01T09:00:00.000Z";
+  const seen: { method: string; params: unknown }[] = [];
+  const view = {
+    id: "art-spec-v3",
+    kind: "spec",
+    name: "spec",
+    version: 3,
+    mediaType: "text/markdown",
+    size: 128,
+    createdAt: asOf,
+  };
+
+  const record = <P, R>(method: string, params: z.ZodType<P>, result: R) => ({
+    params,
+    handle: (p: P): R => {
+      seen.push({ method, params: p });
+      return result;
+    },
+  });
+
+  const table: MethodTable = {
+    [HELLO_METHOD]: hello,
+    [ARTIFACTS_LIST_METHOD]: record(ARTIFACTS_LIST_METHOD, ArtifactsListParamsSchema, {
+      artifacts: [view],
+      total: 1,
+      asOf,
+    }),
+    [ARTIFACTS_GET_METHOD]: record(ARTIFACTS_GET_METHOD, ArtifactsGetParamsSchema, {
+      artifact: { ...view, name: "screenshot", mediaType: "image/png" },
+      omitted: { reason: "binary" as const, detail: "image/png is not text" },
+      asOf,
+    }),
+  };
+
+  let d: DaemonHandle;
+  beforeAll(async () => {
+    d = await startDaemon({ orcaVersion: "0.1.0-test", capabilities: ["runs.read"], methods: table });
+  });
+  afterAll(async () => {
+    await d.close();
+  });
+
+  it("lists metadata only, and takes the step filter a row of chips needs", async () => {
+    const page = await new DaemonClient(d.url).artifactsList({ runId: "run-art", producedByStepRunId: "s-spec-3" });
+    expect(page.artifacts.map((a) => a.id)).toEqual(["art-spec-v3"]);
+    expect(seen[0]).toEqual({
+      method: ARTIFACTS_LIST_METHOD,
+      params: { runId: "run-art", producedByStepRunId: "s-spec-3", limit: 200, offset: 0 },
+    });
+  });
+
+  it("parses a declined body as an omission with its reason, not as an error", async () => {
+    const answer = await new DaemonClient(d.url).artifactsGet({ runId: "run-art", name: "screenshot" });
+    expect(answer.text).toBeUndefined();
+    expect(answer.omitted).toEqual({ reason: "binary", detail: "image/png is not text" });
   });
 });

@@ -29,6 +29,10 @@
  * fails to compile instead of quietly holding a second opinion about what the bridge is.
  */
 import type {
+  ArtifactsGetParams,
+  ArtifactsGetResult,
+  ArtifactsListParams,
+  ArtifactsListResult,
   ClaimsListParams,
   ClaimsListResult,
   HelloResult,
@@ -46,13 +50,22 @@ import type {
 import type { BridgeResult, ConnectionSnapshot, OrcaBridge } from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
 import { AS_OF, CLAIMS, EVENTS, HELLO, INPUTS, RUNS, RUN_DETAILS } from "./fixtures.js";
+import { ARTIFACTS, ARTIFACTS_BY_ID } from "./fixtures-artifacts.js";
 
 /** Params as a caller passes them: the schema defaults (`limit`, `offset`) are the daemon's job. */
 type Params<T> = Partial<T>;
 
 export type FakeOrcaBridge = OrcaBridge;
 
-export type MethodName = "hello" | "runs.list" | "runs.get" | "runs.events" | "inputs.list" | "claims.list";
+export type MethodName =
+  | "hello"
+  | "runs.list"
+  | "runs.get"
+  | "runs.events"
+  | "inputs.list"
+  | "claims.list"
+  | "artifacts.list"
+  | "artifacts.get";
 
 type Answer<T> = BridgeResult<T> | Promise<BridgeResult<T>>;
 
@@ -64,6 +77,8 @@ export interface Handlers {
   "runs.events": (params: Params<RunsEventsParams> & { runId: string }) => Answer<RunsEventsResult>;
   "inputs.list": (params: Params<InputsListParams>) => Answer<InputsListResult>;
   "claims.list": (params: Params<ClaimsListParams>) => Answer<ClaimsListResult>;
+  "artifacts.list": (params: Params<ArtifactsListParams>) => Answer<ArtifactsListResult>;
+  "artifacts.get": (params: Params<ArtifactsGetParams>) => Answer<ArtifactsGetResult>;
 }
 
 export interface BridgeCall {
@@ -113,6 +128,7 @@ const err = (code: string, message: string): BridgeResult<never> => ({ ok: false
  */
 const RUNS_LIST_LIMIT = 100;
 const RUNS_EVENTS_LIMIT = 200;
+const ARTIFACTS_LIST_LIMIT = 200;
 
 /**
  * A live connection, built out of the same `hello` the fake answers, so the state a screen
@@ -202,6 +218,49 @@ const defaults: Handlers = {
       ),
       asOf: AS_OF,
     }),
+
+  "artifacts.list": (params) => {
+    const matches = ARTIFACTS.filter(
+      (a) =>
+        (params.runId === undefined || a.runId === params.runId) &&
+        (params.name === undefined || a.view.name === params.name) &&
+        (params.kind === undefined || a.view.kind === params.kind) &&
+        (params.producedByStepRunId === undefined || a.view.producedByStepRunId === params.producedByStepRunId),
+    );
+    const offset = params.offset ?? 0;
+    const limit = params.limit ?? ARTIFACTS_LIST_LIMIT;
+    // Metadata only, never a body, and `total` counts the filter rather than the page —
+    // both of which are the daemon's contract (#159) and not conveniences of this fake.
+    return ok({
+      artifacts: matches.slice(offset, offset + limit).map((a) => a.view),
+      total: matches.length,
+      asOf: AS_OF,
+    });
+  },
+
+  "artifacts.get": (params) => {
+    // The protocol refines this: an id, or a run and a name — one or the other.
+    if ((params.artifactId !== undefined) === (params.runId !== undefined && params.name !== undefined)) {
+      return err("PROTOCOL_MESSAGE", "address an artifact by 'artifactId', or by 'runId' and 'name'");
+    }
+    let found: (typeof ARTIFACTS)[number] | undefined;
+    if (params.artifactId !== undefined) {
+      found = ARTIFACTS_BY_ID.get(params.artifactId);
+    } else {
+      const named = ARTIFACTS.filter((a) => a.runId === params.runId && a.view.name === params.name);
+      // Absent `version` means the latest of that name in that run — the list is oldest
+      // version first, so that is the last of them.
+      found =
+        params.version === undefined ? named[named.length - 1] : named.find((a) => a.view.version === params.version);
+    }
+    if (!found) return err("ARTIFACT_NOT_FOUND", "no such artifact");
+    return ok({
+      artifact: found.view,
+      ...(found.text !== undefined ? { text: found.text } : {}),
+      ...(found.omitted !== undefined ? { omitted: found.omitted } : {}),
+      asOf: AS_OF,
+    });
+  },
 };
 
 /** A fake `window.orca`. Nothing is installed until `install()` is called. */
@@ -238,6 +297,10 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
     },
     inputs: { list: (params = {}) => call("inputs.list", params) as Promise<BridgeResult<InputsListResult>> },
     claims: { list: (params = {}) => call("claims.list", params) as Promise<BridgeResult<ClaimsListResult>> },
+    artifacts: {
+      list: (params = {}) => call("artifacts.list", params) as Promise<BridgeResult<ArtifactsListResult>>,
+      get: (params) => call("artifacts.get", params) as Promise<BridgeResult<ArtifactsGetResult>>,
+    },
     notifications: {
       subscribe: (listener) => {
         listeners.add(listener);

@@ -98,6 +98,7 @@ test("the window comes up on the built renderer with a bridge in it", async () =
   // widening it is the kind of change that should have to be written down (ADR 0008).
   // Add the key here in the same PR that adds it to `src/bridge.ts`.
   expect(bridge.methods).toEqual([
+    "artifacts",
     "claims",
     "connection",
     "hello",
