@@ -77,13 +77,16 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    substrate, with the height read back off `--row-h`, the status gutter over the whole list
    and the list keys on the keyboard map, adopted by the Runs surface (#155); and the
    connection is a state machine in the main process pushed over its own bridge channel,
-   which is also where "can write, or why not" comes from (#163). Not yet true of the
-   connection work: writes are not queued while reconnecting, `reconnecting` has no give‑up
-   threshold, the event cursor is absent because the app's one subscription is store‑wide,
-   and file mode is #164. Next: phase 1, run monitoring (attention, the run
-   tree, the event timeline, artifacts, answering gates) against the daemon methods of item
-   1 — whose control methods are now on the wire, so answering a gate is a bridge entry and a
-   screen rather than a protocol change. Phase 2 makes it the
+   which is also where "can write, or why not" comes from (#163). Phase 1's read half is now
+   in: the Runs surface is a run tree over an event timeline with step detail beside it and
+   artifacts in the dock (#155, #156, #157, #158, #159), and Agents is a grid of health cards
+   fed by `agent.changed` (#166). The run's cursor is drawn per run in the timeline's header,
+   which is where it belongs — the status bar outlives any one run's selection and has no
+   single number to show. Not yet true of the connection work: writes are not queued while
+   reconnecting, `reconnecting`'s give‑up threshold is decided (#239, backoff saturation) but
+   not implemented, and file mode is #164. Next in phase 1: attention and answering gates
+   against the control methods of item 1 — already on the wire, so answering a gate is a
+   bridge entry and a screen rather than a protocol change. Phase 2 makes it the
    first‑class configuration and monitoring surface (config, agents, plan); the dependency
    graph goes in as a mode of Plan with a docked inspector unless use shows it is a
    starting point (`docs/design/80-dependency-graph-options.md`). Workflow editing

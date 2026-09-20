@@ -130,14 +130,23 @@ which is the intended way to find out. There are three scopes to have: `list` (t
 `run-tree` and `stream`, so a screen can be a run tree above a timeline beside a stream of
 output and `J` still means "next" in whichever one the focus is in. A fourth list on one
 screen is not a missing scope. Selection is `aria-activedescendant` on a single tab stop, and it is a different visual
-from focus (rule 10). `renderer/src/runs/` is the worked adoption: there is no `scrollIntoView`
-anywhere, because it cannot reach a row that is not in the document.
+from focus (rule 10). The rows are a `listbox` of `option`s unless `role="tree"` makes them a
+`tree` of `treeitem`s, and either way the roles are the substrate's, because the row element
+is: a surface reaches the row's *children* through `renderRow`, and adds `aria-level` and
+`aria-expanded` through `rowProps`. A list that pages backwards calls `shiftBy(rows)` on the
+ref after a prepend, or it throws a person back by exactly the page they asked for; a stream
+takes `follow` and hears `onHold` once when a scroll leaves the end.
+`renderer/src/runs/` is the worked adoption: there is no `scrollIntoView` anywhere, because it
+cannot reach a row that is not in the document.
 
 `renderer/src/runs/` is the worked example of a surface and the shape the next one should
 take: the arithmetic in a plain module with a plain test, the data in one hook, selection and
-its keys in another, and the markup composed from `ui/`. Filtering is a filter, not a search
-— status is a `runs.list` parameter the daemon applies to the whole store, text is applied
-locally to what is held, and the count says which ("3 of 7 runs").
+its keys in another, and the markup composed from `ui/`. It is now three lists on one screen —
+`runs/tree/` over `runs/timeline/` on the left, `step/` on the right with `artifacts/` in the
+dock — and that is the shape to copy, one directory per thing with its own plain module and
+plain test. Filtering is a filter, not a search — status is a `runs.list` parameter the daemon
+applies to the whole store, text is applied locally to what is held, and the count says which
+("3 of 7 runs").
 
 **Every shortcut goes in the keyboard map.** Register `{ scope, key, label, action }` on the
 `KeyboardMap` (`renderer/src/keyboard-map.ts`) rather than adding a `keydown` listener — the

@@ -167,15 +167,19 @@ the bound height, never a literal. The component layer has no two-line row class
 The event log is the source of truth and the UI is a projection of it. Two implications for
 the design:
 
-- **Every view has a cursor.** The status bar shows the event the UI is projected up to. A
-  screen is never "current" in the abstract; it is current as of event *n*.
+- **Every view has a cursor.** A screen is never "current" in the abstract; it is current as
+  of event *n*.
 
-  The status bar draws this from the pushed connection snapshot's `eventCursor` (#163), and
-  **it is absent today**. Sequence numbers are per run, and the app holds one store-wide
-  subscription, so there is no single number to show — and an invented one is exactly what
-  rule 12 forbids. The cell therefore renders nothing rather than a zero. It starts reading
-  for real when a surface subscribes per run; the machine already carries the cursor through
-  a reconnection, and a test proves it resumes.
+  The cursor is **per run, and it is drawn beside the run it describes** — the event
+  timeline's sticky header reads "as of event *n*", from `runs.events`'s `lastSeq` and the
+  highest `seq` the surface has applied (#157).
+
+  **The status bar's cell stays empty**, and that is settled rather than pending. Sequence
+  numbers are per run and the app holds one store-wide subscription, so there is no single
+  number for a bar that outlives any one run's selection to show; an invented one is what
+  rule 12 forbids, and a zero would be a lie. The connection snapshot still carries
+  `eventCursor` through a reconnection and a test proves it resumes — that is the machine's
+  guarantee, not a number for the chrome to print.
 - **Replay is the same code path as live.** Opening a finished run replays its events into the
   same components that render a live one. There is no separate "historical" rendering, which
   is why the timeline and the output pane must read well both while updating and at rest.
@@ -184,9 +188,26 @@ the design:
 
 Agent output arrives as ACP updates over the WebSocket. Batch renders to one frame per 100ms
 under `requestAnimationFrame`; a per-token DOM write will cost more CPU than the agent does.
-Append to a detached fragment and commit once per frame. Do not re-render the run tree on
-every agent update — step status changes are a different, much rarer event stream, and the
-tree should subscribe only to those.
+Commit once per frame. Do not re-render the run tree on every agent update — step status
+changes are a different, much rarer event stream, and the tree subscribes only to those.
+
+Two things the implementation settled (#158), both worth knowing before writing a second
+streaming surface:
+
+- **A row is a line; the buffer counts events.** The output pane virtualises over lines at
+  `row-log`, because a fixed row height is what makes a window over a stream possible at all
+  — so a line longer than the pane collapses to a count of what was left off rather than
+  wrapping into a second row nothing has accounted for. The *buffer*, though, is 50,000
+  **events**, per `30-long-running-content.md`: one `agent.update` renders many lines, so
+  that is a larger buffer than 50,000 lines, not a smaller one.
+- **A line's number is its event's `seq`, not an ordinal.** Once the buffer has trimmed, or a
+  page has been loaded in front of it, there is no absolute line number ORCA can supply — so
+  the gutter shows the sequence number the line came from, and it repeats when one update
+  rendered several lines. That is what makes the trim boundary addressable.
+
+**The docked panel has an owner.** The artifact it holds is a context at App level, not state
+inside a surface, so a chip on a step, a gate card and an `orca://artifact/spec.md@v3` deep
+link can all put one there. Opening the panel itself stays the chrome's.
 
 ## The shape of a surface
 
