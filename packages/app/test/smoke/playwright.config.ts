@@ -22,6 +22,26 @@
  * Two projects rather than two config files is what lets the workflow say `--project=<name>`
  * and lets `toHaveScreenshot` put the project's name in a baseline's filename, beside the
  * platform it already puts there.
+ *
+ * ## Two things this file briefly said, and does not say any more
+ *
+ * The first Windows run of `type-proof` timed out in `beforeAll` at 180s with a log that
+ * ended on Vite's `[optimizer] scanning dependencies`, and this project was given a 300s
+ * budget for a cold start. It was not a cold start. With the larger budget the failure
+ * renamed itself `electron.launch: Timeout 180000ms exceeded` — Playwright's own cap on the
+ * launch call — and the trace had said so from the beginning: one call entered and never
+ * returned, `Launch electron`, at +5.9s, with `createServer` and `listen` already resolved
+ * behind it. The 300s is gone; Linux runs this hook in about 50s and macOS in about 30s, so
+ * the shared budget was never the constraint.
+ *
+ * The second guess was that `electron.launch` was blocking on the binary download that
+ * `node_modules/electron/index.js` does on first `require` — real, and worth keeping out of
+ * a test hook, which is why `app-smoke.yml` now has a step for it. Also not the cause: that
+ * step takes five seconds on Windows. The cause was a trailing path separator, and it is
+ * written up where it lives, at the top of `type-proof.spec.ts`.
+ *
+ * Both are recorded because the logs will look like both again. A timeout that moves when
+ * you raise it is naming a different call, not asking for a bigger number.
  */
 import { defineConfig } from "@playwright/test";
 import { fileURLToPath } from "node:url";
@@ -65,32 +85,6 @@ export default defineConfig({
     {
       name: "type-proof",
       testMatch: "type-proof.spec.ts",
-      /**
-       * Headroom over `smoke`'s budget, because this project's `beforeAll` also builds
-       * preload with `tsc -b` and starts a Vite dev server before it launches anything.
-       *
-       * **An earlier version of this comment blamed the Windows timeout on that cold start,
-       * and was wrong** — worth recording, because the log reads as though it were right.
-       * The first Windows run printed `Downloading Electron binary...` and then Vite's
-       * `[optimizer] scanning dependencies`, and stopped there for 174 seconds, which looks
-       * like a dev server that never finished. The trace says otherwise: the one call that
-       * was entered and never returned is `Launch electron`, at +5.9s. `createServer` and
-       * `listen` had already resolved by then, and the optimizer line is the dev server's
-       * background dependency scan, which does not block. Vite was never the cost.
-       *
-       * What was: `node_modules/electron/index.js` downloads the binary on first `require`
-       * if the postinstall never placed it, through a *synchronous* `spawnSync`. That is why
-       * the hook went quiet — and why no budget here is the real fix. `app-smoke.yml` now
-       * puts the binary on disk in its own step, where the download has no hook timeout over
-       * it and its own duration is legible.
-       *
-       * So this number is insurance on a genuinely cold runner and nothing more. It is not
-       * the same kind of number as `maxDiffPixelRatio` above: raising *that* would hide a
-       * real rendering change, whereas a hook that needs four minutes once is just a hook
-       * that needs four minutes. If a run exceeds this, read the trace for the call that
-       * never returned before touching the number — that is what found this one.
-       */
-      timeout: 300_000,
     },
   ],
 });

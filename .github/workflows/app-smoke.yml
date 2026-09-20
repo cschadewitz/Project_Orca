@@ -76,17 +76,18 @@ jobs:
       # `pnpm-workspace.yaml` allows electron's postinstall, but the pnpm store this job
       # restores is keyed on the lockfile and shared with `ci.yml`, which installs under
       # ELECTRON_SKIP_BINARY_DOWNLOAD=1. So the store can hold an electron that is *built*
-      # and has no binary, and `pnpm install` above has nothing left to run — the install
-      # log shows esbuild's postinstall and not electron's. `node_modules/electron/index.js`
-      # then downloads it on first `require`, inside whichever test hook got there first,
-      # through a blocking `spawnSync` that prints one line and nothing after it.
+      # and has no binary, and `pnpm install` above has nothing left to run — its log shows
+      # esbuild's postinstall and not electron's. `node_modules/electron/index.js` then
+      # fetches the binary on first `require`, through a blocking `spawnSync`, inside
+      # whichever test hook reached it first.
       #
-      # Linux and macOS absorbed that in about twenty seconds. The first Windows run did not,
-      # and spent all 180 seconds of `beforeAll` in `electron.launch()` — see the comment in
-      # `playwright.config.ts`, which is where the wrong answer to this is written down.
-      # Here the download has no hook timeout over it and its own duration in the step list.
-      # From `packages/app`, which is the package that depends on electron: pnpm's node_modules
-      # is strict, so the root has no `electron` to resolve and the first attempt at this step
+      # Hygiene rather than a fix: it is five seconds on a Windows runner, so it was never
+      # the three-minute hang it was briefly blamed for (`playwright.config.ts` records that
+      # dead end). What it buys is that the download is not inside a hook's timeout and has
+      # its own line in the step list, which is where a download belongs.
+      #
+      # From `packages/app`, the package that depends on electron: pnpm's node_modules is
+      # strict, so the root has no `electron` to resolve and the first attempt at this step
       # failed with MODULE_NOT_FOUND.
       - name: Put the Electron binary on disk, rather than inside a test's timeout
         shell: bash

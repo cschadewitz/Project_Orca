@@ -40,13 +40,25 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type ViteDevServer } from "vite";
 
-/** `packages/app`, from this file: test/smoke → up two. */
-const appDir = fileURLToPath(new URL("../../", import.meta.url));
-const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+/**
+ * `packages/app` and the repo root, from this file: test/smoke → up two and up four.
+ *
+ * `resolve` is not decoration — it drops the trailing separator `fileURLToPath` leaves on a
+ * directory URL, and on Windows that separator is a bug with a three-minute symptom. The
+ * path goes to `electron.launch` as the app to load, Playwright quotes each argument, and
+ * `"…\packages\app\"` ends in `\"`, which `CommandLineToArgvW` reads as an escaped quote
+ * rather than as the end of the argument. Electron then starts with a mangled argument list,
+ * attaches its debugger and loads no app at all, so the launch never resolves and the only
+ * evidence is a call log that stops after `Debugger attached.` — no error, no window, no
+ * stack. POSIX does not care about the trailing slash, which is why two platforms were green
+ * throughout. See `playwright.config.ts` for the sibling Windows path bug in the same file.
+ */
+const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
+const repoRoot = resolve(fileURLToPath(new URL("../../../../", import.meta.url)));
 
 /** See `app-shell.spec.ts`: the OS sandbox needs user namespaces a plain container lacks. */
 const osSandboxArgs = process.env.ORCA_SMOKE_NO_SANDBOX ? ["--no-sandbox"] : [];
