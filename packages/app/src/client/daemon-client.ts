@@ -10,6 +10,8 @@
  * daemon on the same port; a client that only reads never opens a socket.
  */
 import {
+  AGENTS_LIST_METHOD,
+  AgentsListResultSchema,
   CLAIMS_LIST_METHOD,
   ClaimsListResultSchema,
   HELLO_METHOD,
@@ -25,6 +27,8 @@ import {
   RunsGetResultSchema,
   RunsListResultSchema,
   socketUrlFor,
+  type AgentsListParams,
+  type AgentsListResult,
   type ClaimsListParams,
   type ClaimsListResult,
   type HelloResult,
@@ -111,6 +115,11 @@ export class DaemonClient {
 
   claimsList(params: Params<ClaimsListParams> = {}): Promise<ClaimsListResult> {
     return this.call(CLAIMS_LIST_METHOD, params, ClaimsListResultSchema);
+  }
+
+  /** Every configured agent's handshake health, with what is claimed right now beside it. */
+  agentsList(params: Params<AgentsListParams> = {}): Promise<AgentsListResult> {
+    return this.call(AGENTS_LIST_METHOD, params, AgentsListResultSchema);
   }
 
   /**

@@ -124,10 +124,10 @@ export class Subscription {
     if (runId === undefined && this.opts.agents)
       this.detachAgents = this.opts.agents.onChange((change) => {
         if (this.stopped) return;
-        // Its own envelope, not one of the six: `agent.changed` carries no run and no
-        // cursor, so it is outside `DaemonNotification` on purpose (see @orca/protocol).
-        this.send({
-          kind: "notification",
+        // One of the seven since protocol 1.5 (#241), so it goes out through `emit` like the
+        // rest and honours `methods` - a client that asked only for `run.changed` is not
+        // woken by an agent. What it still does not carry is a `runId` or a `seq`.
+        this.emit({
           method: AGENT_CHANGED,
           params: { subscriptionId: this.id, at: change.at, agent: change.agent },
         });

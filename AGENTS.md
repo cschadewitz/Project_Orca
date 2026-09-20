@@ -92,11 +92,13 @@ focus contract has to stay in one place.
 **Lists do not poll. The daemon pushes.** `window.orca.notifications.subscribe` is the raw
 envelope stream; wrap it with `createNotificationStream` (`renderer/src/notifications.ts`)
 and listen to one method — `run.changed`, `step.changed`, `agent.update`, `input.opened`,
-`input.answered`, `event.appended` — with an optional `runId` filter. Never re-read a list
-because a notification arrived; a notification for an object the list has never seen is
-resolved with one `runs.get` and inserted. Every notification carries `seq`, the cursor, and
-the main process owns reconnection and resume, so a screen only has to unsubscribe when it
-goes away. Agent output arrives coalesced (one `agent.update` per step per 100ms, many lines
+`input.answered`, `event.appended`, `agent.changed` — with an optional `runId` filter. Never
+re-read a list because a notification arrived; a notification for an object the list has
+never seen is resolved with one `runs.get` and inserted. Every *run* notification carries
+`seq`, the cursor, and the main process owns reconnection and resume, so a screen only has to
+unsubscribe when it goes away. `agent.changed` is the one that is not about a run: it carries
+no `runId` and no `seq`, it goes only to a store-wide subscription, and it carries the whole
+`AgentView` — so there is nothing to resolve and nothing to resume (#241). Agent output arrives coalesced (one `agent.update` per step per 100ms, many lines
 inside) — render the batch, do not assume one line per frame. And a push can never tell you
 a run went `stale`: that is a lapsed lease, which is nothing happening, so it shows up only
 on a read.

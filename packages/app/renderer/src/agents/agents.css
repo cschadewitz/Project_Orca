@@ -1,0 +1,187 @@
+/* What the Agents surface adds on top of the design system's component layer, and no more.
+
+   The card itself is `.orca-agent` from components.css — the border, the grid, the padding,
+   and the `--unknown` / `--degraded` / `--down` modifiers — so nothing here restates a
+   colour, a radius or a spacing. What is left is this surface's own geometry: the column the
+   groups stack in, the grid the cards sit in, and the two blocks the card grows below its
+   roles row.
+
+   One class here is not this surface's and should not be: `.orca-agents__health` is the
+   glyph-and-word the card leads with, and the component layer has no class for it —
+   `.orca-agent--degraded` tints the border but nothing carries the state's own foreground.
+   It is written from the same tokens `AGENT_HEALTH_PRESENTATION` names, so the two cannot
+   drift in value, but it belongs in `components.css` as `.orca-agent__health` next to
+   `.orca-agent__name`. Reported rather than edited (packages/design is not this change's).
+
+   Widths are in `ch` where they are columns of text: a ratio to the font already chosen
+   rather than a design decision of its own (tools/eslint-config/css-tokens.js). */
+
+.orca-agents {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.orca-agents__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+
+.orca-agents__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-4);
+}
+
+/* ---------- one host, and its agents ---------- */
+
+.orca-agents__host,
+.orca-agents__claims {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.orca-agents__host-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+/* type: mono-strong */
+.orca-agents__host-id {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+/* type: caption. The transport is the second thing about a host, not the first. */
+.orca-agents__transport {
+  color: var(--ink-secondary);
+}
+/* type: caption */
+.orca-agents__host-count {
+  margin-left: auto;
+  color: var(--ink-secondary);
+  white-space: nowrap;
+}
+
+/* A card is wide enough for its widest metric row and no wider; the track count follows the
+   pane, so a narrow window stacks them rather than squeezing every card. */
+.orca-agents__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(34ch, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+/* ---------- inside a card ---------- */
+
+/* The state, never colour alone (rule 4): the glyph and the word travel together and the
+   card's tinted border is the third channel. See the note at the top of this file.
+   type: caption */
+.orca-agents__health {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+.orca-agents__health--unknown {
+  color: var(--ink-tertiary);
+}
+.orca-agents__health--ok {
+  color: var(--status-succeeded);
+}
+.orca-agents__health--degraded {
+  color: var(--status-waiting);
+}
+.orca-agents__health--down {
+  color: var(--status-failed);
+}
+
+/* The metric block spans the card, under the roles: `.orca-agent` is a three-column grid and
+   these are label/value pairs rather than a fourth column. */
+.orca-agents__meta {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.orca-agents__metric-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+/* type: caption */
+.orca-agents__metric-label {
+  color: var(--ink-secondary);
+}
+/* type: caption. The honest reading of `unknown`, not a placeholder (#222). */
+.orca-agents__unknown {
+  color: var(--ink-secondary);
+}
+
+/* Why a down card is red, on the card rather than in a tooltip. It wraps — it is a message
+   from a machine and truncating it loses the half that says what to do — which is allowed
+   here because a card is not a row (rule 9 is about rows).
+   type: mono-log */
+.orca-agents__error {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-top: var(--stroke-hairline) solid var(--border-hairline);
+  padding-top: var(--space-2);
+  color: var(--status-failed);
+  overflow-wrap: anywhere;
+}
+.orca-agents__error-code {
+  color: var(--ink-secondary);
+}
+
+/* ---------- the claims region ---------- */
+
+.orca-agents__claim-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.orca-agents__claim {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: var(--stroke-hairline) solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-base);
+}
+/* The title is the one elastic column; everything else is sized to its content. */
+.orca-agents__claim-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orca-agents__claim-status {
+  flex: none;
+  width: 12ch;
+}
+.orca-agents__claim-run {
+  flex: none;
+  width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* type: caption */
+.orca-agents__none {
+  color: var(--ink-secondary);
+}

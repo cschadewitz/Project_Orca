@@ -1,6 +1,6 @@
 /**
- * `subscribe` / `unsubscribe`, the six run notifications a subscription produces, and
- * `agent.changed`, which is a push about the process rather than about a run.
+ * `subscribe` / `unsubscribe` and the seven notifications a subscription produces: six about
+ * a run, and `agent.changed`, which is a push about the process rather than about a run.
  *
  * Everything else in this package is request/response. This is the other direction: the
  * daemon pushes, so a client renders a transition when it happens instead of asking five
@@ -9,11 +9,15 @@
  *
  * Three shaping decisions worth knowing before reading the schemas:
  *
- * - **Every notification carries `seq`, and `seq` is the cursor.** It is the sequence
+ * - **Every *run* notification carries `seq`, and `seq` is the cursor.** It is the sequence
  *   number, within `runId`, of the event that caused the notification. A client that keeps
  *   the highest `seq` it has seen can `subscribe({ runId, since: seq })` after a dropped
  *   connection and be sent `seq + 1` onwards, so a blip costs latency and not data. Sequence
  *   numbers are per-run and gap-free (`EventStore`), which is what makes that work.
+ *   `agent.changed` is the one method with neither `runId` nor `seq`: it is about the
+ *   process, so there is nothing to resume from. A client that folds the cursor tests for a
+ *   `seq` instead of assuming one - see the block at the bottom of this file, which is where
+ *   that decision was made, unmade and written down.
  * - **The folded shapes are derived from the transition alone.** `run.changed` and
  *   `step.changed` carry a `DisplayStatus`, folded the same way `runs.list` folds it, but
  *   from the event and nothing else - no store read per notification, and no lease check, so
@@ -56,6 +60,7 @@ export const NOTIFICATION_METHODS = [
   "input.opened",
   "input.answered",
   "event.appended",
+  "agent.changed",
 ] as const;
 export const NotificationMethodSchema = z.enum(NOTIFICATION_METHODS);
 export type NotificationMethod = z.infer<typeof NotificationMethodSchema>;
@@ -66,15 +71,17 @@ export const AGENT_UPDATE = "agent.update";
 export const INPUT_OPENED = "input.opened";
 export const INPUT_ANSWERED = "input.answered";
 export const EVENT_APPENDED = "event.appended";
+export const AGENT_CHANGED = "agent.changed";
 
 /**
- * What every notification carries: which subscription asked for it, which run it is about,
- * and where in that run's log it sits. `subscriptionId` is here because one connection may
- * hold several subscriptions - a run detail screen and a global attention count, say - and
- * a client must be able to route a frame without guessing from its contents.
+ * What every *run* notification carries: which subscription asked for it, which run it is
+ * about, and where in that run's log it sits. `subscriptionId` is here because one
+ * connection may hold several subscriptions - a run detail screen and a global attention
+ * count, say - and a client must be able to route a frame without guessing from its
+ * contents.
  *
- * `agent.changed` is about no run and has no cursor, which is why it is not one of these -
- * see it at the bottom of this file.
+ * `agent.changed` is about no run and has no cursor, so it is the one method in the union
+ * that is not built from this - see it at the bottom of this file.
  */
 const notification = <T extends z.ZodRawShape>(shape: T) =>
   z.object({
@@ -179,6 +186,56 @@ export const EventAppendedParamsSchema = notification({
 });
 export type EventAppendedParams = z.infer<typeof EventAppendedParamsSchema>;
 
+/**
+ * `agent.changed` - an agent's handshake health moved. It is a member of
+ * `NOTIFICATION_METHODS` and of `DaemonNotification`, and it is the only one that carries
+ * neither `runId` nor `seq`.
+ *
+ * **This reverses the decision recorded here in protocol 1.4 (#241).** That version kept
+ * `agent.changed` out of the union on the argument that every member of it is a run event
+ * with a resume cursor, and that admitting one without a cursor would mean either
+ * fabricating a `seq` or teaching every cursor fold to special-case it. The reasoning was
+ * sound and the conclusion was wrong, for three reasons that only showed up once a client
+ * tried to receive one:
+ *
+ * - **The exclusion did not remove the special case, it hid it.** The app's fold guarded on
+ *   `notification.params.runId === this.opts.params.runId`, which on a store-wide
+ *   subscription compares `undefined` with `undefined` and is therefore already true. Had
+ *   `agent.changed` reached it, `undefined` would have been folded into the cursor. The fold
+ *   had to learn `typeof params.seq === "number"` either way; being in the union is what
+ *   makes the type system say so at the one site that matters instead of leaving it to a
+ *   client to notice.
+ * - **A second parser is a second channel.** `parseAgentChanged` meant every consumer needed
+ *   two entry points, two routes and two unsubscribes for one socket. The renderer's
+ *   `createNotificationStream` routes by method over one subscription; a push outside the
+ *   union could only be reached by a parallel path beside it, which is the duplication the
+ *   stream exists to prevent.
+ * - **"Not in the union" reads as "not a notification".** `parseNotification` dropped it, so
+ *   in practice the frame reached no client at all: the daemon sent something nothing could
+ *   receive. A method a client is expected to handle belongs where a client looks for methods.
+ *
+ * What the old rationale got right survives as a property of this schema rather than as an
+ * exclusion: there is still no cursor, still nothing to replay, and still no run. A client
+ * reconnecting re-reads `agents.list` - the current answer is one call away - and `since`
+ * still refuses to travel without a `runId`.
+ *
+ * The daemon's half is unchanged: it sends this only to subscriptions that did **not** scope
+ * themselves to a run, because an agent is a property of the process and a run screen would
+ * only be woken by work it is not showing. It is pushed from a **listener** on the health
+ * tracker rather than a poll, and it fires on the two things that change what a card says: a
+ * handshake that succeeded and one that failed, whoever caused them. It does **not** fire on
+ * `lastSeenAt` moving - that advances with every batch of agent output, and a frame per batch
+ * is the firehose the `agent.update` coalescing exists to prevent.
+ */
+export const AgentChangedParamsSchema = z.object({
+  subscriptionId: z.string(),
+  /** When the health was recorded, by the daemon's clock. Not a cursor. */
+  at: z.string(),
+  /** The agent as `agents.list` would now report it. */
+  agent: AgentViewSchema,
+});
+export type AgentChangedParams = z.infer<typeof AgentChangedParamsSchema>;
+
 /** Each notification method's params schema, so a client can validate one it routed by name. */
 export const NOTIFICATION_PARAMS = {
   [RUN_CHANGED]: RunChangedParamsSchema,
@@ -187,6 +244,7 @@ export const NOTIFICATION_PARAMS = {
   [INPUT_OPENED]: InputOpenedParamsSchema,
   [INPUT_ANSWERED]: InputAnsweredParamsSchema,
   [EVENT_APPENDED]: EventAppendedParamsSchema,
+  [AGENT_CHANGED]: AgentChangedParamsSchema,
 } as const satisfies Record<NotificationMethod, z.ZodType>;
 
 /** Method name to params type, for a client that switches on the method. */
@@ -197,6 +255,7 @@ export interface NotificationParamsByMethod {
   "input.opened": InputOpenedParams;
   "input.answered": InputAnsweredParams;
   "event.appended": EventAppendedParams;
+  "agent.changed": AgentChangedParams;
 }
 
 /** A parsed notification: a discriminated union, so `switch (n.method)` narrows `n.params`. */
@@ -217,49 +276,6 @@ export function parseNotification(message: { method: string; params?: unknown })
   // The table maps each method to exactly its own schema (`satisfies` above pins that), but
   // an indexed lookup keyed by a union widens the result back to the union of all of them.
   return { method: method.data, params: params.data } as DaemonNotification;
-}
-
-/**
- * `agent.changed` - an agent's handshake health moved. A push, but deliberately **not** a
- * member of `NOTIFICATION_METHODS` or of `DaemonNotification`.
- *
- * Everything in that union is a run event: it carries `runId` and `seq`, and `seq` is the
- * resume cursor a client folds without looking at the method (`DaemonSubscription` in the
- * app does exactly that). `agent.changed` has neither. Agent health lives in this process's
- * memory, not in any log (`AgentHealthTracker`) - there is no run it belongs to, no sequence
- * number to resume from, and nothing for a reconnect to replay, because the current answer
- * is one `agents.list` away. Putting it in the union would mean either giving it a fabricated
- * cursor or teaching every cursor fold to special-case it, and the first is a lie while the
- * second is a change in `packages/app`.
- *
- * So it travels as its own `notification` envelope with its own parser. A client that does
- * not know it drops it (`parseNotification` returns `undefined` for an unknown method, which
- * is the compatible thing to do); one that does calls `parseAgentChanged`. A daemon sends it
- * only to subscriptions that did not scope themselves to a run - an agent is a property of
- * the process, so a run screen would only be woken by work it is not showing.
- *
- * It is pushed from a **listener** on the tracker, not a poll, and it fires on the two things
- * that change what a card says: a handshake that succeeded and one that failed, whoever
- * caused them. It does **not** fire on `lastSeenAt` moving - that advances with every batch
- * of agent output, and a frame per batch is the firehose the `agent.update` coalescing exists
- * to prevent.
- */
-export const AGENT_CHANGED = "agent.changed";
-
-export const AgentChangedParamsSchema = z.object({
-  subscriptionId: z.string(),
-  /** When the health was recorded, by the daemon's clock. Not a cursor. */
-  at: z.string(),
-  /** The agent as `agents.list` would now report it. */
-  agent: AgentViewSchema,
-});
-export type AgentChangedParams = z.infer<typeof AgentChangedParamsSchema>;
-
-/** Validate an `agent.changed` envelope, or `undefined` when it is not one. */
-export function parseAgentChanged(message: { method: string; params?: unknown }): AgentChangedParams | undefined {
-  if (message.method !== AGENT_CHANGED) return undefined;
-  const params = AgentChangedParamsSchema.safeParse(message.params);
-  return params.success ? params.data : undefined;
 }
 
 /**

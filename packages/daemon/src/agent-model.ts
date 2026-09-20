@@ -121,12 +121,18 @@ export class AgentModel {
  * rather than the tracker, because the tracker is keyed by id and knows nothing else; an
  * agent whose spec has gone (a config edit between the handshake and the read) keeps its
  * health and loses its host, which is truer than dropping the row.
+ *
+ * `hostType` comes from the host that spec names, and is omitted when there is no such host
+ * to ask - which is the same edit, one step further on. A card that cannot say `local` or
+ * `ssh` says neither rather than the commoner of the two (RULES.md rule 12).
  */
 function agentView(health: AgentHealth, registry: AgentRegistry): AgentView {
   const spec = registry.listAgents().find((a) => a.id === health.agentId);
+  const hostType = spec && registry.hasHost(spec.hostId) ? registry.host(spec.hostId).spec.type : undefined;
   return {
     id: health.agentId,
     hostId: spec?.hostId ?? "",
+    ...(hostType === undefined ? {} : { hostType }),
     roles: [...(spec?.roles ?? [])],
     state: health.state,
     consecutiveFailures: health.consecutiveFailures,

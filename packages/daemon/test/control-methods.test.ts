@@ -8,9 +8,10 @@
  * with `PausingHumanInput` and a workflow, driven until it parks.
  */
 import { describe, expect, it } from "vitest";
-import { AgentRegistry, LocalHost, type AgentSession } from "@orca/agents";
+import { AgentRegistry, LocalHost, SshHost, type AgentSession } from "@orca/agents";
 import {
   AgentSpecSchema,
+  SshHostSchema,
   FakeClock,
   TemplateRegistry,
   WorkflowRegistry,
@@ -26,7 +27,7 @@ import {
   InputsAnswerResultSchema,
   RunsStartResultSchema,
   SubscribeParamsSchema,
-  parseAgentChanged,
+  parseNotification,
 } from "@orca/protocol";
 import { memoryStores } from "@orca/store";
 import {
@@ -103,8 +104,13 @@ function harness() {
   const stores = memoryStores(clock);
   const agents = new AgentRegistry(clock)
     .addHost(new LocalHost({ id: "local", type: "local" }))
+    // A second host, over ssh: `hostType` is derived from the host an agent's spec names
+    // (protocol 1.5), so a registry with one host could not tell a right answer from a
+    // hardcoded one.
+    .addHost(new SshHost(SshHostSchema.parse({ id: "build-box", type: "ssh", host: "build-box.internal" })))
     .addAgent(AgentSpecSchema.parse({ id: "builder", command: "x", hostId: "local", roles: ["build"] }))
-    .addAgent(AgentSpecSchema.parse({ id: "reviewer", command: "y", hostId: "local" }));
+    .addAgent(AgentSpecSchema.parse({ id: "reviewer", command: "y", hostId: "local" }))
+    .addAgent(AgentSpecSchema.parse({ id: "remote", command: "z", hostId: "build-box", roles: ["build"] }));
   const orchestrator = new Orchestrator({
     stores,
     agents,
@@ -264,11 +270,33 @@ describe("agents.list and agents.ping", () => {
     expect(list.agents.map((a) => [a.id, a.state])).toEqual([
       ["builder", "unknown"],
       ["reviewer", "unknown"],
+      ["remote", "unknown"],
     ]);
     expect(list.agents[0]).toMatchObject({ hostId: "local", roles: ["build"], consecutiveFailures: 0 });
     // Health does not survive a restart and must not pretend to: nothing is invented here.
     expect(list.agents[0]!.lastHandshakeAt).toBeUndefined();
     expect(list.agents[0]!.lastSeenAt).toBeUndefined();
+  });
+
+  it("says which transport each agent's host uses, and says nothing when the host has gone", async () => {
+    const h = harness();
+    const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);
+    // `hostType` is the host spec's, not the agent's (protocol 1.5): two agents on `local`
+    // and one over ssh, which is what lets the surface group by host and say how it is
+    // reached without reading the config itself (ADR 0008).
+    expect(list.agents.map((a) => [a.id, a.hostId, a.hostType])).toEqual([
+      ["builder", "local", "local"],
+      ["reviewer", "local", "local"],
+      ["remote", "build-box", "ssh"],
+    ]);
+
+    // A config edit that takes the host out from under an agent: the agent keeps its health
+    // and loses its transport, rather than being told it is local (RULES.md rule 12).
+    h.agents.addAgent(AgentSpecSchema.parse({ id: "orphan", command: "q", hostId: "gone" }));
+    const after = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);
+    const orphan = after.agents.find((a) => a.id === "orphan")!;
+    expect(orphan.hostId).toBe("gone");
+    expect(orphan.hostType).toBeUndefined();
   });
 
   it("pings an agent, records the handshake, and pushes agent.changed", async () => {
@@ -290,9 +318,37 @@ describe("agents.list and agents.ping", () => {
     expect(ping.ok).toBe(true);
     expect(ping.agent).toMatchObject({ id: "builder", state: "ok", roundTripMs: HANDSHAKE_MS });
 
-    const changed = frames.map((f) => parseAgentChanged(f)).filter((p) => p !== undefined);
+    /* Parsed by `parseNotification` like any other method: `agent.changed` is one of the
+       seven since protocol 1.5 (#241), so a client routes it off the same stream rather
+       than through a parser of its own — which is what the reversal was for. */
+    const changed = frames
+      .map((f) => parseNotification(f))
+      .filter((n) => n !== undefined)
+      .filter((n) => n.method === "agent.changed");
     expect(changed).toHaveLength(1);
-    expect(changed[0]!.agent).toMatchObject({ id: "builder", state: "ok" });
+    expect(changed[0]!.params.agent).toMatchObject({ id: "builder", state: "ok", hostType: "local" });
+    // Still no cursor, which is the half of the old rationale that survived: a client that
+    // folds `seq` must test for one rather than assume it.
+    expect((changed[0]!.params as { seq?: number }).seq).toBeUndefined();
+    sub.stop();
+  });
+
+  it("does not wake a subscription that asked for other methods", async () => {
+    const h = harness();
+    const frames: { method: string }[] = [];
+    const sub = new Subscription({
+      id: "sub-2",
+      // `agent.changed` joined `NOTIFICATION_METHODS` in 1.5, so it is something a client
+      // can now ask for — and therefore something it can decline.
+      params: SubscribeParamsSchema.parse({ methods: ["run.changed"] }),
+      source: h.orchestrator,
+      send: (m) => void frames.push(m),
+      agents: h.agentModel,
+    });
+    await sub.start();
+
+    await call(h.ctx, "agents.ping", { agentId: "builder" });
+    expect(frames.map((f) => f.method)).not.toContain("agent.changed");
     sub.stop();
   });
 

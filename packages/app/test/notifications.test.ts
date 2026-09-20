@@ -5,6 +5,7 @@ import {
   type DaemonNotification,
   type EventAppendedParams,
   type NotificationMessage,
+  type StepChangedParams,
 } from "@orca/protocol";
 import { startDaemon, type DaemonHandle, type SubscriptionSource } from "@orca/daemon";
 import { DaemonClient } from "../src/client/daemon-client.js";
@@ -126,7 +127,9 @@ describe("daemon to renderer", () => {
 
     // --- renderer: the bridge's raw envelopes, routed and validated by the protocol alone.
     const stream = createNotificationStream(ipc.renderer);
-    const seen: DaemonNotification["params"][] = [];
+    // This method's own params, not the union's: `agent.changed` joined the union in
+    // protocol 1.5 and carries no `seq` (#241), and `stream.on` narrows for us anyway.
+    const seen: StepChangedParams[] = [];
     const arrived = new Promise<void>((resolve) => {
       stream.on(
         STEP_CHANGED,

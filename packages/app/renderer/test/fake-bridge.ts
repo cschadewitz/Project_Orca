@@ -29,6 +29,8 @@
  * fails to compile instead of quietly holding a second opinion about what the bridge is.
  */
 import type {
+  AgentsListParams,
+  AgentsListResult,
   ClaimsListParams,
   ClaimsListResult,
   HelloResult,
@@ -46,13 +48,15 @@ import type {
 import type { BridgeResult, ConnectionSnapshot, OrcaBridge } from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
 import { AS_OF, CLAIMS, EVENTS, HELLO, INPUTS, RUNS, RUN_DETAILS } from "./fixtures.js";
+import { AGENTS_LIST } from "./fixtures-agents.js";
 
 /** Params as a caller passes them: the schema defaults (`limit`, `offset`) are the daemon's job. */
 type Params<T> = Partial<T>;
 
 export type FakeOrcaBridge = OrcaBridge;
 
-export type MethodName = "hello" | "runs.list" | "runs.get" | "runs.events" | "inputs.list" | "claims.list";
+export type MethodName =
+  "hello" | "runs.list" | "runs.get" | "runs.events" | "inputs.list" | "claims.list" | "agents.list";
 
 type Answer<T> = BridgeResult<T> | Promise<BridgeResult<T>>;
 
@@ -64,6 +68,7 @@ export interface Handlers {
   "runs.events": (params: Params<RunsEventsParams> & { runId: string }) => Answer<RunsEventsResult>;
   "inputs.list": (params: Params<InputsListParams>) => Answer<InputsListResult>;
   "claims.list": (params: Params<ClaimsListParams>) => Answer<ClaimsListResult>;
+  "agents.list": (params: Params<AgentsListParams>) => Answer<AgentsListResult>;
 }
 
 export interface BridgeCall {
@@ -202,6 +207,10 @@ const defaults: Handlers = {
       ),
       asOf: AS_OF,
     }),
+
+  // `agents.list` takes no parameters: every configured agent comes back, contacted or not,
+  // and the daemon does no filtering for the surface to mirror here.
+  "agents.list": () => ok(AGENTS_LIST),
 };
 
 /** A fake `window.orca`. Nothing is installed until `install()` is called. */
@@ -238,6 +247,7 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
     },
     inputs: { list: (params = {}) => call("inputs.list", params) as Promise<BridgeResult<InputsListResult>> },
     claims: { list: (params = {}) => call("claims.list", params) as Promise<BridgeResult<ClaimsListResult>> },
+    agents: { list: (params = {}) => call("agents.list", params) as Promise<BridgeResult<AgentsListResult>> },
     notifications: {
       subscribe: (listener) => {
         listeners.add(listener);

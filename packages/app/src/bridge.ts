@@ -14,6 +14,8 @@
  */
 import type { ConnectionState } from "@orca/design";
 import type {
+  AgentsListParams,
+  AgentsListResult,
   ClaimsListParams,
   ClaimsListResult,
   DaemonCapability,
@@ -85,6 +87,15 @@ export interface OrcaBridge {
   claims: {
     /** Who owns which work item, and whether that run is still alive. */
     list: (params?: Params<ClaimsListParams>) => Promise<BridgeResult<ClaimsListResult>>;
+  };
+  agents: {
+    /**
+     * Every configured agent with its handshake health, and what is claimed right now.
+     * A read: health is in the daemon's memory rather than in a log, so an agent nothing
+     * has contacted answers `unknown` rather than being missing (#222). `agents.ping` is a
+     * read too, but it is a button (#176) and is not on the bridge yet.
+     */
+    list: (params?: Params<AgentsListParams>) => Promise<BridgeResult<AgentsListResult>>;
   };
   notifications: {
     /**

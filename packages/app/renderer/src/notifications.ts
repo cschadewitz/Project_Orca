@@ -75,7 +75,10 @@ export function createNotificationStream(source: NotificationSource): Notificati
     for (const entry of [...entries]) {
       if (!entries.has(entry)) continue;
       if (entry.method && entry.method !== notification.method) continue;
-      if (entry.filter?.runId && entry.filter.runId !== notification.params.runId) continue;
+      // `agent.changed` is about the process and carries no `runId` (#241), so a listener
+      // that asked for one run is not woken by it — the same answer this gives a frame from
+      // any other run.
+      if (entry.filter?.runId && entry.filter.runId !== (notification.params as { runId?: string }).runId) continue;
       entry.deliver(notification);
     }
   };

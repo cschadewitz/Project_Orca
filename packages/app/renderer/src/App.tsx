@@ -20,6 +20,7 @@ import { useEscapeClosesTopLayer, useTransientLayer } from "./layers-context.js"
 import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
+import { AgentsSurface } from "./agents/agents-surface.js";
 import { StateView } from "./ui/index.js";
 
 // Attention is always first: the app's default landing surface (docs/design/10-information-architecture.md).
@@ -72,6 +73,8 @@ export function App(): JSX.Element {
         <PrimaryPane key={activeSurface.id} surface={activeSurface.id}>
           {activeSurface.id === "runs" ? (
             <RunsSurface connection={connection.state} />
+          ) : activeSurface.id === "agents" ? (
+            <AgentsSurface connection={connection.state} />
           ) : (
             <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />
           )}
