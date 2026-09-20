@@ -269,8 +269,9 @@ describe("Runs: the tree, and the output that does not speak", () => {
        being focused (the list has selection, the palette has focus)". Selection is
        `aria-activedescendant` on a single tab stop, so a row is never focusable itself and
        taking focus out of the list entirely must not clear it. Whether the *ring* is drawn
-       after a click is `:focus-visible`'s, which is the stylesheet's half and is asserted
-       where the stylesheet is loaded. */
+       after a click is `:focus-visible`'s, and that — along with selection being a ground
+       and a rail rather than a second ring — is a claim about pixels that happy-dom cannot
+       compute. It is read off the stylesheets in `focus-and-selection.test.ts`. */
     expect(selected.hasAttribute("tabindex")).toBe(false);
     expect(document.activeElement).not.toBe(selected);
 
