@@ -361,8 +361,12 @@ export class Orchestrator {
    * (`run.paused`, see PausingHumanInput); it is not continued here - call
    * `resume()` afterwards. Throws RUN_STATE if the request is not pending, the
    * run is live in some process, or the answer is not one of the options.
+   *
+   * `note` is free text the person wrote beside the answer. It is recorded on
+   * `human.answered` and nothing reads it back: no executor branches on it, and
+   * `answerFromPreviousAttempt` picks up the answer alone when the run resumes.
    */
-  async answer(requestId: string, answer: string, runId?: string): Promise<HumanInputRequest> {
+  async answer(requestId: string, answer: string, runId?: string, note?: string): Promise<HumanInputRequest> {
     const request = (runId ? pendingHumanInputs(await this.getState(runId)) : await this.pendingInputs()).find(
       (h) => h.id === requestId,
     );
@@ -385,7 +389,9 @@ export class Orchestrator {
     await this.stores.events.append({
       type: "human.answered",
       runId: request.runId,
-      payload: { stepRunId: request.stepRunId, requestId, answer },
+      // The note is the person's reasoning, not part of the decision: the run branches on
+      // `answer` alone, and the note is recorded beside it so the log says why (#238).
+      payload: { stepRunId: request.stepRunId, requestId, answer, ...(note ? { note } : {}) },
     });
     return { ...request, answer };
   }
@@ -1052,6 +1058,10 @@ export class Orchestrator {
             // ACP already separates the two: `optionId` is what the agent is answered
             // with, `name` is what the host shows. Keep them apart here too.
             options: req.options.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
+            // Whose turn is being held open (#248). It is recorded here because here is
+            // where it is known: an attention card has to name the agent, and the push that
+            // opens the card is a pure function of the event it comes from.
+            agent: { id: agent.id, hostId: host.spec.id },
             context: { toolCall: req.toolCall },
             onRequested: () => {
               pendingAsks++;

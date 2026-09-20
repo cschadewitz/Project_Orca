@@ -37,13 +37,20 @@ import {
   type RunsStartResult,
   type RunSummaryView,
 } from "@orca/protocol";
-import type { ReadModel } from "./read-model.js";
+import { agentSessionsByStep, type ReadModel } from "./read-model.js";
 
 export interface AnswerAndResumeOptions {
   /** The `HumanInputRequest.id` being answered. */
   requestId: string;
   /** An option's `id`, or the free text for a question that offers none. */
   answer: string;
+  /**
+   * Free text the person wrote beside the answer, recorded on `human.answered` (#238). The
+   * run does not branch on it - `answer` is the whole of the decision - but the log now
+   * holds the reasoning next to the choice instead of only in whoever's terminal it was
+   * typed into.
+   */
+  note?: string | undefined;
   /** Narrows the search to one run and its descendants; an id is unique without it. */
   runId?: string | undefined;
   /** Re-drive afterwards and return once the run is parked again or finished. Default true. */
@@ -100,7 +107,7 @@ export async function answerAndResume(orc: Orchestrator, opts: AnswerAndResumeOp
     );
   await refuseIfLeasedElsewhere(orc, runId);
 
-  const request = await orc.answer(opts.requestId, opts.answer, runId);
+  const request = await orc.answer(opts.requestId, opts.answer, runId, opts.note);
   if (opts.resume === false) return { request };
   // `resume` walks up to the topmost parked ancestor and re-attaches on the way down, so a
   // gate answered inside a child continues the tree and not just the child.
@@ -200,17 +207,9 @@ export class ControlModel {
       requestId: params.requestId,
       answer: params.optionId,
       ...(params.runId ? { runId: params.runId } : {}),
+      ...(params.note ? { note: params.note } : {}),
       resume: params.resume,
     });
-    if (params.note)
-      // `human.answered`'s payload is `{ stepRunId, requestId, answer }` and nothing else, so
-      // the note reaches the operator's log and not the run's. A client must not present it
-      // as something the run recorded. Widening the event is #238.
-      this.orc.logger.info("human input answered with a note", {
-        runId: request.runId,
-        requestId: request.id,
-        note: params.note,
-      });
     return {
       requestId: request.id,
       runId: request.runId,
@@ -322,11 +321,16 @@ export class ControlModel {
   /**
    * Which agent asked. `agent.session.opened` is the only event that records it, and a
    * permission ask always has one: an `ask` reaches a person only through a live session.
+   *
+   * The scan itself is `agentSessionsByStep` in the read model, shared with `inputs.list`,
+   * which needs the same answer to say who is blocked (#248). A standing rule written here
+   * has to belong to the agent the card named, and one scan is how that stays true.
    */
   private async agentForStep(runId: string, stepRunId: string): Promise<string> {
-    for (const e of await this.orc.stores.events.readTypes(runId, ["agent.session.opened"]))
-      if (e.type === "agent.session.opened" && e.payload.stepRunId === stepRunId) return e.payload.agentId;
-    throw new OrcaError("AGENT_NOT_FOUND", `no agent session recorded for step ${stepRunId}`, { runId, stepRunId });
+    const session = (await agentSessionsByStep(this.orc, runId)).get(stepRunId);
+    if (!session)
+      throw new OrcaError("AGENT_NOT_FOUND", `no agent session recorded for step ${stepRunId}`, { runId, stepRunId });
+    return session.agentId;
   }
 }
 

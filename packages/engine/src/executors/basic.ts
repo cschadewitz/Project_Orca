@@ -63,6 +63,19 @@ export async function askHuman(
   });
 }
 
+/**
+ * The ids of a decision's or a gate's options - the whole of what this file compares.
+ *
+ * Since #247 an option is `{ id, label, consequence?, destructive? }` and a bare word in a
+ * workflow reads as an option that is its own id and label. Everything mechanical is the
+ * id: the choice a source produced, `defaultOption`, `autoOption`, the `when: choice ==
+ * '<option>'` on an outgoing edge, and the recorded `human.answered.answer`. The label is
+ * for a person to read and may be reworded without invalidating any of them.
+ */
+function optionIds(node: DecisionNode | GateNode): string[] {
+  return node.options.map((o) => o.id);
+}
+
 /** The answer given to the immediately preceding, cancelled attempt of this node (a resumed pause), if any. */
 function answerFromPreviousAttempt(ctx: StepContext): string | undefined {
   const { stepOrder, steps, humanInputs } = ctx.run.state;
@@ -97,11 +110,14 @@ async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise
         ...(s.template ? { template: s.template } : {}),
         ...(s.prompt ? { prompt: s.prompt } : {}),
         inputs: s.inputs,
+        // Both halves are ids: the artifact field is validated against them and the prompt
+        // asks the agent to answer with one of them, so an option's consequence clause
+        // never reaches a template as though it were a choice.
         produces: [
-          { ...produces, validate: { requiredFields: [s.field], fieldValues: { [s.field]: ctx.node.options } } },
+          { ...produces, validate: { requiredFields: [s.field], fieldValues: { [s.field]: optionIds(ctx.node) } } },
         ],
         completion: { mode: "turn-end", maxFollowUps: 1, maxAttempts: 1 },
-        vars: { options: ctx.node.options },
+        vars: { options: optionIds(ctx.node) },
       });
       if (turn.kind === "failed")
         throw new OrcaError(turn.error.code as "INTERNAL", turn.error.message, turn.error.details);
@@ -123,11 +139,12 @@ export const decisionExecutor: NodeExecutor<DecisionNode> = {
     const { raw, source } = await resolveChoice(ctx);
     let choice =
       typeof raw === "boolean" ? (raw ? "true" : "false") : raw === undefined || raw === null ? undefined : String(raw);
-    if (choice === undefined || !ctx.node.options.includes(choice)) {
+    const ids = optionIds(ctx.node);
+    if (choice === undefined || !ids.includes(choice)) {
       if (!ctx.node.defaultOption)
         return failed(
           "RUN_STATE",
-          `decision '${ctx.nodeId}' produced '${String(choice)}' which is not one of ${ctx.node.options.join(", ")}`,
+          `decision '${ctx.nodeId}' produced '${String(choice)}' which is not one of ${ids.join(", ")}`,
           { raw, source },
         );
       choice = ctx.node.defaultOption;
@@ -142,12 +159,12 @@ export const gateExecutor: NodeExecutor<GateNode> = {
   async execute(ctx) {
     const n = ctx.node;
     if (n.autoApproveWhen && (await ctx.evaluate(n.autoApproveWhen))) {
-      const choice = n.autoOption ?? n.options[0]!;
+      const choice = n.autoOption ?? optionIds(n)[0]!;
       await ctx.emit({ type: "decision.resolved", payload: { stepRunId: ctx.step.id, choice, source: "gate:auto" } });
       return completed({ choice });
     }
     const answer = await askHuman(ctx, await ctx.render(n.question), n.options);
-    if (answer === undefined || !n.options.includes(answer))
+    if (answer === undefined || !optionIds(n).includes(answer))
       return failed("CANCELLED", `gate '${ctx.nodeId}' was not approved (answer: ${String(answer)})`, {}, false);
     await ctx.emit({
       type: "decision.resolved",

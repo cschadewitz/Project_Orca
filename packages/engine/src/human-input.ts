@@ -127,8 +127,14 @@ export async function askHumanInput(opts: {
   stepRunId: string;
   kind: HumanInputQuery["kind"];
   question: string;
-  /** Bare strings are accepted and normalised here; workflows still declare gate options as words. */
+  /** Bare strings are accepted and normalised here; a workflow may still declare gate options as words. */
   options: GateOptionInput[];
+  /**
+   * The agent whose turn this ask is holding open, recorded on `human.requested` so an
+   * attention card can name it (#248). Only the permission path has one - a workflow gate
+   * is nobody's agent - and the field is absent rather than empty when it does not.
+   */
+  agent?: { id: string; hostId: string };
   context?: Record<string, unknown>;
   onRequested?: (query: HumanInputQuery) => void;
   onSettled?: (query: HumanInputQuery) => Promise<void> | void;
@@ -152,6 +158,7 @@ export async function askHumanInput(opts: {
       kind: query.kind,
       question: query.question,
       options: query.options,
+      ...(opts.agent ? { agent: opts.agent } : {}),
       context: query.context,
     },
   });

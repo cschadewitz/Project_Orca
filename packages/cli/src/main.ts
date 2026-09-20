@@ -33,6 +33,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       "body-file": { type: "string" },
       dir: { type: "string" },
       "log-level": { type: "string" },
+      note: { type: "string" },
       plan: { type: "string" },
       status: { type: "string" },
       rationale: { type: "string" },

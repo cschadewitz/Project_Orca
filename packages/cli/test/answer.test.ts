@@ -72,4 +72,47 @@ edges:
     await commands.answer!.run(nothing);
     expect(nothing.lines).toEqual(["no open questions"]);
   });
+
+  it("puts `--note` in the run's log beside the answer (#238)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-answer-note-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: [gated.yaml]\ntemplates: []\n", "utf8");
+    await writeFile(
+      join(dir, "gated.yaml"),
+      `
+id: gated
+name: gated
+start: s
+nodes:
+  s: { type: start }
+  gate:
+    type: gate
+    question: "Ship it?"
+    options:
+      - { id: ship, label: "Ship it", consequence: "The release goes out." }
+      - hold
+  shipped: { type: end }
+  held: { type: end, outcome: failure }
+edges:
+  - { from: s, to: gate }
+  - { from: gate, to: shipped, when: "choice == 'ship'" }
+  - { from: gate, to: held }
+`,
+      "utf8",
+    );
+    const run = ctx(dir, ["gated"]);
+    expect(await commands.run!.run(run)).toBe(3);
+    const requestId = /(hi_\S+)/.exec(run.lines.join("\n"))![1]!;
+
+    const answer = ctx(dir, [requestId, "ship"], { quiet: true, note: "the staging soak is green again" });
+    expect(await commands.answer!.run(answer)).toBe(0);
+
+    // `events` is the whole of the claim: the note is in the run's log, not in a logger.
+    const events = ctx(dir, [/(run_\S+)/.exec(run.lines.join("\n"))![1]!], { quiet: true, json: true });
+    expect(await commands.events!.run(events)).toBe(0);
+    const answered = events.lines
+      .map((l) => JSON.parse(l) as { type: string; payload: Record<string, unknown> })
+      .find((e) => e.type === "human.answered")!;
+    expect(answered.payload).toMatchObject({ answer: "ship", note: "the staging soak is green again" });
+  });
 });

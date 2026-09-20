@@ -40,8 +40,8 @@ edges:
 | --- | --- | --- |
 | `start` / `end` | entry and exit; `end.outcome` = `success` (default) \| `failure` \| `cancelled` | `end.message`; `start` takes no fields |
 | `agent` | run an agent turn and collect artifacts | `agent`, `template`/`prompt`, `inputs`, `produces`, `completion`, `vars` |
-| `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human` \| `matrix`), `options`, `defaultOption` |
-| `gate` | human approval; can auto‑approve | `question`, `options`, `autoApproveWhen`, `autoOption` |
+| `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human` \| `matrix`), `options` (see below), `defaultOption` (an option id) |
+| `gate` | human approval; can auto‑approve | `question`, `options` (see below), `autoApproveWhen`, `autoOption` (an option id) |
 | `set` | assign run vars | `vars` |
 | `loop` | repeat a nested graph / workflow as child runs | `mode` (`while` \| `until` \| `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
 | `parallel` | fan out child runs | `branches{}` or `forEach{items, body, key, dependsOn, workflow, workItemId}`, `concurrency`, `join` (`all` \| `any`), `failFast` (default `true`: stop once the join is decided) |
@@ -140,12 +140,43 @@ The node's result carries a per-branch `branches` list (`branch`, `workItemId`, 
 - Edges are evaluated in file order; the first `when` that is truthy wins; otherwise the
   first unconditional edge (validation rejects more than one on the built‑in node types);
   otherwise the run fails with `WORKFLOW_INVALID`.
-- Decision/gate nodes expose their choice as `choice`; write `when: "choice == 'x'"`.
+- Decision/gate nodes expose their choice as `choice`; write `when: "choice == 'x'"`, where
+  `x` is the option's **id** and never its label (see Options below).
 - Any node may have conditional edges (e.g. `agent` → branch on
   `steps.build.result.data.stopReason` or `artifacts.spec.data.risk`).
 - Loops in the *graph* (an edge pointing backwards) are allowed and are how `ai-sdlc`
   retries `build`; bound them with vars and a `set` node. `loop` *nodes* are for
   repeating a whole sub‑graph as isolated child runs.
+
+## Options (`decision` and `gate`)
+
+An option is either a bare word or a record. The two forms may be mixed in one list.
+
+```yaml
+  ship-it:
+    type: gate
+    question: "Ship {{ workItem.slug }}?"
+    options:
+      - approve                        # the short form: id and label are the same word
+      - id: reject
+        label: "Send back"
+        consequence: "The build runs again from the spec."
+      - id: abandon
+        label: "Abandon the work item"
+        consequence: "The run ends as a failure and the claim is released."
+        destructive: true
+```
+
+| field | meaning |
+| --- | --- |
+| `id` | what the answer *is*. Compared by `defaultOption`, `autoOption` and every `when: "choice == '<id>'"` edge, and what `human.answered` records |
+| `label` | the words a person reads. Reword it freely: no edge and no recorded answer depends on it |
+| `consequence` | one clause on what choosing this does. The desktop app shows it under the label |
+| `destructive` | marks the choice a UI must not make easy to hit by accident — it is never bound to a number key (`docs/design/20-attention-and-gates.md`) |
+
+`approve` on its own means `{ id: approve, label: approve }`, so every workflow written
+before options had fields keeps working unchanged and needs no migration. A `gate` with no
+`options` still defaults to approve / reject.
 
 ## Human gates
 

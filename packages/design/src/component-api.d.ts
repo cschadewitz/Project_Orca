@@ -297,12 +297,39 @@ export interface ArtifactPanelProps {
   };
 }
 
+/**
+ * One option a gate, a decision or a permission ask offers — the model's `GateOption`, which
+ * is also the wire's (`@orca/core`'s `run.ts`, `OpenInputView.options`). This is a correction
+ * of the draft, not a second shape: the draft required `consequence` and offered a `tone`,
+ * and neither survived contact (#247).
+ *
+ * `consequence` is optional because it is the *author's* to write. A workflow that says
+ * nothing about what rejecting does leaves this empty, and a card that invented a clause
+ * would be making up runtime facts (RULES.md rule 12). Ask for one in review; do not fake it.
+ *
+ * `tone` is gone. The one distinction a card has to draw is "this option destroys something",
+ * which is `destructive` — a property of the option, checkable, and what the design's rule
+ * about never binding it to `1` is written against. A three-value presentation hint invited a
+ * caller to colour a safe option `danger` and left the real flag unrepresented.
+ */
 export interface GateOption {
   id: string;
   label: string;
-  /** One clause on what happens if chosen. Required: a person should not guess. */
-  consequence: string;
-  tone?: "default" | "primary" | "danger";
+  /** One clause on what happens if chosen. Absent when the workflow's author wrote none. */
+  consequence?: string;
+  /** Never bound to a number key, never the default focus (docs/design/20-attention-and-gates.md). */
+  destructive?: boolean;
+}
+
+/**
+ * Who is blocked on an ask: an agent and the host it runs on, as `OpenInputView.agent` and
+ * `input.opened` carry it (protocol 1.6, #248). `hostType` is absent when that host is no
+ * longer configured — say nothing rather than guess at the transport.
+ */
+export interface InputAgent {
+  id: string;
+  hostId: string;
+  hostType?: "local" | "ssh";
 }
 
 export interface GateCardProps {
@@ -317,22 +344,60 @@ export interface GateCardProps {
   artifactsReady: boolean;
   /** Rendered inline in a run, or in the attention list. Behaviour is identical. */
   placement: "inline" | "inbox";
+  /**
+   * The note is the person's reasoning and the run does not branch on it — but it is now
+   * recorded on `human.answered` with the answer (#238), so the card may say it is kept.
+   * Until this release it reached the daemon's own log and nothing that outlived the run.
+   */
   onAnswer(optionId: string, note?: string): void;
 }
 
+/**
+ * A permission ask: an agent's turn is held open on a tool call. Three fields of the draft
+ * were wrong about the runtime and are corrected here rather than in the app (AGENTS.md).
+ *
+ * **`kind` is an ACP tool kind, not a category somebody invented.** The draft's
+ * `'exec' | 'write' | 'read' | 'network'` matches nothing: the vocabulary is
+ * `ToolKindSchema` (`packages/core/src/model/agent.ts`), it is what an agent sends and what
+ * a permission rule matches on, and `network` is not in it at all. Ten values, mirrored here
+ * so this file does not import from the runtime.
+ *
+ * **The options are the agent's own.** The draft's `'allow-once' | 'allow-always' | 'deny'`
+ * assumed ORCA composes the choice; it does not. The ask arrives with the agent's options and
+ * they travel verbatim (`Orchestrator`'s `askPermission`), because their ids are the agent's
+ * contract and an ORCA that renamed them would be answering a different question.
+ *
+ * **"Always" is a separate modifier, not a fourth option.** `inputs.answer` takes `optionId`
+ * *plus* an optional `always: { decision }`, and the client is what states the decision —
+ * ORCA will not read an agent's option ids and guess which way a standing grant goes
+ * (`packages/protocol/src/control.ts`). So the card renders one row of the agent's options
+ * and one affordance beside them, and `onAnswer` carries the two separately.
+ */
 export interface PermissionCardProps {
   askId: string;
-  agent: string;
-  host: string;
-  /** 'exec' | 'write' | 'read' | 'network' — drives the glyph and the wording. */
-  kind: string;
+  /** Whose turn is held open, from `OpenInputView.agent` — which host groups the card too. */
+  agent: InputAgent;
+  /** One of the ten ACP tool kinds — drives the glyph and the wording. */
+  kind: "read" | "edit" | "delete" | "move" | "search" | "execute" | "think" | "fetch" | "switch_mode" | "other";
   /** The exact command or path, verbatim, in mono. Never summarised. */
   subject: string;
   step: { id: string; name: string };
   waitingSince: Date;
-  /** Offering 'always' writes to the agent's permission policy; say so on the button. */
-  options: ReadonlyArray<"allow-once" | "allow-always" | "deny">;
-  onAnswer(option: string): void;
+  /** The agent's own options, in the order it offered them. Answer with an `id`. */
+  options: ReadonlyArray<GateOption>;
+  /**
+   * Whether "always" can be offered at all. False when this daemon serves no workspace
+   * config: there is nowhere to write a standing rule, so the affordance is absent rather
+   * than a button that fails (`inputs.answer` refuses `always` in that case).
+   */
+  canRecordAlways: boolean;
+  /**
+   * `always` says which way the standing rule goes, and is the client's statement rather
+   * than a reading of `optionId`. Absent means answer this one call: "allow once" / "deny
+   * once". A card that promises "ORCA will not ask again" must check the result's `added`
+   * and `refused` before saying so.
+   */
+  onAnswer(optionId: string, always?: { decision: "allow" | "deny" }): void;
 }
 
 /** Built. */

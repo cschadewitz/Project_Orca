@@ -49,11 +49,15 @@ export const InputsAnswerParamsSchema = z.object({
   /** An option's `id`. For a free-text question (no options) it is the text. */
   optionId: z.string().min(1),
   /**
-   * A free-text note the person added. It does not reach the workflow, which branches on the
-   * option id alone - and, today, it does not reach the run's log either: `human.answered`
-   * carries `{ stepRunId, requestId, answer }` and has no field for it, so the daemon writes
-   * it to the operator log and returns it. **A client must not show it as something the run
-   * recorded.** Widening the event payload is #238.
+   * A free-text note the person added: why this option, not which one. It does not reach the
+   * workflow, which branches on the option id alone.
+   *
+   * It does reach the run's log, as of #238 - `human.answered` carries it beside the answer -
+   * so a client may show it as something the run recorded, because it is. This comment used
+   * to say the opposite and it is worth keeping the reason: the event payload was
+   * `{ stepRunId, requestId, answer }` and had nowhere to put it, so the daemon wrote the
+   * note to the *operator's* log. A person who typed their reasoning into a gate had attached
+   * it to whichever terminal the daemon was logging to, and to nothing that outlived the run.
    */
   note: z.string().optional(),
   /**

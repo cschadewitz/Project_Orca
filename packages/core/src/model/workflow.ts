@@ -13,6 +13,7 @@
 import { z } from "zod";
 import { AgentSelectorSchema } from "./agent.js";
 import { ArtifactRefSchema, ArtifactSpecSchema } from "./artifact.js";
+import { GateOptionSchema } from "./run.js";
 
 export const ConditionSchema = z.string().min(1);
 export type Condition = z.infer<typeof ConditionSchema>;
@@ -107,9 +108,19 @@ export type DecisionSource = z.infer<typeof DecisionSourceSchema>;
 export const DecisionNodeSchema = NodeBaseSchema.extend({
   type: z.literal("decision"),
   source: DecisionSourceSchema,
-  /** Allowed choices. Outgoing edges use `when: choice == '<option>'`. */
-  options: z.array(z.string().min(1)).min(1),
-  /** Used when the source yields something outside `options`. */
+  /**
+   * Allowed choices. Either a bare word - which reads as an option that is its own
+   * id and label - or `{ id, label, consequence?, destructive? }`, so a workflow can
+   * say what choosing one *does* and mark the one a UI must not make easy to hit
+   * (docs/design/20-attention-and-gates.md, #247).
+   *
+   * Everything downstream compares the **id**: the source's result is matched
+   * against the ids, `defaultOption` names one, and an outgoing edge's
+   * `when: choice == '<option>'` is that id too. A label may therefore be reworded
+   * without touching the graph or invalidating an answer already in a log.
+   */
+  options: z.array(GateOptionSchema).min(1),
+  /** An option's `id`, used when the source yields something outside `options`. */
   defaultOption: z.string().optional(),
 });
 export type DecisionNode = z.infer<typeof DecisionNodeSchema>;
@@ -118,9 +129,23 @@ export type DecisionNode = z.infer<typeof DecisionNodeSchema>;
 export const GateNodeSchema = NodeBaseSchema.extend({
   type: z.literal("gate"),
   question: z.string(),
-  options: z.array(z.string().min(1)).min(1).default(["approve", "reject"]),
+  /**
+   * What the person is offered. As on a decision node: a bare word is an option that
+   * is its own id and label, and the object form carries the consequence clause and
+   * the `destructive` flag an attention card needs before it offers a choice (#247).
+   * The answer recorded is the **id**, and that is what `autoOption` and an edge's
+   * `when: choice == '<option>'` compare against.
+   */
+  options: z
+    .array(GateOptionSchema)
+    .min(1)
+    .default([
+      { id: "approve", label: "approve" },
+      { id: "reject", label: "reject" },
+    ]),
   /** If set, the gate auto-resolves with this option when `autoApproveWhen` is truthy. */
   autoApproveWhen: ConditionSchema.optional(),
+  /** An option's `id`. Defaults to the first option's when `autoApproveWhen` fires. */
   autoOption: z.string().optional(),
 });
 export type GateNode = z.infer<typeof GateNodeSchema>;
