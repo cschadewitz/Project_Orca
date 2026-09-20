@@ -5,6 +5,7 @@ import {
   type DecisionNode,
   type EndNode,
   type GateNode,
+  type GateOptionInput,
   type SetNode,
   type StartNode,
 } from "@orca/core";
@@ -45,7 +46,7 @@ export const setExecutor: NodeExecutor<SetNode> = {
 export async function askHuman(
   ctx: StepContext,
   question: string,
-  options: string[],
+  options: GateOptionInput[],
   kind: HumanInputQuery["kind"] = "decision",
 ): Promise<string | undefined> {
   const recorded = answerFromPreviousAttempt(ctx);

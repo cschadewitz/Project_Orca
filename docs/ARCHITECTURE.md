@@ -117,6 +117,8 @@ that never started get a fresh child run.
 4. `session/prompt`. Session updates stream into the event log as
    `agent.update` (text chunks are coalesced; tool calls, plan entries and
    locations are kept as a compact `AgentUpdateSummary`, not the raw ACP payload).
+   A tool call's args and result travel with it, each capped at 2,000 characters
+   when the event is written and stored with the length it had before the cap.
 5. When the turn ends (`turn-end` mode) — or as soon as the files appear
    (`artifact-present` mode) — **collect**: read each promised file through the
    host FS, parse front matter, validate required fields / allowed values /

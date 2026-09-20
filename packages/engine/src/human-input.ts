@@ -5,7 +5,16 @@
  * answer and resumes it), CLI prompt, or an upstream ACP client when ORCA runs
  * as an agent inside Kepler/Zed.
  */
-import { isOrcaError, newId, OrcaError, type Clock, type OrcaEventInput } from "@orca/core";
+import {
+  isOrcaError,
+  newId,
+  OrcaError,
+  toGateOption,
+  type Clock,
+  type GateOption,
+  type GateOptionInput,
+  type OrcaEventInput,
+} from "@orca/core";
 
 export interface HumanInputQuery {
   runId: string;
@@ -13,7 +22,12 @@ export interface HumanInputQuery {
   requestId: string;
   kind: "decision" | "permission" | "question";
   question: string;
-  options: string[];
+  /**
+   * Always normalised: a port sees `{ id, label, … }` whatever the caller passed.
+   * Answer with the `id` - that is what is recorded and what the next attempt
+   * compares against - and show the `label`.
+   */
+  options: GateOption[];
   context: Record<string, unknown>;
   /**
    * Fires when the run is cancelled while the question is still open. Ports
@@ -33,9 +47,9 @@ export function humanInputCancelled(signal?: AbortSignal): OrcaError {
   return new OrcaError("CANCELLED", String(signal?.reason ?? "cancelled"));
 }
 
-/** Always answers with `option` (or the first option). */
+/** Always answers with `option` (or the first option's id). */
 export function autoHumanInput(option?: string): HumanInputPort {
-  return { ask: async (q) => option ?? q.options[0] };
+  return { ask: async (q) => option ?? q.options[0]?.id };
 }
 
 /**
@@ -113,7 +127,8 @@ export async function askHumanInput(opts: {
   stepRunId: string;
   kind: HumanInputQuery["kind"];
   question: string;
-  options: string[];
+  /** Bare strings are accepted and normalised here; workflows still declare gate options as words. */
+  options: GateOptionInput[];
   context?: Record<string, unknown>;
   onRequested?: (query: HumanInputQuery) => void;
   onSettled?: (query: HumanInputQuery) => Promise<void> | void;
@@ -125,7 +140,8 @@ export async function askHumanInput(opts: {
     requestId: newId("hi", opts.clock.now()),
     kind: opts.kind,
     question: opts.question,
-    options: opts.options,
+    // Normalised before the event is emitted, so nothing written from here on is a bare string.
+    options: opts.options.map(toGateOption),
     context: opts.context ?? {},
   };
   await emit({

@@ -374,10 +374,13 @@ export class Orchestrator {
         `run ${request.runId} is ${state.run.status}, not paused: answer it through the process running it`,
         { runId: request.runId, status: state.run.status },
       );
-    if (request.options.length && !request.options.includes(answer))
-      throw new OrcaError("RUN_STATE", `'${answer}' is not one of: ${request.options.join(", ")}`, {
+    // An answer is an option's id, never its label: a label may be reworded, and what
+    // is recorded here is compared against the options again when the run is re-driven.
+    const ids = request.options.map((o) => o.id);
+    if (ids.length && !ids.includes(answer))
+      throw new OrcaError("RUN_STATE", `'${answer}' is not one of: ${ids.join(", ")}`, {
         requestId,
-        options: request.options,
+        options: ids,
       });
     await this.stores.events.append({
       type: "human.answered",
@@ -1040,7 +1043,9 @@ export class Orchestrator {
           stepRunId,
           kind: "permission",
           question: req.toolCall.title ?? "Allow tool call?",
-          options: req.options.map((o) => o.optionId),
+          // ACP already separates the two: `optionId` is what the agent is answered
+          // with, `name` is what the host shows. Keep them apart here too.
+          options: req.options.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
           context: { toolCall: req.toolCall },
           onRequested: () => {
             pendingAsks++;

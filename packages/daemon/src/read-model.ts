@@ -483,7 +483,10 @@ export class ReadModel {
       id: request.id,
       kind: request.kind,
       question: request.question,
-      options: [...request.options],
+      // `OpenInputView.options` is still `string[]` on the wire (@orca/protocol), so the id
+      // travels - it is what `inputs.answer` sends back. Widening the view to carry labels,
+      // consequence clauses and the destructive flag is the attention surface's work (#161).
+      options: request.options.map((o) => o.id),
       context: request.context,
       runId: request.runId,
       runName: name,

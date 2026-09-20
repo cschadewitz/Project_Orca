@@ -11,7 +11,11 @@ export function cliHumanInput(
       const rl = readline.createInterface({ input, output });
       try {
         output.write(`\n[orca] ${q.kind} for run ${q.runId} / step ${q.stepRunId}\n${q.question}\n`);
-        if (q.options.length) output.write(q.options.map((o, i) => `  ${i + 1}. ${o}`).join("\n") + "\n");
+        if (q.options.length)
+          output.write(
+            q.options.map((o, i) => `  ${i + 1}. ${o.label}${o.consequence ? ` - ${o.consequence}` : ""}`).join("\n") +
+              "\n",
+          );
         for (;;) {
           if (q.signal?.aborted) throw humanInputCancelled(q.signal);
           const answer = (
@@ -21,9 +25,11 @@ export function cliHumanInput(
             })
           ).trim();
           if (!q.options.length) return answer;
+          // Always answered with the option's id, whether it was picked by number or typed out.
           const idx = Number(answer);
-          if (Number.isInteger(idx) && idx >= 1 && idx <= q.options.length) return q.options[idx - 1];
-          if (q.options.includes(answer)) return answer;
+          if (Number.isInteger(idx) && idx >= 1 && idx <= q.options.length) return q.options[idx - 1]?.id;
+          const named = q.options.find((o) => o.id === answer || o.label === answer);
+          if (named) return named.id;
           output.write("Please choose one of the listed options.\n");
         }
       } finally {
