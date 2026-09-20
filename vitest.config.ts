@@ -1,5 +1,6 @@
 /** Vitest setup: `@orca/*` resolves to package sources, so tests never depend on a build. */
 import { defineConfig } from "vitest/config";
+import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const src = (name: string, module: string) =>
@@ -35,6 +36,18 @@ export default defineConfig({
     ],
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Vitest's default is one worker per core less one, so the suite's memory footprint is a
+    // property of whatever machine it lands on and nothing bounds what two concurrent runs
+    // cost. On 2026-09-20 two agents ran the suite at once on an 8-core box and the kernel
+    // OOM-killed both of them mid-run, losing uncommitted work. Measured there: 8 workers is
+    // 45s at 3,249 MB peak, 4 is 50s at 2,217 MB — 11% slower for a third less memory,
+    // because the suite is startup- and I/O-bound well before it is CPU-bound.
+    //
+    // `min` with the default, not a bare 4, and that distinction is load-bearing: a plain 4
+    // RAISES the worker count on a 2- or 4-core CI runner, where the default is 1 or 3. The
+    // first cut of this did exactly that and reddened CI with two timeout-shaped flakes it
+    // had made more likely. This can only ever reduce concurrency, never add to it.
+    maxWorkers: Number(process.env.VITEST_MAX_WORKERS ?? Math.min(4, Math.max(1, availableParallelism() - 1))),
     coverage: {
       provider: "v8",
       // Every source file, not just the ones a test happened to import: a module nobody
