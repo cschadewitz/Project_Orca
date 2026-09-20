@@ -1,0 +1,312 @@
+/**
+ * The control methods and the agent methods over `dispatch`, against a store a real
+ * interpreter wrote - a run actually parked at a gate rather than a log shaped like one.
+ *
+ * That matters here in a way it did not for the read methods. A read is a projection and a
+ * hand-written log exercises it exactly; answering a gate has to re-drive the run, take its
+ * lease and reach the same terminal state a CLI would, so the fixture is an orchestrator
+ * with `PausingHumanInput` and a workflow, driven until it parks.
+ */
+import { describe, expect, it } from "vitest";
+import { AgentRegistry, LocalHost, type AgentSession } from "@orca/agents";
+import {
+  AgentSpecSchema,
+  FakeClock,
+  TemplateRegistry,
+  WorkflowRegistry,
+  parseWorkflow,
+  silentLogger,
+} from "@orca/core";
+import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, runLeaseResource } from "@orca/engine";
+import {
+  AgentsListResultSchema,
+  AgentsPingResultSchema,
+  CONTROL_METHODS,
+  HelloResultSchema,
+  InputsAnswerResultSchema,
+  RunsStartResultSchema,
+  SubscribeParamsSchema,
+  parseAgentChanged,
+} from "@orca/protocol";
+import { memoryStores } from "@orca/store";
+import {
+  AgentModel,
+  ControlModel,
+  ReadModel,
+  Subscription,
+  dispatch,
+  methodsFor,
+  type MethodContext,
+} from "@orca/daemon";
+
+const GATED = `
+id: gated
+name: gated
+start: s
+nodes:
+  s: { type: start }
+  gate: { type: gate, question: "Ship it?", options: [ship, hold] }
+  shipped: { type: end }
+  held: { type: end, outcome: failure }
+edges:
+  - { from: s, to: gate }
+  - { from: gate, to: shipped, when: "choice == 'ship'" }
+  - { from: gate, to: held }
+`;
+
+const TALKY = `
+id: talky
+name: talky
+start: s
+nodes:
+  s: { type: start }
+  work: { type: agent, agent: builder, prompt: "say something" }
+  e: { type: end }
+edges: [{ from: s, to: work }, { from: work, to: e }]
+`;
+
+const HANDSHAKE_MS = 250;
+
+/**
+ * A session that costs `HANDSHAKE_MS` on the clock and speaks one line when prompted. The
+ * line is the point: it is what moves `lastSeenAt` without a second handshake.
+ */
+function fakeSessions(clock: FakeClock) {
+  const factory = async (o: { agent: { id: string }; host: { id: string }; cwd: string }): Promise<AgentSession> => {
+    clock.advance(HANDSHAKE_MS);
+    const listeners = new Set<(e: { summary: { kind: string; text?: string } }) => void>();
+    return {
+      id: `sess_${o.agent.id}`,
+      agentId: o.agent.id,
+      hostId: o.host.id,
+      cwd: o.cwd,
+      acpSessionId: "acp",
+      closed: new Promise(() => {}),
+      prompt: async () => {
+        clock.advance(60_000);
+        for (const l of listeners) l({ summary: { kind: "agent_message_chunk", text: "working on it" } });
+        return { stopReason: "end_turn" as const, durationMs: 1 };
+      },
+      onUpdate: (listener) => {
+        listeners.add(listener as never);
+        return () => void listeners.delete(listener as never);
+      },
+      cancel: async () => {},
+      close: async () => {},
+    };
+  };
+  return factory as Orchestrator["sessionFactory"];
+}
+
+function harness() {
+  const clock = new FakeClock();
+  const stores = memoryStores(clock);
+  const agents = new AgentRegistry(clock)
+    .addHost(new LocalHost({ id: "local", type: "local" }))
+    .addAgent(AgentSpecSchema.parse({ id: "builder", command: "x", hostId: "local", roles: ["build"] }))
+    .addAgent(AgentSpecSchema.parse({ id: "reviewer", command: "y", hostId: "local" }));
+  const orchestrator = new Orchestrator({
+    stores,
+    agents,
+    workflows: new WorkflowRegistry().register(parseWorkflow(GATED)).register(parseWorkflow(TALKY)),
+    templates: new TemplateRegistry(),
+    workspaceProvider: new LocalWorkspaceProvider("/tmp"),
+    // The daemon's port: every gate parks to the log rather than being held open in memory.
+    humanInput: new PausingHumanInput(),
+    sessionFactory: fakeSessions(clock),
+    logger: silentLogger,
+    clock,
+  });
+  const reads = new ReadModel({ orchestrator });
+  const agentModel = new AgentModel({ orchestrator, reads });
+  const control = new ControlModel({ orchestrator, reads });
+  const ctx: MethodContext = {
+    orcaVersion: "0.4.0-test",
+    capabilities: ["runs.read", "runs.subscribe", "runs.control"],
+    reads,
+    control,
+    agents: agentModel,
+  };
+  return { clock, stores, orchestrator, agents, agentModel, ctx };
+}
+
+async function call(ctx: MethodContext, method: string, params?: unknown) {
+  const res = await dispatch(JSON.stringify({ kind: "request", id: 3, method, params }), methodsFor(ctx), ctx);
+  return res as { ok: boolean; result?: unknown; error?: { code: string; message: string; details?: unknown } };
+}
+
+/** A run of `gated`, driven until it parks at the gate, with the id of the open question. */
+async function parked(h: ReturnType<typeof harness>) {
+  const state = await h.orchestrator.startAndRun({ workflowId: "gated" });
+  expect(state.run.status).toBe("paused");
+  const pending = await h.orchestrator.pendingInputs(state.run.id);
+  expect(pending).toHaveLength(1);
+  return { runId: state.run.id, requestId: pending[0]!.id };
+}
+
+describe("inputs.answer", () => {
+  it("answers a parked gate and the run runs on to its end", async () => {
+    const h = harness();
+    const { runId, requestId } = await parked(h);
+
+    const res = await call(h.ctx, "inputs.answer", { requestId, optionId: "ship" });
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    const answered = InputsAnswerResultSchema.parse(res.result);
+    expect(answered).toMatchObject({ requestId, runId, answer: "ship" });
+    // The call returns once the run has stopped again, so this is a settled status.
+    expect(answered.run?.status).toBe("succeeded");
+    expect((await h.orchestrator.getState(runId)).run.status).toBe("completed");
+    expect(await h.orchestrator.pendingInputs(runId)).toEqual([]);
+  });
+
+  it("refuses an option the question does not offer, and names the ones it does", async () => {
+    const h = harness();
+    const { requestId } = await parked(h);
+    const res = await call(h.ctx, "inputs.answer", { requestId, optionId: "maybe" });
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INPUT_OPTION_UNKNOWN");
+    expect(res.error?.details).toMatchObject({ options: ["ship", "hold"] });
+  });
+
+  it("tells a second answer that the question is already settled", async () => {
+    const h = harness();
+    const { requestId } = await parked(h);
+    expect((await call(h.ctx, "inputs.answer", { requestId, optionId: "ship" })).ok).toBe(true);
+
+    // Two people looking at the same attention list is the ordinary case, not the odd one:
+    // the second one has to be told what happened, not handed a generic RUN_STATE.
+    const again = await call(h.ctx, "inputs.answer", { requestId, optionId: "hold" });
+    expect(again.ok).toBe(false);
+    expect(again.error?.code).toBe("INPUT_ANSWERED");
+    expect(again.error?.message).toContain("ship");
+  });
+
+  it("refuses a run another live process is interpreting, and says where it is", async () => {
+    const h = harness();
+    const { runId, requestId } = await parked(h);
+    // A lease held by somebody else, freshly renewed: a live interpreter, not a lapsed one.
+    await h.stores.leases.acquire({
+      resource: runLeaseResource(runId),
+      holder: "some-other-process",
+      ttlMs: 60_000,
+    });
+
+    const res = await call(h.ctx, "inputs.answer", { requestId, optionId: "ship" });
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("RUN_LEASED_ELSEWHERE");
+    // The holder's pid and host, because "do it over there" is only useful with a there.
+    expect(res.error?.details).toMatchObject({ runId, holder: "some-other-process" });
+    expect((res.error?.details as { pid?: unknown }).pid).toEqual(expect.any(Number));
+    expect((res.error?.details as { host?: unknown }).host).toEqual(expect.any(String));
+    // Refused without writing: the answer is still open for the process that holds the lease.
+    expect(await h.orchestrator.pendingInputs(runId)).toHaveLength(1);
+  });
+});
+
+describe("runs.start", () => {
+  it("starts a workflow with vars and writes no request or work-item document (#196)", async () => {
+    const h = harness();
+    const res = await call(h.ctx, "runs.start", {
+      workflowId: "talky",
+      vars: { who: "nobody" },
+      requestId: "req-not-in-this-store",
+      workItemId: "wi-not-in-this-store",
+    });
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+    const started = RunsStartResultSchema.parse(res.result);
+    expect(started.run.status).toBe("succeeded");
+    expect(started.run.requestId).toBe("req-not-in-this-store");
+    // The ids travelled onto the log and nothing was created for them. A run named after a
+    // work item the daemon has not got falls back to the workflow id, as it always has.
+    expect(await h.stores.requests.list()).toEqual([]);
+    expect(await h.stores.workItems.list()).toEqual([]);
+    expect(started.run.name).toBe("talky");
+  });
+});
+
+describe("hello", () => {
+  it("advertises runs.control and the control methods when the daemon drives runs", async () => {
+    const h = harness();
+    const res = await call(h.ctx, "hello", { client: "test/1", protocol: { major: 1, minor: 4 } });
+    const hello = HelloResultSchema.parse(res.result);
+    expect(hello.capabilities).toContain("runs.control");
+    for (const m of CONTROL_METHODS) expect(hello.methods).toContain(m);
+    expect(hello.methods).toContain("agents.ping");
+  });
+
+  it("read-only: no control methods in the table, and no runs.control", async () => {
+    const h = harness();
+    // What `orca serve --read-only` builds: no control model, and the capability dropped.
+    const ctx: MethodContext = { ...h.ctx, control: undefined, capabilities: ["runs.read", "runs.subscribe"] };
+
+    const hello = HelloResultSchema.parse(
+      (await call(ctx, "hello", { client: "t", protocol: { major: 1, minor: 4 } })).result,
+    );
+    expect(hello.capabilities).not.toContain("runs.control");
+    for (const m of CONTROL_METHODS) expect(hello.methods).not.toContain(m);
+
+    // Absent, not present-and-refusing: a client can hide a button rather than discover at
+    // the moment of pressing it that there is nothing behind it.
+    const answer = await call(ctx, "inputs.answer", { requestId: "hi-1", optionId: "ship" });
+    expect(answer.ok).toBe(false);
+    expect(answer.error?.code).toBe("PROTOCOL_METHOD");
+
+    // The agent methods survive `--read-only`: neither touches a run, a lease or a log.
+    expect(hello.methods).toContain("agents.list");
+    expect(hello.methods).toContain("agents.ping");
+  });
+});
+
+describe("agents.list and agents.ping", () => {
+  it("reports a configured agent nothing has contacted as unknown, not as a default", async () => {
+    const h = harness();
+    const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);
+    expect(list.agents.map((a) => [a.id, a.state])).toEqual([
+      ["builder", "unknown"],
+      ["reviewer", "unknown"],
+    ]);
+    expect(list.agents[0]).toMatchObject({ hostId: "local", roles: ["build"], consecutiveFailures: 0 });
+    // Health does not survive a restart and must not pretend to: nothing is invented here.
+    expect(list.agents[0]!.lastHandshakeAt).toBeUndefined();
+    expect(list.agents[0]!.lastSeenAt).toBeUndefined();
+  });
+
+  it("pings an agent, records the handshake, and pushes agent.changed", async () => {
+    const h = harness();
+    const frames: { method: string; params?: unknown }[] = [];
+    const sub = new Subscription({
+      id: "sub-1",
+      // Store-wide: an agent belongs to the process, so a run-scoped subscription is not
+      // woken by one changing.
+      params: SubscribeParamsSchema.parse({}),
+      source: h.orchestrator,
+      send: (m) => void frames.push(m),
+      agents: h.agentModel,
+    });
+    await sub.start();
+
+    const res = await call(h.ctx, "agents.ping", { agentId: "builder" });
+    const ping = AgentsPingResultSchema.parse(res.result);
+    expect(ping.ok).toBe(true);
+    expect(ping.agent).toMatchObject({ id: "builder", state: "ok", roundTripMs: HANDSHAKE_MS });
+
+    const changed = frames.map((f) => parseAgentChanged(f)).filter((p) => p !== undefined);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]!.agent).toMatchObject({ id: "builder", state: "ok" });
+    sub.stop();
+  });
+
+  it("lastSeenAt advances on agent output while lastHandshakeAt stays at the handshake", async () => {
+    const h = harness();
+    await h.orchestrator.startAndRun({ workflowId: "talky" });
+
+    const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);
+    const builder = list.agents.find((a) => a.id === "builder")!;
+    // The fake session hands over a line a minute after the handshake. One timestamp would
+    // have to choose between "the connection is a minute old" and "it spoke just now" (#227).
+    expect(builder.state).toBe("ok");
+    expect(builder.lastHandshakeAt).toBeDefined();
+    expect(builder.lastSeenAt).toBeDefined();
+    expect(Date.parse(builder.lastSeenAt!)).toBeGreaterThan(Date.parse(builder.lastHandshakeAt!));
+  });
+});

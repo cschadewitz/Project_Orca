@@ -22,7 +22,14 @@
  * sequence order - agent output never lands after the `step.completed` that ended it.
  */
 import type { OrcaEvent } from "@orca/core";
-import { AGENT_UPDATE, type DaemonNotification, type NotificationMessage, type SubscribeParams } from "@orca/protocol";
+import {
+  AGENT_CHANGED,
+  AGENT_UPDATE,
+  type AgentView,
+  type DaemonNotification,
+  type NotificationMessage,
+  type SubscribeParams,
+} from "@orca/protocol";
 import { notificationsFor, wants } from "./notifications.js";
 
 /** At most one `agent.update` notification per step per this many milliseconds. */
@@ -38,6 +45,15 @@ export interface SubscriptionSource {
   events(runId: string): Promise<OrcaEvent[]>;
 }
 
+/**
+ * What a subscription needs to push `agent.changed`: a hook that fires when an agent's
+ * handshake health moves. Stated structurally for the same reason as `SubscriptionSource`;
+ * `AgentModel` is what satisfies it in the daemon.
+ */
+export interface AgentChangeSource {
+  onChange(listener: (change: { agent: AgentView; at: string }) => void): () => void;
+}
+
 /** Where a subscription's frames go. The socket writes them; a test collects them. */
 export type SendNotification = (message: NotificationMessage) => void;
 
@@ -46,6 +62,12 @@ export interface SubscriptionOptions {
   params: SubscribeParams;
   source: SubscriptionSource;
   send: SendNotification;
+  /**
+   * Agent health changes, when this daemon has a registry. A subscription scoped to one run
+   * ignores it: agents are a property of the process, not of a run, so a run screen would
+   * only be woken by work it is not showing.
+   */
+  agents?: AgentChangeSource | undefined;
   /** Overridable so a test can hold the batch window open or close it by hand. */
   batchMs?: number | undefined;
 }
@@ -72,6 +94,7 @@ export class Subscription {
   private readonly batchMs: number;
   private readonly batches = new Map<string, Batch>();
   private detach: (() => void) | undefined;
+  private detachAgents: (() => void) | undefined;
   /** Events that arrived while the replay was still reading the log. */
   private buffered: OrcaEvent[] | undefined;
   private stopped = false;
@@ -95,6 +118,20 @@ export class Subscription {
       },
       runId === undefined ? undefined : { runId },
     );
+    // Agent health is the process's, not a run's, so only a store-wide subscription hears
+    // it. There is nothing to replay: health is in memory, it has no sequence number, and
+    // the current answer is one `agents.list` away.
+    if (runId === undefined && this.opts.agents)
+      this.detachAgents = this.opts.agents.onChange((change) => {
+        if (this.stopped) return;
+        // Its own envelope, not one of the six: `agent.changed` carries no run and no
+        // cursor, so it is outside `DaemonNotification` on purpose (see @orca/protocol).
+        this.send({
+          kind: "notification",
+          method: AGENT_CHANGED,
+          params: { subscriptionId: this.id, at: change.at, agent: change.agent },
+        });
+      });
 
     let replayed = 0;
     let through = -1;
@@ -123,6 +160,8 @@ export class Subscription {
     this.flushAll();
     this.detach?.();
     this.detach = undefined;
+    this.detachAgents?.();
+    this.detachAgents = undefined;
   }
 
   /** Route one event, returning how many frames it produced. */
