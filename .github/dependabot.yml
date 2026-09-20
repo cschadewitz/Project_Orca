@@ -1,16 +1,21 @@
-# Grouped weekly dependency bumps, so routine upgrades arrive as one PR per ecosystem.
+# Grouped daily npm dependency bumps, so routine upgrades arrive as one PR per ecosystem.
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: daily
     open-pull-requests-limit: 5
     groups:
       dev-dependencies:
-        dependency-type: development
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
       production-dependencies:
-        dependency-type: production
+        dependency-type: "production"
+        update-types:
+          - "patch"
 
   - package-ecosystem: github-actions
     directory: /
