@@ -14,6 +14,7 @@ import {
   clampIndex,
   hasContentBeneath,
   indexAtOffset,
+  isAtBottom,
   isMeasured,
   listWindow,
   moveIndex,
@@ -21,6 +22,8 @@ import {
   revealAnchor,
   revealScrollTop,
   rowsInView,
+  shiftAnchor,
+  shiftScrollTop,
   tickOffset,
   type ListMetrics,
 } from "../src/list/list-window.js";
@@ -185,6 +188,54 @@ describe("the gutter", () => {
     expect(indexAtOffset(0.5, 50_000)).toBe(25_000);
     expect(indexAtOffset(1, 50_000)).toBe(49_999);
     expect(indexAtOffset(-1, 50_000)).toBe(0);
+  });
+});
+
+describe("prepending a page to the front of a list", () => {
+  /* "Load earlier output" and the timeline's backwards paging. Every index moves down by
+     the number of rows that arrived, so an offset left alone shows the page that was
+     already on screen — which is the one failure that makes the button pointless. */
+
+  it("scrolls down by exactly the height of what arrived", () => {
+    // 100 rows in front of a list scrolled 50 rows down: the same rows stay under the eye.
+    expect(shiftScrollTop(100, metrics({ count: 2_100, scrollTop: 50 * 32 }))).toBe(150 * 32);
+  });
+
+  it("is the same arithmetic in reverse for a trim from the front, and stops at the top", () => {
+    expect(shiftScrollTop(-100, metrics({ scrollTop: 150 * 32 }))).toBe(50 * 32);
+    expect(shiftScrollTop(-100, metrics({ scrollTop: 10 * 32 }))).toBe(0);
+  });
+
+  it("leaves an unmeasured list's offset alone, because it has none to move", () => {
+    expect(shiftScrollTop(100, unmeasured({ scrollTop: 0 }))).toBe(0);
+  });
+
+  it("moves the anchor instead when there are no pixels, and clamps it to the list", () => {
+    expect(shiftAnchor(100, unmeasured({ anchor: 20, count: 2_000 }))).toBe(120);
+    expect(shiftAnchor(-100, unmeasured({ anchor: 20, count: 2_000 }))).toBe(0);
+    expect(shiftAnchor(100, unmeasured({ anchor: 0, count: 0 }))).toBe(0);
+  });
+});
+
+describe("whether a stream is still at its end", () => {
+  /* The question `follow` asks of pixels. The tolerance is a row rather than a pixel: a
+     fractional row height and a device pixel ratio that does not divide both leave a list
+     that is visibly at the bottom a fraction short of it, and a follow mode that dropped
+     out there would drop out constantly. */
+
+  it("is at the bottom when the last row is the one on screen", () => {
+    // 100 rows of 32px is 3200px of content; ten rows of viewport ends it at 2880.
+    expect(isAtBottom(metrics({ count: 100, scrollTop: 2_880 }))).toBe(true);
+    expect(isAtBottom(metrics({ count: 100, scrollTop: 2_879 }))).toBe(true);
+    expect(isAtBottom(metrics({ count: 100, scrollTop: 2_847 }))).toBe(false);
+  });
+
+  it("is at the bottom when there is no scroll to have left", () => {
+    // Unmeasured and empty are both "nothing has scrolled away from the end", which is what
+    // keeps a stream following through its first frame and through a step that has not
+    // printed yet, rather than dropping out of follow before it ever starts.
+    expect(isAtBottom(unmeasured())).toBe(true);
+    expect(isAtBottom(metrics({ count: 0 }))).toBe(true);
   });
 });
 

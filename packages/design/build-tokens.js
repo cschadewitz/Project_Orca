@@ -196,6 +196,20 @@ export const CONNECTION_PRESENTATION: Record<ConnectionState, {
 ${presentation(S.connectionState, true)}
 };
 
+export type AgentHealth = ${union(Object.keys(S.agentHealth))};
+export const AGENT_HEALTH_STATES: readonly AgentHealth[] = [${Object.keys(S.agentHealth).map(quote).join(", ")}] as const;
+/**
+ * An agent's handshake health. \`unknown\` is first because it is the honest default: health
+ * is tracked in the daemon's process and never persisted, so a freshly started daemon knows
+ * nothing about an agent until it contacts one (#222). Word and glyph are not optional —
+ * a degraded agent is never carried by an amber border alone.
+ */
+export const AGENT_HEALTH_PRESENTATION: Record<AgentHealth, {
+  word: string; glyph: string; fg: string; fgToken: ColorToken;
+}> = {
+${presentation(S.agentHealth, true)}
+};
+
 export type StateViewKind = ${union(Object.keys(S.stateView))};
 export const STATE_VIEW_KINDS: readonly StateViewKind[] = [${Object.keys(S.stateView).map(quote).join(", ")}] as const;
 /** The word is the accessible name of the view; 'loading' has no glyph because it draws skeletons. */

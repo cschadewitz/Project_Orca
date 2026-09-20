@@ -6,7 +6,7 @@ export type ColorToken = 'surface-canvas' | 'surface-base' | 'surface-raised' | 
 
 export type SpacingToken = 'space-0-5' | 'space-1' | 'space-2' | 'space-3' | 'space-4' | 'space-5' | 'space-6' | 'space-8' | 'space-12' | 'space-16';
 export type RadiusToken = 'radius-none' | 'radius-xs' | 'radius-sm' | 'radius-md' | 'radius-lg' | 'radius-full';
-export type SizeToken = 'row-comfortable' | 'row-compact' | 'control-sm' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top';
+export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'col-time' | 'col-lineno' | 'control-sm' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top';
 export type BorderToken = 'stroke-hairline' | 'stroke-rail' | 'stroke-focus' | 'stroke-edge-active';
 export type ShadowToken = 'shadow-none' | 'shadow-popover' | 'shadow-modal' | 'shadow-sticky';
 export type DurationToken = 'duration-instant' | 'duration-fast' | 'duration-medium' | 'duration-pulse';
@@ -178,6 +178,23 @@ export const CONNECTION_PRESENTATION: Record<ConnectionState, {
   disconnected: { word: 'disconnected', glyph: '◷', fg: 'var(--status-stale)', fgToken: 'status-stale', writes: 'disabled' },
   file: { word: 'file mode', glyph: '◷', fg: 'var(--status-stale)', fgToken: 'status-stale', writes: 'absent' },
   mismatch: { word: 'version mismatch', glyph: '▣', fg: 'var(--status-blocked)', fgToken: 'status-blocked', writes: 'disabled' },
+};
+
+export type AgentHealth = 'unknown' | 'ok' | 'degraded' | 'down';
+export const AGENT_HEALTH_STATES: readonly AgentHealth[] = ['unknown', 'ok', 'degraded', 'down'] as const;
+/**
+ * An agent's handshake health. `unknown` is first because it is the honest default: health
+ * is tracked in the daemon's process and never persisted, so a freshly started daemon knows
+ * nothing about an agent until it contacts one (#222). Word and glyph are not optional —
+ * a degraded agent is never carried by an amber border alone.
+ */
+export const AGENT_HEALTH_PRESENTATION: Record<AgentHealth, {
+  word: string; glyph: string; fg: string; fgToken: ColorToken;
+}> = {
+  unknown: { word: 'unknown', glyph: '◌', fg: 'var(--ink-tertiary)', fgToken: 'ink-tertiary' },
+  ok: { word: 'ok', glyph: '✓', fg: 'var(--status-succeeded)', fgToken: 'status-succeeded' },
+  degraded: { word: 'degraded', glyph: '◷', fg: 'var(--status-waiting)', fgToken: 'status-waiting' },
+  down: { word: 'down', glyph: '✕', fg: 'var(--status-failed)', fgToken: 'status-failed' },
 };
 
 export type StateViewKind = 'empty' | 'loading' | 'error' | 'disconnected' | 'no-results';

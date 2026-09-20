@@ -17,10 +17,12 @@
  *   and both have to stay legible (docs/design/RULES.md rule 10) — one is the ring the
  *   `:focus-visible` rule draws, the other is `--surface-selected` and the accent rail the
  *   surface's row class carries.
- * - **the keys**, registered on the `KeyboardMap` in the `list` scope (`use-list-keys.ts`),
+ * - **the keys**, registered on the `KeyboardMap` in the list's scope (`use-list-keys.ts`),
  *   because a list that bound its own `keydown` would be a list whose keys the command
- *   palette cannot show — and because two surfaces binding `J` in one scope is a bug the
- *   map throws on rather than a race.
+ *   palette cannot show — and because two lists binding `J` in *one* scope is a bug the map
+ *   throws on rather than a race. Which is why `scope` is a prop: a screen may hold a run
+ *   tree, a timeline and a stream of output, and `J` means "next" in whichever of the three
+ *   the focus is in, because scope resolution is innermost-first.
  * - **scrolling to a row**, which replaces `scrollIntoView`: the row a key just selected
  *   may not be in the document at all. See `use-list-viewport.ts`.
  * - **the status minimap**, which is over the *whole* list and not the window. That is the
@@ -32,21 +34,32 @@
  * rail come from — and the cells inside it. The substrate never states a height; it reads
  * the one the cascade already bound (`row-height.ts`).
  */
-import { useCallback, useEffect, useMemo, useRef, type JSX, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  type JSX,
+  type Ref,
+  type ReactNode,
+} from "react";
 import { scopeProps } from "../keyboard-map.js";
 import { textClass } from "../ui/index.js";
+import type { ListScope } from "./list-scope.js";
 import { moveIndex, pageRows, tickOffset, type ListMove } from "./list-window.js";
 import { useListKeys } from "./use-list-keys.js";
 import { useListViewport } from "./use-list-viewport.js";
-import "./list.css";
 
 /**
- * The three statuses the minimap has a colour for
- * (`.orca-minimap__tick--{failed,waiting,blocked}` in components.css). It is deliberately
- * not the eight run statuses: a gutter that marked every row would mark nothing, and these
- * are the three a person scrolls a long list looking for.
+ * What the minimap has a mark for (`.orca-minimap__tick--*` in components.css): the three
+ * statuses a person scrolls a long list looking for, plus where they currently are.
+ *
+ * It is deliberately not the eight run statuses — a gutter that marked every row would mark
+ * nothing. `current` is not a status at all, and draws taller rather than only differently
+ * coloured, so position cannot be mistaken for a state.
  */
-export type MinimapKind = "failed" | "waiting" | "blocked";
+export type MinimapKind = "failed" | "waiting" | "blocked" | "current";
 
 export interface VirtualListTick {
   /** Index into the whole list, not into the rendered window. */
@@ -54,6 +67,19 @@ export interface VirtualListTick {
   kind: MinimapKind;
   /** The tick's accessible name — it is a control, so it says which row it jumps to. */
   label: string;
+}
+
+/**
+ * The two things a surface cannot ask for by re-rendering, so they are imperative.
+ *
+ * `reveal` is "put this row on screen" — the same call the keys make. `shiftBy` is the one
+ * a list that pages *backwards* needs: after `rows` items land in front of the list, every
+ * index moved down by `rows`, and a scroll offset left alone would throw a person back by
+ * exactly the page they just asked to see.
+ */
+export interface VirtualListHandle {
+  reveal: (index: number) => void;
+  shiftBy: (rows: number) => void;
 }
 
 export interface VirtualListProps<T> {
@@ -82,6 +108,23 @@ export interface VirtualListProps<T> {
   header?: ReactNode;
   /** The surface's class on the substrate's root, for its own place in a layout. */
   className?: string;
+  /**
+   * Which `ShortcutScope` this list's keys belong to. One list per scope: a second
+   * `VirtualList` in the same scope registers `J` twice and the `KeyboardMap` throws, which
+   * is how a collision is meant to be found. Defaults to `list`.
+   */
+  scope?: ListScope;
+  /**
+   * Stay at the end as the list grows — a stream that is following. A growing `items`
+   * reveals the last row; a scroll away from the bottom is the person taking it back, and
+   * calls `onHold` **once** rather than on every scroll event. The surface owns the flag:
+   * the substrate says when following stopped, not whether it should start again.
+   */
+  follow?: boolean;
+  /** Called once when a scroll leaves the bottom while `follow` is set. */
+  onHold?: () => void;
+  /** The imperative half: `reveal` and `shiftBy`. */
+  ref?: Ref<VirtualListHandle>;
 }
 
 export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
@@ -98,11 +141,25 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
     ticks,
     header,
     className,
+    scope = "list",
+    follow = false,
+    onHold,
+    ref,
   } = props;
 
   const count = items.length;
-  const viewport = useListViewport(count, variant === "two-line" ? 2 : 1);
-  const { metricsRef, reveal, window: slice } = viewport;
+
+  /* Through a ref, so the viewport's scroll handler keeps one identity: it is on the
+     scroller's `onScroll` and re-binding it on every frame of a stream would be a listener
+     churned forty times a second. */
+  const hold = useRef(onHold);
+  hold.current = onHold;
+  const leaveBottom = useCallback(() => hold.current?.(), []);
+
+  const viewport = useListViewport(count, variant === "two-line" ? 2 : 1, follow ? leaveBottom : undefined);
+  const { metricsRef, reveal, shiftBy, window: slice } = viewport;
+
+  useImperativeHandle(ref, () => ({ reveal, shiftBy }), [reveal, shiftBy]);
 
   /* Both read through refs by the key handler, which keeps one identity for the life of
      the list so the eight shortcuts are registered once (see `use-list-keys.ts`). */
@@ -121,7 +178,7 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
     },
     [metricsRef, reveal],
   );
-  useListKeys(noun, move);
+  useListKeys(noun, move, scope);
 
   /* Keep the selected row on screen — for a click as much as for a key, and again when the
      row height changes under it, which is what a density toggle does. The selection itself
@@ -130,6 +187,15 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
   useEffect(() => {
     if (selectedIndex !== undefined) reveal(selectedIndex);
   }, [selectedIndex, rowHeight, reveal]);
+
+  /* Following is half an effect and half a scroll handler, and the split is the point: the
+     list grew, so go to its end — and a person scrolled away from the end, so stop, which
+     is `onLeaveBottom` above. Deciding both from render state would stop a stream on the
+     frame between the new offset being computed and being committed, when nobody touched
+     anything. */
+  useEffect(() => {
+    if (follow && count > 0) reveal(count - 1);
+  }, [follow, count, rowHeight, reveal]);
 
   /* The id of the selected row, and only while that row is one the list actually has: a
      dangling `aria-activedescendant` names nothing, which is worse than naming nothing. */
@@ -145,7 +211,7 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
       className={["orca-list", variant === "two-line" ? "orca-list--two-line" : "", className]
         .filter(Boolean)
         .join(" ")}
-      {...scopeProps("list")}
+      {...scopeProps(scope)}
     >
       <div className="orca-list__scroller" ref={viewport.scrollerRef} onScroll={viewport.onScroll}>
         {header !== undefined && (
@@ -153,7 +219,12 @@ export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
             className={[
               "orca-pane__head",
               textClass("label-strong"),
-              viewport.scrolled ? "orca-pane__head--sticky" : "",
+              /* Sticky and lifted are two facts and two classes (#240): where the header
+                 sits, and whether anything is passing under it. They happen to turn on
+                 together here — a header only has to stick once there is something to
+                 stick above — but a surface with a header that is always sticky can now
+                 say "lift only now" without giving up the first. */
+              viewport.scrolled ? "orca-pane__head--sticky orca-pane__head--lifted" : "",
             ]
               .filter(Boolean)
               .join(" ")}
@@ -224,7 +295,7 @@ function Minimap({
         <button
           key={`${mark.kind}-${mark.index}`}
           type="button"
-          className={`orca-minimap__tick orca-minimap__tick--${mark.kind} orca-list__tick`}
+          className={`orca-bare orca-minimap__tick orca-minimap__tick--${mark.kind}`}
           style={{ top: `${mark.offset}%` }}
           aria-label={mark.label}
           onClick={() => onGoTo(mark.index)}

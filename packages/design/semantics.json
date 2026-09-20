@@ -66,6 +66,12 @@
     "file": { "word": "file mode", "glyph": "◷", "fg": "status-stale", "writes": "absent" },
     "mismatch": { "word": "version mismatch", "glyph": "▣", "fg": "status-blocked", "writes": "disabled" }
   },
+  "agentHealth": {
+    "unknown": { "word": "unknown", "glyph": "◌", "fg": "ink-tertiary" },
+    "ok": { "word": "ok", "glyph": "✓", "fg": "status-succeeded" },
+    "degraded": { "word": "degraded", "glyph": "◷", "fg": "status-waiting" },
+    "down": { "word": "down", "glyph": "✕", "fg": "status-failed" }
+  },
   "stateView": {
     "empty": {
       "word": "empty",

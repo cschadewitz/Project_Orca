@@ -58,10 +58,17 @@
   color: var(--ink-secondary);
   background: var(--surface-base);
 }
+/* Two modifiers, because they answer two questions. `--sticky` is where the header sits;
+   `--lifted` is whether anything is passing under it. A shadow over an unscrolled list is a
+   lift with nothing beneath it, which says "there is more above" when there is not — and
+   with the shadow bundled into `--sticky`, the only way to say that was to stop the header
+   being sticky, which is a different statement (#240). */
 .orca-pane__head--sticky {
   position: sticky;
   top: 0;
   z-index: var(--z-sticky);
+}
+.orca-pane__head--lifted {
   box-shadow: var(--shadow-sticky);
 }
 .orca-spacer {
@@ -219,6 +226,21 @@
 }
 
 /* ---------- buttons, keys ---------- */
+
+/* Not every control looks like a control. A minimap tick, a chip that acts, a row that is
+   its own affordance: each has to be a `<button>` to be reachable by keyboard and named to
+   a screen reader, and each draws nothing a button draws. This is that reset, once, so no
+   surface writes `appearance: none` in its own stylesheet again (#240). It strips the
+   chrome and nothing else — the focus ring is `:focus-visible`'s and stays. */
+.orca-bare {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
 
 /* type: label */
 .orca-btn {
@@ -394,27 +416,95 @@
   background: var(--surface-canvas);
 }
 
+/* ---------- the virtual list: a scroller beside a status gutter ---------- */
+
+/* The substrate's own geometry (packages/app/renderer/src/list). No height, colour or
+   radius is written here: `--row-h` stays the one statement of a row's height, which is
+   what lets the substrate read it back out of the cascade. */
+.orca-list {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The element that scrolls, and so the element `--row-h` is read from and `clientHeight`
+   measured on. `overflow-anchor` off: the spacers above and below the window change height
+   on every scroll, and a browser trying to keep its own anchor in place would fight them. */
+.orca-list__scroller {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-anchor: none;
+}
+
+/* The rows themselves are the listbox: the sticky header is a sibling above it, so a
+   listbox's children stay options. The two spacers are its padding rather than two more
+   elements, for the same reason. */
+.orca-list__rows {
+  display: block;
+}
+
+/* Two lines is a declared variant, never a row that grew (RULES.md rule 9): exactly two
+   `--row-h`, the bound height doubled and never restated. It hangs off the substrate's own
+   row class rather than `.orca-tree-row--two-line`, because the substrate does not know
+   which row class the surface passed — and off the list root rather than the row, because
+   a list is one shape or the other and the window arithmetic counts it that way. */
+.orca-list--two-line .orca-list__row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  height: calc(var(--row-h) * 2);
+  min-height: calc(var(--row-h) * 2);
+}
+
 /* the status minimap in the scrollbar gutter */
 .orca-minimap {
   position: relative;
-  width: var(--space-1);
+  width: var(--space-2);
   background: var(--surface-canvas);
   flex: none;
 }
+
+/* A tick is a button, not a mark: the one reason to draw a failure you cannot see is to be
+   able to go to it. So the mark and the target are two boxes — the button is `hit-min` tall
+   and transparent, centred on the row it names, and the visible mark is drawn by `::before`
+   at `mark-sm`. A 4×3px target was the old answer and it was not one (#240). Ticks close
+   together therefore overlap; the later one wins, which is the right loss to take. */
 .orca-minimap__tick {
   position: absolute;
   left: 0;
   right: 0;
-  height: 3px; /* orca-allow-literal: minimap tick thickness — no mark-size token (#211) */
+  height: var(--hit-min);
+  margin-top: calc(var(--hit-min) / -2);
+  display: flex;
+  align-items: center;
+  background: none;
+}
+.orca-minimap__tick::before {
+  content: "";
+  flex: 1;
+  height: var(--mark-sm);
+  background: currentcolor;
 }
 .orca-minimap__tick--failed {
-  background: var(--status-failed);
+  color: var(--status-failed);
 }
 .orca-minimap__tick--waiting {
-  background: var(--status-waiting);
+  color: var(--status-waiting);
 }
 .orca-minimap__tick--blocked {
-  background: var(--status-blocked);
+  color: var(--status-blocked);
+}
+/* Where the rendered window is, so a gutter over fifty thousand rows says where you are as
+   well as where the trouble is. Taller than a status tick rather than only a different
+   colour — position is not a status and must not read as one. */
+.orca-minimap__tick--current {
+  color: var(--accent);
+}
+.orca-minimap__tick--current::before {
+  height: var(--space-2);
 }
 
 /* ---------- event timeline ---------- */
@@ -423,13 +513,16 @@
   display: flex;
   flex-direction: column;
 }
+/* A row, not a baseline grid. The timeline is virtualised over `--row-h` like every other
+   list in the app, so its height is the bound row height and its cells centre inside that
+   rather than sitting on a sub-grid of their own (#240). */
 .orca-timeline-entry {
   display: grid;
-  /* orca-allow-literal: the time column is sized to `00:00:00` and nothing names it (#211) */
-  grid-template-columns: 76px var(--icon-md) 1fr auto;
-  align-items: baseline;
+  grid-template-columns: var(--col-time) var(--icon-md) 1fr auto;
+  align-items: center;
   gap: var(--space-2);
-  padding: 3px var(--space-3); /* orca-allow-literal: sub-grid vertical inset (#211) */
+  height: var(--row-h);
+  padding: 0 var(--space-3);
   border-left: var(--stroke-rail) solid transparent;
 }
 .orca-timeline-entry:hover {
@@ -489,21 +582,34 @@
 
 /* ---------- agent output / log pane ---------- */
 
+/* A line of log is a row, so the pane binds `--row-h` to the line height the type scale
+   already decided and the list substrate reads it straight back out of the cascade — one
+   statement of how tall a line is, in `tokens.json`, where `mono-log` lives. The scroll is
+   the substrate's (`.orca-list__scroller`), not this element's: a log with its own
+   `overflow` would be a second scroller inside the one doing the windowing. */
 /* type: mono-log */
 .orca-log {
+  --row-h: var(--row-log);
   position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: var(--surface-sunken);
   border-radius: var(--radius-md);
   font-family: var(--font-mono);
-  overflow: auto;
 }
+/* Fixed height and `pre`, not `pre-wrap`: a virtualised row whose height depends on how
+   long its text is cannot be virtualised at all. A line longer than the pane collapses to
+   a count of what was left off (docs/design/30-long-running-content.md) rather than wrapping
+   into a second row nothing has accounted for. */
 .orca-log__line {
   display: grid;
-  /* orca-allow-literal: the line-number gutter is sized to five digits (#211) */
-  grid-template-columns: 44px 1fr;
+  grid-template-columns: var(--col-lineno) 1fr;
   gap: var(--space-2);
   padding: 0 var(--space-3);
-  white-space: pre-wrap;
+  height: var(--row-h);
+  align-items: center;
+  white-space: pre;
 }
 .orca-log__line:hover {
   background: var(--surface-hover);
@@ -1044,6 +1150,13 @@
   border-radius: var(--radius-md);
   background: var(--surface-base);
 }
+/* Never contacted since the daemon started — health is tracked in process and not persisted
+   (#222), so this is the honest state of every agent on a fresh daemon. It is drawn as a
+   quieter card rather than a worse one: nothing is known, which is not the same as bad. */
+.orca-agent--unknown {
+  border-style: dashed;
+  color: var(--ink-secondary);
+}
 .orca-agent--degraded {
   border-color: var(--status-waiting);
 }
@@ -1563,9 +1676,13 @@
 .orca-conn--mismatch {
   color: var(--status-blocked);
 }
+/* `flex: none` because a banner is an interruption of fixed height above the body it
+   interrupts: stacked in a column with a growing surface below, a banner that stretched
+   would take the space the surface needs. */
 /* type: caption */
 .orca-banner {
   display: flex;
+  flex: none;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-4);
@@ -1583,6 +1700,62 @@
 }
 .orca-stale-value {
   opacity: var(--opacity-stale);
+}
+
+/* The thinnest interruption there is: a rule, not a row of words, marking the screen below
+   it as last-known (docs/design/40-connection-states.md, "Reconnecting"). `.orca-banner--stale`
+   above is the same fact at a different weight, and the wrong one for a blip. It sits hard
+   against the top of the content area with nothing around it — a margin would turn a rule
+   back into a banner. */
+.orca-stale-rule {
+  flex: none;
+  height: var(--stroke-rail);
+  background: var(--status-stale);
+}
+
+/* ---------- blocking dialog ---------- */
+
+/* Centred, unlike the palette: a dialog that blocks is the only thing on screen that
+   matters, and there is no reading position behind it to preserve. The palette below is the
+   other modal in the system, and its width, top offset and enter animation are all about
+   ⌘K — so this is written out rather than borrowing a class whose name would be a lie. */
+.orca-dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-palette);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--surface-overlay);
+}
+.orca-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* A measure, not a width: the dialog is prose and a line of prose has a readable length. */
+  max-width: 64ch;
+  padding: var(--space-4);
+  background: var(--surface-raised);
+  border: var(--stroke-hairline) solid var(--border-control);
+  border-left: var(--stroke-rail) solid var(--status-blocked);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+}
+/* type: title */
+.orca-dialog__title {
+  margin: 0;
+  color: var(--status-blocked);
+}
+/* type: body */
+.orca-dialog__body {
+  margin: 0;
+  color: var(--ink-primary);
+}
+.orca-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 /* command palette */
@@ -1717,7 +1890,7 @@
 
 /* meters */
 .orca-meter {
-  height: 3px; /* orca-allow-literal: meter track thickness — no mark-size token (#211) */
+  height: var(--mark-sm);
   border-radius: var(--radius-full);
   background: var(--border-hairline);
   overflow: hidden;

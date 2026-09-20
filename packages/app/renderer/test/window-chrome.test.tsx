@@ -134,6 +134,6 @@ describe("window chrome", () => {
 
     expect(screen.getByText("disconnected")).toBeTruthy();
     // And the screen below it says so too, rather than only the status bar.
-    expect(document.querySelector(".orca-connrule")).not.toBeNull();
+    expect(document.querySelector(".orca-stale-rule")).not.toBeNull();
   });
 });

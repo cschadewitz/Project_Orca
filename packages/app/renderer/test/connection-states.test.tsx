@@ -63,7 +63,7 @@ const APP_PROTOCOL = formatProtocolVersion(PROTOCOL_VERSION);
 /** The status bar's connection cell — the one `.orca-conn` in the chrome. */
 const indicator = (): string => document.querySelector(".orca-conn")?.textContent ?? "";
 /** The 2px rule under the chrome, which is what a stale screen looks like. */
-const staleRule = (): Element | null => document.querySelector(".orca-connrule");
+const staleRule = (): Element | null => document.querySelector(".orca-stale-rule");
 
 describe("the connection states, end to end", () => {
   let script: ReturnType<typeof scriptedSocket>;
