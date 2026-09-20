@@ -22,7 +22,7 @@ import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
 import { AgentsSurface } from "./agents/agents-surface.js";
-import { StateView } from "./ui/index.js";
+import { ObjectHeader, StateView, type Crumb } from "./ui/index.js";
 
 // Attention is always first: the app's default landing surface (docs/design/10-information-architecture.md).
 // The data-driven half of the landing rule — Attention showing running runs when nothing is
@@ -32,6 +32,12 @@ const DEFAULT_SURFACE: SurfaceId = "attention";
 export function App(): JSX.Element {
   const [active, setActive] = useState<SurfaceId>(DEFAULT_SURFACE);
   const [panelOpen, setPanelOpen] = useState(false);
+  /* The object header is the chrome's, on every screen that has an object
+     (docs/design/10-information-architecture.md): one breadcrumb in the app, drawn in one
+     place. A surface hands up the crumbs for whatever it has selected and the chrome draws
+     them into `PrimaryPane`'s header slot — Runs is the first surface with an object to put
+     there. */
+  const [crumbs, setCrumbs] = useState<readonly Crumb[]>([]);
 
   const connection = useConnection();
   const sidebarCollapsed = useSidebarCollapsed();
@@ -74,9 +80,20 @@ export function App(): JSX.Element {
         <Sidebar active={active} onSelect={selectSurface} />
         {/* Keyed by surface: a switch mounts a new pane, which is what re-applies that
             surface's remembered density. */}
-        <PrimaryPane key={activeSurface.id} surface={activeSurface.id}>
+        <PrimaryPane
+          key={activeSurface.id}
+          surface={activeSurface.id}
+          header={
+            activeSurface.id === "runs" && crumbs.length > 0 ? (
+              // `onOpen` and `onOpenCounterpart` are omitted until there is an `orca://`
+              // route table to open a crumb into (#165); a crumb that navigates nowhere is
+              // still a crumb that says where you are.
+              <ObjectHeader crumbs={crumbs} />
+            ) : undefined
+          }
+        >
           {activeSurface.id === "runs" ? (
-            <RunsSurface connection={connection.state} />
+            <RunsSurface connection={connection.state} onCrumbs={setCrumbs} />
           ) : activeSurface.id === "agents" ? (
             <AgentsSurface connection={connection.state} />
           ) : (
