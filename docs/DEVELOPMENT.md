@@ -255,6 +255,15 @@ it holds, and the spacing half rungs `space-1-5` and `space-2-5` — plus `contr
 `control-sm-5` extending the control scale, four boxes that simply needed naming, and two
 values that turned out to be arithmetic written out as a number.
 
+**Three remain app-side, in `packages/app/renderer/src/app.css`**, and they are the shape the
+rule expects an exemption to have. `.orca-announcer` — the one polite live region — needs the
+standard visually-hidden clip, whose `1px` measurements are not a size the design system could
+name: the box exists to be in the accessibility tree and nowhere else, and `display: none`, a
+zero box and `visibility: hidden` each drop it out of that tree in some screen reader, which
+would silently turn the region off. They are not waiting on a token. They *are* waiting on a
+`.orca-visually-hidden` in the component layer, which would take the class and all three
+escapes with it — that is #262.
+
 The rule that produced that work is unchanged and is the reason to keep counting: **reaching
 for one of those literals a ninth time is the signal to add the family, not another note.** At
 zero, a new note is a stronger claim than it used to be — not "no token names this yet" but "no

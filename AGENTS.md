@@ -158,6 +158,15 @@ same two cards mount inline in step detail over the same feed (`attention/inline
 so a gate answered in the run and a gate answered in the list are one read, one component and
 one count.
 
+`renderer/src/a11y/` is not a surface. It holds the **one** polite live region the whole app
+announces through, mounted once by `App` and fed by listening to the feed the surfaces already
+hold — a listener, never a second subscription. Its plain module is `announcements.ts`, which
+folds a `run.changed` or `step.changed` into one sentence **or into nothing**: transitions and
+terminal states only, per `docs/design/50-accessibility-and-keyboard.md`, because a region that
+spoke on every frame would be the streaming-output mistake in another place. A surface that
+wants to announce something adds to that fold; it does not add a region. `a11y-sweep.test.tsx`
+asserts there is exactly one, and that it is the same element across every surface.
+
 **Every shortcut goes in the keyboard map.** Register `{ scope, key, label, action }` on the
 `KeyboardMap` (`renderer/src/keyboard-map.ts`) rather than adding a `keydown` listener — the
 command palette is a view of that registry, so a shortcut that skips it is a shortcut nobody
