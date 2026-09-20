@@ -12,6 +12,7 @@
  * without knowing what kind of control it is.
  */
 import { useId, type JSX, type ReactNode } from "react";
+import { textClass } from "./text.js";
 
 /** What the field wires up for whatever control it wraps. Spread onto the control. */
 export interface ConfigFieldControl {
@@ -46,28 +47,28 @@ export function ConfigField({ label, path, children, help, error, onShowRaw }: C
 
   return (
     <div className="orca-field">
-      <label className="orca-field__label" htmlFor={controlId}>
+      <label className={`orca-field__label ${textClass("label-strong")}`} htmlFor={controlId}>
         {label}
-        <span className="orca-field__path">{path}</span>
+        <span className={`orca-field__path ${textClass("mono-id")}`}>{path}</span>
       </label>
       <div className="orca-field__control">
         {children(control)}
         {help !== undefined && (
-          <span className="orca-field__help" id={helpId}>
+          <span className={`orca-field__help ${textClass("caption")}`} id={helpId}>
             {help}
           </span>
         )}
         {/* An error does not replace the help: "what this key means" is still the thing
             you need in order to fix it. */}
         {error !== undefined && (
-          <span className="orca-field__error" id={errorId} role="alert">
+          <span className={`orca-field__error ${textClass("caption")}`} id={errorId} role="alert">
             {error}
           </span>
         )}
       </div>
       <button
         type="button"
-        className="orca-field__raw"
+        className={`orca-field__raw ${textClass("mono-id")}`}
         onClick={() => onShowRaw(path)}
         aria-label={`show ${path} in the raw YAML`}
       >

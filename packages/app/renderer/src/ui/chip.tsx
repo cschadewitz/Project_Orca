@@ -6,6 +6,7 @@
  * status and never "this label happened to want some colour".
  */
 import type { JSX, ReactNode } from "react";
+import { textClass } from "./text.js";
 
 export interface ChipProps {
   children?: ReactNode;
@@ -16,7 +17,7 @@ export interface ChipProps {
 
 export function Chip({ children, glyph, className }: ChipProps): JSX.Element {
   return (
-    <span className={["orca-chip", "orca-chip--plain", className].filter(Boolean).join(" ")}>
+    <span className={["orca-chip", textClass("caption"), "orca-chip--plain", className].filter(Boolean).join(" ")}>
       {glyph !== undefined && (
         <span className="orca-chip__glyph" aria-hidden="true">
           {glyph}

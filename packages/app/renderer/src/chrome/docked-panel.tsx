@@ -8,7 +8,7 @@
  */
 import type { JSX } from "react";
 import { scopeProps } from "../keyboard-map.js";
-import { Button, StateView } from "../ui/index.js";
+import { Button, StateView, textClass } from "../ui/index.js";
 
 export interface DockedPanelProps {
   onClose: () => void;
@@ -17,11 +17,11 @@ export interface DockedPanelProps {
 export function DockedPanel({ onClose }: DockedPanelProps): JSX.Element {
   return (
     <div className="orca-panel" {...scopeProps("panel")}>
-      <div className="orca-pane__head">
+      <div className={`orca-pane__head ${textClass("label-strong")}`}>
         <span>Panel</span>
         <span className="orca-spacer" />
         <Button tone="ghost" size="sm" onClick={onClose} aria-label="Close panel (⌘\)">
-          <span className="orca-kbd" aria-hidden="true">
+          <span className={`orca-kbd ${textClass("mono-id")}`} aria-hidden="true">
             ⌘\
           </span>
         </Button>
