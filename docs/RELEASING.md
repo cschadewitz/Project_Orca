@@ -30,9 +30,10 @@ Closing it proposes the release.
 4. Review that pull request. Its body is the release body verbatim — to change the notes,
    edit `CHANGELOG.md` on the release branch.
 5. **Merge it.** `release-publish.yml` re-runs typecheck, lint, format, tests, build and
-   the compiled-CLI smoke test against the merge commit, then tags `vX.Y.Z` and publishes
-   the release with the changelog section as its body and GitHub's generated list of
-   merged pull requests appended underneath.
+   the compiled-CLI smoke test against the merge commit, builds the desktop and daemon
+   artifacts from that same commit (`desktop.yml`, below), then tags `vX.Y.Z` and publishes
+   the release with the changelog section as its body, the artifacts attached, and GitHub's
+   generated list of merged pull requests appended underneath.
 
 Closing a milestone stops at a pull request on purpose. A milestone can be closed by
 accident and reopened; a published tag cannot be unpublished cleanly. One merge click is
@@ -47,6 +48,107 @@ against it — fix forward and re-run the workflow. Giving `release-prepare.yml`
 access token instead of `GITHUB_TOKEN` would move the checks back onto the PR, at the cost
 of a token to store and rotate; that trade is only worth making if `main` ever gains
 required status checks.
+
+## The artifacts
+
+Two, both from the merge commit that gets tagged, so their protocol versions agree by
+construction rather than by anyone checking:
+
+| Artifact | What it is | Files on the release |
+| --- | --- | --- |
+| **daemon** | The CLI, bundled to one ESM file. No Electron. | `orca-daemon-X.Y.Z.mjs` |
+| **desktop** | The Electron app, with that same daemon build inside it. | `.AppImage`, `.tar.gz`, `.dmg`, `.zip`, `.exe` |
+
+`.github/workflows/desktop.yml` builds both, on `ubuntu-latest`, `macos-latest` and
+`windows-latest`. `release-publish.yml` calls it as a reusable workflow against the merge
+commit and attaches what comes out; a platform runner failing therefore means no tag, which
+is the right way round, since a release page with two of three installers is not something
+a later run can fix. The workflow also runs on `workflow_dispatch`, and on a pull request
+that touches the packaging itself — the config, the spawn module, the build scripts or the
+lockfile. It is deliberately not part of `ci.yml`, which sets
+`ELECTRON_SKIP_BINARY_DOWNLOAD=1` and never launches the app.
+
+Architectures: x64 and arm64 everywhere, except the Linux `AppImage`, which is x64 only —
+building an arm64 one on an x64 runner needs an arm64 `appimagetool` to run there. arm64
+Linux gets the `tar.gz`, which is the same tree without the single-file wrapper.
+
+### The daemon inside the desktop artifact
+
+`packages/app/scripts/build-daemon.js` bundles the *built* CLI (`packages/cli/dist/main.js`)
+into `packages/app/dist/daemon/orca-daemon.mjs` with esbuild: one file, every workspace
+package and every dependency inlined, no `node_modules` beside it. electron-builder copies
+it into the app's resources as `extraResources`, which means beside `app.asar` rather than
+inside it — a file inside an asar archive is not a real file to the operating system, and
+this one has to be spawned.
+
+It is spawned, not imported. `packages/app` may only import `@orca/protocol` and
+`@orca/design` from the workspace (ADR 0008), and the daemon's dependency graph — the
+engine, the stores, the agents — is exactly what that boundary exists to keep out. A
+subprocess is also what makes "attach to a daemon somewhere else" a case rather than a
+rewrite.
+
+`packages/app/src/main/daemon-process.ts` is the whole of it, and it is Electron-free so
+that it has a plain test. On launch the app picks a daemon in this order:
+
+1. **`ORCA_DAEMON_URL`**, if set. Someone who has pointed the app at a daemon has said what
+   they want, and starting a second one beside it would only confuse which store is on
+   screen.
+2. **The bundled daemon**, if the app is packaged. It is started on a port the OS says is
+   free, on loopback, and the app waits for it to answer `hello` before the first read goes
+   out. A free port can be taken before the daemon binds it, so a failed start is retried on
+   a fresh one; a daemon that dies or never answers surfaces as an error carrying its own
+   output rather than as a hung window.
+3. **`http://127.0.0.1:6722`**, the default `orca serve`. This is the development case, and
+   it is also where a packaged app lands when its bundled daemon refuses to start: the
+   window still opens, on a status bar that reads disconnected, because a desktop app that
+   will not open is a worse failure than one that shows you it has no daemon.
+
+The daemon is stopped on `will-quit` — `SIGTERM`, then `SIGKILL` if that is ignored — so it
+cannot outlive the window that started it.
+
+**The workspace it serves is `ORCA_WORKSPACE`, or the user's home directory.** That is a
+placeholder with a known shape rather than an answer: `orca serve` reads `<dir>/.orca` and
+answers an empty run list for a directory that has no store, so a packaged app opens on Runs
+with nothing in it unless `ORCA_WORKSPACE` points at a real workspace. Choosing one from
+inside the app is #164's, and it changes the argument passed to the spawn module, not the
+mechanism.
+
+### Signing and notarisation are not done
+
+Both artifacts are **unsigned**, and both platforms say so to the person who downloads
+them. This is a follow-up, not an oversight, and it stays written here until it is closed.
+
+- **macOS** shows "ORCA is damaged and can't be opened" or a Gatekeeper refusal, because an
+  unsigned app that arrived with a quarantine attribute cannot be opened by double-clicking
+  it at all. The way past it today is `xattr -dr com.apple.quarantine /Applications/ORCA.app`,
+  which is not something to ask of anyone who is not already a contributor.
+
+  Signing needs an Apple Developer Program membership and, as repository secrets: a
+  Developer ID Application certificate exported as base64 `.p12` in **`APPLE_CERTIFICATE_P12`**
+  with its passphrase in **`APPLE_CERTIFICATE_PASSWORD`**, and the team in **`APPLE_TEAM_ID`**.
+  Notarisation needs an App Store Connect API key — **`APPLE_API_KEY_ID`**,
+  **`APPLE_API_ISSUER`** and the `.p8` itself in **`APPLE_API_KEY`** — or, the older way, an
+  Apple ID in **`APPLE_ID`** with an app-specific password in **`APPLE_APP_SPECIFIC_PASSWORD`**.
+  With those present, `mac.identity` and `mac.notarize` in `packages/app/electron-builder.yml`
+  come off `null`/`false` and the workflow gains a keychain step.
+
+- **Windows** shows a SmartScreen "unrecognised app" warning on the NSIS installer, and will
+  keep showing it for a while after signing starts: SmartScreen reputation is earned per
+  certificate over downloads, not granted by a signature.
+
+  Signing needs a code-signing certificate. Microsoft now requires the private key on an
+  HSM, so the practical routes are a cloud signing service — Azure Trusted Signing, which
+  wants **`AZURE_TENANT_ID`**, **`AZURE_CLIENT_ID`** and **`AZURE_CLIENT_SECRET`** — or a
+  token-backed certificate, which does not fit a hosted runner. A plain `.pfx` in
+  **`WINDOWS_CERTIFICATE_PFX`** with **`WINDOWS_CERTIFICATE_PASSWORD`** still works for a
+  self-signed or internal CA certificate, which is enough to test the plumbing and nothing
+  more.
+
+- **Linux** has nothing to sign against. An AppImage can carry a detached GPG signature, and
+  almost nothing verifies one; it is not on the list.
+
+Until that lands, the release notes for a version carrying desktop artifacts should say the
+builds are unsigned and how to open them.
 
 ## Changelog fragments
 
@@ -140,12 +242,10 @@ merge the result, and `gh release create vX.Y.Z --notes-file <(node tools/releas
 - **Labels**: `release`, `release:major`, `release:minor`, `release:patch`, `release:none`.
 - The repository is private, so releases are visible to collaborators only. Making them a
   distribution channel means making the repository public first.
-- Nothing is attached to a release beyond the source tag. When built artifacts are
-  wanted, add them to `release-publish.yml` after the build step. Two are planned, both
-  from the same commit so their protocol versions agree by construction: a **daemon**
-  artifact (the CLI with `orca serve`, no Electron) and a **desktop** artifact (the
-  Electron app with that same daemon build bundled inside it, spawned on launch unless
-  `ORCA_DAEMON_URL` points elsewhere). The `hello` handshake still carries the protocol
+- The release carries the daemon and desktop artifacts described above, built by
+  `desktop.yml` on three platform runners. The `hello` handshake still carries the protocol
   version, because a desktop build will eventually attach to an older daemon on another
-  machine. Desktop packaging needs platform runners and its own workflow; it must not be
-  bolted onto `ci.yml`, which never launches the app.
+  machine — the bundling makes the two agree on the day of the release, not forever.
+- Signing secrets, when signing lands: the names are in "Signing and notarisation are not
+  done" above. `desktop.yml` is called by `release-publish.yml`, so a reusable-workflow
+  `secrets:` block is where they will have to be passed through.

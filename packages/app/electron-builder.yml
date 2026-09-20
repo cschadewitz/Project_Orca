@@ -1,0 +1,98 @@
+# electron-builder: the desktop artifact, one per platform, from `pnpm run build` output.
+#
+# Driven by `.github/workflows/desktop.yml`; `pnpm --filter @orca/app run package` runs the
+# same thing locally for whatever platform you are on. electron-builder finds this file by
+# name, so nothing passes it a `--config` and `-c.<path>=<value>` overrides stay usable.
+# Prerequisites, in order:
+#
+#   pnpm install                              # *without* ELECTRON_SKIP_BINARY_DOWNLOAD
+#   pnpm run build                            # tsc -b, then the renderer through Vite
+#   pnpm --filter @orca/app run build:daemon  # dist/daemon/orca-daemon.mjs
+#
+# The version stamped into the artifacts is this package's `0.1.0` unless something
+# overrides it. The workflow passes `--config.extraMetadata.version=<root version>`, because
+# the repository releases in lockstep from the root package.json and the packages under
+# packages/ do not carry the release version (docs/RELEASING.md).
+appId: dev.orca.desktop
+productName: ORCA
+copyright: ORCA contributors
+
+directories:
+  # Inside dist/, which is already ignored by git, Prettier and ESLint, and removed by
+  # `pnpm run clean`. `files` below never matches it, so it cannot package itself.
+  output: dist/release
+  buildResources: build
+
+# What goes inside app.asar. Only the three built halves and the manifest: the sources, the
+# tests, the Vite config and the daemon bundle all stay out. electron-builder adds the
+# production `dependencies` from package.json on top of this, resolving pnpm's symlinks.
+files:
+  - "dist/main/**/*"
+  - "dist/preload/**/*"
+  - "dist/renderer/**/*"
+  - "package.json"
+  # Source maps are for the release page, not for every user's disk.
+  - "!**/*.map"
+
+# The daemon, beside app.asar rather than inside it. A file inside an asar archive is not a
+# real file to the operating system, and the main process spawns this one as a subprocess
+# (src/main/daemon-process.ts) — so it has to exist on disk. `process.resourcesPath` is
+# where it lands, which is the first place `findBundledDaemon` looks.
+extraResources:
+  - from: dist/daemon
+    to: daemon
+    filter:
+      - "**/*.mjs"
+
+# Both architectures on every platform that has two. A desktop artifact that only runs on
+# the architecture the runner happened to have is the bug this spells out to avoid: GitHub's
+# macOS runners are arm64 and its Windows and Linux runners are x64.
+linux:
+  category: Development
+  synopsis: Orchestration Runtime for Coding Agents
+  # Named rather than derived: the package is `@orca/app`, and a scoped name is not a
+  # thing a binary on `$PATH` can be called.
+  executableName: orca
+  target:
+    # AppImage for x64 only. Building an arm64 AppImage on an x64 runner needs an arm64
+    # appimagetool to run there, which is the one cross-build in this file that does not
+    # come for free; arm64 Linux gets the archive, which is the same tree without the
+    # single-file wrapper. Revisit when a native arm64 Linux runner is on the plan.
+    - target: AppImage
+      arch: [x64]
+    - target: tar.gz
+      arch: [x64, arm64]
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  # Unsigned, deliberately and temporarily: there is no Developer ID certificate in this
+  # repository's secrets yet, and electron-builder would otherwise try to sign with whatever
+  # identity is in the runner's keychain and fail the build. Signing and notarisation are
+  # the named follow-up in docs/RELEASING.md, with the secrets they need.
+  identity: null
+  notarize: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+
+nsis:
+  # Per-user, so the installer needs no elevation — which matters more than usual while the
+  # binary is unsigned, since an unsigned installer asking for administrator is exactly the
+  # thing a person should refuse.
+  perMachine: false
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+# Nothing is published from here. `release-publish.yml` attaches the files to the GitHub
+# release itself, after the same commit's checks have passed; letting electron-builder
+# publish would mean giving three runners a token and three chances to publish half a set.
+publish: null

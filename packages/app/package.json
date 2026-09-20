@@ -5,10 +5,13 @@
   "description": "ORCA desktop app (Electron): monitoring, configuration and later orchestration over the daemon protocol.",
   "type": "module",
   "main": "./dist/main/index.js",
+  "author": "ORCA",
   "scripts": {
     "dev": "node scripts/dev.js",
     "build:renderer": "vite build",
+    "build:daemon": "node scripts/build-daemon.js",
     "start": "electron .",
+    "package": "electron-builder",
     "typecheck:renderer": "tsc -p renderer/tsconfig.json"
   },
   "dependencies": {
@@ -25,6 +28,8 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.1.0",
     "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "vite": "^7.2.0"
   }
 }
