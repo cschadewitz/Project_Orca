@@ -7,7 +7,7 @@
  * mounting, over the one feed `App.tsx` holds — a card there passes `placement="inline"`,
  * its own `onAnswer`, and nothing else different.
  */
-export { AnswerCard, type AnswerCardProps, type AnswerRequest } from "./answer-card.js";
+export { AnswerCard, cardName, type AnswerCardProps, type AnswerRequest } from "./answer-card.js";
 export { AttentionSurface, type AttentionSurfaceProps } from "./attention-surface.js";
 export { GateCard, type GateCardProps } from "./gate-card.js";
 export { PermissionCard, type PermissionCardProps } from "./permission-card.js";

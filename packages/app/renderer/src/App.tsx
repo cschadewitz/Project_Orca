@@ -6,6 +6,7 @@
  * issues that give each surface its content.
  */
 import { useCallback, useEffect, useState, type JSX, type ReactNode } from "react";
+import { Announcer } from "./a11y/announcer.js";
 import { SURFACES, type SurfaceId } from "./chrome/surfaces.js";
 import { Sidebar } from "./chrome/sidebar.js";
 import { TitleBar } from "./chrome/title-bar.js";
@@ -229,6 +230,11 @@ export function App(): JSX.Element {
         {panelOpen ? <DockedPanel onClose={togglePanel} /> : null}
       </div>
       <StatusBar connection={connection} />
+      {/* The app's one polite live region (#167). Here, and only here: a region per surface
+          would announce the same failure twice whenever two of them were mounted, and the
+          chrome is the only thing mounted on every screen. It says step transitions and
+          terminal states; streaming output is never announced (rule 11). */}
+      <Announcer />
       {/* The palette's object rows: recent runs, agents, and search over what the daemon
           can be asked for. Registered here rather than inside a surface because they are
           reads of the store rather than views of a surface's state (#206). */}
