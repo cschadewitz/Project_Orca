@@ -29,11 +29,12 @@
  * ## Unlike `app-shell.spec.ts`, the pictures here *are* the fixture
  *
  * `toHaveScreenshot` against committed, per-platform baselines. The app's own screenshots
- * are evidence and not goldens because the app draws OS-rendered chrome over data with a
- * clock in it; `#type` has no clock in its type and glyph sections, renders both themes as
- * `data-theme` subtrees, and exists precisely so that a pixel difference *means* something.
- * `docs/DEVELOPMENT.md` ("Screenshot baselines") has how they are created and the one
- * honest way to update them.
+ * are evidence and not goldens because the app draws OS-rendered chrome over live data;
+ * `#type` draws a fixed page, renders both themes as `data-theme` subtrees, and exists
+ * precisely so that a pixel difference *means* something. The one exception — the two
+ * connection rows that tick — is taken out of the picture below (`NO_CLOCK`) rather than
+ * budgeted for in the threshold. `docs/DEVELOPMENT.md` ("Screenshot baselines") has how the
+ * baselines are created and the one honest way to update them.
  */
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { spawn } from "node:child_process";
@@ -57,6 +58,46 @@ const osSandboxArgs = process.env.ORCA_SMOKE_NO_SANDBOX ? ["--no-sandbox"] : [];
  * first section off a sensible fold; the columns are captured whole regardless.
  */
 const CONTENT = { width: 1280, height: 900 };
+
+/**
+ * Scrollbars, gone. On Linux they take layout width and on macOS they overlay while
+ * scrolling, which is a per-platform difference in the *column widths* rather than in the
+ * type — the thing this spec is about. Removing them makes the columns the same box
+ * everywhere and removes a capture-time flake.
+ */
+const NO_SCROLLBARS = "html { scrollbar-width: none } ::-webkit-scrollbar { width: 0; height: 0; display: none }";
+
+/**
+ * The one moving thing on `#type`, held still — without which none of this would work.
+ *
+ * `type-proof.tsx` draws all five connection states from one instant six minutes in the
+ * past, and two of the five put a clock on the page: `reconnecting` renders a `Duration`
+ * that ticks at 1Hz ("6m 0s", "6m 1s", …) and `disconnected` a relative `Time` that turns
+ * over to "7m ago" a minute in. A golden image cannot contain either. Left alone this
+ * would not fail loudly — CI's first run would commit a baseline and the *next* run would
+ * be red over two lines of elapsed seconds, which is exactly how a screenshot check earns
+ * the reputation that gets it deleted.
+ *
+ * Hidden rather than masked. A Playwright `mask` paints a box the size of the element, and
+ * the element is the thing whose size is changing ("6m 9s" and "6m 10s" are different
+ * widths in a mono face), so a mask would move too. `visibility: hidden` with the width
+ * pinned to zero takes both the pixels and the geometry out of the picture; the `min-width`
+ * is there because a flex item's `auto` minimum would otherwise hold it at its content
+ * size. The glyph and the word — what `#type` is actually proving about these rows — are
+ * untouched, and the three states whose detail is static (`live`, `file`, `mismatch`) still
+ * render theirs.
+ *
+ * This is the spec bending to the page, not the page to the spec: `#type` is a surface a
+ * person reads, a live duration belongs on it, and `renderer/src` is another unit's.
+ */
+const NO_CLOCK = `
+.orca-conn--reconnecting > span:last-child,
+.orca-conn--disconnected > span:last-child {
+  visibility: hidden;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+}`;
 
 let server: ViteDevServer;
 let app: ElectronApplication;
@@ -136,13 +177,8 @@ test.beforeAll(async () => {
      screenshot should not depend on how a runner image was configured. */
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
 
-  /* Scrollbars, gone. On Linux they take layout width and on macOS they overlay while
-     scrolling, which is a per-platform difference in the *column widths* rather than in the
-     type — the thing this spec is about. Removing them makes the columns the same box
-     everywhere and removes a capture-time flake. */
-  await page.addStyleTag({
-    content: "html { scrollbar-width: none } ::-webkit-scrollbar { width: 0; height: 0; display: none }",
-  });
+  await page.addStyleTag({ content: `${NO_SCROLLBARS}\n${NO_CLOCK}` });
+  await clockIsNeutralised();
 
   await fontsSettled();
 });
@@ -163,6 +199,34 @@ async function fontsSettled(): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
+}
+
+/**
+ * Check that `NO_CLOCK` found what it was written for, and say so if it did not.
+ *
+ * A CSS rule that matches nothing is silent, and the failure it would let through is a
+ * baseline that goes red a minute after it was written. So the two ticking rows are counted
+ * — two per theme column, four on the page — and measured: a detail span that still has
+ * width is a detail span that is still on the picture.
+ */
+async function clockIsNeutralised(): Promise<void> {
+  const widths = await page
+    .locator(".orca-conn--reconnecting > span:last-child, .orca-conn--disconnected > span:last-child")
+    .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().width));
+
+  /* Counted off the page rather than written here: the number of ticking rows is the number
+     of theme columns times the states that carry a clock, and both are the design system's
+     to change. What has to hold is that every one of them was hidden. */
+  const ticking = await page.locator(".orca-conn--reconnecting, .orca-conn--disconnected").count();
+
+  expect(
+    widths.length,
+    "the rule that hides `#type`'s two live clocks matched nothing of what is on the page — " +
+      "`ConnectionIndicator`'s markup has moved and the baselines below are about to start drifting by a " +
+      "second a second. Fix `NO_CLOCK`; do not delete this check.",
+  ).toBe(ticking);
+  expect(ticking, "`#type` drew no reconnecting or disconnected row, so this spec is looking at the wrong page").toBeGreaterThan(0);
+  expect(widths.filter((width) => width !== 0), "a ticking connection detail still occupies the picture").toEqual([]);
 }
 
 /** The window showing the renderer, rather than whichever window opened first. */
