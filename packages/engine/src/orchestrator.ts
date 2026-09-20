@@ -1021,50 +1021,63 @@ export class Orchestrator {
     const current = { step };
     let pendingAsks = 0;
     const humanInput = abortableHumanInput(this.humanInput, rc.abort.signal);
-    const session = await this.sessionFactory({
-      host,
-      agent,
-      cwd: rc.workspace.cwd,
-      logger: rc.logger,
-      clock: this.clock,
-      // Each `ask` permission is its own human-input request: an agent may block on
-      // several tool calls at once, and every one must be listed, answerable and
-      // logged independently (one id per session made concurrent asks collide).
-      askPermission: async (req) => {
-        const stepRunId = current.step.id;
-        return askHumanInput({
-          port: humanInput,
-          emit: (e) => rc.emit(e),
-          clock: this.clock,
-          runId: rc.id,
-          stepRunId,
-          kind: "permission",
-          question: req.toolCall.title ?? "Allow tool call?",
-          options: req.options.map((o) => o.optionId),
-          context: { toolCall: req.toolCall },
-          onRequested: () => {
-            pendingAsks++;
-          },
-          onSettled: async () => {
-            pendingAsks--;
-            // The agent turn is still in flight; go back to waiting on it once no ask is pending.
-            if (pendingAsks === 0)
-              await rc.emit({ type: "step.waiting", payload: { stepRunId, on: "agent-turn" } }).catch(() => undefined);
-          },
-        });
-      },
-      onPermission: (info) =>
-        void rc.emit({
-          type: "agent.permission",
-          payload: {
-            stepRunId: current.step.id,
-            sessionId: session.id,
-            title: info.title,
-            decision: info.decision,
-            ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
-          },
-        }),
-    });
+    // Opening a session *is* the ACP handshake, so it is also where agent health comes from:
+    // one that returns is a live agent, one that throws is a spawn or handshake that failed.
+    // Nothing polls - health only ever reflects work a run asked for (#222).
+    const handshake = this.agents.health.begin(agent.id);
+    let session: AgentSession;
+    try {
+      session = await this.sessionFactory({
+        host,
+        agent,
+        cwd: rc.workspace.cwd,
+        logger: rc.logger,
+        clock: this.clock,
+        // Each `ask` permission is its own human-input request: an agent may block on
+        // several tool calls at once, and every one must be listed, answerable and
+        // logged independently (one id per session made concurrent asks collide).
+        askPermission: async (req) => {
+          const stepRunId = current.step.id;
+          return askHumanInput({
+            port: humanInput,
+            emit: (e) => rc.emit(e),
+            clock: this.clock,
+            runId: rc.id,
+            stepRunId,
+            kind: "permission",
+            question: req.toolCall.title ?? "Allow tool call?",
+            options: req.options.map((o) => o.optionId),
+            context: { toolCall: req.toolCall },
+            onRequested: () => {
+              pendingAsks++;
+            },
+            onSettled: async () => {
+              pendingAsks--;
+              // The agent turn is still in flight; go back to waiting on it once no ask is pending.
+              if (pendingAsks === 0)
+                await rc
+                  .emit({ type: "step.waiting", payload: { stepRunId, on: "agent-turn" } })
+                  .catch(() => undefined);
+            },
+          });
+        },
+        onPermission: (info) =>
+          void rc.emit({
+            type: "agent.permission",
+            payload: {
+              stepRunId: current.step.id,
+              sessionId: session.id,
+              title: info.title,
+              decision: info.decision,
+              ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
+            },
+          }),
+      });
+    } catch (e) {
+      handshake.failed(e);
+      throw e;
+    }
+    handshake.ok();
     await rc.emit({
       type: "agent.session.opened",
       payload: { stepRunId: step.id, sessionId: session.id, agentId: agent.id, hostId: host.id, cwd: rc.workspace.cwd },
