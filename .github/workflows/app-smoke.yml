@@ -85,8 +85,12 @@ jobs:
       # and spent all 180 seconds of `beforeAll` in `electron.launch()` — see the comment in
       # `playwright.config.ts`, which is where the wrong answer to this is written down.
       # Here the download has no hook timeout over it and its own duration in the step list.
+      # From `packages/app`, which is the package that depends on electron: pnpm's node_modules
+      # is strict, so the root has no `electron` to resolve and the first attempt at this step
+      # failed with MODULE_NOT_FOUND.
       - name: Put the Electron binary on disk, rather than inside a test's timeout
         shell: bash
+        working-directory: packages/app
         run: node -e "console.log(require('electron'))"
 
       # The smoke test runs the built app and the built CLI, not the sources.
@@ -152,8 +156,12 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       # As in the `smoke` job above, and this is the job that found it.
+      # From `packages/app`, which is the package that depends on electron: pnpm's node_modules
+      # is strict, so the root has no `electron` to resolve and the first attempt at this step
+      # failed with MODULE_NOT_FOUND.
       - name: Put the Electron binary on disk, rather than inside a test's timeout
         shell: bash
+        working-directory: packages/app
         run: node -e "console.log(require('electron'))"
 
       # Two steps for one command, for the same reason: there is no display server on a
