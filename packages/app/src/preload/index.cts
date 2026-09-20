@@ -20,7 +20,7 @@
 // and emitting CommonJS is the whole point of this file — see the header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import electron = require("electron");
-import type { BridgeResult, OrcaBridge } from "../bridge.js";
+import type { BridgeResult, ConnectionSnapshot, OrcaBridge } from "../bridge.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
 
@@ -52,6 +52,18 @@ const bridge: OrcaBridge = {
       const forward = (_event: unknown, notification: NotificationMessage): void => listener(notification);
       ipcRenderer.on("orca:notification", forward);
       return () => void ipcRenderer.off("orca:notification", forward);
+    },
+  },
+  connection: {
+    // Synchronous for the same reason `preferences.read` is: the status bar is drawn on the
+    // renderer's first pass, and a promise would paint "reconnecting" for a frame first.
+    read: () => ipcRenderer.sendSync("orca:connection.read") as ConnectionSnapshot,
+    // A second channel the main process pushes on. One `ipcRenderer` listener per renderer
+    // listener, as above, so unsubscribing one cannot silence another.
+    subscribe: (listener: (snapshot: ConnectionSnapshot) => void) => {
+      const forward = (_event: unknown, snapshot: ConnectionSnapshot): void => listener(snapshot);
+      ipcRenderer.on("orca:connection", forward);
+      return () => void ipcRenderer.off("orca:connection", forward);
     },
   },
   preferences: {

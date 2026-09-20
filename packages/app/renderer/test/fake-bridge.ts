@@ -13,6 +13,9 @@
  * - `hold` leaves a call pending so a loading state can be asserted, and hands back the
  *   release;
  * - `notify` pushes a daemon notification to whatever has subscribed;
+ * - `connect` pushes a connection snapshot, which is what the main process's state machine
+ *   does over the `connection` channel — the renderer no longer decides the five states,
+ *   so a test that wants one says so rather than arranging a handshake to imply it;
  * - `calls` records every call in order, so a test can assert a screen asked once and not
  *   four times.
  *
@@ -40,7 +43,7 @@ import type {
   RunsListParams,
   RunsListResult,
 } from "@orca/protocol";
-import type { BridgeResult, OrcaBridge } from "../../src/bridge.js";
+import type { BridgeResult, ConnectionSnapshot, OrcaBridge } from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
 import { AS_OF, CLAIMS, EVENTS, HELLO, INPUTS, RUNS, RUN_DETAILS } from "./fixtures.js";
 
@@ -72,6 +75,8 @@ export interface FakeBridgeOptions {
   /** `process.platform` of the main process; `darwin` puts shortcuts on ⌘. */
   platform?: string;
   preferences?: Preferences;
+  /** What `connection.read()` answers before anything has been pushed. Defaults to live. */
+  connection?: ConnectionSnapshot;
 }
 
 export interface FakeBridge {
@@ -88,6 +93,10 @@ export interface FakeBridge {
   hold: (method: MethodName) => () => void;
   /** Deliver a daemon notification to every subscriber. */
   notify: (notification: NotificationMessage) => void;
+  /** Push a connection snapshot, the way the main process's state machine does. */
+  connect: (snapshot: ConnectionSnapshot) => void;
+  /** What `connection.read()` would answer right now. */
+  readonly connection: ConnectionSnapshot;
   /** How many subscribers are listening — a screen that leaks one is a screen that leaks. */
   readonly subscribers: number;
   /** The preferences the fake is holding, after any writes a test has made. */
@@ -104,6 +113,19 @@ const err = (code: string, message: string): BridgeResult<never> => ({ ok: false
  */
 const RUNS_LIST_LIMIT = 100;
 const RUNS_EVENTS_LIMIT = 200;
+
+/**
+ * A live connection, built out of the same `hello` the fake answers, so the state a screen
+ * sees and the handshake it could ask for cannot disagree. `capabilities` is `HELLO`'s, and
+ * `HELLO` does not advertise `runs.control` — which is the real world today, and so the
+ * default a screen test should be written against.
+ */
+const LIVE_CONNECTION: ConnectionSnapshot = {
+  state: "live",
+  since: AS_OF,
+  orcaVersion: HELLO.orcaVersion,
+  capabilities: HELLO.capabilities,
+};
 
 const defaults: Handlers = {
   hello: () => ok(HELLO),
@@ -188,7 +210,9 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
   const calls: BridgeCall[] = [];
   const listeners = new Set<(notification: NotificationMessage) => void>();
   const held = new Map<MethodName, Promise<void>>();
+  const connections = new Set<(snapshot: ConnectionSnapshot) => void>();
   let preferences = options.preferences ?? DEFAULT_PREFERENCES;
+  let connection = options.connection ?? LIVE_CONNECTION;
 
   /** Record the call, wait out any hold, then answer. One place, so `calls` can never miss one. */
   async function call<K extends MethodName>(method: K, params: Parameters<Handlers[K]>[0]): Promise<unknown> {
@@ -218,6 +242,13 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       subscribe: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
+      },
+    },
+    connection: {
+      read: () => connection,
+      subscribe: (listener) => {
+        connections.add(listener);
+        return () => connections.delete(listener);
       },
     },
   };
@@ -256,6 +287,13 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
     },
     notify(notification) {
       for (const listener of [...listeners]) listener(notification);
+    },
+    connect(snapshot) {
+      connection = snapshot;
+      for (const listener of [...connections]) listener(snapshot);
+    },
+    get connection() {
+      return connection;
     },
     get subscribers() {
       return listeners.size;
