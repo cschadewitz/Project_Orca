@@ -46,16 +46,80 @@
   white-space: nowrap;
 }
 
-/* ---------- the list ---------- */
+/* ---------- the two columns ---------- */
 
-/* The scrolling, the window and the status gutter belong to `VirtualList`
-   (renderer/src/list); what is left for the surface is where the list sits in this column. */
-.orca-runs__list {
+/* The tree above the timeline on the left, the step detail on the right. The detail is a
+   fixed column so the tree and the timeline keep one width whatever is selected; the panel
+   width token is the one the docked panel already uses, because they are the same kind of
+   column and two statements of "how wide is a side pane" would drift. */
+.orca-runs__split {
+  display: grid;
+  grid-template-columns: 1fr var(--panel-width);
   flex: 1;
   min-height: 0;
 }
+.orca-runs__left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.orca-runs__detail {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: var(--stroke-hairline) solid var(--border-hairline);
+  background: var(--surface-base);
+}
 
-/* ---------- the columns of a row ---------- */
+/* The tree takes what the timeline does not. Both are scroll regions of their own, so
+   neither can push the other off the screen. */
+.orca-runs__tree {
+  flex: 2;
+  min-height: 0;
+}
+.orca-runs__tree-state,
+.orca-runs__timeline-state {
+  flex: 1;
+  min-height: 0;
+}
+.orca-runs__timeline-pane {
+  display: flex;
+  flex: 3;
+  flex-direction: column;
+  min-height: 0;
+  border-top: var(--stroke-hairline) solid var(--border-hairline);
+}
+.orca-runs__timeline {
+  flex: 1;
+  min-height: 0;
+}
+.orca-runs__timeline-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+}
+
+/* ---------- the sticky headers ---------- */
+
+/* Both sticky headers are one row of cells inside the element `VirtualList` draws; the
+   height, the ground and the lift are `.orca-pane__head`'s. */
+.orca-runs__tree-head,
+.orca-runs__timeline-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  white-space: nowrap;
+}
+.orca-runs__tree-filtered,
+.orca-runs__cursor {
+  margin-left: auto;
+  color: var(--ink-tertiary);
+}
+
+/* ---------- the columns of a tree row ---------- */
 
 .orca-runs__chip {
   flex: none;
@@ -65,12 +129,17 @@
 .orca-runs__name {
   flex: 1;
   min-width: 0;
-}
-.orca-runs__workflow {
-  flex: none;
-  width: 24ch;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.orca-runs__skipped {
+  flex: none;
+  width: 12ch;
+}
+.orca-runs__attempt,
+.orca-runs__loading {
+  flex: none;
+  color: var(--ink-tertiary);
 }
 .orca-runs__dur {
   flex: none;
@@ -82,4 +151,55 @@
   width: 16ch;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The indeterminate meter: a width, and nothing else. Every colour, the height and the
+   animation are `.orca-meter`'s — and there is no fill percentage because ORCA has no
+   completion fraction to give (docs/design/RULES.md rule 12). */
+.orca-runs__meter {
+  flex: none;
+  width: 8ch;
+}
+/* The twisty is a control so a mouse can open a row; its size and colour stay
+   `.orca-tree-row__twisty`'s. Open is the same glyph turned a quarter, because the bundled
+   symbol face has no downward triangle. */
+.orca-runs__twisty--open {
+  transform: rotate(90deg);
+}
+/* One hairline per level above the row, at the indent that level would have had. A border
+   rather than a `│`, which at mono-log's line height reads as dashed (#212). */
+.orca-runs__guide {
+  left: calc(var(--space-3) * var(--guide, 0));
+}
+
+/* ---------- the columns of a timeline row ---------- */
+
+/* The row's grid is `.orca-timeline-entry`'s (time, marker, body, tail); what is left is
+   what goes in the tail and how the quiet rows read. */
+.orca-runs__event-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+/* The event id is the trigger of the row's copy menu. It is quiet until the row is under
+   the pointer, because it is an address rather than a thing to read. */
+.orca-runs__event-id {
+  color: var(--ink-tertiary);
+  opacity: 0;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.orca-timeline-entry:hover .orca-runs__event-id,
+.orca-runs__event-id:focus-within,
+.orca-timeline-entry--selected .orca-runs__event-id {
+  opacity: 1;
+}
+/* The status word, which is what carries the status when the marker glyph is decorative. */
+.orca-runs__event-status {
+  color: var(--ink-secondary);
+}
+/* A gate a policy settled: present, quiet, and it never raises a count (#157). */
+.orca-runs__auto {
+  color: var(--ink-secondary);
 }

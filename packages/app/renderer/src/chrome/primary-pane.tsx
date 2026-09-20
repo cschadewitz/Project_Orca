@@ -1,7 +1,11 @@
 /**
  * The `.orca-main` column: an optional object-header slot above whatever the active
- * surface renders. No surface has an object to put in that slot yet (that arrives with
- * the surfaces themselves), so `header` is unused today but the slot is structural.
+ * surface renders. Runs is the first surface to fill it (#156) — it hands the chrome the
+ * crumbs for its selection and `App` draws an `ObjectHeader` into the slot.
+ *
+ * The slot renders its child bare. `ObjectHeader` is itself an `.orca-objhead`, so a
+ * wrapper carrying that class again would give the bar two heights, two paddings and two
+ * bottom borders.
  *
  * It is also the app's surface root — `data-surface` is what density is remembered by
  * (docs/design/60-implementation.md), so ⌘⇧D on Runs does not change Config.
@@ -22,7 +26,7 @@ export function PrimaryPane({ surface, header, children }: PrimaryPaneProps): JS
 
   return (
     <main className="orca-main orca-surface" data-surface={surface} tabIndex={-1}>
-      {header ? <div className="orca-objhead">{header}</div> : null}
+      {header ?? null}
       {children}
     </main>
   );

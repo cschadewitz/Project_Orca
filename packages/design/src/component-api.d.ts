@@ -126,13 +126,27 @@ export interface TimeProps {
   show?: "absolute" | "relative" | "both";
 }
 
+/**
+ * A run tree row (built: `app/renderer/src/runs/tree/`).
+ *
+ * `selected`, `onSelect` and the row element itself are **not** the row's: the list
+ * substrate owns the row, its `aria-selected` and its click, and the surface passes only
+ * the cells inside it (`app/renderer/src/list/virtual-list.tsx`). They stay named here
+ * because the class layer still describes a whole row.
+ */
 export interface RunTreeRowProps {
   id: string;
   /** Monospace: this is a machine name. */
   name: string;
-  status: RunStatus;
+  /**
+   * Absent on a `note` row only. A skipped fan-out branch never became a run, so it has no
+   * status and no duration — it shows the word "skipped" and why (rule 12, and rule 3: the
+   * eight statuses stay eight).
+   */
+  status?: RunStatus;
   level: number;
-  kind: "run" | "step" | "attempt" | "child-run";
+  /** `note` is the fifth kind: a skipped fan-out branch, drawn as part of the fan-out. */
+  kind: "run" | "step" | "attempt" | "child-run" | "note";
   expanded?: boolean;
   hasChildren?: boolean;
   selected?: boolean;
@@ -141,13 +155,25 @@ export interface RunTreeRowProps {
   /** "attempt 2 of 3" — shown only when attempts > 1. */
   attempt?: { n: number; of: number };
   agent?: string;
+  /** A running *run*: an indeterminate meter, never a percentage (rule 12, #156). */
+  meter?: boolean;
+  /** The second half of a `note` row: why the branch never ran. */
+  note?: string;
   onToggle?(id: string): void;
   onSelect?(id: string): void;
 }
 
+/** An event timeline row (built: `app/renderer/src/runs/timeline/`). */
 export interface TimelineEntryProps {
-  /** Event id; shown in mono-id on hover and copied by the row's context menu. */
-  eventId: string;
+  /**
+   * Event id; shown in mono-id at the end of the row and copied from the row's `Menu`.
+   *
+   * **Optional**, because one row has no id to show. A live `agent.update` arrives as a
+   * coalesced batch — `fromSeq`, `seq` and the updates between them, and no event ids — so
+   * a batch row is addressed by its sequence range instead. Inventing an id for it is what
+   * rule 12 forbids.
+   */
+  eventId?: string;
   at: Date;
   /** The ORCA event kind, verbatim: 'step.started', 'agent.update', … */
   kind: string;
@@ -155,6 +181,17 @@ export interface TimelineEntryProps {
   summary: string;
   status?: RunStatus;
   selected?: boolean;
+  /** The last sequence number the row stands for, and the first when it is coalesced. */
+  seq?: number;
+  fromSeq?: number;
+  /** How many events the row stands for: 1, or the size of a coalesced batch. */
+  count?: number;
+  /**
+   * A gate a policy settled with nobody asked (`decision.resolved`, `source: "gate:auto"`).
+   * Drawn in `ink-secondary` and it never raises a count. The row names the *source* and
+   * not the condition: `autoApproveWhen` is configuration and is not on the event.
+   */
+  autoApproved?: boolean;
 }
 
 export interface OutputPaneProps {

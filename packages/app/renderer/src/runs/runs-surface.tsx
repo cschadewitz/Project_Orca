@@ -2,61 +2,64 @@
  * The Runs surface: what is happening and what happened
  * (docs/design/10-information-architecture.md).
  *
- * It is a **list**, not the run tree — the tree, with its steps, attempts and children, is
- * its own surface. So every run in the store is one fixed-height row here, whatever its
- * parentage, and a row says the five things that let a person pick one out: status, name,
- * the workflow that produced it, how long it has taken, and the agent doing the work.
+ * Two columns. On the left, the **run tree** above the **event timeline** — the tree is
+ * every run in the store with its steps, attempts and child runs under it, and the timeline
+ * is the selected run's log. On the right, the **step detail** for whatever is selected.
+ * The flat run list this surface used to be is gone: it is the tree's roots now, with the
+ * same two filters over it, because a list and a tree of the same objects on one screen is
+ * two places to look for one thing.
  *
- * Four decisions worth knowing before changing anything here:
+ * Five decisions worth knowing before changing anything here:
  *
- * - **The list is a window.** Rows come from `VirtualList` (`renderer/src/list`), which
- *   renders the band a person can see and stands in for the rest with two spacer heights,
- *   so a store with fifty thousand runs in it is still a few dozen elements. The substrate
- *   owns the row element, the selection keys, the scrolling and the status gutter; this
- *   file owns what a row says.
- * - **The filter is a filter, not a search.** The IA rules out a global search screen and
- *   puts the finding of things in the palette and in per-surface filter fields. The status
- *   half is a `runs.list` parameter, so the daemon applies it across the whole store; the
- *   text half narrows what is already on screen, because the protocol has no text parameter
- *   and a client-side "search" that only saw one page would be a lie.
- * - **Nothing here polls.** The page is read once and every later change arrives as a
- *   `run.changed` notification (`use-runs.ts`).
- * - **There is no progress bar, no ETA and no cost column.** ORCA cannot supply any of the
- *   three and a placeholder is worse than their absence (docs/design/RULES.md rule 12,
- *   docs/design/60-implementation.md). Elapsed time is what the row shows instead.
+ * - **Three lists, three scopes, one `J`.** The tree is `run-tree`, the timeline is `list`.
+ *   The substrate registers the movement keys in whichever scope its `scope` prop names and
+ *   scope resolution is innermost-from-focus, so `J` means "next" in whichever one the
+ *   focus is in. `→`, `←`, `⇧→`, `Enter` and `F` are the tree's own and are the only keys
+ *   this surface registers (`tree/use-tree-keys.ts`).
+ * - **One selection.** The tree and the timeline are two views of one run, and selecting in
+ *   either moves the other (`use-run-selection.ts`).
+ * - **The filter is a filter, not a search.** The status half is a `runs.list` parameter,
+ *   so the daemon applies it across the whole store; the text half narrows what is already
+ *   held. The timeline's kind filter is local for the same reason.
+ * - **Nothing here writes.** No control method is called and `useWritability()` is not
+ *   consulted: this surface reads.
+ * - **No progress bar, no ETA, no cost.** A running run draws an indeterminate meter and
+ *   that is all ORCA can honestly say (rule 12).
  */
-import { useMemo, useState, type JSX } from "react";
-import { CHROME_GLYPHS, STATUS_PRESENTATION, type ConnectionState, type RunStatus } from "@orca/design";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { CHROME_GLYPHS, STATUS_PRESENTATION, type ConnectionState } from "@orca/design";
 import { DISPLAY_STATUSES, type RunSummaryView } from "@orca/protocol";
-import { scopeProps } from "../keyboard-map.js";
-import { VirtualList, type MinimapKind, type VirtualListTick } from "../list/index.js";
-import { Duration, Menu, StateView, StatusChip, Text, textClass, type MenuItem } from "../ui/index.js";
+import type { VirtualListHandle } from "../list/index.js";
+import { Menu, StateView, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
 import { matchesText } from "./run-rows.js";
-import { useRunSelection } from "./use-run-selection.js";
+import { RunTree } from "./tree/run-tree.js";
+import { useRunTree } from "./tree/use-run-tree.js";
+import type { TreeRow } from "./tree/tree-rows.js";
+import { ALL_KINDS, Timeline } from "./timeline/timeline.js";
+import { useRunEvents } from "./timeline/use-run-events.js";
+import type { TimelineEntry } from "./timeline/timeline-entries.js";
+import { buildSelectionIndex, useRunSelection, EMPTY_INDEX, type SelectionIndex } from "./use-run-selection.js";
 import { useRuns, type StatusFilter } from "./use-runs.js";
 import "./runs.css";
 
 export interface RunsSurfaceProps {
   /** Whether the daemon is answering. A list nobody is updating says so rather than lying. */
   connection: ConnectionState;
+  /**
+   * The crumbs for `PrimaryPane`'s header slot: request ▸ work item ▸ run ▸ step for the
+   * current selection.
+   *
+   * They are handed up rather than rendered here because the slot is above the surface in
+   * the chrome (`chrome/primary-pane.tsx`), and the breadcrumb for an object is the
+   * chrome's job on *every* screen that has an object — a surface drawing its own would be
+   * the second object header the information architecture rules out.
+   */
+  onCrumbs?: (crumbs: readonly Crumb[]) => void;
 }
 
-/** `aria-activedescendant` needs a DOM id per row, and a row needs one that is stable. */
-const rowId = (runId: string): string => `run-row-${runId}`;
-
-/** A stable empty page, so `visible` is not recomputed on every render before the data lands. */
+/** A stable empty page, so the memos do not recompute before the data lands. */
 const EMPTY: readonly RunSummaryView[] = [];
-
-/**
- * The three statuses the minimap gutter has a colour for, and what a person scrolling a
- * long list is looking for: a failure, a run asking for them, a run that cannot proceed.
- * The other five are on their rows and nowhere else.
- */
-const TICK_KINDS: Readonly<Record<string, MinimapKind>> = {
-  failed: "failed",
-  waiting: "waiting",
-  blocked: "blocked",
-};
+const NO_ENTRIES: readonly TimelineEntry[] = [];
 
 /** "All statuses" plus the eight, in the design system's order. */
 const STATUS_ITEMS: readonly MenuItem[] = [
@@ -73,34 +76,99 @@ function countLabel(shown: number, total: number): string {
   return shown === total ? runs : `${shown} of ${runs}`;
 }
 
-export function RunsSurface({ connection }: RunsSurfaceProps): JSX.Element {
+export function RunsSurface({ connection, onCrumbs }: RunsSurfaceProps): JSX.Element {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [text, setText] = useState("");
+  const [kind, setKind] = useState<string>(ALL_KINDS);
+  /* A run opens with its timeline following: the last thing that happened is what a person
+     clicked the run for. Scrolling away holds it, and picking another run starts again. */
+  const [follow, setFollow] = useState(true);
   const { state, reload } = useRuns(status);
 
   const runs = state.phase === "ready" ? state.runs : EMPTY;
   const visible = useMemo(() => runs.filter((run) => matchesText(run, text)), [runs, text]);
   const ids = useMemo(() => visible.map((run) => run.id), [visible]);
-  const { selectedIndex, selectAt } = useRunSelection(ids);
 
-  /* The gutter marks the whole list, not the rendered window — that is what it is for. It
-     is recomputed with the list rather than per frame: on a store of any size this is the
-     one pass over every run the surface makes. */
-  const ticks = useMemo<VirtualListTick[]>(
-    () =>
-      visible.flatMap((run, index) => {
-        const kind = TICK_KINDS[run.status];
-        if (!kind) return [];
-        return [{ index, kind, label: `${run.name}, ${STATUS_PRESENTATION[run.status].word}` }];
-      }),
-    [visible],
+  const tree = useRunTree(visible);
+
+  /* The index the selection resolves a step against is built from the events the timeline
+     holds — and the timeline only holds events once a run is selected. A ref rather than a
+     prop is what breaks that circle; it is assigned below, after both hooks have run. */
+  const indexRef = useRef<SelectionIndex>(EMPTY_INDEX);
+  const selection = useRunSelection(indexRef, ids);
+  const { selectedRunId, selectedStepRunId, selectedSeq } = selection;
+
+  /* The timeline's imperative half. A backward page lands in front of the list and moves
+     every index down by its length; `shiftBy` is what keeps the reader where they were. */
+  const listRef = useRef<VirtualListHandle>(null);
+  const onPrepend = useCallback((rows: number) => listRef.current?.shiftBy(rows), []);
+
+  /* The tree caches every `runs.get` it makes; the timeline needs the same projection to
+     name the step behind a `stepRunId`, so the selected run is read once, by the tree. */
+  const { ensure } = tree;
+  useEffect(() => {
+    if (selectedRunId !== undefined) ensure(selectedRunId);
+  }, [selectedRunId, ensure]);
+
+  useEffect(() => setFollow(true), [selectedRunId]);
+  const onHold = useCallback(() => setFollow(false), []);
+
+  const detail = selectedRunId === undefined ? undefined : tree.detailOf(selectedRunId);
+  const events = useRunEvents(selectedRunId, detail, onPrepend);
+  const entries = events.state.phase === "ready" ? events.state.entries : NO_ENTRIES;
+  indexRef.current = useMemo(() => buildSelectionIndex(entries), [entries]);
+
+  const selectedRun = useMemo(() => visible.find((run) => run.id === selectedRunId), [visible, selectedRunId]);
+  const currentStep = useMemo(() => {
+    if (selectedStepRunId === undefined) return undefined;
+    return detail?.steps.find((step) => step.id === selectedStepRunId)?.nodeId ?? selectedStepRunId;
+  }, [detail, selectedStepRunId]);
+
+  /* request ▸ work item ▸ run ▸ step, from what the read models carry and nothing else: a
+     run has a `requestId` and a `workItem`, a step has a `nodeId`. A crumb with nothing
+     behind it is left out rather than filled in (rule 12). */
+  const crumbs = useMemo<readonly Crumb[]>(() => {
+    if (!selectedRun) return [];
+    const trail: Crumb[] = [];
+    if (selectedRun.requestId !== undefined) {
+      trail.push({ type: "request", id: selectedRun.requestId, label: selectedRun.requestId });
+    }
+    if (selectedRun.workItem) {
+      trail.push({ type: "item", id: selectedRun.workItem.id, label: selectedRun.workItem.title });
+    }
+    trail.push({ type: "run", id: selectedRun.id, label: selectedRun.name });
+    if (selectedStepRunId !== undefined && currentStep !== undefined) {
+      trail.push({ type: "step", id: selectedStepRunId, label: currentStep });
+    }
+    const last = trail[trail.length - 1];
+    if (last) last.current = true;
+    return trail;
+  }, [selectedRun, selectedStepRunId, currentStep]);
+
+  const report = useRef(onCrumbs);
+  report.current = onCrumbs;
+  useEffect(() => report.current?.(crumbs), [crumbs]);
+
+  const onSelectRow = useCallback(
+    (row: TreeRow) => {
+      if (row.stepRunId !== undefined) selection.selectStep(row.runId, row.stepRunId);
+      else selection.selectRun(row.runId);
+    },
+    [selection],
+  );
+
+  const onSelectEntry = useCallback(
+    (entry: TimelineEntry) => {
+      if (selectedRunId !== undefined) selection.selectEvent(selectedRunId, entry.seq);
+    },
+    [selection, selectedRunId],
   );
 
   const live = connection === "live";
   const filtered = status !== "all" || text.trim() !== "";
 
   return (
-    <div className="orca-runs" {...scopeProps("list")}>
+    <div className="orca-runs">
       {/* Last-known data, said out loud: the values stay, the banner says not to trust their
           freshness (docs/design/40-connection-states.md). */}
       {!live && state.phase === "ready" && (
@@ -143,41 +211,81 @@ export function RunsSurface({ connection }: RunsSurfaceProps): JSX.Element {
         )}
       </div>
 
-      <Body
-        state={state}
-        visible={visible}
-        selectedIndex={selectedIndex}
-        ticks={ticks}
-        live={live}
-        filtered={filtered}
-        connection={connection}
-        onSelect={selectAt}
-        onRetry={reload}
-        onClearFilter={() => {
-          setText("");
-          setStatus("all");
-        }}
-      />
+      <div className="orca-runs__split">
+        <div className="orca-runs__left">
+          <TreeBody
+            state={state}
+            tree={tree}
+            visible={visible}
+            live={live}
+            filtered={filtered}
+            connection={connection}
+            selectedRunId={selectedRunId}
+            selectedStepRunId={selectedStepRunId}
+            onSelect={onSelectRow}
+            onRetry={reload}
+            onClearFilter={() => {
+              setText("");
+              setStatus("all");
+            }}
+          />
+          <Timeline
+            state={events.state}
+            currentStep={currentStep}
+            selectedSeq={selectedSeq}
+            onSelect={onSelectEntry}
+            loadEarlier={events.loadEarlier}
+            onRetry={events.reload}
+            listRef={listRef}
+            kind={kind}
+            onKind={setKind}
+            follow={follow}
+            onHold={onHold}
+          />
+        </div>
+
+        {/* ---------------------------------------------------------------------------
+            SEAM — unit F's step detail goes here (#158, #159).
+            Replace this `StateView` with:
+              <StepDetail runId={selectedRunId} stepRunId={selectedStepRunId}
+                          connection={connection} />
+            and delete the import of `StateView` if nothing else in this file needs it.
+            Everything the component needs is already in this scope and already moves with
+            the selection; nothing else in this file has to change.
+            --------------------------------------------------------------------------- */}
+        <aside className="orca-runs__detail" aria-label="Step detail">
+          <StateView
+            kind="empty"
+            title="Step detail"
+            body={
+              selectedStepRunId === undefined
+                ? "Select a step in the tree to see what it produced."
+                : "The step detail pane has not been built yet."
+            }
+          />
+        </aside>
+      </div>
     </div>
   );
 }
 
-interface BodyProps {
+interface TreeBodyProps {
   state: ReturnType<typeof useRuns>["state"];
+  tree: ReturnType<typeof useRunTree>;
   visible: readonly RunSummaryView[];
-  selectedIndex: number | undefined;
-  ticks: readonly VirtualListTick[];
   live: boolean;
   filtered: boolean;
   connection: ConnectionState;
-  onSelect: (index: number) => void;
+  selectedRunId: string | undefined;
+  selectedStepRunId: string | undefined;
+  onSelect: (row: TreeRow) => void;
   onRetry: () => void;
   onClearFilter: () => void;
 }
 
-/** The list, or the one state view that stands in for it. */
-function Body(props: BodyProps): JSX.Element {
-  const { state, visible, selectedIndex, ticks, live, filtered, connection, onSelect, onRetry, onClearFilter } = props;
+/** The tree, or the one state view that stands in for it. */
+function TreeBody(props: TreeBodyProps): JSX.Element {
+  const { state, tree, visible, live, filtered, connection, onSelect, onRetry, onClearFilter } = props;
 
   if (state.phase === "loading") return <StateView kind="loading" title="Loading runs" />;
 
@@ -218,95 +326,16 @@ function Body(props: BodyProps): JSX.Element {
   }
 
   return (
-    <VirtualList
-      className="orca-runs__list"
-      label="Runs"
-      noun="run"
-      items={visible}
-      ticks={ticks}
-      rowId={(run) => rowId(run.id)}
-      rowClassName={rowClassName}
-      renderRow={(run) => <RunRow run={run} live={live} />}
-      selectedIndex={selectedIndex}
+    <RunTree
+      tree={tree}
+      selectedRunId={props.selectedRunId}
+      selectedStepRunId={props.selectedStepRunId}
       onSelect={onSelect}
+      // `Enter` opens the step detail, which is the same selection the pane beside the
+      // tree already reads — so opening is selecting until unit F gives it somewhere else
+      // to go.
+      onOpen={onSelect}
+      live={live}
     />
   );
-}
-
-/**
- * The system's row, and its selected modifier — but not its status modifiers. In
- * components.css `--running`, `--waiting` and `--failed` are declared *after* `--selected`
- * at the same specificity and all four set the same left rail, so a selected failed row
- * would draw a red rail and nothing on screen would say what is selected. The rail is
- * selection's (accent, rule 5) and status is the chip's (glyph, word, colour third, rules
- * 3 and 4), which is the reading the accessibility doc's selection paragraph takes. The
- * run tree will have to settle the same question when it arrives.
- *
- * It is a function the substrate calls rather than a class on the markup below, because the
- * row *element* — its id, its `option` role, its `aria-selected` and its click — is the
- * substrate's, and its height comes from the `.orca-tree-row` named here.
- */
-const rowClassName = (_run: RunSummaryView, _index: number, selected: boolean): string =>
-  ["orca-tree-row", "orca-tree-row--run", selected ? "orca-tree-row--selected" : ""].filter(Boolean).join(" ");
-
-interface RunRowProps {
-  run: RunSummaryView;
-  live: boolean;
-}
-
-/**
- * What one run says, inside the row `VirtualList` draws around it. The status chip is
- * first in the DOM as well as on screen, so the row's accessible name starts with the
- * status word — "failed, SSO rollout, nightly v1"
- * (docs/design/50-accessibility-and-keyboard.md).
- *
- * The row is an `option`, not a button: it is not focusable itself. Focus stays on the
- * listbox and `aria-activedescendant` names the selected row, which is what keeps one tab
- * stop over a list that may be fifty thousand rows long.
- */
-function RunRow({ run, live }: RunRowProps): JSX.Element {
-  // `DisplayStatus` and the design system's `RunStatus` are the same eight words, pinned
-  // against each other in packages/protocol/test — so no fold and no cast here.
-  const status: RunStatus = run.status;
-  /* Elapsed while the run is going, total once it has stopped. A disconnected app stops the
-     clock: a duration accruing against a daemon that is not talking is an invented number. */
-  const accruing = live && run.finishedAt === undefined && run.startedAt !== undefined;
-
-  return (
-    <>
-      <StatusChip status={status} className="orca-runs__chip" />
-      <span className={`orca-tree-row__name ${textClass("mono-strong")} orca-runs__name`}>{run.name}</span>
-      <span className={`orca-tree-row__meta ${textClass("caption")}`}>
-        <span className={`orca-id ${textClass("mono-id")} orca-runs__workflow`}>
-          {run.workflowId}
-          <span className="orca-faint"> v{run.workflowVersion}</span>
-        </span>
-        <RunDuration run={run} accruing={accruing} stale={!live} />
-        <span className={`orca-id ${textClass("mono-id")} orca-runs__agent`}>{run.agentId ?? ""}</span>
-      </span>
-    </>
-  );
-}
-
-/** The duration cell, kept apart so the three cases it has are readable. */
-function RunDuration({
-  run,
-  accruing,
-  stale,
-}: {
-  run: RunSummaryView;
-  accruing: boolean;
-  stale: boolean;
-}): JSX.Element {
-  const className = ["orca-tree-row__dur", textClass("mono-id"), "orca-runs__dur", stale ? "orca-stale-value" : ""]
-    .filter(Boolean)
-    .join(" ");
-
-  if (accruing && run.startedAt !== undefined) {
-    return <Duration since={new Date(run.startedAt)} className={className} />;
-  }
-  // A run that has not started has no duration at all, and an empty cell is the honest
-  // rendering of that — the column still holds its width, so the rows below stay aligned.
-  if (run.durationMs === undefined) return <span className={className} />;
-  return <Duration ms={run.durationMs} className={className} />;
 }

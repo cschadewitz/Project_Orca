@@ -1,0 +1,339 @@
+// @vitest-environment happy-dom
+/**
+ * The run tree below its roots (#156): what one `runs.get` becomes, what the five tree keys
+ * do to it, and what a `step.changed` does and does not touch.
+ *
+ * The fixture is `fixtures.ts`'s `run-parent`, which is the story the issue asks for — a
+ * `parallel` fan-out with one finished child, one child whose log is gone, one branch that
+ * never ran, and a `build` node retried after a transport failure. `tree-rows.test.ts`
+ * asserts the rows as data; this asserts them as a screen, including the thing a greyscale
+ * screenshot depends on: a glyph *and* a word on every row.
+ *
+ * `timelineRowId` is wrapped rather than spied on because it is the one function the
+ * timeline's `VirtualList` calls once per rendered row, which makes it the cheapest honest
+ * count of "did the timeline's rows re-render" — see the last test.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { STATUS_PRESENTATION } from "@orca/design";
+import type { Crumb } from "../src/ui/index.js";
+import type { NotificationMessage } from "@orca/protocol";
+
+const rendered = vi.hoisted(() => ({ rows: 0 }));
+vi.mock("../src/runs/timeline/timeline-entries.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/runs/timeline/timeline-entries.js")>();
+  return {
+    ...actual,
+    timelineRowId: (seq: number) => {
+      rendered.rows += 1;
+      return actual.timelineRowId(seq);
+    },
+  };
+});
+
+const { RunsSurface } = await import("../src/runs/runs-surface.js");
+const { installBridge, harness } = await import("./harness.js");
+type Harness = Awaited<ReturnType<typeof import("./harness.js").harness>>;
+type FakeBridge = ReturnType<typeof import("./fake-bridge.js").fakeBridge>;
+
+let fake: FakeBridge;
+let h: Harness;
+let crumbs: readonly Crumb[] = [];
+const teardown: (() => void)[] = [];
+
+function renderRuns(): void {
+  h = harness();
+  teardown.push(h.dispose);
+  const { Providers } = h;
+  render(
+    <Providers>
+      <RunsSurface
+        connection="live"
+        onCrumbs={(next) => {
+          crumbs = next;
+        }}
+      />
+    </Providers>,
+  );
+}
+
+const list = (): HTMLElement => screen.getByRole("listbox", { name: "Run tree" });
+const rows = (): HTMLElement[] => within(list()).queryAllByRole("option");
+const ids = (): string[] => rows().map((row) => row.id.replace(/^tree-row-/, ""));
+const press = (key: string, code: string, shift = false): void => {
+  fireEvent.keyDown(list(), { key, code, shiftKey: shift });
+};
+
+/** The twisty is `aria-hidden`, so it is found by class rather than by role. */
+const twisty = (row: HTMLElement): HTMLElement => row.querySelector(".orca-tree-row__twisty")!;
+
+/** Select the last root, which is `run-parent` — the fixture with everything in it. */
+async function openParent(): Promise<void> {
+  renderRuns();
+  await screen.findByRole("listbox", { name: "Run tree" });
+  press("End", "End");
+  await act(async () => {
+    press("ArrowRight", "ArrowRight");
+  });
+  await waitFor(() => expect(ids().length).toBeGreaterThan(5));
+}
+
+describe("the run tree", () => {
+  beforeEach(() => {
+    fake = installBridge();
+    rendered.rows = 0;
+    crumbs = [];
+  });
+  afterEach(() => {
+    cleanup();
+    while (teardown.length) teardown.pop()?.();
+  });
+
+  it("reads a run once when it is opened, and draws its step groups", async () => {
+    await openParent();
+
+    expect(ids()).toEqual([
+      "run-old",
+      "run-lost",
+      "run-gate",
+      "run-child-ok",
+      "run-parent",
+      // One row per node, at the newest attempt: `build` was tried twice and is one row.
+      "run-parent/s-build-2",
+      "run-parent/s-fan",
+    ]);
+    expect(fake.calls.filter((c) => c.method === "runs.get")).toEqual([
+      { method: "runs.get", params: { runId: "run-parent" } },
+    ]);
+  });
+
+  it("puts the earlier attempt under the newest one, and says which attempt each is", async () => {
+    await openParent();
+    fireEvent.click(twisty(rows()[5]!));
+
+    expect(ids()).toEqual([
+      "run-old",
+      "run-lost",
+      "run-gate",
+      "run-child-ok",
+      "run-parent",
+      "run-parent/s-build-2",
+      // A key is a path, not an id: the earlier attempt hangs off the newest one.
+      "run-parent/s-build-2/s-build-1",
+      "run-parent/s-fan",
+    ]);
+    expect(rows()[5]!.textContent).toContain("attempt 2 of 2");
+    expect(rows()[6]!.textContent).toContain("attempt 1 of 2");
+    // One attempt at `fanout`, so no "attempt 1 of 1" on it.
+    expect(rows()[7]!.textContent).not.toContain("attempt");
+  });
+
+  it("draws the whole fan-out: the finished child, the stale one, and the branch that never ran", async () => {
+    await openParent();
+    fireEvent.click(twisty(rows()[6]!));
+
+    expect(ids().slice(6)).toEqual([
+      "run-parent/s-fan",
+      "run-parent/s-fan/run-child-ok",
+      "run-parent/s-fan/run-child-gone",
+      "run-parent/s-fan/!auth-perf",
+    ]);
+    const skipped = rows()[9]!;
+    expect(skipped.textContent).toContain("skipped");
+    expect(skipped.textContent).toContain("auth-perf");
+    expect(skipped.textContent).toContain("a dependency was not met");
+  });
+
+  /* Rule 4, and #156's "a greyscale screenshot still reads": the status is never colour
+     alone. Every row that has one renders its glyph *and* its word, in that order and
+     before the name, which is also the order of the row's accessible name. */
+  it("says the status in a glyph and a word, first, on every row", async () => {
+    await openParent();
+    fireEvent.click(twisty(rows()[6]!));
+
+    const expected: Record<string, string> = {
+      "run-old": "failed",
+      "run-lost": "stale",
+      "run-gate": "waiting",
+      "run-child-ok": "succeeded",
+      "run-parent": "running",
+      "run-parent/s-build-2": "succeeded",
+      "run-parent/s-fan": "running",
+      "run-parent/s-fan/run-child-ok": "succeeded",
+      "run-parent/s-fan/run-child-gone": "stale",
+    };
+
+    for (const row of rows()) {
+      const key = row.id.replace(/^tree-row-/, "");
+      // The twisty is decorative and aria-hidden, so it is not part of the name.
+      const said = (row.textContent ?? "").replace(/^▸?/, "");
+      if (key === "run-parent/s-fan/!auth-perf") {
+        expect(said.startsWith("skipped"), key).toBe(true);
+        continue;
+      }
+      const status = expected[key]!;
+      const { glyph, word } = STATUS_PRESENTATION[status as keyof typeof STATUS_PRESENTATION];
+      expect(said.startsWith(`${glyph}${word}`), `${key}: ${said}`).toBe(true);
+    }
+  });
+
+  it("draws an indeterminate meter on a running run and no percentage anywhere", async () => {
+    await openParent();
+    fireEvent.click(twisty(rows()[6]!));
+
+    // One meter: the running *run*. The running fan-out step does not get one, and
+    // nothing on this screen says a percentage — ORCA has none to give (rule 12).
+    const meters = [...document.querySelectorAll(".orca-meter")];
+    expect(meters).toHaveLength(1);
+    expect(rows()[4]!.contains(meters[0]!)).toBe(true);
+    expect(meters[0]!.getAttribute("aria-hidden")).toBe("true");
+    expect(list().textContent).not.toMatch(/\d+\s*%/);
+  });
+
+  it("expands and collapses with the arrows, and goes to the parent from a closed row", async () => {
+    await openParent();
+    // `→` on an open row steps into it rather than opening it again.
+    press("ArrowRight", "ArrowRight");
+    expect(rows()[5]!.getAttribute("aria-selected")).toBe("true");
+
+    // `←` on a closed row goes to its parent.
+    press("ArrowLeft", "ArrowLeft");
+    expect(rows()[4]!.getAttribute("aria-selected")).toBe("true");
+
+    // And `←` on the open parent closes it.
+    press("ArrowLeft", "ArrowLeft");
+    expect(ids()).toEqual(["run-old", "run-lost", "run-gate", "run-child-ok", "run-parent"]);
+  });
+
+  it("opens a whole subtree with shift and the right arrow", async () => {
+    await openParent();
+    // Back onto the run itself — `End` is the fan-out now that the run is open.
+    fireEvent.click(rows()[4]!);
+    await act(async () => {
+      press("ArrowRight", "ArrowRight", true);
+    });
+
+    // Both step groups opened in one press: the retried node's earlier attempt and the
+    // fan-out's children and skipped branch.
+    await waitFor(() =>
+      expect(ids().slice(5)).toEqual([
+        "run-parent/s-build-2",
+        "run-parent/s-build-2/s-build-1",
+        "run-parent/s-fan",
+        "run-parent/s-fan/run-child-ok",
+        "run-parent/s-fan/run-child-gone",
+        "run-parent/s-fan/!auth-perf",
+      ]),
+    );
+  });
+
+  it("filters to the failed and the waiting with F, and back again", async () => {
+    await openParent();
+    fireEvent.click(twisty(rows()[5]!));
+
+    act(() => press("f", "KeyF"));
+
+    expect(ids()).toEqual([
+      // The failed run, the waiting one, and the retried attempt with the run above it.
+      "run-old",
+      "run-gate",
+      "run-parent",
+      "run-parent/s-build-2",
+      "run-parent/s-build-2/s-build-1",
+    ]);
+    expect(screen.getByText("failed and waiting only")).toBeTruthy();
+
+    act(() => press("f", "KeyF"));
+    expect(ids()).toContain("run-child-ok");
+  });
+
+  it("puts the ancestor chain in the sticky header once a row has one", async () => {
+    await openParent();
+    press("End", "End");
+    press("ArrowDown", "ArrowDown");
+
+    const head = document.querySelector(".orca-runs__tree-head")!;
+    expect(head.textContent).toContain("Add the SSO callback");
+  });
+
+  it("hands the chrome request ▸ work item ▸ run ▸ step for the selection", async () => {
+    await openParent();
+
+    // The run alone: request, work item, run — and the run is the current crumb.
+    await waitFor(() => expect(crumbs.map((c) => c.type)).toEqual(["request", "item", "run"]));
+    expect(crumbs.map((c) => c.label)).toEqual(["req-1", "Add the SSO callback", "Add the SSO callback"]);
+    expect(crumbs[2]!.current).toBe(true);
+
+    // And the step, once a step is selected.
+    act(() => press("Enter", "Enter"));
+    press("ArrowDown", "ArrowDown");
+    await waitFor(() => expect(crumbs.map((c) => c.type)).toEqual(["request", "item", "run", "step"]));
+    expect(crumbs[3]!.label).toBe("build");
+  });
+
+  it("folds a step.changed into the open run without re-reading it", async () => {
+    await openParent();
+    expect(within(rows()[6]!).getByText(STATUS_PRESENTATION.running.word)).toBeTruthy();
+
+    act(() => fake.notify(stepChanged({ stepRunId: "s-fan", status: "failed", event: "step.failed" })));
+
+    await waitFor(() => expect(within(rows()[6]!).getByText(STATUS_PRESENTATION.failed.word)).toBeTruthy());
+    expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(1);
+  });
+
+  it("draws a step it has never seen, from the step.scheduled that introduces it", async () => {
+    await openParent();
+
+    act(() =>
+      fake.notify(
+        stepChanged({
+          stepRunId: "s-deploy",
+          status: "waiting",
+          event: "step.scheduled",
+          nodeId: "deploy",
+          nodeType: "agent",
+          attempt: 1,
+        }),
+      ),
+    );
+
+    await waitFor(() => expect(ids()).toContain("run-parent/s-deploy"));
+    expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(1);
+  });
+
+  /* docs/design/60-implementation.md, read the other way round: the tree subscribes to
+     `run.changed` and `step.changed`, and those are the tree's. A step moving must not cost
+     a re-render of a list that may be ten thousand event rows long. */
+  it("does not re-render the timeline's rows when a step changes", async () => {
+    await openParent();
+    await screen.findByRole("listbox", { name: "Event timeline" });
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("listbox", { name: "Event timeline" })).queryAllByRole("option").length,
+      ).toBeGreaterThan(0),
+    );
+
+    const before = rendered.rows;
+    act(() => fake.notify(stepChanged({ stepRunId: "s-fan", status: "failed", event: "step.failed" })));
+    await waitFor(() => expect(within(rows()[6]!).getByText(STATUS_PRESENTATION.failed.word)).toBeTruthy());
+
+    expect(rendered.rows).toBe(before);
+  });
+});
+
+/** A `step.changed` frame about `run-parent`, with the envelope every notification carries. */
+function stepChanged(over: Record<string, unknown> & { stepRunId: string }): NotificationMessage {
+  return {
+    kind: "notification",
+    method: "step.changed",
+    params: {
+      subscriptionId: "sub-1",
+      runId: "run-parent",
+      seq: 40,
+      at: "2026-03-01T09:00:50.000Z",
+      status: "running",
+      event: "step.started",
+      ...over,
+    },
+  };
+}
