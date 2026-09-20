@@ -102,12 +102,14 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "artifacts",
     "claims",
     "connection",
+    "deepLink",
     "hello",
     "inputs",
     "notifications",
     "platform",
     "preferences",
     "runs",
+    "workspace",
   ]);
 
   // Renderer assets really loaded off file://, rather than the CSP blocking them.

@@ -71,18 +71,18 @@ export interface BundledDaemonOptions {
   entry: string;
   /**
    * The workspace to serve: the daemon reads `<cwd>/.orca` unless an `orca.config.yaml`
-   * above it says otherwise. Workspace selection in the app is #164's; until then this is
-   * whatever `src/main/index.ts` decides, and the daemon tolerates a directory with no
-   * config and no store — it serves an empty run list rather than failing.
+   * above it says otherwise. Which workspace that is belongs to `src/main/workspace.ts`,
+   * which can change it while the app runs (#164); the daemon tolerates a directory with
+   * no config and no store, serving an empty run list rather than failing.
    */
   cwd: string;
   /** `orca --config <file>`, when the workspace's config is not found by walking up. */
   configPath?: string;
   host?: string;
   /**
-   * Extra arguments, appended after `serve`. This is the seam for flags the app learns to
-   * pass later — `--read-only` is the one #164's batch wants — so that growing the command
-   * line never means growing this signature.
+   * Extra arguments, appended after `serve`. The seam for flags the app passes —
+   * `--read-only`, which is what file mode is (#164) — so that growing the command line
+   * never means growing this signature.
    */
   args?: readonly string[];
   /**

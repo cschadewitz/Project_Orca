@@ -137,20 +137,14 @@ describe("the command palette", () => {
     expect(palette()).toBeTruthy();
   });
 
-  it("says so rather than inventing search results", async () => {
-    mount();
-    await open();
-    fireEvent.change(query(), { target: { value: "auth" } });
-    expect(await screen.findByText(/Searching runs, steps and artifacts arrives/)).toBeTruthy();
-  });
-
-  it("offers a jump row for a run id, disabled until orca:// routing exists", async () => {
+  it("offers a jump row for a run id, and it is runnable now that the route table exists", async () => {
     mount();
     await open();
     fireEvent.change(query(), { target: { value: "run_01J7K3QF8ZC4W2M6NP0XYTB5RD" } });
 
     const jump = await screen.findByRole("option", { name: /Open run/ });
-    expect(jump.getAttribute("aria-disabled")).toBe("true");
+    // Not `aria-disabled`: the chrome passes `onJump`, so the row resolves (#165).
+    expect(jump.getAttribute("aria-disabled")).toBeNull();
     expect(jump.textContent).toContain("run_01J7K3QF8ZC4W2M6NP0XYTB5RD");
   });
 

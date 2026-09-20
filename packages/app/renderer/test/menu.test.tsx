@@ -53,8 +53,8 @@ const header = (onChoose: (crumb: Crumb, counterpart: Counterpart) => void = () 
   <ObjectHeader crumbs={crumbs} onOpenCounterpart={onChoose} />
 );
 
-const trigger = (): HTMLElement => screen.getByRole("button", { name: "Counterparts of auth-sso-epic" });
-const menu = (): HTMLElement => screen.getByRole("menu", { name: "Counterparts of auth-sso-epic" });
+const trigger = (): HTMLElement => screen.getByRole("button", { name: "Links for auth-sso-epic" });
+const menu = (): HTMLElement => screen.getByRole("menu", { name: "Links for auth-sso-epic" });
 const items = (): HTMLElement[] => within(menu()).getAllByRole("menuitem");
 
 /** A key pressed where focus is, which is what the window listener sees in the app. */
@@ -68,7 +68,9 @@ afterEach(() => {
   while (teardown.length) teardown.pop()?.();
 });
 
-describe("the counterpart menu, over the Menu primitive", () => {
+/* The crumb menu is Copy link and then the counterparts (#165), so the first row of an
+   item crumb's menu is the link and the two counterparts follow it. */
+describe("the crumb menu, over the Menu primitive", () => {
   it("walks with the arrow keys, activates with Enter, and puts focus back on the trigger", () => {
     const chosen = vi.fn();
     mount(header(chosen));
@@ -76,14 +78,20 @@ describe("the counterpart menu, over the Menu primitive", () => {
     fireEvent.click(trigger());
     // Focus moves into the menu on open, onto the first item.
     expect(document.activeElement).toBe(items()[0]);
-    expect(items().map((item) => item.textContent)).toEqual(["Runs that attempted thisrun", "Dependenciesitem"]);
+    expect(items().map((item) => item.textContent)).toEqual([
+      "Copy linkorca://",
+      "Runs that attempted thisrun",
+      "Dependenciesitem",
+    ]);
 
     press("ArrowDown");
     expect(document.activeElement).toBe(items()[1]);
+    press("ArrowDown");
+    expect(document.activeElement).toBe(items()[2]);
     press("ArrowDown"); // wraps round the end
     expect(document.activeElement).toBe(items()[0]);
     press("ArrowUp");
-    expect(document.activeElement).toBe(items()[1]);
+    expect(document.activeElement).toBe(items()[2]);
 
     press("Enter");
     expect(chosen).toHaveBeenCalledTimes(1);
@@ -111,21 +119,21 @@ describe("the counterpart menu, over the Menu primitive", () => {
     fireEvent.click(trigger());
 
     press("End");
-    expect(document.activeElement).toBe(items()[1]);
+    expect(document.activeElement).toBe(items()[2]);
     press("Home");
     expect(document.activeElement).toBe(items()[0]);
 
     // Typeahead is a local handler on the list, so it is fired there rather than at the window.
     fireEvent.keyDown(document.activeElement!, { key: "d", code: "KeyD" });
-    expect(document.activeElement).toBe(items()[1]);
+    expect(document.activeElement).toBe(items()[2]);
     fireEvent.keyDown(document.activeElement!, { key: "r", code: "KeyR" });
-    expect(document.activeElement).toBe(items()[0]);
+    expect(document.activeElement).toBe(items()[1]);
     // A letter no item starts with leaves focus where it is rather than moving it oddly.
     fireEvent.keyDown(document.activeElement!, { key: "z", code: "KeyZ" });
-    expect(document.activeElement).toBe(items()[0]);
+    expect(document.activeElement).toBe(items()[1]);
     // A modified key is somebody else's shortcut, not typeahead.
     fireEvent.keyDown(document.activeElement!, { key: "d", code: "KeyD", metaKey: true });
-    expect(document.activeElement).toBe(items()[0]);
+    expect(document.activeElement).toBe(items()[1]);
   });
 
   it("dismisses on a press outside without dragging focus back to the trigger", () => {
@@ -150,14 +158,16 @@ describe("the counterpart menu, over the Menu primitive", () => {
     expect(menu()).toBeTruthy();
   });
 
-  it("renders no disclosure at all for a crumb type with no counterparts", () => {
+  it("renders no disclosure at all for a crumb with neither a link nor counterparts", () => {
     mount(
       <ObjectHeader
         crumbs={[{ type: "step", id: "build.2", label: "build", current: true }]}
         onOpenCounterpart={() => {}}
       />,
     );
-    expect(screen.queryByRole("button", { name: /Counterparts/ })).toBeNull();
+    /* A step crumb on its own: its canonical URL needs the run above it in the trail, and
+       a step has no counterparts — so there is nothing to disclose. */
+    expect(screen.queryByRole("button", { name: /Links for/ })).toBeNull();
   });
 });
 
@@ -188,7 +198,7 @@ describe("the menu's keys in the keyboard map", () => {
     // `click` alone, with no `mousedown`, is the one way to get two menus open at once:
     // this is the registry's guard, since the map rejects a second bind on one key.
     fireEvent.click(trigger());
-    fireEvent.click(screen.getByRole("button", { name: "Counterparts of 7f3a2c" }));
+    fireEvent.click(screen.getByRole("button", { name: "Links for 7f3a2c" }));
     expect(screen.getAllByRole("menu")).toHaveLength(2);
     expect(menuKeys(h)).toHaveLength(5);
 

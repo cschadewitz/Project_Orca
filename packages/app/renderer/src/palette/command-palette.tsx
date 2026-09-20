@@ -23,9 +23,9 @@ const LIST_ID = "orca-palette-list";
 export interface CommandPaletteProps {
   controller: CommandPaletteController;
   /**
-   * Resolve an `orca://` URL. Omitted until the route table exists (#165), in which case
-   * the jump row is still listed — so what the palette understands is visible — but
-   * disabled, rather than silently doing nothing.
+   * Resolve an `orca://` URL — the chrome passes the route table's opener (#165). Without
+   * it the jump row is still listed, so what the palette understands stays visible, but it
+   * is disabled rather than silently doing nothing.
    */
   onJump?: (target: JumpTarget) => void;
 }
@@ -173,7 +173,7 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
         ) : null}
         {searchIsEmpty ? (
           <p className={`orca-palette__note ${textClass("caption")}`}>
-            Searching runs, steps and artifacts arrives with the surfaces that hold them.
+            Searching runs, steps and artifacts needs a source registered; none is.
           </p>
         ) : null}
         <div className={`orca-palette__hint ${textClass("caption")}`}>

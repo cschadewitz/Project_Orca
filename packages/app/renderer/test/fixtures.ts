@@ -55,6 +55,22 @@ export const HELLO: HelloResult = {
   methods: ["hello", "runs.list", "runs.get", "runs.events", "inputs.list", "claims.list"],
 };
 
+/**
+ * A daemon started `--read-only`, which is what file mode is (#164, ADR 0008): the control
+ * capability is absent and so are the control methods, and that is an omission rather than
+ * a refusal — a screen hides a button instead of pressing one that would fail.
+ *
+ * Written out rather than derived from `HELLO` so it stays read-only whatever `HELLO`
+ * grows: the two exist in order to differ.
+ */
+export const HELLO_READ_ONLY: HelloResult = {
+  protocol: { major: 1, minor: 0 },
+  orcaVersion: "0.2.0-test",
+  storeDir: "/work/other/.orca",
+  capabilities: ["runs.read"],
+  methods: ["hello", "runs.list", "runs.get", "runs.events", "inputs.list", "claims.list"],
+};
+
 /** `runs.list` with no filter: newest first, which is how the daemon orders it. */
 export const RUNS: readonly RunSummaryView[] = [
   {

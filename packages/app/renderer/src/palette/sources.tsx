@@ -6,9 +6,11 @@
  * contents — belong to the surfaces that hold that data, so each surface registers a
  * source here for as long as it is mounted, the same shape as a shortcut registration.
  *
- * No source is registered today. `runs.list` and the rest of the read methods are #150,
- * and until a surface can answer "which runs are recent" the palette says so rather than
- * listing an invented one (docs/design/RULES.md rule 12).
+ * Three are registered as of #206 — recent runs, agents, and search over step and artifact
+ * names — and they are registered beside the palette itself (`object-sources.tsx`) because
+ * they are reads of the *store* rather than views of a surface's state. A source that *is* a
+ * view of what a surface holds still belongs to that surface, which is what this hook is
+ * for; both kinds file their rows the same way.
  */
 import { createContext, useContext, useEffect, useRef, useSyncExternalStore, type JSX, type ReactNode } from "react";
 import type { PaletteEntry } from "./entries.js";

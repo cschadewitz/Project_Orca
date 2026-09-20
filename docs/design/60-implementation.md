@@ -86,8 +86,11 @@ Three rules fall out of it:
 The palette's own rows come from two places. Commands come from the map. Objects — recent
 runs, work items, agents, config files, workflows — and search results come from sources
 the surfaces register (`palette/sources.tsx`), because that data belongs to the surface
-that holds it. No source is registered yet: the read methods are not there, and an empty
-Search section that says so is better than an invented recent-runs list (rule 12).
+that holds it. Three are registered as of #206 — recent runs, agents, and search over step
+and artifact names — and they sit beside the palette (`palette/object-sources.tsx`) rather
+than inside a surface, because they are reads of the store rather than views of what a
+surface holds. Every row hands back a canonical `orca://` URL and is opened through the
+route table, which is what keeps one resolver for links, crumbs and palette rows alike.
 
 Focus stays in the query field for as long as the palette is open. The highlighted row is
 *selection* — `aria-activedescendant` on the field, the accent rail on the row — which is

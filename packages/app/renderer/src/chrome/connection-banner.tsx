@@ -26,18 +26,39 @@ import { CONNECTION_PRESENTATION } from "@orca/design";
 import { useTransientLayer } from "../layers-context.js";
 import { Button, Text, textClass } from "../ui/index.js";
 import { isStale, type Connection } from "../connection.js";
+import { useWorkspace } from "./use-workspace.js";
 
 export interface ConnectionBannerProps {
   connection: Connection;
 }
 
 /**
- * The bar under the chrome. Two weights: a hairline-thin stale rule that says "what is
- * below is the last thing the daemon sent", and the `status-blocked` bar a mismatch leaves
- * behind, which has words because a person has to be able to act on it.
+ * The bar under the chrome. Three weights: a hairline-thin stale rule that says "what is
+ * below is the last thing the daemon sent", the `status-blocked` bar a mismatch leaves
+ * behind, and the file-mode bar — both of the latter have words, because a person has to be
+ * able to act on them.
  */
 export function ConnectionBanner({ connection }: ConnectionBannerProps): JSX.Element | null {
   const { state, versions } = connection;
+  const workspace = useWorkspace();
+
+  /* File mode is "a genuinely different product mode, not a degraded one, and the design
+     says so": the bar names the store being replayed and offers the way back
+     (docs/design/40-connection-states.md). The writes are already *absent* rather than
+     disabled — `useWritability()` reads a capability the read-only daemon does not
+     advertise — so this bar is the only thing on screen that has to say which mode it is. */
+  if (state === "file") {
+    return (
+      <div className={`orca-banner ${textClass("caption")} orca-banner--stale`} role="status">
+        <Text style="caption">Read-only replay of</Text>
+        <span className={`orca-mono ${textClass("mono-id")}`}>{workspace.path}</span>
+        <span className="orca-spacer" />
+        <Button size="sm" onClick={() => void window.orca.workspace.connectLive()}>
+          Connect to a daemon
+        </Button>
+      </div>
+    );
+  }
 
   if (state === "mismatch") {
     return (
