@@ -1,0 +1,73 @@
+/* What the connection states add on top of the design system's component layer, and no more.
+
+   Two of the three renderings are already in components.css and are used as they are:
+   `.orca-conn` and its five modifiers for the status bar, `.orca-banner--mismatch` for the
+   bar a version mismatch leaves behind, and `.orca-stale-value` for the values a surface
+   dims. What is not there is written here in token references only, and both rules belong
+   in components.css the day that file is open for editing:
+
+   - **the 2px stale rule** (docs/design/40-connection-states.md, "Reconnecting"): a bar of
+     `--stroke-rail` under the object header on a screen whose data is now last-known. The
+     nearest thing in the component layer is `.orca-banner--stale`, which is a padded row
+     with words in it — a different weight of interruption, and the wrong one for a blip.
+   - **a modal dialog**: the component layer has exactly one modal, `.orca-palette`, and it
+     is the command palette's — its width, its top offset and its enter animation are about
+     ⌘K, not about dialogs. Rather than borrow a class whose name is a lie here, the layer
+     and the box are written out; the values are the same tokens the palette's use. */
+
+/* ---------- the 2px stale rule ---------- */
+
+/* It marks the screen below it, so it sits hard against the top of the content area with
+   nothing around it: a margin would turn a rule into a banner. */
+.orca-connrule {
+  flex: none;
+  height: var(--stroke-rail);
+  background: var(--status-stale);
+}
+
+/* The mismatch bar is `.orca-banner--mismatch` from the component layer; all this adds is
+   that it, too, must not stretch when the body below it grows. */
+.orca-connbanner {
+  flex: none;
+}
+
+/* ---------- the blocking dialog ---------- */
+
+/* Centred, unlike the palette: a dialog that blocks is the only thing on the screen that
+   matters, and there is no reading position behind it to preserve. */
+.orca-dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-palette);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--surface-overlay);
+}
+.orca-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* A measure, not a width: the dialog is prose and a line of prose has a readable length. */
+  max-width: 64ch;
+  padding: var(--space-4);
+  background: var(--surface-raised);
+  border: var(--stroke-hairline) solid var(--border-control);
+  border-left: var(--stroke-rail) solid var(--status-blocked);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+}
+.orca-dialog__title {
+  margin: 0;
+  color: var(--status-blocked);
+}
+.orca-dialog__body {
+  margin: 0;
+  color: var(--ink-primary);
+}
+.orca-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}

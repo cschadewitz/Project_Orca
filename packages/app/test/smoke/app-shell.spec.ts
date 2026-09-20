@@ -97,15 +97,25 @@ test("the window comes up on the built renderer with a bridge in it", async () =
   // Exact, not a superset: this list is everything the sandboxed renderer can reach, and
   // widening it is the kind of change that should have to be written down (ADR 0008).
   // Add the key here in the same PR that adds it to `src/bridge.ts`.
-  expect(bridge.methods).toEqual(["claims", "hello", "inputs", "notifications", "platform", "preferences", "runs"]);
+  expect(bridge.methods).toEqual([
+    "claims",
+    "connection",
+    "hello",
+    "inputs",
+    "notifications",
+    "platform",
+    "preferences",
+    "runs",
+  ]);
 
   // Renderer assets really loaded off file://, rather than the CSP blocking them.
   await expect(page.locator(".orca-body")).toBeVisible();
 });
 
 test("the handshake reaches the daemon, and the status bar says which one", async () => {
-  // The chrome calls `hello` on mount; the version in the status bar is the daemon's answer
-  // travelling renderer ← preload ← main ← HTTP, which is the whole connection path.
+  // The main process handshakes as soon as its subscription becomes a stream (#163); the
+  // version in the status bar is that answer travelling renderer ← preload ← main ← HTTP,
+  // pushed over the `connection` channel, which is the whole connection path.
   await expect(page.locator(".orca-statusbar")).toContainText(/orca-daemon \d+\.\d+\.\d+/);
   await expect(page.getByText("disconnected")).toHaveCount(0);
 

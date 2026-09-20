@@ -1,34 +1,42 @@
 /**
- * A one-shot connection probe at startup, mapped onto the five connection states by
- * `connection.ts`: reconnecting until `hello` answers, then live, mismatch or
- * disconnected. The reconnect state machine that keeps it moving after that is #163;
- * this issue only needs enough to render the title bar and the status bar.
+ * The connection state, as the chrome reads it: a subscription to what the main process
+ * pushes, not a probe.
+ *
+ * It used to be a one-shot `hello` at startup, which could only ever be right once — a
+ * daemon that went away afterwards left the status bar claiming a connection that had
+ * stopped existing. The state machine that decides the five states now lives in the main
+ * process (`src/main/connection-state.ts`), because the socket, the bundled daemon's exit
+ * and the handshake are all on that side of the bridge; this hook only holds the latest
+ * snapshot and turns it into the shape the chrome renders.
+ *
+ * The first value comes from a synchronous `read()` so the status bar is right on the first
+ * paint, and the effect re-reads after subscribing: a change that landed between the render
+ * and the subscription would otherwise be the one change nobody hears about.
  */
-import { useEffect, useState } from "react";
-import type { ConnectionState } from "@orca/design";
-import { connectionState, type Handshake } from "../connection.js";
+import { useEffect, useMemo, useState } from "react";
+import type { ConnectionSnapshot } from "../../../src/bridge.js";
+import { toConnection, writability, type Connection, type Writability } from "../connection.js";
 
-export interface Connection {
-  state: ConnectionState;
-  /** When the current attempt started — the indicator's elapsed/last-seen reading. */
-  since: Date;
-  orcaVersion?: string;
-}
+export type { Connection } from "../connection.js";
 
 export function useConnection(): Connection {
-  const [handshake, setHandshake] = useState<Handshake>({ phase: "connecting" });
-  const [since] = useState(() => new Date());
+  const [snapshot, setSnapshot] = useState<ConnectionSnapshot>(() => window.orca.connection.read());
 
   useEffect(() => {
-    let live = true;
-    void window.orca.hello().then((result) => {
-      if (live) setHandshake({ phase: "done", result });
-    });
-    return () => {
-      live = false;
-    };
+    const unsubscribe = window.orca.connection.subscribe(setSnapshot);
+    setSnapshot(window.orca.connection.read());
+    return unsubscribe;
   }, []);
 
-  const version = handshake.phase === "done" && handshake.result.ok ? handshake.result.result.orcaVersion : undefined;
-  return { state: connectionState(handshake), since, ...(version !== undefined ? { orcaVersion: version } : {}) };
+  return useMemo(() => toConnection(snapshot), [snapshot]);
+}
+
+/**
+ * "Can write, or why not", for any control that sends something. The reason is a sentence
+ * fit for `Button`'s `disabledReason`, so a control never has to compose its own — and so
+ * that every control in the app gives the same answer to the same question.
+ */
+export function useWritability(): Writability {
+  const connection = useConnection();
+  return useMemo(() => writability(connection), [connection]);
 }

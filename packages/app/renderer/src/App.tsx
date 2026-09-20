@@ -13,6 +13,7 @@ import { StatusBar } from "./chrome/status-bar.js";
 import { PrimaryPane } from "./chrome/primary-pane.js";
 import { DockedPanel } from "./chrome/docked-panel.js";
 import { useConnection } from "./chrome/use-connection.js";
+import { ConnectionBanner, MismatchDialog } from "./chrome/connection-banner.js";
 import { useSidebarCollapsed, usePanelOverlay } from "./chrome/use-breakpoints.js";
 import { useChromeShortcuts } from "./chrome/use-chrome-shortcuts.js";
 import { useEscapeClosesTopLayer, useTransientLayer } from "./layers-context.js";
@@ -53,10 +54,13 @@ export function App(): JSX.Element {
     <div className="orca-window">
       <TitleBar
         platform={window.orca.platform}
-        connection={connection}
         onOpenAttention={() => selectSurface("attention")}
         onOpenPalette={palette.openPalette}
       />
+      {/* Under the chrome and over every surface: the state is one state, so the bar that
+          says the data is last-known is drawn once rather than by each screen (#163). The
+          five seconds of silence in front of it are the main process's. */}
+      <ConnectionBanner connection={connection} />
       <div
         className={bodyClassName}
         data-sidebar={sidebarCollapsed ? "collapsed" : undefined}
@@ -74,10 +78,13 @@ export function App(): JSX.Element {
         </PrimaryPane>
         {panelOpen ? <DockedPanel onClose={togglePanel} /> : null}
       </div>
-      <StatusBar {...(connection.orcaVersion ? { orcaVersion: connection.orcaVersion } : {})} />
+      <StatusBar connection={connection} />
       {/* Last, so it is over the panel in paint order as well as in z-index; `onJump` is
           omitted until the `orca://` route table exists (#165). */}
       <CommandPalette controller={palette} />
+      {/* Blocking, once per detection, and last of all: a version mismatch is the one
+          connection state that stops a person before they read anything. */}
+      <MismatchDialog connection={connection} />
     </div>
   );
 }
