@@ -20,8 +20,19 @@ has not got — the daemon speaking first, in `notification` envelopes.
 { kind: "notification", method, params? }
 ```
 
-`code` is an `OrcaErrorCode` from `core` or one of `PROTOCOL_VERSION`, `PROTOCOL_METHOD`,
-`PROTOCOL_MESSAGE`. Invalid params are `PROTOCOL_MESSAGE` with the Zod issues in `details`.
+`code` is an `OrcaErrorCode` from `core`, one of `PROTOCOL_VERSION`, `PROTOCOL_METHOD`,
+`PROTOCOL_MESSAGE`, or one of the four the control methods add (`CONTROL_ERROR_CODES`):
+
+| code | means | `details` |
+| --- | --- | --- |
+| `INPUT_ANSWERED` | somebody answered that question already | `requestId`, `runId`, `answer` |
+| `INPUT_OPTION_UNKNOWN` | not an option this question offers | `requestId`, `options` |
+| `RUN_NOT_WAITING` | the run is not parked on anything, or has finished | `runId`, `status` |
+| `RUN_LEASED_ELSEWHERE` | another **live** process is interpreting it | `runId`, `holder`, `pid`, `host`, `renewedAt` |
+
+They exist because a screen has to tell those four apart, and the engine says `RUN_STATE` to
+all of them — the right shape for a CLI that prints a message, the wrong one for a client
+that branches. Invalid params are `PROTOCOL_MESSAGE` with the Zod issues in `details`.
 
 `PROTOCOL_VERSION` is `{ major, minor }`: `major` changes when a message changes shape or
 meaning, `minor` when messages or fields are added. Compatible when the majors match and the
@@ -82,7 +93,19 @@ result: { protocol, orcaVersion, storeDir?, capabilities: DaemonCapability[], me
 `capabilities` is coarse (`runs.read`, `runs.subscribe`, `runs.control`, `plan.read`,
 `plan.write`); `methods` (protocol 1.1) is exactly what this daemon answers, so a newer
 client can light up one screen against an older daemon. A daemon serving no store answers
-`hello` and nothing else. `READ_METHODS` is the seven below.
+`hello` and nothing else. `READ_METHODS` is the seven below, `CONTROL_METHODS` the four that
+write and `AGENT_METHODS` the two about agents.
+
+**`methods` is the check that matters, not `capabilities`.** `orca serve --read-only` leaves
+the control methods out of the dispatch table *and* out of `methods`, and drops
+`runs.control` from `capabilities`: a control call against it answers `PROTOCOL_METHOD`, not
+a refusal. That is deliberate — a client should be able to hide a button rather than find out
+at the moment of pressing it that there is nothing behind it.
+
+> **The control port is not access control.** `orca serve` binds loopback and authenticates
+> nobody, so any local process can answer a gate, cancel a run or start one. The per-run
+> lease stops a *second writer*; it does not stop a caller. ADR 0008 records that as an
+> accepted cost.
 
 ### `runs.list` — the run list
 
@@ -163,8 +186,14 @@ approve something the app could not show them, so those travel with the card.
 
 `waiting` is the one number the title bar shows.
 
-> The design asks for a consequence per option; the engine's options are plain strings, so
-> plain strings is what travels. A client renders them and does not invent explanations.
+**`options` carries the whole `GateOption` as of protocol 1.4** — `{ id, label, consequence?,
+destructive? }`, the model's own shape (`@orca/core/schemas`). It used to be `string[]`
+holding the ids, which let a client answer a gate it could not render: no label, no
+consequence clause, and no `destructive` flag, which is a safety property and not a
+decoration. `id` is still the whole of the answer — `inputs.answer` takes an option id, a
+label may be reworded between the ask and the answer, and a log written before #220 reads
+each bare string as an option that is its own id and label. `input.opened` carries the same
+shape, so a card drawn from the push frame alone is complete.
 
 ### `claims.list` — who owns which work item
 
@@ -247,7 +276,8 @@ sequence number, within that run, of the event behind it, and therefore **the cu
   the `step.scheduled` that introduces the step, `waitingOn?` on `step.waiting`, and
   `willRetry?` / `error?` on `step.failed`.
 - **`agent.update`** — `stepRunId`, `sessionId`, `fromSeq`, and a non-empty `updates`. Batched.
-- **`input.opened`** — `stepRunId`, `requestId`, `kind`, `question`, `options`.
+- **`input.opened`** — `stepRunId`, `requestId`, `kind`, `question`, `options` (whole
+  `GateOption`s since 1.4).
 - **`input.answered`** — `stepRunId`, `requestId`, `answer`.
 - **`event.appended`** — the raw `OrcaEvent`, for a timeline that renders events rather than
   state. **Excludes `agent.update` events**, which arrive coalesced instead, so agent output
@@ -289,7 +319,139 @@ One limit worth knowing: the socket fans out *this process's* event store. A run
 a separate CLI process is not pushed and appears on the next read (`docs/ROADMAP.md`, item 1;
 #196).
 
+### `agent.changed` — a push that is not about a run
+
+```ts
+params: { subscriptionId; at; agent: AgentView }
+```
+
+Deliberately **not** one of the six: every member of that union carries `runId` and `seq`,
+and `seq` is the resume cursor a client folds without looking at the method. Agent health
+lives in the daemon's memory and not in any log — there is no run it belongs to, no sequence
+number to resume from, and nothing for a reconnect to replay, because the current answer is
+one `agents.list` away. So it travels as its own envelope with its own parser,
+`parseAgentChanged(message)`; `parseNotification` returns `undefined` for it, which is what a
+client that does not know a method should do anyway.
+
+A daemon sends it only to subscriptions that did **not** scope themselves to a run, and only
+on a handshake succeeding or failing — never on `lastSeenAt` moving, which happens with every
+batch of agent output and would be exactly the firehose the `agent.update` coalescing exists
+to prevent.
+
+## The control methods
+
+Behind the `runs.control` capability, and absent entirely from a `--read-only` daemon.
+
+### `inputs.answer` — settle an open gate or permission ask
+
+```ts
+params: { requestId; runId?; optionId; note?; always?: { decision: "allow" | "deny" };
+          resume = true }
+result: { requestId; runId; answer; permission?; run?; asOf }
+```
+
+`optionId` is an option's **`id`** (the free text, for a question that offers none). `resume`
+re-drives the run under this daemon's lease and returns once it is parked again or finished,
+so `run` is a settled status rather than a snapshot mid-flight; `resume: false` is
+`orca answer --no-resume`.
+
+Answering a *permission* ask allow-once / allow-always / deny is: the allow option's id;
+the allow option's id plus `always: { decision: "allow" }`; the reject option's id. The
+standing rule an "always" answer implies is appended to the workspace permission sidecar
+(ADR 0009) and `permission` carries `recordAlwaysDecision`'s own `rules` / `added` /
+`alreadyPresent` / `refused` **verbatim** — a button that promises "ORCA will not ask again"
+has to be able to check whether that is true, and `refused` is the case where it is not.
+
+`always.decision` is stated by the client rather than inferred from the option id, because
+those ids are the *agent's* and a standing permission grant is the last place to guess.
+
+> `note` does not reach the run's log: `human.answered` has no field for it (#238). The
+> daemon records it in the operator log and returns it; a client must not present it as
+> something the run recorded.
+
+`INPUT_ANSWERED`, `INPUT_OPTION_UNKNOWN`, `RUN_NOT_WAITING`, `RUN_LEASED_ELSEWHERE`.
+
+### `runs.resume` / `runs.cancel`
+
+```ts
+params: { runId }                      result: { run: RunSummaryView; asOf }
+params: { runId; reason? }             result: { run: RunSummaryView; asOf }
+```
+
+`runs.resume` walks up to the topmost parked ancestor and re-attaches on the way down, so a
+gate answered inside a child continues the tree and not just the child. `runs.cancel` closes
+the run and the children it is waiting on.
+
+Both refuse a run another **live** process is interpreting, immediately and with that
+holder's pid and host (`RUN_LEASED_ELSEWHERE`). They never wait on a lease: a client on an
+open HTTP call cannot tell waiting from hanging. A *lapsed* lease is not a refusal — its
+holder stopped heartbeating, so the next interpreter takes it over, which is what the ttl is
+for.
+
+### `runs.start` — a workflow and its vars, and nothing else
+
+```ts
+params: { workflowId; vars = {}; requestId?; workItemId? }
+result: { runId; run: RunSummaryView; asOf }
+```
+
+**No request document and no work-item document are written or read (#196.)** Those two
+collections live in `JsonFileDocumentStore`, which holds a collection in memory and rewrites
+it whole, so a daemon and a CLI writing beside each other would each keep serving what they
+first read and each clobber the other. Run logs are not affected — the event store re-reads
+them — which is precisely why this may append `run.created` and may not create a document.
+
+`requestId` and `workItemId` are still accepted: they are recorded on `run.created` and
+travel out on `run.changed`, so a client that already knows a work item can start a run
+against it and find the run again. A run named after a work item this daemon has not got
+falls back to the workflow id, which is the fallback chain `name` has always had. When #196
+closes, a `requests.submit` method can go beside this one.
+
+## The agent methods
+
+Under `runs.read`, and answered by a `--read-only` daemon too: neither touches a run, a lease
+or a log.
+
+### `agents.list`
+
+```ts
+params: {}
+result: { agents: AgentView[]; claims: ClaimView[]; asOf }
+```
+
+Every *configured* agent in config order, contacted or not. `AgentView`: `id`, `hostId`,
+`roles`, `state` (`unknown` | `ok` | `degraded` | `down`), `lastHandshakeAt?`, `lastSeenAt?`,
+`roundTripMs?`, `consecutiveFailures`, `lastError?`. Health is in-process and does not
+survive a restart, so a freshly started daemon says `unknown` for all of them rather than
+claiming `ok`; `degraded` means the handshake worked but only after one failed, and there is
+deliberately no latency rule.
+
+**Two timestamps, because they answer different questions (#227).** `lastHandshakeAt` is when
+ORCA last *established* a connection — what `state`, `roundTripMs` and `consecutiveFailures`
+are all about. `lastSeenAt` is when the agent last said anything, and it moves with its
+output. A per-run pooled session handshakes once and then talks for an hour, so one timestamp
+would have to choose between "the connection is an hour old" and "it spoke a second ago".
+
+`claims` is what is being worked right now, projected exactly as `claims.list` projects it:
+the surface's second question, after "is it up", is "and what is it on".
+
+### `agents.ping`
+
+```ts
+params: { agentId; cwd? }
+result: { agent: AgentView; ok; roundTripMs?; error?; asOf }
+```
+
+Spawns the agent, completes the ACP handshake, closes, and records the result — in the
+daemon's own process, so what it proves is that *the daemon* can reach the agent. It pushes
+`agent.changed` afterwards rather than leaving the caller to re-list. A failed handshake is a
+result and not an error envelope: "down, and here is why" is what the caller asked.
+
+`orca ping <agentId>` calls this when a daemon answers on the configured address, and
+otherwise falls back to an in-process handshake — saying, in those words, that it recorded
+nothing (#225).
+
 ## What is not here yet
 
-Writes (`answer`, `resume`, `cancel`, `startRun`) and the plan methods. See
+The plan methods over `PlanService`, and `requests.submit` (blocked on #196). See
 `docs/ROADMAP.md`, item 1.

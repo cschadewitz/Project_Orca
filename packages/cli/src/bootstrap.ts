@@ -31,6 +31,7 @@ import {
   type HumanInputPort,
   type OrcaPlugin,
   type PluginApi,
+  type RunLeaseOptions,
   type WorkspaceProvider,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
@@ -50,6 +51,13 @@ export interface BootstrapOptions {
   /** Programmatic config (skips file discovery). */
   config?: OrcaConfig;
   configDir?: string;
+  /**
+   * Who this orchestrator is to the lease store. Omitted gives it a fresh id per instance,
+   * which is right for a one-shot CLI invocation - nothing it leaves behind is worth
+   * reclaiming. `orca serve` passes a stable one, so a lease in `orca leases list` names a
+   * daemon somebody can go and look at.
+   */
+  lease?: RunLeaseOptions;
 }
 
 export interface OrcaApp {
@@ -200,6 +208,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     workspaceProvider,
     plan,
     logger,
+    ...(opts.lease ? { lease: opts.lease } : {}),
   });
   return {
     config,

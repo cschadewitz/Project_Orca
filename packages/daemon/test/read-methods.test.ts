@@ -298,7 +298,12 @@ describe("inputs.list", () => {
       id: "hi-1",
       kind: "decision",
       question: "Ship the rollout?",
-      options: ["approve", "hold"],
+      // The whole option (protocol 1.4): the id an answer carries, the label a card draws,
+      // and the consequence clause the design requires before offering a choice.
+      options: [
+        { id: "approve", label: "Approve and ship" },
+        { id: "hold", label: "Hold for now", consequence: "The rollout stays parked until someone answers again." },
+      ],
       runId: "run-gate",
       runName: "Document the rollout",
       stepRunId: "s-gate",

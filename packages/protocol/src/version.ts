@@ -12,8 +12,20 @@ export const ProtocolVersionSchema = z.object({
 });
 export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
 
-/** The version this package speaks. Bump `minor` for additions, `major` for anything else. */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 3 };
+/**
+ * The version this package speaks. Bump `minor` for additions, `major` for anything else.
+ *
+ * 1.4 adds the control methods (`inputs.answer`, `runs.resume`, `runs.cancel`, `runs.start`),
+ * the agent methods (`agents.list`, `agents.ping`) and the `agent.changed` notification, and
+ * widens `options` on `OpenInputView` and `input.opened` from `string[]` to `GateOption[]`.
+ *
+ * That widening is a *shape* change to an existing field, which this file's own rule calls a
+ * major. It is a minor anyway, on one condition that holds today and is worth writing down:
+ * every shipped client of `options` is built from this same commit (ADR 0008 - the app and
+ * the daemon ship together), so no build in existence reads those two fields as strings. The
+ * next widening of a field somebody outside this repository already parses is a major.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 4 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
   return `${v.major}.${v.minor}`;

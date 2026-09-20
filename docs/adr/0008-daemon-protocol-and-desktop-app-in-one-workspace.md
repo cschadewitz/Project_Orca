@@ -40,7 +40,33 @@ Option 3.
   daemon" is the same code as the local case, and the read model is deliberately shaped
   for display rather than leaking `RunState` wholesale.
 + The daemon stays the single owner of the domain model; the CLI can become a thin client
-  of it later without another contract.
+  of it later without another contract. `orca ping` is the first step of that: it calls
+  `agents.ping` when a daemon answers, and falls back to an in-process handshake — saying
+  that it recorded nothing — when none does.
+− **The daemon is a writer, under a lease (v0.4.0).** It was a projection of somebody else's
+  store when this was written; with the control methods it drives runs itself — it answers
+  gates, resumes, cancels and starts them, in its own process. Two things follow. First, the
+  single-writer guarantee is no longer "one interpreter, several readers" but "one
+  interpreter *per run*": the daemon takes each run's lease before it appends, exactly as a
+  CLI does, and refuses a run another live process holds with that holder's pid and host
+  (#101). A lease that has lapsed is taken over; a live one is never waited on, because a
+  client on an open HTTP call cannot tell waiting from hanging. Second, `orca serve
+  --read-only` is the way back to the old shape, and it is an omission rather than a refusal:
+  the control methods are absent from the dispatch table and from `hello.methods`, and
+  `runs.control` is absent from `capabilities`, so a client hides a button instead of
+  pressing one that fails.
+− **The control port is unauthenticated, and that is accepted.** `orca serve` binds loopback
+  and asks nobody who they are, so any process running as the same user can answer a gate,
+  cancel a run or start one. The lease is a correctness guard against two interpreters
+  appending to one log; it is not access control, and nothing here should be read as if it
+  were. `orca serve --help` says so in those words. If that is the wrong trade for a machine,
+  `--read-only` is the answer today; authentication on the port is not on the roadmap.
+− **The daemon still may not write documents.** Requests, work items and plan records live in
+  `JsonFileDocumentStore`, which holds a collection in memory and rewrites it whole, so a
+  daemon and a CLI would clobber each other's (#196). That is why `runs.start` takes a
+  workflow and vars only and passes `requestId` / `workItemId` straight through onto
+  `run.created` without creating either document. Run logs are unaffected — the event store
+  re-reads them — which is exactly what makes appending safe and writing documents not.
 − Electron and its builder are a large dependency closure. CI skips the binary download
   (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`) and never launches the app; desktop packaging gets its
   own workflow with platform runners.

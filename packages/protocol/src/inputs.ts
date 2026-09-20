@@ -6,19 +6,19 @@
  * decision is about *without* a further call, because the design forbids offering an answer
  * the app could not show the basis for - so each entry carries its artifacts inline.
  *
- * One thing the design asks for and this wire does not carry yet: a consequence per option.
- * The *model* has it as of #220 - `HumanInputRequest.options` is now
- * `{ id, label, consequence?, destructive? }` - but `options` here and on
- * `input.opened` are still `string[]`, and the daemon sends the **id** down them, because the
- * id is what `inputs.answer` must receive. So a client can answer correctly and cannot yet
- * render a label, a consequence clause or the destructive flag, and must not invent them.
+ * `options` carries the model's `GateOption` whole as of protocol 1.4 - `{ id, label,
+ * consequence?, destructive? }`, the shape `HumanInputRequest.options` has had since #220.
+ * It used to be `string[]` holding the ids, which let a client answer a gate and not render
+ * it: no label to show, no consequence clause, and no `destructive` flag, which is a safety
+ * property and not a decoration (docs/design/20-attention-and-gates.md, #161).
  *
- * Widening these two to carry the whole `GateOption` (exported from `@orca/core/schemas`) is
- * a one-line swap each and is what #161 needs before the attention surface can be built - it
- * requires both the consequence clause and the destructive flag, and the latter is a safety
- * property, not a decoration.
+ * `id` is still the whole of the answer: `inputs.answer` takes an option id, a label may be
+ * reworded between the ask and the answer, and `GateOptionSchema` reads a bare string as an
+ * option that is its own id and label, so a log written before #220 still parses.
  */
 import { z } from "zod";
+// The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
+import { GateOptionSchema } from "@orca/core/schemas";
 import { ArtifactViewSchema, WorkItemViewSchema } from "./views.js";
 
 export const INPUTS_LIST_METHOD = "inputs.list";
@@ -34,8 +34,8 @@ export const OpenInputViewSchema = z.object({
    */
   kind: InputKindSchema,
   question: z.string(),
-  /** The options offered, verbatim. Empty means free text. */
-  options: z.array(z.string()),
+  /** The options offered, verbatim. Empty means free text; answer with an option's `id`. */
+  options: z.array(GateOptionSchema),
   /** Whatever the asking step attached (tool call, file path, policy). Rendered as-is or not at all. */
   context: z.record(z.string(), z.unknown()),
   runId: z.string(),

@@ -44,8 +44,19 @@ export type AgentHealthState = "unknown" | "ok" | "degraded" | "down";
 export interface AgentHealth {
   agentId: string;
   state: AgentHealthState;
-  /** ISO time of the last handshake attempt, successful or not. Absent while `unknown`. */
+  /**
+   * ISO time of the last handshake attempt, successful or not. Absent while `unknown`. This
+   * is what `state`, `roundTripMs` and `consecutiveFailures` are all about, and it is
+   * `lastHandshakeAt` on the wire (#227).
+   */
   lastContact?: string;
+  /**
+   * ISO time of the last sign of life of any kind - a handshake, or a line of output from a
+   * session opened long before (`touch`). Never older than `lastContact`, and usually newer:
+   * a per-run pooled session handshakes once and then talks for an hour, so a card that read
+   * `lastContact` alone would say an agent mid-sentence was last heard from at 09:04 (#227).
+   */
+  lastSeenAt?: string;
   /**
    * Round trip of the last *successful* handshake, in ms - spawn through `initialize`
    * and `session/new`. It survives a later failure, so a `down` agent still reports what
@@ -64,6 +75,9 @@ export interface HandshakeRecorder {
   failed(error: unknown): AgentHealth;
 }
 
+/** Told the new health whenever a handshake succeeds or fails. See `AgentHealthTracker.onChange`. */
+export type AgentHealthListener = (health: AgentHealth) => void;
+
 function unknownHealth(agentId: string): AgentHealth {
   return { agentId, state: "unknown", consecutiveFailures: 0 };
 }
@@ -79,8 +93,37 @@ function unknownHealth(agentId: string): AgentHealth {
  */
 export class AgentHealthTracker {
   private readonly byAgent = new Map<string, AgentHealth>();
+  private readonly listeners = new Set<AgentHealthListener>();
 
   constructor(private readonly clock: Clock = systemClock) {}
+
+  /**
+   * Be told when an agent's handshake health changes. A listener, not a poll: the daemon's
+   * `agent.changed` notification hangs off this, and a poller would have to run whether or
+   * not anything was watching and would still be a tick behind the thing it watched.
+   *
+   * It fires on `recordHandshake` and `recordFailure` and deliberately **not** on `touch`.
+   * `touch` runs once per coalesced batch of agent output; a notification each would be the
+   * firehose the daemon's 100 ms `agent.update` window exists to avoid, and what it moves -
+   * `lastSeenAt` - is a number a surface can read on its next `agents.list` without anyone
+   * having been told.
+   */
+  onChange(listener: AgentHealthListener): () => void {
+    this.listeners.add(listener);
+    return () => void this.listeners.delete(listener);
+  }
+
+  /** A listener that throws must not take down the handshake that told it. */
+  private changed(health: AgentHealth): AgentHealth {
+    for (const listener of [...this.listeners]) {
+      try {
+        listener({ ...health });
+      } catch {
+        // Health is a side-effect of a session opening; a bad listener is not that session's problem.
+      }
+    }
+    return { ...health };
+  }
 
   /** Health for one agent; `unknown` for one never contacted in this process. */
   get(agentId: string): AgentHealth {
@@ -111,34 +154,53 @@ export class AgentHealthTracker {
    */
   recordHandshake(agentId: string, roundTripMs: number): AgentHealth {
     const prior = this.byAgent.get(agentId);
+    const at = this.clock.isoNow();
     const health: AgentHealth = {
       agentId,
       state: prior && prior.consecutiveFailures > 0 ? "degraded" : "ok",
-      lastContact: this.clock.isoNow(),
+      lastContact: at,
+      lastSeenAt: at,
       roundTripMs,
       consecutiveFailures: 0,
     };
     this.byAgent.set(agentId, health);
-    return { ...health };
+    return this.changed(health);
   }
 
   /** A spawn or handshake failed. The agent is `down` until one succeeds. */
   recordFailure(agentId: string, error: unknown): AgentHealth {
     const prior = this.byAgent.get(agentId) ?? unknownHealth(agentId);
     const { code, message } = describeError(error);
+    const at = this.clock.isoNow();
     const health: AgentHealth = {
       agentId,
       state: "down",
-      lastContact: this.clock.isoNow(),
+      lastContact: at,
+      lastSeenAt: at,
       ...(prior.roundTripMs !== undefined ? { roundTripMs: prior.roundTripMs } : {}),
       consecutiveFailures: prior.consecutiveFailures + 1,
       lastError: { code, message },
     };
     this.byAgent.set(agentId, health);
-    return { ...health };
+    return this.changed(health);
   }
 
-  /** Forget everything, as a restart would. */
+  /**
+   * An agent said something. Moves `lastSeenAt` and nothing else - not `state`, not
+   * `consecutiveFailures`, not `lastContact` - because output over an existing session is
+   * evidence the session is alive, not evidence of a new handshake.
+   *
+   * It has to be cheap: it is called once per coalesced batch of agent output, which is
+   * often. A map lookup and one field, no listeners, no allocation for an agent that has
+   * never been contacted (there is no session to be speaking over, so there is nothing to
+   * record).
+   */
+  touch(agentId: string): void {
+    const health = this.byAgent.get(agentId);
+    if (health) health.lastSeenAt = this.clock.isoNow();
+  }
+
+  /** Forget everything, as a restart would. Listeners survive: they belong to the watcher. */
   reset(): void {
     this.byAgent.clear();
   }

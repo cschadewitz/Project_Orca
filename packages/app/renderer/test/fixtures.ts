@@ -387,7 +387,12 @@ export const INPUTS: readonly OpenInputView[] = [
     id: "hi-1",
     kind: "decision",
     question: "Ship the rollout?",
-    options: ["approve", "hold"],
+    // Whole `GateOption`s as of protocol 1.4: the id is what an answer carries and the label
+    // is what a card draws, so they are deliberately different words here.
+    options: [
+      { id: "approve", label: "Approve and ship" },
+      { id: "hold", label: "Hold for now", consequence: "The rollout stays parked until someone answers again." },
+    ],
     context: { artifact: "art-review" },
     runId: "run-gate",
     runName: "Document the rollout",

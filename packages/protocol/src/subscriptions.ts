@@ -1,5 +1,6 @@
 /**
- * `subscribe` / `unsubscribe`, and the six notifications a subscription produces.
+ * `subscribe` / `unsubscribe`, the six run notifications a subscription produces, and
+ * `agent.changed`, which is a push about the process rather than about a run.
  *
  * Everything else in this package is request/response. This is the other direction: the
  * daemon pushes, so a client renders a transition when it happens instead of asking five
@@ -27,7 +28,8 @@
  */
 import { z } from "zod";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
-import { AgentUpdateSummarySchema, OrcaEventSchema, RunOutcomeSchema } from "@orca/core/schemas";
+import { AgentUpdateSummarySchema, GateOptionSchema, OrcaEventSchema, RunOutcomeSchema } from "@orca/core/schemas";
+import { AgentViewSchema } from "./agents.js";
 import { InputKindSchema } from "./inputs.js";
 import { DisplayStatusSchema } from "./status.js";
 import { ViewErrorSchema } from "./views.js";
@@ -70,6 +72,9 @@ export const EVENT_APPENDED = "event.appended";
  * and where in that run's log it sits. `subscriptionId` is here because one connection may
  * hold several subscriptions - a run detail screen and a global attention count, say - and
  * a client must be able to route a frame without guessing from its contents.
+ *
+ * `agent.changed` is about no run and has no cursor, which is why it is not one of these -
+ * see it at the bottom of this file.
  */
 const notification = <T extends z.ZodRawShape>(shape: T) =>
   z.object({
@@ -146,8 +151,13 @@ export const InputOpenedParamsSchema = notification({
   requestId: z.string(),
   kind: InputKindSchema,
   question: z.string(),
-  /** The options offered, verbatim. Empty means free text. */
-  options: z.array(z.string()),
+  /**
+   * The options offered, whole (protocol 1.4): `{ id, label, consequence?, destructive? }`.
+   * Empty means free text. A card drawn from this frame alone has everything it needs to
+   * render the gate, which is the point - the previous `string[]` of ids let a client answer
+   * a question it could not show. Answer with an option's `id`; see `inputs.ts`.
+   */
+  options: z.array(GateOptionSchema),
 });
 export type InputOpenedParams = z.infer<typeof InputOpenedParamsSchema>;
 
@@ -207,6 +217,49 @@ export function parseNotification(message: { method: string; params?: unknown })
   // The table maps each method to exactly its own schema (`satisfies` above pins that), but
   // an indexed lookup keyed by a union widens the result back to the union of all of them.
   return { method: method.data, params: params.data } as DaemonNotification;
+}
+
+/**
+ * `agent.changed` - an agent's handshake health moved. A push, but deliberately **not** a
+ * member of `NOTIFICATION_METHODS` or of `DaemonNotification`.
+ *
+ * Everything in that union is a run event: it carries `runId` and `seq`, and `seq` is the
+ * resume cursor a client folds without looking at the method (`DaemonSubscription` in the
+ * app does exactly that). `agent.changed` has neither. Agent health lives in this process's
+ * memory, not in any log (`AgentHealthTracker`) - there is no run it belongs to, no sequence
+ * number to resume from, and nothing for a reconnect to replay, because the current answer
+ * is one `agents.list` away. Putting it in the union would mean either giving it a fabricated
+ * cursor or teaching every cursor fold to special-case it, and the first is a lie while the
+ * second is a change in `packages/app`.
+ *
+ * So it travels as its own `notification` envelope with its own parser. A client that does
+ * not know it drops it (`parseNotification` returns `undefined` for an unknown method, which
+ * is the compatible thing to do); one that does calls `parseAgentChanged`. A daemon sends it
+ * only to subscriptions that did not scope themselves to a run - an agent is a property of
+ * the process, so a run screen would only be woken by work it is not showing.
+ *
+ * It is pushed from a **listener** on the tracker, not a poll, and it fires on the two things
+ * that change what a card says: a handshake that succeeded and one that failed, whoever
+ * caused them. It does **not** fire on `lastSeenAt` moving - that advances with every batch
+ * of agent output, and a frame per batch is the firehose the `agent.update` coalescing exists
+ * to prevent.
+ */
+export const AGENT_CHANGED = "agent.changed";
+
+export const AgentChangedParamsSchema = z.object({
+  subscriptionId: z.string(),
+  /** When the health was recorded, by the daemon's clock. Not a cursor. */
+  at: z.string(),
+  /** The agent as `agents.list` would now report it. */
+  agent: AgentViewSchema,
+});
+export type AgentChangedParams = z.infer<typeof AgentChangedParamsSchema>;
+
+/** Validate an `agent.changed` envelope, or `undefined` when it is not one. */
+export function parseAgentChanged(message: { method: string; params?: unknown }): AgentChangedParams | undefined {
+  if (message.method !== AGENT_CHANGED) return undefined;
+  const params = AgentChangedParamsSchema.safeParse(message.params);
+  return params.success ? params.data : undefined;
 }
 
 /**

@@ -6,8 +6,10 @@
  */
 import { z } from "zod";
 import { ProtocolVersionSchema } from "./version.js";
+import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD } from "./claims.js";
+import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import { RUNS_EVENTS_METHOD, RUNS_GET_METHOD, RUNS_LIST_METHOD } from "./runs.js";
 import { SUBSCRIBE_METHOD, UNSUBSCRIBE_METHOD } from "./subscriptions.js";
@@ -29,6 +31,31 @@ export const READ_METHODS = [
   ARTIFACTS_LIST_METHOD,
   ARTIFACTS_GET_METHOD,
 ] as const;
+
+/**
+ * The methods behind the `runs.control` capability - the four that write.
+ *
+ * `orca serve --read-only` leaves every one of them out of the dispatch table *and* out of
+ * `HelloResult.methods`, and drops `runs.control` from `capabilities`. That is the whole of
+ * the difference: a read-only daemon answers "unknown method", it does not answer a control
+ * call and then refuse it, because a client should be able to hide a button rather than
+ * discover at the moment of pressing it that there is nothing behind it.
+ */
+export const CONTROL_METHODS = [
+  INPUTS_ANSWER_METHOD,
+  RUNS_RESUME_METHOD,
+  RUNS_CANCEL_METHOD,
+  RUNS_START_METHOD,
+] as const;
+
+/**
+ * The agent methods. They sit under `runs.read` rather than `runs.control`, and a read-only
+ * daemon answers both: `agents.list` is a projection of in-memory health, and `agents.ping`
+ * spawns an agent, shakes hands and closes without touching a run, a lease or a log. It is
+ * listed here rather than in `READ_METHODS` only because a daemon needs a configured
+ * registry to answer them and may have a store without one.
+ */
+export const AGENT_METHODS = [AGENTS_LIST_METHOD, AGENTS_PING_METHOD] as const;
 
 /**
  * The methods behind the `runs.subscribe` capability. They are answered on the WebSocket
