@@ -464,11 +464,23 @@ app.on("before-quit", () => {
  * a user notices the second time they launch the app. `will-quit` is the last event before
  * the process goes, and closing the workspace is asynchronous, so the first pass defers the
  * quit and the second — after `quitting` is set — lets it through.
+ *
+ * Two things here are deliberate, and both are about a quit that must not be able to hang:
+ *
+ * - **The re-quit is on the next tick.** Calling `app.quit()` from a continuation of the
+ *   very dispatch that cancelled the quit is asking Electron to start a sequence it still
+ *   believes it is in; `setImmediate` puts it after that sequence has unwound.
+ * - **Closing is bounded.** A daemon that will not answer `stop()` already gets a SIGKILL
+ *   with its own deadline, but nothing else in this path is allowed to hold the window
+ *   open either: after `SHUTDOWN_DEADLINE_MS` the app leaves anyway. An app that will not
+ *   close is a worse thing to ship than a stray child process, which the OS reaps.
  */
+const SHUTDOWN_DEADLINE_MS = 10_000;
 let quitting = false;
 app.on("will-quit", (event) => {
   if (quitting) return;
   quitting = true;
   event.preventDefault();
-  void workspace.close().finally(() => app.quit());
+  const deadline = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_DEADLINE_MS).unref?.());
+  void Promise.race([workspace.close(), deadline]).finally(() => setImmediate(() => app.quit()));
 });
