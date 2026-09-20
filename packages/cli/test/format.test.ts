@@ -5,7 +5,7 @@
  * snapshot.
  */
 import { describe, expect, it } from "vitest";
-import type { HumanInputRequest, OrcaEvent, RunState } from "@orca/core";
+import { toGateOption, type HumanInputRequest, type OrcaEvent, type RunState } from "@orca/core";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../src/format.js";
 
 /** The union is exhaustive over payloads; tests care about rendering, not about re-typing each one. */
@@ -143,7 +143,7 @@ const REQUEST: HumanInputRequest = {
   stepRunId: "step_gate",
   kind: "decision",
   question: "Ship it?",
-  options: ["ship", "hold"],
+  options: ["ship", "hold"].map(toGateOption),
   context: {},
   requestedAt: "2026-01-02T03:04:05.678Z",
 };

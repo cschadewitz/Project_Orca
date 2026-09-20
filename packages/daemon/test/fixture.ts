@@ -287,7 +287,12 @@ export async function fixture(): Promise<Fixture> {
       requestId: "hi-1",
       kind: "decision",
       question: "Ship the rollout?",
-      options: ["approve", "hold"],
+      // Labels differ from ids on purpose: the wire carries ids, and a view that
+      // leaked labels into `options` would answer the gate with words it cannot match.
+      options: [
+        { id: "approve", label: "Approve and ship" },
+        { id: "hold", label: "Hold for now", consequence: "The rollout stays parked until someone answers again." },
+      ],
       context: { artifact: "art-review" },
     },
   });

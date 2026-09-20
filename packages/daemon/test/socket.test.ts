@@ -196,7 +196,10 @@ describe("the WebSocket endpoint", () => {
         requestId: "hi-1",
         kind: "decision",
         question: "ship?",
-        options: ["yes", "no"],
+        options: [
+          { id: "yes", label: "yes" },
+          { id: "no", label: "no" },
+        ],
         context: {},
       },
     });

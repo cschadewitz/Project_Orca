@@ -9,6 +9,7 @@ import { ArtifactSchema } from "../model/artifact.js";
 import {
   BranchSkipReasonSchema,
   ErrorInfoSchema,
+  GateOptionSchema,
   RunOutcomeSchema,
   RunStatusSchema,
   StepResultSchema,
@@ -26,6 +27,59 @@ const base = <T extends string, P extends z.ZodTypeAny>(type: T, payload: P) =>
     payload,
   });
 
+/**
+ * The most characters of one tool call body - its args, or its result - that go
+ * into the event log. A tool that reads a 48,000-character file must not put the
+ * file in the log: the log is replayed in full on every read of a run, and it is
+ * the same bound #158 puts on a rendered line.
+ */
+export const TOOL_BODY_MAX_CHARS = 2_000;
+
+/**
+ * One side of a tool call as stored: the args the agent sent, or the result it
+ * got back, JSON-encoded and capped at `TOOL_BODY_MAX_CHARS`.
+ *
+ * `length` is the length the body had *before* the cap, so a reader can say
+ * "this was 48,000 characters, you are seeing 2,000" without guessing and
+ * without the answer drifting if the cap is ever changed. When nothing was
+ * dropped, `length === text.length`; `toolBodyTruncated` is that comparison.
+ */
+export const ToolCallBodySchema = z.object({
+  text: z.string(),
+  length: z.number().int().nonnegative(),
+});
+export type ToolCallBody = z.infer<typeof ToolCallBodySchema>;
+
+/** True when `text` is a prefix of a longer body and `length` says how much longer. */
+export function toolBodyTruncated(body: ToolCallBody): boolean {
+  return body.length > body.text.length;
+}
+
+/**
+ * Cap a tool call body for the log. Emitters call this; readers never do, so
+ * what is on disk is what was decided at write time and replay is deterministic.
+ *
+ * Nothing to store - absent, null, empty, or a value JSON cannot encode (a
+ * cycle, a BigInt) - is `undefined`, which is a tool call row with nothing to
+ * expand rather than an empty one.
+ */
+export function toolCallBody(value: unknown, max: number = TOOL_BODY_MAX_CHARS): ToolCallBody | undefined {
+  if (value === undefined || value === null) return undefined;
+  let text: string;
+  if (typeof value === "string") text = value;
+  else {
+    try {
+      const encoded = JSON.stringify(value);
+      if (encoded === undefined) return undefined;
+      text = encoded;
+    } catch {
+      return undefined;
+    }
+  }
+  if (!text.length) return undefined;
+  return { text: text.length > max ? text.slice(0, max) : text, length: text.length };
+}
+
 /** Compact, storage-friendly form of an ACP session update. */
 export const AgentUpdateSummarySchema = z.object({
   kind: z.string(), // ACP sessionUpdate discriminator
@@ -35,6 +89,10 @@ export const AgentUpdateSummarySchema = z.object({
   toolKind: z.string().optional(),
   status: z.string().optional(),
   locations: z.array(z.string()).optional(),
+  /** What the tool was called with. Absent on updates that are not tool calls, and on logs written before v0.4.0. */
+  args: ToolCallBodySchema.optional(),
+  /** What the tool came back with. Absent until the call reports a result. */
+  result: ToolCallBodySchema.optional(),
   planEntries: z.array(z.object({ content: z.string(), status: z.string(), priority: z.string() })).optional(),
 });
 export type AgentUpdateSummary = z.infer<typeof AgentUpdateSummarySchema>;
@@ -188,7 +246,12 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       requestId: z.string(),
       kind: z.enum(["decision", "permission", "question"]),
       question: z.string(),
-      options: z.array(z.string()).default([]),
+      /**
+       * `human.answered.answer` carries the chosen option's `id`. A log written before
+       * v0.4.0 holds bare strings here and `GateOptionSchema` reads each one as
+       * `{ id: s, label: s }`, so those answers still match - see `toGateOption`.
+       */
+      options: z.array(GateOptionSchema).default([]),
       context: z.record(z.string(), z.unknown()).default({}),
     }),
   ),
