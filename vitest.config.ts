@@ -25,8 +25,14 @@ export default defineConfig({
   },
   test: {
     // The renderer is its own TypeScript project (DOM lib, bundler resolution), so its
-    // tests live next to it rather than in packages/app/test.
-    include: ["packages/*/test/**/*.test.ts", "packages/app/renderer/test/**/*.test.{ts,tsx}"],
+    // tests live next to it rather than in packages/app/test. `tools/` is plain JavaScript
+    // with no build step — scripts CI and the release workflows run directly — so its tests
+    // are JavaScript too, and stay out of the workspace's tsconfig like the scripts do.
+    include: [
+      "packages/*/test/**/*.test.ts",
+      "packages/app/renderer/test/**/*.test.{ts,tsx}",
+      "tools/test/**/*.test.js",
+    ],
     testTimeout: 30_000,
     hookTimeout: 30_000,
     coverage: {

@@ -16,13 +16,16 @@ Closing it proposes the release.
    `release:minor`, `release:patch`, or `release:none` for internal churn nobody upgrading
    needs to know about. An issue with no bump label counts as `release:none`, and the
    release pull request lists those issues so an under-bump is visible rather than silent.
-2. Each pull request adds its entry to the `## Unreleased` section of `CHANGELOG.md`. This
-   is the part that matters: the notes are written when the change is fresh, by whoever
-   made it, and releasing never has to reconstruct them from commit subjects.
+2. Each pull request drops its entry into `changelog.d/` as a **fragment** — one file per
+   entry, named `<issue>-<slug>.<section>.md`, holding the bullet(s) verbatim. This is the
+   part that matters: the notes are written when the change is fresh, by whoever made it,
+   and releasing never has to reconstruct them from commit subjects. `changelog.d/README.md`
+   has the naming and the four sections; `node tools/release.js notes --unreleased` renders
+   what is pending.
 3. When the work is done, **close the milestone**. `release-prepare.yml` checks that no
    issue in it is still open, takes the highest bump label, computes the next version, and
-   opens a `release: vX.Y.Z` pull request that bumps `package.json` and dates the
-   changelog section.
+   opens a `release: vX.Y.Z` pull request that bumps `package.json`, renders the fragments
+   into a dated changelog section and deletes them.
 4. Review that pull request. Its body is the release body verbatim — to change the notes,
    edit `CHANGELOG.md` on the release branch.
 5. **Merge it.** `release-publish.yml` re-runs typecheck, lint, format, tests, build and
@@ -43,6 +46,30 @@ against it — fix forward and re-run the workflow. Giving `release-prepare.yml`
 access token instead of `GITHUB_TOKEN` would move the checks back onto the PR, at the cost
 of a token to store and rotate; that trade is only worth making if `main` ever gains
 required status checks.
+
+## Changelog fragments
+
+`CHANGELOG.md` is rendered, not edited. Its `## Unreleased` section holds a pointer, and
+the entries waiting for the next release are files in `changelog.d/`:
+
+```
+changelog.d/152-runs-surface.added.md
+changelog.d/198-preload-cjs.changed.md
+changelog.d/101-leases.store.md
+```
+
+`<section>` is `store`, `added`, `changed` or `fixed`, and is the heading the file renders
+under; `<issue>` is what the entries are ordered by. The body is the entry verbatim —
+bullets with their area prefix, or prose for `store`. Two entries mean two files.
+
+The point is that a pull request creates a file instead of editing a shared list, so two
+pull requests in flight cannot conflict over the changelog — and a dropped fragment is a
+missing file rather than a lost merge. `changelog.d/README.md` is the reference.
+
+`prepare` renders the fragments into the dated section and deletes them, so the deletions
+land in the `release: vX.Y.Z` pull request beside the section they became. Nothing else
+reads `changelog.d/`: `notes <version>` quotes the committed `CHANGELOG.md`, which is what
+`release-publish.yml` publishes.
 
 ## Versioning
 
@@ -78,8 +105,9 @@ surface is what lives on disk and what operators write by hand:
 ORCA is event-sourced, so a change to the first two can invalidate an existing `.orca`
 store — the failure mode most likely to bite someone who upgrades, and the one least
 likely to be noticed in review. Every release therefore carries a **Store format** section
-in the changelog, saying "No change." when there is none, and a store-format change is at
-least a minor bump pre-1.0.
+in the changelog — rendered from the `store` fragments, and saying "No change." when there
+are none — and a store-format change is at least a minor bump pre-1.0. "No change." is a
+claim the release makes on your behalf: write the fragment when it would be false.
 
 Documentation under `docs/` describes `main`, not the last release. Link docs at the tag
 (`/blob/vX.Y.Z/docs/...`) when a release note needs to point at them.
@@ -91,12 +119,14 @@ dependencies:
 
 ```bash
 node tools/release.js version --bump minor    # print the next version
-node tools/release.js prepare 0.2.0           # bump package.json, date the changelog
+node tools/release.js notes --unreleased      # print what changelog.d/ holds
+node tools/release.js prepare 0.2.0           # bump package.json, render the fragments
 node tools/release.js notes 0.2.0             # print that release's notes
 ```
 
-`prepare` refuses to run when the `## Unreleased` section has no entries — a release whose
-notes nobody wrote is worse than no release.
+`prepare` refuses to run when `changelog.d/` is empty — a release whose notes nobody wrote
+is worse than no release — and when `## Unreleased` has picked up entries written by hand,
+which its rewrite would otherwise throw away.
 
 To release without closing a milestone, run **Release (prepare)** from the Actions tab
 with a milestone number. To skip the automation entirely, do the three commands above,

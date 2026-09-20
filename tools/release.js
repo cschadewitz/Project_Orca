@@ -6,29 +6,41 @@
 //   node tools/release.js version --bump minor [--pin 0.2.0-rc.1]   -> prints the next version
 //   node tools/release.js prepare 0.2.0                             -> rewrites package.json + CHANGELOG.md
 //   node tools/release.js notes 0.2.0                               -> prints that release's CHANGELOG body
+//   node tools/release.js notes --unreleased                        -> prints what changelog.d/ holds
+//
+// The notes themselves are not written here: a pull request drops a fragment into
+// `changelog.d/` (tools/changelog.js) and `prepare` renders the lot into the dated
+// section, so nothing has to be reconstructed from commit subjects and no two pull
+// requests edit the same region of the same file.
 //
 // The versioning policy it implements is documented in docs/RELEASING.md.
 import { readFileSync, writeFileSync } from "node:fs";
+import { FRAGMENT_DIR, deleteFragments, readFragments, renderEntries } from "./changelog.js";
 
 const PKG = "package.json";
 const CHANGELOG = "CHANGELOG.md";
 
+// What `## Unreleased` holds between releases: a pointer, because the entries themselves
+// live in changelog.d/ until a release renders them.
 const UNRELEASED_TEMPLATE = `## Unreleased
 
-### Store format
-
-No change.
-
-### Added
-
-### Changed
-
-### Fixed
+Pending entries live in [\`${FRAGMENT_DIR}/\`](${FRAGMENT_DIR}/), one file per entry; preparing a
+release renders them into a dated section below. Run \`node tools/release.js notes --unreleased\`
+to read them as they stand.
 `;
 
 const die = (msg) => {
   console.error(msg);
   process.exit(1);
+};
+
+/** The fragments, or a one-line error rather than a stack trace for a misnamed file. */
+const pending = () => {
+  try {
+    return readFragments();
+  } catch (err) {
+    return die(err.message);
+  }
 };
 
 const parse = (version) => {
@@ -98,18 +110,34 @@ function prepare(version) {
 
   const lines = readFileSync(CHANGELOG, "utf8").split("\n");
   const { start, end, body } = unreleasedSection(lines);
-  const entries = tidy(body);
-  // A release whose notes nobody wrote is worse than no release: the PR checklist asks
-  // for an entry per change, so an untouched template means the bookkeeping was skipped.
-  if (!entries.some((l) => /^\s*[-*] /.test(l))) {
-    die(`${CHANGELOG}'s Unreleased section has no entries; write the release notes first`);
+  // Entries are fragments now. One written by hand into `## Unreleased` would be thrown
+  // away by the rewrite below, so say so instead of losing it.
+  if (tidy(body).some((l) => /^\s*[-*] /.test(l))) {
+    die(`${CHANGELOG}'s Unreleased section has entries written by hand; move them into ${FRAGMENT_DIR}/ first`);
   }
+
+  const fragments = pending();
+  // A release whose notes nobody wrote is worse than no release: the PR checklist asks
+  // for a fragment per change, so an empty directory means the bookkeeping was skipped.
+  if (!fragments.length) die(`${FRAGMENT_DIR}/ has no fragments; write the release notes first`);
+  const entries = renderEntries(fragments);
 
   const date = new Date().toISOString().slice(0, 10);
   const replacement = [...UNRELEASED_TEMPLATE.split("\n"), `## ${version} - ${date}`, "", ...entries, ""];
   writeFileSync(CHANGELOG, [...lines.slice(0, start), ...replacement, ...lines.slice(end)].join("\n"));
   writeFileSync(PKG, bumped);
-  console.error(`prepared ${version}: ${PKG} bumped, ${CHANGELOG} section dated ${date}`);
+  deleteFragments(fragments);
+  console.error(
+    `prepared ${version}: ${PKG} bumped, ${CHANGELOG} section dated ${date} from ` +
+      `${fragments.length} fragment(s), which are now deleted`,
+  );
+}
+
+/** What `prepare` would render today, without writing anything. */
+function unreleasedNotes() {
+  const fragments = pending();
+  if (fragments.length) console.log(renderEntries(fragments).join("\n"));
+  else console.error(`${FRAGMENT_DIR}/ is empty; nothing is pending`);
 }
 
 function notes(version) {
@@ -144,7 +172,8 @@ switch (command) {
     prepare(rest[0] ?? die("usage: node tools/release.js prepare <version>"));
     break;
   case "notes":
-    notes(rest[0] ?? die("usage: node tools/release.js notes <version>"));
+    if (rest.includes("--unreleased")) unreleasedNotes();
+    else notes(rest[0] ?? die("usage: node tools/release.js notes <version> | notes --unreleased"));
     break;
   default:
     die("usage: node tools/release.js <version|prepare|notes> [...]  (see the header comment)");
