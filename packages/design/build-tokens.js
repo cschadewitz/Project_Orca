@@ -71,7 +71,15 @@ function buildCss() {
   const fonts = Object.entries(T.type.families)
     .map(([k, v]) => `  --font-${k}: ${v};`)
     .join("\n");
-  out.push(`:root {\n${scalars}\n  /* type */\n${fonts}\n}\n`);
+  /* The scale reaches CSS as the `.orca-text-*` classes below; an element takes one and the
+     style has a single definition. These two custom properties per style are for the rules
+     that need a size without the rest of it — the shell root, a glyph sized off the scale —
+     so those do not have to write the number out (#211). */
+  const textVars = T.type.groups
+    .flatMap((g) => g.styles)
+    .map((s) => `  --text-${s.name}-size: ${s.fontSize};\n  --text-${s.name}-line-height: ${s.lineHeight};`)
+    .join("\n");
+  out.push(`:root {\n${scalars}\n  /* type */\n${fonts}\n${textVars}\n}\n`);
 
   for (const g of T.type.groups) {
     out.push(`/* ${g.name} */`);

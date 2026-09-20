@@ -43,6 +43,22 @@ import "./type-proof.css";
 /* Derived, never re-declared: the design system owns the list of states. */
 const CONNECTION_STATES = Object.keys(CONNECTION_PRESENTATION) as ConnectionState[];
 
+/* `12px/18px`, read out of the scale rather than written here. */
+const monoLog = TYPE_STYLES.find((style) => style.name === "mono-log");
+const MONO_LOG_METRICS = monoLog === undefined ? "not in the scale" : `${monoLog.fontSize}/${monoLog.lineHeight}`;
+
+/**
+ * The known cost of that line height, said on the page rather than left for a reader to
+ * report as a bug (#212). `docs/design/30-long-running-content.md` carries the decision.
+ */
+const GAP_IS_EXPECTED =
+  `Expected, not a defect: at ${MONO_LOG_METRICS} the box-drawing verticals above do not join — ` +
+  "the glyph is shorter than its line box, so a run of │ or ├─ reads as dashed. mono-log keeps the " +
+  "tight line height, and the app draws stream rules and tree guides with CSS hairline borders " +
+  "instead of these glyphs, which join by construction. This frame uses the real glyphs on purpose: " +
+  "it is proving the bundled faces carry U+2500–257F on the Latin advance width, which is what the " +
+  "corners sitting over the verticals shows.";
+
 /* A fixed instant, so the two theme columns render identical text. */
 const LAST_EVENT = new Date(Date.now() - 6 * 60 * 1000);
 
@@ -122,10 +138,16 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
         </div>
       </Section>
 
-      <Section title="mono-log stream" note="Box drawing (U+2500–257F) is bundled in Plex Mono for exactly this.">
+      <Section
+        title={`mono-log stream — ${MONO_LOG_METRICS}`}
+        note="Box drawing (U+2500–257F) is bundled in Plex Mono for exactly this."
+      >
         <Well label="Streamed output" style="mono-log">
           {STREAM}
         </Well>
+        <Text style="caption" as="p" className="type-proof__expected">
+          {GAP_IS_EXPECTED}
+        </Text>
       </Section>
 
       <Section title="Run statuses" note="Glyph and word, then glyph alone at chip scale.">

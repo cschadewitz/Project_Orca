@@ -287,6 +287,32 @@
   /* type */
   --font-sans: "Noto Sans Symbols 2", "Noto Sans Math", "IBM Plex Sans", "Segoe UI", Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Noto Sans Symbols 2", "Noto Sans Math", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  --text-display-size: 28px;
+  --text-display-line-height: 34px;
+  --text-title-size: 20px;
+  --text-title-line-height: 26px;
+  --text-heading-size: 15px;
+  --text-heading-line-height: 20px;
+  --text-body-size: 14px;
+  --text-body-line-height: 20px;
+  --text-body-strong-size: 14px;
+  --text-body-strong-line-height: 20px;
+  --text-label-size: 13px;
+  --text-label-line-height: 18px;
+  --text-label-strong-size: 13px;
+  --text-label-strong-line-height: 18px;
+  --text-caption-size: 12px;
+  --text-caption-line-height: 16px;
+  --text-eyebrow-size: 11px;
+  --text-eyebrow-line-height: 14px;
+  --text-mono-body-size: 13px;
+  --text-mono-body-line-height: 20px;
+  --text-mono-strong-size: 13px;
+  --text-mono-strong-line-height: 20px;
+  --text-mono-log-size: 12px;
+  --text-mono-log-line-height: 18px;
+  --text-mono-id-size: 12px;
+  --text-mono-id-line-height: 16px;
 }
 
 /* Interface */

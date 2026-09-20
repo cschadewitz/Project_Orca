@@ -61,6 +61,16 @@
   gap: var(--space-2);
 }
 
+/* The one thing on this page that is a known cost rather than a proof: box-drawing verticals
+   do not join at mono-log's line height (#212). Marked as expected where it is visible, so a
+   reader does not file it a second time. */
+.type-proof__expected {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: var(--stroke-rail) solid var(--border-control);
+  color: var(--ink-secondary);
+}
+
 /* The scale: sample on one line, the metrics it was set with on the next, dimmed so the
    eye reads the sample first. */
 .type-proof__scale {
