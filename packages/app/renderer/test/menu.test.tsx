@@ -162,11 +162,13 @@ describe("the counterpart menu, over the Menu primitive", () => {
 });
 
 describe("the menu's keys in the keyboard map", () => {
+  // Every menu key has a key; the fallback is what keeps this `string[]` now that
+  // `Shortcut.key` is optional (#205).
   const menuKeys = (h: Harness): string[] =>
     h.keyboard
       .list()
       .filter((shortcut) => shortcut.scope === "menu")
-      .map((shortcut) => shortcut.key);
+      .map((shortcut) => shortcut.key ?? "");
 
   it("registers them only while a menu is open, so the palette lists what is reachable", () => {
     const h = mount(header());

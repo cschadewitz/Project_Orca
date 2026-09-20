@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { LIVE, harness, renderChrome, stubBridge, stubMatchMedia, type Harness } from "./harness.js";
 import { commandEntries, filterEntries, groupEntries } from "../src/palette/entries.js";
+import type { RegisteredShortcut } from "../src/keyboard-map.js";
 import { parseJump } from "../src/palette/jump.js";
 
 const teardown: (() => void)[] = [];
@@ -64,8 +65,11 @@ describe("the command palette", () => {
     for (const shortcut of registered) {
       const row = rows.find((text) => text.startsWith(shortcut.label));
       expect(row, `${shortcut.label} is missing from the palette`).toBeTruthy();
-      // ⌘ notation, because the harness reports darwin.
-      expect(row).toContain(shortcut.key.replace("Mod+", "⌘").replace("Shift+", "⇧"));
+      // ⌘ notation, because the harness reports darwin. A keyless command (#205) has no
+      // chip to look for and the row itself is the whole assertion.
+      if (shortcut.key !== undefined) {
+        expect(row).toContain(shortcut.key.replace("Mod+", "⌘").replace("Shift+", "⇧"));
+      }
     }
   });
 
@@ -169,16 +173,20 @@ describe("the command palette", () => {
 });
 
 describe("palette entries", () => {
-  const shortcuts = [
+  // Registered shortcuts, so each one carries the map's slot as its `id` (#205): that is
+  // the name a row is keyed by, because `scope:key` is not a name two keyless commands
+  // could differ by.
+  const shortcuts: RegisteredShortcut[] = [
     {
-      scope: "global" as const,
+      scope: "global",
       key: "Mod+1",
+      id: "global:Mod+1",
       label: "Go to Attention",
-      section: "navigation" as const,
+      section: "navigation",
       action: () => {},
     },
-    { scope: "run-tree" as const, key: "F", label: "Filter to failed", action: () => {} },
-    { scope: "global" as const, key: "Mod+Shift+L", label: "Cycle theme", action: () => {} },
+    { scope: "run-tree", key: "F", id: "run-tree:F", label: "Filter to failed", action: () => {} },
+    { scope: "global", key: "Mod+Shift+L", id: "global:Mod+Shift+L", label: "Cycle theme", action: () => {} },
   ];
 
   it("files a shortcut under its section, defaulting to actions", () => {

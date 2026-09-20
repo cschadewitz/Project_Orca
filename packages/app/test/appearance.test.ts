@@ -70,7 +70,7 @@ function page(device: Device = {}, initial: Partial<Preferences> = {}) {
     read: () => saved,
     write: (patch) => {
       writes.push(patch);
-      saved = { theme: patch.theme ?? saved.theme, density: { ...saved.density, ...patch.density } };
+      saved = { ...saved, theme: patch.theme ?? saved.theme, density: { ...saved.density, ...patch.density } };
       return Promise.resolve({ ok: true, result: saved });
     },
   };
@@ -190,7 +190,11 @@ describe("density", () => {
     expect(p.computed("#config-row").height).toBe("32px");
     expect(p.computed("#run-row").height).toBe("24px");
     await Promise.resolve();
-    expect(p.saved()).toEqual({ theme: "system", density: { config: "comfortable", runs: "compact" } });
+    expect(p.saved()).toEqual({
+      theme: "system",
+      density: { config: "comfortable", runs: "compact" },
+      alerts: DEFAULT_PREFERENCES.alerts,
+    });
   });
 
   it("acts on the first surface when focus is nowhere in particular", () => {
@@ -233,7 +237,11 @@ describe("keyboard map", () => {
     const map = new KeyboardMap("darwin");
     installAppearance(p.win, p.store, map);
     expect(
-      map.list().map((s) => [s.scope, s.key, shortcutLabel(s.key, "darwin"), shortcutLabel(s.key, "win32")]),
+      // Both of these have a key; `Shortcut.key` is optional as of #205 and the fallback
+      // is what keeps this a comparison of strings rather than of `string | undefined`.
+      map
+        .list()
+        .map((s) => [s.scope, s.key, shortcutLabel(s.key ?? "", "darwin"), shortcutLabel(s.key ?? "", "win32")]),
     ).toEqual([
       ["global", "Mod+Shift+L", "⌘⇧L", "Ctrl+Shift+L"],
       ["global", "Mod+Shift+D", "⌘⇧D", "Ctrl+Shift+D"],
