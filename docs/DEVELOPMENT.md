@@ -287,6 +287,12 @@ Markdown but the engine loads them, so they count as code). A small `changes` jo
 against the merge base and gates the matrix with a job-level `if`, so a docs-only PR still
 shows a green check rather than none — see the comments in `.github/workflows/ci.yml`.
 
+A second, much cheaper workflow — `.github/workflows/changelog.yml` — fails a pull request
+that changes anything under `packages/` and adds no fragment under `changelog.d/`. The
+opt-out is the `no-changelog` label, which is why the check is its own workflow: it runs on
+`labeled` and `unlabeled` too, and re-running one `git diff` on a label change is cheap
+where re-running the whole matrix would not be.
+
 ## Layout conventions
 
 - One concern per file; every file except a pure re‑export barrel starts with a comment
@@ -333,7 +339,8 @@ shows a green check rather than none — see the comments in `.github/workflows/
 - `exactOptionalPropertyTypes` is on: use conditional spreads (`...(x ? { x } : {})`) instead
   of assigning `undefined`.
 - Release notes are a file, not a list to edit: a pull request adds `changelog.d/<issue>-<slug>.<section>.md`
-  rather than touching `CHANGELOG.md`, which is rendered at release time. `changelog.d/README.md`
+  rather than touching `CHANGELOG.md`, which is rendered at release time. CI enforces it for
+  any change under `packages/`, with `no-changelog` as the opt-out label. `changelog.d/README.md`
   has the naming and `docs/RELEASING.md` the rest.
 - `tools/` is plain JavaScript run straight by node — no build, outside the workspace's
   `tsconfig.json` — so the tests that cover it are JavaScript too, in `tools/test/`, and

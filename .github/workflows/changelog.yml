@@ -1,0 +1,79 @@
+# Every pull request that changes `packages/` adds a release note, or says it needs none.
+#
+# #216 made release notes one file per entry under `changelog.d/`, which turned "did this
+# pull request write its note?" into a question a diff can answer: did it add a file there?
+# This workflow asks exactly that, and nothing about the file's contents — the section
+# suffix is checked by tools/changelog.js when a release renders it, and prose is not a
+# thing to lint.
+#
+# It is its own workflow rather than a job in ci.yml because the opt-out is a label, and a
+# label change has to re-run the check. `labeled`/`unlabeled` on ci.yml would re-run the
+# whole lint/test/build matrix; here it re-runs one checkout and one `git diff`.
+name: Changelog
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changelog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fragment:
+    name: a fragment, or a reason not to
+    runs-on: ubuntu-latest
+    # `no-changelog` is the opt-out for a `packages/` change that genuinely reads as
+    # nothing to a user — a refactor, a test, a comment. `release` is the label
+    # release-prepare.yml puts on the `release: vX.Y.Z` pull request, which *deletes*
+    # fragments rather than adding one; that pull request touches only CHANGELOG.md and
+    # package.json today, so this is belt and braces, and it never runs CI anyway (a
+    # workflow does not start from an event created with GITHUB_TOKEN).
+    if: >-
+      !contains(github.event.pull_request.labels.*.name, 'no-changelog') &&
+      !contains(github.event.pull_request.labels.*.name, 'release')
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The three-dot diff below needs the merge base, so the full history.
+          fetch-depth: 0
+
+      - name: A packages/ change carries a changelog fragment
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # A base that is not in the history (a force-push that rewrote it away) leaves
+          # nothing to compare against; passing is the right way to be wrong here, since
+          # the next push re-runs this against a base that resolves.
+          if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "base commit $BASE unavailable; skipping"
+            exit 0
+          fi
+
+          packages=$(git diff --name-only "$BASE...$HEAD" -- packages)
+          if [ -z "$packages" ]; then
+            echo "no packages/ path changed; no fragment needed"
+            exit 0
+          fi
+          echo "packages/ changed:"; printf '  %s\n' $packages
+
+          # README.md documents the directory; it is not an entry.
+          fragments=$(git diff --name-only --diff-filter=A "$BASE...$HEAD" -- changelog.d \
+            | grep -v '^changelog.d/README.md$' || true)
+          if [ -n "$fragments" ]; then
+            echo "fragment added:"; printf '  %s\n' $fragments
+            exit 0
+          fi
+
+          echo "Add changelog.d/<issue>-<slug>.<section>.md holding the entry, where <section>"
+          echo "is store, added, changed or fixed — changelog.d/README.md has the shape."
+          echo "If the change needs no release note, label this pull request 'no-changelog'."
+          echo "::error::this pull request changes packages/ but adds no changelog fragment; add one, or label the pull request 'no-changelog'"
+          exit 1
