@@ -9,14 +9,26 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    models in `packages/protocol` (its README is the method reference). A step's output is
    `runs.events` filtered by `stepRunId` rather than a method of its own (#158). The desktop app
    (`packages/app`) reaches them through `packages/protocol` and nothing else (ADR 0008).
-   `WS /socket` carries the six `notification` messages off `Orchestrator.subscribe()`, with
+   `WS /socket` carries the six run `notification` messages off `Orchestrator.subscribe()`, with
    a per‑run cursor a client resumes from and agent output coalesced to one frame per step
    per 100ms (#151); the HTTP path is unchanged and a read‑only client never opens a socket.
-   Still to do, in the order the app needs them: the control methods (`answer`, `resume`,
-   `cancel`, `startRun`), then the plan methods over `PlanService`. Human input already survives process
-   boundaries: `pause` mode parks the run in its event log and `orca answer <requestId>
-   <option>` resumes it; the daemon exposes the same `answer()` / `resume()` over the wire
-   and keeps agent sessions alive across the wait. Two processes over one store are now
+   The **control methods** landed in v0.4.0 — `inputs.answer`, `runs.resume`, `runs.cancel`
+   and `runs.start` (protocol 1.4), with `agents.list` / `agents.ping` and the `agent.changed`
+   push beside them. `orca serve` drives runs **by default**; `--read-only` opts out and
+   leaves the four methods out of the dispatch table *and* out of `hello.methods`, and drops
+   `runs.control` from `capabilities`. The port carries no authentication: any process on the
+   machine can reach the control methods over loopback, and the per‑run lease guards against
+   a second *writer* rather than against a caller — an accepted cost, said plainly in
+   `orca serve --help`. Still to do: the plan methods over `PlanService`.
+   Human input survives process boundaries: `pause` mode parks the run in its event log and
+   `orca answer <requestId> <option>` resumes it, through the same shared function
+   `inputs.answer` calls. What the daemon does **not** do is keep an agent session alive
+   across the wait — a gate parks the run to the log, the interpreter lets go, and the step
+   that resumes afterwards opens a **fresh** session, so the agent loses the conversation it
+   was in the middle of (#237, split out of #160). `runs.start` takes a workflow and vars
+   only: it records `requestId` / `workItemId` on `run.created` and writes no request or
+   work‑item document, for the reason below.
+   Two processes over one store are
    safe to the extent the run log is concerned: every interpreter holds a single‑writer
    lease per run (#101). The document stores are not — `JsonFileDocumentStore` caches the
    whole collection and rewrites it, so a daemon and a CLI command would lose each other's
@@ -61,7 +73,8 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    (#153), and the renderer is tested in both themes against the real tokens with an
    Electron smoke test beside it (#154). Next: phase 1, run monitoring (attention, the run
    tree, the event timeline, artifacts, answering gates) against the daemon methods of item
-   1 — which needs the control methods, since every surface so far only reads. Phase 2 makes it the
+   1 — whose control methods are now on the wire, so answering a gate is a bridge entry and a
+   screen rather than a protocol change. Phase 2 makes it the
    first‑class configuration and monitoring surface (config, agents, plan); the dependency
    graph goes in as a mode of Plan with a docked inspector unless use shows it is a
    starting point (`docs/design/80-dependency-graph-options.md`). Workflow editing
