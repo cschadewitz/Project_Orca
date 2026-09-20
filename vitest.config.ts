@@ -35,6 +35,14 @@ export default defineConfig({
     ],
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Vitest forks one worker per core by default (pool `forks`), so the suite's memory
+    // footprint scales with whatever machine it lands on and nothing bounds what two
+    // concurrent runs cost. On 2026-09-20 two agents ran the suite at once on an 8-core box
+    // and the kernel OOM-killed both of them mid-run, losing uncommitted work. Measured on
+    // that box: 8 workers is 45s at 3,249 MB peak, 4 workers is 50s at 2,217 MB — 11% slower
+    // for a third less memory, because the suite is startup- and I/O-bound well before it is
+    // CPU-bound. Raise it with VITEST_MAX_WORKERS where more cores are genuinely free.
+    maxWorkers: Number(process.env.VITEST_MAX_WORKERS ?? 4),
     coverage: {
       provider: "v8",
       // Every source file, not just the ones a test happened to import: a module nobody
