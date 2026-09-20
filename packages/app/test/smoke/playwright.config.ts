@@ -62,6 +62,27 @@ export default defineConfig({
   use: { trace: "retain-on-failure" },
   projects: [
     { name: "smoke", testMatch: "app-shell.spec.ts" },
-    { name: "type-proof", testMatch: "type-proof.spec.ts" },
+    {
+      name: "type-proof",
+      testMatch: "type-proof.spec.ts",
+      /**
+       * A larger budget than `smoke`'s, for two cold-start costs rather than for slowness.
+       *
+       * This project's `beforeAll` builds preload with `tsc -b` and then starts a Vite dev
+       * server, and on a runner that has never done either the second one dominates. Measured
+       * on the first Windows run: Electron's binary downloaded at +3s, Vite logged
+       * `[optimizer] scanning dependencies` at +9s, and the hook was still inside it when the
+       * 180s budget expired — the log shows steady progress throughout, not a deadlock. Linux
+       * finished the same hook in about 50s and macOS in about 30s, because their dependency
+       * caches are warm far more often.
+       *
+       * This is a budget for a one-time cost on a cold machine, which is a different thing
+       * from `maxDiffPixelRatio` above: raising *that* would hide a real rendering change,
+       * whereas a hook that needs four minutes once is just a hook that needs four minutes.
+       * If a run ever exceeds this, the answer is to find what regressed in the cold path,
+       * not to raise it again.
+       */
+      timeout: 300_000,
+    },
   ],
 });
