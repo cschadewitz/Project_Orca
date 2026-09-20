@@ -34,11 +34,27 @@ export const AGENT_HEALTH_STATES = ["unknown", "ok", "degraded", "down"] as cons
 export const AgentHealthStateSchema = z.enum(AGENT_HEALTH_STATES);
 export type AgentHealthState = z.infer<typeof AgentHealthStateSchema>;
 
+/**
+ * How ORCA reaches a host: the two `HostSpec` kinds, restated on the wire so a client can
+ * tell "this agent runs here" from "this agent runs over ssh" without reading the config
+ * it is not allowed to read (ADR 0008). Every host id groups a card, but only the transport
+ * says what a slow handshake or a dead one is likely to mean.
+ */
+export const AGENT_HOST_TYPES = ["local", "ssh"] as const;
+export const AgentHostTypeSchema = z.enum(AGENT_HOST_TYPES);
+export type AgentHostType = z.infer<typeof AgentHostTypeSchema>;
+
 /** One configured agent as a card renders it: who it is, where it runs, how it is. */
 export const AgentViewSchema = z.object({
   id: z.string(),
   /** The host it is spawned on - `local`, or an ssh host's id. */
   hostId: z.string(),
+  /**
+   * That host's transport. Absent only when the host is not configured any more - a config
+   * edit between a handshake and this read leaves the agent with its health and no host, and
+   * an invented `local` there would be a worse answer than none (RULES.md rule 12).
+   */
+  hostType: AgentHostTypeSchema.optional(),
   /** The roles it fills, in config order; a workflow selects an agent by one of these. */
   roles: z.array(z.string()),
   state: AgentHealthStateSchema,

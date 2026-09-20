@@ -256,7 +256,7 @@ params: { subscriptionId }
 result: { stopped }
 ```
 
-`runId` absent means every run in the store. `methods` absent or empty means all six.
+`runId` absent means every run in the store. `methods` absent or empty means all seven.
 `since` is a resume cursor and **requires `runId`** — see below. `stopped: false` means the
 id was not live; unsubscribing twice is not an error, and closing the socket ends every
 subscription on it.
@@ -265,11 +265,13 @@ Over `/rpc` these answer `NOT_SUPPORTED` — there is nowhere to push to. They a
 `hello.methods` regardless, so a client can tell "this daemon can stream" from "this daemon
 is old". The capability is `runs.subscribe`.
 
-### The six notifications
+### The seven notifications
 
-Every one carries `subscriptionId` (one connection may hold several), `runId`, `seq` — the
-sequence number, within that run, of the event behind it, and therefore **the cursor** — and
-`at`, the event's own timestamp rather than the moment the frame was sent.
+Six are about a run. Each carries `subscriptionId` (one connection may hold several),
+`runId`, `seq` — the sequence number, within that run, of the event behind it, and therefore
+**the cursor** — and `at`, the event's own timestamp rather than the moment the frame was
+sent. The seventh, `agent.changed`, is about the process and carries none of `runId` or
+`seq`; it has its own section below.
 
 - **`run.changed`** — `status`, the `run.*` `event`, and `outcome?` / `reason?` / `error?`.
 - **`step.changed`** — `stepRunId`, `status`, `event`, plus `nodeId`/`nodeType`/`attempt` on
@@ -282,6 +284,7 @@ sequence number, within that run, of the event behind it, and therefore **the cu
 - **`event.appended`** — the raw `OrcaEvent`, for a timeline that renders events rather than
   state. **Excludes `agent.update` events**, which arrive coalesced instead, so agent output
   is never shipped twice.
+- **`agent.changed`** — `at` and the whole `AgentView`. No `runId`, no `seq`, no replay.
 
 A folded notification is sent *before* the `event.appended` for the same event, so a client
 watching only the folded stream is never behind one watching both.
@@ -325,13 +328,19 @@ a separate CLI process is not pushed and appears on the next read (`docs/ROADMAP
 params: { subscriptionId; at; agent: AgentView }
 ```
 
-Deliberately **not** one of the six: every member of that union carries `runId` and `seq`,
-and `seq` is the resume cursor a client folds without looking at the method. Agent health
-lives in the daemon's memory and not in any log — there is no run it belongs to, no sequence
+One of the seven since **1.5**, and the only one with neither `runId` nor `seq`. Agent health
+lives in the daemon's memory and not in any log: there is no run it belongs to, no sequence
 number to resume from, and nothing for a reconnect to replay, because the current answer is
-one `agents.list` away. So it travels as its own envelope with its own parser,
-`parseAgentChanged(message)`; `parseNotification` returns `undefined` for it, which is what a
-client that does not know a method should do anyway.
+one `agents.list` away. A client that folds the cursor therefore tests for a `seq`
+(`typeof params.seq === "number"`) rather than assuming one.
+
+**1.4 kept it out of the union and 1.5 puts it in (#241).** The exclusion was meant to keep
+every cursor fold simple, and it did the opposite: a fold that compared `runId`s was already
+true on a store-wide subscription, so the special case existed and was merely unwritten, and
+`parseNotification` dropped the method — which meant the daemon was sending a frame no client
+could receive. A second parser would also have meant a second route and a second unsubscribe
+for one socket. `parseAgentChanged` is gone; `parseNotification` handles it like any other
+method, and a build that does not know it still drops it, which is the compatible thing to do.
 
 A daemon sends it only to subscriptions that did **not** scope themselves to a run, and only
 on a handshake succeeding or failing — never on `lastSeenAt` moving, which happens with every
@@ -420,8 +429,10 @@ result: { agents: AgentView[]; claims: ClaimView[]; asOf }
 ```
 
 Every *configured* agent in config order, contacted or not. `AgentView`: `id`, `hostId`,
-`roles`, `state` (`unknown` | `ok` | `degraded` | `down`), `lastHandshakeAt?`, `lastSeenAt?`,
-`roundTripMs?`, `consecutiveFailures`, `lastError?`. Health is in-process and does not
+`hostType?` (`local` | `ssh`, since 1.5), `roles`, `state` (`unknown` | `ok` | `degraded` |
+`down`), `lastHandshakeAt?`, `lastSeenAt?`, `roundTripMs?`, `consecutiveFailures`,
+`lastError?`. `hostType` is absent only when the host has left the config under the agent —
+the transport is not guessed. Health is in-process and does not
 survive a restart, so a freshly started daemon says `unknown` for all of them rather than
 claiming `ok`; `degraded` means the handshake worked but only after one failed, and there is
 deliberately no latency rule.

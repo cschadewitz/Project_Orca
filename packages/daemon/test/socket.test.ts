@@ -78,9 +78,18 @@ class Client {
     return this.notifications.filter((n) => !of || n.method === of).map((n) => n.method);
   }
 
-  /** Resolve once `count` notifications matching `method` have arrived. */
-  async waitFor(method: NotificationMethod, count: number): Promise<DaemonNotification[]> {
-    const matching = (): DaemonNotification[] => this.notifications.filter((n) => n.method === method);
+  /**
+   * Resolve once `count` notifications matching `method` have arrived, narrowed to that
+   * method's own params. Generic since protocol 1.5: `agent.changed` joined the union and
+   * carries neither `runId` nor `seq`, so a caller asking for `step.changed` has to be given
+   * back `step.changed` rather than the whole union (#241).
+   */
+  async waitFor<M extends NotificationMethod>(
+    method: M,
+    count: number,
+  ): Promise<Extract<DaemonNotification, { method: M }>[]> {
+    type Matching = Extract<DaemonNotification, { method: M }>;
+    const matching = (): Matching[] => this.notifications.filter((n): n is Matching => n.method === method);
     while (matching().length < count) await new Promise<void>((resolve) => this.arrived.push(resolve));
     return matching();
   }

@@ -338,14 +338,54 @@ export interface DecisionMatrixProps {
   supersedes?: string;
 }
 
+/**
+ * Built, and corrected against the wire it is drawn from (`AgentView` in `@orca/protocol`).
+ * Four things the draft got wrong, all of them found by building it:
+ *
+ * - **`state` has four values, not three.** `unknown` is the state of every agent on a
+ *   freshly started daemon: health is tracked in the daemon's process and never persisted
+ *   (#222), so "nothing has contacted this agent since the daemon started" is the honest
+ *   answer and not a missing one. `AGENT_HEALTH_PRESENTATION` carries its word and glyph.
+ * - **A host has an id, not a name.** Nothing in ORCA names a host; `hosts:` in the config
+ *   is a list of ids, which is also what an agent's `hostId` points at and what the cards
+ *   are grouped by. `transport` is optional for the same reason the wire's `hostType` is:
+ *   an agent whose host has left the config has no transport to report, and `local` would
+ *   be a guess (RULES.md rule 12).
+ * - **Two timestamps, not one (#227).** `lastHandshakeAt` is when ORCA last established a
+ *   connection — what `state`, `roundTripMs` and `consecutiveFailures` are about — and
+ *   `lastSeenAt` is when the agent last said anything. A pooled session handshakes once and
+ *   then talks for an hour, so one `lastAt` would have to choose between them. Both are
+ *   absent until first contact.
+ * - **There is no `policy`.** Nothing in ORCA counts auto-approvals: permission decisions
+ *   are evaluated per tool call against the rules in config (`PermissionRule`) and no
+ *   running total is kept anywhere, on the wire or off it. Rule 12 forbids inventing one,
+ *   so the field is gone rather than approximated. A permission *policy* surface is its own
+ *   screen; it is not a line on this card.
+ * - **And there is no `claim` either, for the same reason.** A `ClaimView` names the work
+ *   item and the *run* that owns it; it names no agent, and an `AgentView` names no run. So
+ *   "what is this agent on" cannot be answered from `agents.list`, however much the card
+ *   wants to say it. The claims travel with the list all the same and the surface renders
+ *   them as their own region, where a claim is a work item and the run holding it — which
+ *   is what the data does support (RULES.md rule 12).
+ */
 export interface AgentHealthCardProps {
+  /** The agent's id. There is no separate display name; ids are what config and runs use. */
   name: string;
-  host: { name: string; transport: "local" | "ssh" };
+  host: { id: string; transport?: "local" | "ssh" };
   roles: ReadonlyArray<string>;
-  handshake: { state: "ok" | "degraded" | "down"; lastAt: Date; rttMs?: number };
-  policy: { label: string; autoApprovals: number };
-  /** The work item this agent's current run claims, if any. */
-  claim?: { runId: string; itemId: string; itemTitle: string };
+  state: "unknown" | "ok" | "degraded" | "down";
+  /** The last handshake attempt, successful or not. Absent while `unknown`. */
+  lastHandshakeAt?: Date;
+  /** The last time it said anything at all — output from an old session counts. */
+  lastSeenAt?: Date;
+  /** Round trip of the last *successful* handshake; it survives a later failure. */
+  roundTripMs?: number;
+  /** Failed handshakes since the last successful one. Non-zero exactly while `down`. */
+  consecutiveFailures: number;
+  /** Why the last handshake failed. Kept only while `down`. */
+  lastError?: { code: string; message: string };
+  /** False when the daemon is not answering: the timestamps stop reading as relative. */
+  live?: boolean;
 }
 
 /**

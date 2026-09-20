@@ -170,11 +170,15 @@ export class DaemonSubscription {
     if (message.kind !== "notification") return;
     const notification = parseNotification(message);
     if (!notification) return;
-    // Only for the run this subscription is about: sequence numbers are per-run, so a
-    // store-wide stream interleaves numbers from unrelated logs and has no single cursor.
-    if (notification.params.runId === this.opts.params.runId) {
-      this.cursor =
-        this.cursor === undefined ? notification.params.seq : Math.max(this.cursor, notification.params.seq);
+    /* Only for the run this subscription is about, and only from a frame that has a cursor:
+       sequence numbers are per-run, so a store-wide stream interleaves numbers from
+       unrelated logs and has no single cursor, and `agent.changed` has no `seq` at all
+       (#241). The `runId` test alone is not enough — on a store-wide subscription it
+       compares `undefined` with `undefined` and passes, which would fold `undefined` into
+       the cursor the moment a cursor-less notification arrived. */
+    const { runId, seq } = notification.params as { runId?: string; seq?: number };
+    if (runId === this.opts.params.runId && typeof seq === "number") {
+      this.cursor = this.cursor === undefined ? seq : Math.max(this.cursor, seq);
     }
     this.opts.onNotification(notification);
   }

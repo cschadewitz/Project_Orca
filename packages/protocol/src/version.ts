@@ -24,8 +24,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * every shipped client of `options` is built from this same commit (ADR 0008 - the app and
  * the daemon ship together), so no build in existence reads those two fields as strings. The
  * next widening of a field somebody outside this repository already parses is a major.
+ *
+ * 1.5 moves `agent.changed` into `NOTIFICATION_METHODS` and `DaemonNotification` (#241), and
+ * adds `hostType` to `AgentView`. Both are additions by this file's own rule: a method joins
+ * a list clients read by name, and an optional field joins a view. Nothing that was sent
+ * before is sent differently - a 1.4 client's `parseNotification` dropped `agent.changed` as
+ * a method it had never heard of, which is what it will go on doing.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 4 };
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 5 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
   return `${v.major}.${v.minor}`;

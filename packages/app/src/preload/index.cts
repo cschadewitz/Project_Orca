@@ -48,6 +48,7 @@ const bridge: OrcaBridge = {
     list: (params = {}) => call("orca:artifacts.list", params),
     get: (params) => call("orca:artifacts.get", params),
   },
+  agents: { list: (params = {}) => call("orca:agents.list", params) },
   notifications: {
     // The one channel the main process pushes on rather than answers on. Each renderer
     // listener gets its own `ipcRenderer` listener so that unsubscribing one cannot silence

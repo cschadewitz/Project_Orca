@@ -10,8 +10,10 @@
  * daemon on the same port; a client that only reads never opens a socket.
  */
 import {
+  AGENTS_LIST_METHOD,
   ARTIFACTS_GET_METHOD,
   ARTIFACTS_LIST_METHOD,
+  AgentsListResultSchema,
   ArtifactsGetResultSchema,
   ArtifactsListResultSchema,
   CLAIMS_LIST_METHOD,
@@ -29,6 +31,8 @@ import {
   RunsGetResultSchema,
   RunsListResultSchema,
   socketUrlFor,
+  type AgentsListParams,
+  type AgentsListResult,
   type ArtifactsGetParams,
   type ArtifactsGetResult,
   type ArtifactsListParams,
@@ -129,6 +133,11 @@ export class DaemonClient {
   /** One artifact's body, or the reason it is not being shown. */
   artifactsGet(params: Params<ArtifactsGetParams>): Promise<ArtifactsGetResult> {
     return this.call(ARTIFACTS_GET_METHOD, params, ArtifactsGetResultSchema);
+  }
+
+  /** Every configured agent's handshake health, with what is claimed right now beside it. */
+  agentsList(params: Params<AgentsListParams> = {}): Promise<AgentsListResult> {
+    return this.call(AGENTS_LIST_METHOD, params, AgentsListResultSchema);
   }
 
   /**
