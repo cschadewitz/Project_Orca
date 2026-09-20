@@ -1,0 +1,417 @@
+// @vitest-environment happy-dom
+/**
+ * The Attention surface, through the chrome that mounts it: answering, the one count, the
+ * two ways a control refuses, and what the main process is told to notify about.
+ *
+ * Mounted with `renderChrome` rather than on its own, because three of the things under
+ * test are only true of the whole app — the title bar and the sidebar carry the same number
+ * the surface does, and the command palette is a view of the same keyboard map the cards
+ * register into. Attention is the app's default surface, so the chrome comes up on it.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { NotificationMessage, OpenInputView } from "@orca/protocol";
+import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
+import type { FakeBridge } from "./fake-bridge.js";
+import { DESTRUCTIVE_GATE, FIVE_GATES, INPUTS_AS_OF, PERMISSION_ASK, UNLOADED_GATE } from "./fixtures-inputs.js";
+
+const teardown: (() => void)[] = [];
+let fake: FakeBridge;
+let h: Harness;
+
+/** `inputs.list` answering with exactly these, the way the daemon would. */
+function serve(inputs: readonly OpenInputView[]): void {
+  fake.script({
+    "inputs.list": (params) => {
+      const matching = inputs.filter((i) => params.runId === undefined || i.runId === params.runId);
+      return { ok: true, result: { inputs: [...matching], waiting: matching.length, asOf: INPUTS_AS_OF } };
+    },
+  });
+}
+
+function mount(inputs: readonly OpenInputView[]): void {
+  serve(inputs);
+  renderChrome(h);
+}
+
+const card = (question: string): HTMLElement => screen.getByRole("region", { name: question });
+const answerButton = (question: string): HTMLElement => within(card(question)).getByRole("button", { name: /^Answer/ });
+
+beforeEach(() => {
+  stubMatchMedia(1440);
+  fake = installBridge();
+  teardown.push(fake.install());
+  h = harness();
+  teardown.push(h.dispose);
+});
+
+afterEach(() => {
+  cleanup();
+  while (teardown.length) teardown.pop()?.();
+  vi.restoreAllMocks();
+});
+
+describe("clearing what is waiting", () => {
+  it("clears five gates in five keystrokes, and the count goes five to zero", async () => {
+    const open = new Set(FIVE_GATES.map((g) => g.id));
+    fake.script({
+      "inputs.list": () => {
+        const inputs = FIVE_GATES.filter((g) => open.has(g.id));
+        return { ok: true, result: { inputs, waiting: inputs.length, asOf: INPUTS_AS_OF } };
+      },
+      "inputs.answer": (params) => {
+        open.delete(params.requestId);
+        return {
+          ok: true,
+          result: { requestId: params.requestId, runId: "run-1", answer: params.optionId, asOf: INPUTS_AS_OF },
+        };
+      },
+    });
+    renderChrome(h);
+
+    // The one number, in both places it appears, before anything is answered.
+    expect(await screen.findByRole("button", { name: /5 waiting/ })).toBeTruthy();
+    // The sidebar's Attention row carries the same number, which is why its accessible
+    // name is "Attention 5" and not "Attention".
+    expect(screen.getByRole("button", { name: "Attention 5" })).toBeTruthy();
+
+    const first = card("Ship release 1?");
+    first.focus();
+
+    for (const n of [1, 2, 3, 4, 5]) {
+      // `Enter` on the focused card answers with the option that is selected, which is the
+      // first non-destructive one — no digit needed, and no mouse.
+      fireEvent.keyDown(document.activeElement!, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(screen.queryByRole("region", { name: `Ship release ${n}?` })).toBeNull());
+      // Focus never left the list: the next card took the place of the answered one.
+      if (n < 5) {
+        expect(document.activeElement?.getAttribute("aria-label")).toBe(`Ship release ${n + 1}?`);
+      }
+    }
+
+    expect(fake.calls.filter((c) => c.method === "inputs.answer")).toHaveLength(5);
+    // Five to zero without navigating: the surface is still the one on screen.
+    await waitFor(() => expect(screen.queryByRole("button", { name: /waiting/ })).toBeNull());
+    expect(screen.getByText("Nothing needs you")).toBeTruthy();
+  });
+
+  it("answers with the digit that was pressed, and sends the option's id and not its label", async () => {
+    mount([FIVE_GATES[0]!]);
+    const first = await screen.findByRole("region", { name: "Ship release 1?" });
+    first.focus();
+
+    fireEvent.keyDown(first, { key: "2", code: "Digit2" });
+    fireEvent.keyDown(first, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(fake.calls.some((c) => c.method === "inputs.answer")).toBe(true));
+    expect(fake.calls.find((c) => c.method === "inputs.answer")?.params).toMatchObject({
+      requestId: "gate-1",
+      optionId: "hold",
+    });
+  });
+
+  it("keeps the ask when the daemon refuses the write, and says why", async () => {
+    mount([FIVE_GATES[0]!]);
+    fake.fail("inputs.answer", { code: "RUN_LEASED_ELSEWHERE", message: "run-1 is held by pid 811 on build-2" });
+    const first = await screen.findByRole("region", { name: "Ship release 1?" });
+
+    fireEvent.click(within(first).getByRole("button", { name: /^Answer/ }));
+
+    // Said on the card, beside the control that was pressed — and said once.
+    expect(await within(card("Ship release 1?")).findByText(/RUN_LEASED_ELSEWHERE/)).toBeTruthy();
+    expect(screen.getAllByText(/RUN_LEASED_ELSEWHERE/)).toHaveLength(1);
+    // Still there to answer again: a refused write is not a lost keystroke.
+    expect(card("Ship release 1?")).toBeTruthy();
+  });
+});
+
+describe("the destructive option", () => {
+  it("is never bound to 1 and is never what Enter would send", async () => {
+    mount([DESTRUCTIVE_GATE]);
+    const gate = await screen.findByRole("region", { name: /Roll back\?$/ });
+
+    const digits = [...gate.querySelectorAll(".orca-kbd")].map((k) => k.textContent);
+    const labels = [...gate.querySelectorAll(".orca-btn")].map((b) => b.textContent ?? "");
+    expect(digits).toEqual(["1", "2"]);
+    expect(labels[0]).toContain("Retry the step");
+    expect(labels[1]).toContain("Roll back");
+
+    gate.focus();
+    fireEvent.keyDown(gate, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(fake.calls.some((c) => c.method === "inputs.answer")).toBe(true));
+    expect(fake.calls.find((c) => c.method === "inputs.answer")?.params).toMatchObject({ optionId: "retry" });
+  });
+});
+
+describe("what a person is not allowed to approve blind", () => {
+  it("disables the options with the reason when the artifacts did not load", async () => {
+    mount([UNLOADED_GATE]);
+    const gate = await screen.findByRole("region", { name: "Approve the spec?" });
+
+    const approve = within(gate).getByRole("button", { name: /Approve$/ });
+    expect(approve.getAttribute("aria-disabled")).toBe("true");
+    expect(approve.getAttribute("title")).toContain("have not loaded");
+    expect(within(gate).getByText(/have not loaded/)).toBeTruthy();
+  });
+
+  it("disables every answer with the connection's own reason when it cannot write", async () => {
+    mount([FIVE_GATES[0]!]);
+    await screen.findByRole("region", { name: "Ship release 1?" });
+
+    fake.connect({ state: "disconnected", since: INPUTS_AS_OF });
+
+    await waitFor(() => {
+      const answer = answerButton("Ship release 1?");
+      expect(answer.getAttribute("aria-disabled")).toBe("true");
+      // `useWritability()`'s sentence, verbatim: a control never composes its own.
+      expect(answer.getAttribute("title")).toBe("no daemon is answering");
+    });
+
+    // And a daemon that simply does not offer control says a different thing, not an error.
+    fake.connect({ state: "live", since: INPUTS_AS_OF, capabilities: ["runs.read"] });
+    await waitFor(() =>
+      expect(answerButton("Ship release 1?").getAttribute("title")).toBe("this daemon offers no run control"),
+    );
+  });
+});
+
+describe("the permission card", () => {
+  it("shows the command verbatim and offers always, which promises only what was written", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: "Run a shell command?" });
+    expect(within(ask).getByText("rm -rf build/")).toBeTruthy();
+
+    fake.script({
+      "inputs.answer": (params) => ({
+        ok: true,
+        result: {
+          requestId: params.requestId,
+          runId: "run-1",
+          answer: params.optionId,
+          permission: {
+            file: "/work/orca/orca.permissions.json",
+            agentId: "claude",
+            rules: [{ match: { kind: "execute" as const, path: "build" }, decision: "allow" as const }],
+            added: [{ match: { kind: "execute" as const, path: "build" }, decision: "allow" as const }],
+            alreadyPresent: [],
+          },
+          asOf: INPUTS_AS_OF,
+        },
+      }),
+    });
+
+    fireEvent.click(within(ask).getByRole("button", { name: "Always allow" }));
+
+    expect(await screen.findByText(/ORCA will not ask again/)).toBeTruthy();
+    // The client says which way the rule goes; ORCA does not read the option id and guess.
+    expect(fake.calls.find((c) => c.method === "inputs.answer")?.params).toMatchObject({
+      optionId: "allow",
+      always: { decision: "allow" },
+    });
+  });
+
+  it("does not promise when the daemon refused to derive a rule", async () => {
+    mount([PERMISSION_ASK]);
+    const ask = await screen.findByRole("region", { name: "Run a shell command?" });
+    fake.script({
+      "inputs.answer": (params) => ({
+        ok: true,
+        result: {
+          requestId: params.requestId,
+          runId: "run-1",
+          answer: params.optionId,
+          permission: {
+            file: "/work/orca/orca.permissions.json",
+            agentId: "claude",
+            rules: [],
+            added: [],
+            alreadyPresent: [],
+            refused: { reason: "the ask named no tool", detail: "nothing to match on" },
+          },
+          asOf: INPUTS_AS_OF,
+        },
+      }),
+    });
+
+    fireEvent.click(within(ask).getByRole("button", { name: "Always deny" }));
+    expect(await screen.findByText(/ORCA will ask again/)).toBeTruthy();
+  });
+});
+
+describe("the push stream", () => {
+  const envelope = (method: string, params: Record<string, unknown>): NotificationMessage => ({
+    kind: "notification",
+    method,
+    params: { subscriptionId: "sub-1", seq: 7, at: INPUTS_AS_OF, ...params },
+  });
+
+  it("resolves an ask it has never seen with one scoped read, and counts it", async () => {
+    const served: OpenInputView[] = [];
+    serve(served);
+    renderChrome(h);
+    expect(await screen.findByText("Nothing needs you")).toBeTruthy();
+
+    served.push(FIVE_GATES[0]!);
+    fake.notify(
+      envelope("input.opened", {
+        runId: "run-1",
+        stepRunId: "s-gate-1",
+        requestId: "gate-1",
+        kind: "decision",
+        question: "Ship release 1?",
+        options: FIVE_GATES[0]!.options,
+      }),
+    );
+
+    expect(await screen.findByRole("region", { name: "Ship release 1?" })).toBeTruthy();
+    // One call, scoped to the run — not a re-read of the whole list.
+    const scoped = () =>
+      fake.calls.filter((c) => c.method === "inputs.list" && (c.params as { runId?: string }).runId !== undefined);
+    expect(scoped()).toHaveLength(1);
+    expect(await screen.findByRole("button", { name: /1 waiting/ })).toBeTruthy();
+
+    // A second frame about the same ask asks nothing further.
+    fake.notify(
+      envelope("input.opened", {
+        runId: "run-1",
+        stepRunId: "s-gate-1",
+        requestId: "gate-1",
+        kind: "decision",
+        question: "Ship release 1?",
+        options: FIVE_GATES[0]!.options,
+      }),
+    );
+    expect(scoped()).toHaveLength(1);
+  });
+
+  it("drops an ask answered somewhere else", async () => {
+    mount([FIVE_GATES[0]!, FIVE_GATES[1]!]);
+    await screen.findByRole("region", { name: "Ship release 1?" });
+
+    fake.notify(
+      envelope("input.answered", { runId: "run-1", stepRunId: "s-gate-1", requestId: "gate-1", answer: "approve" }),
+    );
+
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Ship release 1?" })).toBeNull());
+    expect(await screen.findByRole("button", { name: /1 waiting/ })).toBeTruthy();
+  });
+});
+
+describe("failed runs, below the waits", () => {
+  it("lists them as rows with an identity of their own, and no duplicate keys", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    mount([FIVE_GATES[0]!]);
+
+    const list = await screen.findByRole("listbox", { name: "Failed runs" });
+    const rows = within(list).getAllByRole("option");
+    // Row identity, not only row content: a virtualised list keyed by index renders the
+    // right text and the wrong rows (the bug that reached CI in wave 2).
+    const ids = rows.map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.every((id) => id.startsWith("attention-failure-run-"))).toBe(true);
+    expect(within(list).getByText("SSO rollout")).toBeTruthy();
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("what the main process is told", () => {
+  it("sends the daemon's count and every open item, and re-sends when one is answered", async () => {
+    const open = [PERMISSION_ASK, FIVE_GATES[0]!];
+    mount(open);
+    fake.script({
+      "inputs.answer": (params) => {
+        const at = open.findIndex((i) => i.id === params.requestId);
+        if (at >= 0) open.splice(at, 1);
+        return {
+          ok: true,
+          result: { requestId: params.requestId, runId: "run-1", answer: params.optionId, asOf: INPUTS_AS_OF },
+        };
+      },
+    });
+    await screen.findByRole("region", { name: "Run a shell command?" });
+
+    await waitFor(() => expect(fake.alerts.length).toBeGreaterThan(0));
+    const sent = fake.alerts.at(-1)!;
+    expect(sent.waiting).toBe(2);
+    expect(sent.items.map((i) => i.tier)).toEqual(["permission", "gate", "failure"]);
+
+    fireEvent.click(answerButton("Run a shell command?"));
+    await waitFor(() => expect(fake.alerts.at(-1)!.waiting).toBe(1));
+    expect(fake.alerts.at(-1)!.items.some((i) => i.id === "ask-1")).toBe(false);
+  });
+});
+
+describe("a notification that was clicked", () => {
+  it("opens Attention, wherever the person was", async () => {
+    mount([FIVE_GATES[0]!]);
+    await screen.findByRole("region", { name: "Ship release 1?" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Runs" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Ship release 1?" })).toBeNull());
+
+    // The main process has already focused the window; this is the renderer's half. The
+    // item on the activation is what #165 turns into the card's own deep link.
+    fake.activate({
+      item: {
+        id: "gate-1",
+        tier: "gate",
+        title: "release 1 is waiting",
+        body: "Ship release 1?",
+        runId: "run-1",
+        inputId: "gate-1",
+        since: INPUTS_AS_OF,
+      },
+    });
+
+    expect(await screen.findByRole("region", { name: "Ship release 1?" })).toBeTruthy();
+  });
+});
+
+describe("the keyboard map and the palette", () => {
+  it("registers the card keys only while a card has focus", async () => {
+    mount([FIVE_GATES[0]!]);
+    const gate = await screen.findByRole("region", { name: "Ship release 1?" });
+    const cardKeys = (): string[] =>
+      h.keyboard
+        .list()
+        .filter((s) => s.scope === "card" && s.key !== undefined)
+        .map((s) => s.key!);
+
+    // `J` and `K` are the list's and are there as soon as there is a card to move to; the
+    // digits, `Enter`, `⇧Enter` and `G` belong to whichever card has the keyboard. `G` is
+    // among them now that the chrome passes `onOpenRun` — the route table gives it
+    // somewhere to go (#165), and it is registered because it was passed, not by default.
+    expect(cardKeys()).toEqual(expect.arrayContaining(["J", "K", "1", "2", "Enter", "Shift+Enter", "G"]));
+    // One card holds them, not five: the slot is `card:1`, and a second registration of it
+    // is the collision the duplicate-key throw exists to find.
+    expect(cardKeys().filter((key) => key === "1")).toHaveLength(1);
+    expect(gate).toBeTruthy();
+  });
+
+  it("lists the two keyless write commands, with no chip beside them", async () => {
+    mount([FIVE_GATES[0]!]);
+    await screen.findByRole("region", { name: "Ship release 1?" });
+
+    fireEvent.keyDown(window, { key: "k", code: "KeyK", metaKey: true });
+    const palette = await screen.findByRole("dialog", { name: "Command palette" });
+    const row = within(palette).getByRole("option", { name: /Cancel the run this is waiting on/ });
+    // #205: a command with no key is still a command. It is in the palette, and the palette
+    // is the whole of how it is reached — so there is nothing to draw in the chip slot.
+    expect(row.querySelector(".orca-kbd")).toBeNull();
+    expect(within(palette).getByRole("option", { name: /Resume the run this is waiting on/ })).toBeTruthy();
+  });
+
+  it("cancels the run the focused card is waiting on", async () => {
+    mount([FIVE_GATES[0]!]);
+    await screen.findByRole("region", { name: "Ship release 1?" });
+
+    fireEvent.keyDown(window, { key: "k", code: "KeyK", metaKey: true });
+    const palette = await screen.findByRole("dialog", { name: "Command palette" });
+    // `mouseDown`, not `click`: the palette picks on mousedown so that the query field is
+    // not blurred first (`command-palette.tsx`).
+    fireEvent.mouseDown(within(palette).getByRole("option", { name: /Cancel the run this is waiting on/ }));
+
+    await waitFor(() => expect(fake.calls.some((c) => c.method === "runs.cancel")).toBe(true));
+    expect(fake.calls.find((c) => c.method === "runs.cancel")?.params).toMatchObject({ runId: "run-1" });
+  });
+});

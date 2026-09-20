@@ -16,7 +16,11 @@ import { Button, textClass } from "../ui/index.js";
 
 export interface TitleBarProps {
   platform: string;
-  /** Hidden at zero — the count itself is #161. */
+  /**
+   * Tier 1 and tier 2 summed — `InputsListResult.waiting`, which the daemon sends so that
+   * no client recounts it (#161). Hidden at zero, and `status-waiting` is the one status
+   * this bar is allowed to show (rule 6).
+   */
   waitingCount?: number;
   onOpenAttention: () => void;
   onOpenPalette: () => void;

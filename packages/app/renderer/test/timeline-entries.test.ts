@@ -335,6 +335,11 @@ describe("what a row says, per event type", () => {
   it("reads a finished run's marker off its outcome, not off the fact that it ended", () => {
     expect(toEntry(stored({ type: "run.completed", payload: { outcome: "success" } }), NAMES).status).toBe("succeeded");
     expect(toEntry(stored({ type: "run.completed", payload: { outcome: "failure" } }), NAMES).status).toBe("failed");
+    // The third outcome, which used to read as a failure (#249): a run somebody stopped is
+    // not a run that broke, and the gutter is where that difference is looked for.
+    expect(toEntry(stored({ type: "run.completed", payload: { outcome: "cancelled" } }), NAMES).status).toBe(
+      "cancelled",
+    );
   });
 
   it("marks the transitions the gutter has to find, and no others", () => {

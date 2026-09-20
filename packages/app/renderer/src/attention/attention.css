@@ -1,0 +1,97 @@
+/**
+ * The Attention surface's own layout. Everything a card, a row or a chip looks like is the
+ * design layer's (`@orca/design`'s `components.css`); what is here is how the two regions
+ * of this screen sit on the page, and nothing else.
+ *
+ * No literal colours, sizes, radii or durations — every value is a token (RULES.md rule 1),
+ * and every rule carries the type style it expects (#211).
+ */
+
+.orca-attn-surface {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  min-height: 0;
+}
+
+.orca-attn__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.orca-attn__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+
+/* The waiting cards. A card is a declared block rather than a row: it carries a question,
+   its consequences and its controls, so it is the one list on this screen that is not
+   fixed-height and not virtualised (rule 9 is about rows). */
+.orca-attn__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* The card body is the tab stop (`J`/`K` move between them), so its focus ring is the
+   design's: 2px `--border-focus` at a hairline offset, drawn with `outline` so it never
+   changes layout (RULES.md rule 10). */
+.orca-attn__card-body:focus-visible {
+  outline: var(--stroke-focus) solid var(--border-focus);
+  outline-offset: var(--stroke-hairline);
+}
+
+.orca-attn__consequences {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--ink-secondary);
+}
+
+.orca-attn__consequence-for {
+  color: var(--ink-primary);
+}
+
+.orca-attn__note,
+.orca-attn__free {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+/* The failures list is the substrate's, and the substrate reads a row's height back off
+   `--row-h` (`renderer/src/list/row-height.ts`). `.orca-attn__row` in the design layer is
+   padded rather than fixed-height — it predates rule 9's `--row-h` — so the height is bound
+   here, on this surface's own modifier, rather than by editing a class this package does
+   not own. Correcting `.orca-attn__row` itself belongs to `packages/design`. */
+.orca-attn__row--listed {
+  height: var(--row-h);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.orca-attn__failures {
+  min-height: 0;
+  flex: 1;
+}
+
+/* type: label */
+.orca-attn__failed-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* type: caption */
+.orca-attn__report {
+  color: var(--ink-secondary);
+}

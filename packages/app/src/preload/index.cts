@@ -20,7 +20,14 @@
 // and emitting CommonJS is the whole point of this file — see the header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import electron = require("electron");
-import type { BridgeResult, ConnectionSnapshot, OrcaBridge } from "../bridge.js";
+import type {
+  AlertActivation,
+  AlertsUpdate,
+  BridgeResult,
+  ConnectionSnapshot,
+  OrcaBridge,
+  WorkspaceSnapshot,
+} from "../bridge.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
 
@@ -41,8 +48,13 @@ const bridge: OrcaBridge = {
     list: (params = {}) => call("orca:runs.list", params),
     get: (params) => call("orca:runs.get", params),
     events: (params) => call("orca:runs.events", params),
+    cancel: (params) => call("orca:runs.cancel", params),
+    resume: (params) => call("orca:runs.resume", params),
   },
-  inputs: { list: (params = {}) => call("orca:inputs.list", params) },
+  inputs: {
+    list: (params = {}) => call("orca:inputs.list", params),
+    answer: (params) => call("orca:inputs.answer", params),
+  },
   claims: { list: (params = {}) => call("orca:claims.list", params) },
   artifacts: {
     list: (params = {}) => call("orca:artifacts.list", params),
@@ -59,6 +71,17 @@ const bridge: OrcaBridge = {
       return () => void ipcRenderer.off("orca:notification", forward);
     },
   },
+  alerts: {
+    // `send`, not `invoke`: the main process has no verdict to give back about what is
+    // waiting, and a promise nobody awaits is a promise nobody notices rejecting.
+    update: (update: AlertsUpdate) => ipcRenderer.send("orca:alerts.update", update),
+    // A third push channel, one `ipcRenderer` listener per renderer listener as above.
+    subscribe: (listener: (activation: AlertActivation) => void) => {
+      const forward = (_event: unknown, activation: AlertActivation): void => listener(activation);
+      ipcRenderer.on("orca:alerts.activate", forward);
+      return () => void ipcRenderer.off("orca:alerts.activate", forward);
+    },
+  },
   connection: {
     // Synchronous for the same reason `preferences.read` is: the status bar is drawn on the
     // renderer's first pass, and a promise would paint "reconnecting" for a frame first.
@@ -69,6 +92,28 @@ const bridge: OrcaBridge = {
       const forward = (_event: unknown, snapshot: ConnectionSnapshot): void => listener(snapshot);
       ipcRenderer.on("orca:connection", forward);
       return () => void ipcRenderer.off("orca:connection", forward);
+    },
+  },
+  workspace: {
+    // Synchronous, like the two reads above: the file-mode banner names the store on the
+    // renderer's first pass, and a promise would paint an unnamed banner for a frame.
+    read: () => ipcRenderer.sendSync("orca:workspace.read") as WorkspaceSnapshot,
+    subscribe: (listener: (snapshot: WorkspaceSnapshot) => void) => {
+      const forward = (_event: unknown, snapshot: WorkspaceSnapshot): void => listener(snapshot);
+      ipcRenderer.on("orca:workspace", forward);
+      return () => void ipcRenderer.off("orca:workspace", forward);
+    },
+    open: (params = {}) => call("orca:workspace.open", params),
+    connectLive: () => call("orca:workspace.connectLive"),
+  },
+  deepLink: {
+    // Synchronous *and* draining: a link is delivered to one reader once, so the window
+    // takes it on its first pass and subscribes for the rest.
+    take: () => ipcRenderer.sendSync("orca:deepLink.take") as string | undefined,
+    subscribe: (listener: (url: string) => void) => {
+      const forward = (_event: unknown, url: string): void => listener(url);
+      ipcRenderer.on("orca:deepLink", forward);
+      return () => void ipcRenderer.off("orca:deepLink", forward);
     },
   },
   preferences: {

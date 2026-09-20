@@ -6,15 +6,19 @@
  *  - every crumb carries its type label, because `7f3a2c` alone does not say run;
  *  - the crumb for the object you are looking at is not a link;
  *  - every crumb that has counterparts can open them, which is how cross-linking works in
- *    this app — one component, and no surface embedding another's navigation.
+ *    this app — one component, and no surface embedding another's navigation;
+ *  - every crumb that has a canonical `orca://` URL can hand it over — **Copy link** is in
+ *    the same menu, because the header is the one place that always knows which object is
+ *    on screen (#165).
  *
  * It is a `<nav>` with an `aria-label`, and the trail is an ordered list, so the crumbs
  * read as a path rather than as a row of unrelated links.
  */
 import { type JSX, type ReactNode } from "react";
 import { CHROME_GLYPHS } from "@orca/design";
+import { urlForCrumb } from "../route-table.js";
 import { counterpartsFor, type Counterpart, type CrumbType } from "./counterparts.js";
-import { Menu } from "./menu.js";
+import { Menu, type MenuItem } from "./menu.js";
 import { textClass } from "./text.js";
 
 export interface Crumb {
@@ -56,7 +60,7 @@ export function ObjectHeader({ crumbs, actions, onOpen, onOpenCounterpart }: Obj
                 <CrumbLabel crumb={crumb} />
               </button>
             )}
-            {onOpenCounterpart ? <CounterpartMenu crumb={crumb} onChoose={onOpenCounterpart} /> : null}
+            <CrumbMenu crumbs={crumbs} crumb={crumb} onChoose={onOpenCounterpart} />
           </li>
         ))}
       </ol>
@@ -76,29 +80,57 @@ function CrumbLabel({ crumb }: { crumb: Crumb }): JSX.Element {
   );
 }
 
-interface CounterpartMenuProps {
+interface CrumbMenuProps {
+  crumbs: readonly Crumb[];
   crumb: Crumb;
-  onChoose: (crumb: Crumb, counterpart: Counterpart) => void;
+  onChoose?: ((crumb: Crumb, counterpart: Counterpart) => void) | undefined;
 }
 
+/** The menu item id for **Copy link**; it is not a counterpart and never leads anywhere. */
+const COPY_LINK = "copy-link";
+
 /**
- * The crumb's counterparts, over the `Menu` primitive: opening, closing, roving focus,
- * focus return and viewport-aware placement all live there, and the only thing this knows
- * is which counterparts a crumb type has. A crumb type with none renders no disclosure —
- * `Menu` returns nothing for an empty list.
+ * What a crumb offers: **Copy link**, then the counterpart objects
+ * (docs/design/10-information-architecture.md). All of it over the `Menu` primitive —
+ * opening, closing, roving focus, focus return and viewport-aware placement live there,
+ * and the only thing this knows is what a crumb leads to.
+ *
+ * Two things decide what is in the list:
+ *
+ * - **Copy link is here because every crumb is an address.** `orca://` URLs exist so
+ *   another tool can hand a person a place (#165), and the object header is the one place
+ *   in the app that always knows which object is on screen. A crumb type with no canonical
+ *   URL — config, request — simply has no such row.
+ * - **A counterpart is listed whether or not the app can follow it yet.** Only one of the
+ *   four the spec names is addressable from the trail today (`route-table.ts` says which
+ *   and why); the rest arrive with the surfaces that answer them, and choosing one in the
+ *   meantime says so on screen rather than doing nothing — that is `onChoose`'s caller's,
+ *   because this component knows objects and not surfaces.
  */
-function CounterpartMenu({ crumb, onChoose }: CounterpartMenuProps): JSX.Element | null {
-  const options = counterpartsFor(crumb.type);
+function CrumbMenu({ crumbs, crumb, onChoose }: CrumbMenuProps): JSX.Element | null {
+  const link = urlForCrumb(crumbs, crumb);
+  const options = onChoose ? counterpartsFor(crumb.type) : [];
   const byId = new Map(options.map((option) => [option.id, option]));
+
+  const items: MenuItem[] = [
+    ...(link ? [{ id: COPY_LINK, label: "Copy link", hint: "orca://" }] : []),
+    ...options.map((option) => ({ id: option.id, label: option.label, hint: option.leadsTo })),
+  ];
 
   return (
     <Menu
-      label={`Counterparts of ${crumb.label}`}
+      label={`Links for ${crumb.label}`}
       triggerClassName="orca-crumb__more"
-      items={options.map((option) => ({ id: option.id, label: option.label, hint: option.leadsTo }))}
+      items={items}
       onChoose={(item) => {
+        if (item.id === COPY_LINK) {
+          // Fire and forget: the clipboard is the OS's, and a rejected write (no
+          // permission, no clipboard) is not something a breadcrumb can do anything about.
+          if (link) void navigator.clipboard?.writeText(link);
+          return;
+        }
         const option = byId.get(item.id);
-        if (option) onChoose(crumb, option);
+        if (option && onChoose) onChoose(crumb, option);
       }}
     >
       {/* The bundled symbol face carries no downward triangle, and a glyph that falls

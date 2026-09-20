@@ -68,6 +68,13 @@ There is one registry and the palette is a view of it. A component registers
 beside it. That is the mechanism behind "every action in this map is also in the command
 palette" — not a second table that has to be kept in step.
 
+**The key is the optional part (#205).** The design's key table is deliberately short, and a
+command worth doing but not worth one of the letters left registers without a key: it takes a
+slot of its own, nothing can dispatch to it, and the palette draws its row with no chip. The
+palette is then the only way to it, which is a decision about how prominent the command is
+rather than an admission that it is unreachable. **Cancel the run this is waiting on** and
+**Resume the run this is waiting on** are the first two.
+
 Three rules fall out of it:
 
 - **Scope comes from focus, not from a mode flag.** A component that owns a scope marks its
@@ -86,8 +93,11 @@ Three rules fall out of it:
 The palette's own rows come from two places. Commands come from the map. Objects — recent
 runs, work items, agents, config files, workflows — and search results come from sources
 the surfaces register (`palette/sources.tsx`), because that data belongs to the surface
-that holds it. No source is registered yet: the read methods are not there, and an empty
-Search section that says so is better than an invented recent-runs list (rule 12).
+that holds it. Three are registered as of #206 — recent runs, agents, and search over step
+and artifact names — and they sit beside the palette (`palette/object-sources.tsx`) rather
+than inside a surface, because they are reads of the store rather than views of what a
+surface holds. Every row hands back a canonical `orca://` URL and is opened through the
+route table, which is what keeps one resolver for links, crumbs and palette rows alike.
 
 Focus stays in the query field for as long as the palette is open. The highlighted row is
 *selection* — `aria-activedescendant` on the field, the accent rail on the row — which is
@@ -219,8 +229,16 @@ another; the markup is composed from `ui/`.
 
 **A surface never polls and never re-reads a list because a notification arrived.** One read
 on mount and per filter change, then the stream. A notification about an object the list has
-never seen is resolved with a single `get` and inserted in order — a `run.changed` carries a
-status and a cursor, not a name or a creation time, so there is no row to draw from it alone.
+never seen is resolved with a single read *scoped to that object* and inserted in order — a
+`run.changed` carries a status and a cursor, not a name or a creation time, so there is no row
+to draw from it alone, and an `input.opened` carries the question but not the run's name, how
+long it has waited or the artifacts the decision is about. One `runs.get`, or one
+`inputs.list` for one run; never the list again.
+
+Attention is the second surface in this shape and departs from it in one place, deliberately:
+its cards are not rows, so they are not virtualised. What is bounded there is the number of
+things blocked on a person, which is a number somebody is already unhappy about; the failed
+runs below them are rows and are a `VirtualList`.
 
 **Filtering is a filter, not a search** — the IA rules out a global search screen. The halves
 differ deliberately: a status filter is a list parameter, so the daemon applies it to the
@@ -234,6 +252,26 @@ out, `error` when the daemon answered badly, `disconnected` when there is no dae
 already in hand, a lost connection keeps them, marks them stale and **stops the clock**: an
 elapsed time accruing against a daemon that is not talking is an invented number, which
 rule 12 forbids as much as any other invented value.
+
+## Writing, and the alerts that come of it
+
+**A control asks whether it may write; it does not find out by failing.** `useWritability()`
+folds the connection state together with whether `runs.control` is in `hello.capabilities`
+into "can write, or why not", and the `reason` is shaped for `Button`'s `disabledReason` so no
+control composes its own sentence. A daemon started `--read-only` omits the capability *and*
+the methods, which is why file mode needs no second code path: the buttons are already gone.
+
+**The OS half is in the main process and is Electron-free.** `src/main/alerts.ts` holds the
+timing — the tier table's immediate / 60 seconds / on failure, the unfocused escalation, the
+coalescing — behind an `AlertsPort` the main process implements over `Notification` and
+`app.dock`, so the part with the rules in it is a plain module a test drives with fake timers.
+The renderer hands it what is open and it diffs; the badge it sets is the same one count the
+title bar shows. The gate's delay is measured from when the gate was *asked*, not from when
+this process heard about it, so an app opened onto a ten-minute-old gate has already missed
+it. There is no "show the window" call on the port at all — that is how "a permission ask may
+take attention only inside a window that already has focus, and nothing raises a window at
+anybody" is guaranteed rather than remembered. A click comes back with the item it was about
+and is resolved through the route table, like every other way of arriving at an object.
 
 ## What the design assumes ORCA can provide
 

@@ -5,7 +5,7 @@
  * other four (and the per-surface object memory ⌘2 etc. should restore) arrive with the
  * issues that give each surface its content.
  */
-import { useCallback, useState, type JSX } from "react";
+import { useCallback, useEffect, useState, type JSX, type ReactNode } from "react";
 import { SURFACES, type SurfaceId } from "./chrome/surfaces.js";
 import { Sidebar } from "./chrome/sidebar.js";
 import { TitleBar } from "./chrome/title-bar.js";
@@ -22,15 +22,39 @@ import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
 import { AgentsSurface } from "./agents/agents-surface.js";
-import { ObjectHeader, StateView, type Crumb } from "./ui/index.js";
+import { AttentionSurface } from "./attention/attention-surface.js";
+import { useAttention } from "./attention/use-attention.js";
+import { InlineAsksProvider } from "./attention/inline-asks.js";
+import { useAlertActivation } from "./attention/use-alert-activation.js";
+import type { AlertActivation } from "../../src/bridge.js";
+import { PaletteObjectSources } from "./palette/object-sources.js";
+import {
+  describeRoute,
+  gateUrl,
+  resolveRoute,
+  runUrl,
+  urlForCrumb,
+  counterpartUrl,
+  type Route,
+} from "./route-table.js";
+import { Button, ObjectHeader, StateView, Text, textClass, type Crumb } from "./ui/index.js";
 
 // Attention is always first: the app's default landing surface (docs/design/10-information-architecture.md).
 // The data-driven half of the landing rule — Attention showing running runs when nothing is
-// waiting — needs real gate/run data that no protocol method serves yet.
+// waiting — is still not built: the surface says nothing needs you rather than filling the
+// space with runs nobody has to look at.
 const DEFAULT_SURFACE: SurfaceId = "attention";
 
 export function App(): JSX.Element {
   const [active, setActive] = useState<SurfaceId>(DEFAULT_SURFACE);
+  /* Where a URL led. The route table resolves every `orca://` URL — a cold start's, an
+     `open-url`, a second launch's, and the palette's jump row — and this is the one place
+     the answer is held, so all four select the same object (#165). */
+  const [route, setRoute] = useState<Route | undefined>(undefined);
+  /** A URL this version of the app does not understand; said out loud rather than dropped. */
+  const [unresolved, setUnresolved] = useState<string | undefined>(undefined);
+  /** A counterpart the app cannot follow yet, in words — see `DeepLinkLanding`. */
+  const [unavailable, setUnavailable] = useState<string | undefined>(undefined);
   const [panelOpen, setPanelOpen] = useState(false);
   /* The object header is the chrome's, on every screen that has an object
      (docs/design/10-information-architecture.md): one breadcrumb in the app, drawn in one
@@ -40,13 +64,59 @@ export function App(): JSX.Element {
   const [crumbs, setCrumbs] = useState<readonly Crumb[]>([]);
 
   const connection = useConnection();
+  /* What needs a person, read *here* rather than inside the Attention surface, because the
+     title bar and the sidebar carry the same number and it is only one number
+     (docs/design/20-attention-and-gates.md). A count hook of its own beside the surface's
+     own read would be a second answer to one question, and the two would differ by exactly
+     one for as long as a push took to reach both. It is also what keeps the count live on
+     every screen: the chrome is mounted whichever surface is showing. */
+  const attention = useAttention();
+  // Zero until the daemon has answered, which both bars render as nothing at all: a count
+  // is a fact and there is not one yet.
+  const waitingCount = attention.state.phase === "ready" ? attention.state.waiting : 0;
   const sidebarCollapsed = useSidebarCollapsed();
   const panelOverlay = usePanelOverlay();
 
   const selectSurface = useCallback((id: SurfaceId) => setActive(id), []);
+
+  /**
+   * Open an `orca://` URL. The surface is selected first and always — including for
+   * `orca://item/…` and `orca://workflow/…`, whose surfaces do not exist until v0.5.0 and
+   * v0.6.0, because landing on an unbuilt surface with the id in hand is honest and
+   * dropping the link is not (docs/design/10-information-architecture.md).
+   */
+  const navigate = useCallback((url: string) => {
+    const next = resolveRoute(url);
+    if (!next) {
+      setUnresolved(url);
+      return;
+    }
+    setUnresolved(undefined);
+    setUnavailable(undefined);
+    setRoute(next);
+    setActive(next.surface);
+  }, []);
+
+  useDeepLinks(navigate);
   const togglePanel = useCallback(() => setPanelOpen((open) => !open), []);
 
   useChromeShortcuts({ onSurface: selectSurface, onTogglePanel: togglePanel });
+  /* A notification was clicked, or a permission ask took the attention of a window that
+     already had focus. The activation carries the alert it was about, so it goes through the
+     same route table every other arrival does (#165): a waiting ask lands on its card, a
+     failure lands on its run, and an alert whose item has since been answered lands on the
+     surface, which is all that is left to say about it. */
+  useAlertActivation(
+    useCallback(
+      (activation: AlertActivation) => {
+        const item = activation.item;
+        if (item?.inputId) navigate(gateUrl(item.inputId));
+        else if (item?.runId) navigate(runUrl(item.runId));
+        else selectSurface("attention");
+      },
+      [navigate, selectSurface],
+    ),
+  );
   useEscapeClosesTopLayer();
   const palette = useCommandPalette();
 
@@ -65,6 +135,7 @@ export function App(): JSX.Element {
     <div className="orca-window">
       <TitleBar
         platform={window.orca.platform}
+        waitingCount={waitingCount}
         onOpenAttention={() => selectSurface("attention")}
         onOpenPalette={palette.openPalette}
       />
@@ -72,12 +143,26 @@ export function App(): JSX.Element {
           says the data is last-known is drawn once rather than by each screen (#163). The
           five seconds of silence in front of it are the main process's. */}
       <ConnectionBanner connection={connection} />
+      {/* Where a link that arrived lands. A deep link to an object the daemon cannot
+          currently produce "lands on the object's screen in its disconnected state with the
+          id shown, never on a blank window or a generic error". */}
+      <DeepLinkLanding
+        route={route}
+        unresolved={unresolved}
+        unavailable={unavailable}
+        live={connection.state === "live"}
+        onDismiss={() => {
+          setRoute(undefined);
+          setUnresolved(undefined);
+          setUnavailable(undefined);
+        }}
+      />
       <div
         className={bodyClassName}
         data-sidebar={sidebarCollapsed ? "collapsed" : undefined}
         data-panel={panelOpen && panelOverlay ? "overlay" : undefined}
       >
-        <Sidebar active={active} onSelect={selectSurface} />
+        <Sidebar active={active} onSelect={selectSurface} waitingCount={waitingCount} />
         {/* Keyed by surface: a switch mounts a new pane, which is what re-applies that
             surface's remembered density. */}
         <PrimaryPane
@@ -85,15 +170,56 @@ export function App(): JSX.Element {
           surface={activeSurface.id}
           header={
             activeSurface.id === "runs" && crumbs.length > 0 ? (
-              // `onOpen` and `onOpenCounterpart` are omitted until there is an `orca://`
-              // route table to open a crumb into (#165); a crumb that navigates nowhere is
-              // still a crumb that says where you are.
-              <ObjectHeader crumbs={crumbs} />
+              /* Both openers go through the route table rather than through a second
+                 navigation path: a crumb, a counterpart, a palette row and a pasted URL
+                 are four ways of naming the same object and there is one resolver (#165).
+                 A crumb with no canonical URL opens nothing, which is what `urlForCrumb`
+                 answering undefined means. */
+              <ObjectHeader
+                crumbs={crumbs}
+                onOpen={(crumb) => {
+                  const url = urlForCrumb(crumbs, crumb);
+                  if (url) navigate(url);
+                }}
+                onOpenCounterpart={(crumb, counterpart) => {
+                  const url = counterpartUrl(crumbs, crumb, counterpart);
+                  /* Three of the four counterparts are queries over data the header does
+                     not hold, and the surfaces that answer them are v0.5.0's. Saying so is
+                     what a person gets instead of a menu item that did nothing. */
+                  if (url) navigate(url);
+                  else setUnavailable(`${counterpart.label} is not something this app can open yet.`);
+                }}
+              />
             ) : undefined
           }
         >
-          {activeSurface.id === "runs" ? (
-            <RunsSurface connection={connection.state} onCrumbs={setCrumbs} />
+          {activeSurface.id === "attention" ? (
+            /* `onOpenRun` is `G` and a card's run name, and it goes through the route table
+               the rest of the app arrives by. It is a prop rather than a call into the router
+               because the card registers `G` only when there is somewhere for it to go. */
+            <AttentionSurface
+              connection={connection.state}
+              feed={attention}
+              onOpenRun={(runId) => navigate(runUrl(runId))}
+            />
+          ) : activeSurface.id === "runs" ? (
+            /* A `run` route selects the row; an `artifact` route names the run that
+               produced it, which is the run to land on while the panel opens over it. */
+            <RunsSurface
+              connection={connection.state}
+              onCrumbs={setCrumbs}
+              open={
+                route?.kind === "run"
+                  ? {
+                      runId: route.runId,
+                      ...(route.step ? { nodeId: route.step.nodeId } : {}),
+                      ...(route.step?.attempt ? { attempt: route.step.attempt } : {}),
+                    }
+                  : route?.kind === "artifact" && route.runId
+                    ? { runId: route.runId }
+                    : undefined
+              }
+            />
           ) : activeSurface.id === "agents" ? (
             <AgentsSurface connection={connection.state} />
           ) : (
@@ -103,17 +229,109 @@ export function App(): JSX.Element {
         {panelOpen ? <DockedPanel onClose={togglePanel} /> : null}
       </div>
       <StatusBar connection={connection} />
-      {/* Last, so it is over the panel in paint order as well as in z-index; `onJump` is
-          omitted until the `orca://` route table exists (#165). */}
-      <CommandPalette controller={palette} />
+      {/* The palette's object rows: recent runs, agents, and search over what the daemon
+          can be asked for. Registered here rather than inside a surface because they are
+          reads of the store rather than views of a surface's state (#206). */}
+      <PaletteObjectSources onOpen={navigate} />
+      {/* Last, so it is over the panel in paint order as well as in z-index. */}
+      <CommandPalette controller={palette} onJump={(target) => navigate(target.url)} />
       {/* Blocking, once per detection, and last of all: a version mismatch is the one
           connection state that stops a person before they read anything. */}
       <MismatchDialog connection={connection} />
     </div>
   );
 
-  /* The docked panel's artifact is held above every surface, so a chip on a step, a gate
-     card and an `orca://artifact/spec.md@v3` deep link can all put one there; opening the
-     panel itself stays the chrome's, which is what `onOpen` hands over. */
-  return <ArtifactPanelProvider onOpen={() => setPanelOpen(true)}>{chrome}</ArtifactPanelProvider>;
+  /* Two wraps, for the same reason: both are held above every surface because more than one
+     surface reaches them. The docked panel's artifact, so that a chip on a step, a gate card
+     and an `orca://artifact/spec.md@v3` deep link can all put one there — opening the panel
+     itself stays the chrome's, which is what `onOpen` hands over. And the waiting feed, so
+     that a step parked on a gate renders the *same* card the Attention list does without a
+     second `inputs.list` and a second opinion about the one count (#161). */
+  return (
+    <ArtifactPanelProvider onOpen={() => setPanelOpen(true)}>
+      <InlineAsksProvider feed={attention}>{chrome}</InlineAsksProvider>
+    </ArtifactPanelProvider>
+  );
+}
+
+/**
+ * Every `orca://` URL the main process has for this window: the one it was opened for, then
+ * every one that arrives while it is open.
+ *
+ * The cold-start URL is *taken* rather than read, and taken before subscribing, for the
+ * same reason the connection snapshot is read before subscribing: a link is delivered once,
+ * so a reload must not replay it and drag a person back to a place they have left.
+ */
+function useDeepLinks(navigate: (url: string) => void): void {
+  useEffect(() => {
+    const waiting = window.orca.deepLink.take();
+    if (waiting !== undefined) navigate(waiting);
+    return window.orca.deepLink.subscribe(navigate);
+  }, [navigate]);
+}
+
+interface DeepLinkLandingProps {
+  route: Route | undefined;
+  unresolved: string | undefined;
+  unavailable: string | undefined;
+  live: boolean;
+  onDismiss: () => void;
+}
+
+/**
+ * What a link that arrived says about itself.
+ *
+ * Three cases and each one is a different sentence, because "nothing happened" is the
+ * failure this component exists to prevent:
+ *
+ * - a counterpart the app cannot follow yet — say which, rather than swallow the click;
+ * - a URL this version does not understand — say the URL, because a newer app may know it;
+ * - a URL that arrived while no daemon is answering — the disconnected landing, naming the
+ *   object it is holding, which is the information architecture's rule;
+ * - a URL that resolved — name what was opened, so a person who pasted a link can see the
+ *   app agreed about which object they meant.
+ */
+function DeepLinkLanding({
+  route,
+  unresolved,
+  unavailable,
+  live,
+  onDismiss,
+}: DeepLinkLandingProps): JSX.Element | null {
+  if (unavailable !== undefined) {
+    return (
+      <Landing onDismiss={onDismiss}>
+        <Text style="caption">{unavailable}</Text>
+      </Landing>
+    );
+  }
+  if (unresolved !== undefined) {
+    return (
+      <Landing onDismiss={onDismiss}>
+        <Text style="caption">This app does not know how to open</Text>
+        <span className={`orca-mono ${textClass("mono-id")}`}>{unresolved}</span>
+      </Landing>
+    );
+  }
+  if (route === undefined) return null;
+  const { type, id } = describeRoute(route);
+  return (
+    <Landing onDismiss={onDismiss}>
+      <Text style="caption">{live ? `Opened ${type}` : `No daemon is answering, so this ${type} cannot be read:`}</Text>
+      <span className={`orca-mono ${textClass("mono-id")}`}>{id}</span>
+    </Landing>
+  );
+}
+
+/** The bar itself: one weight, one dismissal, and never a live region — it is not urgent. */
+function Landing({ children, onDismiss }: { children: ReactNode; onDismiss: () => void }): JSX.Element {
+  return (
+    <div className={`orca-banner ${textClass("caption")} orca-banner--stale`} role="status">
+      {children}
+      <span className="orca-spacer" />
+      <Button size="sm" tone="ghost" onClick={onDismiss}>
+        Dismiss
+      </Button>
+    </div>
+  );
 }

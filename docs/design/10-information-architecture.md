@@ -36,9 +36,9 @@ nothing else about the layout changes per platform.
 | **Config** | How the system is wired, and what the workflows are | 2 |
 
 Attention is a surface, not a notification tray: it is first in the sidebar, it has a
-permanent keyboard address (`⌘1`), and it is the app's default landing screen when anything
-is waiting. When nothing is waiting it shows the running runs instead, so the top item in the
-sidebar is never a dead end.
+permanent keyboard address (`⌘1`), and it is the app's landing screen. When nothing is waiting
+it says so and the runs that failed are still listed below, so the top item in the sidebar is
+never a dead end.
 
 ## Dual spine
 
@@ -66,26 +66,58 @@ and no surface needs to embed another's navigation.
 a CI comment) can hand a person a place rather than a search.
 
 ```
-orca://run/7f3a2c                  the run tree, that run selected
-orca://run/7f3a2c/step/build.2     step detail, attempt 2, output scrolled to its start
-orca://gate/91c4                   attention surface, that gate focused, answer buttons armed
-orca://item/auth-sso-epic          plan, that work item, explanation panel open
-orca://artifact/spec.md@v3         the docked panel, that artifact, version 3
-orca://workflow/ai-sdlc            workflow viewer, no run overlaid
-orca://workflow/ai-sdlc?run=7f3a2c workflow viewer with that run overlaid
+orca://run/7f3a2c                      the run tree, that run selected
+orca://run/7f3a2c/step/build.2         step detail, attempt 2, output scrolled to its start
+orca://gate/91c4                       attention surface, that gate focused, answer buttons armed
+orca://item/auth-sso-epic              plan, that work item, explanation panel open
+orca://artifact/spec.md@v3?run=7f3a2c  the docked panel, that artifact, version 3
+orca://workflow/ai-sdlc                workflow viewer, no run overlaid
+orca://workflow/ai-sdlc?run=7f3a2c     workflow viewer with that run overlaid
+orca://agent/claude-local              agents, that agent's card
 ```
 
+Three of those lines are corrections made when the table was implemented (#165), and each
+one is worth keeping in mind before a new form is added:
+
+- **An artifact carries the run that produced it.** Versions are monotonic per (run, name),
+  so `orca://artifact/spec.md@v3` alone names as many artifacts as there are runs with a
+  `spec.md`. The `?run=` form is canonical and is what **Copy link** emits; a bare name is a
+  palette *search*, not a link.
+- **`orca://item/…` and `orca://workflow/…` name surfaces that do not exist yet** — Plan is
+  v0.5.0 and the workflow viewer v0.6.0. They resolve all the same: the surface is selected
+  and the id is shown on its unbuilt state. A link is never dropped because the screen behind
+  it has not been built.
+- **`orca://agent/…` was missing.** The Agents surface shipped in v0.4.0 and the palette lists
+  agents, and every palette entry has to hand back a canonical URL.
+
 A deep link to an object the daemon cannot currently produce lands on the object's screen in
-its disconnected state with the id shown, never on a blank window or a generic error.
+its disconnected state with the id shown, never on a blank window or a generic error. A URL
+this version of the app does not understand says so, with the URL, rather than being
+swallowed — a newer build may know what it means.
+
+**One table resolves all of them.** A URL arriving on a cold start, through macOS's
+`open-url`, through a second launch's command line, from **Copy link** in an object header,
+or from the palette's jump row is the same object selected the same way
+(`renderer/src/route-table.ts`). A second launch focuses the window that is already open
+rather than opening a second one onto the same store.
 
 ## Command palette
 
 `⌘K` / `Ctrl+K`. Three kinds of entry, in this order: **actions** on the current object
 (answer gate, cancel run, resume run, waive dependency, toggle density), **navigation**
-(recent runs, work items, agents, config files, workflows), and **search** (step names, event
-text, artifact contents). Typing a bare run id or an `orca://` URL jumps straight to it. The
+(recent runs, work items, agents, config files, workflows), and **search** (step and artifact
+names). Typing a bare run id or an `orca://` URL jumps straight to it. The
 palette is the only place a phase-2 write action needs to be discoverable, which keeps the
 chrome of phase-1 screens empty.
+
+Every object row is an `orca://` URL and opens through the route table above, which is what
+keeps one resolver rather than three (#206). Two limits are worth writing down rather than
+approximating: navigation lists the **ten most recent runs** and the configured agents, since
+a person looking for the two-hundredth run types its id and the jump row takes it; and search
+covers **step and artifact names** only. Event text and artifact *contents* need a
+daemon-side search method — the protocol has none, `runs.events` pages rather than matches —
+and scanning every log in the store from the renderer on each keystroke is not a search, it
+is a denial of service against your own daemon.
 
 ## What the app deliberately does not have
 

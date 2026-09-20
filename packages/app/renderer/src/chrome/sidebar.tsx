@@ -6,7 +6,7 @@ import { SURFACES, type SurfaceId } from "./surfaces.js";
 export interface SidebarProps {
   active: SurfaceId;
   onSelect: (id: SurfaceId) => void;
-  /** Hidden at zero — the count itself is #161. */
+  /** The same number the title bar shows, on the Attention row. Hidden at zero (#161). */
   waitingCount?: number;
 }
 

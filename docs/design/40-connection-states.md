@@ -10,7 +10,7 @@ wrong.**
 | **Live** | `● connected` in `status-succeeded` | none | live | enabled |
 | **Reconnecting** | `◌ reconnecting… 3s` in `status-waiting`, spinner | none for the first 5s, then a thin bar on affected screens | last-known, values at `opacity-stale` | queued, buttons show "will send on reconnect" |
 | **Disconnected** | `◷ disconnected · 2m ago` in `status-stale` | persistent bar on every screen with data | last-known, values at `opacity-stale`, every timestamp switched to absolute | disabled with the reason on the control |
-| **File mode** | `◷ file mode · read-only` in `status-stale` | persistent bar naming the event-log path | whatever the event log and artifact files contain, replayed | disabled, and the buttons are absent rather than disabled |
+| **File mode** | `◷ file mode · read-only` in `status-stale` | persistent bar naming the store being replayed | whatever the event log and artifact files contain, replayed | disabled, and the buttons are absent rather than disabled |
 | **Version mismatch** | `▣ daemon 0.11 · app 0.9` in `status-blocked` | blocking dialog on first detection, then a persistent bar | last-known | disabled |
 
 ## Reconnecting
@@ -33,7 +33,9 @@ glyph becomes `◷`.
 ## File mode
 
 A genuinely different product mode, not a degraded one, and the design says so: the banner
-names the event log path and offers **Connect to a daemon**. Writes are *absent*, not
+names the store being replayed and offers **Connect to a daemon**. What is chosen is a
+workspace, not a single log file — a run's history is its event log and its artifacts
+together, and half of it is not a mode. Writes are *absent*, not
 disabled — a screen with no cancel button reads as a viewer; a screen with a greyed cancel
 button reads as broken. The event timeline and run tree are fully usable, because they are a
 replay of the event log either way; what is missing is streaming, gates and control.
@@ -55,22 +57,29 @@ where the stream stopped and draws the `── reconnected hh:mm:ss ──` rule
 driven from `useConnection()` transitions. It is not a live region (rule 11) — the status bar
 has already said the word.
 
-Three things above are still not true, and are written here rather than approximated in code:
+**`reconnecting` gives up at backoff saturation** as of #239: three consecutive failures at
+the 5s cap — about twenty seconds of real silence, and the seventh failure overall with
+today's `RECONNECT_BACKOFF_MS`. It is a fact about the retry loop rather than a stopwatch, so
+it survives a change to that array, and it is a *rendering* change: the subscription goes on
+retrying, because giving up for real would need a reconnect control and nothing has one.
+`DaemonSubscription` reports its retry count beside its state — on every failure, not only
+the first, since the count is news when the word is not — and `connectionStateFor` reads it.
+
+**File mode is implemented** as of #164, and it is `orca serve --read-only` over a chosen
+store rather than a second store path in the renderer (ADR 0008). File ▸ Open a store… stops
+the daemon this process started, starts one with `--read-only` on the chosen workspace and
+resets the machine (`src/main/workspace.ts`). `runs.control` is then absent from `hello`, so
+the writes are already *absent* through `useWritability()` and the bar only has to name the
+store being replayed and offer **Connect to a daemon**. The mode is an *input* to the machine
+rather than something it can deduce: nothing about the socket or the handshake distinguishes
+a read-only daemon from a writable one, which is why `ConnectionInputs` carries it.
+
+One thing above is still not true, and is written here rather than approximated in code:
 
 - **Writes are not queued while reconnecting.** There is no outbox — that belongs with the
   control methods — so a control says "the daemon is not answering; wait for the connection to
   come back" rather than promise a send the app cannot make. The table's "will send on
   reconnect" is the intent, not the behaviour.
-- **`reconnecting` has no give-up threshold *yet*, but the design now says what one is.**
-  `DaemonSubscription` retries forever with the backoff capped at 5s, so today `disconnected`
-  is reached only when a bundled daemon exits or the stream is closed, and against an external
-  `ORCA_DAEMON_URL` that dies the status bar reads "reconnecting… 4m" indefinitely. The rule
-  settled on #239 is **backoff saturation: three consecutive failures at the 5s cap**, about
-  twenty seconds of real silence. It is deliberately a fact about the retry loop rather than a
-  stopwatch, so it survives a change to the backoff, and it is a *rendering* change — the
-  subscription keeps retrying, because giving up would need a reconnect control and nothing
-  has one. Implementing it belongs with #164.
-- **File mode is not implemented** and is never produced (#164).
 
 The two classes this spec needs are now in the component layer (#240): `.orca-stale-rule` for
 the 2px bar, and the `.orca-dialog` family for a blocking dialog that is not the command

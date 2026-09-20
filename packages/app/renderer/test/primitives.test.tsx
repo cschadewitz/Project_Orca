@@ -199,11 +199,14 @@ describe("ObjectHeader", () => {
     expect(markup.match(/class="orca-crumb orca-text-label"/g)).toHaveLength(1);
   });
 
-  it("offers a counterpart menu only where there are counterparts, and only with a handler", () => {
-    expect(html(<ObjectHeader crumbs={crumbs} />)).not.toContain("orca-crumb__more");
+  it("offers a menu on every crumb that has somewhere to go, and none on one that has not", () => {
+    /* Copy link alone is enough for a disclosure: every crumb with a canonical `orca://`
+       URL is an address another tool can be handed (#165), handler or no handler. */
+    expect(html(<ObjectHeader crumbs={crumbs} />).match(/orca-crumb__more/g)).toHaveLength(2);
     const withMenus = html(<ObjectHeader crumbs={crumbs} onOpenCounterpart={() => {}} />);
     expect(withMenus.match(/orca-crumb__more/g)).toHaveLength(2);
 
+    // A step crumb with no run above it: no URL to copy, and a step has no counterparts.
     const steps = [{ type: "step", id: "build.2", label: "build", current: true }] as const;
     expect(html(<ObjectHeader crumbs={steps} onOpenCounterpart={() => {}} />)).not.toContain("orca-crumb__more");
   });

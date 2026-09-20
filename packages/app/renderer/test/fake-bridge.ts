@@ -1,6 +1,6 @@
 /**
- * A `window.orca` for tests: the handshake, the eight read methods and daemon notifications,
- * answered from `fixtures.ts`.
+ * A `window.orca` for tests: the handshake, the nine read methods, the three control
+ * methods, the OS-alert channel and daemon notifications, answered from `fixtures.ts`.
  *
  * This is the seam every screen test uses. The renderer can reach exactly one thing outside
  * itself — the preload bridge — so a fake bridge is the whole of "the daemon" as far as a
@@ -23,8 +23,9 @@
  * fixture the way the daemon's `ReadModel` does. A list screen wired to a fake that ignored
  * `limit` would pass its test and page wrongly against a real daemon.
  *
- * The bridge this implements is `packages/app/src/bridge.ts`, whole: the handshake, the five
- * read methods, the notification stream and the preferences. It is typed as `OrcaBridge`
+ * The bridge this implements is `packages/app/src/bridge.ts`, whole: the handshake, the
+ * read methods, the notification stream, the connection, the workspace, the deep-link queue
+ * and the preferences. It is typed as `OrcaBridge`
  * rather than as a shape of its own, so the day the real bridge grows a method this file
  * fails to compile instead of quietly holding a second opinion about what the bridge is.
  */
@@ -38,18 +39,31 @@ import type {
   ClaimsListParams,
   ClaimsListResult,
   HelloResult,
+  InputsAnswerParams,
+  InputsAnswerResult,
   InputsListParams,
   InputsListResult,
   NotificationMessage,
   ProtocolError,
   RunsEventsParams,
   RunsEventsResult,
+  RunsCancelParams,
+  RunsCancelResult,
   RunsGetParams,
   RunsGetResult,
   RunsListParams,
   RunsListResult,
+  RunsResumeParams,
+  RunsResumeResult,
 } from "@orca/protocol";
-import type { BridgeResult, ConnectionSnapshot, OrcaBridge } from "../../src/bridge.js";
+import type {
+  AlertActivation,
+  AlertsUpdate,
+  BridgeResult,
+  ConnectionSnapshot,
+  OrcaBridge,
+  WorkspaceSnapshot,
+} from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
 import { AS_OF, CLAIMS, EVENTS, HELLO, INPUTS, RUNS, RUN_DETAILS } from "./fixtures.js";
 import { AGENTS_LIST } from "./fixtures-agents.js";
@@ -69,7 +83,10 @@ export type MethodName =
   | "claims.list"
   | "artifacts.list"
   | "artifacts.get"
-  | "agents.list";
+  | "agents.list"
+  | "inputs.answer"
+  | "runs.cancel"
+  | "runs.resume";
 
 type Answer<T> = BridgeResult<T> | Promise<BridgeResult<T>>;
 
@@ -84,6 +101,11 @@ export interface Handlers {
   "artifacts.list": (params: Params<ArtifactsListParams>) => Answer<ArtifactsListResult>;
   "artifacts.get": (params: Params<ArtifactsGetParams>) => Answer<ArtifactsGetResult>;
   "agents.list": (params: Params<AgentsListParams>) => Answer<AgentsListResult>;
+  "inputs.answer": (
+    params: Params<InputsAnswerParams> & { requestId: string; optionId: string },
+  ) => Answer<InputsAnswerResult>;
+  "runs.cancel": (params: RunsCancelParams) => Answer<RunsCancelResult>;
+  "runs.resume": (params: RunsResumeParams) => Answer<RunsResumeResult>;
 }
 
 export interface BridgeCall {
@@ -97,6 +119,10 @@ export interface FakeBridgeOptions {
   preferences?: Preferences;
   /** What `connection.read()` answers before anything has been pushed. Defaults to live. */
   connection?: ConnectionSnapshot;
+  /** The store on screen. Defaults to a writable workspace, which is the ordinary case. */
+  workspace?: WorkspaceSnapshot;
+  /** The `orca://` URL this window was opened for, the way a cold start delivers one (#165). */
+  deepLink?: string;
 }
 
 export interface FakeBridge {
@@ -115,12 +141,23 @@ export interface FakeBridge {
   notify: (notification: NotificationMessage) => void;
   /** Push a connection snapshot, the way the main process's state machine does. */
   connect: (snapshot: ConnectionSnapshot) => void;
+  /**
+   * Every `alerts.update` the renderer has sent, oldest first: what the main process would
+   * have posted notifications and set the badge from (#162).
+   */
+  readonly alerts: readonly AlertsUpdate[];
+  /** Deliver a notification click, the way the main process does when a person answers one. */
+  activate: (activation: AlertActivation) => void;
   /** What `connection.read()` would answer right now. */
   readonly connection: ConnectionSnapshot;
   /** How many subscribers are listening — a screen that leaks one is a screen that leaks. */
   readonly subscribers: number;
   /** The preferences the fake is holding, after any writes a test has made. */
   readonly preferences: Preferences;
+  /** Deliver an `orca://` URL to every subscriber, the way `open-url` reaches a window. */
+  link: (url: string) => void;
+  /** What `workspace.read()` would answer right now. */
+  readonly workspace: WorkspaceSnapshot;
 }
 
 const ok = <T>(result: T): BridgeResult<T> => ({ ok: true, result });
@@ -137,9 +174,10 @@ const ARTIFACTS_LIST_LIMIT = 200;
 
 /**
  * A live connection, built out of the same `hello` the fake answers, so the state a screen
- * sees and the handshake it could ask for cannot disagree. `capabilities` is `HELLO`'s, and
- * `HELLO` does not advertise `runs.control` — which is the real world today, and so the
- * default a screen test should be written against.
+ * sees and the handshake it could ask for cannot disagree. `capabilities` is `HELLO`'s,
+ * which now includes `runs.control`: the daemon writes as of #160, so a screen test runs
+ * against a daemon that takes commands. A test of what a read-only daemon looks like
+ * pushes a connection whose capabilities say otherwise (#164).
  */
 const LIVE_CONNECTION: ConnectionSnapshot = {
   state: "live",
@@ -147,6 +185,12 @@ const LIVE_CONNECTION: ConnectionSnapshot = {
   orcaVersion: HELLO.orcaVersion,
   capabilities: HELLO.capabilities,
 };
+
+/**
+ * The workspace a test gets unless it says otherwise: a writable store the app found for
+ * itself, which is what every screen but the file-mode banner is written against.
+ */
+const DEFAULT_WORKSPACE: WorkspaceSnapshot = { path: "/work/orca", readOnly: false, source: "default" };
 
 const defaults: Handlers = {
   hello: () => ok(HELLO),
@@ -270,6 +314,32 @@ const defaults: Handlers = {
   // `agents.list` takes no parameters: every configured agent comes back, contacted or not,
   // and the daemon does no filtering for the surface to mirror here.
   "agents.list": () => ok(AGENTS_LIST),
+
+  /* The three that write. They answer and change nothing: the fixture store is a constant,
+     and a fake that quietly removed an answered input would hide the thing a screen test
+     is actually about — whether the screen moved on without being told to. A test that
+     wants the input gone scripts `inputs.list` to say so, or pushes `input.answered`.
+
+     `permission` is absent unless a test asks for it, exactly as the daemon leaves it
+     absent unless `always` was sent, so nothing promises "ORCA will not ask again" by
+     default. */
+  "inputs.answer": (params) => {
+    const input = INPUTS.find((i) => i.id === params.requestId);
+    if (!input) return err("INPUT_NOT_FOUND", `no open input ${params.requestId}`);
+    return ok({ requestId: params.requestId, runId: input.runId, answer: params.optionId, asOf: AS_OF });
+  },
+
+  "runs.cancel": ({ runId }) => {
+    const run = RUNS.find((r) => r.id === runId);
+    return run ? ok({ run: { ...run, status: "cancelled" }, asOf: AS_OF }) : err("RUN_NOT_FOUND", `no run ${runId}`);
+  },
+
+  // Answered once the run has parked again, so the status is a settled one and never
+  // `running` — which is what the protocol says and what a screen is written against.
+  "runs.resume": ({ runId }) => {
+    const run = RUNS.find((r) => r.id === runId);
+    return run ? ok({ run: { ...run, status: "succeeded" }, asOf: AS_OF }) : err("RUN_NOT_FOUND", `no run ${runId}`);
+  },
 };
 
 /** A fake `window.orca`. Nothing is installed until `install()` is called. */
@@ -279,8 +349,23 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
   const listeners = new Set<(notification: NotificationMessage) => void>();
   const held = new Map<MethodName, Promise<void>>();
   const connections = new Set<(snapshot: ConnectionSnapshot) => void>();
+  const links = new Set<(url: string) => void>();
+  const workspaces = new Set<(snapshot: WorkspaceSnapshot) => void>();
+  const activations = new Set<(activation: AlertActivation) => void>();
+  const alerts: AlertsUpdate[] = [];
   let preferences = options.preferences ?? DEFAULT_PREFERENCES;
   let connection = options.connection ?? LIVE_CONNECTION;
+  let workspace = options.workspace ?? DEFAULT_WORKSPACE;
+  /* Taken once, like the real bridge: a deep link is delivered to one reader, so a window
+     that reads it and then reloads must not find it waiting a second time. */
+  let pendingLink = options.deepLink;
+
+  /** The main process's half of a workspace switch: set it, then push it. */
+  const setWorkspace = (next: WorkspaceSnapshot): BridgeResult<WorkspaceSnapshot> => {
+    workspace = next;
+    for (const listener of [...workspaces]) listener(next);
+    return ok(next);
+  };
 
   /** Record the call, wait out any hold, then answer. One place, so `calls` can never miss one. */
   async function call<K extends MethodName>(method: K, params: Parameters<Handlers[K]>[0]): Promise<unknown> {
@@ -292,6 +377,29 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
   const bridge: FakeOrcaBridge = {
     platform: options.platform ?? "darwin",
     hello: () => call("hello", undefined) as Promise<BridgeResult<HelloResult>>,
+    workspace: {
+      read: () => workspace,
+      subscribe: (listener) => {
+        workspaces.add(listener);
+        return () => workspaces.delete(listener);
+      },
+      // The real thing starts a read-only daemon over the chosen store; here it is the
+      // observable half of that — the snapshot the banner and the status bar read.
+      open: (params = {}) =>
+        Promise.resolve(setWorkspace({ path: params.path ?? workspace.path, readOnly: true, source: "chosen" })),
+      connectLive: () => Promise.resolve(setWorkspace(DEFAULT_WORKSPACE)),
+    },
+    deepLink: {
+      take: () => {
+        const url = pendingLink;
+        pendingLink = undefined;
+        return url;
+      },
+      subscribe: (listener) => {
+        links.add(listener);
+        return () => links.delete(listener);
+      },
+    },
     preferences: {
       read: () => preferences,
       write: (patch) => {
@@ -303,8 +411,13 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       list: (params = {}) => call("runs.list", params) as Promise<BridgeResult<RunsListResult>>,
       get: (params) => call("runs.get", params) as Promise<BridgeResult<RunsGetResult>>,
       events: (params) => call("runs.events", params) as Promise<BridgeResult<RunsEventsResult>>,
+      cancel: (params) => call("runs.cancel", params) as Promise<BridgeResult<RunsCancelResult>>,
+      resume: (params) => call("runs.resume", params) as Promise<BridgeResult<RunsResumeResult>>,
     },
-    inputs: { list: (params = {}) => call("inputs.list", params) as Promise<BridgeResult<InputsListResult>> },
+    inputs: {
+      list: (params = {}) => call("inputs.list", params) as Promise<BridgeResult<InputsListResult>>,
+      answer: (params) => call("inputs.answer", params) as Promise<BridgeResult<InputsAnswerResult>>,
+    },
     claims: { list: (params = {}) => call("claims.list", params) as Promise<BridgeResult<ClaimsListResult>> },
     artifacts: {
       list: (params = {}) => call("artifacts.list", params) as Promise<BridgeResult<ArtifactsListResult>>,
@@ -315,6 +428,15 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       subscribe: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
+      },
+    },
+    alerts: {
+      update: (update) => {
+        alerts.push(update);
+      },
+      subscribe: (listener) => {
+        activations.add(listener);
+        return () => activations.delete(listener);
       },
     },
     connection: {
@@ -365,8 +487,20 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       connection = snapshot;
       for (const listener of [...connections]) listener(snapshot);
     },
+    get alerts() {
+      return alerts;
+    },
+    activate(activation) {
+      for (const listener of [...activations]) listener(activation);
+    },
     get connection() {
       return connection;
+    },
+    link(url) {
+      for (const listener of [...links]) listener(url);
+    },
+    get workspace() {
+      return workspace;
     },
     get subscribers() {
       return listeners.size;

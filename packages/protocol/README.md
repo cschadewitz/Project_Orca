@@ -195,6 +195,15 @@ label may be reworded between the ask and the answer, and a log written before #
 each bare string as an option that is its own id and label. `input.opened` carries the same
 shape, so a card drawn from the push frame alone is complete.
 
+**`agent` says whose turn is being held, as of protocol 1.6** — `{ id, hostId, hostType? }`,
+three fields of `AgentView` and not a fourth, because the rest of an agent's state is what
+the Agents surface is for. A `permission` ask always has one: it reaches a person through a
+live agent session, and "claude-local on build-01 is waiting" is what makes an allow-always
+decision one a person can size. A workflow `decision` or `question` has none, and the absence
+is the answer rather than a field that failed to load — as is a missing `hostType`, which
+means the host is no longer configured. `input.opened` carries it too, for the same reason it
+carries the options.
+
 ### `claims.list` — who owns which work item
 
 ```ts
@@ -279,7 +288,9 @@ sent. The seventh, `agent.changed`, is about the process and carries none of `ru
   `willRetry?` / `error?` on `step.failed`.
 - **`agent.update`** — `stepRunId`, `sessionId`, `fromSeq`, and a non-empty `updates`. Batched.
 - **`input.opened`** — `stepRunId`, `requestId`, `kind`, `question`, `options` (whole
-  `GateOption`s since 1.4).
+  `GateOption`s since 1.4) and `agent?` (since 1.6). The agent comes off the event rather than
+  out of a read, which is what keeps this fold a pure function of one event; `hostType` is
+  therefore only on `inputs.list`, where the registry can be asked.
 - **`input.answered`** — `stepRunId`, `requestId`, `answer`.
 - **`event.appended`** — the raw `OrcaEvent`, for a timeline that renders events rather than
   state. **Excludes `agent.update` events**, which arrive coalesced instead, so agent output
@@ -374,9 +385,11 @@ has to be able to check whether that is true, and `refused` is the case where it
 `always.decision` is stated by the client rather than inferred from the option id, because
 those ids are the *agent's* and a standing permission grant is the last place to guess.
 
-> `note` does not reach the run's log: `human.answered` has no field for it (#238). The
-> daemon records it in the operator log and returns it; a client must not present it as
-> something the run recorded.
+`note` is why this option and not which one. It does not reach the workflow, which branches on
+the option id alone, and it **does** reach the run's log as of #238: `human.answered` carries
+it beside the answer, so a client may show it as something the run recorded, because it is.
+Until then the daemon wrote it to the *operator's* log — a person's reasoning attached to
+whichever terminal the daemon was logging to, and to nothing that outlived the run.
 
 `INPUT_ANSWERED`, `INPUT_OPTION_UNKNOWN`, `RUN_NOT_WAITING`, `RUN_LEASED_ELSEWHERE`.
 

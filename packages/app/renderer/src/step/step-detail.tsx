@@ -25,6 +25,7 @@
 import { useCallback, useMemo, useRef, useState, type JSX, type RefObject } from "react";
 import { STATUS_PRESENTATION, type ConnectionState, type RunStatus } from "@orca/design";
 import type { ArtifactView, RunsGetResult, StepView } from "@orca/protocol";
+import { StepAsks } from "../attention/inline-asks.js";
 import { useArtifactPanel } from "../artifacts/panel-context.js";
 import { useArtifactsList } from "../artifacts/use-artifacts.js";
 import { Duration, StateView, StatusChip, Text, textClass } from "../ui/index.js";
@@ -124,6 +125,11 @@ function Step({
           {`${session.error.code}: ${session.error.message}`}
         </Text>
       )}
+
+      {/* Whatever this step is waiting on a person for, as the same card the Attention
+          list draws (#161). Nothing on most steps; on a parked one it is the reason the
+          run has stopped, so it sits above the artifacts rather than below the log. */}
+      <StepAsks runId={detail.run.id} stepRunId={step.id} />
 
       <StepArtifacts runId={detail.run.id} stepRunId={step.id} />
 
