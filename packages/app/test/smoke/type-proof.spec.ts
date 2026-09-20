@@ -225,8 +225,14 @@ async function clockIsNeutralised(): Promise<void> {
       "`ConnectionIndicator`'s markup has moved and the baselines below are about to start drifting by a " +
       "second a second. Fix `NO_CLOCK`; do not delete this check.",
   ).toBe(ticking);
-  expect(ticking, "`#type` drew no reconnecting or disconnected row, so this spec is looking at the wrong page").toBeGreaterThan(0);
-  expect(widths.filter((width) => width !== 0), "a ticking connection detail still occupies the picture").toEqual([]);
+  expect(
+    ticking,
+    "`#type` drew no reconnecting or disconnected row, so this spec is looking at the wrong page",
+  ).toBeGreaterThan(0);
+  expect(
+    widths.filter((width) => width !== 0),
+    "a ticking connection detail still occupies the picture",
+  ).toEqual([]);
 }
 
 /** The window showing the renderer, rather than whichever window opened first. */
