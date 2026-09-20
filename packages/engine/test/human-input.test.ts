@@ -223,6 +223,74 @@ edges: [{ from: s, to: child }, { from: child, to: e }]
     expect(await orchestrator.pendingInputs()).toEqual([]);
   });
 
+  it("carries a workflow's consequence clauses and destructive flag through to the answer", async () => {
+    // The authoring shape, widened by #247: what a gate *says*, not only what it offers.
+    const { orchestrator } = make([
+      `
+id: rich
+name: rich
+start: s
+nodes:
+  s: { type: start }
+  gate:
+    type: gate
+    question: "Ship it?"
+    options:
+      - id: ship
+        label: "Ship it"
+        consequence: "The release goes out to everyone."
+      - id: abandon
+        label: "Abandon the release"
+        consequence: "The run ends and the branch is left where it is."
+        destructive: true
+  shipped: { type: end }
+  gone: { type: end, outcome: failure }
+edges:
+  - { from: s, to: gate }
+  - { from: gate, to: shipped, when: "choice == 'ship'" }
+  - { from: gate, to: gone }
+`,
+    ]);
+    const parked = await orchestrator.startAndRun({ workflowId: "rich" });
+    const [request] = await orchestrator.pendingInputs(parked.run.id);
+    // Workflow -> `human.requested` -> what a card reads, with nothing dropped on the way.
+    expect(request!.options).toEqual([
+      { id: "ship", label: "Ship it", consequence: "The release goes out to everyone." },
+      {
+        id: "abandon",
+        label: "Abandon the release",
+        consequence: "The run ends and the branch is left where it is.",
+        destructive: true,
+      },
+    ]);
+
+    // The answer is the id, and a label is never one: #161's safety properties are only
+    // real if the two cannot be confused.
+    await expect(orchestrator.answer(request!.id, "Ship it")).rejects.toThrow(/not one of: ship, abandon/);
+    await orchestrator.answer(request!.id, "ship");
+    const done = await orchestrator.resume(parked.run.id);
+    expect(done.run.outcome).toBe("success");
+    // The edge compares the id too, so `when: choice == 'ship'` routed it.
+    expect(nodes(done)).toEqual(["s:completed", "gate:cancelled", "gate:completed", "shipped:completed"]);
+  });
+
+  it("does exactly what it did before when the options are bare words (#247's compatibility claim)", async () => {
+    // GATED declares `options: [ship, hold]`. Nothing about that workflow changes: the words
+    // are the ids, the answer is the word, and the edge still routes on it.
+    const { orchestrator } = make([GATED]);
+    const parked = await orchestrator.startAndRun({ workflowId: "gated" });
+    const [request] = await orchestrator.pendingInputs(parked.run.id);
+    expect(request!.options).toEqual([
+      { id: "ship", label: "ship" },
+      { id: "hold", label: "hold" },
+    ]);
+    // No consequence and no flag invented for an author who wrote neither.
+    expect(request!.options.every((o) => o.consequence === undefined && o.destructive === undefined)).toBe(true);
+    await orchestrator.answer(request!.id, "hold");
+    const done = await orchestrator.resume(parked.run.id);
+    expect(done.run.outcome).toBe("failure");
+  });
+
   it("cancels agent permission asks instead of parking (the agent session cannot be resumed)", async () => {
     await expect(
       new PausingHumanInput().ask({

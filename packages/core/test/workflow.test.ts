@@ -35,7 +35,14 @@ describe("workflow definitions", () => {
           completion: { mode: "turn-end", maxFollowUps: 1, maxAttempts: 1 },
           vars: {},
         },
-        d: { type: "decision", source: { kind: "expression", expr: "a ==" }, options: ["yes"] },
+        // A `WorkflowDefinition` is the *parsed* shape, so the options are already the
+        // objects `GateOptionSchema` produces - a bare "yes" in the YAML is what becomes
+        // this (#247).
+        d: {
+          type: "decision",
+          source: { kind: "expression", expr: "a ==" },
+          options: [{ id: "yes", label: "yes" }],
+        },
         orphan: { type: "set", vars: {} },
         end: { type: "end", outcome: "success" },
       },

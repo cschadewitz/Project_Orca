@@ -174,7 +174,9 @@ function validateNode(
         const m = checkExpression(s.expr);
         if (m) err(m, ".source.expr");
       } else if (s.kind === "agent") checkAgentPrompt(s, ".source");
-      if (n.defaultOption && !n.options.includes(n.defaultOption))
+      // Options are `{ id, label, ... }` since #247, and `defaultOption` names an id - the
+      // same thing an edge's `when: choice == '...'` compares, not the words on the button.
+      if (n.defaultOption && !n.options.some((o) => o.id === n.defaultOption))
         err("defaultOption must be one of options", ".defaultOption");
       break;
     }
@@ -182,7 +184,9 @@ function validateNode(
       if (n.autoApproveWhen) {
         const m = checkExpression(n.autoApproveWhen);
         if (m) err(m, ".autoApproveWhen");
-        if (n.autoOption && !n.options.includes(n.autoOption)) err("autoOption must be one of options", ".autoOption");
+        // An id, for the same reason `defaultOption` is one.
+        if (n.autoOption && !n.options.some((o) => o.id === n.autoOption))
+          err("autoOption must be one of options", ".autoOption");
       }
       break;
     case "set":
