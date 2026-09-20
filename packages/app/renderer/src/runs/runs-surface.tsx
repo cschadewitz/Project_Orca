@@ -7,8 +7,13 @@
  * parentage, and a row says the five things that let a person pick one out: status, name,
  * the workflow that produced it, how long it has taken, and the agent doing the work.
  *
- * Three decisions worth knowing before changing anything here:
+ * Four decisions worth knowing before changing anything here:
  *
+ * - **The list is a window.** Rows come from `VirtualList` (`renderer/src/list`), which
+ *   renders the band a person can see and stands in for the rest with two spacer heights,
+ *   so a store with fifty thousand runs in it is still a few dozen elements. The substrate
+ *   owns the row element, the selection keys, the scrolling and the status gutter; this
+ *   file owns what a row says.
  * - **The filter is a filter, not a search.** The IA rules out a global search screen and
  *   puts the finding of things in the palette and in per-surface filter fields. The status
  *   half is a `runs.list` parameter, so the daemon applies it across the whole store; the
@@ -20,10 +25,11 @@
  *   three and a placeholder is worse than their absence (docs/design/RULES.md rule 12,
  *   docs/design/60-implementation.md). Elapsed time is what the row shows instead.
  */
-import { useEffect, useMemo, useState, type JSX } from "react";
+import { useMemo, useState, type JSX } from "react";
 import { CHROME_GLYPHS, STATUS_PRESENTATION, type ConnectionState, type RunStatus } from "@orca/design";
 import { DISPLAY_STATUSES, type RunSummaryView } from "@orca/protocol";
 import { scopeProps } from "../keyboard-map.js";
+import { VirtualList, type MinimapKind, type VirtualListTick } from "../list/index.js";
 import { Duration, Menu, StateView, StatusChip, Text, textClass, type MenuItem } from "../ui/index.js";
 import { matchesText } from "./run-rows.js";
 import { useRunSelection } from "./use-run-selection.js";
@@ -40,6 +46,17 @@ const rowId = (runId: string): string => `run-row-${runId}`;
 
 /** A stable empty page, so `visible` is not recomputed on every render before the data lands. */
 const EMPTY: readonly RunSummaryView[] = [];
+
+/**
+ * The three statuses the minimap gutter has a colour for, and what a person scrolling a
+ * long list is looking for: a failure, a run asking for them, a run that cannot proceed.
+ * The other five are on their rows and nowhere else.
+ */
+const TICK_KINDS: Readonly<Record<string, MinimapKind>> = {
+  failed: "failed",
+  waiting: "waiting",
+  blocked: "blocked",
+};
 
 /** "All statuses" plus the eight, in the design system's order. */
 const STATUS_ITEMS: readonly MenuItem[] = [
@@ -64,17 +81,20 @@ export function RunsSurface({ connection }: RunsSurfaceProps): JSX.Element {
   const runs = state.phase === "ready" ? state.runs : EMPTY;
   const visible = useMemo(() => runs.filter((run) => matchesText(run, text)), [runs, text]);
   const ids = useMemo(() => visible.map((run) => run.id), [visible]);
-  const { selectedId, select } = useRunSelection(ids);
+  const { selectedIndex, selectAt } = useRunSelection(ids);
 
-  /* Keep the selected row on screen when a key moved the selection rather than the mouse.
-     `block: "nearest"` so a row already visible does not scroll under the person's eyes. */
-  useEffect(() => {
-    if (selectedId === undefined) return;
-    const row = document.getElementById(rowId(selectedId));
-    // happy-dom has no layout and no `scrollIntoView`; the guard keeps the tests honest
-    // about what they are asserting rather than making them stub a DOM method.
-    if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
-  }, [selectedId]);
+  /* The gutter marks the whole list, not the rendered window — that is what it is for. It
+     is recomputed with the list rather than per frame: on a store of any size this is the
+     one pass over every run the surface makes. */
+  const ticks = useMemo<VirtualListTick[]>(
+    () =>
+      visible.flatMap((run, index) => {
+        const kind = TICK_KINDS[run.status];
+        if (!kind) return [];
+        return [{ index, kind, label: `${run.name}, ${STATUS_PRESENTATION[run.status].word}` }];
+      }),
+    [visible],
+  );
 
   const live = connection === "live";
   const filtered = status !== "all" || text.trim() !== "";
@@ -126,11 +146,12 @@ export function RunsSurface({ connection }: RunsSurfaceProps): JSX.Element {
       <Body
         state={state}
         visible={visible}
-        selectedId={selectedId}
+        selectedIndex={selectedIndex}
+        ticks={ticks}
         live={live}
         filtered={filtered}
         connection={connection}
-        onSelect={select}
+        onSelect={selectAt}
         onRetry={reload}
         onClearFilter={() => {
           setText("");
@@ -144,18 +165,19 @@ export function RunsSurface({ connection }: RunsSurfaceProps): JSX.Element {
 interface BodyProps {
   state: ReturnType<typeof useRuns>["state"];
   visible: readonly RunSummaryView[];
-  selectedId: string | undefined;
+  selectedIndex: number | undefined;
+  ticks: readonly VirtualListTick[];
   live: boolean;
   filtered: boolean;
   connection: ConnectionState;
-  onSelect: (id: string) => void;
+  onSelect: (index: number) => void;
   onRetry: () => void;
   onClearFilter: () => void;
 }
 
 /** The list, or the one state view that stands in for it. */
 function Body(props: BodyProps): JSX.Element {
-  const { state, visible, selectedId, live, filtered, connection, onSelect, onRetry, onClearFilter } = props;
+  const { state, visible, selectedIndex, ticks, live, filtered, connection, onSelect, onRetry, onClearFilter } = props;
 
   if (state.phase === "loading") return <StateView kind="loading" title="Loading runs" />;
 
@@ -196,37 +218,53 @@ function Body(props: BodyProps): JSX.Element {
   }
 
   return (
-    <div
+    <VirtualList
       className="orca-runs__list"
-      role="listbox"
-      aria-label="Runs"
-      tabIndex={0}
-      {...(selectedId !== undefined ? { "aria-activedescendant": rowId(selectedId) } : {})}
-    >
-      {visible.map((run) => (
-        <RunRow key={run.id} run={run} selected={run.id === selectedId} live={live} onSelect={onSelect} />
-      ))}
-    </div>
+      label="Runs"
+      noun="run"
+      items={visible}
+      ticks={ticks}
+      rowId={(run) => rowId(run.id)}
+      rowClassName={rowClassName}
+      renderRow={(run) => <RunRow run={run} live={live} />}
+      selectedIndex={selectedIndex}
+      onSelect={onSelect}
+    />
   );
 }
 
+/**
+ * The system's row, and its selected modifier — but not its status modifiers. In
+ * components.css `--running`, `--waiting` and `--failed` are declared *after* `--selected`
+ * at the same specificity and all four set the same left rail, so a selected failed row
+ * would draw a red rail and nothing on screen would say what is selected. The rail is
+ * selection's (accent, rule 5) and status is the chip's (glyph, word, colour third, rules
+ * 3 and 4), which is the reading the accessibility doc's selection paragraph takes. The
+ * run tree will have to settle the same question when it arrives.
+ *
+ * It is a function the substrate calls rather than a class on the markup below, because the
+ * row *element* — its id, its `option` role, its `aria-selected` and its click — is the
+ * substrate's, and its height comes from the `.orca-tree-row` named here.
+ */
+const rowClassName = (_run: RunSummaryView, _index: number, selected: boolean): string =>
+  ["orca-tree-row", "orca-tree-row--run", selected ? "orca-tree-row--selected" : ""].filter(Boolean).join(" ");
+
 interface RunRowProps {
   run: RunSummaryView;
-  selected: boolean;
   live: boolean;
-  onSelect: (id: string) => void;
 }
 
 /**
- * One run as a row. The status chip is first in the DOM as well as on screen, so the row's
- * accessible name starts with the status word — "failed, SSO rollout, nightly v1"
+ * What one run says, inside the row `VirtualList` draws around it. The status chip is
+ * first in the DOM as well as on screen, so the row's accessible name starts with the
+ * status word — "failed, SSO rollout, nightly v1"
  * (docs/design/50-accessibility-and-keyboard.md).
  *
  * The row is an `option`, not a button: it is not focusable itself. Focus stays on the
  * listbox and `aria-activedescendant` names the selected row, which is what keeps one tab
- * stop over a list that may be thousands of rows long.
+ * stop over a list that may be fifty thousand rows long.
  */
-function RunRow({ run, selected, live, onSelect }: RunRowProps): JSX.Element {
+function RunRow({ run, live }: RunRowProps): JSX.Element {
   // `DisplayStatus` and the design system's `RunStatus` are the same eight words, pinned
   // against each other in packages/protocol/test — so no fold and no cast here.
   const status: RunStatus = run.status;
@@ -234,25 +272,8 @@ function RunRow({ run, selected, live, onSelect }: RunRowProps): JSX.Element {
      clock: a duration accruing against a daemon that is not talking is an invented number. */
   const accruing = live && run.finishedAt === undefined && run.startedAt !== undefined;
 
-  /* The system's row, and its selected modifier — but not its status modifiers. In
-     components.css `--running`, `--waiting` and `--failed` are declared *after* `--selected`
-     at the same specificity and all four set the same left rail, so a selected failed row
-     would draw a red rail and nothing on screen would say what is selected. The rail is
-     selection's (accent, rule 5) and status is the chip's (glyph, word, colour third, rules
-     3 and 4), which is the reading the accessibility doc's selection paragraph takes. The
-     run tree will have to settle the same question when it arrives. */
-  const className = ["orca-tree-row", "orca-tree-row--run", selected ? "orca-tree-row--selected" : ""]
-    .filter(Boolean)
-    .join(" ");
-
   return (
-    <div
-      id={rowId(run.id)}
-      className={className}
-      role="option"
-      aria-selected={selected}
-      onClick={() => onSelect(run.id)}
-    >
+    <>
       <StatusChip status={status} className="orca-runs__chip" />
       <span className={`orca-tree-row__name ${textClass("mono-strong")} orca-runs__name`}>{run.name}</span>
       <span className={`orca-tree-row__meta ${textClass("caption")}`}>
@@ -263,7 +284,7 @@ function RunRow({ run, selected, live, onSelect }: RunRowProps): JSX.Element {
         <RunDuration run={run} accruing={accruing} stale={!live} />
         <span className={`orca-id ${textClass("mono-id")} orca-runs__agent`}>{run.agentId ?? ""}</span>
       </span>
-    </div>
+    </>
   );
 }
 

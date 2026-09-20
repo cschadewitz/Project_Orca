@@ -151,8 +151,14 @@ class UpdateRecorder {
   constructor(
     private readonly ctx: StepContext,
     private readonly sessionId: string,
+    private readonly agentId: string,
   ) {}
   handle = (e: SessionUpdateEvent): void => {
+    // Anything at all over this session is the agent alive, so `lastSeenAt` moves here and
+    // not at the handshake. A pooled per-run session hands out one handshake and then talks
+    // for as long as the run does (#227); it is one map write, on the coalescing path rather
+    // than per chunk, and it notifies nobody - see `AgentHealthTracker.touch`.
+    this.ctx.agents.health.touch(this.agentId);
     const s = e.summary;
     if (s.kind === "agent_message_chunk" || s.kind === "agent_thought_chunk") {
       if (this.bufferKind && this.bufferKind !== s.kind) void this.flush();
@@ -253,7 +259,7 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
 
   await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "agent-turn" } });
   const { session, release } = await ctx.openSession(spec.agent);
-  const recorder = new UpdateRecorder(ctx, session.id);
+  const recorder = new UpdateRecorder(ctx, session.id, session.agentId);
   const unsubscribe = session.onUpdate(recorder.handle);
   const { agent } = ctx.agents.resolve(spec.agent);
   const timeoutMs = spec.completion.timeoutMs ?? agent.turnTimeoutMs;

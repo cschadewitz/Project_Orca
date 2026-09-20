@@ -80,7 +80,14 @@ describe("handshake health per agent", () => {
     const state = await orchestrator.startAndRun({ workflowId: "health" });
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(agents.listHealth()).toEqual([
-      { agentId: "fake", state: "ok", lastContact: clock.isoNow(), roundTripMs: HANDSHAKE_MS, consecutiveFailures: 0 },
+      {
+        agentId: "fake",
+        state: "ok",
+        lastContact: clock.isoNow(),
+        lastSeenAt: clock.isoNow(),
+        roundTripMs: HANDSHAKE_MS,
+        consecutiveFailures: 0,
+      },
     ]);
   });
 

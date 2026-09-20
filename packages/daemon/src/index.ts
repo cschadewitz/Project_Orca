@@ -2,10 +2,18 @@
  * @orca/daemon - the long-lived `orca serve` process. Exposes the orchestrator over the
  * wire contract in `@orca/protocol` so several clients (the desktop app, a CLI in client
  * mode, an editor integration) can watch and steer the same runs. Today: the transport, the
- * method table, the handshake, the read methods over a store and the WebSocket endpoint that
- * pushes run, step, agent and input notifications; writes land as the app needs them.
+ * method table, the handshake, the read methods over a store, the WebSocket endpoint that
+ * pushes run, step, agent and input notifications, and - as of v0.4.0 - the four methods
+ * that write.
+ *
+ * Writing makes the daemon one of the interpreters rather than a spectator of them, which
+ * is a real change of role: it takes a run's single-writer lease before it appends, exactly
+ * as a CLI does, and refuses a run another live process holds (ADR 0008, #101). `orca serve
+ * --read-only` leaves the whole of it out.
  */
 export * from "./read-model.js";
+export * from "./control.js";
+export * from "./agent-model.js";
 export * from "./methods.js";
 export * from "./notifications.js";
 export * from "./subscriptions.js";

@@ -15,6 +15,7 @@
     "dist"
   ],
   "dependencies": {
+    "@orca/agents": "workspace:*",
     "@orca/core": "workspace:*",
     "@orca/engine": "workspace:*",
     "@orca/protocol": "workspace:*",
@@ -23,7 +24,6 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@orca/agents": "workspace:*",
     "@types/ws": "^8.18.1"
   }
 }

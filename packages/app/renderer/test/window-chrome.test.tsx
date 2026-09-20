@@ -7,7 +7,7 @@
  * this covers what #148 itself needs to claim its "done when".
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { LIVE, harness, renderChrome as mountChrome, stubBridge, stubMatchMedia, type Harness } from "./harness.js";
 
 const teardown: (() => void)[] = [];
@@ -121,10 +121,19 @@ describe("window chrome", () => {
     expect(body().className).toContain("orca-body--panel");
   });
 
-  it("shows disconnected when the daemon handshake fails", async () => {
+  /* The connection is pushed now, not probed (#163): the state machine is in the main
+     process, so a chrome test says what it was told rather than arranging a failed
+     handshake and waiting for the renderer to draw a conclusion from it. */
+  it("shows disconnected when the main process says the daemon is gone", async () => {
     stubMatchMedia(1440);
-    stubBridge(() => Promise.resolve({ ok: false, error: { code: "AGENT_TRANSPORT", message: "no daemon" } }));
+    const fake = stubBridge(() => Promise.resolve(LIVE));
     renderChrome();
-    expect(await screen.findByText("disconnected")).toBeTruthy();
+    await screen.findByRole("button", { name: "Attention" });
+
+    act(() => fake.connect({ state: "disconnected", since: new Date().toISOString() }));
+
+    expect(screen.getByText("disconnected")).toBeTruthy();
+    // And the screen below it says so too, rather than only the status bar.
+    expect(document.querySelector(".orca-connrule")).not.toBeNull();
   });
 });

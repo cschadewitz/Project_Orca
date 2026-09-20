@@ -94,6 +94,9 @@ export function attachSocket(server: Server, opts: SocketOptions): () => Promise
             params: params.data,
             source: opts.source,
             send,
+            // Agent health lives on the context rather than on the source: it is not an
+            // event feed and a daemon can have one without the other.
+            ...(opts.ctx.agents ? { agents: opts.ctx.agents } : {}),
             ...(opts.batchMs === undefined ? {} : { batchMs: opts.batchMs }),
           });
           subscriptions.set(id, subscription);

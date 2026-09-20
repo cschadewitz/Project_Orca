@@ -43,8 +43,15 @@ transports, so tests use in‑memory stores and a scripted ACP agent.
 `hello` handshake, and the display read models the read methods answer with, including the
 one fold from the engine's statuses to the eight the design system draws
 (`packages/protocol/README.md`). `daemon` serves it over the network in front of the engine:
-it depends on `engine` and `store` to project them, and `cli` starts one with `orca serve`,
-read-only over the workspace's store. It has two transports on one port. `socket.ts`
+it depends on `engine` and `store` to project them, and `cli` starts one with `orca serve`.
+Since v0.4.0 that daemon is a **writer**, not a reader: it drives runs under a single‑writer
+lease of its own (`orca-serve@<host>:<pid>`), advertises the `runs.control` capability, and
+answers `inputs.answer`, `runs.resume`, `runs.cancel` and `runs.start` as well as the read
+methods. `orca serve --read-only` opts back out, and then those methods are *absent* from
+`hello.methods` rather than present and refusing — which is what makes "can this client
+write" a question about the handshake rather than about a failed call. The lease is the
+guard against a second writer; it is not access control, and any local process can reach the
+control methods on the loopback port (ADR 0008). It has two transports on one port. `socket.ts`
 upgrades `/socket` in `ws`'s `noServer` mode, so `/health` and `/rpc` still reach the HTTP
 handler untouched; a connection carries the ordinary method table plus `subscribe` /
 `unsubscribe`, whose state is the connection's. `subscriptions.ts` owns one client's stream

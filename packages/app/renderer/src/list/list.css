@@ -1,0 +1,58 @@
+/* What the list substrate adds on top of the design system's component layer, and no more.
+
+   Almost everything a virtual list draws already exists in components.css: the row is
+   `.orca-tree-row` (or whatever row class the surface passes), the gutter is
+   `.orca-minimap` with its three tick colours, and the sticky context header is
+   `.orca-pane__head--sticky`. What is left is the substrate's own geometry — a scroller
+   beside a gutter — plus the two things the component layer has no class for yet, each
+   written as a ratio to something already decided rather than as a value of its own:
+
+   - the tick as a *button*, because a tick you cannot click is a mark you have to go and
+     find by hand. `.orca-minimap__tick` gives it its place and colour; this strips the
+     border and padding a button comes with, and nothing else;
+   - the two-line row variant (docs/design/RULES.md rule 9: anything needing two lines is a
+     declared variant, not a row that grew). components.css has no such class today, so it
+     is declared here as exactly two `--row-h` — the bound height, doubled, never restated.
+
+   No height, colour or radius is written here: `--row-h` stays the one statement of a row's
+   height, which is what lets `row-height.ts` read it back out of the cascade. */
+
+.orca-list {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The element that scrolls, and so the element `--row-h` is read from and `clientHeight`
+   measured on. `overflow-anchor` off: the spacers above and below the window change height
+   on every scroll, and a browser trying to keep its own anchor in place would fight them. */
+.orca-list__scroller {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-anchor: none;
+}
+
+/* The rows themselves are the listbox: the sticky header is a sibling above it, so a
+   listbox's children stay options. The two spacers are its padding rather than two more
+   elements, for the same reason. */
+.orca-list__rows {
+  display: block;
+}
+
+.orca-list__tick {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+
+.orca-list--two-line .orca-list__row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  height: calc(var(--row-h) * 2);
+  min-height: calc(var(--row-h) * 2);
+}

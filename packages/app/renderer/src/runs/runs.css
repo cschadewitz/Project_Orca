@@ -48,10 +48,11 @@
 
 /* ---------- the list ---------- */
 
+/* The scrolling, the window and the status gutter belong to `VirtualList`
+   (renderer/src/list); what is left for the surface is where the list sits in this column. */
 .orca-runs__list {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
 }
 
 /* ---------- the columns of a row ---------- */

@@ -44,3 +44,27 @@ Blocking, once, with the two versions and what is likely to break, then a persis
 app stays readable because the event log format is the compatibility surface, but anything
 that requires an RPC the app cannot type-check is disabled and says why. Never attempt a
 partial degradation the person cannot see.
+
+## Where the implementation stands (#163)
+
+The machine is `packages/app/src/main/connection-state.ts` — the one place `SubscriptionState`,
+the `hello` result and a bundled daemon's exit are folded onto these five states. Four things
+above are not yet true, and are written here rather than approximated in code:
+
+- **Writes are not queued while reconnecting.** There is no outbox — that belongs with the
+  control methods — so a control says "the daemon is not answering; wait for the connection to
+  come back" rather than promise a send the app cannot make. The table's "will send on
+  reconnect" is the intent, not the behaviour.
+- **`reconnecting` has no give-up threshold.** `DaemonSubscription` retries forever with the
+  backoff capped at 5s, so today `disconnected` is reached only when a bundled daemon exits or
+  the stream is closed. Against an external `ORCA_DAEMON_URL` that dies, the status bar reads
+  "reconnecting… 4m" indefinitely. The design does not say when patience should end; picking a
+  number is a design decision, not an implementation detail, so none was invented.
+- **The event cursor is absent.** See `60-implementation.md`, "Event-sourced rendering".
+- **File mode is not implemented** and is never produced (#164).
+
+Two classes this spec needs do not exist in `components.css`: the 2px stale bar (`.orca-banner--stale`
+is a padded row with words in it — the wrong weight for a blip) and a generic blocking dialog
+(the only modal in the layer is `.orca-palette`, whose width and animation are about ⌘K). Both
+are written from tokens in `renderer/src/chrome/connection.css` until the component layer grows
+them; the second blocking dialog the design wants is the gate card, so it is worth doing.

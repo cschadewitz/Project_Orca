@@ -11,7 +11,14 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describeError } from "@orca/core";
-import { parseMessage, protocolError, socketUrlFor, type ProtocolError, type ResponseMessage } from "@orca/protocol";
+import {
+  isProtocolFault,
+  parseMessage,
+  protocolError,
+  socketUrlFor,
+  type ProtocolError,
+  type ResponseMessage,
+} from "@orca/protocol";
 import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
 import { attachSocket } from "./socket.js";
 
@@ -76,7 +83,10 @@ export async function dispatch(text: string, methods: MethodTable, ctx: MethodCo
   try {
     return { kind: "response", id: msg.id, ok: true, result: await method.handle(params.data, ctx) };
   } catch (e) {
-    return fail(msg.id, describeError(e));
+    // A `ProtocolFault` already *is* the error half of a response - it carries one of the
+    // protocol-only codes, which `describeError` (whose vocabulary is `OrcaErrorCode`) would
+    // flatten to `INTERNAL`. Everything else goes the way it always did.
+    return fail(msg.id, isProtocolFault(e) ? e.toJSON() : describeError(e));
   }
 }
 
@@ -88,6 +98,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     capabilities: opts.capabilities,
     reads: opts.reads,
     source: opts.source,
+    control: opts.control,
+    agents: opts.agents,
   };
   // A daemon without a store serves `hello` alone, and says so in `hello.methods`: a read
   // method it cannot answer is an unknown method, not a method that fails.

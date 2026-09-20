@@ -17,11 +17,12 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
-import type { BridgeResult } from "../bridge.js";
+import type { BridgeResult, ConnectionSnapshot } from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
 import type { DaemonSubscription } from "../client/subscription.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
+import { ConnectionMachine } from "./connection-state.js";
 import { findBundledDaemon, startBundledDaemon, type BundledDaemon } from "./daemon-process.js";
 
 /**
@@ -92,6 +93,29 @@ function broadcast(notification: NotificationMessage): void {
   }
 }
 
+/* ---------- the connection state ---------- */
+
+/**
+ * One connection state for the whole app, decided here because this is the only place that
+ * can see the socket, the bundled daemon's exit and the handshake at once (see
+ * `./connection-state.ts`). Built before `whenReady` so that a window opening at any moment
+ * has a state to read rather than a hole; `client` is read at call time, so the machine
+ * follows the reassignment `connectToADaemon` may make.
+ */
+const connection = new ConnectionMachine({
+  hello: () => client.hello(`orca-app/${app.getVersion()}`),
+  onChange: (snapshot) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send("orca:connection", snapshot);
+    }
+  },
+});
+
+// Synchronous, like `preferences.read`: the chrome draws the status bar on its first pass.
+ipcMain.on("orca:connection.read", (event) => {
+  event.returnValue = connection.current satisfies ConnectionSnapshot;
+});
+
 /* ---------- the bundled daemon ---------- */
 
 /**
@@ -122,8 +146,13 @@ async function connectToADaemon(): Promise<void> {
         entry,
         cwd: process.env.ORCA_WORKSPACE ?? app.getPath("home"),
         onLog: (line) => console.error(`[daemon] ${line}`),
-        onExit: (exit) =>
-          console.error(`the bundled daemon exited on its own (code ${exit.code}, signal ${exit.signal})`),
+        onExit: (exit) => {
+          console.error(`the bundled daemon exited on its own (code ${exit.code}, signal ${exit.signal})`);
+          // The socket will go on retrying, but a daemon this process started and then
+          // watched exit is not coming back on its own: that is `disconnected`, not
+          // `reconnecting`, and the difference is the whole of what the status bar says.
+          connection.daemonExited();
+        },
       });
       client = new DaemonClient(bundled.url);
     } catch (e) {
@@ -136,7 +165,14 @@ async function connectToADaemon(): Promise<void> {
   }
   notifications = client.subscribe({
     params: {},
-    onNotification: (n) => broadcast({ kind: "notification", method: n.method, params: n.params }),
+    onNotification: (n) => {
+      broadcast({ kind: "notification", method: n.method, params: n.params });
+      // The cursor the stream would resume from. A sequence number is per-run, so this
+      // store-wide subscription has none and the status bar shows no event number — see
+      // the note on `ConnectionMachine.sawCursor`.
+      connection.sawCursor(notifications?.lastSeq);
+    },
+    onState: (state) => connection.linkChanged(state),
   });
 }
 
@@ -227,6 +263,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   notifications?.close();
   notifications = undefined;
+  connection.close();
 });
 
 /**
