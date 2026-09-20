@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { parseOrcaConfig, silentLogger, type OrcaConfig } from "@orca/core";
+import { parseOrcaConfig, silentLogger, toGateOption, type OrcaConfig } from "@orca/core";
 import { GitWorktreeProvider, LocalWorkspaceProvider, PausingHumanInput } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { AgentRegistry, LocalHost } from "@orca/agents";
@@ -159,7 +159,7 @@ describe("makeHumanInput", () => {
         requestId: "hi",
         kind: "decision",
         question: "?",
-        options: ["ship"],
+        options: ["ship"].map(toGateOption),
         context: {},
       }),
     ).resolves.toBe("hold");

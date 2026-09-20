@@ -6,9 +6,17 @@
  * decision is about *without* a further call, because the design forbids offering an answer
  * the app could not show the basis for - so each entry carries its artifacts inline.
  *
- * One thing the design asks for and the model does not have: a consequence per option. The
- * engine's options are plain strings (`HumanInputRequest.options`), so that is what travels;
- * a client renders the strings and does not invent explanations for them.
+ * One thing the design asks for and this wire does not carry yet: a consequence per option.
+ * The *model* has it as of #220 - `HumanInputRequest.options` is now
+ * `{ id, label, consequence?, destructive? }` - but `options` here and on
+ * `input.opened` are still `string[]`, and the daemon sends the **id** down them, because the
+ * id is what `inputs.answer` must receive. So a client can answer correctly and cannot yet
+ * render a label, a consequence clause or the destructive flag, and must not invent them.
+ *
+ * Widening these two to carry the whole `GateOption` (exported from `@orca/core/schemas`) is
+ * a one-line swap each and is what #161 needs before the attention surface can be built - it
+ * requires both the consequence clause and the destructive flag, and the latter is a safety
+ * property, not a decoration.
  */
 import { z } from "zod";
 import { ArtifactViewSchema, WorkItemViewSchema } from "./views.js";

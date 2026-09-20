@@ -1,5 +1,12 @@
 /** Human-readable rendering of events and run state for the terminal. */
-import { pendingHumanInputs, type HumanInputRequest, type OrcaEvent, type RunState } from "@orca/core";
+import {
+  pendingHumanInputs,
+  toGateOption,
+  type GateOptionInput,
+  type HumanInputRequest,
+  type OrcaEvent,
+  type RunState,
+} from "@orca/core";
 
 export function formatEvent(e: OrcaEvent): string {
   const t = e.at.slice(11, 19);
@@ -56,7 +63,7 @@ export function formatEvent(e: OrcaEvent): string {
     case "decision.resolved":
       return `${t}     decision: ${String(p.choice)} (${String(p.source)})`;
     case "human.requested":
-      return `${t}     ? ${String(p.question)} [${(p.options as string[]).join(" | ")}]`;
+      return `${t}     ? ${String(p.question)} [${optionLabels(p.options).join(" | ")}]`;
     case "human.answered":
       return `${t}     ! answered: ${String(p.answer)}`;
     case "child.spawned":
@@ -114,8 +121,17 @@ export function formatRunState(s: RunState): string {
   return lines.join("\n");
 }
 
+/**
+ * What a person reads. `formatEvent` is handed raw payloads, which on a log
+ * written before v0.4.0 are bare strings; `toGateOption` is the one place that
+ * knows a string is its own label.
+ */
+function optionLabels(options: unknown): string[] {
+  return Array.isArray(options) ? options.map((o) => toGateOption(o as GateOptionInput).label) : [];
+}
+
 export function formatPendingInput(h: HumanInputRequest): string {
-  return `${h.id}  run=${h.runId}  ${h.question} [${h.options.join(" | ")}]`;
+  return `${h.id}  run=${h.runId}  ${h.question} [${h.options.map((o) => o.label).join(" | ")}]`;
 }
 
 /** What a user sees when a run parks at a human gate: the open questions (across the run tree) and how to answer them. */
@@ -124,7 +140,8 @@ export function formatPaused(runId: string, pending: HumanInputRequest[]): strin
   for (const h of pending) lines.push(`  ${formatPendingInput(h)}`);
   const example = pending[0];
   lines.push(
-    `answer with: orca answer ${example?.id ?? "<requestId>"} ${example?.options.length ? `<${example.options.join("|")}>` : "<answer>"}   (records the answer and resumes the run)`,
+    // Ids, not labels: `orca answer` records what it is given, and the id is what a re-run compares against.
+    `answer with: orca answer ${example?.id ?? "<requestId>"} ${example?.options.length ? `<${example.options.map((o) => o.id).join("|")}>` : "<answer>"}   (records the answer and resumes the run)`,
   );
   return lines.join("\n");
 }

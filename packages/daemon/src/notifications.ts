@@ -119,7 +119,10 @@ export function notificationsFor(event: OrcaEvent, subscriptionId: string): Daem
         requestId: event.payload.requestId,
         kind: event.payload.kind,
         question: event.payload.question,
-        options: [...event.payload.options],
+        // `InputOpenedParams.options` is still `string[]` on the wire (@orca/protocol), so
+        // the id travels - it is what `inputs.answer` must send back. A client that needs
+        // the label or the consequence clause reads the request itself.
+        options: event.payload.options.map((o) => o.id),
       },
     });
   } else if (event.type === "human.answered") {

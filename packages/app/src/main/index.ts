@@ -1,8 +1,12 @@
 /**
  * Electron main process. Owns the daemon connection, the preferences file and the window;
- * the renderer only sees what the preload bridge exposes. The daemon URL comes from
- * `ORCA_DAEMON_URL` (default: the local `orca serve`); bundling and spawning a daemon inside
- * the app is the desktop-release step in docs/RELEASING.md.
+ * the renderer only sees what the preload bridge exposes.
+ *
+ * Which daemon, in order: `ORCA_DAEMON_URL` if it is set, then the daemon bundled inside a
+ * packaged app (`./daemon-process.ts`, spawned here and stopped on quit), then the default
+ * local `orca serve` — which is the development case, where a developer is running one in
+ * a terminal. This is the only file that knows all three; `daemon-process.ts` is Electron-
+ * free so that it can be tested as a plain module.
  *
  * The window loads the built renderer from `dist/renderer` unless `ORCA_RENDERER_URL` is
  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
@@ -18,14 +22,34 @@ import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/d
 import type { DaemonSubscription } from "../client/subscription.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
+import { findBundledDaemon, startBundledDaemon, type BundledDaemon } from "./daemon-process.js";
 
-const client = new DaemonClient(process.env.ORCA_DAEMON_URL ?? DEFAULT_DAEMON_URL);
+/**
+ * Reassigned once, by `connectToADaemon()`, when the app turns out to be talking to a
+ * daemon it started itself. Every bridge handler reads it at call time and waits for
+ * `daemonReady` first, so nothing below has to care which daemon it got.
+ */
+let client = new DaemonClient(process.env.ORCA_DAEMON_URL ?? DEFAULT_DAEMON_URL);
 const preferences = new PreferencesFile(join(app.getPath("userData"), "preferences.json"));
 
 /** The dev server's URL when `scripts/dev.js` started one; undefined in a packaged app. */
 const rendererUrl = process.env.ORCA_RENDERER_URL;
 
 /* ---------- the daemon ---------- */
+
+/**
+ * Resolves once the app knows which daemon it is talking to — which, for a packaged build,
+ * means once the bundled daemon has answered `hello` on its port. The window is created
+ * without waiting for it, so the shell paints while the daemon starts; a call that arrives
+ * in that second or two waits here rather than going to the wrong URL and failing.
+ *
+ * It never rejects: `connectToADaemon` handles its own failure, because a daemon that would
+ * not start is a disconnected status bar, not a desktop app that refuses to open.
+ */
+let daemonReady: Promise<void> = Promise.resolve();
+
+/** The daemon this process started, if it started one. Undefined means nothing to stop. */
+let bundled: BundledDaemon | undefined;
 
 /**
  * Every bridge call answers rather than rejects: a rejection over the context bridge reaches
@@ -35,6 +59,7 @@ const rendererUrl = process.env.ORCA_RENDERER_URL;
 function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
   ipcMain.handle(channel, async (_event, params: P): Promise<BridgeResult<R>> => {
     try {
+      await daemonReady;
       return { ok: true, result: await run(params) };
     } catch (e) {
       if (e instanceof DaemonClientError) return { ok: false, error: e.error };
@@ -65,6 +90,54 @@ function broadcast(notification: NotificationMessage): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send("orca:notification", notification);
   }
+}
+
+/* ---------- the bundled daemon ---------- */
+
+/**
+ * Settle on a daemon and open the push stream to it. Called once, from `whenReady`.
+ *
+ * `ORCA_DAEMON_URL` wins outright: someone who points the app at a daemon on another
+ * machine, or at the one their terminal is running, has said what they want and starting a
+ * second one beside it would only confuse the question of which store is on screen.
+ *
+ * The workspace the bundled daemon serves is `ORCA_WORKSPACE`, or the user's home
+ * directory. Home is a placeholder with a known shape — `orca serve` reads `~/.orca` and
+ * answers an empty run list rather than failing — and choosing a workspace in the app is
+ * #164's. That issue changes the argument passed here, not the mechanism.
+ */
+async function connectToADaemon(): Promise<void> {
+  const explicit = process.env.ORCA_DAEMON_URL;
+  const entry = explicit
+    ? undefined
+    : findBundledDaemon([
+        // A packaged app: electron-builder's `extraResources`, beside `app.asar`.
+        process.resourcesPath,
+        // A build run from the repository: `dist/`, one level up from `dist/main`.
+        fileURLToPath(new URL("../", import.meta.url)),
+      ]);
+  if (entry) {
+    try {
+      bundled = await startBundledDaemon({
+        entry,
+        cwd: process.env.ORCA_WORKSPACE ?? app.getPath("home"),
+        onLog: (line) => console.error(`[daemon] ${line}`),
+        onExit: (exit) =>
+          console.error(`the bundled daemon exited on its own (code ${exit.code}, signal ${exit.signal})`),
+      });
+      client = new DaemonClient(bundled.url);
+    } catch (e) {
+      // The window still opens, on a status bar that reads disconnected. A desktop app
+      // that refuses to start because its daemon would not is a worse failure than one
+      // that shows you it has no daemon.
+      console.error(`the bundled daemon did not start; the app will look for one on ${client.url}`);
+      console.error(e instanceof Error ? e.message : String(e));
+    }
+  }
+  notifications = client.subscribe({
+    params: {},
+    onNotification: (n) => broadcast({ kind: "notification", method: n.method, params: n.params }),
+  });
 }
 
 ipcMain.on("orca:preferences.read", (event) => {
@@ -139,10 +212,7 @@ function createWindow(): void {
 
 void app.whenReady().then(() => {
   applyTheme(preferences.read().theme);
-  notifications = client.subscribe({
-    params: {},
-    onNotification: (n) => broadcast({ kind: "notification", method: n.method, params: n.params }),
-  });
+  daemonReady = connectToADaemon();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -157,4 +227,18 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   notifications?.close();
   notifications = undefined;
+});
+
+/**
+ * A daemon this process started has to die with it: an orphan holding a port is the thing
+ * a user notices the second time they launch the app. `will-quit` is the last event before
+ * the process goes, and stopping is asynchronous, so the first pass defers the quit and the
+ * second — after `bundled` is cleared — lets it through.
+ */
+app.on("will-quit", (event) => {
+  const daemon = bundled;
+  if (!daemon) return;
+  bundled = undefined;
+  event.preventDefault();
+  void daemon.stop().finally(() => app.quit());
 });

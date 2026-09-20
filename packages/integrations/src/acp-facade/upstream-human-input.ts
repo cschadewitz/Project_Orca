@@ -67,11 +67,16 @@ export class UpstreamHumanInput implements HumanInputPort {
   async ask(q: HumanInputQuery): Promise<string | undefined> {
     const t = await this.targetFor(q.runId);
     if (!t) return this.fallback?.ask(q);
-    const options: acp.PermissionOption[] = (q.options.length ? q.options : ["ok"]).map((o, i) => ({
-      optionId: o,
-      name: o,
-      kind: i === 0 ? "allow_once" : "reject_once",
-    }));
+    // `optionId` carries our option's id, so `res.outcome.optionId` comes straight back
+    // as the recorded answer; the consequence clause, when there is one, rides along in
+    // the name because ACP has nowhere else to put it.
+    const options: acp.PermissionOption[] = (q.options.length ? q.options : [{ id: "ok", label: "ok" }]).map(
+      (o, i) => ({
+        optionId: o.id,
+        name: o.consequence ? `${o.label} - ${o.consequence}` : o.label,
+        kind: i === 0 ? "allow_once" : "reject_once",
+      }),
+    );
     const toolCall: acp.ToolCallUpdate = {
       toolCallId: q.requestId,
       title: `[orca ${q.kind}] ${q.question}`,

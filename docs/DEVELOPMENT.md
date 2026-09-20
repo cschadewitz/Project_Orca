@@ -236,10 +236,17 @@ the fix is in the failure. For a value no token could sensibly name, an
 `/* orca-allow-literal: why */` comment suppresses the line it is on and the next; reaching
 for it twice for the same kind of value means a missing token, not a missing exemption.
 
-Known gap: `packages/design/css/components.css` is checked for colours and stacking order
-only. It still carries ~190 literal type sizes and box heights predating the check, which
-need a type-scale and control-height vocabulary `tokens.json` does not have yet. New code
-does not inherit that exemption — anything under `packages/app/renderer` is checked in full.
+`packages/design/css/components.css` is checked in full, the same as anything under
+`packages/app/renderer`. It used to be checked for colours and stacking order only, because it
+carried ~190 literal type sizes and box heights; #211 removed them. No rule there writes a type
+size any more — an element takes an `.orca-text-*` class, and each rule carries a
+`/* type: <style> */` note naming the class it expects.
+
+What remains is 49 box dimensions under `/* orca-allow-literal: … (#211) */` notes. Those are
+findings, not exemptions: sub-`control-sm` heights (18px and 20px, wanted eight times), chrome
+bar heights, decorative mark sizes, inline padding rungs between the space steps, and fixed
+grid tracks. Each names a family `tokens.json` does not have. Reaching for one of those
+literals a ninth time is the signal to add the family, not another note.
 
 Prettier runs at `printWidth: 120` and skips `*.md` and `templates/` (see
 `.prettierignore`): prose is wrapped by hand, and a prompt template's whitespace is

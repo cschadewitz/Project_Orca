@@ -369,7 +369,10 @@ export const EVENTS: Readonly<Record<string, readonly OrcaEvent[]>> = {
         requestId: "hi-1",
         kind: "decision",
         question: "Ship the rollout?",
-        options: ["approve", "hold"],
+        options: [
+          { id: "approve", label: "approve" },
+          { id: "hold", label: "hold" },
+        ],
         context: { artifact: "art-review" },
       },
     ],

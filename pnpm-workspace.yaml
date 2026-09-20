@@ -5,13 +5,17 @@ packages:
   - "tools/*"
 
 # pnpm runs no dependency lifecycle scripts by default. esbuild (pulled in by
-# tsx) needs its postinstall to place the platform binary; electron's postinstall
-# downloads the Electron binary (CI sets ELECTRON_SKIP_BINARY_DOWNLOAD=1, since it
-# never launches the app). Allow just those two. The IBM Plex packages (the font sources
-# tools/font-build subsets) ship a postinstall that reports to IBM's telemetry service; it is
-# denied explicitly rather than left to the default, so the answer is recorded here.
+# tsx, and declared by packages/app for the daemon bundle) needs its postinstall to place
+# the platform binary; electron's postinstall downloads the Electron binary (CI sets
+# ELECTRON_SKIP_BINARY_DOWNLOAD=1, since it never launches the app; .github/workflows/desktop.yml
+# deliberately does not, since packaging needs it). Allow just those two. The IBM Plex packages
+# (the font sources tools/font-build subsets) ship a postinstall that reports to IBM's telemetry
+# service; it is denied explicitly rather than left to the default, so the answer is recorded here.
+# electron-winstaller comes in with electron-builder and its postinstall fetches Squirrel.Windows;
+# the Windows artifact is an NSIS installer, so nothing ever asks it for a Squirrel package.
 allowBuilds:
   esbuild: true
   electron: true
   "@ibm/plex-sans": false
   "@ibm/plex-mono": false
+  electron-winstaller: false

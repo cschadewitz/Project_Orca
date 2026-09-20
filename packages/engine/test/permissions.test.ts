@@ -158,7 +158,11 @@ describe("ask permissions as human input", () => {
     const [a, b] = humanInput.list();
     expect(a!.requestId).not.toBe(b!.requestId);
     expect(a!.kind).toBe("permission");
-    expect(a!.options).toEqual(["allow", "deny"]);
+    // ACP's `optionId` becomes the id (what the agent is answered with), its `name` the label.
+    expect(a!.options).toEqual([
+      { id: "allow", label: "Allow" },
+      { id: "deny", label: "Deny" },
+    ]);
     expect(a!.context).toMatchObject({ toolCall: { toolCallId: "tool-1" } });
 
     // Both asks are visible on the run while pending, and the step is waiting on human input.

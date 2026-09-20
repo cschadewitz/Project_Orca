@@ -1,6 +1,7 @@
 /** Per-run routing of gates / `ask` permissions to the ACP session that owns the run. */
 import { describe, expect, it } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
+import { toGateOption } from "@orca/core";
 import type { HumanInputQuery } from "@orca/engine";
 import { UpstreamHumanInput, type UpstreamTarget } from "@orca/integrations";
 
@@ -21,7 +22,7 @@ const query = (runId: string, question: string): HumanInputQuery => ({
   requestId: `hi-${runId}`,
   kind: "decision",
   question,
-  options: ["ship", "hold"],
+  options: ["ship", "hold"].map(toGateOption),
   context: {},
 });
 

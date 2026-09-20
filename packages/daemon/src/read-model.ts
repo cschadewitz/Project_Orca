@@ -43,6 +43,11 @@ import type { WorkItemClaim } from "@orca/store";
 import {
   displayStatusForRun,
   displayStatusForStep,
+  isTextMediaType,
+  type ArtifactsGetParams,
+  type ArtifactsGetResult,
+  type ArtifactsListParams,
+  type ArtifactsListResult,
   type ArtifactView,
   type ChildRunView,
   type ClaimsListParams,
@@ -101,6 +106,19 @@ function artifactView(a: Artifact): ArtifactView {
     ...(a.path ? { path: a.path } : {}),
     ...(a.producedBy.stepRunId ? { producedByStepRunId: a.producedBy.stepRunId } : {}),
   };
+}
+
+/**
+ * The step run a log entry is about, when it is about one. Every step-scoped event carries
+ * `stepRunId` in its payload and no run-scoped event does, so this is the whole of the
+ * `runs.events` step filter - and a run-level event matching nothing is the right answer,
+ * not an omission.
+ */
+function stepRunIdOf(e: OrcaEvent): string | undefined {
+  const payload: unknown = e.payload;
+  if (!payload || typeof payload !== "object") return undefined;
+  const id = (payload as { stepRunId?: unknown }).stepRunId;
+  return typeof id === "string" ? id : undefined;
 }
 
 function workItemView(w: WorkItem): WorkItemView {
@@ -347,9 +365,18 @@ export class ReadModel {
     if (!all.length) throw new OrcaError("RUN_NOT_FOUND", `run ${params.runId} not found`, { runId: params.runId });
     const lastSeq = all[all.length - 1]!.seq;
     const types = params.types;
+    const stepRunId = params.stepRunId;
     // An unknown type matches nothing rather than failing: a newer client may ask for an
-    // event type this daemon's engine does not emit.
-    const matching = types?.length ? all.filter((e) => types.includes(e.type)) : all;
+    // event type this daemon's engine does not emit. The two filters are an AND, and both
+    // cut the log *before* it is paged, so the cursors below are cursors into the filtered
+    // sequence while staying the run's own sequence numbers.
+    const matching =
+      types?.length || stepRunId
+        ? all.filter(
+            (e) =>
+              (!types?.length || types.includes(e.type)) && (stepRunId === undefined || stepRunIdOf(e) === stepRunId),
+          )
+        : all;
 
     let page: OrcaEvent[];
     let hasMore: boolean;
@@ -405,6 +432,86 @@ export class ReadModel {
     const claims: ClaimView[] = [];
     for (const claim of held) claims.push(await this.claimView(pass, claim));
     return { claims, asOf: pass.asOf };
+  }
+
+  /**
+   * The artifact index, filtered: a run's artifacts, one name's versions, one step's
+   * output. Metadata only - a version list must not cost the bodies it lists.
+   */
+  async artifactsList(params: ArtifactsListParams): Promise<ArtifactsListResult> {
+    const asOf = this.clock.isoNow();
+    const found = await this.orc.stores.artifacts.list({
+      ...(params.runId ? { runId: params.runId } : {}),
+      ...(params.kind ? { kind: params.kind } : {}),
+      ...(params.name ? { name: params.name } : {}),
+    });
+    const rows = found
+      .filter((a) => !params.producedByStepRunId || a.producedBy.stepRunId === params.producedByStepRunId)
+      // Grouped by name, oldest version first: `version` is monotonic per (run, name), so
+      // this is the version list the panel steps through with `[` and `]`.
+      .sort((a, b) => a.name.localeCompare(b.name) || a.version - b.version || a.id.localeCompare(b.id));
+    return {
+      artifacts: rows.slice(params.offset, params.offset + params.limit).map(artifactView),
+      total: rows.length,
+      asOf,
+    };
+  }
+
+  /**
+   * One artifact, by id or by the (`runId`, `name`, `version?`) address a deep link carries,
+   * with its body when the body is text of a sane size. Declining is not an error: the panel
+   * still shows what the artifact *is*, and says why it is not showing what it says.
+   */
+  async artifactsGet(params: ArtifactsGetParams): Promise<ArtifactsGetResult> {
+    const asOf = this.clock.isoNow();
+    const store = this.orc.stores.artifacts;
+    let artifact: Artifact | undefined;
+    if (params.artifactId !== undefined) {
+      artifact = await store.get(params.artifactId);
+    } else {
+      const versions = await store.list({ runId: params.runId!, name: params.name! });
+      artifact =
+        params.version === undefined
+          ? versions.reduce<Artifact | undefined>(
+              (best, a) => (!best || a.version > best.version ? a : best),
+              undefined,
+            )
+          : versions.find((a) => a.version === params.version);
+    }
+    if (!artifact) {
+      const address =
+        params.artifactId !== undefined
+          ? params.artifactId
+          : `${params.name}${params.version === undefined ? "" : `@v${params.version}`} in run ${params.runId}`;
+      throw new OrcaError("ARTIFACT_MISSING", `artifact ${address} not found`, {
+        ...(params.artifactId === undefined
+          ? {
+              runId: params.runId,
+              name: params.name,
+              ...(params.version === undefined ? {} : { version: params.version }),
+            }
+          : { artifactId: params.artifactId }),
+      });
+    }
+    const view = artifactView(artifact);
+    if (!isTextMediaType(artifact.mediaType))
+      return {
+        artifact: view,
+        omitted: { reason: "binary", detail: `${artifact.mediaType} is not text; ${artifact.size} bytes in the store` },
+        asOf,
+      };
+    if (artifact.size > params.maxBytes)
+      return {
+        artifact: view,
+        omitted: {
+          reason: "tooLarge",
+          detail: `${artifact.size} bytes, past the ${params.maxBytes} this call asked for`,
+        },
+        asOf,
+      };
+    // `content` is the one read that touches a blob, and it raises ARTIFACT_MISSING itself
+    // when the index knows an artifact whose body is gone.
+    return { artifact: view, text: await store.content(artifact.id), asOf };
   }
 
   // ------------------------------------------------------------------ pieces
@@ -483,7 +590,10 @@ export class ReadModel {
       id: request.id,
       kind: request.kind,
       question: request.question,
-      options: [...request.options],
+      // `OpenInputView.options` is still `string[]` on the wire (@orca/protocol), so the id
+      // travels - it is what `inputs.answer` sends back. Widening the view to carry labels,
+      // consequence clauses and the destructive flag is the attention surface's work (#161).
+      options: request.options.map((o) => o.id),
       context: request.context,
       runId: request.runId,
       runName: name,

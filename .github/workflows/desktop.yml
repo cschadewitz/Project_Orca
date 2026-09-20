@@ -1,0 +1,209 @@
+# The two release artifacts, built on the platforms they run on: the desktop app, packaged
+# per platform by electron-builder, and the daemon it bundles.
+#
+# Separate from `ci.yml` on purpose, and for the same reason `app-smoke.yml` is: that
+# workflow sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and never launches the app, and putting a
+# three-runner Electron packaging matrix on every pull request would make the repository's
+# cheapest check its most expensive one. This workflow installs the Electron binary because
+# packaging is exactly what needs it.
+#
+# `release-publish.yml` calls it (`workflow_call`) against the merge commit it is about to
+# tag, then attaches what comes out to the GitHub release — so the daemon inside the desktop
+# artifact and the daemon beside it are one build of one commit, and their protocol versions
+# agree by construction rather than by review (docs/RELEASING.md).
+#
+# On a pull request it runs only when the packaging itself changes. The things that break
+# packaging are the packaging config, the spawn module, the build scripts and the dependency
+# graph; a change to a renderer component cannot, and `app-smoke.yml` already covers the app
+# running at all.
+name: Desktop
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to build. Defaults to whatever the caller checked out.
+        type: string
+        required: false
+      version:
+        description: The version to stamp into the artifacts. Defaults to the root package.json's.
+        type: string
+        required: false
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/desktop.yml"
+      - "packages/app/electron-builder.yml"
+      - "packages/app/package.json"
+      - "packages/app/scripts/**"
+      - "packages/app/src/main/**"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  # A pull request's older run is worth cancelling; a release's is not — `release-publish.yml`
+  # is waiting on it and there is nothing behind it to supersede it.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing is a fact about that platform, and the other two artifacts are
+      # still worth having in the run's output while it is being diagnosed.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+          - os: macos-latest
+            name: macos
+          - os: windows-latest
+            name: windows
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
+      # resolve the store path. Version comes from package.json packageManager.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v7
+        with:
+          # One version: this is about producing an artifact, not about Node support.
+          # `mise.toml` pins 24, so that is what a developer reproduces locally.
+          node-version: 24
+          cache: pnpm
+
+      # Deliberately *without* ELECTRON_SKIP_BINARY_DOWNLOAD, unlike every other workflow
+      # here: the Electron binary is what electron-builder packages.
+      - run: pnpm install --frozen-lockfile
+
+      # The version the release carries lives in the root package.json; the packages under
+      # packages/ all sit at 0.1.0 and never move (docs/RELEASING.md).
+      - name: The version to stamp
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          if [ -z "$version" ]; then version=$(node -p 'require("./package.json").version'); fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "packaging $version"
+
+      # `tsc -b` for main and preload, Vite for the renderer (docs/DEVELOPMENT.md).
+      - name: Build
+        run: pnpm run build
+
+      # One ESM file with the whole daemon inlined, from the CLI that was just built.
+      - name: Build the bundled daemon
+        run: pnpm --filter @orca/app run build:daemon
+
+      # The daemon artifact, proven to run on this platform before anything is packaged
+      # around it. A bundle that cannot start is the failure that would otherwise only show
+      # up as a desktop app whose status bar reads disconnected, on someone else's machine.
+      - name: The bundled daemon answers hello
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace=$(mktemp -d)
+          node packages/app/dist/daemon/orca-daemon.mjs --cwd "$workspace" serve --port 6799 &
+          daemon=$!
+          trap 'kill "$daemon" 2>/dev/null || true' EXIT
+          body='{"kind":"request","id":1,"method":"hello","params":{"client":"desktop-ci/0","protocol":{"major":1,"minor":0}}}'
+          for _ in $(seq 1 60); do
+            if curl -sS --fail -X POST http://127.0.0.1:6799/rpc \
+              -H 'content-type: application/json' -d "$body" -o hello.json; then
+              break
+            fi
+            sleep 1
+          done
+          cat hello.json
+          grep -q '"ok":true' hello.json
+
+      # electron-builder finds packages/app/electron-builder.yml by name; `-c.` overrides one
+      # value in it. `exec` rather than `run package` so that no stray `--` reaches yargs.
+      #
+      # `shell: bash` because the default on the Windows runner is PowerShell, which does not
+      # pass `-c.extraMetadata.version=<v>` through as one token. yargs then sees a bare `-c`
+      # and reads the rest as the *path to a config file*, so the job fails with
+      # `ENOENT: ... open '.extraMetadata.version=0.3.0'` — a packaging error that is really
+      # an argument-quoting one. bash is present on all three runners and parses it the same
+      # way everywhere, which is what this step wants.
+      - name: Package
+        shell: bash
+        run: pnpm --filter @orca/app exec electron-builder -c.extraMetadata.version=${{ steps.version.outputs.version }}
+
+      # The definition of done, as far as a runner can check it: launch the packaged app
+      # with no daemon running and nothing in `ORCA_DAEMON_URL`, and see the bundled daemon
+      # come up under it. The app forwards the daemon's own output (`onLog` in
+      # src/main/index.ts), so its listening line appearing in the app's log is the
+      # bundled daemon having been found, spawned and answered.
+      #
+      # Linux only: it is the one runner with a display server to fake and a process table
+      # to read. What the other two prove is that their artifact builds and that the daemon
+      # inside it runs, which is the part that differs per platform.
+      - name: The packaged app starts its own daemon
+        if: matrix.name == 'linux'
+        run: |
+          set -euo pipefail
+          # Chromium's sandbox needs unprivileged user namespaces, which Ubuntu restricts by
+          # default. Lifted rather than worked around: `--no-sandbox` would be testing the
+          # app in a configuration nobody ships. Same as app-smoke.yml.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          profile=$(mktemp -d)
+          xvfb-run -a packages/app/dist/release/linux-unpacked/orca \
+            --user-data-dir="$profile" > app.log 2>&1 &
+          app=$!
+          trap 'kill "$app" 2>/dev/null || true; pkill -f orca-daemon.mjs || true' EXIT
+          for _ in $(seq 1 60); do
+            if grep -q 'listening on http://127.0.0.1:' app.log; then break; fi
+            sleep 1
+          done
+          echo '--- the packaged app said ---'
+          cat app.log
+          grep -q 'listening on http://127.0.0.1:' app.log
+          pgrep -af orca-daemon.mjs
+
+      # The standalone daemon artifact, named for the release. Built once and taken from the
+      # Linux leg: it is one ESM file with no platform in it, and three identical copies on
+      # a release page would only raise the question of which one to take.
+      - name: Name the daemon artifact
+        if: matrix.name == 'linux'
+        shell: bash
+        run: cp packages/app/dist/daemon/orca-daemon.mjs "packages/app/dist/release/orca-daemon-${{ steps.version.outputs.version }}.mjs"
+
+      # Installers and archives only. electron-builder also leaves its unpacked directories
+      # and its `.blockmap` sidecars in there, and neither is something to hand a person.
+      - name: Upload the artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: desktop-${{ matrix.name }}
+          path: |
+            packages/app/dist/release/*.AppImage
+            packages/app/dist/release/*.tar.gz
+            packages/app/dist/release/*.dmg
+            packages/app/dist/release/*.zip
+            packages/app/dist/release/*.exe
+            packages/app/dist/release/*.mjs
+          if-no-files-found: error
+          retention-days: 14
+
+      # Whatever the packaging said, when it failed to say anything useful.
+      - name: Upload the packaging log
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: desktop-${{ matrix.name }}-logs
+          path: |
+            app.log
+            hello.json
+          if-no-files-found: ignore
+          retention-days: 14

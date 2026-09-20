@@ -110,13 +110,18 @@ that never started get a fresh child run.
 3. Open (or reuse, `sessionMode: per-run`) an **ACP session** on the agent's
    host. ORCA is the ACP *client*: it serves `fs/read_text_file`,
    `fs/write_text_file` from the host file system (scoped to the workspace) and
-   answers `session/request_permission` through the agent's permission policy.
+   answers `session/request_permission` through the agent's permission policy —
+   the rules configured on the agent first, then any the workspace sidecar has
+   recorded (ADR 0009), first match winning, so a configured `deny` can never be
+   undone by something a machine wrote.
    An `ask` decision becomes its own human‑input request (`human.requested` /
    `human.answered`, one `hi_*` id per ask), so several pending tool calls can be
    listed and answered independently.
 4. `session/prompt`. Session updates stream into the event log as
    `agent.update` (text chunks are coalesced; tool calls, plan entries and
    locations are kept as a compact `AgentUpdateSummary`, not the raw ACP payload).
+   A tool call's args and result travel with it, each capped at 2,000 characters
+   when the event is written and stored with the length it had before the cap.
 5. When the turn ends (`turn-end` mode) — or as soon as the files appear
    (`artifact-present` mode) — **collect**: read each promised file through the
    host FS, parse front matter, validate required fields / allowed values /
@@ -263,3 +268,4 @@ Recorded as ADRs in `docs/adr/`:
 - 0006 The plan as a persistent cross‑request dependency graph, scheduled live
 - 0007 Risks and decisions as plan entities fed by artifacts, computed by ORCA
 - 0008 Daemon, protocol package and desktop app in one workspace; the app sees only the protocol
+- 0009 "Allow always" writes to a workspace sidecar, layered under the configured rules

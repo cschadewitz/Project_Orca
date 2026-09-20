@@ -150,13 +150,50 @@ export const RunSummarySchema = RunSchema.pick({
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 
+/**
+ * One option a gate, a decision or an agent `ask` offers a person.
+ *
+ * `id` is the contract: it is what `human.answered.answer` carries and what a
+ * client sends back, so a label can be reworded - translated, shortened for a
+ * card, given a verb - without invalidating an answer already in a log. `label`
+ * is the words shown; `consequence` is the clause that says what choosing it
+ * does; `destructive` marks the one a UI must not make easy to hit by accident
+ * (docs/design/20-attention-and-gates.md).
+ */
+const GateOptionObjectSchema = z.object({
+  id: z.string().min(1),
+  label: z.string(),
+  consequence: z.string().optional(),
+  destructive: z.boolean().optional(),
+});
+export type GateOption = z.infer<typeof GateOptionObjectSchema>;
+
+/** What a caller may hand us: the full option, or the bare string that used to be one. */
+export type GateOptionInput = string | GateOption;
+
+/**
+ * The one place a bare string becomes an option. Before v0.4.0 options *were*
+ * strings, in the event log and in every caller, and a string answer was
+ * compared against them - so a string reads as an option that is its own id and
+ * its own label, which makes every answer ever recorded still match.
+ *
+ * `GateOptionSchema` applies this on read (an old `human.requested` line, an old
+ * `RunState` snapshot); emitters apply it on write, so nothing written from here
+ * on holds a bare string.
+ */
+export function toGateOption(option: GateOptionInput): GateOption {
+  return typeof option === "string" ? { id: option, label: option } : option;
+}
+
+export const GateOptionSchema = z.union([z.string().transform(toGateOption), GateOptionObjectSchema]);
+
 export const HumanInputRequestSchema = z.object({
   id: z.string(),
   runId: z.string(),
   stepRunId: z.string(),
   kind: z.enum(["decision", "permission", "question"]),
   question: z.string(),
-  options: z.array(z.string()).default([]),
+  options: z.array(GateOptionSchema).default([]),
   context: z.record(z.string(), z.unknown()).default({}),
   answer: z.string().optional(),
   requestedAt: z.string(),

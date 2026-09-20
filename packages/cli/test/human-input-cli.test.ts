@@ -5,6 +5,7 @@
  */
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { toGateOption } from "@orca/core";
 import type { HumanInputQuery } from "@orca/engine";
 import { cliHumanInput } from "../src/human-input-cli.js";
 
@@ -32,7 +33,7 @@ const query = (over: Partial<HumanInputQuery> = {}): HumanInputQuery => ({
   requestId: "hi_1",
   kind: "decision",
   question: "Ship it?",
-  options: ["ship", "hold"],
+  options: ["ship", "hold"].map(toGateOption),
   context: {},
   ...over,
 });

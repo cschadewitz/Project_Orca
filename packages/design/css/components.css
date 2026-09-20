@@ -1,13 +1,26 @@
 /* ORCA — reference implementation of the component library.
    Token-bound classes only: no hardcoded colour, size, radius or duration.
-   Every rule here compiles against tokens.css. */
+   Every rule here compiles against tokens.css.
+
+   No rule here writes a type size. The scale lives in tokens.json and reaches CSS as the
+   `.orca-text-*` classes tokens.css emits, so a style has one definition rather than two: a
+   component class carries the ground, the box, the weight and the track (sans or mono), and
+   the element it sits on also carries its type class. A `type:` note on a rule names the
+   class the caller adds — `type: label` means `orca-text-label` (issue 211). The two rules
+   that need a size without the rest of a style reference `--text-*-size`; a glyph sized as a
+   glyph references `--icon-*`.
+
+   An `orca-allow-literal` note marks a box dimension no token names yet. Each one is a
+   finding on issue 211 waiting on a token, not on a permanent exemption. */
 
 /* ---------- roots ---------- */
 
+/* The shell root is the one place that cannot take a type class: everything inside it
+   inherits from here, so the body style is referenced rather than composed. */
 .orca {
   font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line-height);
   color: var(--ink-primary);
   background: var(--surface-canvas);
   -webkit-font-smoothing: antialiased;
@@ -33,15 +46,14 @@
   border-radius: var(--radius-md);
   overflow: hidden;
 }
+/* type: label-strong */
 .orca-pane__head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: 34px;
+  height: 34px; /* orca-allow-literal: pane header bar height — no chrome-bar token (#211) */
   padding: 0 var(--space-3);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
-  font-size: 13px;
-  line-height: 18px;
   font-weight: 500;
   color: var(--ink-secondary);
   background: var(--surface-base);
@@ -59,11 +71,9 @@
 .orca-mono {
   font-family: var(--font-mono);
 }
+/* type: mono-id */
 .orca-id {
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 16px;
-  letter-spacing: 0.01em;
   color: var(--ink-secondary);
 }
 .orca-muted {
@@ -72,11 +82,8 @@
 .orca-faint {
   color: var(--ink-tertiary);
 }
+/* type: eyebrow */
 .orca-eyebrow {
-  font-size: 11px;
-  line-height: 14px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
@@ -98,27 +105,26 @@
 .orca :focus-visible,
 .orca-focus {
   outline: var(--stroke-focus) solid var(--border-focus);
-  outline-offset: 1px;
+  outline-offset: var(--stroke-hairline);
   border-radius: var(--radius-xs);
 }
 
 /* ---------- status chip ---------- */
 
+/* type: caption, at medium */
 .orca-chip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-0-5);
-  height: 18px;
-  padding: 0 6px;
+  height: 18px; /* orca-allow-literal: chip height — the control family starts at 24px (#211) */
+  padding: 0 6px; /* orca-allow-literal: chip inline padding, between space-1 and space-2 (#211) */
   border: var(--stroke-hairline) solid transparent;
   border-radius: var(--radius-xs);
-  font-size: 12px;
-  line-height: 16px;
   font-weight: 500;
   white-space: nowrap;
 }
 .orca-chip__glyph {
-  font-size: 11px;
+  font-size: var(--icon-sm);
   line-height: 1;
 }
 .orca-chip--running {
@@ -157,7 +163,7 @@
 }
 .orca-chip--cancelled .orca-chip__label {
   text-decoration: line-through;
-  text-decoration-thickness: 1px;
+  text-decoration-thickness: var(--stroke-hairline);
 }
 .orca-chip--plain {
   color: var(--ink-secondary);
@@ -165,13 +171,13 @@
   border-color: var(--border-control);
 }
 .orca-chip--glyph-only {
-  width: 18px;
+  width: 18px; /* orca-allow-literal: square on the chip height (#211) */
   padding: 0;
   justify-content: center;
 }
 
 .orca-dot {
-  width: 7px;
+  width: 7px; /* orca-allow-literal: the status dot is a mark, not a control (#211) */
   height: 7px;
   border-radius: var(--radius-full);
   display: inline-block;
@@ -214,20 +220,19 @@
 
 /* ---------- buttons, keys ---------- */
 
+/* type: label */
 .orca-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
   height: var(--control-md);
-  padding: 0 10px;
+  padding: 0 10px; /* orca-allow-literal: button inline padding, between space-2 and space-3 (#211) */
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-sm);
   background: var(--surface-base);
   color: var(--ink-primary);
   font: inherit;
-  font-size: 13px;
-  line-height: 18px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -242,10 +247,10 @@
   height: var(--control-lg);
   padding: 0 var(--space-3);
 }
+/* type: caption */
 .orca-btn--sm {
   height: var(--control-sm);
   padding: 0 var(--space-2);
-  font-size: 12px;
 }
 .orca-btn--primary {
   background: var(--accent);
@@ -279,17 +284,17 @@
   cursor: not-allowed;
 }
 
+/* type: mono-id */
 .orca-kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
+  min-width: 18px; /* orca-allow-literal: key cap sits on the chip height, below control-sm (#211) */
   height: 18px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-xs);
   font-family: var(--font-mono);
-  font-size: 11px;
   line-height: 1;
   color: var(--ink-secondary);
   background: var(--surface-base);
@@ -340,44 +345,46 @@
   align-items: center;
   justify-content: center;
   color: var(--ink-tertiary);
-  font-size: 10px;
+  font-size: var(--icon-sm);
 }
 .orca-tree-row__twisty--empty {
   visibility: hidden;
 }
+/* type: mono-strong */
 .orca-tree-row__name {
   font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 20px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* type: label */
 .orca-tree-row__note {
-  font-size: 13px;
   color: var(--ink-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* type: caption */
 .orca-tree-row__meta {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  font-size: 12px;
   color: var(--ink-secondary);
 }
+/* type: mono-id */
 .orca-tree-row__dur {
   font-family: var(--font-mono);
-  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+/* The guide down a nested subtree is a hairline border, not a box-drawing vertical: at
+   mono-log's line height `│` leaves a gap at every line boundary, so a glyph guide reads as
+   dashed (#212, docs/design/30-long-running-content.md). */
 .orca-tree-guide {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: var(--stroke-hairline);
-  background: var(--graph-edge);
+  width: 0;
+  border-left: var(--stroke-hairline) solid var(--graph-edge);
   opacity: 0.5;
 }
 .orca-tree-row--run .orca-tree-row__name {
@@ -390,7 +397,7 @@
 /* the status minimap in the scrollbar gutter */
 .orca-minimap {
   position: relative;
-  width: 4px;
+  width: var(--space-1);
   background: var(--surface-canvas);
   flex: none;
 }
@@ -398,7 +405,7 @@
   position: absolute;
   left: 0;
   right: 0;
-  height: 3px;
+  height: 3px; /* orca-allow-literal: minimap tick thickness — no mark-size token (#211) */
 }
 .orca-minimap__tick--failed {
   background: var(--status-failed);
@@ -418,10 +425,11 @@
 }
 .orca-timeline-entry {
   display: grid;
-  grid-template-columns: 76px 16px 1fr auto;
+  /* orca-allow-literal: the time column is sized to `00:00:00` and nothing names it (#211) */
+  grid-template-columns: 76px var(--icon-md) 1fr auto;
   align-items: baseline;
   gap: var(--space-2);
-  padding: 3px var(--space-3);
+  padding: 3px var(--space-3); /* orca-allow-literal: sub-grid vertical inset (#211) */
   border-left: var(--stroke-rail) solid transparent;
 }
 .orca-timeline-entry:hover {
@@ -431,29 +439,25 @@
   background: var(--surface-selected);
   border-left-color: var(--accent);
 }
+/* type: mono-id */
 .orca-timeline-entry__time {
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 18px;
   color: var(--ink-tertiary);
   font-variant-numeric: tabular-nums;
 }
 .orca-timeline-entry__marker {
-  font-size: 11px;
-  line-height: 18px;
+  font-size: var(--icon-sm);
   text-align: center;
 }
+/* type: label */
 .orca-timeline-entry__body {
-  font-size: 13px;
-  line-height: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* type: mono-id */
 .orca-timeline-entry__kind {
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 18px;
   color: var(--ink-tertiary);
 }
 .orca-timeline-entry--waiting {
@@ -466,38 +470,36 @@
 .orca-timeline-entry--running .orca-timeline-entry__marker {
   color: var(--status-running);
 }
-.orca-timeline-entry--succeeded .orca-timeline-entry__marker {
-  color: var(--status-succeeded);
-}
+/* type: caption */
+/* The seam either side of the label is a hairline border, not a run of `─` (#212). */
 .orca-timeline-rule {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-3);
-  font-size: 11px;
   color: var(--ink-tertiary);
 }
 .orca-timeline-rule::before,
 .orca-timeline-rule::after {
   content: "";
-  height: var(--stroke-hairline);
-  background: var(--border-hairline);
+  height: 0;
+  border-top: var(--stroke-hairline) solid var(--border-hairline);
   flex: 1;
 }
 
 /* ---------- agent output / log pane ---------- */
 
+/* type: mono-log */
 .orca-log {
   position: relative;
   background: var(--surface-sunken);
   border-radius: var(--radius-md);
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 18px;
   overflow: auto;
 }
 .orca-log__line {
   display: grid;
+  /* orca-allow-literal: the line-number gutter is sized to five digits (#211) */
   grid-template-columns: 44px 1fr;
   gap: var(--space-2);
   padding: 0 var(--space-3);
@@ -523,9 +525,9 @@
 }
 .orca-log__caret {
   display: inline-block;
-  width: 7px;
+  width: 7px; /* orca-allow-literal: the caret is cut to the mono-log cell, not a control (#211) */
   height: 13px;
-  vertical-align: -2px;
+  vertical-align: calc(-1 * var(--space-0-5));
   background: var(--status-running);
   animation: orca-blink var(--duration-pulse) var(--ease-linear) infinite;
 }
@@ -546,6 +548,7 @@
   padding: 0 var(--space-2);
   display: inline-block;
 }
+/* type: caption */
 .orca-jump {
   position: absolute;
   left: 50%;
@@ -562,7 +565,6 @@
   border-radius: var(--radius-full);
   box-shadow: var(--shadow-popover);
   font-family: var(--font-sans);
-  font-size: 12px;
   cursor: pointer;
 }
 
@@ -581,7 +583,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 26px;
+  min-height: 26px; /* orca-allow-literal: between control-sm and control-md (#211) */
   padding: var(--space-1) var(--space-2);
   cursor: default;
 }
@@ -594,36 +596,35 @@
   flex: none;
   color: var(--ink-tertiary);
 }
+/* type: mono-strong */
 .orca-tool__name {
   font-family: var(--font-mono);
-  font-size: 13px;
   font-weight: 500;
 }
+/* type: mono-id */
 .orca-tool__arg {
   font-family: var(--font-mono);
-  font-size: 12px;
   color: var(--ink-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
+/* type: caption */
 .orca-tool__meta {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 12px;
   color: var(--ink-tertiary);
   font-variant-numeric: tabular-nums;
 }
+/* type: mono-log */
 .orca-tool__body {
   border-top: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-sunken);
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 18px;
   white-space: pre-wrap;
 }
 .orca-tool--failed {
@@ -659,27 +660,21 @@
   border-color: var(--status-waiting);
   box-shadow: var(--shadow-popover);
 }
+/* type: eyebrow */
 .orca-card__eyebrow {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 11px;
-  line-height: 14px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--status-waiting);
   margin-bottom: var(--space-2);
 }
+/* type: body-strong */
 .orca-card__q {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 500;
   margin: 0 0 var(--space-1);
 }
+/* type: caption */
 .orca-card__sub {
-  font-size: 12px;
-  line-height: 16px;
   color: var(--ink-secondary);
   margin: 0 0 var(--space-3);
 }
@@ -689,17 +684,17 @@
   gap: var(--space-1);
   margin-bottom: var(--space-3);
 }
+/* type: mono-id */
 .orca-ref {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 20px;
+  height: 20px; /* orca-allow-literal: badge height, below control-sm (#211) */
   padding: 0 var(--space-2);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-xs);
   background: var(--surface-base);
   font-family: var(--font-mono);
-  font-size: 12px;
   color: var(--accent);
   cursor: pointer;
 }
@@ -709,15 +704,14 @@
   gap: var(--space-2);
   align-items: center;
 }
+/* type: caption */
 .orca-card__hint {
-  font-size: 12px;
   color: var(--ink-secondary);
   margin-top: var(--space-2);
 }
+/* type: mono-log */
 .orca-card__cmd {
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 18px;
   background: var(--surface-sunken);
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
@@ -745,25 +739,24 @@
 .orca-attn__row--failed {
   border-left-color: var(--status-failed);
 }
+/* type: mono-id */
 .orca-attn__age {
   font-family: var(--font-mono);
-  font-size: 12px;
   color: var(--ink-secondary);
   font-variant-numeric: tabular-nums;
 }
 
 /* ---------- schedule badge ---------- */
 
+/* type: caption, at medium */
 .orca-badge {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 20px;
+  height: 20px; /* orca-allow-literal: badge height, below control-sm (#211) */
   padding: 0 var(--space-2);
   border-radius: var(--radius-xs);
   border: var(--stroke-hairline) solid transparent;
-  font-size: 12px;
-  line-height: 16px;
   font-weight: 500;
 }
 .orca-badge--ready {
@@ -788,6 +781,7 @@
   border-color: var(--status-cancelled);
   border-style: dashed;
 }
+/* type: caption */
 .orca-badge__why {
   margin-left: var(--space-1);
   /* It is a <button>: it opens the explanation popover, it does not navigate. */
@@ -797,22 +791,21 @@
   font: inherit;
   color: var(--accent);
   cursor: pointer;
-  font-size: 11px;
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-underline-offset: var(--space-0-5);
 }
 
 /* ---------- tables ---------- */
 
+/* type: label */
 .orca-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
 }
+/* type: caption, at medium */
 .orca-table th {
   text-align: left;
   font-weight: 500;
-  font-size: 12px;
   color: var(--ink-secondary);
   padding: var(--space-2) var(--space-3);
   border-bottom: var(--stroke-hairline) solid var(--border-control);
@@ -846,7 +839,7 @@
   gap: var(--space-2);
 }
 .orca-matrix__bar {
-  height: 4px;
+  height: var(--space-1);
   border-radius: var(--radius-full);
   background: var(--graph-edge);
   display: inline-block;
@@ -854,8 +847,8 @@
 .orca-matrix__bar--win {
   background: var(--accent);
 }
+/* type: mono-id */
 .orca-matrix__w {
-  font-size: 11px;
   color: var(--ink-tertiary);
   font-family: var(--font-mono);
 }
@@ -866,8 +859,8 @@
   border-collapse: collapse;
   table-layout: fixed;
 }
+/* type: caption, at medium */
 .orca-risk th {
-  font-size: 11px;
   font-weight: 500;
   color: var(--ink-secondary);
   padding: var(--space-1) var(--space-2);
@@ -876,11 +869,11 @@
 }
 .orca-risk th.orca-risk__rowhead {
   text-align: right;
-  width: 108px;
+  width: 108px; /* orca-allow-literal: matrix axis label column (#211) */
 }
 .orca-risk td {
   border: var(--stroke-hairline) solid var(--surface-base);
-  height: 62px;
+  height: 62px; /* orca-allow-literal: the matrix cell is a fixed plot area, not a row (#211) */
   width: 92px;
   padding: var(--space-1);
   vertical-align: top;
@@ -897,26 +890,26 @@
 }
 .orca-risk__cell--severe {
   background: var(--risk-severe);
+  /* orca-allow-literal: hatch period and stripe width — no hatch geometry token (#211) */
   background-image: repeating-linear-gradient(45deg, transparent 0 5px, var(--surface-overlay) 5px 6px);
 }
+/* type: mono-id */
 .orca-risk__score {
   position: absolute;
-  top: 2px;
-  right: 4px;
+  top: var(--space-0-5);
+  right: var(--space-1);
   font-family: var(--font-mono);
-  font-size: 10px;
   color: var(--ink-secondary);
 }
+/* type: caption */
 .orca-risk__pin {
   display: block;
-  margin-bottom: 2px;
-  font-size: 11px;
-  line-height: 14px;
+  margin-bottom: var(--space-0-5);
   background: var(--surface-raised);
   color: var(--ink-primary);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-xs);
-  padding: 1px var(--space-1);
+  padding: var(--stroke-hairline) var(--space-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -924,7 +917,7 @@
 }
 .orca-risk__appetite {
   outline: var(--stroke-rail) solid var(--status-failed);
-  outline-offset: -2px;
+  outline-offset: calc(-1 * var(--space-0-5));
 }
 
 /* ---------- graph nodes (workflow + dependency) ---------- */
@@ -932,30 +925,29 @@
 .orca-node {
   display: inline-flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 132px;
+  gap: var(--space-0-5);
+  min-width: 132px; /* orca-allow-literal: graph node minimum width (#211) */
   padding: var(--space-2) var(--space-3);
   background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-md);
   text-align: left;
 }
+/* type: eyebrow */
 .orca-node__kind {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: 10px;
-  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
+/* type: mono-strong */
 .orca-node__name {
   font-family: var(--font-mono);
-  font-size: 13px;
   font-weight: 500;
 }
+/* type: caption */
 .orca-node__meta {
-  font-size: 11px;
   color: var(--ink-secondary);
 }
 .orca-node--start,
@@ -973,12 +965,13 @@
 }
 .orca-node--parallel {
   box-shadow:
+    /* orca-allow-literal: the stacked-sheet offset behind a parallel node (#211) */
     3px 3px 0 0 var(--surface-base),
-    3px 3px 0 1px var(--border-control);
+    /* orca-allow-literal: and the hairline edge of the sheet below it (#211) */ 3px 3px 0 1px var(--border-control);
 }
 .orca-node--subworkflow {
   border-style: double;
-  border-width: 3px;
+  border-width: 3px; /* orca-allow-literal: a double border needs three widths to draw (#211) */
 }
 .orca-node--loop {
   border-style: dashed;
@@ -1019,9 +1012,9 @@
   opacity: var(--opacity-untaken);
   stroke-dasharray: 3 3;
 }
+/* type: mono-id */
 .orca-edge__label {
   font-family: var(--font-mono);
-  font-size: 10px;
   fill: var(--ink-secondary);
 }
 
@@ -1058,13 +1051,13 @@
   border-color: var(--status-failed);
   background: var(--status-failed-bg);
 }
+/* type: mono-strong */
 .orca-agent__name {
   font-family: var(--font-mono);
-  font-size: 13px;
   font-weight: 500;
 }
+/* type: caption */
 .orca-agent__host {
-  font-size: 12px;
   color: var(--ink-secondary);
 }
 .orca-agent__roles {
@@ -1072,6 +1065,7 @@
   gap: var(--space-1);
   grid-column: 2 / -1;
 }
+/* type: caption */
 .orca-agent__claim {
   grid-column: 1 / -1;
   display: flex;
@@ -1079,12 +1073,11 @@
   gap: var(--space-2);
   border-top: var(--stroke-hairline) solid var(--border-hairline);
   padding-top: var(--space-2);
-  font-size: 12px;
   color: var(--ink-secondary);
 }
+/* type: mono-id */
 .orca-agent__metric {
   font-family: var(--font-mono);
-  font-size: 12px;
   color: var(--ink-secondary);
   font-variant-numeric: tabular-nums;
 }
@@ -1093,20 +1086,21 @@
 
 .orca-field {
   display: grid;
+  /* orca-allow-literal: the label column of a config form (#211) */
   grid-template-columns: 180px 1fr;
   gap: var(--space-3);
   align-items: start;
   padding: var(--space-3) 0;
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
+/* type: label-strong */
 .orca-field__label {
-  font-size: 13px;
   font-weight: 500;
-  padding-top: 5px;
+  padding-top: 5px; /* orca-allow-literal: optical alignment to the control beside it (#211) */
 }
+/* type: mono-id */
 .orca-field__path {
   font-family: var(--font-mono);
-  font-size: 11px;
   color: var(--ink-tertiary);
   display: block;
   font-weight: 400;
@@ -1117,6 +1111,7 @@
   gap: var(--space-1);
   min-width: 0;
 }
+/* type: mono-body */
 .orca-input {
   height: var(--control-md);
   padding: 0 var(--space-2);
@@ -1125,7 +1120,6 @@
   background: var(--surface-base);
   color: var(--ink-primary);
   font-family: var(--font-mono);
-  font-size: 13px;
 }
 .orca-input:hover {
   border-color: var(--border-strong);
@@ -1133,33 +1127,32 @@
 .orca-input--invalid {
   border-color: var(--status-failed);
 }
+/* type: caption */
 .orca-field__help {
-  font-size: 12px;
   color: var(--ink-secondary);
 }
+/* type: caption */
 .orca-field__error {
-  font-size: 12px;
   color: var(--status-failed);
 }
+/* type: mono-id */
 .orca-field__raw {
   align-self: start;
   font-family: var(--font-mono);
-  font-size: 11px;
   color: var(--accent);
   background: none;
   border: 0;
   cursor: pointer;
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-underline-offset: var(--space-0-5);
   padding: 0;
 }
+/* type: mono-log */
 .orca-yaml {
   background: var(--surface-sunken);
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 18px;
   white-space: pre;
   overflow-x: auto;
 }
@@ -1193,9 +1186,9 @@
   padding: var(--space-2) var(--space-3);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
+/* type: mono-strong */
 .orca-artifact__name {
   font-family: var(--font-mono);
-  font-size: 13px;
   font-weight: 500;
 }
 .orca-vers {
@@ -1205,14 +1198,14 @@
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
+/* type: mono-id */
 .orca-vers__btn {
-  height: 22px;
+  height: 22px; /* orca-allow-literal: inline segmented control, below control-sm (#211) */
   padding: 0 var(--space-2);
   border: 0;
   background: var(--surface-base);
   color: var(--ink-secondary);
   font-family: var(--font-mono);
-  font-size: 12px;
   cursor: pointer;
 }
 .orca-vers__btn + .orca-vers__btn {
@@ -1223,19 +1216,18 @@
   color: var(--accent);
   font-weight: 500;
 }
+/* type: caption */
 .orca-artifact__prov {
   padding: var(--space-2) var(--space-3);
-  font-size: 12px;
   color: var(--ink-secondary);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
 }
+/* type: mono-body */
 .orca-artifact__body {
   padding: var(--space-3);
   overflow: auto;
   font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 20px;
   max-width: var(--measure-prose);
 }
 .orca-diff__line {
@@ -1254,10 +1246,12 @@
 
 .orca-window {
   display: grid;
+  /* orca-allow-literal: title bar and status bar heights are not control heights (#211) */
   grid-template-rows: 36px 1fr 24px;
   height: 100%;
   background: var(--surface-canvas);
 }
+/* type: label */
 .orca-titlebar {
   display: flex;
   align-items: center;
@@ -1265,7 +1259,6 @@
   padding: 0 var(--space-3);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
-  font-size: 13px;
   /* The whole bar drags the window; interactive children opt back out with
      [data-app-region="no-drag"]. */
   -webkit-app-region: drag;
@@ -1279,25 +1272,26 @@
 .orca-titlebar[data-platform="win32"] {
   padding-right: var(--titlebar-inset-caption-buttons);
 }
+/* type: label-strong, over-weighted and tracked out for the brand mark */
 .orca-titlebar__brand {
   font-weight: 600;
   letter-spacing: 0.04em;
-  font-size: 13px;
 }
+/* type: caption, at medium */
 .orca-titlebar__attn {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 20px;
+  height: 20px; /* orca-allow-literal: badge height, below control-sm (#211) */
   padding: 0 var(--space-2);
   border-radius: var(--radius-xs);
   background: var(--status-waiting-bg);
   color: var(--status-waiting);
   border: var(--stroke-hairline) solid var(--status-waiting);
-  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
 }
+/* type: mono-id */
 .orca-statusbar {
   display: flex;
   align-items: center;
@@ -1306,7 +1300,6 @@
   border-top: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
   font-family: var(--font-mono);
-  font-size: 11px;
   color: var(--ink-secondary);
 }
 .orca-body {
@@ -1342,18 +1335,18 @@
   padding: var(--space-2);
   overflow: auto;
 }
+/* type: label */
 .orca-nav {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  height: 28px;
+  height: var(--control-md);
   padding: 0 var(--space-2);
   border: none;
   border-radius: var(--radius-sm);
   background: none;
   font: inherit;
-  font-size: 13px;
   text-align: left;
   color: var(--ink-secondary);
   cursor: default;
@@ -1380,10 +1373,10 @@
 .orca-body[data-sidebar="collapsed"] .orca-nav__count {
   display: none;
 }
+/* type: mono-id */
 .orca-nav__count {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 11px;
 }
 .orca-nav__count--waiting {
   color: var(--status-waiting);
@@ -1418,10 +1411,11 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: 40px;
+  height: 40px; /* orca-allow-literal: chrome bar height — no token names it (#211) */
   padding: 0 var(--space-4);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
+/* type: label */
 .orca-crumb {
   display: inline-flex;
   align-items: baseline;
@@ -1432,7 +1426,6 @@
   padding: 0;
   background: none;
   font: inherit;
-  font-size: 13px;
   color: var(--accent);
   cursor: pointer;
 }
@@ -1441,15 +1434,14 @@
   font-weight: 500;
   cursor: default;
 }
+/* type: eyebrow */
 .orca-crumb__type {
-  font-size: 10px;
-  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
+/* type: caption */
 .orca-crumb__sep {
   color: var(--ink-tertiary);
-  font-size: 12px;
 }
 /* The trail is an <ol>; the crumbs carry their own separators. */
 .orca-objhead__trail {
@@ -1474,7 +1466,7 @@
   background: none;
   padding: 0;
   font: inherit;
-  font-size: 10px;
+  font-size: var(--icon-sm);
   color: var(--ink-tertiary);
   cursor: pointer;
   line-height: 1;
@@ -1523,19 +1515,19 @@
   left: auto;
   right: 0;
 }
+/* type: label */
 .orca-menu__item {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  height: 28px;
+  height: var(--control-md);
   padding: 0 var(--space-2);
   border: 0;
   border-radius: var(--radius-xs);
   background: none;
   color: var(--ink-primary);
   font: inherit;
-  font-size: 13px;
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
@@ -1543,21 +1535,20 @@
 .orca-menu__item:hover {
   background: var(--surface-hover);
 }
+/* type: eyebrow */
 .orca-menu__type {
   margin-left: auto;
-  font-size: 10px;
-  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
 
 /* connection indicator */
+/* type: mono-id */
 .orca-conn {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   font-family: var(--font-mono);
-  font-size: 11px;
 }
 .orca-conn--live {
   color: var(--status-succeeded);
@@ -1572,12 +1563,12 @@
 .orca-conn--mismatch {
   color: var(--status-blocked);
 }
+/* type: caption */
 .orca-banner {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-4);
-  font-size: 12px;
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
 .orca-banner--stale {
@@ -1619,6 +1610,7 @@
   box-shadow: var(--shadow-modal);
   overflow: hidden;
 }
+/* type: body */
 .orca-palette__input {
   display: flex;
   align-items: center;
@@ -1631,7 +1623,6 @@
   border-radius: 0;
   background: none;
   font: inherit;
-  font-size: 14px;
   color: var(--ink-primary);
 }
 .orca-palette__input::placeholder {
@@ -1652,6 +1643,7 @@
 .orca-palette__group {
   padding: var(--space-2) var(--space-3) var(--space-1);
 }
+/* type: label */
 .orca-palette__row {
   display: flex;
   align-items: center;
@@ -1659,7 +1651,6 @@
   height: var(--control-md);
   padding: 0 var(--space-3);
   border-left: var(--stroke-rail) solid transparent;
-  font-size: 13px;
   color: var(--ink-primary);
   cursor: default;
 }
@@ -1682,9 +1673,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* type: caption */
 .orca-palette__detail {
   color: var(--ink-tertiary);
-  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1696,15 +1687,16 @@
   margin-left: auto;
   flex: none;
 }
+/* type: caption */
 .orca-palette__why {
   color: var(--ink-tertiary);
-  font-size: 11px;
 }
+/* type: caption */
 .orca-palette__note {
   padding: var(--space-1) var(--space-3) var(--space-2);
   color: var(--ink-tertiary);
-  font-size: 12px;
 }
+/* type: caption */
 .orca-palette__hint {
   display: flex;
   align-items: center;
@@ -1713,7 +1705,6 @@
   padding: 0 var(--space-3);
   border-top: var(--stroke-hairline) solid var(--border-hairline);
   color: var(--ink-tertiary);
-  font-size: 11px;
 }
 @keyframes orca-palette-enter {
   from {
@@ -1726,7 +1717,7 @@
 
 /* meters */
 .orca-meter {
-  height: 3px;
+  height: 3px; /* orca-allow-literal: meter track thickness — no mark-size token (#211) */
   border-radius: var(--radius-full);
   background: var(--border-hairline);
   overflow: hidden;
@@ -1736,7 +1727,7 @@
   width: 34%;
   background: var(--status-running);
   border-radius: var(--radius-full);
-  animation: orca-indet 1.8s var(--ease-standard) infinite;
+  animation: orca-indet var(--duration-pulse) var(--ease-standard) infinite;
 }
 @keyframes orca-indet {
   0% {
@@ -1758,16 +1749,18 @@
   padding: var(--space-12) var(--space-8);
   text-align: center;
 }
+/* A glyph, not a type style: it is set at the title size and nothing else about title
+   applies to it. */
 .orca-state__glyph {
-  font-size: 20px;
+  font-size: var(--text-title-size);
   color: var(--ink-tertiary);
 }
+/* type: heading */
 .orca-state__title {
-  font-size: 15px;
   font-weight: 600;
 }
+/* type: label */
 .orca-state__body {
-  font-size: 13px;
   color: var(--ink-secondary);
   max-width: 44ch;
 }
@@ -1788,7 +1781,7 @@
 .orca-skeleton {
   background: var(--border-hairline);
   border-radius: var(--radius-xs);
-  height: 10px;
+  height: 10px; /* orca-allow-literal: skeleton line thickness — no mark-size token (#211) */
   animation: orca-shimmer var(--duration-pulse) var(--ease-linear) infinite;
 }
 @keyframes orca-shimmer {
@@ -1809,7 +1802,7 @@
     transition: none !important;
   }
   .orca-dot--running {
-    box-shadow: 0 0 0 2px var(--status-running-bg);
+    box-shadow: 0 0 0 var(--stroke-rail) var(--status-running-bg);
   }
 }
 
@@ -1823,14 +1816,14 @@
   overflow: hidden;
   height: var(--control-md);
 }
+/* type: label */
 .orca-seg__btn {
   height: 100%;
-  padding: 0 10px;
+  padding: 0 10px; /* orca-allow-literal: button inline padding, between space-2 and space-3 (#211) */
   border: 0;
   background: var(--surface-base);
   color: var(--ink-secondary);
   font: inherit;
-  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1869,33 +1862,32 @@
   background: var(--surface-selected);
   border-left-color: var(--accent);
 }
+/* type: eyebrow */
 .orca-nodelist__type {
-  font-size: 10px;
-  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-tertiary);
-  width: 74px;
+  width: 74px; /* orca-allow-literal: node kind column (#211) */
   flex: none;
 }
+/* type: mono-strong */
 .orca-nodelist__name {
   font-family: var(--font-mono);
-  font-size: 13px;
   font-weight: 500;
 }
+/* type: caption */
 .orca-nodelist__meta {
   margin-left: auto;
-  font-size: 12px;
   color: var(--ink-secondary);
 }
 .orca-nodelist__grip {
   color: var(--ink-tertiary);
-  font-size: 11px;
+  font-size: var(--icon-sm);
   cursor: grab;
 }
 
 .orca-node--selected {
   outline: var(--stroke-focus) solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: var(--space-0-5);
 }
 .orca-node--added {
   border-color: var(--status-succeeded);
@@ -1915,26 +1907,25 @@
 }
 .orca-node--removed .orca-node__name {
   text-decoration: line-through;
-  text-decoration-thickness: 1px;
+  text-decoration-thickness: var(--stroke-hairline);
 }
 .orca-node--invalid {
   border-color: var(--status-failed);
   border-width: var(--stroke-edge-active);
 }
+/* type: eyebrow */
 .orca-node__flag {
   position: absolute;
-  top: -8px;
-  right: -6px;
-  font-size: 10px;
-  line-height: 14px;
-  padding: 0 4px;
+  top: calc(-1 * var(--space-2));
+  right: -6px; /* orca-allow-literal: hangs the flag half off the node's corner (#211) */
+  padding: 0 var(--space-1);
   border-radius: var(--radius-xs);
   background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
   color: var(--ink-secondary);
 }
 .orca-port {
-  width: 9px;
+  width: 9px; /* orca-allow-literal: the port is a mark on an edge, not a control (#211) */
   height: 9px;
   border-radius: var(--radius-full);
   background: var(--surface-raised);
@@ -1966,30 +1957,30 @@
   padding: var(--space-2) var(--space-3);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
+/* type: mono-strong */
 .orca-inspector__title {
   font-family: var(--font-mono);
-  font-size: 13px;
   font-weight: 500;
 }
 .orca-inspector__body {
   padding: 0 var(--space-3);
   overflow: auto;
 }
+/* type: eyebrow */
 .orca-inspector__group {
   padding: var(--space-3) 0 var(--space-1);
-  font-size: 11px;
-  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
 .orca-inspector .orca-field {
+  /* orca-allow-literal: the inspector's narrower label column (#211) */
   grid-template-columns: 116px 1fr;
   gap: var(--space-2);
   padding: var(--space-2) 0;
 }
+/* type: caption */
 .orca-inspector .orca-field__label {
-  font-size: 12px;
-  padding-top: 4px;
+  padding-top: var(--space-1);
 }
 
 /* ---------- validation + dry run ---------- */
@@ -1998,12 +1989,12 @@
   border-top: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-base);
 }
+/* type: caption */
 .orca-validation__row {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-3);
-  font-size: 12px;
   border-left: var(--stroke-rail) solid transparent;
 }
 .orca-validation__row:hover {
@@ -2044,22 +2035,23 @@
   background: var(--status-failed-bg);
   border-top-color: var(--status-failed);
 }
+/* type: caption, at medium */
 .orca-pinned {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 20px;
+  height: 20px; /* orca-allow-literal: badge height, below control-sm (#211) */
   padding: 0 var(--space-2);
   border-radius: var(--radius-xs);
   background: var(--status-running-bg);
   color: var(--status-running);
   border: var(--stroke-hairline) solid var(--status-running);
-  font-size: 12px;
   font-weight: 500;
 }
 
 /* ---------- graph filter rail ---------- */
 
+/* type: caption */
 .orca-graphctl {
   display: flex;
   align-items: center;
@@ -2068,7 +2060,6 @@
   padding: var(--space-2) var(--space-4);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-base);
-  font-size: 12px;
   color: var(--ink-secondary);
 }
 .orca-graphctl__set {
@@ -2076,15 +2067,15 @@
   align-items: center;
   gap: var(--space-1);
 }
+/* type: caption */
 .orca-legend {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: 11px;
   color: var(--ink-secondary);
 }
 .orca-legend__swatch {
-  width: 18px;
+  width: 18px; /* orca-allow-literal: legend stroke sample length (#211) */
   height: 0;
   border-top: var(--stroke-rail) solid var(--graph-edge);
   display: inline-block;

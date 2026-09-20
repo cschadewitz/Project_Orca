@@ -1,7 +1,7 @@
 /** Persisted human input: `pause` mode parks a run (and its parents), `answer()` + `resume()` continue it. */
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import { FakeClock, parseWorkflow, TemplateRegistry, toGateOption, WorkflowRegistry } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
@@ -50,7 +50,15 @@ describe("pause mode", () => {
 
     const pending = await orchestrator.pendingInputs();
     expect(pending).toHaveLength(1);
-    expect(pending[0]).toMatchObject({ runId: parked.run.id, question: "Ship it?", options: ["ship", "hold"] });
+    // A workflow declares gate options as words; they are stored as options whose id is that word.
+    expect(pending[0]).toMatchObject({
+      runId: parked.run.id,
+      question: "Ship it?",
+      options: [
+        { id: "ship", label: "ship" },
+        { id: "hold", label: "hold" },
+      ],
+    });
     const requestId = pending[0]!.id;
 
     await expect(orchestrator.answer("hi_nope", "ship")).rejects.toThrow(/no pending human input/);
@@ -223,7 +231,7 @@ edges: [{ from: s, to: child }, { from: child, to: e }]
         requestId: "hi",
         kind: "permission",
         question: "rm -rf?",
-        options: ["allow", "reject"],
+        options: ["allow", "reject"].map(toGateOption),
         context: {},
       }),
     ).resolves.toBeUndefined();

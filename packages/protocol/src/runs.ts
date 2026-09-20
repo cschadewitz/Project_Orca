@@ -156,6 +156,11 @@ export type RunsGetResult = z.infer<typeof RunsGetResultSchema>;
  * One page of a run's event log, by sequence number, in either direction: `after` walks
  * forward (the live timeline tailing a run), `before` walks backward (scrolling up through
  * a long history). Giving both is an error - a page has one anchor.
+ *
+ * `stepRunId` is how a step's output pane reads: a step's output is its `agent.update`
+ * events, so it is a filter on this log rather than a method of its own. One method means
+ * one cursor semantics, which is what lets "load earlier output" and "tail the run" be the
+ * same paging code (#158).
  */
 export const RunsEventsParamsSchema = z
   .object({
@@ -166,6 +171,13 @@ export const RunsEventsParamsSchema = z
     before: z.number().int().nonnegative().optional(),
     /** Only these event types. An unknown type matches nothing rather than failing. */
     types: z.array(z.string().min(1)).optional(),
+    /**
+     * Only events about this step run - which is what a step's output *is*: the
+     * `agent.update` events it appended, in the run's own sequence. Run-level events
+     * (`run.*`, `vars.set`) are about no step and so match nothing. Composes with `types`
+     * as an AND, and an unknown step run matches nothing rather than failing.
+     */
+    stepRunId: z.string().min(1).optional(),
     limit: z.number().int().positive().max(500).default(200),
   })
   .refine((p) => p.after === undefined || p.before === undefined, {

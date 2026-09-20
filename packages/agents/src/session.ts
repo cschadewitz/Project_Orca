@@ -5,7 +5,7 @@
  * implement the same contract.
  */
 import type * as acp from "@agentclientprotocol/sdk";
-import type { AgentUpdateSummary } from "@orca/core";
+import { toolCallBody, type AgentUpdateSummary, type ToolCallBody } from "@orca/core";
 
 export interface TurnResult {
   stopReason: acp.StopReason;
@@ -55,6 +55,7 @@ export function summarizeUpdate(u: acp.SessionUpdate): AgentUpdateSummary {
         ...(u.kind ? { toolKind: u.kind } : {}),
         ...(u.status ? { status: u.status } : {}),
         ...(u.locations ? { locations: u.locations.map((l) => l.path) } : {}),
+        ...toolBodies(u),
       };
     case "tool_call_update":
       return {
@@ -64,6 +65,7 @@ export function summarizeUpdate(u: acp.SessionUpdate): AgentUpdateSummary {
         ...(u.kind ? { toolKind: u.kind } : {}),
         ...(u.status ? { status: u.status } : {}),
         ...(u.locations ? { locations: u.locations.map((l) => l.path) } : {}),
+        ...toolBodies(u),
       };
     case "plan":
       return {
@@ -73,4 +75,22 @@ export function summarizeUpdate(u: acp.SessionUpdate): AgentUpdateSummary {
     default:
       return { kind: (u as { sessionUpdate: string }).sessionUpdate };
   }
+}
+
+/**
+ * The tool call's args and result, capped here - at write time - so what lands
+ * in the event log is what every later reader sees. ACP's own fields come
+ * first: `rawInput` is the arguments, `rawOutput` the structured result. An
+ * agent that sends no `rawOutput` still sends `content` (the text, diff or
+ * terminal output a host would render), so that stands in for the result
+ * rather than leaving a finished call with nothing to expand.
+ */
+function toolBodies(u: {
+  rawInput?: unknown;
+  rawOutput?: unknown;
+  content?: acp.ToolCallContent[] | null | undefined;
+}): { args?: ToolCallBody; result?: ToolCallBody } {
+  const args = toolCallBody(u.rawInput);
+  const result = toolCallBody(u.rawOutput ?? (u.content?.length ? u.content : undefined));
+  return { ...(args ? { args } : {}), ...(result ? { result } : {}) };
 }

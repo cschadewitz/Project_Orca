@@ -123,7 +123,15 @@ Every event is `{ id, seq, runId, at, type, payload }`. Types:
 - `human.requested`, `human.answered`
 
 `agent.update` stores a compact `AgentUpdateSummary` (kind, text, tool call id/title/kind/status,
-locations, plan entries) rather than the raw ACP payload; text chunks are coalesced.
+locations, args, result, plan entries) rather than the raw ACP payload; text chunks are coalesced.
+A tool call's `args` and `result` are each capped at `TOOL_BODY_MAX_CHARS` (2,000) when the event
+is written, and stored as `{ text, length }` where `length` is what the body measured before the
+cap — so a tool call that reads a large file leaves the size in the log, not the file.
+
+`human.requested.options` is a list of `{ id, label, consequence?, destructive? }`. `human.answered`
+carries the chosen option's `id`, never its label, so rewording a label cannot orphan an answer
+already in a log. A log written before v0.4.0 holds bare strings here; each reads as
+`{ id: s, label: s }` (`toGateOption`), which needs no migration.
 
 ## Expression / template context
 

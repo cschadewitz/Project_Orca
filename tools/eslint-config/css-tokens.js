@@ -122,10 +122,12 @@ function locator(source) {
  * @param {string} source the stylesheet
  * @param {string} [file] a label for the messages
  * @param {{lengths?: boolean}} [options] `lengths: false` checks colours and stacking order
- *   only. That is for `packages/design/css/components.css`, which still carries ~190 literal
- *   type sizes and box heights from before this check existed: they need type-scale and
- *   size tokens that do not exist yet, so the length pass there would be noise nobody could
- *   act on. Colours and z-values it is already clean of, and this keeps it that way.
+ *   only. It exists for stylesheets that predate the length pass and cannot yet act on it.
+ *   Nothing passes it today: `packages/design/css/components.css` was the one caller, and
+ *   #211 removed the ~190 literal type sizes and box heights that made it necessary, so
+ *   `lint:css` now checks that file in full. Keep the option only while something needs it —
+ *   a stylesheet that wants it is a stylesheet with a missing token family, and the honest
+ *   fix is the tokens.
  * @returns {{file: string, line: number, column: number, property: string, text: string, message: string}[]}
  */
 export function checkCss(source, file = "<input>", options = {}) {
