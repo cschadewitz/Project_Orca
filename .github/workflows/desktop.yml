@@ -73,7 +73,7 @@ jobs:
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v7
         with:
@@ -183,7 +183,7 @@ jobs:
       # Installers and archives only. electron-builder also leaves its unpacked directories
       # and its `.blockmap` sidecars in there, and neither is something to hand a person.
       - name: Upload the artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.name }}
           path: |
@@ -199,7 +199,7 @@ jobs:
       # Whatever the packaging said, when it failed to say anything useful.
       - name: Upload the packaging log
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.name }}-logs
           path: |
