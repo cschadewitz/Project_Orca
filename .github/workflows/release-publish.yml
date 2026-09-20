@@ -34,7 +34,7 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v7
         with:
@@ -92,7 +92,7 @@ jobs:
       # Flattened into one directory: the three legs upload disjoint file sets, so there is
       # nothing for `merge-multiple` to collide over.
       - name: Download the desktop artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: desktop-*
           path: artifacts
