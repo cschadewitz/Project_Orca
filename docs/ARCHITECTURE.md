@@ -265,3 +265,4 @@ Recorded as ADRs in `docs/adr/`:
 - 0006 The plan as a persistent cross‑request dependency graph, scheduled live
 - 0007 Risks and decisions as plan entities fed by artifacts, computed by ORCA
 - 0008 Daemon, protocol package and desktop app in one workspace; the app sees only the protocol
+- 0009 "Allow always" writes to a workspace sidecar, layered under the configured rules
