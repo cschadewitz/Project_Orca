@@ -32,8 +32,29 @@ import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
 import { planCommand } from "./plan.js";
 
-/** The CLI package's version, which is the release version (every package is bumped together). */
-const ORCA_VERSION = (createRequire(import.meta.url)("../../package.json") as { version: string }).version;
+/**
+ * This package's version, as `orca --version` and `hello.orcaVersion` report it.
+ *
+ * Two ways in, because this module is built twice. `tsc` leaves it at
+ * `packages/cli/dist/commands/index.js`, where `../../package.json` is this package's —
+ * that is the fallback and it is what every ordinary `orca` invocation takes.
+ *
+ * The desktop app instead bundles the whole CLI into one file
+ * (`packages/app/scripts/build-daemon.js`) and ships it somewhere else entirely, so
+ * `import.meta.url` becomes the bundle's own location and that relative path resolves
+ * against a directory this package does not control. It found `packages/app/package.json`
+ * while the bundle sat in `packages/app/dist/daemon/` and nothing at all once
+ * electron-builder moved it to `resources/daemon/`, which crashed the daemon on startup.
+ * So the bundler substitutes the version at build time and the require never runs there.
+ *
+ * `typeof` rather than a bare reference: in the `tsc` build the identifier is not declared
+ * at all, and `typeof` is the one operator that does not throw on that.
+ */
+declare const __ORCA_VERSION__: string | undefined;
+const ORCA_VERSION =
+  typeof __ORCA_VERSION__ === "string"
+    ? __ORCA_VERSION__
+    : (createRequire(import.meta.url)("../../package.json") as { version: string }).version;
 
 export interface CommandContext {
   cwd: string;

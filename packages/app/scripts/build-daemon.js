@@ -20,10 +20,19 @@
  */
 import { parseArgs } from "node:util";
 import { build } from "esbuild";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const appDir = fileURLToPath(new URL("../", import.meta.url));
+
+// The CLI reads its own version out of its package.json at a path relative to the module
+// doing the reading. Bundling moves that module, so the path stops meaning what it meant:
+// it resolved to `packages/app/package.json` while the bundle sat in the app's dist (same
+// version by coincidence, so nothing looked wrong) and to nothing once electron-builder
+// relocated it to `resources/daemon/`, where the daemon died on startup before it could
+// serve. Read the version here, where the layout is known, and substitute it below.
+const { version: cliVersion } = createRequire(import.meta.url)("../../cli/package.json");
 
 const { values } = parseArgs({
   options: { outfile: { type: "string" } },
@@ -58,6 +67,11 @@ const result = await build({
   banner: {
     js: "import { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);",
   },
+  // Substituted into `packages/cli/src/commands/index.ts`, which falls back to reading its
+  // package.json only when this is absent. Deliberately the CLI package's own version and
+  // not the root's, so the bundled daemon reports exactly what `orca serve` reports from
+  // the same commit; that those two are 0.1.0 while the release is not is a separate bug.
+  define: { __ORCA_VERSION__: JSON.stringify(cliVersion) },
   // `ws`'s optional native accelerators. They are `try`-ed at runtime and absent here by
   // design — bundling a prebuilt binary per platform to shave a memcpy is not a trade
   // worth making for a loopback socket.
