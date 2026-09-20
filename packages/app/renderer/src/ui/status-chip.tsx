@@ -12,6 +12,7 @@
  */
 import type { JSX } from "react";
 import { STATUS_PRESENTATION, type RunStatus } from "@orca/design";
+import { textClass } from "./text.js";
 
 export interface StatusChipProps {
   status: RunStatus;
@@ -27,7 +28,13 @@ export function StatusChip({ status, label, glyphOnly = false, className }: Stat
 
   return (
     <span
-      className={["orca-chip", `orca-chip--${status}`, glyphOnly ? "orca-chip--glyph-only" : "", className]
+      className={[
+        "orca-chip",
+        textClass("caption"),
+        `orca-chip--${status}`,
+        glyphOnly ? "orca-chip--glyph-only" : "",
+        className,
+      ]
         .filter(Boolean)
         .join(" ")}
       /* The glyph is decorative markup for a sighted reader; the word is the name. When

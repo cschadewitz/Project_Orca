@@ -11,6 +11,7 @@
  */
 import { Fragment, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useKeyboard } from "../keyboard-context.js";
+import { textClass } from "../ui/index.js";
 import { commandEntries, filterEntries, groupEntries, type PaletteEntry } from "./entries.js";
 import { parseJump, type JumpTarget } from "./jump.js";
 import { usePaletteSources } from "./sources.js";
@@ -126,7 +127,7 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
       >
         <input
           ref={input}
-          className="orca-palette__input"
+          className={`orca-palette__input ${textClass("body")}`}
           type="text"
           role="combobox"
           aria-expanded="true"
@@ -148,7 +149,7 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
           {groups.map((group) => (
             <Fragment key={group.id}>
               {group.label ? (
-                <li role="presentation" className="orca-eyebrow orca-palette__group">
+                <li role="presentation" className={`orca-eyebrow ${textClass("eyebrow")} orca-palette__group`}>
                   {group.label}
                 </li>
               ) : null}
@@ -167,13 +168,15 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
             </Fragment>
           ))}
         </ul>
-        {entries.length === 0 && !pending ? <p className="orca-palette__note">No matching command.</p> : null}
+        {entries.length === 0 && !pending ? (
+          <p className={`orca-palette__note ${textClass("caption")}`}>No matching command.</p>
+        ) : null}
         {searchIsEmpty ? (
-          <p className="orca-palette__note">
+          <p className={`orca-palette__note ${textClass("caption")}`}>
             Searching runs, steps and artifacts arrives with the surfaces that hold them.
           </p>
         ) : null}
-        <div className="orca-palette__hint">
+        <div className={`orca-palette__hint ${textClass("caption")}`}>
           <span>↑ ↓ to move</span>
           <span>Enter to run</span>
           <span>Esc to close</span>
@@ -194,7 +197,8 @@ function Row({
   onPick: () => void;
   onHover: () => void;
 }): JSX.Element {
-  const className = selected ? "orca-palette__row orca-palette__row--active" : "orca-palette__row";
+  const row = `orca-palette__row ${textClass("label")}`;
+  const className = selected ? `${row} orca-palette__row--active` : row;
   return (
     <li
       id={entry.id}
@@ -211,12 +215,20 @@ function Row({
     >
       <span className="orca-palette__label">{entry.label}</span>
       {entry.detail ? (
-        <span className={entry.detailIsMachine ? "orca-palette__detail orca-mono" : "orca-palette__detail"}>
+        <span
+          className={
+            entry.detailIsMachine
+              ? `orca-palette__detail ${textClass("caption")} orca-mono`
+              : `orca-palette__detail ${textClass("caption")}`
+          }
+        >
           {entry.detail}
         </span>
       ) : null}
-      {entry.unavailable ? <span className="orca-palette__why">{entry.unavailable}</span> : null}
-      {entry.shortcut ? <kbd className="orca-kbd">{entry.shortcut}</kbd> : null}
+      {entry.unavailable ? (
+        <span className={`orca-palette__why ${textClass("caption")}`}>{entry.unavailable}</span>
+      ) : null}
+      {entry.shortcut ? <kbd className={`orca-kbd ${textClass("mono-id")}`}>{entry.shortcut}</kbd> : null}
     </li>
   );
 }

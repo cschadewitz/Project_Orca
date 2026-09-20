@@ -11,9 +11,15 @@
  * control. In file mode the button is absent instead; that is the caller's decision.
  */
 import type { ButtonHTMLAttributes, JSX, MouseEvent, ReactNode } from "react";
+import type { TextStyle } from "@orca/design";
+import { textClass } from "./text.js";
 
 export type ButtonTone = "default" | "primary" | "danger" | "ghost";
 export type ButtonSize = "sm" | "md" | "lg";
+
+/* `.orca-btn` is noted `type: label` and `.orca-btn--sm` overrides it with `type: caption`
+   (#211); the large button takes the label size too, and only its box grows. */
+const TEXT: Record<ButtonSize, TextStyle> = { sm: "caption", md: "label", lg: "label" };
 
 export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "disabled" | "style"> {
   children?: ReactNode;
@@ -36,6 +42,7 @@ export function Button({
 }: ButtonProps): JSX.Element {
   const classes = [
     "orca-btn",
+    textClass(TEXT[size]),
     tone === "default" ? "" : `orca-btn--${tone}`,
     size === "md" ? "" : `orca-btn--${size}`,
     className,

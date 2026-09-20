@@ -13,7 +13,7 @@
 import type { JSX } from "react";
 import { CONNECTION_PRESENTATION, type ConnectionState } from "@orca/design";
 import { Duration, Time } from "./time.js";
-import { Text } from "./text.js";
+import { Text, textClass } from "./text.js";
 
 export interface ConnectionIndicatorProps {
   state: ConnectionState;
@@ -36,7 +36,7 @@ export function ConnectionIndicator({
 
   return (
     <span
-      className={["orca-conn", `orca-conn--${state}`, className].filter(Boolean).join(" ")}
+      className={["orca-conn", textClass("mono-id"), `orca-conn--${state}`, className].filter(Boolean).join(" ")}
       role="status"
       aria-live="polite"
     >

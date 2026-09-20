@@ -14,6 +14,7 @@
 import type { JSX } from "react";
 import { STATE_VIEW_PRESENTATION, type StateViewKind } from "@orca/design";
 import { Button } from "./button.js";
+import { textClass } from "./text.js";
 
 export interface StateViewAction {
   label: string;
@@ -52,8 +53,8 @@ export function StateView(props: StateViewProps): JSX.Element {
           {glyph}
         </span>
       )}
-      <span className="orca-state__title">{title}</span>
-      {props.kind !== "loading" && <span className="orca-state__body">{props.body}</span>}
+      <span className={`orca-state__title ${textClass("heading")}`}>{title}</span>
+      {props.kind !== "loading" && <span className={`orca-state__body ${textClass("label")}`}>{props.body}</span>}
       {props.kind !== "loading" && props.action !== undefined && (
         <Button tone="primary" onClick={props.action.onClick}>
           {props.action.label}

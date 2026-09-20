@@ -100,10 +100,19 @@ describe("ConnectionIndicator", () => {
 
 describe("Button", () => {
   it("maps tone and size onto the class layer", () => {
-    expect(html(<Button>Go</Button>)).toContain('class="orca-btn"');
+    expect(html(<Button>Go</Button>)).toContain('class="orca-btn orca-text-label"');
     expect(html(<Button tone="primary">Go</Button>)).toContain("orca-btn--primary");
     expect(html(<Button tone="danger">Go</Button>)).toContain("orca-btn--danger");
     expect(html(<Button size="sm">Go</Button>)).toContain("orca-btn--sm");
+  });
+
+  it("takes the size its class layer expects, which the small button overrides (#211)", () => {
+    /* `.orca-btn` is noted `type: label`; `.orca-btn--sm` is noted `type: caption`. The
+       class-layer sweep in type-classes.test.tsx is what holds every button to this — the
+       assertion here is that the size prop is what picks, and that `lg` is a bigger box
+       rather than bigger type. */
+    expect(html(<Button size="sm">Go</Button>)).toContain("orca-text-caption");
+    expect(html(<Button size="lg">Go</Button>)).toContain("orca-text-label");
   });
 
   it("disables with aria-disabled and carries the reason, so it stays focusable", () => {
@@ -182,12 +191,12 @@ describe("ObjectHeader", () => {
 
   it("labels every crumb with its type and leaves the current one unlinked", () => {
     const markup = html(<ObjectHeader crumbs={crumbs} onOpen={() => {}} />);
-    expect(markup).toContain('class="orca-crumb__type">item<');
-    expect(markup).toContain('class="orca-crumb__type">run<');
+    expect(markup).toContain('class="orca-crumb__type orca-text-eyebrow">item<');
+    expect(markup).toContain('class="orca-crumb__type orca-text-eyebrow">run<');
     expect(markup).toContain("orca-crumb--current");
     expect(markup).toContain('aria-current="page"');
     /* Exactly one crumb is a button: the one that is not current. */
-    expect(markup.match(/class="orca-crumb"/g)).toHaveLength(1);
+    expect(markup.match(/class="orca-crumb orca-text-label"/g)).toHaveLength(1);
   });
 
   it("offers a counterpart menu only where there are counterparts, and only with a handler", () => {

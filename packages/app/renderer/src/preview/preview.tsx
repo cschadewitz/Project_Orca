@@ -36,6 +36,7 @@ import {
   Text,
   Time,
   Well,
+  textClass,
 } from "../ui/index.js";
 import "./preview.css";
 
@@ -168,8 +169,10 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
 
       <Section title="Surfaces">
         <Card tone="gate" eyebrow="Gate · waiting 4m">
-          <p className="orca-card__q">Ship the migration behind a flag, or hold for review?</p>
-          <p className="orca-card__sub">auth-sso-epic · run 7f3a2c</p>
+          <p className={`orca-card__q ${textClass("body-strong")}`}>
+            Ship the migration behind a flag, or hold for review?
+          </p>
+          <p className={`orca-card__sub ${textClass("caption")}`}>auth-sso-epic · run 7f3a2c</p>
           <div className="orca-card__options">
             <Button tone="primary">Ship behind a flag</Button>
             <Button>Hold for review</Button>
@@ -185,10 +188,18 @@ function ThemeColumn({ theme }: { theme: ThemeId }): JSX.Element {
           help="Where the app attaches. ORCA_DAEMON_URL overrides it."
           onShowRaw={noop}
         >
-          {(control) => <input className="orca-input" defaultValue="127.0.0.1:6722" {...control} />}
+          {(control) => (
+            <input className={`orca-input ${textClass("mono-body")}`} defaultValue="127.0.0.1:6722" {...control} />
+          )}
         </ConfigField>
         <ConfigField label="Max attempts" path="engine.retries.max" error="Must be a whole number." onShowRaw={noop}>
-          {(control) => <input className="orca-input orca-input--invalid" defaultValue="two" {...control} />}
+          {(control) => (
+            <input
+              className={`orca-input ${textClass("mono-body")} orca-input--invalid`}
+              defaultValue="two"
+              {...control}
+            />
+          )}
         </ConfigField>
       </Section>
 

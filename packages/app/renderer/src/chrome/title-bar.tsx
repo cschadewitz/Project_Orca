@@ -7,7 +7,7 @@ import type { JSX } from "react";
 import { STATUS_PRESENTATION } from "@orca/design";
 import { shortcutLabel } from "../keyboard-map.js";
 import { OPEN_PALETTE_KEY } from "../palette/use-command-palette.js";
-import { Button, ConnectionIndicator } from "../ui/index.js";
+import { Button, ConnectionIndicator, textClass } from "../ui/index.js";
 import type { Connection } from "./use-connection.js";
 
 export interface TitleBarProps {
@@ -27,10 +27,15 @@ export function TitleBar({
   onOpenPalette,
 }: TitleBarProps): JSX.Element {
   return (
-    <div className="orca-titlebar" data-platform={platform}>
-      <span className="orca-titlebar__brand">ORCA</span>
+    <div className={`orca-titlebar ${textClass("label")}`} data-platform={platform}>
+      <span className={`orca-titlebar__brand ${textClass("label-strong")}`}>ORCA</span>
       {waitingCount ? (
-        <button type="button" className="orca-titlebar__attn" data-app-region="no-drag" onClick={onOpenAttention}>
+        <button
+          type="button"
+          className={`orca-titlebar__attn ${textClass("caption")}`}
+          data-app-region="no-drag"
+          onClick={onOpenAttention}
+        >
           <span aria-hidden="true">{STATUS_PRESENTATION.waiting.glyph}</span>
           {waitingCount} waiting
         </button>
@@ -49,7 +54,7 @@ export function TitleBar({
         onClick={onOpenPalette}
       >
         Commands
-        <kbd className="orca-kbd">{shortcutLabel(OPEN_PALETTE_KEY, platform)}</kbd>
+        <kbd className={`orca-kbd ${textClass("mono-id")}`}>{shortcutLabel(OPEN_PALETTE_KEY, platform)}</kbd>
       </Button>
     </div>
   );

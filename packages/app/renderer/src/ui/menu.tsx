@@ -48,6 +48,7 @@ import {
   type MenuPlacement,
   type Rect,
 } from "./menu-placement.js";
+import { textClass } from "./text.js";
 
 export interface MenuItem {
   id: string;
@@ -310,7 +311,7 @@ export function Menu({
               <button
                 type="button"
                 role="menuitem"
-                className="orca-menu__item"
+                className={`orca-menu__item ${textClass("label")}`}
                 /* Roving focus: the menu is one tab stop, and focus inside it moves with
                    the arrow keys. Tab leaves the menu rather than walking it. */
                 tabIndex={-1}
@@ -325,7 +326,9 @@ export function Menu({
                 }}
               >
                 <span>{item.label}</span>
-                {item.hint === undefined ? null : <span className="orca-menu__type">{item.hint}</span>}
+                {item.hint === undefined ? null : (
+                  <span className={`orca-menu__type ${textClass("eyebrow")}`}>{item.hint}</span>
+                )}
               </button>
             </li>
           ))}

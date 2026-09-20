@@ -5,6 +5,7 @@
  * rather than shown as invented zeros (docs/design/60-implementation.md).
  */
 import type { JSX } from "react";
+import { textClass } from "../ui/index.js";
 
 export interface StatusBarProps {
   orcaVersion?: string;
@@ -12,7 +13,7 @@ export interface StatusBarProps {
 
 export function StatusBar({ orcaVersion }: StatusBarProps): JSX.Element {
   return (
-    <div className="orca-statusbar">
+    <div className={`orca-statusbar ${textClass("mono-id")}`}>
       {orcaVersion ? <span>orca-daemon {orcaVersion}</span> : <span className="orca-faint">not connected</span>}
     </div>
   );
