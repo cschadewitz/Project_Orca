@@ -101,6 +101,33 @@ inside) — render the batch, do not assume one line per frame. And a push can n
 a run went `stale`: that is a lapsed lease, which is nothing happening, so it shows up only
 on a read.
 
+**The connection is pushed too, and it is a different channel.** `window.orca.connection`
+(`read()` for the snapshot, `subscribe()` for the changes) carries
+`{ state, since, eventCursor?, versions?, orcaVersion?, capabilities? }`, where `state` is one
+of the design's five. Do not derive a connection state from a failed call, and do not probe
+with a `hello` of your own: the main process owns the machine (`src/main/connection-state.ts`),
+which is the one place `SubscriptionState` and the handshake are folded onto those five. A
+screen reads it through `useConnection()`. **Leaving `live` is held silent for five seconds**,
+so a blip changes nothing on screen — that is the machine's, not a component's, and a
+component that re-implements it will double the delay.
+
+**Ask whether you can write; do not find out by failing.** `useWritability()` derives
+"can write, or why not" from the connection state plus whether `runs.control` is in
+`hello.capabilities`. A daemon started `--read-only` omits the capability *and* the methods,
+so absence is a normal, explainable state and never an error. The `reason` string is shaped
+for `Button`'s `disabledReason`; a control must not compose its own.
+
+**A list of rows is `VirtualList`, not a `map`.** `renderer/src/list/` is the substrate every
+row list in the app is built on: it renders a window over the rows, reads the row height back
+off `--row-h` rather than restating it (so `data-density` needs no special case), carries the
+status minimap gutter over the *whole* list rather than the visible window, and registers
+`J`/`K`, the arrows, `Home`/`End` and the page keys on the `KeyboardMap` in scope `list`.
+Because those registrations are the substrate's, **one `list` scope holds one `VirtualList`** —
+a surface that also registers `J` in that scope will throw, which is the intended way to find
+out. Selection is `aria-activedescendant` on a single tab stop, and it is a different visual
+from focus (rule 10). `renderer/src/runs/` is the worked adoption: there is no `scrollIntoView`
+anywhere, because it cannot reach a row that is not in the document.
+
 `renderer/src/runs/` is the worked example of a surface and the shape the next one should
 take: the arithmetic in a plain module with a plain test, the data in one hook, selection and
 its keys in another, and the markup composed from `ui/`. Filtering is a filter, not a search

@@ -71,7 +71,16 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    first screen with real data behind it. The preload is built as CommonJS because a
    sandboxed preload cannot be ESM (#198), literal colours and sizes are rejected by lint
    (#153), and the renderer is tested in both themes against the real tokens with an
-   Electron smoke test beside it (#154). Next: phase 1, run monitoring (attention, the run
+   Electron smoke test beside it (#154). v0.4.0 added the three things every later surface
+   builds on: the type scale reaches an element as a second class and a test sweeps the
+   rendered trees to keep it true (#211); `renderer/src/list/` is the virtualised row
+   substrate, with the height read back off `--row-h`, the status gutter over the whole list
+   and the list keys on the keyboard map, adopted by the Runs surface (#155); and the
+   connection is a state machine in the main process pushed over its own bridge channel,
+   which is also where "can write, or why not" comes from (#163). Not yet true of the
+   connection work: writes are not queued while reconnecting, `reconnecting` has no give‑up
+   threshold, the event cursor is absent because the app's one subscription is store‑wide,
+   and file mode is #164. Next: phase 1, run monitoring (attention, the run
    tree, the event timeline, artifacts, answering gates) against the daemon methods of item
    1 — whose control methods are now on the wire, so answering a gate is a bridge entry and a
    screen rather than a protocol change. Phase 2 makes it the

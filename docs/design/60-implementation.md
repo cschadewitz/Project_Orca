@@ -148,6 +148,20 @@ consequences the implementation must respect: a row never wraps, and a row never
 content. Anything that needs more than one line is a two-line row variant with its own token
 height, declared as such, not an ordinary row that happens to be taller.
 
+`renderer/src/list/` is that virtualiser (#155), and the arithmetic is a plain module with a
+plain test (`list-window.ts`). The height is *read back* off `--row-h` from the scroller's
+computed style rather than restated in TypeScript, which is what makes `data-density` an
+ordinary re-measure rather than a special case, and what stops a second statement of a token
+from drifting from the first. A viewport nothing has measured — first frame, a hidden pane, a
+DOM with no layout — is an ordinary case and not an error: with no pixels to divide by, the
+window is a fixed *count* of rows around an anchor. Dividing by a zero row height would render
+all 50,000 rows, which is the freeze the virtualiser exists to prevent, and substituting a
+guessed height would be the second statement the design forbids.
+
+Two-line rows are `.orca-list--two-line`, whose height is `calc(var(--row-h) * 2)` — a ratio to
+the bound height, never a literal. The component layer has no two-line row class and
+`tokens.json` has no second row height; both belong there, beside the row they vary.
+
 ## Event-sourced rendering
 
 The event log is the source of truth and the UI is a projection of it. Two implications for
@@ -155,6 +169,13 @@ the design:
 
 - **Every view has a cursor.** The status bar shows the event the UI is projected up to. A
   screen is never "current" in the abstract; it is current as of event *n*.
+
+  The status bar draws this from the pushed connection snapshot's `eventCursor` (#163), and
+  **it is absent today**. Sequence numbers are per run, and the app holds one store-wide
+  subscription, so there is no single number to show — and an invented one is exactly what
+  rule 12 forbids. The cell therefore renders nothing rather than a zero. It starts reading
+  for real when a surface subscribes per run; the machine already carries the cursor through
+  a reconnection, and a test proves it resumes.
 - **Replay is the same code path as live.** Opening a finished run replays its events into the
   same components that render a live one. There is no separate "historical" rendering, which
   is why the timeline and the output pane must read well both while updating and at rest.
