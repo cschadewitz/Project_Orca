@@ -34,7 +34,7 @@ import { z } from "zod";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
 import { AgentUpdateSummarySchema, GateOptionSchema, OrcaEventSchema, RunOutcomeSchema } from "@orca/core/schemas";
 import { AgentViewSchema } from "./agents.js";
-import { InputKindSchema } from "./inputs.js";
+import { InputAgentSchema, InputKindSchema } from "./inputs.js";
 import { DisplayStatusSchema } from "./status.js";
 import { ViewErrorSchema } from "./views.js";
 
@@ -165,6 +165,18 @@ export const InputOpenedParamsSchema = notification({
    * a question it could not show. Answer with an option's `id`; see `inputs.ts`.
    */
   options: z.array(GateOptionSchema),
+  /**
+   * Who is blocked, when it is an agent (protocol 1.6, #248) - the same field, with the same
+   * meaning, as `OpenInputView.agent`, so a card built from this frame and a card built from
+   * `inputs.list` are the same card. Absent on a workflow gate, which has no agent.
+   *
+   * It comes off the event, not out of a read: `human.requested` records the agent that
+   * asked, which is what keeps `notificationsFor` a pure function of the event and this
+   * notification free of a store lookup. What the log cannot hold is `hostType` - a host's
+   * transport is configuration, and a stored copy would go stale - so it is present only on
+   * a read, where the registry can be asked.
+   */
+  agent: InputAgentSchema.optional(),
 });
 export type InputOpenedParams = z.infer<typeof InputOpenedParamsSchema>;
 

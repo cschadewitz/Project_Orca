@@ -4,7 +4,17 @@
  * the error mapping are exercised the way a client reaches them.
  */
 import { beforeAll, describe, expect, it } from "vitest";
-import { OrcaError } from "@orca/core";
+import { AgentRegistry, LocalHost, SshHost } from "@orca/agents";
+import {
+  FakeClock,
+  OrcaError,
+  SshHostSchema,
+  TemplateRegistry,
+  WorkflowRegistry,
+  silentLogger,
+} from "@orca/core";
+import { Orchestrator } from "@orca/engine";
+import { memoryStores } from "@orca/store";
 import {
   ArtifactsGetResultSchema,
   ArtifactsListResultSchema,
@@ -18,7 +28,7 @@ import {
   RunsListResultSchema,
 } from "@orca/protocol";
 import { ReadModel, dispatch, methods, type MethodContext } from "@orca/daemon";
-import { artifactFixture, emptyFixture, fixture, STEP_MS, type Fixture } from "./fixture.js";
+import { artifactFixture, emptyFixture, fixture, START, STEP_MS, type Fixture } from "./fixture.js";
 
 let f: Fixture;
 let reads: ReadModel;
@@ -491,5 +501,119 @@ describe("hello", () => {
       bare,
     );
     expect(refused).toMatchObject({ ok: false, error: { code: "NOT_SUPPORTED" } });
+  });
+});
+
+/**
+ * `OpenInputView.agent` (#248). A separate store from the shared fixture because the answer
+ * is half configuration: `hostType` comes from the registry rather than the log, so a
+ * registry with one host could not tell a derived answer from a hardcoded one.
+ */
+describe("inputs.list names who is blocked", () => {
+  /** `configured: false` stands for the config edit that took the session's host away. */
+  async function blocked(configured = true) {
+    const clock = new FakeClock(START);
+    const stores = memoryStores(clock);
+    const agents = new AgentRegistry(clock).addHost(new LocalHost({ id: "local", type: "local" }));
+    if (configured)
+      agents.addHost(new SshHost(SshHostSchema.parse({ id: "build-box", type: "ssh", host: "build-box.internal" })));
+    const orchestrator = new Orchestrator({
+      stores,
+      agents,
+      workflows: new WorkflowRegistry(),
+      templates: new TemplateRegistry(),
+      logger: silentLogger,
+      clock,
+    });
+    const workspace = { hostId: "build-box", cwd: "/work/orca", repo: "orca", branch: "main" };
+    const append = async (e: Parameters<typeof stores.events.append>[0]) => {
+      clock.advance(STEP_MS);
+      await stores.events.append(e);
+    };
+    await append({
+      type: "run.created",
+      runId: "run-ask",
+      payload: { workflowId: "sdlc", workflowVersion: "1", workspace, vars: {} },
+    });
+    await append({ type: "run.started", runId: "run-ask", payload: {} });
+
+    // A permission ask: the agent's turn is open, so the step has a session.
+    await append({
+      type: "step.scheduled",
+      runId: "run-ask",
+      payload: { stepRunId: "s-build", nodeId: "build", nodeType: "agent", attempt: 1 },
+    });
+    await append({ type: "step.started", runId: "run-ask", payload: { stepRunId: "s-build", inputArtifactIds: [] } });
+    await append({
+      type: "agent.session.opened",
+      runId: "run-ask",
+      payload: { stepRunId: "s-build", sessionId: "sess", agentId: "remote", hostId: "build-box", cwd: "/work/orca" },
+    });
+    await append({
+      type: "human.requested",
+      runId: "run-ask",
+      payload: {
+        stepRunId: "s-build",
+        requestId: "hi-perm",
+        kind: "permission",
+        question: "Run `rm -rf build`?",
+        options: [
+          { id: "allow", label: "Allow" },
+          { id: "reject", label: "Reject", destructive: true },
+        ],
+        agent: { id: "remote", hostId: "build-box" },
+        context: { toolCall: { toolCallId: "tc-1", title: "rm -rf build", toolKind: "execute" } },
+      },
+    });
+    await append({
+      type: "step.waiting",
+      runId: "run-ask",
+      payload: { stepRunId: "s-build", on: "human-input", detail: "hi-perm" },
+    });
+
+    // A workflow gate on a step that opened no session: nobody's agent is waiting on it.
+    await append({
+      type: "step.scheduled",
+      runId: "run-ask",
+      payload: { stepRunId: "s-gate", nodeId: "approve", nodeType: "gate", attempt: 1 },
+    });
+    await append({ type: "step.started", runId: "run-ask", payload: { stepRunId: "s-gate", inputArtifactIds: [] } });
+    await append({
+      type: "human.requested",
+      runId: "run-ask",
+      payload: {
+        stepRunId: "s-gate",
+        requestId: "hi-gate",
+        kind: "decision",
+        question: "Ship it?",
+        options: [{ id: "ship", label: "Ship" }],
+        context: {},
+      },
+    });
+    await append({
+      type: "step.waiting",
+      runId: "run-ask",
+      payload: { stepRunId: "s-gate", on: "human-input", detail: "hi-gate" },
+    });
+    await append({ type: "run.paused", runId: "run-ask", payload: { reason: "human input" } });
+    return new ReadModel({ orchestrator });
+  }
+
+  it("names the agent and its host on a permission ask, and nobody on a gate", async () => {
+    const r = await blocked();
+    const byId = new Map((await r.inputsList({})).inputs.map((i) => [i.id, i]));
+
+    // `hostType` is not in the log - it is the transport of the host the session names,
+    // asked of the registry on this read.
+    expect(byId.get("hi-perm")?.agent).toEqual({ id: "remote", hostId: "build-box", hostType: "ssh" });
+    // A gate is a workflow's question, not an agent's. Absent, not an empty agent.
+    expect(byId.get("hi-gate")?.agent).toBeUndefined();
+  });
+
+  it("keeps the agent and drops the transport when the host is no longer configured", async () => {
+    // The config edit `AgentView` has the same answer for: say `ssh` or `local` only when a
+    // host says so, and say nothing rather than the commoner of the two (RULES.md rule 12).
+    const perm = (await (await blocked(false)).inputsList({ kind: ["permission"] })).inputs[0]!;
+    expect(perm.agent).toEqual({ id: "remote", hostId: "build-box" });
   });
 });

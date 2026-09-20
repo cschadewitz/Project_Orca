@@ -223,9 +223,35 @@ describe("the WebSocket endpoint", () => {
       ],
       seq: 0,
     });
+    // A workflow gate is nobody's agent, so the field is absent rather than empty (#248).
+    expect(opened!.params).not.toHaveProperty("agent");
     // The folded notification first, the raw one second: a client watching only the folded
     // stream is never behind one watching both.
     expect(c.methods()).toEqual([INPUT_OPENED, EVENT_APPENDED]);
+  });
+
+  it("names the agent a permission ask is holding open", async () => {
+    const url = await serve();
+    const c = await client(url);
+    await c.subscribe({ runId: "run-1" });
+    await append({
+      type: "human.requested",
+      runId: "run-1",
+      payload: {
+        stepRunId: "sr-1",
+        requestId: "hi-perm",
+        kind: "permission",
+        question: "Run `rm -rf build`?",
+        options: [{ id: "allow", label: "Allow" }],
+        agent: { id: "builder", hostId: "build-box" },
+        context: {},
+      },
+    });
+    const [opened] = await c.waitFor(INPUT_OPENED, 1);
+    // Straight off the event, which is what keeps `notificationsFor` free of a store read
+    // (#248). `hostType` is configuration and is resolved on `inputs.list`, not pushed.
+    expect(opened!.params).toMatchObject({ requestId: "hi-perm", agent: { id: "builder", hostId: "build-box" } });
+    expect(opened!.params.agent).not.toHaveProperty("hostType");
   });
 
   it("coalesces agent output into one notification per step per window", async () => {

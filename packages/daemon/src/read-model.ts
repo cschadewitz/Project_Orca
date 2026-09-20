@@ -108,6 +108,33 @@ function artifactView(a: Artifact): ArtifactView {
   };
 }
 
+/** The agent a step opened a session with, as `agent.session.opened` recorded it. */
+export interface AgentSessionRef {
+  agentId: string;
+  hostId: string;
+}
+
+/**
+ * Which agent worked each step of a run. `agent.session.opened` is the only event that says
+ * so, and it says it once per session, so one filtered pass over the log answers for every
+ * step in it - which is why this builds the whole map rather than searching for one step.
+ *
+ * It lives here, and `ControlModel.agentForStep` calls it, because both surfaces are asking
+ * the same question of the same log: `inputs.list` needs it to name who is blocked (#248)
+ * and `inputs.answer` needs it to know whose permission policy an "always" rule belongs in.
+ * Two scans would be two chances to disagree about a step with more than one session.
+ *
+ * The last session for a step wins: a step retried against a second agent is being worked by
+ * that one now.
+ */
+export async function agentSessionsByStep(orc: Orchestrator, runId: string): Promise<Map<string, AgentSessionRef>> {
+  const byStep = new Map<string, AgentSessionRef>();
+  for (const e of await orc.stores.events.readTypes(runId, ["agent.session.opened"]))
+    if (e.type === "agent.session.opened")
+      byStep.set(e.payload.stepRunId, { agentId: e.payload.agentId, hostId: e.payload.hostId });
+  return byStep;
+}
+
 /**
  * The step run a log entry is about, when it is about one. Every step-scoped event carries
  * `stepRunId` in its payload and no run-scoped event does, so this is the whole of the
@@ -195,6 +222,7 @@ class Pass {
   private readonly workItems = new Map<string, WorkItem | undefined>();
   private readonly requests = new Map<string, Request | undefined>();
   private readonly facts = new Map<string, RunFacts | undefined>();
+  private readonly agentSessions = new Map<string, Map<string, AgentSessionRef>>();
   private leases: Map<string, boolean> | undefined;
 
   constructor(
@@ -216,6 +244,19 @@ class Pass {
     if (!id) return undefined;
     if (!this.requests.has(id)) this.requests.set(id, await this.orc.stores.requests.get(id));
     return this.requests.get(id);
+  }
+
+  /**
+   * Which agent worked each step of this run. Cached per run because a run parked on three
+   * permission asks would otherwise scan its log three times for the same answer.
+   */
+  async agentSession(runId: string, stepRunId: string): Promise<AgentSessionRef | undefined> {
+    let byStep = this.agentSessions.get(runId);
+    if (!byStep) {
+      byStep = await agentSessionsByStep(this.orc, runId);
+      this.agentSessions.set(runId, byStep);
+    }
+    return byStep.get(stepRunId);
   }
 
   /** `undefined` when the run has no log - a child a parent still points at, a rolled-back store. */
@@ -586,6 +627,14 @@ export class ReadModel {
       .map((id) => state.artifacts[id])
       .filter((a): a is Artifact => Boolean(a))
       .map(artifactView);
+    // Who is blocked (#248). A permission ask always has an agent session on its step - an
+    // `ask` reaches a person only through a live one - and a workflow gate never does, so
+    // the absence here is the answer rather than a lookup that failed. The transport comes
+    // from the registry and not the log, because a host's type is configuration: a log that
+    // had frozen a copy of it would be wrong the first time somebody moved the agent.
+    const session = await pass.agentSession(request.runId, request.stepRunId);
+    const registry = this.orc.agents;
+    const hostType = session && registry.hasHost(session.hostId) ? registry.host(session.hostId).spec.type : undefined;
     return {
       id: request.id,
       kind: request.kind,
@@ -604,6 +653,9 @@ export class ReadModel {
       waitingMs: elapsed(request.requestedAt, pass.now) ?? 0,
       artifacts,
       ...(step?.nodeId ? { nodeId: step.nodeId } : {}),
+      ...(session
+        ? { agent: { id: session.agentId, hostId: session.hostId, ...(hostType ? { hostType } : {}) } }
+        : {}),
       ...(workItem ? { workItem } : {}),
     };
   }

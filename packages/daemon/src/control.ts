@@ -37,7 +37,7 @@ import {
   type RunsStartResult,
   type RunSummaryView,
 } from "@orca/protocol";
-import type { ReadModel } from "./read-model.js";
+import { agentSessionsByStep, type ReadModel } from "./read-model.js";
 
 export interface AnswerAndResumeOptions {
   /** The `HumanInputRequest.id` being answered. */
@@ -322,11 +322,16 @@ export class ControlModel {
   /**
    * Which agent asked. `agent.session.opened` is the only event that records it, and a
    * permission ask always has one: an `ask` reaches a person only through a live session.
+   *
+   * The scan itself is `agentSessionsByStep` in the read model, shared with `inputs.list`,
+   * which needs the same answer to say who is blocked (#248). A standing rule written here
+   * has to belong to the agent the card named, and one scan is how that stays true.
    */
   private async agentForStep(runId: string, stepRunId: string): Promise<string> {
-    for (const e of await this.orc.stores.events.readTypes(runId, ["agent.session.opened"]))
-      if (e.type === "agent.session.opened" && e.payload.stepRunId === stepRunId) return e.payload.agentId;
-    throw new OrcaError("AGENT_NOT_FOUND", `no agent session recorded for step ${stepRunId}`, { runId, stepRunId });
+    const session = (await agentSessionsByStep(this.orc, runId)).get(stepRunId);
+    if (!session)
+      throw new OrcaError("AGENT_NOT_FOUND", `no agent session recorded for step ${stepRunId}`, { runId, stepRunId });
+    return session.agentId;
   }
 }
 

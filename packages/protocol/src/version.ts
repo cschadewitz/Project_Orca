@@ -30,8 +30,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * a list clients read by name, and an optional field joins a view. Nothing that was sent
  * before is sent differently - a 1.4 client's `parseNotification` dropped `agent.changed` as
  * a method it had never heard of, which is what it will go on doing.
+ *
+ * 1.6 adds `agent` to `OpenInputView` and to `input.opened` (#248): which agent's turn a
+ * permission ask is holding open, and the host it runs on. An optional field joining two
+ * existing views, so a minor by the rule above; nothing sent before is sent differently.
+ * It is optional on the wire as well as in the rule - a workflow gate is nobody's agent -
+ * so a client reads its absence as "no agent is blocked", never as a field that failed.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 5 };
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 6 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
   return `${v.major}.${v.minor}`;

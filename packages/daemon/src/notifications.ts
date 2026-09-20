@@ -123,6 +123,12 @@ export function notificationsFor(event: OrcaEvent, subscriptionId: string): Daem
         // pre-#220 log's bare strings as `{ id: s, label: s }` by the time the event gets
         // here, so an old log pushes the same shape as a new one.
         options: event.payload.options,
+        // Whose turn is held open (protocol 1.6, #248), straight off the event - which is
+        // what keeps this function pure. `hostType` is deliberately not here: a host's
+        // transport is configuration, so `inputs.list` resolves it from the registry rather
+        // than a log freezing a stale copy. A workflow gate has no agent, and a permission
+        // ask recorded before the field existed has none either; both send nothing.
+        ...(event.payload.agent ? { agent: event.payload.agent } : {}),
       },
     });
   } else if (event.type === "human.answered") {

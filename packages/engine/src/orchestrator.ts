@@ -1052,6 +1052,10 @@ export class Orchestrator {
             // ACP already separates the two: `optionId` is what the agent is answered
             // with, `name` is what the host shows. Keep them apart here too.
             options: req.options.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
+            // Whose turn is being held open (#248). It is recorded here because here is
+            // where it is known: an attention card has to name the agent, and the push that
+            // opens the card is a pure function of the event it comes from.
+            agent: { id: agent.id, hostId: host.spec.id },
             context: { toolCall: req.toolCall },
             onRequested: () => {
               pendingAsks++;

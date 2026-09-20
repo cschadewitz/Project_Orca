@@ -252,6 +252,22 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
        * `{ id: s, label: s }`, so those answers still match - see `toGateOption`.
        */
       options: z.array(GateOptionSchema).default([]),
+      /**
+       * The agent whose turn this ask is holding open, when one is (#248). A `permission`
+       * always has one; a workflow `decision` or `question` has none, and the absence is
+       * the answer rather than a gap.
+       *
+       * It is recorded here as well as derivable from `agent.session.opened` because the
+       * `input.opened` notification is a pure function of this one event: a push that had
+       * to scan a log to say whose turn is blocked would turn every append into a
+       * projection. Only what the moment of asking *knows* is stored - the agent's id and
+       * the host it was spawned on. A host's transport is configuration, so it is resolved
+       * from the registry on a read and never frozen into the log.
+       *
+       * An event written before this field existed simply has none; `inputs.list` answers
+       * for those logs from the session scan, which is why the read path does not use it.
+       */
+      agent: z.object({ id: z.string(), hostId: z.string() }).optional(),
       context: z.record(z.string(), z.unknown()).default({}),
     }),
   ),

@@ -15,16 +15,40 @@
  * `id` is still the whole of the answer: `inputs.answer` takes an option id, a label may be
  * reworded between the ask and the answer, and `GateOptionSchema` reads a bare string as an
  * option that is its own id and label, so a log written before #220 still parses.
+ *
+ * `agent` joined for the same reason as the artifacts (protocol 1.6, #248): a permission ask
+ * holds an agent's turn open, the card has to say whose, and "whose" was one `agents.list`
+ * away - a further call the design forbids. It is optional because a workflow gate is not an
+ * agent's question.
  */
 import { z } from "zod";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
 import { GateOptionSchema } from "@orca/core/schemas";
+import { AgentHostTypeSchema } from "./agents.js";
 import { ArtifactViewSchema, WorkItemViewSchema } from "./views.js";
 
 export const INPUTS_LIST_METHOD = "inputs.list";
 
 export const InputKindSchema = z.enum(["decision", "permission", "question"]);
 export type InputKind = z.infer<typeof InputKindSchema>;
+
+/**
+ * Who is blocked on this question - the agent that asked and the host it runs on (#248).
+ *
+ * Three fields of `AgentView` and not a fourth: a card says "claude-local on build-01 is
+ * waiting", and the rest of the agent's state is what the Agents surface is for. Folding one
+ * vocabulary matters more here than saving the bytes, so the names are `AgentView`'s.
+ *
+ * `hostType` is absent when the host is no longer configured, for the same reason it is
+ * optional on `AgentView`: a config edit between the ask and the read leaves the agent
+ * without one, and an invented `local` would be worse than none (RULES.md rule 12).
+ */
+export const InputAgentSchema = z.object({
+  id: z.string(),
+  hostId: z.string(),
+  hostType: AgentHostTypeSchema.optional(),
+});
+export type InputAgent = z.infer<typeof InputAgentSchema>;
 
 export const OpenInputViewSchema = z.object({
   id: z.string(),
@@ -42,6 +66,13 @@ export const OpenInputViewSchema = z.object({
   runName: z.string(),
   stepRunId: z.string(),
   nodeId: z.string().optional(),
+  /**
+   * The agent held open by this ask, when there is one (protocol 1.6, #248). A `permission`
+   * always has one - an `ask` reaches a person only through a live agent session - and a
+   * `decision` or `question` opened by a workflow gate has none, so its absence is the
+   * honest answer and not a field that failed to load.
+   */
+  agent: InputAgentSchema.optional(),
   workItem: WorkItemViewSchema.optional(),
   requestedAt: z.string(),
   /** How long it has waited, against `asOf` of the result - so a client's own clock never enters into it. */
