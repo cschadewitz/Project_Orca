@@ -41,7 +41,13 @@ describe("connectionStateFor", () => {
   it("is mismatch whatever the transport is doing: reachable and unusable is its own state", () => {
     expect(connectionStateFor({ ...base, compatible: false })).toBe("mismatch");
     expect(
-      connectionStateFor({ link: "reconnecting", compatible: false, daemonGone: true, failuresAtCap: 0, fileMode: false }),
+      connectionStateFor({
+        link: "reconnecting",
+        compatible: false,
+        daemonGone: true,
+        failuresAtCap: 0,
+        fileMode: false,
+      }),
     ).toBe("mismatch");
   });
 

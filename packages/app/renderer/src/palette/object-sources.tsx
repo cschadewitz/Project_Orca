@@ -83,13 +83,15 @@ export function PaletteObjectSources({ onOpen }: PaletteObjectSourcesProps): JSX
     useCallback(
       async (query: string) => {
         const recent = await recentRuns();
-        return recent.filter((run) => matches(query, run.name, run.id)).map((run) => ({
-          id: run.id,
-          label: run.name,
-          detail: run.id,
-          detailIsMachine: true,
-          run: () => onOpen(runUrl(run.id)),
-        }));
+        return recent
+          .filter((run) => matches(query, run.name, run.id))
+          .map((run) => ({
+            id: run.id,
+            label: run.name,
+            detail: run.id,
+            detailIsMachine: true,
+            run: () => onOpen(runUrl(run.id)),
+          }));
       },
       [recentRuns, onOpen],
     ),
@@ -108,14 +110,16 @@ export function PaletteObjectSources({ onOpen }: PaletteObjectSourcesProps): JSX
               : [],
           );
         const listed = await agents.current;
-        return listed.filter((agent) => matches(query, agent.id, agent.hostId)).map((agent) => ({
-          id: agent.id,
-          label: agent.id,
-          // The host and the health together, because an agent nobody has contacted is
-          // `unknown` rather than missing and a row that hid that would be the lie (#222).
-          detail: `${agent.hostId} · ${agent.state}`,
-          run: () => onOpen(agentUrl(agent.id)),
-        }));
+        return listed
+          .filter((agent) => matches(query, agent.id, agent.hostId))
+          .map((agent) => ({
+            id: agent.id,
+            label: agent.id,
+            // The host and the health together, because an agent nobody has contacted is
+            // `unknown` rather than missing and a row that hid that would be the lie (#222).
+            detail: `${agent.hostId} · ${agent.state}`,
+            run: () => onOpen(agentUrl(agent.id)),
+          }));
       },
       [onOpen],
     ),

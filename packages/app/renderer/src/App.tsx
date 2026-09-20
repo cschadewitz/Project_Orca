@@ -218,7 +218,13 @@ interface DeepLinkLandingProps {
  * - a URL that resolved — name what was opened, so a person who pasted a link can see the
  *   app agreed about which object they meant.
  */
-function DeepLinkLanding({ route, unresolved, unavailable, live, onDismiss }: DeepLinkLandingProps): JSX.Element | null {
+function DeepLinkLanding({
+  route,
+  unresolved,
+  unavailable,
+  live,
+  onDismiss,
+}: DeepLinkLandingProps): JSX.Element | null {
   if (unavailable !== undefined) {
     return (
       <Landing onDismiss={onDismiss}>

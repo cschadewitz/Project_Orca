@@ -56,9 +56,7 @@ function parseStep(segment: string): StepAddress {
   // A node id may contain dots of its own, so a trailing number is an attempt and anything
   // else is part of the name: `deploy.eu-west` is one node, `deploy.eu-west.2` is its
   // second attempt.
-  return Number.isInteger(attempt) && attempt > 0
-    ? { nodeId: segment.slice(0, dot), attempt }
-    : { nodeId: segment };
+  return Number.isInteger(attempt) && attempt > 0 ? { nodeId: segment.slice(0, dot), attempt } : { nodeId: segment };
 }
 
 /** `spec.md@v3` — the name, and the version when one is pinned. */
@@ -151,7 +149,9 @@ export const artifactUrl = (runId: string, name: string, version?: number): stri
   `orca://artifact/${encodeURIComponent(version === undefined ? name : `${name}@v${version}`)}?run=${encodeURIComponent(runId)}`;
 
 export const workflowUrl = (workflowId: string, runId?: string): string =>
-  runId === undefined ? path("workflow", workflowId) : `${path("workflow", workflowId)}?run=${encodeURIComponent(runId)}`;
+  runId === undefined
+    ? path("workflow", workflowId)
+    : `${path("workflow", workflowId)}?run=${encodeURIComponent(runId)}`;
 
 /**
  * The URL for a crumb in the object header, which is what **Copy link** copies and what
@@ -211,7 +211,10 @@ export function describeRoute(route: Route): { type: string; id: string } {
   switch (route.kind) {
     case "run":
       return route.step
-        ? { type: "step", id: route.step.attempt === undefined ? route.step.nodeId : `${route.step.nodeId}.${route.step.attempt}` }
+        ? {
+            type: "step",
+            id: route.step.attempt === undefined ? route.step.nodeId : `${route.step.nodeId}.${route.step.attempt}`,
+          }
         : { type: "run", id: route.runId };
     case "gate":
       return { type: "gate", id: route.inputId };
