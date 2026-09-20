@@ -8,6 +8,7 @@
  */
 import type { JSX } from "react";
 import { SCHEDULE_PRESENTATION, type ScheduleClass } from "@orca/design";
+import { textClass } from "./text.js";
 
 export interface ScheduleBadgeProps {
   classification: ScheduleClass;
@@ -19,9 +20,18 @@ export interface ScheduleBadgeProps {
 export function ScheduleBadge({ classification, onExplain, className }: ScheduleBadgeProps): JSX.Element {
   const { word } = SCHEDULE_PRESENTATION[classification];
   return (
-    <span className={["orca-badge", `orca-badge--${classification}`, className].filter(Boolean).join(" ")}>
+    <span
+      className={["orca-badge", textClass("caption"), `orca-badge--${classification}`, className]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <span>{word}</span>
-      <button type="button" className="orca-badge__why" onClick={onExplain} aria-label={`why ${word}`}>
+      <button
+        type="button"
+        className={`orca-badge__why ${textClass("caption")}`}
+        onClick={onExplain}
+        aria-label={`why ${word}`}
+      >
         why
       </button>
     </span>

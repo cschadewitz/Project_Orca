@@ -11,6 +11,7 @@
  * surfaces that own them (#160); this is the shell they sit in.
  */
 import type { JSX, ReactNode } from "react";
+import { textClass } from "./text.js";
 
 export type CardTone = "default" | "gate" | "permission";
 
@@ -30,7 +31,7 @@ export function Card({ children, tone = "default", eyebrow, interrupt = false, c
       className={["orca-card", tone === "default" ? "" : `orca-card--${tone}`, className].filter(Boolean).join(" ")}
       {...(interrupt ? { role: "alert", "aria-live": "assertive" as const } : {})}
     >
-      {eyebrow !== undefined && <div className="orca-card__eyebrow">{eyebrow}</div>}
+      {eyebrow !== undefined && <div className={`orca-card__eyebrow ${textClass("eyebrow")}`}>{eyebrow}</div>}
       {children}
     </section>
   );

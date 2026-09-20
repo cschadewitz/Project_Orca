@@ -15,6 +15,7 @@ import { type JSX, type ReactNode } from "react";
 import { CHROME_GLYPHS } from "@orca/design";
 import { counterpartsFor, type Counterpart, type CrumbType } from "./counterparts.js";
 import { Menu } from "./menu.js";
+import { textClass } from "./text.js";
 
 export interface Crumb {
   type: CrumbType;
@@ -42,16 +43,16 @@ export function ObjectHeader({ crumbs, actions, onOpen, onOpenCounterpart }: Obj
         {crumbs.map((crumb, index) => (
           <li key={keyOf(crumb)} className="orca-objhead__crumb">
             {index > 0 && (
-              <span className="orca-crumb__sep" aria-hidden="true">
+              <span className={`orca-crumb__sep ${textClass("caption")}`} aria-hidden="true">
                 {CHROME_GLYPHS.crumbSeparator}
               </span>
             )}
             {crumb.current === true ? (
-              <span className="orca-crumb orca-crumb--current" aria-current="page">
+              <span className={`orca-crumb ${textClass("label")} orca-crumb--current`} aria-current="page">
                 <CrumbLabel crumb={crumb} />
               </span>
             ) : (
-              <button type="button" className="orca-crumb" onClick={() => onOpen?.(crumb)}>
+              <button type="button" className={`orca-crumb ${textClass("label")}`} onClick={() => onOpen?.(crumb)}>
                 <CrumbLabel crumb={crumb} />
               </button>
             )}
@@ -70,7 +71,7 @@ function CrumbLabel({ crumb }: { crumb: Crumb }): JSX.Element {
   return (
     <>
       <span>{crumb.label}</span>
-      <span className="orca-crumb__type">{crumb.type}</span>
+      <span className={`orca-crumb__type ${textClass("eyebrow")}`}>{crumb.type}</span>
     </>
   );
 }

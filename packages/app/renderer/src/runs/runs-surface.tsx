@@ -24,7 +24,7 @@ import { useEffect, useMemo, useState, type JSX } from "react";
 import { CHROME_GLYPHS, STATUS_PRESENTATION, type ConnectionState, type RunStatus } from "@orca/design";
 import { DISPLAY_STATUSES, type RunSummaryView } from "@orca/protocol";
 import { scopeProps } from "../keyboard-map.js";
-import { Duration, Menu, StateView, StatusChip, Text, type MenuItem } from "../ui/index.js";
+import { Duration, Menu, StateView, StatusChip, Text, textClass, type MenuItem } from "../ui/index.js";
 import { matchesText } from "./run-rows.js";
 import { useRunSelection } from "./use-run-selection.js";
 import { useRuns, type StatusFilter } from "./use-runs.js";
@@ -84,14 +84,14 @@ export function RunsSurface({ connection }: RunsSurfaceProps): JSX.Element {
       {/* Last-known data, said out loud: the values stay, the banner says not to trust their
           freshness (docs/design/40-connection-states.md). */}
       {!live && state.phase === "ready" && (
-        <div className="orca-banner orca-banner--stale" role="status">
+        <div className={`orca-banner ${textClass("caption")} orca-banner--stale`} role="status">
           <Text style="caption">Not connected — these runs are the last the daemon sent.</Text>
         </div>
       )}
 
       <div className="orca-runs__filters">
         <input
-          className="orca-input orca-runs__text"
+          className={`orca-input ${textClass("mono-body")} orca-runs__text`}
           type="search"
           value={text}
           aria-label="Filter runs"
@@ -105,7 +105,7 @@ export function RunsSurface({ connection }: RunsSurfaceProps): JSX.Element {
         <Menu
           label={`Filter by status, currently ${statusLabel(status)}`}
           items={STATUS_ITEMS}
-          triggerClassName="orca-btn orca-btn--ghost orca-btn--sm"
+          triggerClassName={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
           onChoose={(item) => setStatus(item.id as StatusFilter)}
         >
           {statusLabel(status)}
@@ -254,14 +254,14 @@ function RunRow({ run, selected, live, onSelect }: RunRowProps): JSX.Element {
       onClick={() => onSelect(run.id)}
     >
       <StatusChip status={status} className="orca-runs__chip" />
-      <span className="orca-tree-row__name orca-runs__name">{run.name}</span>
-      <span className="orca-tree-row__meta">
-        <span className="orca-id orca-runs__workflow">
+      <span className={`orca-tree-row__name ${textClass("mono-strong")} orca-runs__name`}>{run.name}</span>
+      <span className={`orca-tree-row__meta ${textClass("caption")}`}>
+        <span className={`orca-id ${textClass("mono-id")} orca-runs__workflow`}>
           {run.workflowId}
           <span className="orca-faint"> v{run.workflowVersion}</span>
         </span>
         <RunDuration run={run} accruing={accruing} stale={!live} />
-        <span className="orca-id orca-runs__agent">{run.agentId ?? ""}</span>
+        <span className={`orca-id ${textClass("mono-id")} orca-runs__agent`}>{run.agentId ?? ""}</span>
       </span>
     </div>
   );
@@ -277,7 +277,9 @@ function RunDuration({
   accruing: boolean;
   stale: boolean;
 }): JSX.Element {
-  const className = ["orca-tree-row__dur", "orca-runs__dur", stale ? "orca-stale-value" : ""].filter(Boolean).join(" ");
+  const className = ["orca-tree-row__dur", textClass("mono-id"), "orca-runs__dur", stale ? "orca-stale-value" : ""]
+    .filter(Boolean)
+    .join(" ");
 
   if (accruing && run.startedAt !== undefined) {
     return <Duration since={new Date(run.startedAt)} className={className} />;
