@@ -205,11 +205,16 @@ async function fontsSettled(): Promise<void> {
  * Check that `NO_CLOCK` found what it was written for, and say so if it did not.
  *
  * A CSS rule that matches nothing is silent, and the failure it would let through is a
- * baseline that goes red a minute after it was written. So the two ticking rows are counted
- * — two per theme column, four on the page — and measured: a detail span that still has
- * width is a detail span that is still on the picture.
+ * baseline that goes red a minute after it was written. So the ticking rows are counted and
+ * then measured: a detail span that still has width is a detail span that is still on the
+ * picture.
  */
 async function clockIsNeutralised(): Promise<void> {
+  /* Waited for, not assumed: `evaluateAll` does not auto-wait, and a zero count would
+     otherwise read as "the markup moved" when it only meant "not painted yet". */
+  const ticker = page.locator(".orca-conn--reconnecting, .orca-conn--disconnected").first();
+  await expect(ticker).toBeAttached();
+
   const widths = await page
     .locator(".orca-conn--reconnecting > span:last-child, .orca-conn--disconnected > span:last-child")
     .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().width));
