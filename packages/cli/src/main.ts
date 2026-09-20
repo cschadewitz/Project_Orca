@@ -2,7 +2,7 @@
 /** `orca` command line. */
 import { parseArgs } from "node:util";
 import { isOrcaError } from "@orca/core";
-import { commands } from "./commands/index.js";
+import { commands, ORCA_VERSION } from "./commands/index.js";
 
 const USAGE = `orca - Orchestration Runtime for Coding Agents
 
@@ -17,6 +17,7 @@ global options:
   --config <file>    orca.config.yaml to use (default: nearest one upwards from cwd)
   --cwd <dir>        working directory (default: process cwd)
   --help             show this help
+  --version          print the ORCA version and exit
 `;
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -46,9 +47,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       keep: { type: "boolean" },
       "no-resume": { type: "boolean" },
       help: { type: "boolean" },
+      version: { type: "boolean" },
     },
   });
   const [name, ...rest] = positionals;
+  // Before the command lookup and before `--help`: `orca --version` is a question about the
+  // installation, not about a command, and it was answered with the usage text and exit 1
+  // until now — `strict: false` made an undeclared `--version` a flag nobody read (#229).
+  // Only bare, though: with a command named, the flag is that command's to interpret.
+  if (values.version && !name) {
+    process.stdout.write(ORCA_VERSION + "\n");
+    return 0;
+  }
   if (values.help) {
     process.stdout.write(USAGE);
     return 0;
