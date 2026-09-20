@@ -35,8 +35,14 @@
  * lines would be asserting against a shape the daemon does not produce.
  *
  * The gate parks because `orca serve` installs `PausingHumanInput` whatever the config's
- * `humanInput` says (packages/cli/src/commands/index.ts), so a gate with no
+ * `humanInput` says (packages/cli/src/commands/index.ts) — unless `--read-only`, which this
+ * fixture must not pass and which would take `runs.start` away with it. So a gate with no
  * `autoApproveWhen` lands on `inputs.list` and stays there until somebody answers it.
+ *
+ * Measured against a real daemon, not inferred: with the three additions below, `inputs.list`
+ * answers `waiting: 1` with the gate's question and both its options, `runs.list` answers
+ * seven runs across `waiting`, `failed` and `succeeded`, and `agents.list` answers two agents
+ * on two hosts, both at `unknown` health.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
@@ -76,8 +82,15 @@ export const FIXTURE = {
   host: { id: "builder-2", agentId: "remote-builder", agentName: "Remote builder" },
   /**
    * The parked gate: its workflow, the question on the card and the option a card must not
-   * make easy. A run started by `runs.start` is named after its workflow id, so
-   * `workflowId` is also the run name a card and a row show.
+   * make easy.
+   *
+   * **Assert on `question`, `destructiveOption` and `safeOption` — not on `title`.** The
+   * question and the option labels travel on the wire (`OpenInputView`); a workflow's `name`
+   * and a node's `name` do not, so `title` is only what the YAML below is called and is
+   * invisible to every surface. A run started by `runs.start` has no work item and no
+   * request behind it, so the daemon falls back to the workflow id for its display name:
+   * `workflowId` is the run name a card and a row show, and `smoke-gate` is what a reader of
+   * a failed screenshot will see.
    */
   gate: {
     workflowId: "smoke-gate",
@@ -86,7 +99,11 @@ export const FIXTURE = {
     destructiveOption: "Publish",
     safeOption: "Hold for review",
   },
-  /** The failed run, for Attention's third tier and for a second status in the tree. */
+  /**
+   * The failed run, for Attention's third tier and for a second status in the tree. `title`
+   * is the workflow's `name` and, as above, is not on screen anywhere — the row reads
+   * `smoke-failure`.
+   */
   failure: { workflowId: "smoke-failure", title: "Nightly regression suite" },
 } as const;
 
@@ -213,11 +230,13 @@ edges:
  * The config `orca serve` is given: the demo's, plus a second host and the fixture's
  * workflows.
  *
- * Written as JSON beside the demo's YAML rather than over it (`orca.config.json` is one of
- * `CONFIG_FILENAMES`, and JSON is what `bootstrap` parses when the name ends in `.json`).
- * The demo's own file is left exactly as `orca demo --keep` wrote it, so the sentence it
- * prints — "the workspace also holds a ready-to-use orca.config.yaml" — stays true of a
- * workspace a person inspects after a failed smoke run.
+ * Written as JSON beside the demo's YAML rather than over it. What makes that work is the
+ * extension, not the name: `loadConfig` parses with `JSON.parse` when the path ends in
+ * `.json` and with the YAML parser otherwise, and `--config` is explicit here, so this file
+ * deliberately is *not* one of `CONFIG_FILENAMES` and nothing will discover it by accident.
+ * The demo's own file is left exactly as `orca demo` wrote it, so the sentence it prints —
+ * "the workspace also holds a ready-to-use orca.config.yaml" — stays true of a workspace a
+ * person inspects after a failed smoke run.
  */
 async function writeSmokeConfig(dir: string): Promise<string> {
   const demo = parseYaml(await readFile(join(dir, "orca.config.yaml"), "utf8")) as {
@@ -284,8 +303,20 @@ async function seedAttention(url: string): Promise<void> {
 /** Build a demo workspace, add what an audit needs to it, and serve it. Call `stop` however the test ends. */
 export async function startDemoDaemon(): Promise<Daemon> {
   const dir = await mkdtemp(join(tmpdir(), "orca-smoke-"));
-  // `--keep` because the point is the store it leaves behind; without it demo cleans up.
-  await run(process.execPath, [cli, "demo", "--dir", dir, "--keep"], { cwd: dir, maxBuffer: 32 * 1024 * 1024 });
+  /* `--keep` because the point is the store it leaves behind; without it demo cleans up.
+     (`--dir` already implies it, but saying so is what stops the next reader deleting it.)
+
+     `orca demo` exits non-zero if the program run did not succeed, so `execFile` rejects and
+     the smoke test never reaches the window — and it rejects with a `Command failed` whose
+     output Node truncates to a couple of lines. The demo's own stdout is where it says what
+     went wrong, so it is re-thrown here with the whole thing attached: a broken demo should
+     be readable off a red CI run rather than reproducible only on a laptop. */
+  try {
+    await run(process.execPath, [cli, "demo", "--dir", dir, "--keep"], { cwd: dir, maxBuffer: 32 * 1024 * 1024 });
+  } catch (e) {
+    const { stdout = "", stderr = "" } = e as { stdout?: string; stderr?: string };
+    throw new Error(`\`orca demo\` failed, so there is no store to smoke-test\n${stdout}${stderr}`, { cause: e });
+  }
   const configPath = await writeSmokeConfig(dir);
 
   const port = await freePort();
