@@ -6,7 +6,27 @@ updates:
     schedule:
       interval: daily
     open-pull-requests-limit: 5
+
+    # An npm bump that touches packages/ trips changelog.yml, which wants a fragment or the
+    # opt-out label. A version bump is not a release note on its own — the note belongs to
+    # whatever the upgrade lets us build — so the opt-out is the honest answer. `dependencies`
+    # is Dependabot's own default label, which setting `labels` at all would otherwise drop.
+    labels: [dependencies, no-changelog]
+
+    # tools/eslint-config pins TypeScript 6 on purpose: typescript-eslint declares
+    # `typescript: >=4.8.4 <6.1.0`, while the rest of the repo builds with TS 7. Two majors
+    # live here deliberately, and a bump that sees only one manifest cannot know that — it
+    # moved the pin to 7.0.2 and lint died with "typescript-eslint does not support TS 7.0".
+    # TypeScript moves by hand, on both sides at once, until typescript-eslint supports 7.
+    ignore:
+      - dependency-name: typescript
+
     groups:
+      # Without `update-types` Dependabot fills in minor+patch for a development group and
+      # patch alone for a production one, which drops every major out of the group and into
+      # a pull request of its own. That is how vite 8 and @vitejs/plugin-react 6 arrived
+      # separately, the plugin reaching for a `vite/internal` that the vite beside it did
+      # not have. Majors are the bumps that most need to travel together.
       dev-dependencies:
         dependency-type: "development"
         update-types:
