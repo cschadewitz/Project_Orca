@@ -59,10 +59,14 @@ export function useCardKeys(options: readonly BoundOption[], focused: boolean, a
           ],
     );
     return () => off.forEach((remove) => remove());
-    // `signature` stands for `options` here: the effect must re-run when an option is
-    // reworded or added and must not when the array is merely rebuilt, which it is on
-    // every push. (No exhaustive-deps rule is configured in this repo to appease.)
-  }, [keyboard, focused, signature, options]);
+    /* `signature` rather than `options`: the effect must re-run when an option is reworded
+       or added, and must *not* on every render — unregistering and re-registering four
+       shortcuts each time would leave a window, however small, in which a keypress does
+       nothing. `options` is read through that same render's closure, which is the array
+       `signature` was computed from. */
+  }, [keyboard, focused, signature]);
+
+  const hasGoToRun = actions.goToRun !== undefined;
 
   useEffect(() => {
     if (!focused) return;
@@ -80,7 +84,7 @@ export function useCardKeys(options: readonly BoundOption[], focused: boolean, a
         detail: "The note reaches the operator log, not the run's own event log (#238)",
         action: () => current.current.submitWithNote(),
       }),
-      ...(actions.goToRun
+      ...(hasGoToRun
         ? [
             keyboard.register({
               scope: "card",
@@ -93,5 +97,7 @@ export function useCardKeys(options: readonly BoundOption[], focused: boolean, a
         : []),
     ];
     return () => off.forEach((remove) => remove());
-  }, [keyboard, focused, actions.goToRun]);
+    /* Whether there is a `goToRun`, not which one: the callback is a closure the caller
+       rebuilds every render, and `current` already carries the latest. */
+  }, [keyboard, focused, hasGoToRun]);
 }

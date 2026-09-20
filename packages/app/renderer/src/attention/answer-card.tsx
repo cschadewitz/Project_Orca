@@ -24,7 +24,7 @@
  *   that `allow_always` means allow, so the two always-buttons say which way the rule goes;
  *   what they wrote comes back in `permission` and is reported verbatim (`alwaysOutcome`).
  */
-import { useEffect, useRef, useState, type JSX, type ReactNode, type Ref } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode, type Ref } from "react";
 import { Button, Card, Text, textClass } from "../ui/index.js";
 import { scopeProps } from "../keyboard-map.js";
 import { bindOptions, defaultSelection, isFreeText, type GateOption } from "./card-model.js";
@@ -98,7 +98,10 @@ export function AnswerCard({
   onFocus,
   cardRef,
 }: AnswerCardProps): JSX.Element {
-  const bound = bindOptions(options);
+  /* Memoised on the options themselves: the bound list is what `useCardKeys` registers
+     from, and a new array each render would mean four shortcuts unregistered and
+     re-registered on every push. */
+  const bound = useMemo(() => bindOptions(options), [options]);
   const [selected, setSelected] = useState<string | undefined>(() => defaultSelection(options));
   const [note, setNote] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
