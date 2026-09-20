@@ -1050,8 +1050,8 @@ export class Orchestrator {
             kind: "permission",
             question: req.toolCall.title ?? "Allow tool call?",
             // ACP already separates the two: `optionId` is what the agent is answered
-          // with, `name` is what the host shows. Keep them apart here too.
-          options: req.options.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
+            // with, `name` is what the host shows. Keep them apart here too.
+            options: req.options.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
             context: { toolCall: req.toolCall },
             onRequested: () => {
               pendingAsks++;

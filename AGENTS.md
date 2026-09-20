@@ -62,6 +62,14 @@ over them. Build on those rather than re-deriving values. If a screen seems to n
 component that does not exist, check `docs/design/` before inventing one — most of them are
 already specced.
 
+**A component class no longer carries a type size (#211).** `components.css` sets no
+`font-size` at all: an element gets its size by *also* taking an `.orca-text-*` class
+(`orca-text-caption`, `orca-text-mono-log`, …), and every rule in `components.css` carries a
+`/* type: <style> */` note saying which one it expects. `class="orca-chip"` alone inherits the
+shell's 14px rather than the chip's intended size, so both classes go on the element. The
+sans/mono distinction, weight and colour still come from the component class — only the size
+moved.
+
 Screens live in `packages/app/renderer` — React, bundled by Vite, with `tokens.css` and
 `components.css` imported at the top of `renderer/src/main.tsx`. `pnpm --filter @orca/app dev`
 runs it with hot reload; `docs/DEVELOPMENT.md` ("The renderer build") has the rest.

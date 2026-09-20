@@ -110,7 +110,10 @@ that never started get a fresh child run.
 3. Open (or reuse, `sessionMode: per-run`) an **ACP session** on the agent's
    host. ORCA is the ACP *client*: it serves `fs/read_text_file`,
    `fs/write_text_file` from the host file system (scoped to the workspace) and
-   answers `session/request_permission` through the agent's permission policy.
+   answers `session/request_permission` through the agent's permission policy —
+   the rules configured on the agent first, then any the workspace sidecar has
+   recorded (ADR 0009), first match winning, so a configured `deny` can never be
+   undone by something a machine wrote.
    An `ask` decision becomes its own human‑input request (`human.requested` /
    `human.answered`, one `hi_*` id per ask), so several pending tool calls can be
    listed and answered independently.

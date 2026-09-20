@@ -40,9 +40,16 @@ top of the failing step if there is one, otherwise at the top.
 
 ## Buffering and trimming
 
-The renderer keeps the last 50,000 lines of a step's output in memory and the full log on
+The renderer keeps the last 50,000 **events** of a step's output in memory and the full log on
 disk. When the buffer trims, a marker row in `ink-tertiary` says so and offers **Load earlier
 output**, which pages backwards from disk. The app never silently shows a partial log.
+
+Events, not lines, because a step's output *is* its `agent.update` events: there is no
+separate log file, and `runs.events` pages over them with a `stepRunId` filter rather than a
+method of its own (#158). One `agent.update` can render many lines, so 50,000 events is a
+larger buffer than 50,000 lines, not a smaller one. The reason to count them this way is that
+the trim boundary has to be addressable: **Load earlier output** pages backwards with that
+event's cursor, and a line boundary is not a thing the wire can name.
 
 Long single lines (a base64 blob, a minified bundle) are collapsed at 2,000 characters to a
 `… 84,102 more characters` affordance rather than wrapped, because one such line can otherwise
