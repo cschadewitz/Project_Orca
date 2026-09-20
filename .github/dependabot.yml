@@ -8,7 +8,7 @@ updates:
     open-pull-requests-limit: 5
     groups:
       dev-dependencies:
-        dependency-type: development        
+        dependency-type: development
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-patch"
