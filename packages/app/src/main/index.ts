@@ -20,14 +20,21 @@
  */
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
-import type { BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
+import type {
+  AlertItem,
+  AlertsUpdate,
+  BridgeResult,
+  ConnectionSnapshot,
+  WorkspaceSnapshot,
+} from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
 import { appMenuTemplate } from "./app-menu.js";
+import { createAlerts, type AlertTier } from "./alerts.js";
 import { ConnectionMachine } from "./connection-state.js";
 import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
 import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
@@ -90,6 +97,13 @@ handle("orca:artifacts.list", (params: Parameters<DaemonClient["artifactsList"]>
 handle("orca:artifacts.get", (params: Parameters<DaemonClient["artifactsGet"]>[0]) => client().artifactsGet(params));
 handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) => client().agentsList(params));
 
+// The three that write (#160, #161). They reach the daemon the same way the reads do; what
+// makes them different is on the other two sides - the daemon refuses them without the
+// run's lease, and the renderer asks `useWritability()` before offering the control at all.
+// `runs.start` is absent on purpose: it needs a workflow picker (#178, v0.5.0).
+handle("orca:inputs.answer", (params: Parameters<DaemonClient["inputsAnswer"]>[0]) => client().inputsAnswer(params));
+handle("orca:runs.cancel", (params: Parameters<DaemonClient["runsCancel"]>[0]) => client().runsCancel(params));
+handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) => client().runsResume(params));
 /** Everything the main process pushes goes out the same way: every window, none destroyed. */
 function send(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -281,6 +295,73 @@ ipcMain.handle("orca:preferences.write", (_event, patch: unknown): BridgeResult<
   }
 });
 
+/* ---------- OS notifications ---------- */
+
+/**
+ * The Electron half of `./alerts.ts` (#162). One `Notification` per tier, kept so a second
+ * ask can update the one already showing instead of stacking a second behind it, and a
+ * badge that carries the same one number the title bar and the sidebar show.
+ *
+ * Nothing here decides *whether* to post: the tier table, the 60-second gate delay and the
+ * unfocused escalation are all in the module, which is Electron-free so that they can be
+ * tested with fake timers.
+ */
+const liveAlerts = new Map<AlertTier, Notification>();
+
+function focusedWindow(): BrowserWindow | undefined {
+  return BrowserWindow.getAllWindows().find((win) => !win.isDestroyed() && win.isFocused());
+}
+
+/** Tell every open window a person clicked a notification, or that Attention should come forward. */
+function activate(item: AlertItem | undefined): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send("orca:alerts.activate", item ? { item } : {});
+  }
+}
+
+const alerts = createAlerts(
+  {
+    show: ({ tier, title, body, item }) => {
+      if (!Notification.isSupported()) return;
+      // Closed and replaced rather than mutated: `Notification.title` is writable but only
+      // some platforms redraw a notification that is already on screen, and a stale count
+      // is worse than a redraw.
+      liveAlerts.get(tier)?.close();
+      const notification = new Notification({ title, body });
+      // Focus the window the person is coming back to, which is the one thing a click on a
+      // notification is allowed to do — the *card* it opens is #165's route table, and
+      // `activate` already carries the item a route will be built from.
+      notification.on("click", () => {
+        const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+        win?.show();
+        activate(item);
+      });
+      liveAlerts.set(tier, notification);
+      notification.show();
+    },
+    dismiss: (tier) => {
+      liveAlerts.get(tier)?.close();
+      liveAlerts.delete(tier);
+    },
+    badge: (count) => {
+      // `setBadgeCount` is the dock on macOS, the launcher badge on Linux, and a no-op on
+      // Windows (where the taskbar wants an overlay icon there is no artwork for yet).
+      if (typeof app.setBadgeCount === "function") app.setBadgeCount(count);
+    },
+    isFocused: () => focusedWindow() !== undefined,
+    // Inside the focused window only, and never `show()`: a permission ask may take the
+    // person's attention where they already are, and may not move a window at them
+    // (docs/design/20-attention-and-gates.md).
+    focusAttention: (item) => focusedWindow()?.webContents.send("orca:alerts.activate", { item }),
+  },
+  () => preferences.read().alerts,
+);
+
+ipcMain.on("orca:alerts.update", (_event, update: AlertsUpdate) => alerts.update(update));
+
+app.on("browser-window-focus", () => alerts.focusChanged(true));
+app.on("browser-window-blur", () => alerts.focusChanged(false));
+
 /* ---------- theme ---------- */
 
 /** The theme the window is actually showing: the preference, or the OS when it is `system`. */
@@ -381,6 +462,7 @@ app.on("window-all-closed", () => {
 // Stop pushing at a process that is going.
 app.on("before-quit", () => {
   connection.close();
+  alerts.close();
 });
 
 /**

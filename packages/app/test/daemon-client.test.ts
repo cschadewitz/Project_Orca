@@ -10,15 +10,21 @@ import {
   CLAIMS_LIST_METHOD,
   ClaimsListParamsSchema,
   HELLO_METHOD,
+  INPUTS_ANSWER_METHOD,
   INPUTS_LIST_METHOD,
+  InputsAnswerParamsSchema,
   InputsListParamsSchema,
   PROTOCOL_VERSION,
+  RUNS_CANCEL_METHOD,
   RUNS_EVENTS_METHOD,
   RUNS_GET_METHOD,
   RUNS_LIST_METHOD,
+  RUNS_RESUME_METHOD,
+  RunsCancelParamsSchema,
   RunsEventsParamsSchema,
   RunsGetParamsSchema,
   RunsListParamsSchema,
+  RunsResumeParamsSchema,
   SOCKET_PATH,
 } from "@orca/protocol";
 import { hello, startDaemon, type DaemonHandle, type MethodTable } from "@orca/daemon";
@@ -288,5 +294,99 @@ describe("the agents method", () => {
     expect(answer.claims.map((c) => c.workItemId)).toEqual(["wi-7"]);
     expect(answer.claims[0]?.owner.runId).toBe("run-1");
     expect(answer.asOf).toBe(asOf);
+  });
+});
+
+/**
+ * The three control methods (#160, #161): the calls that write.
+ *
+ * What the client has to get right about them is narrow and worth pinning. `resume` is the
+ * daemon's default and not the client's, so an answer sent without it arrives as `true` —
+ * the app never states it, and a client that filled it in itself would have to be changed
+ * the day the default changes. And `permission` comes back verbatim, with `added`,
+ * `alreadyPresent` and `refused` intact, because a button that promises "ORCA will not ask
+ * again" reads all three before it says so.
+ *
+ * `runs.start` is absent from the client for the same reason it is absent from the bridge:
+ * nothing in the app can pick a workflow to start yet (#178).
+ */
+describe("the control methods", () => {
+  const asOf = "2026-03-01T09:00:00.000Z";
+  const seen: { method: string; params: unknown }[] = [];
+  const run = {
+    id: "run-gate",
+    name: "Document the rollout",
+    workflowId: "sdlc",
+    workflowVersion: "1",
+    status: "waiting" as const,
+    createdAt: asOf,
+  };
+
+  const record = <P, R>(method: string, params: z.ZodType<P>, result: R) => ({
+    params,
+    handle: (p: P): R => {
+      seen.push({ method, params: p });
+      return result;
+    },
+  });
+
+  const table: MethodTable = {
+    [HELLO_METHOD]: hello,
+    [INPUTS_ANSWER_METHOD]: record(INPUTS_ANSWER_METHOD, InputsAnswerParamsSchema, {
+      requestId: "hi-1",
+      runId: "run-gate",
+      answer: "allow_always",
+      permission: {
+        file: "/work/orca/orca.permissions.json",
+        agentId: "claude",
+        rules: [{ match: { kind: "execute" as const, path: "scripts/deploy.sh" }, decision: "allow" as const }],
+        added: [{ match: { kind: "execute" as const, path: "scripts/deploy.sh" }, decision: "allow" as const }],
+        alreadyPresent: [],
+      },
+      run: { ...run, status: "running" as const },
+      asOf,
+    }),
+    [RUNS_RESUME_METHOD]: record(RUNS_RESUME_METHOD, RunsResumeParamsSchema, { run, asOf }),
+    [RUNS_CANCEL_METHOD]: record(RUNS_CANCEL_METHOD, RunsCancelParamsSchema, {
+      run: { ...run, status: "cancelled" as const },
+      asOf,
+    }),
+  };
+
+  let d: DaemonHandle;
+  beforeAll(async () => {
+    d = await startDaemon({
+      orcaVersion: "0.1.0-test",
+      capabilities: ["runs.read", "runs.control"],
+      methods: table,
+    });
+  });
+  afterAll(async () => {
+    await d.close();
+  });
+
+  it("answers an input by option id, and leaves `resume` to the daemon's default", async () => {
+    const answered = await new DaemonClient(d.url).inputsAnswer({
+      requestId: "hi-1",
+      optionId: "allow_always",
+      always: { decision: "allow" },
+    });
+    expect(answered.answer).toBe("allow_always");
+    expect(answered.permission?.added).toHaveLength(1);
+    expect(answered.permission?.refused).toBeUndefined();
+    expect(seen[0]).toEqual({
+      method: INPUTS_ANSWER_METHOD,
+      params: { requestId: "hi-1", optionId: "allow_always", always: { decision: "allow" }, resume: true },
+    });
+  });
+
+  it("resumes and cancels a run, and answers with the run as it stands", async () => {
+    const client = new DaemonClient(d.url);
+    expect((await client.runsResume({ runId: "run-gate" })).run.status).toBe("waiting");
+    expect((await client.runsCancel({ runId: "run-gate", reason: "no longer needed" })).run.status).toBe("cancelled");
+    expect(seen.slice(1)).toEqual([
+      { method: RUNS_RESUME_METHOD, params: { runId: "run-gate" } },
+      { method: RUNS_CANCEL_METHOD, params: { runId: "run-gate", reason: "no longer needed" } },
+    ]);
   });
 });

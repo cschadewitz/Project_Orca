@@ -191,15 +191,21 @@ describe("the palette's object rows", () => {
     await screen.findByRole("dialog", { name: "Command palette" });
   };
   const query = (): HTMLInputElement => screen.getByRole("combobox", { name: "Command palette" });
+  /**
+   * Scoped to the palette on purpose: the Attention surface behind it draws its failed runs
+   * as `option` rows of its own (#161), so a store-wide query for a run's name matches the
+   * palette row *and* the failure row and says only that two things are called the same.
+   */
+  const rows = (): ReturnType<typeof within> => within(screen.getByRole("dialog", { name: "Command palette" }));
 
   it("lists recent runs and agents under Navigation", async () => {
     mount();
     await open();
 
-    expect(await screen.findByRole("option", { name: /SSO rollout/ })).toBeTruthy();
+    expect(await rows().findByRole("option", { name: /SSO rollout/ })).toBeTruthy();
     // The agent rows say the host and the health beside the id: an agent nobody has
     // contacted is `unknown` rather than missing (#222).
-    expect(await screen.findByRole("option", { name: /claude local/ })).toBeTruthy();
+    expect(await rows().findByRole("option", { name: /claude local/ })).toBeTruthy();
   });
 
   it("searches step and artifact names, and opening one goes through the route table", async () => {
@@ -248,7 +254,7 @@ describe("the palette's object rows", () => {
   it("forgets what it holds when the store says a run changed", async () => {
     const { fake } = mount();
     await open();
-    await screen.findByRole("option", { name: /SSO rollout/ });
+    await rows().findByRole("option", { name: /SSO rollout/ });
     const before = fake.calls.filter((call) => call.method === "runs.list").length;
 
     fake.notify({

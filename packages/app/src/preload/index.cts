@@ -20,7 +20,14 @@
 // and emitting CommonJS is the whole point of this file — see the header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import electron = require("electron");
-import type { BridgeResult, ConnectionSnapshot, OrcaBridge, WorkspaceSnapshot } from "../bridge.js";
+import type {
+  AlertActivation,
+  AlertsUpdate,
+  BridgeResult,
+  ConnectionSnapshot,
+  OrcaBridge,
+  WorkspaceSnapshot,
+} from "../bridge.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
 
@@ -41,8 +48,13 @@ const bridge: OrcaBridge = {
     list: (params = {}) => call("orca:runs.list", params),
     get: (params) => call("orca:runs.get", params),
     events: (params) => call("orca:runs.events", params),
+    cancel: (params) => call("orca:runs.cancel", params),
+    resume: (params) => call("orca:runs.resume", params),
   },
-  inputs: { list: (params = {}) => call("orca:inputs.list", params) },
+  inputs: {
+    list: (params = {}) => call("orca:inputs.list", params),
+    answer: (params) => call("orca:inputs.answer", params),
+  },
   claims: { list: (params = {}) => call("orca:claims.list", params) },
   artifacts: {
     list: (params = {}) => call("orca:artifacts.list", params),
@@ -57,6 +69,17 @@ const bridge: OrcaBridge = {
       const forward = (_event: unknown, notification: NotificationMessage): void => listener(notification);
       ipcRenderer.on("orca:notification", forward);
       return () => void ipcRenderer.off("orca:notification", forward);
+    },
+  },
+  alerts: {
+    // `send`, not `invoke`: the main process has no verdict to give back about what is
+    // waiting, and a promise nobody awaits is a promise nobody notices rejecting.
+    update: (update: AlertsUpdate) => ipcRenderer.send("orca:alerts.update", update),
+    // A third push channel, one `ipcRenderer` listener per renderer listener as above.
+    subscribe: (listener: (activation: AlertActivation) => void) => {
+      const forward = (_event: unknown, activation: AlertActivation): void => listener(activation);
+      ipcRenderer.on("orca:alerts.activate", forward);
+      return () => void ipcRenderer.off("orca:alerts.activate", forward);
     },
   },
   connection: {

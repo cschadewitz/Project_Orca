@@ -35,14 +35,31 @@ export type ShortcutSection = "actions" | "navigation";
 
 export interface Shortcut {
   scope: ShortcutScope;
-  /** `Mod`, `Shift`, `Alt` in that order, then one key: a letter, digit or `KeyboardEvent.key` name. */
-  key: string;
+  /**
+   * `Mod`, `Shift`, `Alt` in that order, then one key: a letter, digit or
+   * `KeyboardEvent.key` name.
+   *
+   * **Optional (#205).** A command with no key is still a command: it registers here, so
+   * the palette lists it — with no chip beside it — and the palette is then the only way
+   * to it. The design's keyboard table is deliberately short, and a command worth doing
+   * but not worth one of the letters left should be discoverable rather than absent.
+   */
+  key?: string;
   label: string;
   action: () => void;
   /** Where the palette files it. Defaults to `actions` — most shortcuts act on the current object. */
   section?: ShortcutSection;
   /** A second line for the palette: what the action is for, when the label cannot say it. */
   detail?: string;
+}
+
+/**
+ * A shortcut as the map holds it: the same thing with the slot it occupies, which is the
+ * one name a keyless command has. The palette keys its rows off it, because `scope:key` —
+ * which used to be that name — is not a name two keyless commands could differ by.
+ */
+export interface RegisteredShortcut extends Shortcut {
+  readonly id: string;
 }
 
 /**
@@ -136,23 +153,36 @@ export function shortcutLabel(key: string, platform: string): string {
 }
 
 export class KeyboardMap {
-  private readonly shortcuts = new Map<string, Shortcut>();
+  private readonly shortcuts = new Map<string, RegisteredShortcut>();
+  /** Only ever counts up, so a keyless command that unregisters cannot hand its slot on. */
+  private keyless = 0;
 
   constructor(readonly platform: string) {}
 
-  /** Register one shortcut; returns its unregister. Two shortcuts on one key in one scope is a bug, so it throws. */
+  /**
+   * Register one shortcut; returns its unregister. Two shortcuts on one key in one scope is
+   * a bug, so it throws — that throw is how a collision is found, and it stays.
+   *
+   * A shortcut with no key (#205) cannot collide with anything, so it gets a slot of its
+   * own instead: `scope:!keyless-n`, which no normalised key can spell, so `handle()`
+   * looks a keypress up and never finds one. Two keyless commands in one scope are two
+   * commands and not a bug.
+   */
   register(shortcut: Shortcut): () => void {
-    const key = normalizeKey(shortcut.key);
-    const slot = `${shortcut.scope}:${key}`;
+    const key = shortcut.key === undefined ? undefined : normalizeKey(shortcut.key);
+    const slot = key === undefined ? `${shortcut.scope}:!keyless-${this.keyless++}` : `${shortcut.scope}:${key}`;
     const taken = this.shortcuts.get(slot);
     if (taken) throw new Error(`${key} is already registered in scope ${shortcut.scope} as "${taken.label}"`);
-    this.shortcuts.set(slot, { ...shortcut, key });
+    // The given `key` is dropped and the normalised one put back, so a keyless entry has no
+    // `key` property at all rather than an `undefined` one — `exactOptionalPropertyTypes`.
+    const { key: _given, ...rest } = shortcut;
+    this.shortcuts.set(slot, key === undefined ? { ...rest, id: slot } : { ...rest, key, id: slot });
     return () => {
       this.shortcuts.delete(slot);
     };
   }
 
-  list(): readonly Shortcut[] {
+  list(): readonly RegisteredShortcut[] {
     return [...this.shortcuts.values()];
   }
 
@@ -160,6 +190,9 @@ export class KeyboardMap {
    * Run the shortcut the event spells in the first of `scopes` that has one. Returns
    * whether one ran. `scopes` defaults to the chain resolved from the event's target, so
    * callers normally pass nothing; pass an explicit list only to dispatch out of band.
+   *
+   * Keyless commands are skipped by construction: their slot is not one a keypress can
+   * spell, so there is no branch here that has to know about them.
    */
   handle(event: KeyboardEvent, scopes?: readonly ShortcutScope[]): boolean {
     const key = keyOfEvent(event, this.platform);

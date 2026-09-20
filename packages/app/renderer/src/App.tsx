@@ -22,13 +22,17 @@ import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
 import { AgentsSurface } from "./agents/agents-surface.js";
+import { AttentionSurface } from "./attention/attention-surface.js";
+import { useAttention } from "./attention/use-attention.js";
+import { useAlertActivation } from "./attention/use-alert-activation.js";
 import { PaletteObjectSources } from "./palette/object-sources.js";
 import { describeRoute, resolveRoute, urlForCrumb, counterpartUrl, type Route } from "./route-table.js";
 import { Button, ObjectHeader, StateView, Text, textClass, type Crumb } from "./ui/index.js";
 
 // Attention is always first: the app's default landing surface (docs/design/10-information-architecture.md).
 // The data-driven half of the landing rule — Attention showing running runs when nothing is
-// waiting — needs real gate/run data that no protocol method serves yet.
+// waiting — is still not built: the surface says nothing needs you rather than filling the
+// space with runs nobody has to look at.
 const DEFAULT_SURFACE: SurfaceId = "attention";
 
 export function App(): JSX.Element {
@@ -50,6 +54,16 @@ export function App(): JSX.Element {
   const [crumbs, setCrumbs] = useState<readonly Crumb[]>([]);
 
   const connection = useConnection();
+  /* What needs a person, read *here* rather than inside the Attention surface, because the
+     title bar and the sidebar carry the same number and it is only one number
+     (docs/design/20-attention-and-gates.md). A count hook of its own beside the surface's
+     own read would be a second answer to one question, and the two would differ by exactly
+     one for as long as a push took to reach both. It is also what keeps the count live on
+     every screen: the chrome is mounted whichever surface is showing. */
+  const attention = useAttention();
+  // Zero until the daemon has answered, which both bars render as nothing at all: a count
+  // is a fact and there is not one yet.
+  const waitingCount = attention.state.phase === "ready" ? attention.state.waiting : 0;
   const sidebarCollapsed = useSidebarCollapsed();
   const panelOverlay = usePanelOverlay();
 
@@ -77,6 +91,11 @@ export function App(): JSX.Element {
   const togglePanel = useCallback(() => setPanelOpen((open) => !open), []);
 
   useChromeShortcuts({ onSurface: selectSurface, onTogglePanel: togglePanel });
+  /* A notification was clicked, or a permission ask took the attention of a window that
+     already had focus: both mean "the thing that needs you is on Attention". The card's own
+     deep link is #165's, and the activation already carries what a route would be built
+     from (`use-alert-activation.ts`). */
+  useAlertActivation(useCallback(() => selectSurface("attention"), [selectSurface]));
   useEscapeClosesTopLayer();
   const palette = useCommandPalette();
 
@@ -95,6 +114,7 @@ export function App(): JSX.Element {
     <div className="orca-window">
       <TitleBar
         platform={window.orca.platform}
+        waitingCount={waitingCount}
         onOpenAttention={() => selectSurface("attention")}
         onOpenPalette={palette.openPalette}
       />
@@ -121,7 +141,7 @@ export function App(): JSX.Element {
         data-sidebar={sidebarCollapsed ? "collapsed" : undefined}
         data-panel={panelOpen && panelOverlay ? "overlay" : undefined}
       >
-        <Sidebar active={active} onSelect={selectSurface} />
+        <Sidebar active={active} onSelect={selectSurface} waitingCount={waitingCount} />
         {/* Keyed by surface: a switch mounts a new pane, which is what re-applies that
             surface's remembered density. */}
         <PrimaryPane
@@ -152,7 +172,12 @@ export function App(): JSX.Element {
             ) : undefined
           }
         >
-          {activeSurface.id === "runs" ? (
+          {activeSurface.id === "attention" ? (
+            // `onOpenRun` is omitted until there is an `orca://` route table to open a run
+            // into (#165), for the same reason `CommandPalette`'s `onJump` is: `G` on a card
+            // is registered only when there is somewhere for it to go.
+            <AttentionSurface connection={connection.state} feed={attention} />
+          ) : activeSurface.id === "runs" ? (
             <RunsSurface connection={connection.state} onCrumbs={setCrumbs} />
           ) : activeSurface.id === "agents" ? (
             <AgentsSurface connection={connection.state} />

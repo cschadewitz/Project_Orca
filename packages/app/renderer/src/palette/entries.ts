@@ -6,7 +6,7 @@
  * run id or an `orca://` URL. Every shortcut in the keyboard map appears in one of the
  * first two with its key beside it; that is the whole point of the registry.
  */
-import { shortcutLabel, type Shortcut, type ShortcutScope } from "../keyboard-map.js";
+import { shortcutLabel, type RegisteredShortcut, type ShortcutScope } from "../keyboard-map.js";
 
 export type PaletteSection = "jump" | "actions" | "navigation" | "search";
 
@@ -27,7 +27,11 @@ export interface PaletteEntry {
   detail?: string;
   /** True when `detail` is machine text and must be set in mono (docs/design/RULES.md rule 8). */
   detailIsMachine?: boolean;
-  /** The shortcut, already rendered for this platform: `⌘⇧L` or `Ctrl+Shift+L`. */
+  /**
+   * The shortcut, already rendered for this platform: `⌘⇧L` or `Ctrl+Shift+L`. Absent for
+   * a command with no key (#205): the row renders with no chip, and the palette is then
+   * the whole of how that command is reached.
+   */
   shortcut?: string;
   /** Present when the entry cannot be run yet; the string says why, and the row is disabled. */
   unavailable?: string;
@@ -41,7 +45,7 @@ export interface PaletteEntry {
  * putting the scope focus is in first so "actions on the current object" means what it says.
  */
 export function commandEntries(
-  shortcuts: readonly Shortcut[],
+  shortcuts: readonly RegisteredShortcut[],
   platform: string,
   activeScopes: readonly ShortcutScope[],
 ): readonly PaletteEntry[] {
@@ -55,11 +59,14 @@ export function commandEntries(
       // Stable within a scope: registration order is mount order, which is reading order.
       .sort((a, b) => rank(a.shortcut.scope) - rank(b.shortcut.scope) || a.index - b.index)
       .map(({ shortcut }) => ({
-        id: `command:${shortcut.scope}:${shortcut.key}`,
+        // The map's own slot, because `scope:key` is not a name two keyless commands
+        // could differ by and this id becomes a DOM id for `aria-activedescendant`.
+        id: `command:${shortcut.id}`,
         section: shortcut.section ?? "actions",
         label: shortcut.label,
         ...(shortcut.detail ? { detail: shortcut.detail } : {}),
-        shortcut: shortcutLabel(shortcut.key, platform),
+        // No chip rather than an empty one: a keyless command has nothing to press (#205).
+        ...(shortcut.key === undefined ? {} : { shortcut: shortcutLabel(shortcut.key, platform) }),
         run: shortcut.action,
       }))
   );

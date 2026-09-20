@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { LIVE, harness, renderChrome, stubBridge, stubMatchMedia, type Harness } from "./harness.js";
 import { commandEntries, filterEntries, groupEntries } from "../src/palette/entries.js";
+import type { RegisteredShortcut } from "../src/keyboard-map.js";
 import { parseJump } from "../src/palette/jump.js";
 
 const teardown: (() => void)[] = [];
@@ -21,7 +22,9 @@ function mount(): Harness {
 
 const palette = (): HTMLElement => screen.getByRole("dialog", { name: "Command palette" });
 const query = (): HTMLInputElement => screen.getByRole("combobox", { name: "Command palette" });
-const options = (): HTMLElement[] => within(screen.getByRole("listbox")).getAllByRole("option");
+// Scoped to the palette: the Attention surface behind it is a screen with its own listbox
+// in it now (the failed runs), and "the listbox" stopped being a unique thing on the page.
+const options = (): HTMLElement[] => within(within(palette()).getByRole("listbox")).getAllByRole("option");
 const selectedOption = (): HTMLElement => options().find((o) => o.getAttribute("aria-selected") === "true")!;
 
 async function open(): Promise<void> {
@@ -62,17 +65,22 @@ describe("the command palette", () => {
     expect(registered.length).toBeGreaterThan(0);
     const rows = options().map((o) => o.textContent ?? "");
     for (const shortcut of registered) {
-      const row = rows.find((text) => text.startsWith(shortcut.label));
-      expect(row, `${shortcut.label} is missing from the palette`).toBeTruthy();
-      // ⌘ notation, because the harness reports darwin.
-      expect(row).toContain(shortcut.key.replace("Mod+", "⌘").replace("Shift+", "⇧"));
+      // ⌘ notation, because the harness reports darwin. Matched on the label *and* the chip
+      // rather than on the label alone: the list substrate gives `J` and `↓` one label
+      // between them, so a row found by label could be the other one's. A keyless command
+      // (#205) has no chip, and then the row itself is the whole assertion.
+      const chip = shortcut.key?.replace("Mod+", "⌘").replace("Shift+", "⇧");
+      const row = rows.find((text) => text.startsWith(shortcut.label) && (!chip || text.includes(chip)));
+      expect(row, `${shortcut.label} ${chip ?? "(no key)"} is missing from the palette`).toBeTruthy();
     }
   });
 
   it("puts actions before navigation before search", async () => {
     mount();
     await open();
-    const headers = [...screen.getByRole("listbox").querySelectorAll(".orca-palette__group")].map((h) => h.textContent);
+    const headers = [...within(palette()).getByRole("listbox").querySelectorAll(".orca-palette__group")].map(
+      (h) => h.textContent,
+    );
     expect(headers).toEqual(["Actions", "Navigation"]);
   });
 
@@ -163,16 +171,20 @@ describe("the command palette", () => {
 });
 
 describe("palette entries", () => {
-  const shortcuts = [
+  // Registered shortcuts, so each one carries the map's slot as its `id` (#205): that is
+  // the name a row is keyed by, because `scope:key` is not a name two keyless commands
+  // could differ by.
+  const shortcuts: RegisteredShortcut[] = [
     {
-      scope: "global" as const,
+      scope: "global",
       key: "Mod+1",
+      id: "global:Mod+1",
       label: "Go to Attention",
-      section: "navigation" as const,
+      section: "navigation",
       action: () => {},
     },
-    { scope: "run-tree" as const, key: "F", label: "Filter to failed", action: () => {} },
-    { scope: "global" as const, key: "Mod+Shift+L", label: "Cycle theme", action: () => {} },
+    { scope: "run-tree", key: "F", id: "run-tree:F", label: "Filter to failed", action: () => {} },
+    { scope: "global", key: "Mod+Shift+L", id: "global:Mod+Shift+L", label: "Cycle theme", action: () => {} },
   ];
 
   it("files a shortcut under its section, defaulting to actions", () => {
