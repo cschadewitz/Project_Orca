@@ -149,8 +149,12 @@ same stacks minus every bundled family. The failure it catches is silent: a glyp
 through to the OS still renders, just in a different typeface, and nobody notices in a
 screenshot taken on the machine that happens to have the font. With the faces off, U+23F8
 (`held`) renders as tofu on Linux. **The rule for reading it: anything that does not change
-when you flip the toggle was never coming from a bundled face.** Cross-platform screenshots
-are still done by eye.
+when you flip the toggle was never coming from a bundled face.**
+
+Cross-platform is no longer done by eye: `packages/app/test/smoke/type-proof.spec.ts`
+photographs this page on Linux, macOS and Windows and diffs committed baselines (#213). See
+"Screenshot baselines" under [Testing the app](#testing-the-app) for how those are made and
+the one honest way to update them.
 
 Both routes are dev-only in the strong sense: `routes.tsx` reaches them through a dynamic
 `import()` inside an `import.meta.env.DEV` branch, which Vite folds to `false` in a build,
@@ -389,21 +393,121 @@ test uses all three.
   `packages/daemon/test/fixture.ts` and are parsed through their protocol schemas, so a
   protocol change breaks that file rather than a screen test much later.
 
-**The Electron smoke test** (`packages/app/test/smoke/`) is the one test that launches the
-real thing: Playwright's Electron driver against the *built* app and a daemon on an
-`orca demo` store. It asserts the window comes up with a bridge in it — which is exactly
-what an ESM preload broke (#198) — that `hello` reached the daemon, that both themes render
-and resolve different tokens, and that axe finds no violations in either. Run it with
-`pnpm run build && pnpm run app:smoke`; on a headless box, `xvfb-run -a pnpm run app:smoke`,
-and in a container without unprivileged user namespaces also set `ORCA_SMOKE_NO_SANDBOX=1`.
-That is the *OS* sandbox and is unrelated to `webPreferences.sandbox: true`, which stays on
-everywhere and is one of the things the test checks.
+**The Electron smoke test** (`packages/app/test/smoke/app-shell.spec.ts`) is the one test
+that launches the real thing: Playwright's Electron driver against the *built* app and a
+daemon on an `orca demo` store. It asserts the window comes up with a bridge in it — which
+is exactly what an ESM preload broke (#198) — that `hello` reached the daemon, that both
+themes render and resolve different tokens, that axe finds no violations on **Attention,
+Runs or Agents** in either theme, and that every status on the attention list, the run tree
+and the status bar still carries its glyph and its word with the colour taken away (#167).
+Plan and Config are asserted to be the unbuilt `StateView`s they are in v0.4.0, rather than
+audited — a screen that says "not built yet" passes an axe run and means nothing by it, so
+the day one of them grows content that assertion fails and says which.
+
+Run it with `pnpm run build && pnpm run app:smoke`; on a headless box,
+`xvfb-run -a pnpm run app:smoke`, and in a container without unprivileged user namespaces
+also set `ORCA_SMOKE_NO_SANDBOX=1`. That is the *OS* sandbox and is unrelated to
+`webPreferences.sandbox: true`, which stays on everywhere and is one of the things the test
+checks.
+
+The audit needs a workspace `orca demo` does not leave behind — it runs the program to
+completion, so there is no gate waiting, no failed run and one host, and three of the
+surfaces render empty states. `test/smoke/daemon.ts` adds a second host, a failed run and a
+parked gate on top of the demo store, through the daemon's own RPC and its own config file,
+and **not by changing `orca demo`**, which is somebody's first look at ORCA and has its own
+users.
+
+**The type proof** (`packages/app/test/smoke/type-proof.spec.ts`, `pnpm run app:type-proof`)
+is the second spec and answers the half of #213 that no single machine can: whether the
+bundled faces render the same on Linux, macOS and Windows. Because `#type` is dev-only by
+design — `routes.tsx` gates it behind `import.meta.env.DEV` so it never reaches a shipped
+bundle — this spec does not use the built renderer. It compiles main and preload with
+`tsc -b packages/app/tsconfig.preload.json`, starts a Vite dev server, and launches Electron
+with `ORCA_RENDERER_URL` pointed at it plus `#type`, which is exactly what
+`packages/app/scripts/dev.js` does. **The production bundle is unchanged and must stay that
+way.** Alongside the pictures it makes two assertions that need no baseline at all: that no
+bundled `@font-face` ended at `error`, and that flipping the bundled-faces toggle changes
+the measured width of the declared glyphs — if it does not, the faces were never on.
+
+### Screenshot baselines
+
+Two specs take screenshots and they mean opposite things, which is worth being explicit
+about because the obvious reaction to either is to make it behave like the other.
+
+- `app-shell.spec.ts` screenshots are **evidence, never fixtures**. They are attached to the
+  Playwright report so that a failed assertion comes with a picture of the window, and none
+  of them is committed or diffed. The app draws OS-rendered chrome over live data; a pixel
+  baseline of it would go red for reasons that are not bugs.
+- `type-proof.spec.ts` screenshots **are the fixture**. `#type` is a fixed page whose whole
+  purpose is that a pixel difference means something, so it commits per-platform baselines
+  and diffs against them with `toHaveScreenshot()`. The page's one moving part — the
+  `reconnecting` and `disconnected` rows, which carry a ticking duration — is hidden by the
+  spec before the shutter opens rather than budgeted for in the threshold.
+
+Four baselines per platform: the light column and the dark column, with the bundled faces on
+and off. They are committed beside the spec, in Playwright's own layout:
+
+```
+packages/app/test/smoke/type-proof.spec.ts-snapshots/
+  type-bundled-light-type-proof-linux.png
+  type-bundled-light-type-proof-darwin.png
+  type-bundled-light-type-proof-win32.png
+  …
+```
+
+Each is a screenshot of a **locator** — one theme column — and not of the page, which keeps
+a committed PNG to the thing under test rather than to a window's worth of chrome.
+
+**Creating them the first time.** They are not generated on a developer's machine, because a
+baseline is only useful if it was taken on the machine that will be compared against it: a
+Linux baseline shot on a laptop and a Linux baseline shot on `ubuntu-latest` are different
+pictures of the same page. So **CI produces the first set**. On a platform with no baseline,
+Playwright writes the image it just took to the baseline path and fails the job — which is
+the behaviour to want, since a run that silently accepted whatever it saw would be recording
+a bug as the truth. The `type-proof` job uploads
+`packages/app/test/smoke/type-proof.spec.ts-snapshots/` as an artifact named
+`type-proof-<os>`, so the procedure is:
+
+1. Open the pull request. All three `type-proof` legs go red with "A snapshot doesn't exist".
+2. Download the three `type-proof-<os>` artifacts from the run.
+3. Unpack all three into `packages/app/test/smoke/type-proof.spec.ts-snapshots/`, **look at
+   the images** — tofu, wrong weights and fallback faces are visible to a person and to
+   nothing else — and commit them with the reason in the message.
+4. Push. The legs are now green, and stay green until a glyph changes.
+
+**Updating them deliberately.** A diff is a question, not a chore, and the answer is never a
+larger `maxDiffPixelRatio`. `playwright.config.ts` budgets `0.002` for antialiasing moving
+under a runner image and nothing else; a face falling through to the OS changes whole words
+and is orders of magnitude above it. When a leg goes red:
+
+1. Open the HTML report from the `type-proof-<os>` artifact and look at the three-up
+   expected / actual / diff. **That is the deliverable** — the numbers only say how much
+   moved, and the picture says what.
+2. Decide which it is. *A bug* — a subset lost a codepoint, a stack stopped reaching a
+   family, a token changed a size — is fixed, and the baseline stays as the thing that
+   caught it. *An intended change* — a new glyph, a re-subset face, a deliberate type-scale
+   edit — is a baseline update.
+3. For an intended change, regenerate from CI the same way the first set was made, or
+   locally for **this platform only** with `pnpm run app:type-proof:update` (`xvfb-run -a`
+   on a headless box). That script exists so the update has a name: it is
+   `--update-snapshots`, which rewrites the current platform's four files and leaves the
+   other two platforms' alone, so a local run can never silently bless a picture it did not
+   take. A locally regenerated Linux baseline should still be checked against the runner's
+   before it is trusted.
+4. **Put the reason in the commit message**, naming what changed and why the new picture is
+   right. A baseline update with no reason in it is indistinguishable from a regression
+   being blessed, which is the one failure mode this check cannot survive.
+
+A runner image moving under us is the expected cause of an unexplained diff, and the answer
+is still a deliberate update with that written down — never a loosened threshold.
 
 It runs from `.github/workflows/app-smoke.yml`, not `ci.yml`, on pull requests touching
 `packages/app`, `packages/design`, `packages/daemon` or `packages/protocol`. `ci.yml` keeps
 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and so has no Electron to launch; the smoke workflow
 installs without it. No browser binaries are involved — the driver uses the workspace's own
-`electron`, so `playwright install` is never needed.
+`electron`, so `playwright install` is never needed. The workflow has no `push` trigger and
+no `workflow_call`, so the faces are not re-checked at release time; that is **#254**, filed
+and deliberately deferred rather than overlooked.
 
 ## Tests worth reading first
 
