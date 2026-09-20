@@ -121,15 +121,27 @@ describe("the Runs surface", () => {
     expect(listCalls[1]!.params).toEqual({ status: ["waiting"] });
   });
 
-  it("moves the selection with J, K and the arrows, and registers all four in the map", async () => {
+  /* The keys belong to the list substrate as of #155: `list/use-list-keys.ts` registers all
+     eight in the `list` scope and the surface only lends them its noun. So the map holds
+     `Home`, `End` and the page keys beside the original four, and every label reads "run". */
+  it("moves the selection with the list keys, and registers every one in the map", async () => {
     renderRuns();
     await screen.findByRole("listbox", { name: "Runs" });
 
     const listKeys = h.keyboard
       .list()
       .filter((s) => s.scope === "list")
-      .map((s) => s.key);
-    expect(listKeys).toEqual(["J", "ArrowDown", "K", "ArrowUp"]);
+      .map((s) => `${s.key}: ${s.label}`);
+    expect(listKeys).toEqual([
+      "J: Next run",
+      "ArrowDown: Next run",
+      "K: Previous run",
+      "ArrowUp: Previous run",
+      "Home: First run",
+      "End: Last run",
+      "PageDown: Next page of runs",
+      "PageUp: Previous page of runs",
+    ]);
 
     // Nothing selected yet: J takes the first row, which is the newest run.
     press("j", "KeyJ");
@@ -145,6 +157,33 @@ describe("the Runs surface", () => {
     // The ends hold: K on the first row stays on the first row.
     press("ArrowUp", "ArrowUp");
     expect(rows()[0]!.getAttribute("aria-selected")).toBe("true");
+
+    press("End", "End");
+    expect(rows()[RUNS.length - 1]!.getAttribute("aria-selected")).toBe("true");
+
+    press("Home", "Home");
+    expect(rows()[0]!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  /* The gutter is over the whole filtered list rather than the rendered window, and only
+     the three statuses `.orca-minimap__tick--*` has a colour for get a mark: a run that
+     failed, one waiting on a person, one that cannot proceed. The other five are on their
+     rows and nowhere else. `virtual-list.test.tsx` proves a mark can be off screen. */
+  it("marks the failed and the waiting run in the status gutter, and nothing else", async () => {
+    renderRuns();
+    await screen.findByRole("listbox", { name: "Runs" });
+
+    const ticks = [...document.querySelectorAll(".orca-minimap__tick")];
+    expect(ticks.map((tick) => tick.getAttribute("aria-label"))).toEqual([
+      `SSO rollout, ${STATUS_PRESENTATION.failed.word}`,
+      `Document the rollout, ${STATUS_PRESENTATION.waiting.word}`,
+    ]);
+    expect(ticks[0]!.classList.contains("orca-minimap__tick--failed")).toBe(true);
+    expect(ticks[1]!.classList.contains("orca-minimap__tick--waiting")).toBe(true);
+
+    // Clicking one selects nothing — it takes you to the row, which is a different act.
+    fireEvent.click(ticks[0]!);
+    expect(list().getAttribute("aria-activedescendant")).toBeNull();
   });
 
   it("does not move the selection while a letter is being typed into the filter", async () => {
