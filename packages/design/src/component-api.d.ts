@@ -412,3 +412,81 @@ export type StateViewProps =
       body: string;
       action?: { label: string; onClick(): void };
     };
+
+/**
+ * The status minimap's kinds (built, as part of `VirtualList`). Three, not eight:
+ * `.orca-minimap__tick--failed`, `--waiting` and `--blocked` are the only tick colours
+ * components.css declares, and that is the design decision rather than an omission — a
+ * gutter that marked every row would mark nothing. These are the three a person scrolls a
+ * long list looking for.
+ */
+export type MinimapKind = "failed" | "waiting" | "blocked";
+
+/**
+ * One mark in the gutter. `index` is into the **whole** list rather than into whatever the
+ * list has rendered, which is the whole purpose of the gutter: a failure four thousand rows
+ * below the fold is a mark on the right-hand edge. A tick is a control, not a decoration —
+ * clicking it scrolls to its row — so `label` is required and names the row it goes to.
+ */
+export interface MinimapTickProps {
+  index: number;
+  kind: MinimapKind;
+  label: string;
+}
+
+/**
+ * The list substrate (built — `packages/app/renderer/src/list`). Every list surface is one
+ * of these: the Runs list today, the run tree, the event timeline and the inputs queue as
+ * they land. A surface says what a row contains; the substrate owns everything a list has
+ * to get right and no surface should re-derive.
+ *
+ * **It renders a window, not a list.** Only the band a person can see, plus a few rows
+ * either side, is in the document; the rest is two spacer heights, so the scrollbar is
+ * still the length of the whole list. Fifty thousand rows are a few dozen elements.
+ *
+ * **Height is read, never written.** A row is `--row-h` tall because its row class says so
+ * (`.orca-tree-row` and its kin), and the substrate reads that value back off the cascade
+ * to do its arithmetic — so `data-density="compact"` rebinding the token is not a special
+ * case, it is the same read taken again. Nothing in the substrate states a height, and
+ * `rowClassName` therefore has to name a row class that does.
+ *
+ * **Selection and focus are different things** (docs/design/RULES.md rule 10). One tab
+ * stop, on the listbox; `aria-activedescendant` carries the selection; the ring is the
+ * listbox's and the accent rail is the row's.
+ *
+ * **The keys are registered, not listened for.** `J`/`K`, `↑`/`↓`, `Home`/`End` and the
+ * page keys go on the `KeyboardMap` in the `list` scope, so the command palette lists them
+ * and so an open menu's `↑`/`↓` out-rank them. It follows that one `list` scope holds one
+ * `VirtualList` at a time — a second registration of `J` in one scope throws, which is the
+ * right answer rather than a race.
+ */
+export interface VirtualListProps<T> {
+  items: ReadonlyArray<T>;
+  /** The listbox's accessible name: "Runs". */
+  label: string;
+  /** A stable DOM id per row; `aria-activedescendant` names it. */
+  rowId(item: T, index: number): string;
+  /** The row's own classes — a system row class, which is where `--row-h` comes from. */
+  rowClassName?(item: T, index: number, selected: boolean): string;
+  /** The cells inside the row; the substrate supplies the `option` element around them. */
+  renderRow(item: T, index: number, selected: boolean): unknown;
+  selectedIndex?: number;
+  onSelect(index: number): void;
+  /** The word the palette uses for a row: "run" gives "Next run". Defaults to "row". */
+  noun?: string;
+  /**
+   * Two lines is a *declared variant*, never a row that grew (rule 9): the row is exactly
+   * two `--row-h` tall and the window arithmetic counts it that way. components.css has no
+   * class for it yet, so the substrate declares it as `calc(var(--row-h) * 2)`.
+   */
+  variant?: "single" | "two-line";
+  /** Ticks for the whole list. An empty array keeps the gutter and draws no marks. */
+  ticks?: ReadonlyArray<MinimapTickProps>;
+  /**
+   * The sticky context header's content, in `.orca-pane__head--sticky`. The lift
+   * (`shadow-sticky`) appears only once content is actually beneath it: a shadow over an
+   * unscrolled list says "there is more above" when there is not.
+   */
+  header?: unknown;
+  className?: string;
+}
