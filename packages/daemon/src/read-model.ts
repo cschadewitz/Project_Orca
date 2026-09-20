@@ -653,9 +653,7 @@ export class ReadModel {
       waitingMs: elapsed(request.requestedAt, pass.now) ?? 0,
       artifacts,
       ...(step?.nodeId ? { nodeId: step.nodeId } : {}),
-      ...(session
-        ? { agent: { id: session.agentId, hostId: session.hostId, ...(hostType ? { hostType } : {}) } }
-        : {}),
+      ...(session ? { agent: { id: session.agentId, hostId: session.hostId, ...(hostType ? { hostType } : {}) } } : {}),
       ...(workItem ? { workItem } : {}),
     };
   }

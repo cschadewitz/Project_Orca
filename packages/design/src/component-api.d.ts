@@ -378,17 +378,7 @@ export interface PermissionCardProps {
   /** Whose turn is held open, from `OpenInputView.agent` — which host groups the card too. */
   agent: InputAgent;
   /** One of the ten ACP tool kinds — drives the glyph and the wording. */
-  kind:
-    | "read"
-    | "edit"
-    | "delete"
-    | "move"
-    | "search"
-    | "execute"
-    | "think"
-    | "fetch"
-    | "switch_mode"
-    | "other";
+  kind: "read" | "edit" | "delete" | "move" | "search" | "execute" | "think" | "fetch" | "switch_mode" | "other";
   /** The exact command or path, verbatim, in mono. Never summarised. */
   subject: string;
   step: { id: string; name: string };
