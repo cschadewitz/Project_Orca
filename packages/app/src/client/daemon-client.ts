@@ -20,16 +20,22 @@ import {
   ClaimsListResultSchema,
   HELLO_METHOD,
   HelloResultSchema,
+  INPUTS_ANSWER_METHOD,
   INPUTS_LIST_METHOD,
+  InputsAnswerResultSchema,
   InputsListResultSchema,
   PROTOCOL_VERSION,
+  RUNS_CANCEL_METHOD,
   RUNS_EVENTS_METHOD,
   RUNS_GET_METHOD,
   RUNS_LIST_METHOD,
+  RUNS_RESUME_METHOD,
   ResponseMessageSchema,
+  RunsCancelResultSchema,
   RunsEventsResultSchema,
   RunsGetResultSchema,
   RunsListResultSchema,
+  RunsResumeResultSchema,
   socketUrlFor,
   type AgentsListParams,
   type AgentsListResult,
@@ -40,16 +46,22 @@ import {
   type ClaimsListParams,
   type ClaimsListResult,
   type HelloResult,
+  type InputsAnswerParams,
+  type InputsAnswerResult,
   type InputsListParams,
   type InputsListResult,
   type ProtocolError,
   type RequestMessage,
+  type RunsCancelParams,
+  type RunsCancelResult,
   type RunsEventsParams,
   type RunsEventsResult,
   type RunsGetParams,
   type RunsGetResult,
   type RunsListParams,
   type RunsListResult,
+  type RunsResumeParams,
+  type RunsResumeResult,
 } from "@orca/protocol";
 import type { ZodType } from "zod";
 import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
@@ -133,6 +145,33 @@ export class DaemonClient {
   /** One artifact's body, or the reason it is not being shown. */
   artifactsGet(params: Params<ArtifactsGetParams>): Promise<ArtifactsGetResult> {
     return this.call(ARTIFACTS_GET_METHOD, params, ArtifactsGetResultSchema);
+  }
+
+  /* ---------- the control methods: the calls that write ---------- */
+
+  /**
+   * Answer a gate or a permission ask. The answer is an option *id*; `always` also writes
+   * the standing rule into the workspace sidecar and the result says what was written.
+   *
+   * Slow on purpose when `resume` is left at its default: the daemon re-drives the run
+   * under its lease and answers once the run parks again or finishes, so this call is open
+   * for as long as the run is moving. Nothing here times it out — the notification stream
+   * is what a screen watches meanwhile.
+   */
+  inputsAnswer(
+    params: Params<InputsAnswerParams> & { requestId: string; optionId: string },
+  ): Promise<InputsAnswerResult> {
+    return this.call(INPUTS_ANSWER_METHOD, params, InputsAnswerResultSchema);
+  }
+
+  /** Re-drive a parked run. Answers when it parks again or finishes, never mid-flight. */
+  runsResume(params: RunsResumeParams): Promise<RunsResumeResult> {
+    return this.call(RUNS_RESUME_METHOD, params, RunsResumeResultSchema);
+  }
+
+  /** Stop a run, with the reason recorded on `run.cancelled`. */
+  runsCancel(params: RunsCancelParams): Promise<RunsCancelResult> {
+    return this.call(RUNS_CANCEL_METHOD, params, RunsCancelResultSchema);
   }
 
   /** Every configured agent's handshake health, with what is claimed right now beside it. */

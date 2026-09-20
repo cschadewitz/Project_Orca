@@ -46,13 +46,39 @@ const WI = {
   "wi-3": { id: "wi-3", slug: "auth-docs", title: "Document the rollout", status: "in-progress" },
 } as const;
 
-/** A daemon that serves a store: the read capability and all five methods. */
+/**
+ * A daemon that serves a store and takes commands about it: both capabilities, and every
+ * method this protocol version has.
+ *
+ * It used to claim six methods and `runs.read` alone, which was true when the wire had six
+ * — and stopped being true four batches ago, quietly, because nothing reads `methods` for
+ * anything but display. It matters now: `useWritability()` reads `capabilities` and hides
+ * every control when `runs.control` is missing, so a fixture without it is a fixture in
+ * which no test can press a button (#161). The read-only daemon is a real state and is a
+ * *variant* of this rather than the default of it (#164).
+ */
 export const HELLO: HelloResult = {
-  protocol: { major: 1, minor: 0 },
+  protocol: { major: 1, minor: 5 },
   orcaVersion: "0.2.0-test",
   storeDir: "/work/orca/.orca",
-  capabilities: ["runs.read"],
-  methods: ["hello", "runs.list", "runs.get", "runs.events", "inputs.list", "claims.list"],
+  capabilities: ["runs.read", "runs.control"],
+  methods: [
+    "hello",
+    "runs.list",
+    "runs.get",
+    "runs.events",
+    "inputs.list",
+    "claims.list",
+    "artifacts.list",
+    "artifacts.get",
+    "agents.list",
+    "inputs.answer",
+    "runs.resume",
+    "runs.cancel",
+    // Answered by a daemon with `runs.control`, and called by nothing in the app: the app
+    // has no workflow picker to start a run from (#178).
+    "runs.start",
+  ],
 };
 
 /** `runs.list` with no filter: newest first, which is how the daemon orders it. */

@@ -13,12 +13,16 @@ import {
   ClaimsListResultSchema,
   AgentsListResultSchema,
   HelloResultSchema,
+  InputsAnswerResultSchema,
   InputsListResultSchema,
+  RunsCancelResultSchema,
   RunsEventsResultSchema,
   RunsGetResultSchema,
   RunsListResultSchema,
+  RunsResumeResultSchema,
 } from "@orca/protocol";
 import { fakeBridge, type FakeBridge } from "./fake-bridge.js";
+import { DEFAULT_PREFERENCES } from "../../src/preferences/schema.js";
 
 const teardown: (() => void)[] = [];
 afterEach(() => {
@@ -50,6 +54,9 @@ describe("fixtures", () => {
     RunsEventsResultSchema.parse(await result(b.runs.events({ runId: "run-parent" })));
     RunsEventsResultSchema.parse(await result(b.runs.events({ runId: "run-gate" })));
     InputsListResultSchema.parse(await result(b.inputs.list()));
+    InputsAnswerResultSchema.parse(await result(b.inputs.answer({ requestId: "hi-1", optionId: "approve" })));
+    RunsCancelResultSchema.parse(await result(b.runs.cancel({ runId: "run-parent" })));
+    RunsResumeResultSchema.parse(await result(b.runs.resume({ runId: "run-gate" })));
     ClaimsListResultSchema.parse(await result(b.claims.list()));
     AgentsListResultSchema.parse(await result(b.agents.list()));
   });
@@ -222,6 +229,7 @@ describe("installation", () => {
     expect(await result(Promise.resolve(window.orca.preferences.write({ theme: "dark" })))).toEqual({
       theme: "dark",
       density: {},
+      alerts: DEFAULT_PREFERENCES.alerts,
     });
     expect(window.orca.preferences.read().theme).toBe("dark");
     restore();
