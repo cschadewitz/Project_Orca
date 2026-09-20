@@ -204,7 +204,16 @@ describe("the WebSocket endpoint", () => {
       },
     });
     const [opened] = await c.waitFor(INPUT_OPENED, 1);
-    expect(opened!.params).toMatchObject({ requestId: "hi-1", kind: "decision", options: ["yes", "no"], seq: 0 });
+    // The whole `GateOption` travels as of protocol 1.4, not the ids it used to carry.
+    expect(opened!.params).toMatchObject({
+      requestId: "hi-1",
+      kind: "decision",
+      options: [
+        { id: "yes", label: "yes" },
+        { id: "no", label: "no" },
+      ],
+      seq: 0,
+    });
     // The folded notification first, the raw one second: a client watching only the folded
     // stream is never behind one watching both.
     expect(c.methods()).toEqual([INPUT_OPENED, EVENT_APPENDED]);

@@ -590,10 +590,12 @@ export class ReadModel {
       id: request.id,
       kind: request.kind,
       question: request.question,
-      // `OpenInputView.options` is still `string[]` on the wire (@orca/protocol), so the id
-      // travels - it is what `inputs.answer` sends back. Widening the view to carry labels,
-      // consequence clauses and the destructive flag is the attention surface's work (#161).
-      options: request.options.map((o) => o.id),
+      // The whole `GateOption` travels as of protocol 1.4 (#161): the id is what
+      // `inputs.answer` sends back, and the label, the consequence clause and the
+      // `destructive` flag are what the card is allowed to draw. No mapping - the model's
+      // shape *is* the wire's shape here, and anything less let a client answer a question
+      // it could not show.
+      options: request.options,
       context: request.context,
       runId: request.runId,
       runName: name,
