@@ -37,6 +37,16 @@ to the event log, plan journal, artifact index or config schema can invalidate a
 someone already has. A release with no `store` fragment renders "No change.", which is a
 claim — write the fragment when it would be false, and see `docs/RELEASING.md`.
 
+## The check
+
+`.github/workflows/changelog.yml` fails a pull request that changes anything under
+`packages/` and adds no file here. It asks only that — the section suffix is checked when a
+release renders the fragment, and the prose is nobody's business.
+
+Some `packages/` changes genuinely read as nothing to someone upgrading: a refactor, a test,
+a comment, a rename with no surface. **Label the pull request `no-changelog`** and the check
+passes. Labelling re-runs it, so there is nothing else to click.
+
 ## Reading and releasing them
 
 ```bash

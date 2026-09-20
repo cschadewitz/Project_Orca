@@ -19,9 +19,10 @@ Closing it proposes the release.
 2. Each pull request drops its entry into `changelog.d/` as a **fragment** — one file per
    entry, named `<issue>-<slug>.<section>.md`, holding the bullet(s) verbatim. This is the
    part that matters: the notes are written when the change is fresh, by whoever made it,
-   and releasing never has to reconstruct them from commit subjects. `changelog.d/README.md`
-   has the naming and the four sections; `node tools/release.js notes --unreleased` renders
-   what is pending.
+   and releasing never has to reconstruct them from commit subjects. CI fails a pull request
+   that changes `packages/` and adds no fragment, unless it carries the `no-changelog` label.
+   `changelog.d/README.md` has the naming and the four sections; `node tools/release.js notes
+   --unreleased` renders what is pending.
 3. When the work is done, **close the milestone**. `release-prepare.yml` checks that no
    issue in it is still open, takes the highest bump label, computes the next version, and
    opens a `release: vX.Y.Z` pull request that bumps `package.json`, renders the fragments
