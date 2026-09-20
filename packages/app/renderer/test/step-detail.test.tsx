@@ -518,9 +518,16 @@ describe("following and holding", () => {
     rerender("live");
     await screen.findByText(/^reconnected \d\d:\d\d:\d\d$/);
 
-    // Rule 11: the stream is not a live region, whatever is in it.
-    expect(stream().closest("[aria-live]")).toBeNull();
-    expect(document.querySelector('[role="log"]')).toBeNull();
+    /* Rule 11, in the shape #167 settled it: the pane *is* a `log` region, named for the
+       step, so a person can go to it on demand — and it never speaks, whatever lands in
+       it. `role="log"` carries an implicit `aria-live="polite"`, so the explicit `off`
+       beside it is what keeps forty lines a second out of a screen reader's ear. */
+    const log = stream().closest('[role="log"]');
+    expect(log).not.toBeNull();
+    expect(log?.getAttribute("aria-label")).toMatch(/^Output of fanout/);
+    expect(log?.getAttribute("aria-live")).toBe("off");
+    // Nothing between the lines and that region reinstates a polite one.
+    expect(stream().closest('[aria-live="polite"]')).toBeNull();
   });
 
   /** Mount once and change only the connection, which is what the chrome does. */

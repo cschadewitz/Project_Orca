@@ -21,10 +21,20 @@
  *   the log on disk: the protocol has no text parameter over events, and a search that
  *   only saw what happened to be in memory while claiming otherwise would be a lie. The
  *   count beside the field is how many it found and in what.
- * - **It is not a live region** (rule 11). An agent producing forty lines a second would
- *   make the app unusable with a screen reader, so `role="log"` — which implies
- *   `aria-live` — is deliberately absent, and the pane is a labelled region a person
- *   reads on demand. Step transitions and terminal states are announced elsewhere.
+ * - **A labelled `log` region that never speaks** (rule 11, #167). The spec asks for two
+ *   things at once and they pull against each other: the pane is "a labelled `log` region
+ *   the person reads on demand", *and* streaming output is not a live region, because an
+ *   agent producing forty lines a second would make the app unusable with a screen reader.
+ *   `role="log"` on its own gives the second away — the role carries an implicit
+ *   `aria-live="polite"`, so the role by itself *is* the flood. So the role is stated and
+ *   the live behaviour is turned off beside it with an explicit `aria-live="off"`. What
+ *   that buys is navigation without narration: the pane appears in the region list a
+ *   screen reader offers, named for the step it belongs to ("Output of build, attempt 2",
+ *   `outputLabel` at the bottom of this file), and a person goes to it and reads it when
+ *   they choose to. What announces instead is the app's one polite live region
+ *   (`a11y/announcer.tsx`): step transitions and terminal states, which is the part of the
+ *   flood worth hearing. Do not drop the `aria-live="off"` to "complete" the role — that
+ *   attribute is the whole of what keeps this pane usable.
  */
 import {
   useCallback,
@@ -220,7 +230,15 @@ export function OutputPane(props: OutputPaneProps): JSX.Element {
   const last = items.length - 1;
 
   return (
-    <div className={["orca-log", textClass("mono-log"), className].filter(Boolean).join(" ")}>
+    <div
+      className={["orca-log", textClass("mono-log"), className].filter(Boolean).join(" ")}
+      /* The region, its name and its silence, in that order — see the header. The role is
+         what puts the output in a screen reader's region list; `aria-live="off"` is what
+         stops the role's implicit `polite` from reading the stream out loud. */
+      role="log"
+      aria-live="off"
+      aria-label={label}
+    >
       <div className={`orca-pane__head ${textClass("label-strong")}`}>
         <span>Output</span>
         <input

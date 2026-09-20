@@ -168,7 +168,12 @@ export function AnswerCard({
         id={`attention-card-${id}`}
         ref={cardRef}
         tabIndex={0}
-        aria-label={question}
+        /* The tier's word first, then the question: "gate, Ship release 1?" — the same
+           ordering the run rows and the agent cards take, because the first word of an
+           accessible name is the one a person hears before they decide whether to listen
+           (docs/design/50-accessibility-and-keyboard.md, #167). It is the tone rather than
+           the waited duration because a name that ticks is a name that re-announces. */
+        aria-label={cardName(tone, question)}
         onFocus={onFocus}
         className="orca-attn__card-body"
       >
@@ -292,4 +297,12 @@ export function AnswerCard({
       </section>
     </Card>
   );
+}
+
+/**
+ * What a card is called, in one place so the list, the inline mounting and a test all
+ * spell it the same way: the tier's word, then the question. "gate, Ship release 1?"
+ */
+export function cardName(tone: "gate" | "permission", question: string): string {
+  return `${tone}, ${question}`;
 }

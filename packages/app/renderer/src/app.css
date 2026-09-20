@@ -1,7 +1,9 @@
-/* What this app adds on top of the design system's component layer: only the window
-   filling the window. `.orca-window` is a grid with `height: 100%`, so every box above it
-   has to have a height for that percentage to mean anything. Token references only
-   (docs/design/RULES.md rule 1). */
+/* What this app adds on top of the design system's component layer: the window filling the
+   window, and the one live region that has no visual form at all. Token references only
+   (docs/design/RULES.md rule 1).
+
+   `.orca-window` is a grid with `height: 100%`, so every box above it has to have a height
+   for that percentage to mean anything. */
 html,
 body,
 #root {
@@ -10,4 +12,29 @@ body,
 body {
   margin: 0;
   overflow: hidden;
+}
+
+/* The polite announcer (#167): read, never seen. It is here rather than in
+   `packages/design/css/components.css` because the component layer has no visually-hidden
+   utility — that is a finding for the design layer, not a component this app invented, and
+   the class moves there the moment one exists.
+
+   The measurements are the standard clip: a box big enough to stay in the accessibility
+   tree and small enough to be invisible. `display: none`, `visibility: hidden` and a
+   zero-sized box each take the element *out* of that tree in at least one screen reader,
+   which would silently turn the region off. No token can name 1px-of-nothing, so the
+   literals carry the escape hatch rather than inventing a size family for them. */
+.orca-announcer {
+  position: absolute;
+  /* orca-allow-literal: the visually-hidden clip; a size token would misname it (#167) */
+  width: 1px;
+  /* orca-allow-literal: the other half of the same clip (#167) */
+  height: 1px;
+  /* orca-allow-literal: pulls the clipped box off its own line, so it moves nothing (#167) */
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

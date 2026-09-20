@@ -14,6 +14,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import type { NotificationMessage, OpenInputView } from "@orca/protocol";
 import type { ConnectionState } from "@orca/design";
 import { type JSX } from "react";
+import { cardName } from "../src/attention/answer-card.js";
 import { AttentionSurface } from "../src/attention/attention-surface.js";
 import { useAttention } from "../src/attention/use-attention.js";
 import { harness, installBridge, stubMatchMedia, type Harness } from "./harness.js";
@@ -79,7 +80,7 @@ afterEach(() => {
 describe("answering with a note", () => {
   it("opens the note field on ⇧Enter, says where the note goes, and sends it", async () => {
     mount([FIVE_GATES[0]!]);
-    const gate = await screen.findByRole("region", { name: "Ship release 1?" });
+    const gate = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
     gate.focus();
 
     expect(within(gate).queryByLabelText("Note")).toBeNull();
@@ -103,7 +104,7 @@ describe("answering with a note", () => {
 
   it("submits a written note when ⇧Enter is pressed again rather than reopening the field", async () => {
     mount([FIVE_GATES[0]!]);
-    const gate = await screen.findByRole("region", { name: "Ship release 1?" });
+    const gate = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
     gate.focus();
     fireEvent.keyDown(gate, { key: "Enter", code: "Enter", shiftKey: true });
     fireEvent.change(within(gate).getByLabelText("Note"), { target: { value: "on the record" } });
@@ -118,7 +119,7 @@ describe("answering with a note", () => {
 describe("a permission ask naming who it blocks", () => {
   it("says the agent and its host off the ask, and the run only when there is no agent", async () => {
     mount([PERMISSION_ASK]);
-    const card = await screen.findByRole("region", { name: "Run a shell command?" });
+    const card = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
     // `OpenInputView.agent` (protocol 1.6, #248) - what makes "always allow" sizeable.
     expect(within(card).getByText("claude")).toBeTruthy();
     expect(card.textContent).toContain("build-box");
@@ -126,7 +127,7 @@ describe("a permission ask naming who it blocks", () => {
     cleanup();
     const { agent: _agent, ...anonymous } = PERMISSION_ASK;
     mount([anonymous]);
-    const fallback = await screen.findByRole("region", { name: "Run a shell command?" });
+    const fallback = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
     expect(within(fallback).getByText("release 1")).toBeTruthy();
     expect(fallback.textContent).not.toContain("build-box");
   });
@@ -136,7 +137,7 @@ describe("a question with no options", () => {
   it("takes free text, and will not send an empty answer", async () => {
     const question: OpenInputView = { ...FIVE_GATES[0]!, id: "q-1", question: "Which branch?", options: [] };
     mount([question]);
-    const gate = await screen.findByRole("region", { name: "Which branch?" });
+    const gate = await screen.findByRole("region", { name: cardName("gate", "Which branch?") });
 
     const answer = within(gate).getByRole("button", { name: /^Answer/ });
     expect(answer.getAttribute("aria-disabled")).toBe("true");
@@ -154,22 +155,22 @@ describe("a question with no options", () => {
 describe("moving between cards", () => {
   it("moves with J and K and stops at both ends", async () => {
     mount([FIVE_GATES[0]!, FIVE_GATES[1]!, FIVE_GATES[2]!]);
-    const first = await screen.findByRole("region", { name: "Ship release 1?" });
+    const first = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
     first.focus();
 
     fireEvent.keyDown(document.activeElement!, { key: "j", code: "KeyJ" });
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("Ship release 2?");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(cardName("gate", "Ship release 2?"));
     fireEvent.keyDown(document.activeElement!, { key: "k", code: "KeyK" });
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("Ship release 1?");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(cardName("gate", "Ship release 1?"));
     // The top is the top: `K` on the first card is not a wrap to the last.
     fireEvent.keyDown(document.activeElement!, { key: "k", code: "KeyK" });
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("Ship release 1?");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(cardName("gate", "Ship release 1?"));
   });
 
   it("registers G and opens the run only when there is somewhere to open it", async () => {
     const opened: string[] = [];
     mount([FIVE_GATES[0]!], { onOpenRun: (id) => opened.push(id) });
-    const gate = await screen.findByRole("region", { name: "Ship release 1?" });
+    const gate = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
     gate.focus();
 
     expect(h.keyboard.list().some((s) => s.scope === "card" && s.key === "G")).toBe(true);
@@ -181,7 +182,7 @@ describe("moving between cards", () => {
 describe("an answer in flight", () => {
   it("says so on the control and does not send a second one", async () => {
     mount([FIVE_GATES[0]!]);
-    const gate = await screen.findByRole("region", { name: "Ship release 1?" });
+    const gate = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
     const release = fake.hold("inputs.answer");
 
     gate.focus();
@@ -214,7 +215,7 @@ describe("what the surface is looking at", () => {
       "inputs.list": () => ({ ok: true, result: { inputs: [FIVE_GATES[0]!], waiting: 1, asOf: INPUTS_AS_OF } }),
     });
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("region", { name: "Ship release 1?" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeTruthy();
   });
 
   it("calls a daemon that never answered disconnected rather than broken", async () => {
@@ -233,7 +234,7 @@ describe("what the surface is looking at", () => {
     fake.fail("runs.list", { code: "STORE_UNAVAILABLE", message: "no run list" });
     // The gates are the thing a person came for; the failures are the other half of the
     // screen and their absence is not a reason to withhold them.
-    expect(await screen.findByRole("region", { name: "Ship release 1?" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeTruthy();
     expect(screen.queryByRole("listbox", { name: "Failed runs" })).toBeNull();
   });
 });
@@ -276,7 +277,7 @@ describe("runs that fail while the surface is open", () => {
 describe("resuming a run from the card", () => {
   it("re-drives it and says what it settled as", async () => {
     mount([FIVE_GATES[0]!]);
-    await screen.findByRole("region", { name: "Ship release 1?" });
+    await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
     fake.script({
       "runs.resume": ({ runId }) => ({
         ok: true,
