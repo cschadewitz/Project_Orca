@@ -11,6 +11,10 @@
  */
 import { OrcaError } from "@orca/core";
 import {
+  ARTIFACTS_GET_METHOD,
+  ARTIFACTS_LIST_METHOD,
+  ArtifactsGetParamsSchema,
+  ArtifactsListParamsSchema,
   CLAIMS_LIST_METHOD,
   ClaimsListParamsSchema,
   HELLO_METHOD,
@@ -30,6 +34,8 @@ import {
   UnsubscribeParamsSchema,
   formatProtocolVersion,
   isCompatible,
+  type ArtifactsGetResult,
+  type ArtifactsListResult,
   type ClaimsListResult,
   type DaemonCapability,
   type HelloResult,
@@ -124,6 +130,18 @@ export const claimsList: Method<Parameters<ReadModel["claimsList"]>[0], ClaimsLi
   handle: (params, ctx) => reads(ctx).claimsList(params),
 };
 
+/** `artifacts.list`: the artifact index, filtered - a run's, a name's versions, a step's. */
+export const artifactsList: Method<Parameters<ReadModel["artifactsList"]>[0], ArtifactsListResult> = {
+  params: ArtifactsListParamsSchema,
+  handle: (params, ctx) => reads(ctx).artifactsList(params),
+};
+
+/** `artifacts.get`: one artifact with its body, or the reason the body is not shown. */
+export const artifactsGet: Method<Parameters<ReadModel["artifactsGet"]>[0], ArtifactsGetResult> = {
+  params: ArtifactsGetParamsSchema,
+  handle: (params, ctx) => reads(ctx).artifactsGet(params),
+};
+
 /**
  * A connection's subscription state is the connection's, so these two are answered by the
  * socket transport (socket.ts) before dispatch ever sees them. They are in the table so that
@@ -157,6 +175,8 @@ export const methods: MethodTable = {
   [RUNS_EVENTS_METHOD]: runsEvents,
   [INPUTS_LIST_METHOD]: inputsList,
   [CLAIMS_LIST_METHOD]: claimsList,
+  [ARTIFACTS_LIST_METHOD]: artifactsList,
+  [ARTIFACTS_GET_METHOD]: artifactsGet,
 };
 
 /**

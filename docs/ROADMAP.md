@@ -3,9 +3,11 @@
 Groundwork is complete and tested end‑to‑end. Deliberately left for follow‑up:
 
 1. **Daemon mode** — `orca serve` exists (`packages/daemon`) with the transport, the
-   `hello` handshake over HTTP and the five read methods over `Orchestrator` — `runs.list`,
-   `runs.get`, `runs.events`, `inputs.list`, `claims.list` (#150), answering the display read
-   models in `packages/protocol` (its README is the method reference). The desktop app
+   `hello` handshake over HTTP and the seven read methods over `Orchestrator` — `runs.list`,
+   `runs.get`, `runs.events`, `inputs.list`, `claims.list` (#150), `artifacts.list`,
+   `artifacts.get` (#159), answering the display read
+   models in `packages/protocol` (its README is the method reference). A step's output is
+   `runs.events` filtered by `stepRunId` rather than a method of its own (#158). The desktop app
    (`packages/app`) reaches them through `packages/protocol` and nothing else (ADR 0008).
    `WS /socket` carries the six `notification` messages off `Orchestrator.subscribe()`, with
    a per‑run cursor a client resumes from and agent output coalesced to one frame per step
