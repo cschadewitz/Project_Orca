@@ -242,11 +242,20 @@ carried ~190 literal type sizes and box heights; #211 removed them. No rule ther
 size any more — an element takes an `.orca-text-*` class, and each rule carries a
 `/* type: <style> */` note naming the class it expects.
 
-What remains is 49 box dimensions under `/* orca-allow-literal: … (#211) */` notes. Those are
-findings, not exemptions: sub-`control-sm` heights (18px and 20px, wanted eight times), chrome
-bar heights, decorative mark sizes, inline padding rungs between the space steps, and fixed
-grid tracks. Each names a family `tokens.json` does not have. Reaching for one of those
-literals a ninth time is the signal to add the family, not another note.
+**Nothing remains: the count is 0.** #211 left 38 of those notes, #240 took five, and #244
+took the last 32 (`grep -c orca-allow-literal components.css` returns 1, and that one is the
+paragraph at the top of the file explaining the rule). They were never 32 numbers. They were
+five families `tokens.json` did not have — `bar-*` for a band of chrome, `badge-*` for a mark
+that carries a word, `mark-*` for decorative geometry, `col-*` for a fixed track sized to what
+it holds, and the spacing half rungs `space-1-5` and `space-2-5` — plus `control-xs` and
+`control-sm-5` extending the control scale, four boxes that simply needed naming, and two
+values that turned out to be arithmetic written out as a number.
+
+The rule that produced that work is unchanged and is the reason to keep counting: **reaching
+for one of those literals a ninth time is the signal to add the family, not another note.** At
+zero, a new note is a stronger claim than it used to be — not "no token names this yet" but "no
+token could sensibly name this" — so it argues for itself in its own text, with a reason rather
+than an issue number, and a reviewer is entitled to ask for the token instead.
 
 Prettier runs at `printWidth: 120` and skips `*.md` and `templates/` (see
 `.prettierignore`): prose is wrapped by hand, and a prompt template's whitespace is

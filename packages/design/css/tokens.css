@@ -226,7 +226,9 @@
   /* spacing */
   --space-0-5: 2px;
   --space-1: 4px;
+  --space-1-5: 6px;
   --space-2: 8px;
+  --space-2-5: 10px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 20px;
@@ -247,9 +249,26 @@
   --row-log: var(--text-mono-log-line-height);
   --hit-min: 24px;
   --mark-sm: 3px;
+  --mark-md: 7px;
+  --mark-port: 9px;
+  --mark-skeleton: 10px;
+  --mark-swatch: 18px;
+  --hatch-period: 6px;
+  --bar-status: 24px;
+  --bar-pane: 34px;
+  --bar-title: 36px;
+  --bar-object: 40px;
+  --badge-sm: 18px;
+  --badge-md: 20px;
   --col-time: 76px;
   --col-lineno: 44px;
+  --col-label: 180px;
+  --col-label-narrow: 116px;
+  --col-node-kind: 74px;
+  --col-matrix-axis: 108px;
+  --control-xs: 22px;
   --control-sm: 24px;
+  --control-sm-5: 26px;
   --control-md: 28px;
   --control-lg: 32px;
   --icon-sm: 12px;
@@ -257,6 +276,9 @@
   --sidebar-width: 228px;
   --sidebar-width-collapsed: 48px;
   --panel-width: 420px;
+  --node-min-width: 132px;
+  --risk-cell-width: 92px;
+  --risk-cell-height: 62px;
   --measure-prose: 68ch;
   --titlebar-inset-traffic-lights: 78px;
   --titlebar-inset-caption-buttons: 138px;
@@ -276,6 +298,7 @@
   --stroke-rail: 2px;
   --stroke-focus: 2px;
   --stroke-edge-active: 2px;
+  --stroke-double: 3px;
   /* duration */
   --duration-instant: 0ms;
   --duration-fast: 120ms;
