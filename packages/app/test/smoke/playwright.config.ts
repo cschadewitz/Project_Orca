@@ -24,9 +24,18 @@
  * platform it already puts there.
  */
 import { defineConfig } from "@playwright/test";
+import { fileURLToPath } from "node:url";
+
+// `fileURLToPath`, never `new URL(...).pathname` — on Windows the latter yields
+// `/D:/a/Project_Orca/...`, with a leading slash before the drive letter, which Playwright
+// resolves against the cwd into `D:\D:\a\Project_Orca\...`. The first run of the three-OS
+// type-proof job found this the only way it can be found: Linux and macOS were fine and
+// Windows reported "No tests found" and an ENOENT on a doubled drive letter. `vitest.config.ts`
+// already uses this helper for the same reason.
+const here = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
 
 export default defineConfig({
-  testDir: new URL(".", import.meta.url).pathname,
+  testDir: here("."),
   // Launching Electron, building a demo store and serving it is slower than a browser test;
   // the daemon's own startup has its own deadline inside `daemon.ts`, and the type proof
   // compiles main and preload and starts a Vite dev server before its first test.
@@ -49,7 +58,7 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
-  outputDir: new URL("../../../../test-results/app-smoke", import.meta.url).pathname,
+  outputDir: here("../../../../test-results/app-smoke"),
   use: { trace: "retain-on-failure" },
   projects: [
     { name: "smoke", testMatch: "app-shell.spec.ts" },
