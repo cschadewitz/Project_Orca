@@ -1,11 +1,13 @@
 /**
- * The five read methods against a fixture store - once through the `ReadModel` for the
+ * The seven read methods against a fixture store - once through the `ReadModel` for the
  * projection itself, and once over `dispatch` so the method table, the params schemas and
  * the error mapping are exercised the way a client reaches them.
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import { OrcaError } from "@orca/core";
 import {
+  ArtifactsGetResultSchema,
+  ArtifactsListResultSchema,
   ClaimsListResultSchema,
   HelloResultSchema,
   InputsListResultSchema,
@@ -16,7 +18,7 @@ import {
   RunsListResultSchema,
 } from "@orca/protocol";
 import { ReadModel, dispatch, methods, type MethodContext } from "@orca/daemon";
-import { emptyFixture, fixture, STEP_MS, type Fixture } from "./fixture.js";
+import { artifactFixture, emptyFixture, fixture, STEP_MS, type Fixture } from "./fixture.js";
 
 let f: Fixture;
 let reads: ReadModel;
@@ -204,6 +206,78 @@ describe("runs.events", () => {
     expect(none.hasMore).toBe(false);
   });
 
+  it("narrows to one step run - which is what a step's output pane reads", async () => {
+    const step = RunsEventsResultSchema.parse(
+      (await call("runs.events", { runId: "run-parent", stepRunId: "s-build-1" })).result,
+    );
+    expect(step.events.map((e) => e.seq)).toEqual([2, 3, 4, 5]);
+    expect(step.events.map((e) => e.type)).toEqual([
+      "step.scheduled",
+      "step.started",
+      "agent.session.opened",
+      "step.failed",
+    ]);
+    // The run's high-water mark, not the filtered page's: one cursor for the whole surface.
+    expect(step.lastSeq).toBe(16);
+    expect(step.hasMore).toBe(false);
+
+    const unknown = await reads.runsEvents({ runId: "run-parent", stepRunId: "s-nope", limit: 100 });
+    expect(unknown.events).toEqual([]);
+    expect(unknown.lastSeq).toBe(16);
+  });
+
+  it("ANDs the step filter with the type filter, and run-level events are about no step", async () => {
+    const failed = await reads.runsEvents({
+      runId: "run-parent",
+      stepRunId: "s-build-1",
+      types: ["step.failed"],
+      limit: 100,
+    });
+    expect(failed.events.map((e) => e.seq)).toEqual([5]);
+    // `step.failed` happened and `run.started` happened; no event is both, so this is empty.
+    const neither = await reads.runsEvents({
+      runId: "run-parent",
+      stepRunId: "s-build-1",
+      types: ["run.started"],
+      limit: 100,
+    });
+    expect(neither.events).toEqual([]);
+    // A run-level event has no `stepRunId`, so no step filter can reach it.
+    const runLevel = await reads.runsEvents({ runId: "run-parent", types: ["run.created"], limit: 100 });
+    expect(runLevel.events.map((e) => e.seq)).toEqual([0]);
+  });
+
+  it("pages a step-filtered log both ways, on cursors that are still the run's sequence numbers", async () => {
+    const first = await reads.runsEvents({ runId: "run-parent", stepRunId: "s-fan", limit: 2 });
+    expect(first.events.map((e) => e.seq)).toEqual([11, 12]);
+    expect(first.hasMore).toBe(true);
+    expect(first.nextCursor).toBe(12);
+
+    const second = await reads.runsEvents({
+      runId: "run-parent",
+      stepRunId: "s-fan",
+      after: first.nextCursor!,
+      limit: 2,
+    });
+    expect(second.events.map((e) => e.seq)).toEqual([13, 14]);
+    expect(second.prevCursor).toBe(13);
+
+    // Back from where the second page starts lands on the first: no gap and no duplicate,
+    // even though the sequence numbers in between belong to other steps.
+    const back = await reads.runsEvents({
+      runId: "run-parent",
+      stepRunId: "s-fan",
+      before: second.prevCursor!,
+      limit: 2,
+    });
+    expect(back.events.map((e) => e.seq)).toEqual([11, 12]);
+    expect(back.hasMore).toBe(false);
+
+    const tail = await reads.runsEvents({ runId: "run-parent", stepRunId: "s-fan", after: 14, limit: 10 });
+    expect(tail.events.map((e) => e.seq)).toEqual([15, 16]);
+    expect(tail.hasMore).toBe(false);
+  });
+
   it("refuses a page anchored in both directions", async () => {
     const r = await call("runs.events", { runId: "run-parent", after: 1, before: 5 });
     expect(r.ok).toBe(false);
@@ -271,6 +345,122 @@ describe("claims.list", () => {
 
   it("scopes to one run", async () => {
     expect((await reads.claimsList({ runId: "run-parent" })).claims.map((c) => c.workItemId)).toEqual(["wi-2"]);
+  });
+});
+
+describe("artifacts.list", () => {
+  let art: Fixture;
+  let artReads: ReadModel;
+
+  beforeAll(async () => {
+    art = await artifactFixture();
+    artReads = new ReadModel({ orchestrator: art.orchestrator });
+  });
+
+  it("lists what the index holds, grouped by name and oldest version first", async () => {
+    const r = ArtifactsListResultSchema.parse((await call("artifacts.list")).result);
+    expect(r.asOf).toBe(f.asOf);
+    expect(r.total).toBe(2);
+    expect(r.artifacts.map((a) => [a.id, a.name, a.version, a.producedByStepRunId])).toEqual([
+      ["art-review", "review", 1, "s-write"],
+      ["art-spec", "spec", 1, "s-build-2"],
+    ]);
+  });
+
+  it("scopes to a run, a name, a kind and a producing step", async () => {
+    expect(
+      (await reads.artifactsList({ runId: "run-gate", limit: 200, offset: 0 })).artifacts.map((a) => a.id),
+    ).toEqual(["art-review"]);
+    expect((await reads.artifactsList({ kind: "spec", limit: 200, offset: 0 })).artifacts.map((a) => a.id)).toEqual([
+      "art-spec",
+    ]);
+    expect(
+      (await reads.artifactsList({ producedByStepRunId: "s-build-2", limit: 200, offset: 0 })).artifacts.map(
+        (a) => a.id,
+      ),
+    ).toEqual(["art-spec"]);
+    expect((await reads.artifactsList({ name: "nothing", limit: 200, offset: 0 })).artifacts).toEqual([]);
+  });
+
+  it("is a version list when it is asked for one name, and pages against the whole match", async () => {
+    const versions = await artReads.artifactsList({ runId: "run-art", name: "spec", limit: 200, offset: 0 });
+    expect(versions.artifacts.map((a) => a.version)).toEqual([1, 2, 3]);
+    expect(versions.total).toBe(3);
+
+    const page = await artReads.artifactsList({ runId: "run-art", name: "spec", limit: 2, offset: 1 });
+    expect(page.artifacts.map((a) => a.version)).toEqual([2, 3]);
+    expect(page.total).toBe(3);
+  });
+
+  it("is empty, not an error, on a store with no artifacts", async () => {
+    const empty = emptyFixture();
+    const model = new ReadModel({ orchestrator: empty.orchestrator });
+    expect(await model.artifactsList({ limit: 200, offset: 0 })).toEqual({
+      artifacts: [],
+      total: 0,
+      asOf: empty.asOf,
+    });
+  });
+});
+
+describe("artifacts.get", () => {
+  let art: Fixture;
+  let artReads: ReadModel;
+
+  beforeAll(async () => {
+    art = await artifactFixture();
+    artReads = new ReadModel({ orchestrator: art.orchestrator });
+  });
+
+  it("serves a body by id", async () => {
+    const r = ArtifactsGetResultSchema.parse((await call("artifacts.get", { artifactId: "art-spec" })).result);
+    expect(r.artifact).toMatchObject({ id: "art-spec", name: "spec", version: 1, producedByStepRunId: "s-build-2" });
+    expect(r.text).toBe("# Spec\n\nThe SSO callback, as designed.\n");
+    expect(r.omitted).toBeUndefined();
+  });
+
+  it("addresses a version by run and name, and answers the latest without one", async () => {
+    const v2 = await artReads.artifactsGet({ runId: "run-art", name: "spec", version: 2, maxBytes: 1_000_000 });
+    expect(v2.artifact.id).toBe("art-spec-v2");
+    expect(v2.text).toBe("# Spec v2\n");
+
+    const latest = await artReads.artifactsGet({ runId: "run-art", name: "spec", maxBytes: 1_000_000 });
+    expect(latest.artifact.version).toBe(3);
+    expect(latest.text).toBe("# Spec v3\n");
+  });
+
+  it("declines a body that is not text, and says why rather than failing", async () => {
+    const r = await artReads.artifactsGet({ artifactId: "art-shot", maxBytes: 1_000_000 });
+    expect(r.text).toBeUndefined();
+    expect(r.omitted?.reason).toBe("binary");
+    // The panel can still draw the chip and the header: size travels on the view.
+    expect(r.artifact).toMatchObject({ name: "screenshot", mediaType: "image/png", size: 4096 });
+  });
+
+  it("declines a body past `maxBytes` the same way", async () => {
+    const r = await reads.artifactsGet({ artifactId: "art-spec", maxBytes: 8 });
+    expect(r.text).toBeUndefined();
+    expect(r.omitted?.reason).toBe("tooLarge");
+  });
+
+  it("answers ARTIFACT_MISSING for an artifact the store has never had", async () => {
+    const byId = await call("artifacts.get", { artifactId: "art-nope" });
+    expect(byId.ok).toBe(false);
+    expect(byId.error?.code).toBe("ARTIFACT_MISSING");
+
+    const byVersion = await call("artifacts.get", { runId: "run-parent", name: "spec", version: 9 });
+    expect(byVersion.ok).toBe(false);
+    expect(byVersion.error?.code).toBe("ARTIFACT_MISSING");
+
+    await expect(artReads.artifactsGet({ runId: "run-art", name: "nothing", maxBytes: 1 })).rejects.toThrow(OrcaError);
+  });
+
+  it("refuses a request that addresses nothing, or both ways at once", async () => {
+    expect((await call("artifacts.get", {})).error?.code).toBe("PROTOCOL_MESSAGE");
+    expect((await call("artifacts.get", { runId: "run-parent" })).error?.code).toBe("PROTOCOL_MESSAGE");
+    expect(
+      (await call("artifacts.get", { artifactId: "art-spec", runId: "run-parent", name: "spec" })).error?.code,
+    ).toBe("PROTOCOL_MESSAGE");
   });
 });
 

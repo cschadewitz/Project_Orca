@@ -51,6 +51,59 @@ function artifact(id: string, kind: string, runId: string, stepRunId: string, cr
   };
 }
 
+/**
+ * A store whose artifacts are the point: three versions of one `spec`, produced by three
+ * attempts at one node, and a screenshot that is not text. It is a fixture of its own
+ * rather than more runs in `fixture()`, so the run list, the sequence numbers and the
+ * durations asserted against that one stay exactly what they are.
+ */
+export async function artifactFixture(): Promise<Fixture> {
+  const clock = new FakeClock(START);
+  const stores = memoryStores(clock);
+  const orc = orchestrator(stores, clock);
+  const append = async (e: OrcaEventInput) => {
+    clock.advance(STEP_MS);
+    await stores.events.append(e);
+  };
+
+  await append({
+    type: "run.created",
+    runId: "run-art",
+    payload: { workflowId: "sdlc", workflowVersion: "2", workspace, vars: {} },
+  });
+  await append({ type: "run.started", runId: "run-art", payload: {} });
+
+  for (const version of [1, 2, 3]) {
+    const stepRunId = `s-spec-${version}`;
+    await append({
+      type: "step.scheduled",
+      runId: "run-art",
+      payload: { stepRunId, nodeId: "spec", nodeType: "agent", attempt: version },
+    });
+    await append({ type: "step.started", runId: "run-art", payload: { stepRunId, inputArtifactIds: [] } });
+    const a: Artifact = { ...artifact(`art-spec-v${version}`, "spec", "run-art", stepRunId, clock.isoNow()), version };
+    await stores.artifacts.put(a, `# Spec v${version}\n`);
+    await append({ type: "artifact.recorded", runId: "run-art", payload: { stepRunId, artifact: a } });
+    await append({
+      type: "step.completed",
+      runId: "run-art",
+      payload: { stepRunId, result: { artifactIds: [a.id], data: {} } },
+    });
+  }
+
+  const shot: Artifact = {
+    ...artifact("art-shot", "generic", "run-art", "s-spec-3", clock.isoNow()),
+    name: "screenshot",
+    mediaType: "image/png",
+    path: "/work/orca/.orca/artifacts/art-shot.png",
+    size: 4096,
+  };
+  await stores.artifacts.put(shot, "PNG binary bytes, in a store that keeps blobs as strings");
+  await append({ type: "artifact.recorded", runId: "run-art", payload: { stepRunId: "s-spec-3", artifact: shot } });
+
+  return { clock, stores, orchestrator: orc, asOf: clock.isoNow() };
+}
+
 export function emptyFixture(): Fixture {
   const clock = new FakeClock(START);
   const stores = memoryStores(clock);
@@ -173,13 +226,14 @@ export async function fixture(): Promise<Fixture> {
     runId: "run-parent",
     payload: { stepRunId: "s-build-2", sessionId: "sess-2", agentId: "claude", hostId: "local", cwd: workspace.cwd },
   });
+  // Into the artifact index as well as the log, the way `Orchestrator.recordArtifact` does
+  // it: `artifacts.list` and `artifacts.get` read the index, `runs.get` reads the log.
+  const spec = artifact("art-spec", "spec", "run-parent", "s-build-2", clock.isoNow());
+  await stores.artifacts.put(spec, "# Spec\n\nThe SSO callback, as designed.\n");
   await append({
     type: "artifact.recorded",
     runId: "run-parent",
-    payload: {
-      stepRunId: "s-build-2",
-      artifact: artifact("art-spec", "spec", "run-parent", "s-build-2", clock.isoNow()),
-    },
+    payload: { stepRunId: "s-build-2", artifact: spec },
   });
   await append({
     type: "step.completed",
@@ -255,13 +309,12 @@ export async function fixture(): Promise<Fixture> {
     payload: { stepRunId: "s-write", nodeId: "write", nodeType: "agent", attempt: 1 },
   });
   await append({ type: "step.started", runId: "run-gate", payload: { stepRunId: "s-write", inputArtifactIds: [] } });
+  const review = artifact("art-review", "review", "run-gate", "s-write", clock.isoNow());
+  await stores.artifacts.put(review, "---\nverdict: approve\n---\n\nLooks right.\n");
   await append({
     type: "artifact.recorded",
     runId: "run-gate",
-    payload: {
-      stepRunId: "s-write",
-      artifact: artifact("art-review", "review", "run-gate", "s-write", clock.isoNow()),
-    },
+    payload: { stepRunId: "s-write", artifact: review },
   });
   await append({
     type: "step.completed",

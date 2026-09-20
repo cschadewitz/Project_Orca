@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import { ProtocolVersionSchema } from "./version.js";
+import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD } from "./claims.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import { RUNS_EVENTS_METHOD, RUNS_GET_METHOD, RUNS_LIST_METHOD } from "./runs.js";
@@ -25,6 +26,8 @@ export const READ_METHODS = [
   RUNS_EVENTS_METHOD,
   INPUTS_LIST_METHOD,
   CLAIMS_LIST_METHOD,
+  ARTIFACTS_LIST_METHOD,
+  ARTIFACTS_GET_METHOD,
 ] as const;
 
 /**

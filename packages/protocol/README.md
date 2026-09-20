@@ -82,7 +82,7 @@ result: { protocol, orcaVersion, storeDir?, capabilities: DaemonCapability[], me
 `capabilities` is coarse (`runs.read`, `runs.subscribe`, `runs.control`, `plan.read`,
 `plan.write`); `methods` (protocol 1.1) is exactly what this daemon answers, so a newer
 client can light up one screen against an older daemon. A daemon serving no store answers
-`hello` and nothing else. `READ_METHODS` is the five below.
+`hello` and nothing else. `READ_METHODS` is the seven below.
 
 ### `runs.list` — the run list
 
@@ -121,7 +121,8 @@ never became child runs, so the whole fan-out is shown and not just the part tha
 ### `runs.events` — the timeline, paged by sequence number
 
 ```ts
-params: { runId; after?: number; before?: number; types?: string[]; limit = 200 }
+params: { runId; after?: number; before?: number; types?: string[]; stepRunId?: string;
+          limit = 200 }
 result: { events: OrcaEvent[]; nextCursor?; prevCursor?; hasMore; lastSeq; asOf }
 ```
 
@@ -129,6 +130,23 @@ result: { events: OrcaEvent[]; nextCursor?; prevCursor?; hasMore; lastSeq; asOf 
 preceding one; giving both is an error. Either way the page reads oldest first, so live and
 historical rendering are one code path. `types` filters, and an unknown type matches nothing
 rather than failing. `lastSeq` is the run's, not the page's.
+
+**`stepRunId` is how a step's output is read.** A step's output *is* the `agent.update`
+events it appended, so it is a filter here rather than a method of its own (#158): one
+method, one cursor semantics, one thing file mode and a read-only daemon have to support.
+The two filters are an AND, and an unknown step run matches nothing rather than failing.
+Run-level events (`run.*`, `vars.set`) are about no step and so match no `stepRunId`.
+
+The filters cut the log before it is paged, so `nextCursor` / `prevCursor` are cursors into
+the *filtered* sequence while remaining the run's own sequence numbers: paging back from a
+page's `prevCursor` lands on the page before it with no gap and no duplicate, however many
+other steps' events lie between them. `lastSeq` is the run's high-water mark either way, so
+a screen filtered to one step still shows the same cursor as the run around it.
+
+> A client buffering a step's output buffers **events, not lines**: one `agent.update` can
+> render many lines, and #158's "last 50,000 lines" is a count of events on this wire. The
+> trim boundary a client pages across with `before` is therefore an event boundary, which is
+> what makes "load earlier output" exact — a line boundary would not be addressable here.
 
 ### `inputs.list` — the attention surface
 
@@ -159,6 +177,43 @@ Oldest first. A claim is `workItemId`, `workItem?`, `branch`, `stepRunId?`, `cla
 its `owner`: `runId`, `name?`, `status`, `missing` (no log for that run any more, shown as
 `stale`), and `releasable` — true when the owning run cannot resume, which is exactly when
 `orca claims release` does not need `--force`.
+
+### `artifacts.list` — the artifact index, filtered
+
+```ts
+params: { runId?; name?; kind?; producedByStepRunId?; limit = 200; offset = 0 }
+result: { artifacts: ArtifactView[]; total: number; asOf }
+```
+
+Metadata only — a version list must not cost the bodies it lists. Grouped by `name`, oldest
+version first, because `Artifact.version` is monotonic per (run, name): asking for one
+`name` in one `runId` *is* the version list the docked panel steps through with `[` and `]`,
+and each entry carries `producedByStepRunId` and `createdAt`, so "which step wrote v3, and
+when" needs no second call.
+
+Which steps *consumed* an artifact is not a field here: `runs.get` already gives every
+`StepView`'s `inputArtifactIds`, so a client that has the run tree has the consumers, and
+listing a gate's artifacts must not ship a run's provenance graph to draw six chips.
+
+### `artifacts.get` — one artifact, with its body
+
+```ts
+params: { artifactId? } | { runId; name; version? }, plus maxBytes = 1_000_000
+result: { artifact: ArtifactView; text?: string; omitted?: { reason; detail }; asOf }
+```
+
+Address it by `artifactId`, or by the (`runId`, `name`, `version?`) triple a deep link
+carries (`orca://artifact/spec.md@v3`); without a `version`, the latest of that name. Giving
+both addresses, or neither, is `PROTOCOL_MESSAGE`.
+
+`text` is present exactly when `omitted` is absent. A body is declined rather than served
+when the artifact's `mediaType` is not text (`reason: "binary"`) or its `size` is past
+`maxBytes` (`reason: "tooLarge"`); `detail` says so in words, because it is what a panel
+shows where the body would have been, and the size is on the `ArtifactView` beside it.
+Declining is not an error — the panel still shows what the artifact *is*.
+
+`ARTIFACT_MISSING` when the index has no such artifact, and equally when it has one whose
+blob is gone.
 
 ## The push channel
 

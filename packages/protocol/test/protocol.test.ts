@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  ARTIFACT_TEXT_LIMIT_BYTES,
+  ArtifactsGetParamsSchema,
   HelloParamsSchema,
   HelloResultSchema,
   PROTOCOL_VERSION,
+  READ_METHODS,
+  RunsEventsParamsSchema,
   formatProtocolVersion,
   isCompatible,
+  isTextMediaType,
   parseMessage,
   protocolError,
 } from "@orca/protocol";
@@ -70,5 +75,39 @@ describe("hello", () => {
     expect(
       HelloResultSchema.safeParse({ protocol: PROTOCOL_VERSION, orcaVersion: "0.1.0", capabilities: ["nope"] }).success,
     ).toBe(false);
+  });
+
+  it("lists the artifact reads among the read methods", () => {
+    expect(READ_METHODS).toContain("artifacts.list");
+    expect(READ_METHODS).toContain("artifacts.get");
+  });
+});
+
+describe("runs.events params", () => {
+  it("takes a step run beside the type filter, and still refuses two anchors", () => {
+    const p = RunsEventsParamsSchema.parse({ runId: "r", stepRunId: "s-1", types: ["agent.update"] });
+    expect(p).toMatchObject({ stepRunId: "s-1", types: ["agent.update"], limit: 200 });
+    expect(RunsEventsParamsSchema.safeParse({ runId: "r", stepRunId: "", limit: 10 }).success).toBe(false);
+    expect(RunsEventsParamsSchema.safeParse({ runId: "r", stepRunId: "s-1", after: 1, before: 5 }).success).toBe(false);
+  });
+});
+
+describe("artifacts", () => {
+  it("knows which media types are text a client can render", () => {
+    for (const t of ["text/markdown", "text/plain; charset=utf-8", "application/json", "application/vnd.orca+yaml"])
+      expect(isTextMediaType(t)).toBe(true);
+    for (const t of ["image/png", "application/pdf", "application/octet-stream"])
+      expect(isTextMediaType(t)).toBe(false);
+  });
+
+  it("is addressed by id, or by run and name, and never by both or neither", () => {
+    expect(ArtifactsGetParamsSchema.parse({ artifactId: "a" })).toMatchObject({
+      artifactId: "a",
+      maxBytes: ARTIFACT_TEXT_LIMIT_BYTES,
+    });
+    expect(ArtifactsGetParamsSchema.safeParse({ runId: "r", name: "spec", version: 3 }).success).toBe(true);
+    expect(ArtifactsGetParamsSchema.safeParse({}).success).toBe(false);
+    expect(ArtifactsGetParamsSchema.safeParse({ runId: "r" }).success).toBe(false);
+    expect(ArtifactsGetParamsSchema.safeParse({ artifactId: "a", runId: "r", name: "spec" }).success).toBe(false);
   });
 });
