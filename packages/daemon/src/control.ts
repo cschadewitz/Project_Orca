@@ -44,6 +44,13 @@ export interface AnswerAndResumeOptions {
   requestId: string;
   /** An option's `id`, or the free text for a question that offers none. */
   answer: string;
+  /**
+   * Free text the person wrote beside the answer, recorded on `human.answered` (#238). The
+   * run does not branch on it - `answer` is the whole of the decision - but the log now
+   * holds the reasoning next to the choice instead of only in whoever's terminal it was
+   * typed into.
+   */
+  note?: string | undefined;
   /** Narrows the search to one run and its descendants; an id is unique without it. */
   runId?: string | undefined;
   /** Re-drive afterwards and return once the run is parked again or finished. Default true. */
@@ -100,7 +107,7 @@ export async function answerAndResume(orc: Orchestrator, opts: AnswerAndResumeOp
     );
   await refuseIfLeasedElsewhere(orc, runId);
 
-  const request = await orc.answer(opts.requestId, opts.answer, runId);
+  const request = await orc.answer(opts.requestId, opts.answer, runId, opts.note);
   if (opts.resume === false) return { request };
   // `resume` walks up to the topmost parked ancestor and re-attaches on the way down, so a
   // gate answered inside a child continues the tree and not just the child.
@@ -200,17 +207,9 @@ export class ControlModel {
       requestId: params.requestId,
       answer: params.optionId,
       ...(params.runId ? { runId: params.runId } : {}),
+      ...(params.note ? { note: params.note } : {}),
       resume: params.resume,
     });
-    if (params.note)
-      // `human.answered`'s payload is `{ stepRunId, requestId, answer }` and nothing else, so
-      // the note reaches the operator's log and not the run's. A client must not present it
-      // as something the run recorded. Widening the event is #238.
-      this.orc.logger.info("human input answered with a note", {
-        runId: request.runId,
-        requestId: request.id,
-        note: params.note,
-      });
     return {
       requestId: request.id,
       runId: request.runId,

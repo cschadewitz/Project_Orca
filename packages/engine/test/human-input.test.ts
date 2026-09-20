@@ -291,6 +291,31 @@ edges:
     expect(done.run.outcome).toBe("failure");
   });
 
+  it("records the note beside the answer, and only when there is one (#238)", async () => {
+    const { orchestrator } = make([GATED]);
+    const parked = await orchestrator.startAndRun({ workflowId: "gated" });
+    const [request] = await orchestrator.pendingInputs(parked.run.id);
+    await orchestrator.answer(request!.id, "hold", undefined, "the staging soak is still red");
+
+    const answered = (await orchestrator.events(parked.run.id)).filter((e) => e.type === "human.answered");
+    expect(answered).toHaveLength(1);
+    expect(answered[0]!.payload).toMatchObject({ answer: "hold", note: "the staging soak is still red" });
+
+    // The run still branches on the answer alone; the note is the record of why.
+    const done = await orchestrator.resume(parked.run.id);
+    expect(done.run.outcome).toBe("failure");
+  });
+
+  it("writes no `note` field at all when none was given", async () => {
+    const { orchestrator } = make([GATED]);
+    const parked = await orchestrator.startAndRun({ workflowId: "gated" });
+    const [request] = await orchestrator.pendingInputs(parked.run.id);
+    await orchestrator.answer(request!.id, "ship");
+    const answered = (await orchestrator.events(parked.run.id)).find((e) => e.type === "human.answered")!;
+    // Absent, not an empty string: a card must not draw a note nobody wrote.
+    expect(answered.payload).not.toHaveProperty("note");
+  });
+
   it("cancels agent permission asks instead of parking (the agent session cannot be resumed)", async () => {
     await expect(
       new PausingHumanInput().ask({

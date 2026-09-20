@@ -165,6 +165,22 @@ describe("inputs.answer", () => {
     expect(await h.orchestrator.pendingInputs(runId)).toEqual([]);
   });
 
+  it("records the note on `human.answered`, where the run keeps it (#238)", async () => {
+    const h = harness();
+    const { runId, requestId } = await parked(h);
+    const res = await call(h.ctx, "inputs.answer", {
+      requestId,
+      optionId: "hold",
+      note: "the staging soak is still red",
+    });
+    expect(res.ok, JSON.stringify(res.error)).toBe(true);
+
+    // In the run's log, not the daemon's: until #238 this note reached whichever terminal
+    // the daemon was logging to and nothing that outlived the run.
+    const answered = (await h.orchestrator.events(runId)).find((e) => e.type === "human.answered")!;
+    expect(answered.payload).toMatchObject({ answer: "hold", note: "the staging soak is still red" });
+  });
+
   it("refuses an option the question does not offer, and names the ones it does", async () => {
     const h = harness();
     const { requestId } = await parked(h);

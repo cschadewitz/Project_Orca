@@ -442,7 +442,7 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   answer: {
-    help: "answer [<requestId> <option> [--no-resume]]  Answer a paused run's question and resume it; without arguments, list open questions.",
+    help: "answer [<requestId> <option> [--note text] [--no-resume]]  Answer a paused run's question and resume it; --note records why in the run's log; without arguments, list open questions.",
     async run(ctx) {
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
       const [requestId, ...rest] = ctx.positionals;
@@ -459,6 +459,10 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
           "answer needs a request id and an answer (orca answer <requestId> <option>)",
         );
       const resume = !ctx.flags["no-resume"];
+      // Why, beside what. It goes onto `human.answered` with the answer (#238), so a person
+      // reading the run later sees the reasoning where the decision is, rather than in
+      // whichever terminal it was typed into. The run itself branches on the option alone.
+      const note = ctx.flags.note as string | undefined;
       const detach = resume ? attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet)) : () => {};
       try {
         // The same function the daemon's `inputs.answer` calls (`@orca/daemon`): answer,
@@ -469,6 +473,7 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         const { request, state } = await answerAndResume(app.orchestrator, {
           requestId,
           answer: value,
+          ...(note ? { note } : {}),
           resume,
           resumeWith: (id) => app.program.resume(id),
         });

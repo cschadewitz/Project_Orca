@@ -271,7 +271,24 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       context: z.record(z.string(), z.unknown()).default({}),
     }),
   ),
-  base("human.answered", z.object({ stepRunId: z.string(), requestId: z.string(), answer: z.string() })),
+  base(
+    "human.answered",
+    z.object({
+      stepRunId: z.string(),
+      requestId: z.string(),
+      answer: z.string(),
+      /**
+       * The free-text note the person wrote beside the answer (#238). The run does not
+       * branch on it - `answer` is the whole of the decision - but it is the record of
+       * *why* that decision was taken, and until now it reached the operator's log and not
+       * the run's, which made it something a client had to be told not to display.
+       *
+       * Absent on every answer recorded before this release, and on every answer given
+       * without one; a reader must not turn that into an empty string on screen.
+       */
+      note: z.string().optional(),
+    }),
+  ),
 ]);
 
 export type OrcaEvent = z.infer<typeof OrcaEventSchema>;
