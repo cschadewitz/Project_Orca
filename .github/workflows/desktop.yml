@@ -130,7 +130,15 @@ jobs:
 
       # electron-builder finds packages/app/electron-builder.yml by name; `-c.` overrides one
       # value in it. `exec` rather than `run package` so that no stray `--` reaches yargs.
+      #
+      # `shell: bash` because the default on the Windows runner is PowerShell, which does not
+      # pass `-c.extraMetadata.version=<v>` through as one token. yargs then sees a bare `-c`
+      # and reads the rest as the *path to a config file*, so the job fails with
+      # `ENOENT: ... open '.extraMetadata.version=0.3.0'` — a packaging error that is really
+      # an argument-quoting one. bash is present on all three runners and parses it the same
+      # way everywhere, which is what this step wants.
       - name: Package
+        shell: bash
         run: pnpm --filter @orca/app exec electron-builder -c.extraMetadata.version=${{ steps.version.outputs.version }}
 
       # The definition of done, as far as a runner can check it: launch the packaged app

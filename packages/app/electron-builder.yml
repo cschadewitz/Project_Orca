@@ -23,14 +23,29 @@ directories:
   output: dist/release
   buildResources: build
 
-# What goes inside app.asar. Only the three built halves and the manifest: the sources, the
-# tests, the Vite config and the daemon bundle all stay out. electron-builder adds the
+# What goes inside app.asar: the compiled output and the manifest. The sources, the tests and
+# the Vite config are not under dist/ and so are never candidates; the two directories that
+# are under it but must stay out are excluded by name below. electron-builder adds the
 # production `dependencies` from package.json on top of this, resolving pnpm's symlinks.
+#
+# This is deliberately the whole of dist/ rather than a list of the parts. Listing
+# `dist/main`, `dist/preload` and `dist/renderer` reads like the app's three halves and is
+# wrong: main and preload also import `dist/bridge.js`, `dist/client/**` and
+# `dist/preferences/**`, so an enumerated list shipped an asar whose main process threw
+# ERR_MODULE_NOT_FOUND on first import. An allowlist here has to be re-derived every time a
+# module moves, and nothing fails until the packaged app is actually launched.
 files:
-  - "dist/main/**/*"
-  - "dist/preload/**/*"
-  - "dist/renderer/**/*"
+  - "dist/**/*"
   - "package.json"
+  # The daemon is a subprocess, so it ships beside app.asar via extraResources below. A copy
+  # in here would be 1.7 MB that can never be spawned.
+  - "!dist/daemon"
+  # electron-builder's own output directory (directories.output), which would package itself.
+  - "!dist/release"
+  # Build artefacts of `tsc -b`: declarations and the incremental build state are for the
+  # workspace, not for a user's disk.
+  - "!**/*.d.ts"
+  - "!**/*.tsbuildinfo"
   # Source maps are for the release page, not for every user's disk.
   - "!**/*.map"
 
