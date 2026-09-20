@@ -89,9 +89,14 @@ describe("clearing what is waiting", () => {
       await waitFor(() =>
         expect(screen.queryByRole("region", { name: cardName("gate", `Ship release ${n}?`) })).toBeNull(),
       );
-      // Focus never left the list: the next card took the place of the answered one.
+      // Focus never left the list: the next card took the place of the answered one. Waited
+      // for, not read at once: the surface moves focus in a passive effect after the commit
+      // that removed the card, and `waitFor` above returns on the DOM mutation itself, so on a
+      // loaded runner the assertion can run in the gap between the two (CI on #263).
       if (n < 5) {
-        expect(document.activeElement?.getAttribute("aria-label")).toBe(cardName("gate", `Ship release ${n + 1}?`));
+        await waitFor(() =>
+          expect(document.activeElement?.getAttribute("aria-label")).toBe(cardName("gate", `Ship release ${n + 1}?`)),
+        );
       }
     }
 
