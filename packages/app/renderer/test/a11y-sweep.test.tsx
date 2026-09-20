@@ -141,6 +141,34 @@ describe("the one polite announcer", () => {
     expect(announcer.textContent).toBe("Run run-parent failed");
   });
 
+  it("says nothing on the frames that are not worth a sentence, and does not blank itself", async () => {
+    serveWaits();
+    renderChrome(h);
+    await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
+    const announcer = announcers()[0]!;
+
+    await act(async () => {
+      fake.notify(stepChanged({ status: "failed", nodeId: "build", event: "step.scheduled" }));
+    });
+    expect(announcer.textContent).toBe("build step failed");
+
+    /* The quiet half of the fold, asserted at the region rather than at the function
+       (`announcements.test.ts` has the wording). Two frames that say nothing: a step that
+       succeeded — success is quiet, rule 6 — and a run that is merely running, whose
+       transitions are its steps and are heard through them.
+
+       What is being checked is not only that they add nothing, but that they do not
+       *clear* what is there. A live region that reset to "" on every uninteresting frame
+       would be a region that mutated twice per announcement, and a screen reader part-way
+       through the sentence would hear it cut off. */
+    for (const frame of [stepChanged({ status: "succeeded" }), runChanged("running")]) {
+      await act(async () => {
+        fake.notify(frame);
+      });
+      expect(announcer.textContent).toBe("build step failed");
+    }
+  });
+
   it("is the only polite region besides the connection state the spec asks for", async () => {
     serveWaits();
     renderChrome(h);
