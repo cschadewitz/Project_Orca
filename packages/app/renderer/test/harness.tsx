@@ -7,7 +7,7 @@
  *
  * - `themes.tsx` — mount a component in both themes and assert on the colour the real
  *   `tokens.css` resolves it to (docs/design/RULES.md rule 7);
- * - `fake-bridge.ts` — a `window.orca` that answers `hello`, the five read methods and
+ * - `fake-bridge.ts` — a `window.orca` that answers `hello`, the eight read methods and
  *   daemon notifications from `fixtures.ts`. `installBridge` below is the short way in.
  */
 import { render, type RenderResult } from "@testing-library/react";
@@ -23,6 +23,7 @@ import { LayerStackProvider } from "../src/layers-context.js";
 import { createNotificationStream, type NotificationSource, type NotificationStream } from "../src/notifications.js";
 import { NotificationProvider } from "../src/notifications-context.js";
 import { PaletteSourceProvider, PaletteSourceRegistry } from "../src/palette/sources.js";
+import { ArtifactPanelProvider } from "../src/artifacts/panel-context.js";
 import type { BridgeResult } from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
 import { fakeBridge, type FakeBridge, type FakeBridgeOptions } from "./fake-bridge.js";
@@ -129,7 +130,15 @@ export function harness(platform = "darwin"): Harness {
         <LayerStackProvider value={layers}>
           <PaletteSourceProvider value={paletteSources}>
             <NotificationProvider value={notifications}>
-              <AppearanceProvider value={appearance}>{children}</AppearanceProvider>
+              <AppearanceProvider value={appearance}>
+                {/* `App` wraps every surface in this, so a surface test has to as well: a
+                    step's artifact chip asks the context to put an artifact in the docked
+                    panel, and the context throws rather than silently doing nothing when
+                    nothing is above it. `onOpen` is the chrome's and is omitted here —
+                    opening the panel is what a test of the panel asserts, not what a test
+                    of a surface does. */}
+                <ArtifactPanelProvider>{children}</ArtifactPanelProvider>
+              </AppearanceProvider>
             </NotificationProvider>
           </PaletteSourceProvider>
         </LayerStackProvider>

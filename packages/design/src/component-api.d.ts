@@ -126,13 +126,27 @@ export interface TimeProps {
   show?: "absolute" | "relative" | "both";
 }
 
+/**
+ * A run tree row (built: `app/renderer/src/runs/tree/`).
+ *
+ * `selected`, `onSelect` and the row element itself are **not** the row's: the list
+ * substrate owns the row, its `aria-selected` and its click, and the surface passes only
+ * the cells inside it (`app/renderer/src/list/virtual-list.tsx`). They stay named here
+ * because the class layer still describes a whole row.
+ */
 export interface RunTreeRowProps {
   id: string;
   /** Monospace: this is a machine name. */
   name: string;
-  status: RunStatus;
+  /**
+   * Absent on a `note` row only. A skipped fan-out branch never became a run, so it has no
+   * status and no duration — it shows the word "skipped" and why (rule 12, and rule 3: the
+   * eight statuses stay eight).
+   */
+  status?: RunStatus;
   level: number;
-  kind: "run" | "step" | "attempt" | "child-run";
+  /** `note` is the fifth kind: a skipped fan-out branch, drawn as part of the fan-out. */
+  kind: "run" | "step" | "attempt" | "child-run" | "note";
   expanded?: boolean;
   hasChildren?: boolean;
   selected?: boolean;
@@ -141,13 +155,25 @@ export interface RunTreeRowProps {
   /** "attempt 2 of 3" — shown only when attempts > 1. */
   attempt?: { n: number; of: number };
   agent?: string;
+  /** A running *run*: an indeterminate meter, never a percentage (rule 12, #156). */
+  meter?: boolean;
+  /** The second half of a `note` row: why the branch never ran. */
+  note?: string;
   onToggle?(id: string): void;
   onSelect?(id: string): void;
 }
 
+/** An event timeline row (built: `app/renderer/src/runs/timeline/`). */
 export interface TimelineEntryProps {
-  /** Event id; shown in mono-id on hover and copied by the row's context menu. */
-  eventId: string;
+  /**
+   * Event id; shown in mono-id at the end of the row and copied from the row's `Menu`.
+   *
+   * **Optional**, because one row has no id to show. A live `agent.update` arrives as a
+   * coalesced batch — `fromSeq`, `seq` and the updates between them, and no event ids — so
+   * a batch row is addressed by its sequence range instead. Inventing an id for it is what
+   * rule 12 forbids.
+   */
+  eventId?: string;
   at: Date;
   /** The ORCA event kind, verbatim: 'step.started', 'agent.update', … */
   kind: string;
@@ -155,41 +181,120 @@ export interface TimelineEntryProps {
   summary: string;
   status?: RunStatus;
   selected?: boolean;
+  /** The last sequence number the row stands for, and the first when it is coalesced. */
+  seq?: number;
+  fromSeq?: number;
+  /** How many events the row stands for: 1, or the size of a coalesced batch. */
+  count?: number;
+  /**
+   * A gate a policy settled with nobody asked (`decision.resolved`, `source: "gate:auto"`).
+   * Drawn in `ink-secondary` and it never raises a count. The row names the *source* and
+   * not the condition: `autoApproveWhen` is configuration and is not on the event.
+   */
+  autoApproved?: boolean;
 }
 
+/**
+ * Built (#158), and corrected here against what the implementation met. Three changes,
+ * each because the draft assumed something the wire does not carry:
+ *
+ * - `lines` became `rows`, and a row is not always a line. The stream also holds the two
+ *   seams a reconnection leaves — `◷ paused — reconnecting` where it stopped and
+ *   `── reconnected hh:mm:ss ──` where it came back — and they are rows because *where*
+ *   the gap falls in the output is the whole of what they say.
+ * - A row's number is its event's `seq`, not an ordinal `n`. An absolute line number is a
+ *   thing ORCA cannot supply once the buffer has trimmed or a page has been loaded in
+ *   front of it — "a line boundary is not a thing the wire can name"
+ *   (docs/design/30-long-running-content.md) — and inventing one is what rule 12 forbids.
+ *   `seq` repeats when one `agent.update` rendered several lines, which is honest.
+ * - There is no `stream: 'stdout' | 'stderr'`. ACP has no such split; a step's output is
+ *   its `agent.update` events, and the tone a line takes is derived from the update's kind
+ *   and status instead.
+ */
 export interface OutputPaneProps {
-  lines: ReadonlyArray<{ n: number; text: string; stream?: "stdout" | "stderr" }>;
+  rows: ReadonlyArray<
+    | { kind: "line"; key: string; seq: number; text: string; tone: "out" | "dim" | "err"; folded: number }
+    | { kind: "paused" | "reconnected"; key: string; at: string }
+  >;
+  /** The pane's accessible name. Not a live region: rule 11. */
+  label: string;
   /** True while the step is producing output; draws the caret. */
   streaming: boolean;
   /** 'following' pins to the bottom; 'held' shows the jump button. */
   mode: "following" | "held";
   /** Lines that arrived while held. */
   pending: number;
-  /** Set when the in-memory buffer has trimmed; renders the load-earlier marker. */
+  /** Set when there is output in front of the buffer; renders the load-earlier marker. */
   trimmedBefore?: number;
+  loadingEarlier?: boolean;
   onJumpToLatest(): void;
+  /** Called once when a scroll leaves the end while following. */
+  onHold(): void;
   onLoadEarlier?(): void;
 }
 
+/**
+ * Built (#158). The draft's five fields became one `call` object, because every one of
+ * them is a projection of the same fold over the step's log (`renderer/src/step/tool-calls.ts`)
+ * and passing them apart invited a row assembled from two different calls.
+ *
+ * `durationMs` is gone: `agent.update` carries no timing per call, and `agent.turn.completed`
+ * times the *turn*, not the call inside it. A per-call duration would be invented (rule 12).
+ *
+ * `body` is `{ args, result }` with each one's *pre-cut* length beside it, because
+ * `toolCallBody` caps both at 2,000 characters when the event is written (#220): a row has
+ * to be able to say it is showing 2,000 of 41,318 rather than end mid-token.
+ */
 export interface ToolCallRowProps {
-  tool: string;
-  /** One-line argument summary; the full payload goes in the body. */
-  argSummary: string;
-  state: "pending" | "ok" | "failed" | "awaiting-permission";
-  durationMs?: number;
+  call: {
+    id: string;
+    tool: string;
+    toolKind?: string;
+    /** One-line argument summary; the full payload goes in the body. */
+    argSummary: string;
+    state: "pending" | "ok" | "failed" | "awaiting-permission";
+    locations: readonly string[];
+    args?: { text: string; length: number };
+    result?: { text: string; length: number };
+    /** What a person answered, once `agent.permission` has settled the call. */
+    decision?: string;
+    /** What they are being asked, while it is still open. */
+    question?: string;
+  };
+  /** Open on first render. Defaults to open for a failed call and closed for the rest. */
   expanded?: boolean;
-  body?: { args?: string; result?: string };
 }
 
+/**
+ * Built (#159), as an *address* rather than as data. The draft passed the versions, the
+ * current one and the consumed-by list in; the implementation passes
+ * `{ runId, name, version, compareWith? }` and reads the rest, for two reasons:
+ *
+ * - The panel is opened from four places — a step's artifact chip, a gate card, the
+ *   version menu and `orca://artifact/spec.md@v3` (#165) — and the last of those has
+ *   nothing but a name and a version. A prop shape only a caller holding `ArtifactView`s
+ *   could satisfy would have locked the deep link out.
+ * - `versions`, the body and the consumed-by links are three different reads
+ *   (`artifacts.list`, `artifacts.get`, `runs.get`), and hoisting them into the caller
+ *   would have made every caller do all three.
+ *
+ * `onSelectVersion` is gone for the same reason: version selection, the comparison and the
+ * panel's open state are one controller held above every surface
+ * (`renderer/src/artifacts/panel-context.tsx`), not a callback a parent has to hold.
+ *
+ * There is **no rendered/raw toggle**. Markdown renders raw; a renderer is a dependency
+ * decision `packages/app` has not taken, and the control is absent rather than disabled so
+ * that nothing on screen promises a feature nobody has decided on.
+ */
 export interface ArtifactPanelProps {
-  name: string;
-  versions: ReadonlyArray<{ v: number; at: Date; producedBy: string }>;
-  current: number;
-  /** When set, the body renders as a diff against this version. */
-  compareWith?: number;
-  /** Steps that read this artifact — rendered as links under the header. */
-  consumedBy?: ReadonlyArray<{ stepId: string; name: string }>;
-  onSelectVersion(v: number): void;
+  target: {
+    runId: string;
+    /** The logical name within the run — what `artifacts.list` groups versions by. */
+    name: string;
+    version: number;
+    /** When set, the body renders as a diff against this version of the same name. */
+    compareWith?: number;
+  };
 }
 
 export interface GateOption {
@@ -270,14 +375,54 @@ export interface DecisionMatrixProps {
   supersedes?: string;
 }
 
+/**
+ * Built, and corrected against the wire it is drawn from (`AgentView` in `@orca/protocol`).
+ * Four things the draft got wrong, all of them found by building it:
+ *
+ * - **`state` has four values, not three.** `unknown` is the state of every agent on a
+ *   freshly started daemon: health is tracked in the daemon's process and never persisted
+ *   (#222), so "nothing has contacted this agent since the daemon started" is the honest
+ *   answer and not a missing one. `AGENT_HEALTH_PRESENTATION` carries its word and glyph.
+ * - **A host has an id, not a name.** Nothing in ORCA names a host; `hosts:` in the config
+ *   is a list of ids, which is also what an agent's `hostId` points at and what the cards
+ *   are grouped by. `transport` is optional for the same reason the wire's `hostType` is:
+ *   an agent whose host has left the config has no transport to report, and `local` would
+ *   be a guess (RULES.md rule 12).
+ * - **Two timestamps, not one (#227).** `lastHandshakeAt` is when ORCA last established a
+ *   connection — what `state`, `roundTripMs` and `consecutiveFailures` are about — and
+ *   `lastSeenAt` is when the agent last said anything. A pooled session handshakes once and
+ *   then talks for an hour, so one `lastAt` would have to choose between them. Both are
+ *   absent until first contact.
+ * - **There is no `policy`.** Nothing in ORCA counts auto-approvals: permission decisions
+ *   are evaluated per tool call against the rules in config (`PermissionRule`) and no
+ *   running total is kept anywhere, on the wire or off it. Rule 12 forbids inventing one,
+ *   so the field is gone rather than approximated. A permission *policy* surface is its own
+ *   screen; it is not a line on this card.
+ * - **And there is no `claim` either, for the same reason.** A `ClaimView` names the work
+ *   item and the *run* that owns it; it names no agent, and an `AgentView` names no run. So
+ *   "what is this agent on" cannot be answered from `agents.list`, however much the card
+ *   wants to say it. The claims travel with the list all the same and the surface renders
+ *   them as their own region, where a claim is a work item and the run holding it — which
+ *   is what the data does support (RULES.md rule 12).
+ */
 export interface AgentHealthCardProps {
+  /** The agent's id. There is no separate display name; ids are what config and runs use. */
   name: string;
-  host: { name: string; transport: "local" | "ssh" };
+  host: { id: string; transport?: "local" | "ssh" };
   roles: ReadonlyArray<string>;
-  handshake: { state: "ok" | "degraded" | "down"; lastAt: Date; rttMs?: number };
-  policy: { label: string; autoApprovals: number };
-  /** The work item this agent's current run claims, if any. */
-  claim?: { runId: string; itemId: string; itemTitle: string };
+  state: "unknown" | "ok" | "degraded" | "down";
+  /** The last handshake attempt, successful or not. Absent while `unknown`. */
+  lastHandshakeAt?: Date;
+  /** The last time it said anything at all — output from an old session counts. */
+  lastSeenAt?: Date;
+  /** Round trip of the last *successful* handshake; it survives a later failure. */
+  roundTripMs?: number;
+  /** Failed handshakes since the last successful one. Non-zero exactly while `down`. */
+  consecutiveFailures: number;
+  /** Why the last handshake failed. Kept only while `down`. */
+  lastError?: { code: string; message: string };
+  /** False when the daemon is not answering: the timestamps stop reading as relative. */
+  live?: boolean;
 }
 
 /**
@@ -458,8 +603,9 @@ export interface MinimapTickProps {
  * `rowClassName` therefore has to name a row class that does.
  *
  * **Selection and focus are different things** (docs/design/RULES.md rule 10). One tab
- * stop, on the listbox; `aria-activedescendant` carries the selection; the ring is the
- * listbox's and the accent rail is the row's.
+ * stop, on the container; `aria-activedescendant` carries the selection; the ring is the
+ * container's and the accent rail is the row's. The container is a `listbox` of `option`s
+ * by default and a `tree` of `treeitem`s when `role` says so — see `role` and `rowProps`.
  *
  * **The keys are registered, not listened for.** `J`/`K`, `↑`/`↓`, `Home`/`End` and the
  * page keys go on the `KeyboardMap` in the scope `scope` names, so the command palette
@@ -502,6 +648,25 @@ export interface VirtualListProps<T> {
    * scopes, so one screen can hold a run tree, a timeline and a stream. Defaults to `list`.
    */
   scope?: "list" | "run-tree" | "stream";
+  /**
+   * What the rows are, as ARIA sees them: a `listbox` of `option`s (the default, a flat
+   * list of choices) or a `tree` of `treeitem`s (rows with depth — the run tree, #156).
+   *
+   * It is the substrate's because the substrate owns the row element. A surface cannot fix
+   * this from `renderRow`, which returns only the row's *children*: `aria-level` on a span
+   * inside a row, or a `treeitem` nested in an `option`, is invalid ARIA and reads as a
+   * flat list either way. Everything else is identical for both roles — one tab stop,
+   * `aria-activedescendant`, `aria-selected`.
+   */
+  role?: "listbox" | "tree";
+  /**
+   * Per-row ARIA only the surface can know — `aria-level` and `aria-expanded` on a tree
+   * row — merged onto the row element. Applied *before* the attributes the substrate owns,
+   * so a surface reaching too far cannot overwrite the role, the id or the selection. A
+   * row with no children omits `aria-expanded` rather than setting it false: "closed" and
+   * "nothing to open" are different facts.
+   */
+  rowProps?(item: T, index: number, selected: boolean): Record<string, string | number | boolean | undefined>;
   /**
    * Stay at the end as the list grows — a stream that is following. A growing `items`
    * reveals the last row; a scroll away from the bottom calls `onHold` **once**, not per

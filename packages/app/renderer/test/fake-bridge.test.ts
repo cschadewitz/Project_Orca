@@ -11,6 +11,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ClaimsListResultSchema,
+  AgentsListResultSchema,
   HelloResultSchema,
   InputsListResultSchema,
   RunsEventsResultSchema,
@@ -50,6 +51,7 @@ describe("fixtures", () => {
     RunsEventsResultSchema.parse(await result(b.runs.events({ runId: "run-gate" })));
     InputsListResultSchema.parse(await result(b.inputs.list()));
     ClaimsListResultSchema.parse(await result(b.claims.list()));
+    AgentsListResultSchema.parse(await result(b.agents.list()));
   });
 
   it("cover a live run, a finished one, a run asking for a person and a run nobody is driving", async () => {
@@ -127,6 +129,24 @@ describe("the read methods", () => {
       ["wi-3", true, true],
     ]);
     expect((await result(b.claims.list({ runId: "run-parent" }))).claims).toHaveLength(1);
+  });
+
+  it("lists every configured agent, both hosts and all four health states", async () => {
+    const { bridge: b } = bridge();
+    const list = await result(b.agents.list());
+    expect(list.agents.map((a) => [a.id, a.hostId, a.hostType, a.state])).toEqual([
+      ["claude", "local", "local", "ok"],
+      ["codex", "local", "local", "unknown"],
+      ["gemini", "build-box", "ssh", "degraded"],
+      ["sandbox", "build-box", "ssh", "down"],
+    ]);
+    // An agent nothing has contacted has no timestamps rather than invented ones (#222).
+    expect(list.agents[1]!.lastHandshakeAt).toBeUndefined();
+    expect(list.agents[1]!.lastSeenAt).toBeUndefined();
+    // `consecutiveFailures` is non-zero exactly while `down`.
+    expect(list.agents.map((a) => a.consecutiveFailures)).toEqual([0, 0, 0, 3]);
+    // The claims travel with the list, and are the same ones `claims.list` projects.
+    expect(list.claims).toEqual((await result(b.claims.list())).claims);
   });
 });
 

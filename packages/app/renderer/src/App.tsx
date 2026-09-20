@@ -17,10 +17,12 @@ import { ConnectionBanner, MismatchDialog } from "./chrome/connection-banner.js"
 import { useSidebarCollapsed, usePanelOverlay } from "./chrome/use-breakpoints.js";
 import { useChromeShortcuts } from "./chrome/use-chrome-shortcuts.js";
 import { useEscapeClosesTopLayer, useTransientLayer } from "./layers-context.js";
+import { ArtifactPanelProvider } from "./artifacts/panel-context.js";
 import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
-import { StateView } from "./ui/index.js";
+import { AgentsSurface } from "./agents/agents-surface.js";
+import { ObjectHeader, StateView, type Crumb } from "./ui/index.js";
 
 // Attention is always first: the app's default landing surface (docs/design/10-information-architecture.md).
 // The data-driven half of the landing rule — Attention showing running runs when nothing is
@@ -30,6 +32,12 @@ const DEFAULT_SURFACE: SurfaceId = "attention";
 export function App(): JSX.Element {
   const [active, setActive] = useState<SurfaceId>(DEFAULT_SURFACE);
   const [panelOpen, setPanelOpen] = useState(false);
+  /* The object header is the chrome's, on every screen that has an object
+     (docs/design/10-information-architecture.md): one breadcrumb in the app, drawn in one
+     place. A surface hands up the crumbs for whatever it has selected and the chrome draws
+     them into `PrimaryPane`'s header slot — Runs is the first surface with an object to put
+     there. */
+  const [crumbs, setCrumbs] = useState<readonly Crumb[]>([]);
 
   const connection = useConnection();
   const sidebarCollapsed = useSidebarCollapsed();
@@ -50,7 +58,10 @@ export function App(): JSX.Element {
      Esc must not close what a person put there to read alongside the pane. */
   useTransientLayer(panelOpen && panelOverlay, { name: "docked-panel", close: togglePanel });
 
-  return (
+  /* Bound rather than returned, and then wrapped at the bottom of this function: the
+     provider is a wrap, and re-indenting the whole tree to nest it would make every line
+     of the chrome a line this change touched. */
+  const chrome = (
     <div className="orca-window">
       <TitleBar
         platform={window.orca.platform}
@@ -69,9 +80,22 @@ export function App(): JSX.Element {
         <Sidebar active={active} onSelect={selectSurface} />
         {/* Keyed by surface: a switch mounts a new pane, which is what re-applies that
             surface's remembered density. */}
-        <PrimaryPane key={activeSurface.id} surface={activeSurface.id}>
+        <PrimaryPane
+          key={activeSurface.id}
+          surface={activeSurface.id}
+          header={
+            activeSurface.id === "runs" && crumbs.length > 0 ? (
+              // `onOpen` and `onOpenCounterpart` are omitted until there is an `orca://`
+              // route table to open a crumb into (#165); a crumb that navigates nowhere is
+              // still a crumb that says where you are.
+              <ObjectHeader crumbs={crumbs} />
+            ) : undefined
+          }
+        >
           {activeSurface.id === "runs" ? (
-            <RunsSurface connection={connection.state} />
+            <RunsSurface connection={connection.state} onCrumbs={setCrumbs} />
+          ) : activeSurface.id === "agents" ? (
+            <AgentsSurface connection={connection.state} />
           ) : (
             <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />
           )}
@@ -87,4 +111,9 @@ export function App(): JSX.Element {
       <MismatchDialog connection={connection} />
     </div>
   );
+
+  /* The docked panel's artifact is held above every surface, so a chip on a step, a gate
+     card and an `orca://artifact/spec.md@v3` deep link can all put one there; opening the
+     panel itself stays the chrome's, which is what `onOpen` hands over. */
+  return <ArtifactPanelProvider onOpen={() => setPanelOpen(true)}>{chrome}</ArtifactPanelProvider>;
 }

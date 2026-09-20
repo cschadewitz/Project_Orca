@@ -1,0 +1,309 @@
+/**
+ * `StepDetail` — what one step run did: its header, what it produced, what it called, and
+ * what it said.
+ *
+ * It is the pane beside the run tree, and it has two readings. With a step selected it is
+ * the step: node, attempt, agent, host and duration; the artifacts it produced as chips
+ * that open the docked panel; its tool calls; and its output. With a run selected and no
+ * step it is a minimal run summary — the run's variables, its artifacts and its error — in
+ * the same pane, because an empty detail pane beside a selected run is a dead end and the
+ * three things a run has that its steps do not are worth exactly that much room.
+ *
+ * Two things the header deliberately does not say:
+ *
+ * - **No cost, and no token count.** ACP does not necessarily carry it and the ORCA model
+ *   does not mention it, so there is nothing to render and approximating it is what rule 12
+ *   forbids. docs/design/60-implementation.md leaves room for exactly one more metric here
+ *   and this is it; the row below is laid out so that adding it is adding a cell.
+ * - **No progress and no estimate**, for the same reason, everywhere in the app.
+ *
+ * The host is not on `StepView`; it is in `agent.session.opened`, which comes back with the
+ * one `runs.events({ stepRunId })` page the output pane already reads (`step-facts.ts`).
+ * That is why this file holds one hook and hands its parts to three renderers rather than
+ * each of them reading for itself.
+ */
+import { useCallback, useMemo, useRef, useState, type JSX, type RefObject } from "react";
+import { STATUS_PRESENTATION, type ConnectionState, type RunStatus } from "@orca/design";
+import type { ArtifactView, RunsGetResult, StepView } from "@orca/protocol";
+import { useArtifactPanel } from "../artifacts/panel-context.js";
+import { useArtifactsList } from "../artifacts/use-artifacts.js";
+import { Duration, StateView, StatusChip, Text, textClass } from "../ui/index.js";
+import { OutputPane, outputLabel, type OutputPaneHandle } from "./output-pane.js";
+import { sessionOf } from "./step-facts.js";
+import { foldToolCalls } from "./tool-calls.js";
+import { ToolCallRow } from "./tool-call-row.js";
+import { useStepLog } from "./use-step-log.js";
+import "./step.css";
+
+export interface StepDetailProps {
+  /** The run, whole, as `runs.get` answered it — the run tree already holds one. */
+  detail: RunsGetResult;
+  /** The step to show. Absent renders the run summary in the same pane. */
+  stepRunId?: string | undefined;
+  connection: ConnectionState;
+}
+
+export function StepDetail({ detail, stepRunId, connection }: StepDetailProps): JSX.Element {
+  const step = stepRunId === undefined ? undefined : detail.steps.find((s) => s.id === stepRunId);
+  if (step === undefined) return <RunSummary detail={detail} connection={connection} />;
+  // Keyed on the step so the log hook's buffer, the selection and the search field all
+  // start again rather than being carried across to a different step's output.
+  return <Step key={step.id} detail={detail} step={step} connection={connection} />;
+}
+
+/* ---------- a step ---------- */
+
+function Step({
+  detail,
+  step,
+  connection,
+}: {
+  detail: RunsGetResult;
+  step: StepView;
+  connection: ConnectionState;
+}): JSX.Element {
+  const pane = useRef<OutputPaneHandle>(null);
+  const onPrepend = useCallback((rows: number) => pane.current?.shiftBy(rows), []);
+
+  const running = step.status === "running" || step.status === "waiting";
+  const log = useStepLog(detail.run.id, step.id, {
+    connection,
+    // A finished step opens held at the top: there is nothing arriving to follow, and its
+    // beginning is where the reason it finished that way usually is.
+    openHeld: !running,
+    onPrepend,
+  });
+
+  const session = useMemo(() => sessionOf(log.events), [log.events]);
+  const calls = useMemo(() => foldToolCalls(log.events), [log.events]);
+  const status: RunStatus = step.status;
+
+  return (
+    <div className="orca-inspector orca-step">
+      <div className="orca-inspector__head">
+        <StatusChip status={status} />
+        <span className={`orca-inspector__title ${textClass("mono-strong")}`}>{step.nodeId}</span>
+        <Text style="caption" className="orca-faint">
+          {`attempt ${step.attempt}`}
+        </Text>
+      </div>
+
+      <div className="orca-step__metrics">
+        <Metric label="node">
+          <Text style="mono-id">{step.nodeType}</Text>
+        </Metric>
+        <Metric label="attempt">
+          <Text style="mono-id">{String(step.attempt)}</Text>
+        </Metric>
+        <Metric label="agent">
+          <Text style="mono-id">{step.agentId ?? session.agentId ?? unknown}</Text>
+        </Metric>
+        <Metric label="host">
+          <Text style="mono-id">{session.hostId ?? unknown}</Text>
+        </Metric>
+        <Metric label="duration">
+          {/* A duration accruing against a daemon that is not talking is an invented
+              number: the clock stops when the connection does. */}
+          {step.startedAt !== undefined && step.finishedAt === undefined && connection === "live" ? (
+            <Duration since={new Date(step.startedAt)} />
+          ) : (
+            <Duration ms={step.durationMs ?? 0} />
+          )}
+        </Metric>
+        {/* Exactly one more metric fits here, and it is cost. ORCA cannot supply it
+            (rule 12), so the cell is absent rather than empty or approximated. */}
+      </div>
+
+      {step.error !== undefined && (
+        <Text style="label" as="div" className="orca-step__error">
+          {`${step.error.code}: ${step.error.message}`}
+        </Text>
+      )}
+      {session.error !== undefined && step.error === undefined && (
+        <Text style="label" as="div" className="orca-step__error">
+          {`${session.error.code}: ${session.error.message}`}
+        </Text>
+      )}
+
+      <StepArtifacts runId={detail.run.id} stepRunId={step.id} />
+
+      {calls.length > 0 && (
+        <div className="orca-step__tools">
+          <Text style="eyebrow" as="div" className="orca-inspector__group">
+            Tool calls
+          </Text>
+          {calls.map((call) => (
+            <ToolCallRow key={call.id} call={call} />
+          ))}
+        </div>
+      )}
+
+      <Output log={log} step={step} running={running} paneRef={pane} />
+    </div>
+  );
+}
+
+const unknown = "—";
+
+function Metric({ label, children }: { label: string; children: JSX.Element }): JSX.Element {
+  return (
+    <div className="orca-step__metric">
+      <Text style="eyebrow" as="div" className="orca-faint">
+        {label}
+      </Text>
+      {children}
+    </div>
+  );
+}
+
+function Output({
+  log,
+  step,
+  running,
+  paneRef,
+}: {
+  log: ReturnType<typeof useStepLog>;
+  step: StepView;
+  running: boolean;
+  paneRef: RefObject<OutputPaneHandle | null>;
+}): JSX.Element {
+  if (log.phase === "loading") return <StateView kind="loading" title="Loading output" className="orca-step__output" />;
+  if (log.phase === "error") {
+    return (
+      <StateView
+        kind="error"
+        title="Could not read this step's output"
+        body={log.error ? `${log.error.code}: ${log.error.message}` : "The daemon answered badly."}
+        className="orca-step__output"
+      />
+    );
+  }
+  return (
+    <OutputPane
+      className="orca-step__output"
+      label={outputLabel(step.nodeId, step.attempt)}
+      rows={log.rows}
+      streaming={running}
+      mode={log.following ? "following" : "held"}
+      pending={log.pending}
+      {...(log.earlierBefore === undefined ? {} : { trimmedBefore: log.earlierBefore })}
+      loadingEarlier={log.loadingEarlier}
+      onJumpToLatest={log.follow}
+      onHold={log.hold}
+      onLoadEarlier={log.loadEarlier}
+      ref={paneRef}
+    />
+  );
+}
+
+/* ---------- the artifacts a step produced ---------- */
+
+function StepArtifacts({ runId, stepRunId }: { runId: string; stepRunId: string }): JSX.Element | null {
+  const { artifacts } = useArtifactsList({ runId, producedByStepRunId: stepRunId });
+  if (artifacts.length === 0) return null;
+  return (
+    <div className="orca-step__artifacts">
+      <Text style="eyebrow" as="div" className="orca-inspector__group">
+        Produced
+      </Text>
+      <div className="orca-step__chips">
+        {artifacts.map((artifact) => (
+          <ArtifactChip key={artifact.id} runId={runId} artifact={artifact} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The chip, its click and the panel's open state are one seam: clicking opens the docked
+ * panel *and* puts this artifact in it, which is why the target lives in a context above
+ * every surface rather than in this one (`artifacts/panel-context.tsx`).
+ */
+export function ArtifactChip({ runId, artifact }: { runId: string; artifact: ArtifactView }): JSX.Element {
+  const panel = useArtifactPanel();
+  return (
+    <button
+      type="button"
+      className={`orca-ref ${textClass("mono-id")}`}
+      onClick={() => panel.open({ runId, name: artifact.name, version: artifact.version })}
+    >
+      {`${artifact.name}@v${artifact.version}`}
+    </button>
+  );
+}
+
+/* ---------- a run, with no step selected ---------- */
+
+/**
+ * The three things a run has that its steps do not: the variables it was started with, the
+ * artifacts it produced between them, and the error it ended on. It is deliberately
+ * *minimal* — the run tree above it already says what happened, and a second, fuller run
+ * screen here would be a rival to it.
+ */
+function RunSummary({ detail, connection }: { detail: RunsGetResult; connection: ConnectionState }): JSX.Element {
+  const [showVars, setShowVars] = useState(true);
+  const vars = Object.entries(detail.vars);
+  const status: RunStatus = detail.run.status;
+
+  return (
+    <div className="orca-inspector orca-step">
+      <div className="orca-inspector__head">
+        <StatusChip status={status} />
+        <span className={`orca-inspector__title ${textClass("mono-strong")}`}>{detail.run.name}</span>
+        <Text style="caption" className="orca-faint">
+          {STATUS_PRESENTATION[status].word}
+        </Text>
+      </div>
+
+      {detail.run.error !== undefined && (
+        <Text style="label" as="div" className="orca-step__error">
+          {`${detail.run.error.code}: ${detail.run.error.message}`}
+        </Text>
+      )}
+
+      <div className="orca-inspector__body">
+        <details open={showVars} onToggle={(event) => setShowVars(event.currentTarget.open)}>
+          <summary className={`orca-inspector__group ${textClass("eyebrow")}`}>{`Variables (${vars.length})`}</summary>
+          {vars.length === 0 ? (
+            <Text style="caption" className="orca-faint">
+              This run was started with none.
+            </Text>
+          ) : (
+            vars.map(([name, value]) => (
+              <div className="orca-field" key={name}>
+                <span className={`orca-field__label ${textClass("caption")}`}>{name}</span>
+                <span className={`orca-mono ${textClass("mono-body")}`}>{format(value)}</span>
+              </div>
+            ))
+          )}
+        </details>
+
+        <Text style="eyebrow" as="div" className="orca-inspector__group">
+          {`Artifacts (${detail.artifacts.length})`}
+        </Text>
+        <div className="orca-step__chips">
+          {detail.artifacts.map((artifact) => (
+            <ArtifactChip key={artifact.id} runId={detail.run.id} artifact={artifact} />
+          ))}
+        </div>
+
+        {connection !== "live" && (
+          <Text style="caption" className="orca-faint" as="div">
+            Not connected — this is the last the daemon sent.
+          </Text>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A variable as one line of mono. `JSON.stringify` so a string reads as a string. */
+function format(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}

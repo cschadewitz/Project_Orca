@@ -14,6 +14,12 @@
  */
 import type { ConnectionState } from "@orca/design";
 import type {
+  AgentsListParams,
+  AgentsListResult,
+  ArtifactsGetParams,
+  ArtifactsGetResult,
+  ArtifactsListParams,
+  ArtifactsListResult,
   ClaimsListParams,
   ClaimsListResult,
   DaemonCapability,
@@ -85,6 +91,29 @@ export interface OrcaBridge {
   claims: {
     /** Who owns which work item, and whether that run is still alive. */
     list: (params?: Params<ClaimsListParams>) => Promise<BridgeResult<ClaimsListResult>>;
+  };
+  artifacts: {
+    /**
+     * Artifact metadata, never bodies: the versions of one name, or everything one step
+     * produced. A run with forty artifacts would otherwise ship megabytes to draw a
+     * version list (#159).
+     */
+    list: (params?: Params<ArtifactsListParams>) => Promise<BridgeResult<ArtifactsListResult>>;
+    /**
+     * One artifact's body, addressed by `artifactId` or by (`runId`, `name`, `version?`).
+     * A binary or oversized body comes back as `omitted` with the reason in words rather
+     * than as an error — it exists, it is simply not being shown.
+     */
+    get: (params: Params<ArtifactsGetParams>) => Promise<BridgeResult<ArtifactsGetResult>>;
+  };
+  agents: {
+    /**
+     * Every configured agent with its handshake health, and what is claimed right now.
+     * A read: health is in the daemon's memory rather than in a log, so an agent nothing
+     * has contacted answers `unknown` rather than being missing (#222). `agents.ping` is a
+     * read too, but it is a button (#176) and is not on the bridge yet.
+     */
+    list: (params?: Params<AgentsListParams>) => Promise<BridgeResult<AgentsListResult>>;
   };
   notifications: {
     /**

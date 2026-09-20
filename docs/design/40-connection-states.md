@@ -7,7 +7,7 @@ wrong.**
 
 | State | Status bar | Banner | Data shown | Writes |
 | --- | --- | --- | --- | --- |
-| **Live** | `● connected` in `status-succeeded`, event cursor ticking | none | live | enabled |
+| **Live** | `● connected` in `status-succeeded` | none | live | enabled |
 | **Reconnecting** | `◌ reconnecting… 3s` in `status-waiting`, spinner | none for the first 5s, then a thin bar on affected screens | last-known, values at `opacity-stale` | queued, buttons show "will send on reconnect" |
 | **Disconnected** | `◷ disconnected · 2m ago` in `status-stale` | persistent bar on every screen with data | last-known, values at `opacity-stale`, every timestamp switched to absolute | disabled with the reason on the control |
 | **File mode** | `◷ file mode · read-only` in `status-stale` | persistent bar naming the event-log path | whatever the event log and artifact files contain, replayed | disabled, and the buttons are absent rather than disabled |
@@ -48,23 +48,32 @@ partial degradation the person cannot see.
 ## Where the implementation stands (#163)
 
 The machine is `packages/app/src/main/connection-state.ts` — the one place `SubscriptionState`,
-the `hello` result and a bundled daemon's exit are folded onto these five states. Four things
-above are not yet true, and are written here rather than approximated in code:
+the `hello` result and a bundled daemon's exit are folded onto these five states.
+
+**The reconnect seam is real** as of #158: the output pane marks `◷ paused — reconnecting`
+where the stream stopped and draws the `── reconnected hh:mm:ss ──` rule when it returns,
+driven from `useConnection()` transitions. It is not a live region (rule 11) — the status bar
+has already said the word.
+
+Three things above are still not true, and are written here rather than approximated in code:
 
 - **Writes are not queued while reconnecting.** There is no outbox — that belongs with the
   control methods — so a control says "the daemon is not answering; wait for the connection to
   come back" rather than promise a send the app cannot make. The table's "will send on
   reconnect" is the intent, not the behaviour.
-- **`reconnecting` has no give-up threshold.** `DaemonSubscription` retries forever with the
-  backoff capped at 5s, so today `disconnected` is reached only when a bundled daemon exits or
-  the stream is closed. Against an external `ORCA_DAEMON_URL` that dies, the status bar reads
-  "reconnecting… 4m" indefinitely. The design does not say when patience should end; picking a
-  number is a design decision, not an implementation detail, so none was invented.
-- **The event cursor is absent.** See `60-implementation.md`, "Event-sourced rendering".
+- **`reconnecting` has no give-up threshold *yet*, but the design now says what one is.**
+  `DaemonSubscription` retries forever with the backoff capped at 5s, so today `disconnected`
+  is reached only when a bundled daemon exits or the stream is closed, and against an external
+  `ORCA_DAEMON_URL` that dies the status bar reads "reconnecting… 4m" indefinitely. The rule
+  settled on #239 is **backoff saturation: three consecutive failures at the 5s cap**, about
+  twenty seconds of real silence. It is deliberately a fact about the retry loop rather than a
+  stopwatch, so it survives a change to the backoff, and it is a *rendering* change — the
+  subscription keeps retrying, because giving up would need a reconnect control and nothing
+  has one. Implementing it belongs with #164.
 - **File mode is not implemented** and is never produced (#164).
 
-Two classes this spec needs do not exist in `components.css`: the 2px stale bar (`.orca-banner--stale`
-is a padded row with words in it — the wrong weight for a blip) and a generic blocking dialog
-(the only modal in the layer is `.orca-palette`, whose width and animation are about ⌘K). Both
-are written from tokens in `renderer/src/chrome/connection.css` until the component layer grows
-them; the second blocking dialog the design wants is the gate card, so it is worth doing.
+The two classes this spec needs are now in the component layer (#240): `.orca-stale-rule` for
+the 2px bar, and the `.orca-dialog` family for a blocking dialog that is not the command
+palette. `renderer/src/chrome/connection.css` is gone — the app writes no CSS of its own for
+these states. The second blocking dialog the design wants is the gate card, and it inherits
+all of it.

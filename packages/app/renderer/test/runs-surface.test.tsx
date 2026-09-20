@@ -1,8 +1,14 @@
 // @vitest-environment happy-dom
 /**
- * The Runs surface against the fake preload bridge: the rows, the filter, selection by
- * keyboard, the four state views, and the live path — a `run.changed` repainting a row and
- * a `run.changed` for an unknown run inserting one.
+ * The Runs surface against the fake preload bridge: the tree's roots, the filter, selection
+ * by keyboard, the four state views, and the live path — a `run.changed` repainting a row
+ * and a `run.changed` for an unknown run inserting one.
+ *
+ * The roots of the run tree are the run list this surface used to be, with the same two
+ * filters over them, so most of what this file asserts is unchanged by #156 — the listbox
+ * is called "Run tree" now and a row's id is its path in the tree rather than a run id.
+ * What the tree does *below* its roots is `run-tree.test.tsx`; the timeline is
+ * `timeline.test.tsx`.
  *
  * Everything below goes through `window.orca`, which is the whole of "the daemon" as far as
  * the renderer is concerned. The fake's read methods genuinely filter and page (see
@@ -38,8 +44,9 @@ function renderRuns(connection: "live" | "disconnected" = "live"): void {
   );
 }
 
-const rows = (): HTMLElement[] => screen.queryAllByRole("option");
-const list = (): HTMLElement => screen.getByRole("listbox", { name: "Runs" });
+const list = (): HTMLElement => screen.getByRole("tree", { name: "Run tree" });
+/** Scoped to the tree: the timeline is a second listbox on this screen. */
+const rows = (): HTMLElement[] => within(list()).queryAllByRole("treeitem");
 const filterField = (): HTMLElement => screen.getByRole("searchbox", { name: "Filter runs" });
 
 /** A bare key on the list, as the keyboard map reads it: `code` for letters, `key` for the rest. */
@@ -64,43 +71,42 @@ describe("the Runs surface", () => {
     setTheme(undefined);
   });
 
-  it("lists every run the daemon sent, newest first, on fixed-height rows", async () => {
+  it("makes every run the daemon sent a root of the tree, newest first", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
 
     // The fixture's order is the daemon's: newest first by creation.
-    expect(rows().map((row) => row.id)).toEqual(RUNS.map((run) => `run-row-${run.id}`));
+    expect(rows().map((row) => row.id)).toEqual(RUNS.map((run) => `tree-row-${run.id}`));
     expect(rows().every((row) => row.classList.contains("orca-tree-row"))).toBe(true);
 
-    // Each row says the five things the surface promises: status, name, workflow, version,
-    // duration, agent. `run-old` is the failed one at the top.
+    // `run-old` is the failed one at the top; a row says status, name, duration, agent.
     const old = within(rows()[0]!);
     expect(old.getByText(STATUS_PRESENTATION.failed.word)).toBeTruthy();
     expect(old.getByText("SSO rollout")).toBeTruthy();
-    expect(old.getByText("nightly")).toBeTruthy();
-    expect(old.getByText("v1")).toBeTruthy();
     expect(rows()[0]!.textContent).toContain("1.0s");
   });
 
   it("asks the daemon once, and with no paging parameters it does not need", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
 
     const listCalls = fake.calls.filter((c) => c.method === "runs.list");
     expect(listCalls).toHaveLength(1);
     expect(listCalls[0]!.params).toEqual({});
+    // Nothing is selected and nothing is open, so no run has been read.
+    expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(0);
   });
 
   it("filters by text over the name, the id, the workflow and the agent", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
 
     fireEvent.change(filterField(), { target: { value: "login" } });
-    expect(rows().map((r) => r.id)).toEqual(["run-row-run-child-ok"]);
+    expect(rows().map((r) => r.id)).toEqual(["tree-row-run-child-ok"]);
 
     // An id the row does not show: a person pasting one should still find the run.
     fireEvent.change(filterField(), { target: { value: "run-gate" } });
-    expect(rows().map((r) => r.id)).toEqual(["run-row-run-gate"]);
+    expect(rows().map((r) => r.id)).toEqual(["tree-row-run-gate"]);
 
     // The text filter is local, so it costs no round trip.
     expect(fake.calls.filter((c) => c.method === "runs.list")).toHaveLength(1);
@@ -108,45 +114,55 @@ describe("the Runs surface", () => {
 
   it("filters by status through runs.list, so the whole store is filtered and not one page", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
 
     fireEvent.click(screen.getByRole("button", { name: /Filter by status/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: STATUS_PRESENTATION.waiting.word }));
 
     await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]!.id).toBe("run-row-run-gate");
+    expect(rows()[0]!.id).toBe("tree-row-run-gate");
 
     const listCalls = fake.calls.filter((c) => c.method === "runs.list");
     expect(listCalls).toHaveLength(2);
     expect(listCalls[1]!.params).toEqual({ status: ["waiting"] });
   });
 
-  /* The keys belong to the list substrate as of #155: `list/use-list-keys.ts` registers all
-     eight in the `list` scope and the surface only lends them its noun. So the map holds
-     `Home`, `End` and the page keys beside the original four, and every label reads "run". */
-  it("moves the selection with the list keys, and registers every one in the map", async () => {
+  /* The movement keys belong to the list substrate: `list/use-list-keys.ts` registers all
+     eight in whichever scope the list's `scope` prop names, and the tree's is `run-tree`.
+     The `list` scope is now the timeline's, which is why nothing is registered there until
+     a run is selected. */
+  it("moves the selection with the list keys, registered in the run-tree scope", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
 
     const listKeys = h.keyboard
       .list()
-      .filter((s) => s.scope === "list")
+      .filter((s) => s.scope === "run-tree")
       .map((s) => `${s.key}: ${s.label}`);
+    /* The substrate's eight first — a child's effects run before its parent's, and the
+       `VirtualList` is inside the component that registers the tree's five. */
     expect(listKeys).toEqual([
-      "J: Next run",
-      "ArrowDown: Next run",
-      "K: Previous run",
-      "ArrowUp: Previous run",
-      "Home: First run",
-      "End: Last run",
-      "PageDown: Next page of runs",
-      "PageUp: Previous page of runs",
+      "J: Next row",
+      "ArrowDown: Next row",
+      "K: Previous row",
+      "ArrowUp: Previous row",
+      "Home: First row",
+      "End: Last row",
+      "PageDown: Next page of rows",
+      "PageUp: Previous page of rows",
+      "ArrowRight: Expand the selected row",
+      "ArrowLeft: Collapse the selected row, or go to its parent",
+      "Shift+ArrowRight: Expand the whole subtree",
+      "Enter: Open the step detail",
+      "F: Filter to failed and waiting",
     ]);
+    // Nothing is registered in `list` until a run is selected and the timeline has a log.
+    expect(h.keyboard.list().filter((s) => s.scope === "list")).toHaveLength(0);
 
     // Nothing selected yet: J takes the first row, which is the newest run.
     press("j", "KeyJ");
     expect(rows()[0]!.getAttribute("aria-selected")).toBe("true");
-    expect(list().getAttribute("aria-activedescendant")).toBe("run-row-run-old");
+    expect(list().getAttribute("aria-activedescendant")).toBe("tree-row-run-old");
 
     press("ArrowDown", "ArrowDown");
     expect(rows()[1]!.getAttribute("aria-selected")).toBe("true");
@@ -171,7 +187,7 @@ describe("the Runs surface", () => {
      rows and nowhere else. `virtual-list.test.tsx` proves a mark can be off screen. */
   it("marks the failed and the waiting run in the status gutter, and nothing else", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
 
     const ticks = [...document.querySelectorAll(".orca-minimap__tick")];
     expect(ticks.map((tick) => tick.getAttribute("aria-label"))).toEqual([
@@ -188,7 +204,7 @@ describe("the Runs surface", () => {
 
   it("does not move the selection while a letter is being typed into the filter", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
     press("j", "KeyJ");
 
     fireEvent.keyDown(filterField(), { key: "j", code: "KeyJ" });
@@ -198,9 +214,9 @@ describe("the Runs surface", () => {
 
   it("clears a selection whose row the filter took away", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
     press("j", "KeyJ");
-    expect(list().getAttribute("aria-activedescendant")).toBe("run-row-run-old");
+    expect(list().getAttribute("aria-activedescendant")).toBe("tree-row-run-old");
 
     fireEvent.change(filterField(), { target: { value: "login" } });
 
@@ -209,7 +225,7 @@ describe("the Runs surface", () => {
 
   it("repaints a row from run.changed without re-reading the list", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
     const running = STATUS_PRESENTATION.running.word;
     expect(within(rows()[4]!).getByText(running)).toBeTruthy();
 
@@ -229,14 +245,14 @@ describe("the Runs surface", () => {
     const page = RUNS.filter((run) => run.id !== "run-gate");
     fake.script({ "runs.list": () => ({ ok: true, result: { runs: page, total: page.length, asOf: AS_OF } }) });
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
     expect(rows()).toHaveLength(page.length);
 
     act(() => fake.notify(runChanged("run-gate", "waiting")));
 
     await waitFor(() => expect(rows()).toHaveLength(RUNS.length));
     // Third row: it was created after `run-child-ok` and before `run-lost`.
-    expect(rows()[2]!.id).toBe("run-row-run-gate");
+    expect(rows()[2]!.id).toBe("tree-row-run-gate");
     expect(fake.calls.filter((c) => c.method === "runs.get")).toEqual([
       { method: "runs.get", params: { runId: "run-gate" } },
     ]);
@@ -244,7 +260,7 @@ describe("the Runs surface", () => {
 
   it("drops a row that has left the status filter", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
 
     fireEvent.click(screen.getByRole("button", { name: /Filter by status/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: STATUS_PRESENTATION.waiting.word }));
@@ -261,7 +277,7 @@ describe("the Runs surface", () => {
 
     expect(await screen.findByText("Loading runs")).toBeTruthy();
     release();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
   });
 
   it("shows the empty state when the store has no runs", async () => {
@@ -283,7 +299,7 @@ describe("the Runs surface", () => {
     fake.script({ "runs.list": () => ({ ok: true, result: { runs: [...RUNS], total: RUNS.length, asOf: "x" } }) });
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
   });
 
   it("says it is disconnected rather than blaming the store, and stops the clock", async () => {
@@ -296,14 +312,14 @@ describe("the Runs surface", () => {
     fake.script({ "runs.list": () => ({ ok: true, result: { runs: [...RUNS], total: RUNS.length, asOf: "x" } }) });
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
     expect(screen.getByText(/these runs are the last the daemon sent/)).toBeTruthy();
     expect(document.querySelectorAll(".orca-stale-value").length).toBe(RUNS.length);
   });
 
   it("leaves no bridge subscription behind when it unmounts", async () => {
     renderRuns();
-    await screen.findByRole("listbox", { name: "Runs" });
+    await screen.findByRole("tree", { name: "Run tree" });
     expect(fake.subscribers).toBe(1);
 
     cleanup();
@@ -311,10 +327,23 @@ describe("the Runs surface", () => {
     expect(h.notifications.listeners).toBe(0);
     expect(fake.subscribers).toBe(0);
   });
+
+  /* The right-hand column is unit F's (#158, #159), wired into this surface by wave 2's
+     integration commit. With no run selected there is no `runs.get` projection to hand it,
+     so the slot is still a state view — which is the case this asserts. What it renders
+     once a run *is* selected is `step-detail.test.tsx`'s. */
+  it("keeps the step detail slot beside the tree, empty until a run is selected", async () => {
+    renderRuns();
+    await screen.findByRole("tree", { name: "Run tree" });
+
+    const slot = screen.getByRole("complementary", { name: "Step detail" });
+    expect(within(slot).getByText("Step detail")).toBeTruthy();
+    expect(within(slot).getByText(/Select a run in the tree/)).toBeTruthy();
+  });
 });
 
 /**
- * The same list, mounted once per theme against the real `tokens.css`
+ * The same tree, mounted once per theme against the real `tokens.css`
  * (docs/design/RULES.md rule 7).
  *
  * `inBothThemes` is not used here and this loop is its asynchronous twin: that helper mounts
@@ -350,7 +379,7 @@ describe("the Runs surface in both themes", () => {
         </Providers>,
         { container },
       );
-      await screen.findByRole("listbox", { name: "Runs" });
+      await screen.findByRole("tree", { name: "Run tree" });
       expect(rows()).toHaveLength(RUNS.length);
 
       // Status: the chip is bound to its own token rather than to a colour typed here.
