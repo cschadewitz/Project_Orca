@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  AGENTS_LIST_METHOD,
+  AgentsListParamsSchema,
   ARTIFACTS_GET_METHOD,
   ARTIFACTS_LIST_METHOD,
   ArtifactsGetParamsSchema,
@@ -201,5 +203,90 @@ describe("the artifact methods", () => {
     const answer = await new DaemonClient(d.url).artifactsGet({ runId: "run-art", name: "screenshot" });
     expect(answer.text).toBeUndefined();
     expect(answer.omitted).toEqual({ reason: "binary", detail: "image/png is not text" });
+  });
+});
+
+/**
+ * `agents.list` (#166), in its own daemon because the shape worth asserting is an agent
+ * ORCA has *not* reached yet: health is in-process only, so a daemon that has just started
+ * knows nothing about any agent, and the client must carry that absence through rather than
+ * filling it in. An `unknown` agent with no timestamps is the common case on a cold daemon,
+ * not an edge one.
+ */
+describe("the agents method", () => {
+  const asOf = "2026-03-01T09:00:00.000Z";
+  let seen: unknown;
+
+  const table: MethodTable = {
+    [HELLO_METHOD]: hello,
+    [AGENTS_LIST_METHOD]: {
+      params: AgentsListParamsSchema,
+      handle: (p: unknown) => {
+        seen = p;
+        return {
+          agents: [
+            {
+              id: "claude",
+              hostId: "local",
+              hostType: "local",
+              roles: ["build"],
+              state: "unknown",
+              consecutiveFailures: 0,
+            },
+            {
+              id: "codex",
+              hostId: "builder",
+              hostType: "ssh",
+              roles: ["review"],
+              state: "down",
+              lastHandshakeAt: asOf,
+              lastSeenAt: asOf,
+              roundTripMs: 42,
+              consecutiveFailures: 3,
+              lastError: { code: "AGENT_TRANSPORT", message: "ssh: connect: connection refused" },
+            },
+          ],
+          claims: [
+            {
+              workItemId: "wi-7",
+              branch: "auth-ui",
+              claimedAt: asOf,
+              owner: { runId: "run-1", name: "sdlc", status: "running", missing: false, releasable: false },
+            },
+          ],
+          asOf,
+        };
+      },
+    },
+  };
+
+  let d: DaemonHandle;
+  beforeAll(async () => {
+    d = await startDaemon({ orcaVersion: "0.1.0-test", capabilities: ["runs.read"], methods: table });
+  });
+  afterAll(async () => {
+    await d.close();
+  });
+
+  it("takes no parameters, and keeps an uncontacted agent's absent times absent", async () => {
+    const answer = await new DaemonClient(d.url).agentsList();
+    expect(seen).toEqual({});
+
+    const [cold, gone] = answer.agents;
+    expect(cold).toMatchObject({ id: "claude", state: "unknown", consecutiveFailures: 0 });
+    expect(cold?.lastHandshakeAt).toBeUndefined();
+    expect(cold?.lastSeenAt).toBeUndefined();
+    expect(cold?.roundTripMs).toBeUndefined();
+
+    // A down agent keeps what it cost when it last worked, and says why it stopped.
+    expect(gone).toMatchObject({ hostType: "ssh", state: "down", roundTripMs: 42, consecutiveFailures: 3 });
+    expect(gone?.lastError?.code).toBe("AGENT_TRANSPORT");
+  });
+
+  it("carries the claims beside the agents, so one read answers both questions", async () => {
+    const answer = await new DaemonClient(d.url).agentsList();
+    expect(answer.claims.map((c) => c.workItemId)).toEqual(["wi-7"]);
+    expect(answer.claims[0]?.owner.runId).toBe("run-1");
+    expect(answer.asOf).toBe(asOf);
   });
 });

@@ -80,6 +80,67 @@ describe("the edges", () => {
     expect(diff.lines.map((l) => l.op)).toEqual(["same", "del", "add", "same", "same"]);
   });
 
+  it("sees no change when a re-recorded version differs only by its final newline", () => {
+    // `toLines` is where this is decided, but the panel is where it is noticed: an artifact
+    // written twice by two tools that disagree about the last byte is not a changed artifact.
+    const diff = diffText(SPEC_BODIES[1]!, SPEC_BODIES[1]!.replace(/\n$/, ""));
+    expect([diff.added, diff.removed]).toEqual([0, 0]);
+  });
+
+  it("numbers an appended block in the newer version only", () => {
+    const diff = diffLines(["# Spec", "", "One."], ["# Spec", "", "One.", "Two."]);
+
+    expect([diff.added, diff.removed]).toEqual([1, 0]);
+    expect(diff.lines[3]).toMatchObject({ op: "add", text: "Two.", b: 4 });
+    // An added line has no line to cite in the older version, so it carries no `a` at all
+    // rather than a zero the gutter would have to special-case.
+    expect(diff.lines[3]).not.toHaveProperty("a");
+  });
+
+  it("numbers a deleted block in the older version only", () => {
+    const diff = diffLines(["# Spec", "", "One.", "Two."], ["# Spec", "", "One."]);
+
+    expect([diff.added, diff.removed]).toEqual([0, 1]);
+    expect(diff.lines[3]).toMatchObject({ op: "del", text: "Two.", a: 4 });
+    expect(diff.lines[3]).not.toHaveProperty("b");
+  });
+
+  it("does not match one repeated line twice when the head and the tail would overlap", () => {
+    // The prefix and suffix scans are two passes over the same array, so a file whose only
+    // change is a duplicated line is where they would both claim it and report no change.
+    const diff = diffLines(["a"], ["a", "a"]);
+
+    expect([diff.added, diff.removed]).toEqual([1, 0]);
+    expect(diff.lines).toEqual([
+      { op: "same", text: "a", a: 1, b: 1 },
+      { op: "add", text: "a", b: 2 },
+    ]);
+  });
+
+  it("numbers a shared tail line by where it sits in each version, not by one offset", () => {
+    // The two sides drift apart by the size of the hunk, so the same text is line 2 in the
+    // older version and line 3 in the newer — which is the number a person cites.
+    const diff = diffLines(["intro", "shared"], ["intro", "added", "shared"]);
+
+    expect(diff.lines).toEqual([
+      { op: "same", text: "intro", a: 1, b: 1 },
+      { op: "add", text: "added", b: 2 },
+      { op: "same", text: "shared", a: 2, b: 3 },
+    ]);
+  });
+
+  it("reads an empty older body as one removed empty line, not as nothing", () => {
+    // `toLines("")` is `[""]`, so an artifact whose stored body is the empty string diffs as
+    // a file of one blank line. The panel draws a `−` on a blank row and says "1 removed".
+    const diff = diffText("", "one\n");
+
+    expect([diff.added, diff.removed]).toEqual([1, 1]);
+    expect(diff.lines).toEqual([
+      { op: "del", text: "", a: 1 },
+      { op: "add", text: "one", b: 1 },
+    ]);
+  });
+
   it("falls back to a whole-file replacement when the two are too far apart, and says so", () => {
     // Beyond MAX_CELLS with nothing in common: the table is not built at all.
     const side = Math.ceil(Math.sqrt(MAX_CELLS)) + 1;

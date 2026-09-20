@@ -95,6 +95,270 @@ describe("an event as a row", () => {
   });
 });
 
+/**
+ * The line each event type draws, which is a contract of its own: the log is the source of
+ * truth and the timeline shows all of it, so most of these types reach a person only
+ * through this switch. The fixtures above hold the seven or eight an SDLC run happens to
+ * emit; the rest are asserted here or nowhere.
+ *
+ * Every row is subject first (rule 13), sentence case, and says nothing the payload does
+ * not carry (rule 12) — the two `plural` cases are here because "1 artifacts" is the kind
+ * of wrong a person notices and a test does not, unless it asks.
+ *
+ * A new event type does not need adding here to be safe: `summarise` switches over the
+ * whole union with no default, so an unhandled type fails the build rather than drawing a
+ * blank row. It needs adding here to be *worded*.
+ */
+describe("what a row says, per event type", () => {
+  const STEP = "s-build-1";
+  const SESSION = "sess-1";
+  const AT = "2026-03-01T09:00:00.000Z";
+  const NAMES = new Map([[STEP, "build"]]);
+  const GONE = { code: "AGENT_TRANSPORT", message: "agent went away" };
+  const WORKSPACE = { hostId: "local", cwd: "/work/orca" };
+  const SPEC = {
+    id: "art-1",
+    kind: "spec",
+    name: "spec",
+    mediaType: "text/markdown",
+    contentHash: "sha256:9f2",
+    size: 1_204,
+    version: 2,
+    producedBy: { runId: "run-words", stepRunId: STEP },
+    parents: [],
+    data: {},
+    createdAt: AT,
+  };
+
+  /** An event without the four fields the store assigns; `stored` puts those back. */
+  type EventBody = {
+    [T in OrcaEvent["type"]]: { type: T; payload: Extract<OrcaEvent, { type: T }>["payload"] };
+  }[OrcaEvent["type"]];
+
+  const stored = (body: EventBody): OrcaEvent => ({ id: "evt-1", seq: 1, runId: "run-words", at: AT, ...body });
+
+  const LINES: ReadonlyArray<{ event: EventBody; reads: string }> = [
+    {
+      event: {
+        type: "run.created",
+        payload: { workflowId: "sdlc", workflowVersion: "2", workspace: WORKSPACE, vars: {} },
+      },
+      reads: "Run created from sdlc v2",
+    },
+    { event: { type: "run.started", payload: {} }, reads: "Run started" },
+    { event: { type: "run.paused", payload: {} }, reads: "Run paused" },
+    { event: { type: "run.paused", payload: { reason: "the lease lapsed" } }, reads: "Run paused, the lease lapsed" },
+    { event: { type: "run.resumed", payload: {} }, reads: "Run resumed" },
+    { event: { type: "run.completed", payload: { outcome: "success" } }, reads: "Run completed, success" },
+    { event: { type: "run.failed", payload: { error: GONE } }, reads: "Run failed, AGENT_TRANSPORT: agent went away" },
+    { event: { type: "run.cancelled", payload: {} }, reads: "Run cancelled" },
+    { event: { type: "run.cancelled", payload: { reason: "asked to stop" } }, reads: "Run cancelled, asked to stop" },
+    {
+      event: { type: "vars.set", payload: { vars: { branch: "feat/sso", reviewer: "casey" } } },
+      reads: "Variables set, branch, reviewer",
+    },
+
+    {
+      event: { type: "step.scheduled", payload: { stepRunId: STEP, nodeId: "build", nodeType: "agent", attempt: 2 } },
+      reads: "build scheduled, attempt 2",
+    },
+    { event: { type: "step.started", payload: { stepRunId: STEP, inputArtifactIds: [] } }, reads: "build started" },
+    {
+      event: { type: "step.inputs", payload: { stepRunId: STEP, artifactIds: ["art-1"] } },
+      reads: "build read 1 artifact",
+    },
+    {
+      event: { type: "step.inputs", payload: { stepRunId: STEP, artifactIds: ["art-1", "art-2"] } },
+      reads: "build read 2 artifacts",
+    },
+    {
+      event: { type: "step.waiting", payload: { stepRunId: STEP, on: "child-run" } },
+      reads: "build waiting on child-run",
+    },
+    {
+      event: { type: "step.waiting", payload: { stepRunId: STEP, on: "human", detail: "approve the plan" } },
+      reads: "build waiting on human, approve the plan",
+    },
+    {
+      event: { type: "step.completed", payload: { stepRunId: STEP, result: { artifactIds: [], data: {} } } },
+      reads: "build completed",
+    },
+    {
+      event: { type: "step.failed", payload: { stepRunId: STEP, error: GONE, willRetry: true } },
+      reads: "build failed, AGENT_TRANSPORT: agent went away, retrying",
+    },
+    {
+      event: { type: "step.failed", payload: { stepRunId: STEP, error: GONE, willRetry: false } },
+      reads: "build failed, AGENT_TRANSPORT: agent went away",
+    },
+    { event: { type: "step.cancelled", payload: { stepRunId: STEP } }, reads: "build cancelled" },
+    {
+      event: { type: "step.skipped", payload: { stepRunId: STEP, reason: "the branch it needed failed" } },
+      reads: "build skipped, the branch it needed failed",
+    },
+
+    {
+      event: {
+        type: "agent.session.opened",
+        payload: { stepRunId: STEP, sessionId: SESSION, agentId: "claude", hostId: "local", cwd: "/work/orca" },
+      },
+      reads: "build opened a session with claude",
+    },
+    {
+      event: {
+        type: "agent.turn.started",
+        payload: {
+          stepRunId: STEP,
+          sessionId: SESSION,
+          promptHash: "sha256:1a4",
+          promptPreview: "Implement the SSO callback",
+          followUp: 0,
+        },
+      },
+      reads: "build prompted the agent, Implement the SSO callback",
+    },
+    {
+      event: {
+        type: "agent.update",
+        payload: {
+          stepRunId: STEP,
+          sessionId: SESSION,
+          update: { kind: "agent_message_chunk", text: "reading src/auth.ts" },
+        },
+      },
+      reads: "build, agent output",
+    },
+    {
+      event: {
+        type: "agent.permission",
+        payload: { stepRunId: STEP, sessionId: SESSION, title: "write src/auth.ts", decision: "allowed" },
+      },
+      reads: "build asked to write src/auth.ts, allowed",
+    },
+    {
+      event: {
+        type: "agent.turn.completed",
+        payload: { stepRunId: STEP, sessionId: SESSION, stopReason: "end_turn", durationMs: 4_200 },
+      },
+      reads: "build turn ended, end_turn",
+    },
+    {
+      event: { type: "agent.session.closed", payload: { stepRunId: STEP, sessionId: SESSION } },
+      reads: "build closed its session",
+    },
+    {
+      event: { type: "agent.session.closed", payload: { stepRunId: STEP, sessionId: SESSION, error: GONE } },
+      reads: "build session closed, AGENT_TRANSPORT: agent went away",
+    },
+
+    {
+      event: { type: "artifact.recorded", payload: { stepRunId: STEP, artifact: SPEC } },
+      reads: "build recorded spec v2",
+    },
+    {
+      event: {
+        type: "artifact.rejected",
+        payload: {
+          stepRunId: STEP,
+          kind: "spec",
+          path: "/work/orca/spec.md",
+          reason: "no verdict in the front matter",
+        },
+      },
+      reads: "build rejected a spec artifact, no verdict in the front matter",
+    },
+    {
+      event: {
+        type: "plan.signals.rejected",
+        payload: { stepRunId: STEP, artifactId: "art-1", issues: ["unknown node"] },
+      },
+      reads: "build had 1 planning signal rejected",
+    },
+    {
+      event: {
+        type: "plan.signals.rejected",
+        payload: { stepRunId: STEP, artifactId: "art-1", issues: ["unknown node", "a cycle"] },
+      },
+      reads: "build had 2 planning signals rejected",
+    },
+
+    {
+      event: { type: "decision.resolved", payload: { stepRunId: STEP, choice: "approve", source: AUTO_GATE_SOURCE } },
+      reads: `build auto-approved as approve, by ${AUTO_GATE_SOURCE}`,
+    },
+    {
+      event: { type: "decision.resolved", payload: { stepRunId: STEP, choice: "approve", source: "human" } },
+      reads: "build resolved to approve, by human",
+    },
+    { event: { type: "loop.iteration", payload: { stepRunId: STEP, iteration: 3 } }, reads: "build iteration 3" },
+    {
+      event: { type: "child.spawned", payload: { stepRunId: STEP, childRunId: "run-child-ok" } },
+      reads: "build spawned run-child-ok",
+    },
+    {
+      event: { type: "child.spawned", payload: { stepRunId: STEP, childRunId: "run-child-ok", branch: "auth-ui" } },
+      reads: "build spawned run-child-ok for auth-ui",
+    },
+    {
+      event: { type: "child.finished", payload: { stepRunId: STEP, childRunId: "run-child-ok", status: "completed" } },
+      reads: "build child run-child-ok completed",
+    },
+    {
+      event: { type: "branch.skipped", payload: { stepRunId: STEP, branch: "auth-perf", reason: "dependency" } },
+      reads: "build skipped auth-perf, dependency",
+    },
+
+    {
+      event: {
+        type: "human.requested",
+        payload: {
+          stepRunId: STEP,
+          requestId: "req-1",
+          kind: "decision",
+          question: "Ship the callback?",
+          options: [],
+          context: {},
+        },
+      },
+      reads: "build asked, Ship the callback?",
+    },
+    {
+      event: { type: "human.answered", payload: { stepRunId: STEP, requestId: "req-1", answer: "approve" } },
+      reads: "build answered approve",
+    },
+  ];
+
+  it.each(LINES)("$event.type: $reads", ({ event, reads }) => {
+    expect(toEntry(stored(event), NAMES).summary).toBe(reads);
+  });
+
+  it("reads a finished run's marker off its outcome, not off the fact that it ended", () => {
+    expect(toEntry(stored({ type: "run.completed", payload: { outcome: "success" } }), NAMES).status).toBe("succeeded");
+    expect(toEntry(stored({ type: "run.completed", payload: { outcome: "failure" } }), NAMES).status).toBe("failed");
+  });
+
+  it("marks the transitions the gutter has to find, and no others", () => {
+    const marked = LINES.filter(({ event }) => statusOf(stored(event)) !== undefined).map(
+      ({ event }) => `${event.type}=${statusOf(stored(event))}`,
+    );
+    expect(new Set(marked)).toEqual(
+      new Set([
+        "run.started=running",
+        "run.paused=held",
+        "run.completed=succeeded",
+        "run.failed=failed",
+        "run.cancelled=cancelled",
+        "step.started=running",
+        "step.waiting=waiting",
+        "step.completed=succeeded",
+        "step.failed=failed",
+        "step.cancelled=cancelled",
+        "human.requested=waiting",
+      ]),
+    );
+  });
+});
+
 describe("an auto-approved gate", () => {
   const auto = MANY_EVENTS[AUTO_SEQ]!;
 
@@ -160,9 +424,44 @@ describe("a coalesced batch", () => {
     expect([live.fromSeq, live.seq]).toEqual([replayed.fromSeq, replayed.seq]);
     expect(live.count).toBe(replayed.count);
   });
+
+  it("falls back to the step run id when the batch arrives for a step no page has named", () => {
+    // Live output can outrun the page that would name the step — a `step.scheduled` the
+    // client has not read yet. The row still has to address something.
+    const params: AgentUpdateParams = {
+      subscriptionId: "sub-1",
+      runId: MANY_RUN_ID,
+      seq: 5,
+      at: MANY_EVENTS[5]!.at,
+      fromSeq: 5,
+      stepRunId: "s-0",
+      sessionId: "sess-0",
+      updates: [{ kind: "agent_message_chunk", text: "0" }],
+    };
+    expect(agentUpdateEntry(params, new Map()).summary).toBe("s-0, agent output");
+  });
 });
 
 describe("merging pages", () => {
+  it("has no anchor and no cursor before the first page arrives", () => {
+    // An empty list is the opening state of every run screen, not an error: `undefined`
+    // is "do not ask for a page before anything" rather than sequence zero.
+    expect(earliestSeq([])).toBeUndefined();
+    expect(appliedSeq([])).toBeUndefined();
+  });
+
+  it("takes the first page whole, with nothing in front of it", () => {
+    const page = toEntries(MANY_EVENTS.slice(0, 20), new Map());
+    expect(mergeEntries([], page)).toEqual({ entries: page, prepended: 0 });
+  });
+
+  it("leaves the list alone when the page came back empty", () => {
+    // The end of the log going backwards: a merge that moved nothing must report no shift,
+    // or the list scrolls for a page that was never drawn.
+    const held = toEntries(MANY_EVENTS.slice(0, 20), new Map());
+    expect(mergeEntries(held, [])).toEqual({ entries: held, prepended: 0 });
+  });
+
   it("reports how many rows landed in front, which is what shiftBy needs", () => {
     const held = toEntries(MANY_EVENTS.slice(20, 30), new Map());
     const earlier = toEntries(MANY_EVENTS.slice(10, 20), new Map());
