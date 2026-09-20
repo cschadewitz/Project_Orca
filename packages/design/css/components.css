@@ -10,8 +10,16 @@
    that need a size without the rest of a style reference `--text-*-size`; a glyph sized as a
    glyph references `--icon-*`.
 
-   An `orca-allow-literal` note marks a box dimension no token names yet. Each one is a
-   finding on issue 211 waiting on a token, not on a permanent exemption. */
+   There are no `orca-allow-literal` notes left. #211 removed 140 literals and left 38 of
+   these notes, #240 took five more, and #244 took the last 32 — because they were never 32
+   numbers. They were five families tokens.json did not have (`bar-*`, `badge-*`, `mark-*`,
+   `col-*` and the spacing half rungs), two rungs that extend `control-*`, four boxes that
+   simply needed naming, and two values that were arithmetic somebody had written out as a
+   number. The note was always described here as a finding waiting on a token rather than a
+   permanent exemption, and those findings are now closed. Adding one back is a claim nobody
+   has made yet: that a value exists which no token could sensibly name. Make that argument
+   in the note itself — say why it is permanent, not which issue it is waiting on — or add
+   the token, which is almost always the right fix. */
 
 /* ---------- roots ---------- */
 
@@ -51,7 +59,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: 34px; /* orca-allow-literal: pane header bar height — no chrome-bar token (#211) */
+  height: var(--bar-pane);
   padding: 0 var(--space-3);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   font-weight: 500;
@@ -123,8 +131,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-0-5);
-  height: 18px; /* orca-allow-literal: chip height — the control family starts at 24px (#211) */
-  padding: 0 6px; /* orca-allow-literal: chip inline padding, between space-1 and space-2 (#211) */
+  height: var(--badge-sm);
+  padding: 0 var(--space-1-5);
   border: var(--stroke-hairline) solid transparent;
   border-radius: var(--radius-xs);
   font-weight: 500;
@@ -178,14 +186,14 @@
   border-color: var(--border-control);
 }
 .orca-chip--glyph-only {
-  width: 18px; /* orca-allow-literal: square on the chip height (#211) */
+  width: var(--badge-sm);
   padding: 0;
   justify-content: center;
 }
 
 .orca-dot {
-  width: 7px; /* orca-allow-literal: the status dot is a mark, not a control (#211) */
-  height: 7px;
+  width: var(--mark-md);
+  height: var(--mark-md);
   border-radius: var(--radius-full);
   display: inline-block;
   flex: none;
@@ -249,7 +257,7 @@
   justify-content: center;
   gap: var(--space-2);
   height: var(--control-md);
-  padding: 0 10px; /* orca-allow-literal: button inline padding, between space-2 and space-3 (#211) */
+  padding: 0 var(--space-2-5);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-sm);
   background: var(--surface-base);
@@ -311,8 +319,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px; /* orca-allow-literal: key cap sits on the chip height, below control-sm (#211) */
-  height: 18px;
+  min-width: var(--badge-sm);
+  height: var(--badge-sm);
   padding: 0 var(--space-1);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-xs);
@@ -631,8 +639,10 @@
 }
 .orca-log__caret {
   display: inline-block;
-  width: 7px; /* orca-allow-literal: the caret is cut to the mono-log cell, not a control (#211) */
-  height: 13px;
+  width: var(--mark-md);
+  /* Cut to the mono-log cell — one hairline proud of the glyph, so the cursor stays visible
+     against a character without filling the line box (#244). */
+  height: calc(var(--text-mono-log-size) + var(--stroke-hairline));
   vertical-align: calc(-1 * var(--space-0-5));
   background: var(--status-running);
   animation: orca-blink var(--duration-pulse) var(--ease-linear) infinite;
@@ -689,7 +699,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 26px; /* orca-allow-literal: between control-sm and control-md (#211) */
+  min-height: var(--control-sm-5);
   padding: var(--space-1) var(--space-2);
   cursor: default;
 }
@@ -795,7 +805,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 20px; /* orca-allow-literal: badge height, below control-sm (#211) */
+  height: var(--badge-md);
   padding: 0 var(--space-2);
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-xs);
@@ -859,7 +869,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 20px; /* orca-allow-literal: badge height, below control-sm (#211) */
+  height: var(--badge-md);
   padding: 0 var(--space-2);
   border-radius: var(--radius-xs);
   border: var(--stroke-hairline) solid transparent;
@@ -975,12 +985,13 @@
 }
 .orca-risk th.orca-risk__rowhead {
   text-align: right;
-  width: 108px; /* orca-allow-literal: matrix axis label column (#211) */
+  width: var(--col-matrix-axis);
 }
 .orca-risk td {
   border: var(--stroke-hairline) solid var(--surface-base);
-  height: 62px; /* orca-allow-literal: the matrix cell is a fixed plot area, not a row (#211) */
-  width: 92px;
+  /* A fixed plot area rather than a row, so neither of these follows --row-h. */
+  height: var(--risk-cell-height);
+  width: var(--risk-cell-width);
   padding: var(--space-1);
   vertical-align: top;
   position: relative;
@@ -996,8 +1007,15 @@
 }
 .orca-risk__cell--severe {
   background: var(--risk-severe);
-  /* orca-allow-literal: hatch period and stripe width — no hatch geometry token (#211) */
-  background-image: repeating-linear-gradient(45deg, transparent 0 5px, var(--surface-overlay) 5px 6px);
+  /* Rule 4 hatches the top band so severity is never carried by colour alone, which makes
+     this geometry rather than decoration — hence a token and not the exemption #244 offered.
+     One hairline stripe per hatch-period, so the stripe is the same width as every other line
+     in the system and the period is the only decision left to make. */
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0 calc(var(--hatch-period) - var(--stroke-hairline)),
+    var(--surface-overlay) calc(var(--hatch-period) - var(--stroke-hairline)) var(--hatch-period)
+  );
 }
 /* type: mono-id */
 .orca-risk__score {
@@ -1032,7 +1050,7 @@
   display: inline-flex;
   flex-direction: column;
   gap: var(--space-0-5);
-  min-width: 132px; /* orca-allow-literal: graph node minimum width (#211) */
+  min-width: var(--node-min-width);
   padding: var(--space-2) var(--space-3);
   background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
@@ -1070,14 +1088,15 @@
   border-color: var(--status-waiting);
 }
 .orca-node--parallel {
+  /* The sheet stacked behind a parallel node, offset by the sliver of it that shows — which is
+     a mark's thickness — and edged with one hairline like every other container. */
   box-shadow:
-    /* orca-allow-literal: the stacked-sheet offset behind a parallel node (#211) */
-    3px 3px 0 0 var(--surface-base),
-    /* orca-allow-literal: and the hairline edge of the sheet below it (#211) */ 3px 3px 0 1px var(--border-control);
+    var(--mark-sm) var(--mark-sm) 0 0 var(--surface-base),
+    var(--mark-sm) var(--mark-sm) 0 var(--stroke-hairline) var(--border-control);
 }
 .orca-node--subworkflow {
   border-style: double;
-  border-width: 3px; /* orca-allow-literal: a double border needs three widths to draw (#211) */
+  border-width: var(--stroke-double);
 }
 .orca-node--loop {
   border-style: dashed;
@@ -1199,8 +1218,7 @@
 
 .orca-field {
   display: grid;
-  /* orca-allow-literal: the label column of a config form (#211) */
-  grid-template-columns: 180px 1fr;
+  grid-template-columns: var(--col-label) 1fr;
   gap: var(--space-3);
   align-items: start;
   padding: var(--space-3) 0;
@@ -1209,7 +1227,10 @@
 /* type: label-strong */
 .orca-field__label {
   font-weight: 500;
-  padding-top: 5px; /* orca-allow-literal: optical alignment to the control beside it (#211) */
+  /* Not a spacing decision — the label's line box is centred against the control beside it, so
+     the inset is half of what the control is taller by. Written as the arithmetic rather than
+     as its answer, so it follows if either the control height or the type scale moves (#244). */
+  padding-top: calc((var(--control-md) - var(--text-label-line-height)) / 2);
 }
 /* type: mono-id */
 .orca-field__path {
@@ -1313,7 +1334,9 @@
 }
 /* type: mono-id */
 .orca-vers__btn {
-  height: 22px; /* orca-allow-literal: inline segmented control, below control-sm (#211) */
+  /* The group is the pointer target; a segment is a division of it, so control-xs is the one
+     rung permitted below hit-min and only here (#244). */
+  height: var(--control-xs);
   padding: 0 var(--space-2);
   border: 0;
   background: var(--surface-base);
@@ -1359,8 +1382,8 @@
 
 .orca-window {
   display: grid;
-  /* orca-allow-literal: title bar and status bar heights are not control heights (#211) */
-  grid-template-rows: 36px 1fr 24px;
+  /* A bar is a band of chrome, not a control — these are bar-*, never control-* (#244). */
+  grid-template-rows: var(--bar-title) 1fr var(--bar-status);
   height: 100%;
   background: var(--surface-canvas);
 }
@@ -1395,7 +1418,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 20px; /* orca-allow-literal: badge height, below control-sm (#211) */
+  height: var(--badge-md);
   padding: 0 var(--space-2);
   border-radius: var(--radius-xs);
   background: var(--status-waiting-bg);
@@ -1524,7 +1547,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: 40px; /* orca-allow-literal: chrome bar height — no token names it (#211) */
+  height: var(--bar-object);
   padding: 0 var(--space-4);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
@@ -1954,7 +1977,7 @@
 .orca-skeleton {
   background: var(--border-hairline);
   border-radius: var(--radius-xs);
-  height: 10px; /* orca-allow-literal: skeleton line thickness — no mark-size token (#211) */
+  height: var(--mark-skeleton);
   animation: orca-shimmer var(--duration-pulse) var(--ease-linear) infinite;
 }
 @keyframes orca-shimmer {
@@ -1979,6 +2002,24 @@
   }
 }
 
+/* The other half of `docs/design/50-accessibility-and-keyboard.md`'s preferences section,
+   which nothing honoured until now. Under `prefers-contrast: more` a hairline separator is
+   drawn at the control border's strength and the third ink step is folded into the second,
+   because the two quietest decisions in the system are the two that stop being legible first.
+   Deliberately a rebinding of two custom properties on the shell root rather than a set of
+   overrides — no new palette is introduced, both themes keep their own values, and no rule
+   below has to know the preference exists. The root is `<body class="orca">`, so a popover in
+   a portal is inside it too; the second selector is for a `data-theme` subtree, which declares
+   these two properties on itself and would otherwise shadow the rebinding — that is how the
+   preview galleries show both themes at once, and the preference has to be visible there. */
+@media (prefers-contrast: more) {
+  .orca,
+  .orca [data-theme] {
+    --border-hairline: var(--border-control);
+    --ink-tertiary: var(--ink-secondary);
+  }
+}
+
 /* ---------- segmented mode toggle ---------- */
 
 .orca-seg {
@@ -1992,7 +2033,7 @@
 /* type: label */
 .orca-seg__btn {
   height: 100%;
-  padding: 0 10px; /* orca-allow-literal: button inline padding, between space-2 and space-3 (#211) */
+  padding: 0 var(--space-2-5);
   border: 0;
   background: var(--surface-base);
   color: var(--ink-secondary);
@@ -2039,7 +2080,7 @@
 .orca-nodelist__type {
   text-transform: uppercase;
   color: var(--ink-tertiary);
-  width: 74px; /* orca-allow-literal: node kind column (#211) */
+  width: var(--col-node-kind);
   flex: none;
 }
 /* type: mono-strong */
@@ -2090,7 +2131,7 @@
 .orca-node__flag {
   position: absolute;
   top: calc(-1 * var(--space-2));
-  right: -6px; /* orca-allow-literal: hangs the flag half off the node's corner (#211) */
+  right: calc(-1 * var(--space-1-5));
   padding: 0 var(--space-1);
   border-radius: var(--radius-xs);
   background: var(--surface-raised);
@@ -2098,8 +2139,8 @@
   color: var(--ink-secondary);
 }
 .orca-port {
-  width: 9px; /* orca-allow-literal: the port is a mark on an edge, not a control (#211) */
-  height: 9px;
+  width: var(--mark-port);
+  height: var(--mark-port);
   border-radius: var(--radius-full);
   background: var(--surface-raised);
   border: var(--stroke-hairline) solid var(--border-control);
@@ -2146,8 +2187,8 @@
   color: var(--ink-tertiary);
 }
 .orca-inspector .orca-field {
-  /* orca-allow-literal: the inspector's narrower label column (#211) */
-  grid-template-columns: 116px 1fr;
+  /* The same column as .orca-field's, at the inspector's width — one column, two widths. */
+  grid-template-columns: var(--col-label-narrow) 1fr;
   gap: var(--space-2);
   padding: var(--space-2) 0;
 }
@@ -2213,7 +2254,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 20px; /* orca-allow-literal: badge height, below control-sm (#211) */
+  height: var(--badge-md);
   padding: 0 var(--space-2);
   border-radius: var(--radius-xs);
   background: var(--status-running-bg);
@@ -2248,7 +2289,7 @@
   color: var(--ink-secondary);
 }
 .orca-legend__swatch {
-  width: 18px; /* orca-allow-literal: legend stroke sample length (#211) */
+  width: var(--mark-swatch);
   height: 0;
   border-top: var(--stroke-rail) solid var(--graph-edge);
   display: inline-block;
