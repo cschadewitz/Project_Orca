@@ -24,11 +24,50 @@ describe("agent health", () => {
       agentId: "builder",
       state: "ok",
       lastContact: clock.isoNow(),
+      // A handshake is also a sign of life, so both timestamps move. Only `touch` moves one
+      // of them on its own (#227).
+      lastSeenAt: clock.isoNow(),
       roundTripMs: 420,
       consecutiveFailures: 0,
     });
     expect(tracker.get("builder").state).toBe("ok");
     expect(tracker.list().map((h) => h.agentId)).toEqual(["builder"]);
+  });
+
+  it("moves lastSeenAt on a touch and leaves the handshake alone", () => {
+    const clock = new FakeClock();
+    const tracker = new AgentHealthTracker(clock);
+    const handshake = tracker.begin("builder").ok();
+    clock.advance(60_000);
+    tracker.touch("builder");
+    const health = tracker.get("builder");
+    // A pooled session handshakes once and then talks: the connection is a minute old and
+    // the agent spoke just now, and the card has to be able to say both (#227).
+    expect(health.lastContact).toBe(handshake.lastContact);
+    expect(health.lastSeenAt).toBe(clock.isoNow());
+    expect(health.state).toBe("ok");
+    expect(health.roundTripMs).toBe(handshake.roundTripMs);
+  });
+
+  it("does not invent an agent from a touch for one nothing has ever contacted", () => {
+    const tracker = new AgentHealthTracker(new FakeClock());
+    tracker.touch("ghost");
+    // There is no session for it to be speaking over, so there is nothing to record.
+    expect(tracker.list()).toEqual([]);
+  });
+
+  it("tells a listener about a handshake and a failure, and not about a touch", () => {
+    const clock = new FakeClock();
+    const tracker = new AgentHealthTracker(clock);
+    const seen: string[] = [];
+    const off = tracker.onChange((h) => seen.push(h.state));
+    tracker.recordHandshake("builder", 12);
+    tracker.touch("builder");
+    tracker.recordFailure("builder", transportFailure());
+    expect(seen).toEqual(["ok", "down"]);
+    off();
+    tracker.recordHandshake("builder", 12);
+    expect(seen).toEqual(["ok", "down"]);
   });
 
   it("records a failed spawn as down, with why", () => {
@@ -118,6 +157,7 @@ describe("the registry's health view", () => {
         agentId: "builder",
         state: "ok",
         lastContact: new FakeClock().isoNow(),
+        lastSeenAt: new FakeClock().isoNow(),
         roundTripMs: 35,
         consecutiveFailures: 0,
       },
