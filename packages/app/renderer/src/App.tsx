@@ -17,6 +17,7 @@ import { ConnectionBanner, MismatchDialog } from "./chrome/connection-banner.js"
 import { useSidebarCollapsed, usePanelOverlay } from "./chrome/use-breakpoints.js";
 import { useChromeShortcuts } from "./chrome/use-chrome-shortcuts.js";
 import { useEscapeClosesTopLayer, useTransientLayer } from "./layers-context.js";
+import { ArtifactPanelProvider } from "./artifacts/panel-context.js";
 import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
@@ -50,7 +51,10 @@ export function App(): JSX.Element {
      Esc must not close what a person put there to read alongside the pane. */
   useTransientLayer(panelOpen && panelOverlay, { name: "docked-panel", close: togglePanel });
 
-  return (
+  /* Bound rather than returned, and then wrapped at the bottom of this function: the
+     provider is a wrap, and re-indenting the whole tree to nest it would make every line
+     of the chrome a line this change touched. */
+  const chrome = (
     <div className="orca-window">
       <TitleBar
         platform={window.orca.platform}
@@ -87,4 +91,9 @@ export function App(): JSX.Element {
       <MismatchDialog connection={connection} />
     </div>
   );
+
+  /* The docked panel's artifact is held above every surface, so a chip on a step, a gate
+     card and an `orca://artifact/spec.md@v3` deep link can all put one there; opening the
+     panel itself stays the chrome's, which is what `onOpen` hands over. */
+  return <ArtifactPanelProvider onOpen={() => setPanelOpen(true)}>{chrome}</ArtifactPanelProvider>;
 }

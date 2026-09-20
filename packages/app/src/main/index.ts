@@ -75,6 +75,8 @@ handle("orca:runs.get", (params: Parameters<DaemonClient["runsGet"]>[0]) => clie
 handle("orca:runs.events", (params: Parameters<DaemonClient["runsEvents"]>[0]) => client.runsEvents(params));
 handle("orca:inputs.list", (params: Parameters<DaemonClient["inputsList"]>[0]) => client.inputsList(params));
 handle("orca:claims.list", (params: Parameters<DaemonClient["claimsList"]>[0]) => client.claimsList(params));
+handle("orca:artifacts.list", (params: Parameters<DaemonClient["artifactsList"]>[0]) => client.artifactsList(params));
+handle("orca:artifacts.get", (params: Parameters<DaemonClient["artifactsGet"]>[0]) => client.artifactsGet(params));
 
 /**
  * One socket for the whole app, store-wide, forwarded to every open window. A subscription

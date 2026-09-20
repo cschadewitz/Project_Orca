@@ -1,0 +1,112 @@
+/* What the step detail pane adds on top of the design system's component layer, and no
+   more.
+
+   Everything with a look already has a class in components.css: the pane is `.orca-inspector`,
+   the header is `.orca-inspector__head`, a tool call is `.orca-tool`, a line of log is
+   `.orca-log__line` inside `.orca-log`, the jump button is `.orca-jump` and the reconnect
+   seam is `.orca-timeline-rule`. What is left here is this surface's own geometry — how the
+   four bands of the pane divide the height, and what a metric cell is — and two corrections
+   that only arise because a system class is being used inside a virtualised row.
+
+   No literal colours, sizes, radii or durations: every value below is a token reference, a
+   ratio (`ch`, `%`, `fr`) or zero (docs/design/RULES.md rule 1). */
+
+.orca-step {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+/* ---------- the header's metrics ---------- */
+
+/* Node, attempt, agent, host, duration — and room for exactly one more, which is cost and
+   which ORCA cannot supply (rule 12). `auto-fit` is what makes that room real: the sixth
+   cell needs no change here, it just arrives. */
+.orca-step__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14ch, 1fr));
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+.orca-step__metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.orca-step__error {
+  padding: var(--space-2) var(--space-3);
+  color: var(--status-failed);
+  background: var(--status-failed-bg);
+}
+
+/* ---------- what the step produced, and what it called ---------- */
+
+.orca-step__artifacts,
+.orca-step__tools {
+  padding: 0 var(--space-3) var(--space-2);
+  flex: none;
+}
+/* The tool list is the band that gives way: the output pane below it is what a person came
+   for, so the calls scroll within their own share rather than pushing the log off screen. */
+.orca-step__tools {
+  overflow-y: auto;
+  max-height: 40%;
+}
+.orca-step__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* ---------- the output pane ---------- */
+
+.orca-step__output {
+  flex: 1;
+  min-height: 0;
+  margin: 0 var(--space-3) var(--space-3);
+}
+.orca-step__stream {
+  flex: 1;
+  min-height: 0;
+}
+/* The find field sits in the pane head beside the word "Output"; it is a filter over what
+   is buffered, not a search of the log, and the count beside it says so. */
+.orca-step__find {
+  margin-left: auto;
+  max-width: 28ch;
+  min-width: 0;
+}
+
+/* A seam is a row, so it is exactly one bound row tall. `.orca-timeline-rule`'s own block
+   padding is written for a timeline entry, where a row may breathe; inside a virtualised
+   stream a row that breathed would be a row the arithmetic had not accounted for (rule 9). */
+.orca-step__seam {
+  height: var(--row-h);
+  padding-block: 0;
+}
+
+/* The load-earlier affordance is a bare button inside a `row-log` row: it takes the row's
+   height from its parent and says what it does in accent, with no control chrome of its
+   own to make the row taller. */
+.orca-step__more {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: var(--space-0-5);
+}
+.orca-step__more[aria-disabled="true"] {
+  color: var(--ink-tertiary);
+  cursor: default;
+  text-decoration: none;
+}
+
+/* Selection in a stream is the accent rail and the selected ground, exactly as it is in
+   every other list (rule 10) — a line is not a status, so it takes neither a tint nor a
+   status colour. */
+.orca-step__line--selected {
+  background: var(--surface-selected);
+  box-shadow: inset var(--stroke-rail) 0 0 0 var(--accent);
+}

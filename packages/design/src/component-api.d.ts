@@ -157,39 +157,107 @@ export interface TimelineEntryProps {
   selected?: boolean;
 }
 
+/**
+ * Built (#158), and corrected here against what the implementation met. Three changes,
+ * each because the draft assumed something the wire does not carry:
+ *
+ * - `lines` became `rows`, and a row is not always a line. The stream also holds the two
+ *   seams a reconnection leaves — `◷ paused — reconnecting` where it stopped and
+ *   `── reconnected hh:mm:ss ──` where it came back — and they are rows because *where*
+ *   the gap falls in the output is the whole of what they say.
+ * - A row's number is its event's `seq`, not an ordinal `n`. An absolute line number is a
+ *   thing ORCA cannot supply once the buffer has trimmed or a page has been loaded in
+ *   front of it — "a line boundary is not a thing the wire can name"
+ *   (docs/design/30-long-running-content.md) — and inventing one is what rule 12 forbids.
+ *   `seq` repeats when one `agent.update` rendered several lines, which is honest.
+ * - There is no `stream: 'stdout' | 'stderr'`. ACP has no such split; a step's output is
+ *   its `agent.update` events, and the tone a line takes is derived from the update's kind
+ *   and status instead.
+ */
 export interface OutputPaneProps {
-  lines: ReadonlyArray<{ n: number; text: string; stream?: "stdout" | "stderr" }>;
+  rows: ReadonlyArray<
+    | { kind: "line"; key: string; seq: number; text: string; tone: "out" | "dim" | "err"; folded: number }
+    | { kind: "paused" | "reconnected"; key: string; at: string }
+  >;
+  /** The pane's accessible name. Not a live region: rule 11. */
+  label: string;
   /** True while the step is producing output; draws the caret. */
   streaming: boolean;
   /** 'following' pins to the bottom; 'held' shows the jump button. */
   mode: "following" | "held";
   /** Lines that arrived while held. */
   pending: number;
-  /** Set when the in-memory buffer has trimmed; renders the load-earlier marker. */
+  /** Set when there is output in front of the buffer; renders the load-earlier marker. */
   trimmedBefore?: number;
+  loadingEarlier?: boolean;
   onJumpToLatest(): void;
+  /** Called once when a scroll leaves the end while following. */
+  onHold(): void;
   onLoadEarlier?(): void;
 }
 
+/**
+ * Built (#158). The draft's five fields became one `call` object, because every one of
+ * them is a projection of the same fold over the step's log (`renderer/src/step/tool-calls.ts`)
+ * and passing them apart invited a row assembled from two different calls.
+ *
+ * `durationMs` is gone: `agent.update` carries no timing per call, and `agent.turn.completed`
+ * times the *turn*, not the call inside it. A per-call duration would be invented (rule 12).
+ *
+ * `body` is `{ args, result }` with each one's *pre-cut* length beside it, because
+ * `toolCallBody` caps both at 2,000 characters when the event is written (#220): a row has
+ * to be able to say it is showing 2,000 of 41,318 rather than end mid-token.
+ */
 export interface ToolCallRowProps {
-  tool: string;
-  /** One-line argument summary; the full payload goes in the body. */
-  argSummary: string;
-  state: "pending" | "ok" | "failed" | "awaiting-permission";
-  durationMs?: number;
+  call: {
+    id: string;
+    tool: string;
+    toolKind?: string;
+    /** One-line argument summary; the full payload goes in the body. */
+    argSummary: string;
+    state: "pending" | "ok" | "failed" | "awaiting-permission";
+    locations: readonly string[];
+    args?: { text: string; length: number };
+    result?: { text: string; length: number };
+    /** What a person answered, once `agent.permission` has settled the call. */
+    decision?: string;
+    /** What they are being asked, while it is still open. */
+    question?: string;
+  };
+  /** Open on first render. Defaults to open for a failed call and closed for the rest. */
   expanded?: boolean;
-  body?: { args?: string; result?: string };
 }
 
+/**
+ * Built (#159), as an *address* rather than as data. The draft passed the versions, the
+ * current one and the consumed-by list in; the implementation passes
+ * `{ runId, name, version, compareWith? }` and reads the rest, for two reasons:
+ *
+ * - The panel is opened from four places — a step's artifact chip, a gate card, the
+ *   version menu and `orca://artifact/spec.md@v3` (#165) — and the last of those has
+ *   nothing but a name and a version. A prop shape only a caller holding `ArtifactView`s
+ *   could satisfy would have locked the deep link out.
+ * - `versions`, the body and the consumed-by links are three different reads
+ *   (`artifacts.list`, `artifacts.get`, `runs.get`), and hoisting them into the caller
+ *   would have made every caller do all three.
+ *
+ * `onSelectVersion` is gone for the same reason: version selection, the comparison and the
+ * panel's open state are one controller held above every surface
+ * (`renderer/src/artifacts/panel-context.tsx`), not a callback a parent has to hold.
+ *
+ * There is **no rendered/raw toggle**. Markdown renders raw; a renderer is a dependency
+ * decision `packages/app` has not taken, and the control is absent rather than disabled so
+ * that nothing on screen promises a feature nobody has decided on.
+ */
 export interface ArtifactPanelProps {
-  name: string;
-  versions: ReadonlyArray<{ v: number; at: Date; producedBy: string }>;
-  current: number;
-  /** When set, the body renders as a diff against this version. */
-  compareWith?: number;
-  /** Steps that read this artifact — rendered as links under the header. */
-  consumedBy?: ReadonlyArray<{ stepId: string; name: string }>;
-  onSelectVersion(v: number): void;
+  target: {
+    runId: string;
+    /** The logical name within the run — what `artifacts.list` groups versions by. */
+    name: string;
+    version: number;
+    /** When set, the body renders as a diff against this version of the same name. */
+    compareWith?: number;
+  };
 }
 
 export interface GateOption {

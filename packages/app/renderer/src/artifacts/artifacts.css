@@ -1,0 +1,33 @@
+/* What the artifact panel adds on top of the design system's component layer, and no more.
+
+   The panel, its header, the version strip, the provenance line, the body and the two diff
+   line variants are all classes in components.css (`.orca-artifact*`, `.orca-vers*`,
+   `.orca-diff__line--add` / `--del`). What is left is the diff gutter column — which is
+   text, not a colour (docs/design/RULES.md rule 4), and so needs a width to line up down
+   the page — and the consumed-by line's spacing.
+
+   The gutter's width is in `ch`: a ratio to the mono face already chosen rather than a
+   design decision of its own. */
+
+/* One character of gutter, plus the space that separates it from the line. A diff whose
+   `+` and `−` did not line up would be a diff a person had to read twice. */
+.orca-diff__gutter {
+  display: inline-block;
+  width: 2ch;
+  color: var(--ink-tertiary);
+  user-select: none;
+}
+
+.orca-artifact__consumers {
+  margin-top: var(--space-1);
+}
+
+/* The body is the one part of the panel that scrolls; the header and the provenance line
+   stay put, because the version you are reading is the thing you lose track of first. */
+.orca-artifact__body {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
