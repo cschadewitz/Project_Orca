@@ -71,6 +71,24 @@ jobs:
       - name: Allow unprivileged user namespaces, so the Chromium sandbox works
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
+      # Electron's binary, on disk before any test's clock is running.
+      #
+      # `pnpm-workspace.yaml` allows electron's postinstall, but the pnpm store this job
+      # restores is keyed on the lockfile and shared with `ci.yml`, which installs under
+      # ELECTRON_SKIP_BINARY_DOWNLOAD=1. So the store can hold an electron that is *built*
+      # and has no binary, and `pnpm install` above has nothing left to run — the install
+      # log shows esbuild's postinstall and not electron's. `node_modules/electron/index.js`
+      # then downloads it on first `require`, inside whichever test hook got there first,
+      # through a blocking `spawnSync` that prints one line and nothing after it.
+      #
+      # Linux and macOS absorbed that in about twenty seconds. The first Windows run did not,
+      # and spent all 180 seconds of `beforeAll` in `electron.launch()` — see the comment in
+      # `playwright.config.ts`, which is where the wrong answer to this is written down.
+      # Here the download has no hook timeout over it and its own duration in the step list.
+      - name: Put the Electron binary on disk, rather than inside a test's timeout
+        shell: bash
+        run: node -e "console.log(require('electron'))"
+
       # The smoke test runs the built app and the built CLI, not the sources.
       - name: Build
         run: pnpm run build
@@ -132,6 +150,11 @@ jobs:
       - name: Allow unprivileged user namespaces, so the Chromium sandbox works
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # As in the `smoke` job above, and this is the job that found it.
+      - name: Put the Electron binary on disk, rather than inside a test's timeout
+        shell: bash
+        run: node -e "console.log(require('electron'))"
 
       # Two steps for one command, for the same reason: there is no display server on a
       # Linux runner and no xvfb on the other two.

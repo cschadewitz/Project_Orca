@@ -181,6 +181,7 @@ test.beforeAll(async () => {
   await clockIsNeutralised();
 
   await fontsSettled();
+  await layoutSettled();
 });
 
 test.afterAll(async () => {
@@ -199,6 +200,46 @@ async function fontsSettled(): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
+}
+
+/**
+ * Wait until the page has stopped changing shape, and fail loudly if it never does.
+ *
+ * The first run on each platform showed why this is needed. On macOS the *first* column
+ * captured came out 640×2801 and the three after it 640×2769 — not light versus dark, since
+ * the light fallback column was 2769 too, and not bundled versus fallback, since Linux drew
+ * all four at 2801. Only the first picture differed, which is the signature of a page still
+ * settling when the shutter opened: the window is given its content size in `beforeAll`, and
+ * a platform that applies that asynchronously reflows underneath the test that follows.
+ *
+ * That is worth a wait rather than a tolerance, because `toHaveScreenshot` does not compare
+ * images of different sizes at all — it fails on the dimensions, before `maxDiffPixelRatio`
+ * is consulted. A baseline committed from the unsettled frame would have gone red on the
+ * very next run, with a message about geometry rather than about type, which is the fastest
+ * way to teach a team to distrust a screenshot check.
+ *
+ * Stability, not a sleep: three consecutive identical readings of the viewport and the
+ * document's height. A fixed `waitForTimeout` would be a guess that gets raised the first
+ * time a slower runner misses it, and this page is static once it has settled — so if the
+ * readings never agree, something on `#type` is genuinely animating and the right outcome is
+ * this throwing with the series in hand, not a picture of a moving target.
+ */
+async function layoutSettled(): Promise<void> {
+  const sample = (): Promise<string> =>
+    page.evaluate(() => [innerWidth, innerHeight, document.documentElement.scrollHeight].join("x"));
+
+  const seen: string[] = [await sample()];
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    seen.push(await sample());
+    const tail = seen.slice(-3);
+    if (tail.length === 3 && tail[0] === tail[1] && tail[1] === tail[2]) return;
+  }
+  throw new Error(
+    "the page never held still: `#type` is supposed to be a static page, and a screenshot of one that " +
+      `is still reflowing is not a baseline. Readings, as innerWidth x innerHeight x scrollHeight: ${seen.join(", ")}`,
+  );
 }
 
 /**
@@ -282,6 +323,9 @@ async function setFaces(faces: "bundled" | "fallback"): Promise<void> {
   if (current !== faces) await toggle.click();
   await expect(page.locator(".type-proof")).toHaveAttribute("data-faces", faces);
   await fontsSettled();
+  /* Every picture goes through here, so this is the one place that guarantees none of them
+     is taken mid-reflow — the toggle swaps whole families, which moves the page's height. */
+  await layoutSettled();
 }
 
 /* ------------------------------------------------------------------ the machine checks */

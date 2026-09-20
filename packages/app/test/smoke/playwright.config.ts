@@ -66,21 +66,29 @@ export default defineConfig({
       name: "type-proof",
       testMatch: "type-proof.spec.ts",
       /**
-       * A larger budget than `smoke`'s, for two cold-start costs rather than for slowness.
+       * Headroom over `smoke`'s budget, because this project's `beforeAll` also builds
+       * preload with `tsc -b` and starts a Vite dev server before it launches anything.
        *
-       * This project's `beforeAll` builds preload with `tsc -b` and then starts a Vite dev
-       * server, and on a runner that has never done either the second one dominates. Measured
-       * on the first Windows run: Electron's binary downloaded at +3s, Vite logged
-       * `[optimizer] scanning dependencies` at +9s, and the hook was still inside it when the
-       * 180s budget expired — the log shows steady progress throughout, not a deadlock. Linux
-       * finished the same hook in about 50s and macOS in about 30s, because their dependency
-       * caches are warm far more often.
+       * **An earlier version of this comment blamed the Windows timeout on that cold start,
+       * and was wrong** — worth recording, because the log reads as though it were right.
+       * The first Windows run printed `Downloading Electron binary...` and then Vite's
+       * `[optimizer] scanning dependencies`, and stopped there for 174 seconds, which looks
+       * like a dev server that never finished. The trace says otherwise: the one call that
+       * was entered and never returned is `Launch electron`, at +5.9s. `createServer` and
+       * `listen` had already resolved by then, and the optimizer line is the dev server's
+       * background dependency scan, which does not block. Vite was never the cost.
        *
-       * This is a budget for a one-time cost on a cold machine, which is a different thing
-       * from `maxDiffPixelRatio` above: raising *that* would hide a real rendering change,
-       * whereas a hook that needs four minutes once is just a hook that needs four minutes.
-       * If a run ever exceeds this, the answer is to find what regressed in the cold path,
-       * not to raise it again.
+       * What was: `node_modules/electron/index.js` downloads the binary on first `require`
+       * if the postinstall never placed it, through a *synchronous* `spawnSync`. That is why
+       * the hook went quiet — and why no budget here is the real fix. `app-smoke.yml` now
+       * puts the binary on disk in its own step, where the download has no hook timeout over
+       * it and its own duration is legible.
+       *
+       * So this number is insurance on a genuinely cold runner and nothing more. It is not
+       * the same kind of number as `maxDiffPixelRatio` above: raising *that* would hide a
+       * real rendering change, whereas a hook that needs four minutes once is just a hook
+       * that needs four minutes. If a run exceeds this, read the trace for the call that
+       * never returned before touching the number — that is what found this one.
        */
       timeout: 300_000,
     },
