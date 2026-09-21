@@ -114,13 +114,14 @@ handle("orca:risks.list", (params: Parameters<DaemonClient["risksList"]>[0]) => 
 handle("orca:decisions.list", (params: Parameters<DaemonClient["decisionsList"]>[0]) => client().decisionsList(params));
 handle("orca:journal.list", (params: Parameters<DaemonClient["journalList"]>[0]) => client().journalList(params));
 
-// The three that write (#160, #161). They reach the daemon the same way the reads do; what
-// makes them different is on the other two sides - the daemon refuses them without the
-// run's lease, and the renderer asks `useWritability()` before offering the control at all.
-// `runs.start` is absent on purpose: it needs a workflow picker (#178, v0.5.0).
+// The four that write a run (#160, #161, #178). They reach the daemon the same way the
+// reads do; what makes them different is on the other two sides - the daemon refuses them
+// without the run's lease, and the renderer asks `useWritability()` before offering the
+// control at all. `runs.start` needs no lease: there is no run to hold one yet.
 handle("orca:inputs.answer", (params: Parameters<DaemonClient["inputsAnswer"]>[0]) => client().inputsAnswer(params));
 handle("orca:runs.cancel", (params: Parameters<DaemonClient["runsCancel"]>[0]) => client().runsCancel(params));
 handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) => client().runsResume(params));
+handle("orca:runs.start", (params: Parameters<DaemonClient["runsStart"]>[0]) => client().runsStart(params));
 // The fourth (#174, #266). It writes a file rather than a run, so no lease is involved, but
 // it is still absent from a `--read-only` daemon and `useWritability()` still governs it.
 handle("orca:config.set", (params: Parameters<DaemonClient["configSet"]>[0]) => client().configSet(params));

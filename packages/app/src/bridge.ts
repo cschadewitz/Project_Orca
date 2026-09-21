@@ -70,6 +70,8 @@ import type {
   RunsListResult,
   RunsResumeParams,
   RunsResumeResult,
+  RunsStartParams,
+  RunsStartResult,
   ScheduleExplainParams,
   ScheduleExplainResult,
   ScheduleGetParams,
@@ -198,14 +200,19 @@ export interface OrcaBridge {
     get: (params: RunsGetParams) => Promise<BridgeResult<RunsGetResult>>;
     /** One page of a run's log, by sequence number, forwards or backwards. */
     events: (params: Params<RunsEventsParams> & { runId: string }) => Promise<BridgeResult<RunsEventsResult>>;
-    /**
-     * Stop a run, with the reason recorded on `run.cancelled`. A write.
-     *
-     * `runs.start` is deliberately **not** here: starting a run needs a workflow picker and
-     * a vars form that nothing in this app has yet (#178, v0.5.0), and a bridge entry with
-     * no caller is a promise the app cannot keep.
-     */
+    /** Stop a run, with the reason recorded on `run.cancelled`. A write. */
     cancel: (params: RunsCancelParams) => Promise<BridgeResult<RunsCancelResult>>;
+    /**
+     * Start a run of a registered workflow (#178). A write, and the app's caller is the
+     * palette's **Start a run**: a picker of `workflows.list` and no vars at all, because
+     * the vars form the design asks for is not specified yet and a form that guessed at a
+     * workflow's inputs would invent them (RULES.md rule 12). A run started from here runs
+     * on the workflow's own `vars`.
+     *
+     * It answers when the run exists rather than when it finishes, so the caller can
+     * navigate to `orca://run/<id>` and watch the rest arrive on the stream.
+     */
+    start: (params: Params<RunsStartParams> & { workflowId: string }) => Promise<BridgeResult<RunsStartResult>>;
     /**
      * Re-drive a parked run under this daemon's lease. It answers when the run parks again
      * or finishes, not when it starts moving, so a caller that wants the steps in between

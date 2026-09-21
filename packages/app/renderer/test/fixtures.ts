@@ -78,8 +78,8 @@ export const HELLO: HelloResult = {
     "inputs.answer",
     "runs.resume",
     "runs.cancel",
-    // Answered by a daemon with `runs.control`, and called by nothing in the app: the app
-    // has no workflow picker to start a run from (#178).
+    // Answered by a daemon with `runs.control`, and called by the palette's **Start a run**
+    // since #178: a picker of `workflows.list` and the workflow's own vars.
     "runs.start",
     // The plan surface (#169). Nine reads, and five writes that ride the same `--read-only`
     // switch as the four above.

@@ -62,12 +62,14 @@ import {
   RUNS_GET_METHOD,
   RUNS_LIST_METHOD,
   RUNS_RESUME_METHOD,
+  RUNS_START_METHOD,
   ResponseMessageSchema,
   RunsCancelResultSchema,
   RunsEventsResultSchema,
   RunsGetResultSchema,
   RunsListResultSchema,
   RunsResumeResultSchema,
+  RunsStartResultSchema,
   WORKFLOWS_GET_METHOD,
   WORKFLOWS_LIST_METHOD,
   WorkflowsGetResultSchema,
@@ -130,6 +132,8 @@ import {
   type RunsListResult,
   type RunsResumeParams,
   type RunsResumeResult,
+  type RunsStartParams,
+  type RunsStartResult,
   type WorkflowsGetParams,
   type WorkflowsGetResult,
   type WorkflowsListParams,
@@ -352,6 +356,18 @@ export class DaemonClient {
   /** Stop a run, with the reason recorded on `run.cancelled`. */
   runsCancel(params: RunsCancelParams): Promise<RunsCancelResult> {
     return this.call(RUNS_CANCEL_METHOD, params, RunsCancelResultSchema);
+  }
+
+  /**
+   * Start a run of a registered workflow (#178). `vars` is merged over the workflow's own,
+   * exactly as `orca run --var` merges them; the palette's picker sends none, so a run
+   * started from the app runs on the workflow's defaults.
+   *
+   * It answers as soon as the run exists — `runId` and the summary — rather than when the
+   * run finishes, so the caller navigates to a run that is already moving.
+   */
+  runsStart(params: Params<RunsStartParams> & { workflowId: string }): Promise<RunsStartResult> {
+    return this.call(RUNS_START_METHOD, params, RunsStartResultSchema);
   }
 
   /**

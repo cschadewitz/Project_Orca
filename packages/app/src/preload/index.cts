@@ -50,6 +50,7 @@ const bridge: OrcaBridge = {
     events: (params) => call("orca:runs.events", params),
     cancel: (params) => call("orca:runs.cancel", params),
     resume: (params) => call("orca:runs.resume", params),
+    start: (params) => call("orca:runs.start", params),
   },
   inputs: {
     list: (params = {}) => call("orca:inputs.list", params),

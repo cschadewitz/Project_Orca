@@ -88,6 +88,8 @@ import type {
   RunsListResult,
   RunsResumeParams,
   RunsResumeResult,
+  RunsStartParams,
+  RunsStartResult,
   WorkflowsGetParams,
   WorkflowsGetResult,
   WorkflowsListParams,
@@ -140,6 +142,7 @@ export type MethodName =
   | "inputs.answer"
   | "runs.cancel"
   | "runs.resume"
+  | "runs.start"
   | "config.get"
   | "config.set"
   | "plans.list"
@@ -177,6 +180,7 @@ export interface Handlers {
   ) => Answer<InputsAnswerResult>;
   "runs.cancel": (params: RunsCancelParams) => Answer<RunsCancelResult>;
   "runs.resume": (params: RunsResumeParams) => Answer<RunsResumeResult>;
+  "runs.start": (params: Params<RunsStartParams> & { workflowId: string }) => Answer<RunsStartResult>;
   "config.get": (params: Params<ConfigGetParams>) => Answer<ConfigGetResult>;
   "config.set": (params: ConfigSetParams) => Answer<ConfigSetResult>;
   "plans.list": (params: Params<PlansListParams>) => Answer<PlansListResult>;
@@ -448,6 +452,27 @@ const defaults: Handlers = {
   "runs.resume": ({ runId }) => {
     const run = RUNS.find((r) => r.id === runId);
     return run ? ok({ run: { ...run, status: "succeeded" }, asOf: AS_OF }) : err("RUN_NOT_FOUND", `no run ${runId}`);
+  },
+
+  /* Answers as the daemon does: the moment the run exists, with its id and a summary that
+     is `running` and has no outcome yet. The id is derived from the workflow so a test can
+     assert where the palette navigated without scripting a handler. */
+  "runs.start": ({ workflowId }) => {
+    const workflow = WORKFLOWS.find((w) => w.id === workflowId);
+    if (!workflow) return err("WORKFLOW_NOT_FOUND", `no workflow ${workflowId}`);
+    return ok({
+      runId: `run-started-${workflow.id}`,
+      run: {
+        id: `run-started-${workflow.id}`,
+        name: workflow.name,
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+        status: "running",
+        createdAt: AS_OF,
+        startedAt: AS_OF,
+      },
+      asOf: AS_OF,
+    });
   },
 
   "config.get": () => ok(CONFIG_GET),
@@ -727,6 +752,7 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       events: (params) => call("runs.events", params) as Promise<BridgeResult<RunsEventsResult>>,
       cancel: (params) => call("runs.cancel", params) as Promise<BridgeResult<RunsCancelResult>>,
       resume: (params) => call("runs.resume", params) as Promise<BridgeResult<RunsResumeResult>>,
+      start: (params) => call("runs.start", params) as Promise<BridgeResult<RunsStartResult>>,
     },
     inputs: {
       list: (params = {}) => call("inputs.list", params) as Promise<BridgeResult<InputsListResult>>,
