@@ -185,3 +185,50 @@
 .orca-agents__none {
   color: var(--ink-secondary);
 }
+
+/* ---------- the policy panel beside the cards (#176) ---------- */
+
+/* The cards and the inspector, side by side. One column until a panel is open, which is why
+   the modifier is on the container rather than a width on the panel: with nothing open the
+   cards have the whole pane and the grid's `auto-fill` uses it. */
+.orca-agents__split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.orca-agents__split > .orca-agents__body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------- the two writes (#176) ---------- */
+
+/* The card's action row, under everything else the card says. */
+.orca-agents__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.orca-agents__claim-release {
+  flex: none;
+}
+
+/* What the release said, on the row it was about. It wraps, because it is a sentence from
+   the daemon explaining what releasing did *not* fix and half of it is the useful half.
+   type: caption */
+.orca-agents__claim-note {
+  flex-basis: 100%;
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+.orca-agents__claim-note--failed {
+  color: var(--status-failed);
+}
+
+/* A claim row grows a second line when it carries a note, so it stops being a fixed-height
+   row and says so here rather than by accident. */
+.orca-agents__claim {
+  flex-wrap: wrap;
+}

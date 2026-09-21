@@ -20,33 +20,74 @@
  *   names the work item and the *run* holding it, and names no agent, so it cannot be put on
  *   a card without inventing the link (RULES.md rule 12). It is rendered as what it is: the
  *   work being held right now, and by which run.
- * - **Nothing here writes.** `agents.ping` is a read — it spawns, handshakes and closes,
- *   touching no run, lease or log — but the button that calls it is #176's, so this surface
- *   asks nothing of `useWritability()` and offers no control at all.
+ * - **It writes two things, and only two (#176).** A claim is released here, and an agent's
+ *   permission policy is edited in a panel — which is the Config surface's editor mounted
+ *   beside the cards, over the Config surface's own draft model, because a second copy of
+ *   `use-config.ts` would be a second answer to "what is unsaved" (`config/policy-editor.tsx`).
+ *   Both controls are absent rather than disabled where there is nothing to send to:
+ *   `claims.release` and `config.set` both sit behind `runs.control`, which a `--read-only`
+ *   daemon leaves out of `hello.methods` *and* out of its capabilities, so `useWritesPresent()`
+ *   is one answer to both rather than two checks that could drift.
+ * - **There is no "force release" here, deliberately.** `claims.release --force` takes an
+ *   item away from a run that could still resume, which is a decision with no undo, and a
+ *   keyless palette row is the wrong amount of friction for it. It stays a CLI act; a claim
+ *   the daemon will refuse says so on the control instead (`releaseRefusal`).
+ *
+ * And one thing the issue asked for that cannot be built: **an auto-approval count.** Nothing
+ * in ORCA counts how often a permission rule fired — `decidePermission` runs per tool call
+ * and keeps no total, on the wire or off it — so there is no number to put beside a policy
+ * (RULES.md rule 12).
  */
-import { useMemo, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 import type { ConnectionState } from "@orca/design";
 import type { ClaimView } from "@orca/protocol";
-import { StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
+import { useWritability, useWritesPresent } from "../chrome/use-connection.js";
+import { useKeyboard } from "../keyboard-context.js";
+import { scopeProps } from "../keyboard-map.js";
+import { PolicyPanel } from "../config/policy-editor.js";
+import { Button, Menu, StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
 import { AgentCard } from "./agent-card.js";
-import { countLabel, groupByHost, transportLabel, type HostGroup } from "./agent-groups.js";
-import { useAgents, type AgentsState } from "./use-agents.js";
+import {
+  countLabel,
+  groupByHost,
+  releaseConsequence,
+  releaseRefusal,
+  transportLabel,
+  type HostGroup,
+} from "./agent-groups.js";
+import { useAgents, type AgentsFeed, type AgentsState } from "./use-agents.js";
 import "./agents.css";
 
 export interface AgentsSurfaceProps {
   /** Whether the daemon is answering. A screen nobody is updating says so rather than lying. */
   connection: ConnectionState;
+  /**
+   * Open an `orca://` URL — the chrome's route table (#165). The policy panel uses it to
+   * send a person to the Config form, which is where a *configured* rule is edited.
+   */
+  onOpen?: (url: string) => void;
 }
 
-export function AgentsSurface({ connection }: AgentsSurfaceProps): JSX.Element {
-  const { state, reload } = useAgents();
+export function AgentsSurface({ connection, onOpen }: AgentsSurfaceProps): JSX.Element {
+  const feed = useAgents();
+  const { state, reload } = feed;
   const live = connection === "live";
+  const writesPresent = useWritesPresent();
+
+  /** Whose policy the panel is showing, or nothing. One panel, whichever card opened it. */
+  const [policyFor, setPolicyFor] = useState<string | undefined>(undefined);
 
   const agents = state.phase === "ready" ? state.agents : undefined;
   const groups = useMemo(() => (agents ? groupByHost(agents) : []), [agents]);
+  const claims = state.phase === "ready" ? state.claims : EMPTY_CLAIMS;
+
+  const openPolicy = useCallback((agentId: string) => setPolicyFor(agentId), []);
+  usePaletteActions(agents, claims, writesPresent, openPolicy, feed.releaseClaim);
 
   return (
-    <div className="orca-agents">
+    /* The scope the two keyless commands register in: they are actions on an object on this
+       screen, and `card` is the scope the palette ranks first when focus is on one. */
+    <div className="orca-agents" {...scopeProps("card")}>
       {/* Last-known data, said out loud: the values stay, the banner says not to trust their
           freshness (docs/design/40-connection-states.md). */}
       {!live && state.phase === "ready" && (
@@ -61,10 +102,34 @@ export function AgentsSurface({ connection }: AgentsSurfaceProps): JSX.Element {
         </div>
       )}
 
-      <Body state={state} groups={groups} live={live} connection={connection} onRetry={reload} />
+      <div className={policyFor === undefined ? "orca-agents__split" : "orca-agents__split orca-agents__split--panel"}>
+        <Body
+          state={state}
+          groups={groups}
+          live={live}
+          connection={connection}
+          onRetry={reload}
+          feed={feed}
+          writesPresent={writesPresent}
+          onEditPermissions={openPolicy}
+        />
+        {/* Mounted only while it is open, and keyed by nothing: switching agents keeps the
+            same panel — and therefore the same draft — rather than remounting `useConfig`
+            and throwing away an unsaved grant edit. */}
+        {policyFor !== undefined && (
+          <PolicyPanel
+            agentId={policyFor}
+            live={live}
+            {...(onOpen ? { onOpen } : {})}
+            onClose={() => setPolicyFor(undefined)}
+          />
+        )}
+      </div>
     </div>
   );
 }
+
+const EMPTY_CLAIMS: readonly ClaimView[] = [];
 
 interface BodyProps {
   state: AgentsState;
@@ -72,10 +137,22 @@ interface BodyProps {
   live: boolean;
   connection: ConnectionState;
   onRetry: () => void;
+  feed: AgentsFeed;
+  writesPresent: boolean;
+  onEditPermissions: (agentId: string) => void;
 }
 
 /** The groups and the claims, or the one state view that stands in for them. */
-function Body({ state, groups, live, connection, onRetry }: BodyProps): JSX.Element {
+function Body({
+  state,
+  groups,
+  live,
+  connection,
+  onRetry,
+  feed,
+  writesPresent,
+  onEditPermissions,
+}: BodyProps): JSX.Element {
   if (state.phase === "loading") return <StateView kind="loading" title="Loading agents" />;
 
   if (state.phase === "error") {
@@ -113,15 +190,29 @@ function Body({ state, groups, live, connection, onRetry }: BodyProps): JSX.Elem
   return (
     <div className="orca-agents__body">
       {groups.map((group) => (
-        <HostSection key={group.hostId} group={group} live={live} />
+        <HostSection key={group.hostId} group={group} live={live} onEditPermissions={onEditPermissions} />
       ))}
-      <Claims claims={state.claims} asOf={state.asOf} live={live} />
+      <Claims
+        claims={state.claims}
+        asOf={state.asOf}
+        live={live}
+        feed={feed}
+        writesPresent={writesPresent && live}
+      />
     </div>
   );
 }
 
 /** One host and its agents. The heading is the id; the transport is the second thing. */
-function HostSection({ group, live }: { group: HostGroup; live: boolean }): JSX.Element {
+function HostSection({
+  group,
+  live,
+  onEditPermissions,
+}: {
+  group: HostGroup;
+  live: boolean;
+  onEditPermissions: (agentId: string) => void;
+}): JSX.Element {
   const transport = transportLabel(group.hostType);
   const count = `${group.agents.length} ${group.agents.length === 1 ? "agent" : "agents"}`;
 
@@ -146,7 +237,12 @@ function HostSection({ group, live }: { group: HostGroup; live: boolean }): JSX.
       </div>
       <div className="orca-agents__grid">
         {group.agents.map((agent) => (
-          <AgentCard key={agent.id} agent={agent} live={live} />
+          <AgentCard
+            key={agent.id}
+            agent={agent}
+            live={live}
+            onEditPermissions={() => onEditPermissions(agent.id)}
+          />
         ))}
       </div>
     </section>
@@ -157,6 +253,9 @@ interface ClaimsProps {
   claims: readonly ClaimView[];
   asOf: string;
   live: boolean;
+  feed: AgentsFeed;
+  /** False where there is no `claims.release` to call: the control is absent, not disabled. */
+  writesPresent: boolean;
 }
 
 /**
@@ -169,8 +268,13 @@ interface ClaimsProps {
  * somewhere to navigate to, and the route table is #165's — so the row names both objects
  * and leaves the navigation to land in one place rather than growing a private one here,
  * exactly as the command palette leaves out `onJump`.
+ *
+ * Since #176 the row also carries the one write it can offer: **Release**, which takes the
+ * item back from a run that cannot resume (#88). The claims themselves are still read once
+ * with the list and moved by no push — a release journals nothing, so there is nothing to
+ * listen for, and `use-agents.ts` re-reads them once after the call instead.
  */
-function Claims({ claims, asOf, live }: ClaimsProps): JSX.Element {
+function Claims({ claims, asOf, live, feed, writesPresent }: ClaimsProps): JSX.Element {
   return (
     <section className="orca-agents__claims" aria-label="Claimed work">
       <div className="orca-agents__host-head">
@@ -201,10 +305,126 @@ function Claims({ claims, asOf, live }: ClaimsProps): JSX.Element {
                 {claim.owner.name ?? claim.owner.runId}
               </span>
               <Time at={new Date(claim.claimedAt)} show={live ? "both" : "absolute"} />
+              {writesPresent && (
+                <Release
+                  claim={claim}
+                  busy={feed.releasing.has(claim.workItemId)}
+                  onRelease={() => feed.releaseClaim(claim.workItemId)}
+                />
+              )}
+              {/* The result, on the row it was about. Not a live region — `use-agents.ts`
+                  already said it into the app's one announcer. */}
+              {feed.release?.workItemId === claim.workItemId && (
+                <span
+                  className={`orca-agents__claim-note ${textClass("caption")}${feed.release.failed ? " orca-agents__claim-note--failed" : ""}`}
+                >
+                  {feed.release.message}
+                </span>
+              )}
             </li>
           ))}
         </ul>
       )}
     </section>
   );
+}
+
+/**
+ * **Release**, and the confirmation `orca claims release` also asks for.
+ *
+ * The confirmation is a `Menu`, because every popover in this app is one (AGENTS.md) and
+ * because what it needs is exactly what a menu is: a short list of choices with the
+ * consequence written beside the one that acts. It states the work item, the run it is taken
+ * from and what happens next, so that the destructive choice is the one a person read rather
+ * than the one they landed on.
+ *
+ * A claim the daemon will refuse gets no menu at all: the button is disabled with the reason
+ * on it (`releaseRefusal`), because `owner.releasable` predicts the refusal exactly and
+ * offering a confirmation for a call that will fail is a worse lie than saying so up front.
+ * There is no **Force release** here — see the file header.
+ */
+function Release({ claim, busy, onRelease }: { claim: ClaimView; busy: boolean; onRelease: () => void }): JSX.Element {
+  const writability = useWritability();
+  const refusal = releaseRefusal(claim);
+  const blocked = refusal ?? (writability.can ? undefined : writability.reason);
+
+  if (blocked !== undefined || busy) {
+    return (
+      <Button
+        size="sm"
+        tone="danger"
+        className="orca-agents__claim-release"
+        disabled
+        {...(blocked === undefined ? {} : { disabledReason: blocked })}
+      >
+        Release
+      </Button>
+    );
+  }
+
+  return (
+    <Menu
+      label={`Release ${claim.workItemId}`}
+      items={[
+        { id: "release", label: `Release ${claim.workItemId}`, hint: releaseConsequence(claim) },
+        { id: "keep", label: "Keep the claim" },
+      ]}
+      onChoose={(item) => {
+        if (item.id === "release") onRelease();
+      }}
+      triggerClassName={`orca-btn orca-btn--danger orca-btn--sm orca-agents__claim-release ${textClass("caption")}`}
+    >
+      Release
+    </Menu>
+  );
+}
+
+/**
+ * The two palette-only commands this surface owns (#176, #178).
+ *
+ * Keyless on purpose (#205): the design's keyboard table is short, and neither "edit this
+ * agent's permissions" nor "release this claim" is worth one of the letters left — but both
+ * are worth doing, so they register with no key and the palette becomes the way to them.
+ * They are registered per *object*, one row per agent and one per releasable claim, because
+ * "actions on the current object" is what the palette's first section means and a single
+ * "Release claim" row would have to ask which one afterwards.
+ *
+ * A claim the daemon would refuse gets no row: the palette lists commands that do something.
+ */
+function usePaletteActions(
+  agents: readonly { id: string }[] | undefined,
+  claims: readonly ClaimView[],
+  writesPresent: boolean,
+  onEditPermissions: (agentId: string) => void,
+  onRelease: (workItemId: string) => void,
+): void {
+  const keyboard = useKeyboard();
+  const agentIds = (agents ?? []).map((agent) => agent.id).join(" ");
+  const releasable = claims.filter((claim) => claim.owner.releasable).map((claim) => claim.workItemId);
+  const claimIds = releasable.join(" ");
+
+  useEffect(() => {
+    const off = (agentIds === "" ? [] : agentIds.split(" ")).map((id) =>
+      keyboard.register({
+        scope: "card",
+        label: `Edit permissions for ${id}`,
+        detail: "Opens the agent's permission policy, with its written grants editable",
+        action: () => onEditPermissions(id),
+      }),
+    );
+    return () => off.forEach((unregister) => unregister());
+  }, [agentIds, keyboard, onEditPermissions]);
+
+  useEffect(() => {
+    if (!writesPresent) return;
+    const off = (claimIds === "" ? [] : claimIds.split(" ")).map((workItemId) =>
+      keyboard.register({
+        scope: "card",
+        label: `Release claim on ${workItemId}`,
+        detail: "Takes the work item back from the run holding it; the item goes back to the scheduler",
+        action: () => onRelease(workItemId),
+      }),
+    );
+    return () => off.forEach((unregister) => unregister());
+  }, [claimIds, keyboard, onRelease, writesPresent]);
 }

@@ -293,7 +293,9 @@ export function App(): JSX.Element {
               onOpenRun={openRun}
             />
           ) : activeSurface.id === "agents" ? (
-            <AgentsSurface connection={connection.state} />
+            /* `onOpen` is the route table's, as everywhere else: the policy panel's link to
+               the Config form is a link to another object and there is one resolver (#165). */
+            <AgentsSurface connection={connection.state} onOpen={navigate} />
           ) : activeSurface.id === "config" && route?.kind === "workflow" ? (
             /* The workflow viewer lands on Config, which is where the route table has always
                put `orca://workflow/…` — "how the system is wired, and what the workflows

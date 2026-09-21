@@ -387,6 +387,71 @@ describe("Agents: health in the name, before the id", () => {
     // Nothing on this surface announces: an agent going quiet is not an interruption.
     expect(document.querySelectorAll(".orca-agents [aria-live]")).toHaveLength(0);
   });
+
+  it("names both of the surface's writes by the object they act on (#176)", async () => {
+    renderChrome(h);
+    await goTo("Agents");
+    await screen.findAllByRole("region", { name: /^Host / });
+
+    /* Four cards on screen means four **Permissions** buttons, and a name that was the word
+       alone would be four identical controls. Each one names its agent, which is also what
+       makes the button and the palette's keyless row read as the same command. */
+    for (const agent of AGENTS) {
+      expect(screen.getByRole("button", { name: `Permissions for ${agent.id}` })).toBeTruthy();
+    }
+
+    /* The same for **Release**: the one that will fire names its work item, and the one the
+       daemon would refuse is disabled with the reason reachable *on* the control rather than
+       only on hover — `Button` uses `aria-disabled` and keeps the element focusable for
+       exactly this (docs/design/40-connection-states.md). */
+    expect(screen.getByRole("button", { name: "Release wi-3" })).toBeTruthy();
+    const refused = screen.getByRole("button", { name: "Release" });
+    expect(refused.getAttribute("aria-disabled")).toBe("true");
+    expect(refused.hasAttribute("disabled")).toBe(false);
+    expect(refused.getAttribute("title")).toContain("The run could still resume");
+  });
+
+  it("announces a release into the one region, and grows no region of its own", async () => {
+    renderChrome(h);
+    await goTo("Agents");
+    const announcer = announcers()[0]!;
+
+    fireEvent.click(await screen.findByRole("button", { name: "Release wi-3" }));
+    fireEvent.click(
+      within(await screen.findByRole("menu", { name: "Release wi-3" })).getByRole("menuitem", {
+        name: /^Release wi-3/,
+      }),
+    );
+
+    /* A write this app made is not something the daemon pushes, so it goes through
+       `useAnnounce()` into the *same* region every notification does — and the surface grows
+       no second one for it (AGENTS.md, "`renderer/src/a11y/` is not a surface"). */
+    await waitFor(() => expect(announcer.textContent).toContain("wi-3 is released"));
+    expect(document.querySelectorAll(".orca-agents [aria-live]")).toHaveLength(0);
+    expect(announcers()).toHaveLength(1);
+  });
+
+  it("labels every control in the policy panel, and adds no live region there either", async () => {
+    renderChrome(h);
+    await goTo("Agents");
+    fireEvent.click(await screen.findByRole("button", { name: "Permissions for claude" }));
+
+    const panel = await screen.findByRole("complementary", { name: "Permissions for claude" });
+    // Two named sections, so the read-only half and the editable half are distinguishable
+    // by name rather than by position on the screen.
+    expect(within(panel).getByRole("region", { name: "Configured rules" })).toBeTruthy();
+    expect(within(panel).getByRole("region", { name: "Written grants" })).toBeTruthy();
+
+    // Every control the panel draws has a name: a form over a file must be readable aloud.
+    for (const control of within(panel).getAllByRole("button")) {
+      expect((control.getAttribute("aria-label") ?? control.textContent ?? "").trim()).not.toBe("");
+    }
+    for (const box of within(panel).getAllByRole("textbox")) {
+      expect(box.getAttribute("id")).toBeTruthy();
+      expect(panel.querySelector(`label[for="${box.getAttribute("id")}"]`)).toBeTruthy();
+    }
+    expect(panel.querySelectorAll("[aria-live]")).toHaveLength(0);
+  });
 });
 
 describe("Workflow: a graph read as a list, with the status first", () => {
