@@ -24,6 +24,10 @@ import type {
   ArtifactsListResult,
   ClaimsListParams,
   ClaimsListResult,
+  ConfigGetParams,
+  ConfigGetResult,
+  ConfigSetParams,
+  ConfigSetResult,
   DaemonCapability,
   HelloResult,
   InputsAnswerParams,
@@ -230,6 +234,33 @@ export interface OrcaBridge {
      * read too, but it is a button (#176) and is not on the bridge yet.
      */
     list: (params?: Params<AgentsListParams>) => Promise<BridgeResult<AgentsListResult>>;
+  };
+  /**
+   * The workspace's configuration, as two documents: `orca.config.yaml` and the ADR 0009
+   * permission sidecar `orca.permissions.json` (#174, #266). Plumbing only today — the
+   * Configuration and Agents surfaces (#175, #176) are what call it.
+   */
+  config: {
+    /**
+     * Both documents, each with its own path, its own `revision` and its raw `text`; the
+     * schema description a form draws its fields from; and the effective permission policy
+     * per agent, in evaluation order, with each rule labelled by the document it came from.
+     *
+     * A read, so a `--read-only` daemon answers it. **Nothing is redacted**: `text` is the
+     * bytes of the config file. A form that edits a file has to show the file, and a
+     * redacted text written back would destroy what it hid.
+     */
+    get: (params?: Params<ConfigGetParams>) => Promise<BridgeResult<ConfigGetResult>>;
+    /**
+     * Write one of them. `expectedRevision` is what was read; a stale one is refused with
+     * `CONFIG_STALE` rather than overwritten. Send `patch` from a form — it edits the YAML
+     * document in place and keeps its comments — and `text` from an editor pane.
+     * `validateOnly` asks the same questions and writes nothing.
+     *
+     * A write: absent from a daemon started `--read-only`, so a caller asks
+     * `useWritability()` first rather than finding out by failing.
+     */
+    set: (params: ConfigSetParams) => Promise<BridgeResult<ConfigSetResult>>;
   };
   notifications: {
     /**

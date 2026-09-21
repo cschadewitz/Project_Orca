@@ -96,6 +96,7 @@ handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>
   client().workflowsList(params),
 );
 handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
+handle("orca:config.get", (params: Parameters<DaemonClient["configGet"]>[0]) => client().configGet(params));
 
 // The three that write (#160, #161). They reach the daemon the same way the reads do; what
 // makes them different is on the other two sides - the daemon refuses them without the
@@ -104,6 +105,9 @@ handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0
 handle("orca:inputs.answer", (params: Parameters<DaemonClient["inputsAnswer"]>[0]) => client().inputsAnswer(params));
 handle("orca:runs.cancel", (params: Parameters<DaemonClient["runsCancel"]>[0]) => client().runsCancel(params));
 handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) => client().runsResume(params));
+// The fourth (#174, #266). It writes a file rather than a run, so no lease is involved, but
+// it is still absent from a `--read-only` daemon and `useWritability()` still governs it.
+handle("orca:config.set", (params: Parameters<DaemonClient["configSet"]>[0]) => client().configSet(params));
 /** Everything the main process pushes goes out the same way: every window, none destroyed. */
 function send(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {

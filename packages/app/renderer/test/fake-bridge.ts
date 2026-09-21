@@ -38,6 +38,10 @@ import type {
   ArtifactsListResult,
   ClaimsListParams,
   ClaimsListResult,
+  ConfigGetParams,
+  ConfigGetResult,
+  ConfigSetParams,
+  ConfigSetResult,
   HelloResult,
   InputsAnswerParams,
   InputsAnswerResult,
@@ -73,6 +77,7 @@ import { AS_OF, CLAIMS, EVENTS, HELLO, INPUTS, RUNS, RUN_DETAILS } from "./fixtu
 import { AGENTS_LIST } from "./fixtures-agents.js";
 import { WORKFLOWS, WORKFLOW_VIEWS } from "./fixtures-workflows.js";
 import { ARTIFACTS, ARTIFACTS_BY_ID } from "./fixtures-artifacts.js";
+import { CONFIG_GET } from "./fixtures-config.js";
 
 /** Params as a caller passes them: the schema defaults (`limit`, `offset`) are the daemon's job. */
 type Params<T> = Partial<T>;
@@ -93,7 +98,9 @@ export type MethodName =
   | "agents.list"
   | "inputs.answer"
   | "runs.cancel"
-  | "runs.resume";
+  | "runs.resume"
+  | "config.get"
+  | "config.set";
 
 type Answer<T> = BridgeResult<T> | Promise<BridgeResult<T>>;
 
@@ -115,6 +122,8 @@ export interface Handlers {
   ) => Answer<InputsAnswerResult>;
   "runs.cancel": (params: RunsCancelParams) => Answer<RunsCancelResult>;
   "runs.resume": (params: RunsResumeParams) => Answer<RunsResumeResult>;
+  "config.get": (params: Params<ConfigGetParams>) => Answer<ConfigGetResult>;
+  "config.set": (params: ConfigSetParams) => Answer<ConfigSetResult>;
 }
 
 export interface BridgeCall {
@@ -364,6 +373,26 @@ const defaults: Handlers = {
     const run = RUNS.find((r) => r.id === runId);
     return run ? ok({ run: { ...run, status: "succeeded" }, asOf: AS_OF }) : err("RUN_NOT_FOUND", `no run ${runId}`);
   },
+
+  "config.get": () => ok(CONFIG_GET),
+
+  /* `config.set` answers and changes nothing, for the same reason the three above do. What
+     it does model is the one refusal a form has to handle: a revision that is not the one
+     on the fixture is `CONFIG_STALE`, so a screen test can drive "somebody edited this
+     underneath you" without scripting anything. A test that wants the write to land sends
+     the fixture's revision; a test that wants it refused sends anything else. */
+  "config.set": (params) => {
+    const current = params.document === "config" ? CONFIG_GET.config : CONFIG_GET.permissions;
+    if (params.expectedRevision !== current.revision)
+      return err("CONFIG_STALE", `${current.path} has changed since you read it`);
+    const document = params.text === undefined ? current : { ...current, text: params.text };
+    return ok({
+      document,
+      written: params.validateOnly !== true,
+      ...(params.validateOnly ? { validation: { errors: [] } } : {}),
+      asOf: AS_OF,
+    });
+  },
 };
 
 /** A fake `window.orca`. Nothing is installed until `install()` is called. */
@@ -452,6 +481,10 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       get: (params) => call("workflows.get", params) as Promise<BridgeResult<WorkflowsGetResult>>,
     },
     agents: { list: (params = {}) => call("agents.list", params) as Promise<BridgeResult<AgentsListResult>> },
+    config: {
+      get: (params = {}) => call("config.get", params) as Promise<BridgeResult<ConfigGetResult>>,
+      set: (params) => call("config.set", params) as Promise<BridgeResult<ConfigSetResult>>,
+    },
     notifications: {
       subscribe: (listener) => {
         listeners.add(listener);

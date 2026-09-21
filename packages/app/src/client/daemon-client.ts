@@ -17,7 +17,11 @@ import {
   ArtifactsGetResultSchema,
   ArtifactsListResultSchema,
   CLAIMS_LIST_METHOD,
+  CONFIG_GET_METHOD,
+  CONFIG_SET_METHOD,
   ClaimsListResultSchema,
+  ConfigGetResultSchema,
+  ConfigSetResultSchema,
   HELLO_METHOD,
   HelloResultSchema,
   INPUTS_ANSWER_METHOD,
@@ -49,6 +53,10 @@ import {
   type ArtifactsListResult,
   type ClaimsListParams,
   type ClaimsListResult,
+  type ConfigGetParams,
+  type ConfigGetResult,
+  type ConfigSetParams,
+  type ConfigSetResult,
   type HelloResult,
   type InputsAnswerParams,
   type InputsAnswerResult,
@@ -169,6 +177,19 @@ export class DaemonClient {
     return this.call(WORKFLOWS_GET_METHOD, params, WorkflowsGetResultSchema);
   }
 
+  /**
+   * Both configuration documents — `orca.config.yaml` and the ADR 0009 permission sidecar —
+   * with the schema a form renders and the effective permission policy the two add up to
+   * (#174, #266).
+   *
+   * A read, answered by a `--read-only` daemon too. It is **not** redacted: `config.text` is
+   * the file's bytes, host entries and command lines included, because a form that edits a
+   * file has to show the file.
+   */
+  configGet(params: Params<ConfigGetParams> = {}): Promise<ConfigGetResult> {
+    return this.call(CONFIG_GET_METHOD, params, ConfigGetResultSchema);
+  }
+
   /* ---------- the control methods: the calls that write ---------- */
 
   /**
@@ -194,6 +215,16 @@ export class DaemonClient {
   /** Stop a run, with the reason recorded on `run.cancelled`. */
   runsCancel(params: RunsCancelParams): Promise<RunsCancelResult> {
     return this.call(RUNS_CANCEL_METHOD, params, RunsCancelResultSchema);
+  }
+
+  /**
+   * Write one configuration document. `expectedRevision` is the `revision` of the view this
+   * edit was made against; a daemon whose bytes have moved answers `CONFIG_STALE` rather
+   * than overwriting whatever landed in between. Exactly one of `text` and `patch`, and
+   * `patch` is the one that keeps the YAML's comments.
+   */
+  configSet(params: ConfigSetParams): Promise<ConfigSetResult> {
+    return this.call(CONFIG_SET_METHOD, params, ConfigSetResultSchema);
   }
 
   /** Every configured agent's handshake health, with what is claimed right now beside it. */
