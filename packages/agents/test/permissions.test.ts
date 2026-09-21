@@ -8,6 +8,7 @@
  * silently means "once" and the prompt comes back forever. Both have their own describe
  * block below, with concrete cases, because both are the deliverable.
  */
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -656,6 +657,51 @@ describe("replacing the sidecar", () => {
       { code: "CONFIG_INVALID" },
     );
     await expect(readFile(file, "utf8")).rejects.toThrow();
+  });
+
+  /**
+   * `expectedRevision` is re-hashed *inside* the lock, which is the whole of the point: the
+   * daemon used to compare revisions and then call this, and a grant appended in between was
+   * replaced away. Checked here, there is no in-between.
+   */
+  it("refuses a replace whose expectedRevision is not the file's, and writes nothing", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const hashOf = async () =>
+      createHash("sha256")
+        .update(await readFile(file))
+        .digest("hex");
+
+    // A file that is not there hashes to `""`, and asserting that is how a first write is made.
+    await replacePermissionPolicyFile(
+      file,
+      { version: 1, agents: { alpha: { rules: [{ match: { kind: "read", path: "a.ts" }, decision: "allow" }] } } },
+      { expectedRevision: "" },
+    );
+    const revision = await hashOf();
+
+    // Somebody else writes. The operator's edit was made against `revision`, which is now old.
+    await recordAlwaysDecision({
+      file,
+      agentId: "beta",
+      request: req("edit", "Edit src/b.ts", `${dir}/src/b.ts`),
+      decision: "allow",
+      workspaceCwd: dir,
+    });
+    const moved = await hashOf();
+    expect(moved).not.toBe(revision);
+
+    await expect(
+      replacePermissionPolicyFile(file, { version: 1, agents: {} }, { expectedRevision: revision }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_STALE",
+      details: { expectedRevision: revision, actualRevision: moved },
+    });
+    // Refused, not half-applied: both agents are still there.
+    expect(Object.keys((await readPermissionPolicyFile(file)).agents).sort()).toEqual(["alpha", "beta"]);
+    // And the same replace against the revision the file actually has goes through.
+    await replacePermissionPolicyFile(file, { version: 1, agents: {} }, { expectedRevision: moved });
+    expect(Object.keys((await readPermissionPolicyFile(file)).agents)).toEqual([]);
   });
 
   it("serialises against a concurrent `recordAlwaysDecision` instead of overwriting it", async () => {

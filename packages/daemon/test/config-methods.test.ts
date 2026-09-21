@@ -395,15 +395,108 @@ describe("config.set on the permissions document", () => {
         agents: { claude: { rules: [{ match: { kind: "read", pathPrefix: "docs" }, decision: "allow" }] } },
       }),
     });
-    await Promise.all([always, operator]);
+    const [, saved] = await Promise.all([
+      always,
+      operator.then(
+        () => undefined,
+        (e: unknown) => e as { code: string },
+      ),
+    ]);
 
-    // Both writers took the same lock, so whichever went second read the other's file
-    // first: one of the two agents is certainly there, and the file is valid JSON either
-    // way. What must never happen is a half-written or unparseable sidecar.
+    // Both writers take the same lock, so the file is never half-written or unparseable, and
+    // exactly one of two things happened. Either the operator's save got in first and the
+    // grant was appended on top of it, or the grant got in first - in which case the save is
+    // a replace of bytes it never saw, and is refused as stale rather than dropping it
+    // silently (#266). What must never happen is the third case: a save that lands and takes
+    // the grant with it.
     const doc = await readPermissionPolicyFile(file);
-    expect(Object.keys(doc.agents).length).toBeGreaterThanOrEqual(1);
+    if (saved?.code === "CONFIG_STALE") expect(Object.keys(doc.agents)).toEqual(["codex"]);
+    else expect(Object.keys(doc.agents).sort()).toEqual(["claude", "codex"]);
+  });
+
+  /**
+   * The window the revision compare used to leave open. `config.set` is a *replace*, so a
+   * grant appended between the operator's `config.get` and their save is not merged - it is
+   * overwritten. The compare is what is supposed to prevent that, and it only can if it
+   * happens under the same lock as the write, which is why `expectedRevision` now travels
+   * into `replacePermissionPolicyFile` instead of being checked out here (ADR 0009, #266).
+   */
+  it("refuses a save that would drop a grant recorded after the client read", async () => {
+    const { dir, model } = await workspace();
+    const file = join(dir, "orca.permissions.json");
+    await mkdir(dir, { recursive: true });
+    const read = await model.read("permissions");
+
+    // The run answers "always" while the operator's form is open.
+    await recordAlwaysDecision({
+      file,
+      agentId: "codex",
+      request: {
+        sessionId: "s",
+        toolCall: { toolCallId: "t", title: "Edit lib/a.ts", kind: "edit", locations: [{ path: "/work/lib/a.ts" }] },
+        options: [],
+      } as never,
+      decision: "allow",
+      workspaceCwd: "/work",
+    });
+
+    const failure = await model
+      .set({
+        document: "permissions",
+        expectedRevision: read.revision,
+        text: JSON.stringify({
+          version: 1,
+          agents: { claude: { rules: [{ match: { kind: "read", pathPrefix: "docs" }, decision: "allow" }] } },
+        }),
+      })
+      .then(
+        () => undefined,
+        (e: unknown) => e as { code: string; details?: Record<string, unknown> },
+      );
+
+    expect(failure?.code).toBe("CONFIG_STALE");
+    expect(failure?.details).toMatchObject({ document: "permissions", expectedRevision: read.revision });
+    expect(failure?.details?.["actualRevision"]).not.toBe(read.revision);
+    // And nothing was lost: the grant is still the only thing in the file.
+    const doc = await readPermissionPolicyFile(file);
+    expect(Object.keys(doc.agents)).toEqual(["codex"]);
+    expect(doc.agents["codex"]?.rules).toHaveLength(1);
   });
 });
+
+/**
+ * The same window, on the YAML. Two saves made against one revision - two people with the
+ * Config surface open, or one of them and a script - must not both land: the second is a
+ * replace of bytes the first has already replaced, and it wins only by arriving second.
+ */
+describe("two concurrent config.set on the YAML", () => {
+  it("lets exactly one through and tells the other its revision is stale", async () => {
+    const { dir, model } = await workspace();
+    const read = await model.read("config");
+
+    const results = await Promise.allSettled(
+      [".one", ".two"].map((storeDir) =>
+        model.set({ document: "config", expectedRevision: read.revision, patch: [{ path: "storeDir", value: storeDir }] }),
+      ),
+    );
+
+    const written = results.filter((r) => r.status === "fulfilled");
+    const refused = results.filter((r) => r.status === "rejected");
+    expect(written).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect((refused[0] as PromiseRejectedResult).reason).toMatchObject({ code: "CONFIG_STALE" });
+
+    // One whole write on disk, not two interleaved ones - and the comment still in it.
+    const text = await readFile(join(dir, "orca.config.yaml"), "utf8");
+    expect(text).toContain("# Keep me");
+    expect([".one", ".two"]).toContain(parseOrcaConfigStoreDir(text));
+  });
+});
+
+/** `storeDir:` as the file now spells it, without parsing the whole config. */
+function parseOrcaConfigStoreDir(text: string): string | undefined {
+  return /^storeDir:\s*(\S+)\s*$/m.exec(text)?.[1];
+}
 
 describe("the method table", () => {
   let fixture: Fixture;

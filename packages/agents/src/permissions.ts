@@ -24,6 +24,7 @@
  * The schemas, the layering and the derivation are in `@orca/core`
  * (`model/agent.ts`), which is node-free; the reading, writing and locking are here.
  */
+import { createHash } from "node:crypto";
 import { link, mkdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -309,16 +310,55 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
  *
  * It is a replace and not a merge. The caller read a revision, edited it and sends the whole
  * document back; deciding here which of two concurrent versions of a rule list was meant is
- * a guess, and the staleness check at the caller is where that is refused honestly.
+ * a guess, and refusing it as stale is the honest answer.
+ *
+ * Which is why `expectedRevision` is checked **here**, inside the lock, and not by the
+ * caller. A daemon that compared revisions and then called this had a window between the two
+ * exactly wide enough for a run answering "always" to append a grant, and the replace then
+ * dropped it - the one case #266 names and the one this lock exists to prevent. It is the
+ * sha256 hex of the file's current bytes, `""` for a file that is not there; omit it and the
+ * replace is unconditional, which is what a caller with no revision to quote should do
+ * deliberately rather than by default.
  */
 export async function replacePermissionPolicyFile(
   file: string,
   doc: unknown,
-  opts?: { lock?: { timeoutMs?: number; staleMs?: number } | undefined },
+  opts?: {
+    lock?: { timeoutMs?: number; staleMs?: number } | undefined;
+    /** sha256 hex of the bytes the caller's edit was based on; `""` for "there was no file". */
+    expectedRevision?: string | undefined;
+  },
 ): Promise<PermissionPolicyFile> {
   const parsed = parsePermissionPolicyDocument(doc);
-  await withPolicyLock(file, opts?.lock, () => writePolicyFile(file, parsed));
+  const expected = opts?.expectedRevision;
+  await withPolicyLock(file, opts?.lock, async () => {
+    if (expected !== undefined) {
+      const actual = await revisionOf(file);
+      if (actual !== expected)
+        throw new OrcaError(
+          "CONFIG_STALE",
+          `${file} has changed since you read it: write again against the current revision`,
+          { file, expectedRevision: expected, actualRevision: actual },
+        );
+    }
+    await writePolicyFile(file, parsed);
+  });
   return parsed;
+}
+
+/**
+ * The content hash of a file as it is right now, `""` when it is not there - the same
+ * "revision" `config.get` reports, computed the same way, so the two can be compared at all.
+ */
+async function revisionOf(file: string): Promise<string> {
+  try {
+    return createHash("sha256")
+      .update(await readFile(file))
+      .digest("hex");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw e;
+  }
 }
 
 /**

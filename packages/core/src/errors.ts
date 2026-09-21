@@ -26,6 +26,13 @@ export type OrcaErrorCode =
   | "HUMAN_INPUT_PENDING"
   | "NOT_SUPPORTED"
   | "CONFIG_INVALID"
+  /**
+   * A configuration document moved between the read the caller based its edit on and the
+   * write, detected *under* the writer's lock. `details` carries `expectedRevision` and
+   * `actualRevision`, both content hashes (`""` for a file that is not there); the daemon
+   * maps it onto the protocol's `CONFIG_STALE` fault.
+   */
+  | "CONFIG_STALE"
   | "PLAN_NOT_FOUND"
   | "PLAN_INVALID"
   | "DEPENDENCY_CYCLE"

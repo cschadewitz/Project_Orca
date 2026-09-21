@@ -25,19 +25,26 @@
  * writer that did not take the lock would lose exactly the race #266 asks to be tested - a
  * run answering "always" at the moment an operator saves an edit.
  *
- * **`revision` is a content hash and the only concurrency control there is.** A client sends
+ * **`revision` is a content hash, and it is compared under the write lock.** A client sends
  * back the revision it read; anything else is `CONFIG_STALE`, with both revisions, rather
  * than a write that wins by arriving second. There is no lease here: a configuration file is
  * not a run, and #160's lease story is about who may interpret a run, not who may edit a
- * file. What `config.set` does hold is the sidecar's own lock, for the sidecar.
+ * file. What there is, is a lock per document, and the compare lives *inside* it - the YAML
+ * under `<configFile>.lock` (`withFileLock`, the store's), the sidecar inside
+ * `replacePermissionPolicyFile`'s `link()` lock, which is where `expectedRevision` is now
+ * re-hashed. Compare-then-write as two steps had a window in it, and the thing that fitted
+ * through the window was the sidecar case this file is about: a run answering "always"
+ * between an operator's `config.get` and their `config.set`, whose grant the replace then
+ * dropped without anybody being told.
  */
 import { createHash } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
 import { permissionOverlayFor, replacePermissionPolicyFile } from "@orca/agents";
 import {
   DEFAULT_PERMISSION_POLICY,
+  isOrcaError,
   layerPermissionPolicies,
   OrcaError,
   OrcaConfigSchema,
@@ -58,6 +65,7 @@ import {
   type ConfigValidationError,
   type EffectivePermissionRule,
 } from "@orca/protocol";
+import { withFileLock } from "@orca/store";
 import { describeConfigSchema, validationErrors } from "./config-schema.js";
 
 /** The default name a `config.set` creates when the workspace has no config file yet. */
@@ -163,41 +171,93 @@ export class ConfigModel {
    * likewise undisturbed - this method touches no run, takes no lease and appends no event,
    * which is what makes editing the config while a run starts a safe thing to do rather than
    * a race (#174).
+   *
+   * **`CONFIG_STALE` is decided inside the write lock, not before it.** The revision compare
+   * and the write used to be two unsynchronised steps, with a window between them wide enough
+   * for the case ADR 0009 is about: a run answering "always" appends a grant to the sidecar
+   * between an operator's `config.get` and their `config.set`, the compare sees the revision
+   * it read, and the replace drops the grant. So each document now re-reads and re-hashes
+   * under the lock its writer takes - `<configFile>.lock` via `withFileLock` for the YAML,
+   * and the sidecar's own `link()` lock inside `replacePermissionPolicyFile`. The compare
+   * before the lock stays, because it refuses the ordinary case sooner; it is no longer the
+   * one that decides.
    */
   async set(params: ConfigSetParams): Promise<ConfigSetResult> {
-    const current = await this.read(params.document);
-    if (params.expectedRevision !== current.revision)
-      throw new ProtocolFault(
-        "CONFIG_STALE",
-        current.exists
-          ? `${current.path} has changed since you read it: write again against the current revision`
-          : `${current.path} exists now and did not when you read it: write again against the current revision`,
-        { document: params.document, expectedRevision: params.expectedRevision, actualRevision: current.revision },
-      );
-
-    const text =
-      params.document === "config" ? this.nextConfigText(current, params) : this.nextSidecarText(current, params);
-    const errors = this.validate(params.document, text);
-
     if (params.validateOnly) {
+      // Nothing is written, so there is nothing to serialise against: this reports what the
+      // document would be, and a `CONFIG_STALE` here is advice rather than a verdict.
+      const current = await this.read(params.document);
+      refuseIfStale(params, current);
+      const text = this.nextText(current, params);
       const parsed = safeParse(params.document, text);
       return {
         document: { ...current, exists: true, revision: hash(text), text, ...(parsed === undefined ? {} : { parsed }) },
         written: false,
-        validation: { errors },
+        validation: { errors: this.validate(params.document, text) },
         asOf: this.clock.isoNow(),
       };
     }
-    if (errors.length)
-      throw new OrcaError("CONFIG_INVALID", `${current.path}: ${errors[0]?.message ?? "invalid"}`, { errors });
 
-    if (params.document === "config") await writeAtomically(current.path, text);
-    // The sidecar's own writer, under the sidecar's own lock. See the file header.
-    else await replacePermissionPolicyFile(current.path, JSON.parse(text));
-
-    const written = await this.read(params.document);
+    const written =
+      params.document === "config" ? await this.writeConfigFile(params) : await this.writeSidecarFile(params);
     this.publish(written);
     return { document: written, written: true, asOf: this.clock.isoNow() };
+  }
+
+  /**
+   * `orca.config.yaml`, under `<configFile>.lock`.
+   *
+   * `withFileLock` is the store's, and the daemon already depends on `@orca/store` for the
+   * stores it serves. The layering rule ADR 0009 states is about `@orca/agents`, which sits
+   * to the *right* of `store` and so writes the sidecar with its own `link()` idiom; nothing
+   * stops the daemon reusing the fuller version. Everything between the read and the rename
+   * happens in here: patching a YAML document is read-modify-write, and a compare made
+   * outside the lock is a compare of bytes that may not be the ones being replaced.
+   */
+  private async writeConfigFile(params: ConfigSetParams): Promise<ConfigDocumentView> {
+    const path = this.pathOf("config");
+    await mkdir(dirname(path), { recursive: true });
+    return withFileLock(`${path}.lock`, async () => {
+      const current = await this.read("config");
+      refuseIfStale(params, current);
+      const text = this.nextConfigText(current, params);
+      const errors = this.validate("config", text);
+      if (errors.length)
+        throw new OrcaError("CONFIG_INVALID", `${path}: ${errors[0]?.message ?? "invalid"}`, { errors });
+      await writeAtomically(path, text);
+      return this.read("config");
+    });
+  }
+
+  /**
+   * `orca.permissions.json`, through the sidecar's own writer and under the sidecar's own
+   * lock - a `link()` lock is only a lock if every writer takes it, and `recordAlwaysDecision`
+   * takes that one. `expectedRevision` travels with the document so that the compare happens
+   * in there, beside the write, rather than out here where a grant can land between the two.
+   */
+  private async writeSidecarFile(params: ConfigSetParams): Promise<ConfigDocumentView> {
+    const current = await this.read("permissions");
+    refuseIfStale(params, current);
+    const text = this.nextSidecarText(current, params);
+    const errors = this.validate("permissions", text);
+    if (errors.length)
+      throw new OrcaError("CONFIG_INVALID", `${current.path}: ${errors[0]?.message ?? "invalid"}`, { errors });
+    try {
+      await replacePermissionPolicyFile(current.path, JSON.parse(text), {
+        expectedRevision: params.expectedRevision,
+      });
+    } catch (e) {
+      // The writer's stable code, in the wire's words. `details` already carries both hashes.
+      if (isOrcaError(e, "CONFIG_STALE"))
+        throw new ProtocolFault("CONFIG_STALE", e.message, { document: "permissions", ...(e.details ?? {}) });
+      throw e;
+    }
+    return this.read("permissions");
+  }
+
+  /** The bytes `params` asks for, whichever document it names. */
+  private nextText(current: ConfigDocumentView, params: ConfigSetParams): string {
+    return params.document === "config" ? this.nextConfigText(current, params) : this.nextSidecarText(current, params);
   }
 
   // ------------------------------------------------------------------ pieces
@@ -329,6 +389,25 @@ export class ConfigModel {
 }
 
 /* ------------------------------ plain helpers ------------------------------ */
+
+/**
+ * Refuse an edit made against a revision the file no longer has.
+ *
+ * Called twice per write: once before the lock, where it is a cheap refusal with a message
+ * that distinguishes "changed" from "exists now and did not", and once inside it, where it is
+ * the one that decides. Outside the lock it can be wrong in only one direction - it can miss
+ * a change that lands a moment later, which the in-lock compare then catches.
+ */
+function refuseIfStale(params: ConfigSetParams, current: ConfigDocumentView): void {
+  if (params.expectedRevision === current.revision) return;
+  throw new ProtocolFault(
+    "CONFIG_STALE",
+    current.exists
+      ? `${current.path} has changed since you read it: write again against the current revision`
+      : `${current.path} exists now and did not when you read it: write again against the current revision`,
+    { document: params.document, expectedRevision: params.expectedRevision, actualRevision: current.revision },
+  );
+}
 
 function hash(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
