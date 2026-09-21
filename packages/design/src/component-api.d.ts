@@ -668,6 +668,14 @@ export interface Crumb {
    * no breadcrumb holds; this is how the one that is not says so.
    */
   counterpartIds?: Readonly<Record<string, string>>;
+  /**
+   * Added in #177. The workflow this object runs and the version it is pinned to, as one
+   * string: `ai-sdlc v11`. 70-workflow-editing.md asks for the version wherever a run's
+   * workflow is named, and the run header is a crumb — the header could not carry it
+   * without this. The `◷ pinned` chip is deliberately not here: it is a comparison against
+   * the definition on disk, which is a second read the runs surface does not make.
+   */
+  version?: string;
 }
 
 /**

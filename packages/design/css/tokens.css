@@ -304,6 +304,9 @@
   --stroke-focus: 2px;
   --stroke-edge-active: 2px;
   --stroke-double: 3px;
+  --stroke-dash-untaken: 3px 3px;
+  --stroke-dash-back: 1px 5px;
+  --stroke-dash-draft: 5px 3px;
   /* duration */
   --duration-instant: 0ms;
   --duration-fast: 120ms;

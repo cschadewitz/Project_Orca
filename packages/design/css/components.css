@@ -1178,7 +1178,7 @@
 .orca-edge--untaken {
   stroke: var(--graph-edge);
   opacity: var(--opacity-untaken);
-  stroke-dasharray: 3 3;
+  stroke-dasharray: var(--stroke-dash-untaken);
 }
 /* type: mono-id */
 .orca-edge__label {
@@ -1617,6 +1617,10 @@
 .orca-crumb__type {
   text-transform: uppercase;
   color: var(--ink-tertiary);
+}
+/* type: mono-id — the run's workflow and the version it is pinned to, `ai-sdlc v11` (#177) */
+.orca-crumb__version {
+  color: var(--ink-secondary);
 }
 /* type: caption */
 .orca-crumb__sep {
@@ -2155,9 +2159,14 @@
   cursor: grab;
 }
 
+/* Selection, not focus (rule 10): `--surface-selected` and an accent rail, the same two
+   marks a selected row takes. It used to be an accent outline at the focus ring's width and
+   offset, which on a canvas whose one tab stop is the viewport meant the ring appeared to be
+   on a node that could not have it — two different facts drawn as one. The rail is an inset
+   shadow rather than a border so a selected node does not change size. */
 .orca-node--selected {
-  outline: var(--stroke-focus) solid var(--accent);
-  outline-offset: var(--space-0-5);
+  background: var(--surface-selected);
+  box-shadow: inset var(--stroke-rail) 0 0 0 var(--accent);
 }
 .orca-node--added {
   border-color: var(--status-succeeded);
@@ -2209,7 +2218,7 @@
 .orca-edge--draft {
   stroke: var(--accent);
   stroke-width: var(--stroke-edge-active);
-  stroke-dasharray: 5 3;
+  stroke-dasharray: var(--stroke-dash-draft);
 }
 
 /* ---------- inspector ---------- */
@@ -2313,9 +2322,12 @@
   height: var(--badge-md);
   padding: 0 var(--space-2);
   border-radius: var(--radius-xs);
-  background: var(--status-running-bg);
-  color: var(--status-running);
-  border: var(--stroke-hairline) solid var(--status-running);
+  /* A chip tone, not a status tone: a pinned run is not a *running* run, and painting it in
+     `--status-running` made "this run is on an older version of the workflow" look like a
+     state the run is in. The glyph and the word carry it (rule 4). */
+  background: var(--surface-raised);
+  color: var(--ink-secondary);
+  border: var(--stroke-hairline) solid var(--border-control);
   font-weight: 500;
 }
 
@@ -2355,6 +2367,10 @@
 }
 .orca-legend__swatch--soft {
   border-top-style: dashed;
+}
+/* The back edge's own stroke: dotted, never the dash an untaken edge takes (rule 4). */
+.orca-legend__swatch--back {
+  border-top-style: dotted;
 }
 .orca-legend__swatch--informs {
   border-top-style: dotted;

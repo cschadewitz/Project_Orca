@@ -22,7 +22,8 @@ hand-written in an editor are the same file, a diff shows only semantic change, 
 never owns state the daemon does not know about.
 
 What it costs: you cannot express intent through arrangement. That is acceptable here,
-because these graphs are small (the shipped `ai-sdlc` is eleven nodes) and their shape is
+because these graphs are small (the shipped `ai-sdlc` is sixteen nodes — eleven working ones,
+plus `start`, two `set`s and three `end`s) and their shape is
 already meaningful — layers are dependency depth, not taste.
 
 **Editing operations.**
@@ -127,6 +128,26 @@ and the two things a reader of this file would otherwise get wrong:
   contemplates is not what shipped, but neither is the pinned model: ORCA records the version
   and cannot execute an older one, so the viewer states both facts rather than implying it is
   showing what ran.
+- **The run header carries the version, and not the chip.** `Crumb.version` (#177) prints
+  `ai-sdlc v11` on the run crumb, from the `workflowVersion` the run recorded — that is the
+  "shown wherever a run's workflow is named" above, on the run header. The `◷ pinned` chip is
+  *not* drawn there: pinned is `run.workflowVersion` against the version on disk, and the runs
+  surface has never read the definition — knowing it would mean a `workflows.get` per run in
+  the tree. So the run header says the version, the viewer says whether it is pinned, and the
+  crumb's counterpart menu is the way from one to the other.
+- **Three strokes on the canvas, three words in the legend.** A taken edge is solid and heavy,
+  an untaken one is dashed and faint, and a **back edge is dotted** — `--stroke-dash-untaken`
+  and `--stroke-dash-back`, which are tokens and not two hand-written dash arrays. Rule 4:
+  "runs backwards" and "was not taken" are different facts and an edge can be either, both or
+  neither, so they cannot be the same stroke.
+- **Every node is an `option` inside a `listbox`.** The viewport is the listbox and the one
+  tab stop; the scene, the plane and each positioned box between it and the nodes are
+  `role="presentation"`, because a div a reader has to walk past is a div that should say it
+  is scenery. An expanded group box sits *outside* the viewport, so its plane is a `listbox`
+  of its own with its own name — and it is that listbox, not the viewport, that carries
+  `aria-activedescendant` when the selected node is one of its. There is still one selection:
+  the surface holds one id and resolves it across the nested graphs (`findNode`), so selecting
+  a node inside an expanded branch opens it in the inspector like any other.
 
 ## What the editor reuses
 
