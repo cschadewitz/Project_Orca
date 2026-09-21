@@ -71,6 +71,7 @@ function breakableStores(): { stores: Stores; broken: Set<string> } {
         if (a && broken.has(a.name)) throw new Error(`blob ${a.contentHash} could not be opened`);
         return base.artifacts.content(id);
       },
+      bytes: (id) => base.artifacts.bytes(id),
     },
   };
   return { stores, broken };

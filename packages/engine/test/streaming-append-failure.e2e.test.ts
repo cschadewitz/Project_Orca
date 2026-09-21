@@ -47,6 +47,8 @@ function refuseFirstUpdate(events: EventStore): { store: EventStore; refused: ()
     },
     read: (runId) => events.read(runId),
     readTypes: (runId, types) => events.readTypes(runId, types),
+    readRange: (runId, range) => events.readRange(runId, range),
+    lastSeq: (runId) => events.lastSeq(runId),
     listRuns: () => events.listRuns(),
     subscribe: (listener, filter) => events.subscribe(listener, filter),
   };

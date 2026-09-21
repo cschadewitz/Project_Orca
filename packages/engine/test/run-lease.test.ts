@@ -88,6 +88,8 @@ function countingReads(inner: EventStore, count: { full: number }): EventStore {
     append: (input) => inner.append(input),
     read: (runId) => (count.full++, inner.read(runId)),
     readTypes: (runId, types) => inner.readTypes(runId, types),
+    readRange: (runId, range) => inner.readRange(runId, range),
+    lastSeq: (runId) => inner.lastSeq(runId),
     listRuns: () => inner.listRuns(),
     subscribe: (listener, filter) => inner.subscribe(listener, filter),
   };
