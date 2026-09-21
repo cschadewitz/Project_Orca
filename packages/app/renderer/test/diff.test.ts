@@ -61,6 +61,9 @@ describe("the edges", () => {
   it("reads a trailing newline as a terminator, not as an empty last line", () => {
     expect(toLines("a\nb\n")).toEqual(["a", "b"]);
     expect(toLines("a\nb")).toEqual(["a", "b"]);
+    // `toLines` keeps its own contract: an empty *string* is one empty line, because a
+    // one-line file and an empty file are not the same object. What an empty *body*
+    // contributes to a diff is decided in `diffText` (#250, below).
     expect(toLines("")).toEqual([""]);
   });
 
@@ -129,16 +132,54 @@ describe("the edges", () => {
     ]);
   });
 
-  it("reads an empty older body as one removed empty line, not as nothing", () => {
-    // `toLines("")` is `[""]`, so an artifact whose stored body is the empty string diffs as
-    // a file of one blank line. The panel draws a `−` on a blank row and says "1 removed".
+  it("reads an empty older body as a creation: lines added, nothing removed (#250)", () => {
+    // v1 of an artifact, or a first version compared against nothing. The count sentence
+    // the panel draws from this has to read "1 added" — there is no removed line, because
+    // there was no line.
     const diff = diffText("", "one\n");
 
-    expect([diff.added, diff.removed]).toEqual([1, 1]);
+    expect([diff.added, diff.removed]).toEqual([1, 0]);
+    expect(diff.lines).toEqual([{ op: "add", text: "one", b: 1 }]);
+  });
+
+  it("reads an emptied newer body as a deletion: lines removed, nothing added", () => {
+    const diff = diffText("one\ntwo\n", "");
+
+    expect([diff.added, diff.removed]).toEqual([0, 2]);
     expect(diff.lines).toEqual([
-      { op: "del", text: "", a: 1 },
-      { op: "add", text: "one", b: 1 },
+      { op: "del", text: "one", a: 1 },
+      { op: "del", text: "two", a: 2 },
     ]);
+  });
+
+  it("calls two empty bodies no change at all, and draws no row", () => {
+    const diff = diffText("", "");
+
+    expect([diff.added, diff.removed]).toEqual([0, 0]);
+    expect(diff.lines).toEqual([]);
+    expect(diff.coarse).toBe(false);
+  });
+
+  it("does not let a trailing newline stand in for content against an empty body", () => {
+    // "\n" is one empty line, not nothing: the file has a line in it and the body is not
+    // the empty string, so this is a creation of one blank line rather than no change.
+    expect([diffText("", "\n").added, diffText("", "\n").removed]).toEqual([1, 0]);
+    expect([diffText("\n", "").added, diffText("\n", "").removed]).toEqual([0, 1]);
+  });
+
+  it("counts the same change whether or not the newer body ends in a newline", () => {
+    const terminated = diffText("one\n", "one\ntwo\n");
+    const unterminated = diffText("one", "one\ntwo");
+
+    expect([terminated.added, terminated.removed]).toEqual([1, 0]);
+    expect(unterminated.lines).toEqual(terminated.lines);
+  });
+
+  it("still counts an explicit empty line a caller passed as an array", () => {
+    // The fix is about what an empty *body* contributes; a caller holding `[""]` has
+    // already said the line exists, and `diffLines` takes it at its word.
+    expect(diffLines([""], [])).toMatchObject({ added: 0, removed: 1 });
+    expect(diffLines([], [""])).toMatchObject({ added: 1, removed: 0 });
   });
 
   it("falls back to a whole-file replacement when the two are too far apart, and says so", () => {
