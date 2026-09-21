@@ -21,6 +21,13 @@
  * is `DEFAULT_PERMISSION_POLICY`, appended last by `loadEffectivePermissionPolicy`, so that
  * a `deny` from either half outranks it (#140).
  *
+ * The sidecar is read *per ask*, not per session (#271): `openAcpSession` calls
+ * `loadEffectivePermissionPolicy` from its `session/request_permission` handler, so a rule
+ * recorded while a run is in flight — somebody answering "always" in the app — decides the
+ * very next tool call rather than only the next session. The file is two levels of nesting
+ * deep and an ask is already a round trip to an agent, so re-reading it costs nothing worth
+ * caching against.
+ *
  * The schemas, the layering and the derivation are in `@orca/core`
  * (`model/agent.ts`), which is node-free; the reading, writing and locking are here.
  */
@@ -188,18 +195,38 @@ export function permissionOverlayFor(doc: PermissionPolicyFile, agentId: string)
  * after it; nothing else about this has to change.
  *
  * The ordering and the "if they apply" are both `effectivePermissionPolicy`'s in `@orca/core`,
- * not this function's: `acp-session.ts` evaluates without a sidecar path and has to reach the
- * same answer, so the rule lives in one place and this only adds the file reading.
+ * not this function's, which only adds the file reading. This is the one production path to
+ * an evaluated policy: `acp-session.ts` calls it per ask (#271), with no files when nothing
+ * wired a sidecar, so "no sidecar" is the same code reaching the same answer rather than a
+ * second evaluation that has to be kept in step with this one.
  *
  * A file that is missing contributes nothing, so a workspace where nobody has ever answered
  * "always" evaluates exactly as it did before this existed.
+ *
+ * `onUnreadable` decides what a *corrupt* sidecar means to the caller, and the two answers
+ * are both right in their place. Omit it and the `CONFIG_INVALID` propagates, which is what
+ * a caller reading the file to show or edit it wants. Pass one — `openAcpSession` does — and
+ * the file is skipped and reported instead: a live agent asking for permission must not be
+ * taken down by a sidecar somebody hand-edited badly, and skipping is the *conservative*
+ * direction here rather than the permissive one, because an overlay can only ever add rules
+ * after the configured ones. Dropping it can turn an `allow` back into an `ask`; it can
+ * never turn an `ask` into an `allow`. It is reported at warn either way, so the grant that
+ * silently stopped applying is on the record.
  */
 export async function loadEffectivePermissionPolicy(
   agent: { id: string; permissions: ConfiguredPermissionPolicy },
   files: readonly string[],
+  onUnreadable?: (file: string, error: unknown) => void,
 ): Promise<PermissionPolicy> {
   const overlays: PermissionRule[][] = [];
-  for (const file of files) overlays.push(permissionOverlayFor(await readPermissionPolicyFile(file), agent.id));
+  for (const file of files) {
+    try {
+      overlays.push(permissionOverlayFor(await readPermissionPolicyFile(file), agent.id));
+    } catch (e) {
+      if (!onUnreadable) throw e;
+      onUnreadable(file, e);
+    }
+  }
   return effectivePermissionPolicy(agent.permissions, ...overlays);
 }
 
