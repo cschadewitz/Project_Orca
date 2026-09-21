@@ -22,7 +22,7 @@ import {
   RunsListResultSchema,
 } from "@orca/protocol";
 import { ReadModel, dispatch, methods, type MethodContext } from "@orca/daemon";
-import { artifactFixture, emptyFixture, fixture, START, STEP_MS, type Fixture } from "./fixture.js";
+import { artifactFixture, emptyFixture, fixture, PNG_BODY, START, STEP_MS, type Fixture } from "./fixture.js";
 
 let f: Fixture;
 let reads: ReadModel;
@@ -487,7 +487,13 @@ describe("artifacts.get", () => {
     expect(r.text).toBeUndefined();
     expect(r.omitted?.reason).toBe("binary");
     // The panel can still draw the chip and the header: size travels on the view.
-    expect(r.artifact).toMatchObject({ name: "screenshot", mediaType: "image/png", size: 4096 });
+    expect(r.artifact).toMatchObject({ name: "screenshot", mediaType: "image/png", size: PNG_BODY.length });
+    // The reason is true of the store underneath (#226): the media type is the artifact's
+    // and the size is the number of bytes a download would be, not a character count.
+    expect(r.omitted?.detail).toContain("image/png");
+    expect(r.omitted?.detail).toContain(`${PNG_BODY.length} bytes`);
+    // And the store does hold them - declining is the wire's choice now, not a limitation.
+    expect(Buffer.from(await art.stores.artifacts.bytes("art-shot"))).toEqual(PNG_BODY);
   });
 
   it("declines a body past `maxBytes` the same way", async () => {

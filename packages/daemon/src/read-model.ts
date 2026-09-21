@@ -548,6 +548,12 @@ export class ReadModel {
    * One artifact, by id or by the (`runId`, `name`, `version?`) address a deep link carries,
    * with its body when the body is text of a sane size. Declining is not an error: the panel
    * still shows what the artifact *is*, and says why it is not showing what it says.
+   *
+   * It still declines a binary body, and that is now a choice rather than a limitation: the
+   * store round-trips bytes since #226, so what stops a 200 MB PNG here is the JSON-RPC wire
+   * it would have to travel on, not the store it came from. What did change is that the
+   * reason is true - `size` is bytes, so the number it quotes is the number of bytes a
+   * download would be.
    */
   async artifactsGet(params: ArtifactsGetParams): Promise<ArtifactsGetResult> {
     const asOf = this.clock.isoNow();
@@ -584,7 +590,10 @@ export class ReadModel {
     if (!isTextMediaType(artifact.mediaType))
       return {
         artifact: view,
-        omitted: { reason: "binary", detail: `${artifact.mediaType} is not text; ${artifact.size} bytes in the store` },
+        omitted: {
+          reason: "binary",
+          detail: `${artifact.mediaType} is not text; ${artifact.size} bytes in the store, which this call does not carry`,
+        },
         asOf,
       };
     if (artifact.size > params.maxBytes)

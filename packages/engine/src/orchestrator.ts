@@ -1036,7 +1036,10 @@ export class Orchestrator {
       name,
       mediaType,
       contentHash: sha256(content),
-      size: content.length,
+      // Bytes, not characters (#226): `size` is what `artifacts.get` quotes when it declines
+      // a body, and what a store's blob actually occupies. The two differ on any artifact
+      // that is not pure ASCII, which is most prose with a dash in it.
+      size: Buffer.byteLength(content, "utf8"),
       version: await rc.nextArtifactVersion(name),
       producedBy: {
         runId: rc.id,

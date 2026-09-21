@@ -42,6 +42,7 @@ function countingStores(): { stores: Stores; counts: Counts } {
       put: (a, c) => base.artifacts.put(a, c),
       get: (id) => base.artifacts.get(id),
       list: (q) => base.artifacts.list(q),
+      bytes: (id) => base.artifacts.bytes(id),
       content: (id) => {
         counts.content++;
         return base.artifacts.content(id);
