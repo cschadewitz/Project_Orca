@@ -405,7 +405,12 @@ surface's cards carry one action, **Permissions**, which opens that agent's poli
 inspector beside them. It shows the whole effective policy in evaluation order: the
 configured rules first, **read-only** — they are `orca.config.yaml`'s, a person curated them,
 and nothing machine-written rewrites a hand-curated array, so the panel links to the Config
-form instead — and then the sidecar's written grants, which are editable. A grant can be
+form instead — then the sidecar's written grants, which are editable, and last **ORCA's
+defaults**, the floor `@orca/agents` appends when the config left `default:` unset (#140).
+The defaults are a read-only group of their own with no link out of it: they are not a
+document, there is no file behind them and `config.set` cannot address them, so the way to
+change them is to write a fallthrough in the config, which opts out of them entirely. The
+Config surface's read-only view groups the same three layers the same way. A grant can be
 removed, narrowed or widened (kind, path, path prefix, scope, title pattern), or added by
 hand, in which case it is stamped with the time and with `grantedFor: "added by hand in the
 app"` so a reader of the diff can tell it from one a run wrote.
@@ -414,12 +419,22 @@ app"` so a reader of the diff can tell it from one a run wrote.
 `renderer/src/config/` and reads the app's one feed through `ConfigProvider`: the same
 `expectedRevision`, the same `CONFIG_STALE` conflict with **Reload**, the same rule that a
 refused write keeps the draft — and, since the model is above both screens, closing the
-panel keeps the grant edits rather than discarding them.
+panel keeps the grant edits rather than discarding them. There is no "discard these?" warning
+on **Close** because there is nothing to discard: the draft outlives the panel, and
+`policy-editor.test.tsx` closes it and reopens it to keep that true.
 A save sends the whole sidecar as `config.set { document: "permissions", text }` — `patch`
 edits a YAML document in place and this one is JSON — and the daemon canonicalises the key
 order, so a client compares **revisions, not bytes**. The panel never writes a `default`: the
 sidecar has no fallthrough, because answering one prompt must not change the answer to every
 other one, and a document carrying one is refused rather than stripped.
+
+**The round trip is lossless or it is refused.** A key this app does not recognise — on a
+rule or inside a match — is written back after the ones it does, so an edit to one row
+cannot quietly delete a field a newer daemon put on another. A document whose `version` is
+not 1, a rule that is not an object, one with no `match`, or one naming a decision outside
+`PERMISSION_DECISIONS`, is a file the panel says it **cannot edit here** and points at the
+Config surface's raw view — the same state unparseable text gets, because guessing at a
+repair and writing it back is the one thing a file this security-relevant must not do.
 
 **Allow-always lands here without a second path.** When a run answers "always", the daemon
 writes the sidecar and pushes `config.changed`; the panel is on the same hook every Config
@@ -435,6 +450,12 @@ an item from a run that could still resume, which has no undo and stays a CLI ac
 pushes for a release (it journals no event), so the claims are re-read once after the call,
 and the result's `note` — what releasing did *not* fix, since a dead run's log never moves on
 — is announced into the app's one live region and left on the row.
+
+**And one control that is not there: retrying a handshake from the card.** No method drives
+the daemon's handshake retry — `agents.ping` probes an agent and records a result, it does
+not reschedule anything — and `AgentView` carries the last attempt, the round trip and the
+consecutive failure count but no next-attempt time, so a card could offer neither the retry
+nor the countdown beside it without inventing both (RULES.md rule 12).
 
 **And one number that does not exist.** #176 asked for "the auto-approval count explained".
 Nothing in ORCA counts auto-approvals: `decidePermission` is evaluated per tool call and no
