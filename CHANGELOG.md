@@ -15,6 +15,11 @@ Entries are not written into this file. The PR that makes the change adds a frag
 and deletes them. One file per entry is why two pull requests in flight no longer conflict
 over this one. `changelog.d/README.md` has the naming.
 
+A section is grouped by change type (`### Added`) and then by change target (`#### cli`),
+the target being that area prefix, which the heading carries so the bullets need not.
+Sections through 0.4.0 were rendered before that grouping existed and keep the prefix
+inline.
+
 Releases start at 0.2.0. `0.1.0` was the untagged groundwork commit (`8645f28`,
 2026-09-15); everything below landed on top of it.
 

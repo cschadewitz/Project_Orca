@@ -167,6 +167,15 @@ changelog.d/101-leases.store.md
 under; `<issue>` is what the entries are ordered by. The body is the entry verbatim —
 bullets with their area prefix, or prose for `store`. Two entries mean two files.
 
+A rendered section is grouped twice: by change type, which is the `<section>`, and inside
+that by change target, which is the bullet's area prefix, rendered as `#### app` with the
+prefix lifted out of the bullet into the heading. A wave-sized release is fifty bullets
+under four headings otherwise, and it is the release pull request — whose body is the
+section verbatim — that has to be reviewed that way. Targets render alphabetically, entries
+inside one keep their issue order, and a bullet with no prefix renders ungrouped above the
+headings, which is how `store` prose comes out as it always has. `changelog.d/README.md`
+says what that asks of a fragment.
+
 The point is that a pull request creates a file instead of editing a shared list, so two
 pull requests in flight cannot conflict over the changelog — and a dropped fragment is a
 missing file rather than a lost merge. `changelog.d/README.md` is the reference.
