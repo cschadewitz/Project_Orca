@@ -13,7 +13,7 @@
  */
 
 /**
- * The scopes in docs/design/50-accessibility-and-keyboard.md's table, plus two the table
+ * The scopes in docs/design/50-accessibility-and-keyboard.md's table, plus three the table
  * gained as the surfaces that need them landed:
  *
  * - `menu` — an open popover is a place focus can be, and its roving keys have to out-rank
@@ -23,6 +23,11 @@
  *   a layer rather than between rows, its `←`/`→` move between layers, and it binds `+`,
  *   `-` and `0` for zoom, which no list has. A canvas inside a surface that also has a list
  *   is the same situation `run-tree` beside `list` is, and it is settled the same way.
+ * - `plan-journal` (#170) — the Plan surface holds two lists: the schedule table in `list`
+ *   and the plan journal below it. One scope holds one `VirtualList`, so the second list
+ *   needs a scope of its own or the substrate's `J` would be registered twice and the map
+ *   would throw. It is the same situation `run-tree` beside `list` is, named for the list
+ *   rather than for the surface because that is what a person's `J` is moving through.
  */
 export type ShortcutScope =
   | "global"
@@ -33,7 +38,8 @@ export type ShortcutScope =
   | "panel"
   | "config"
   | "menu"
-  | "workflow";
+  | "workflow"
+  | "plan-journal";
 
 export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "global",
@@ -52,6 +58,7 @@ export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "config",
   "menu",
   "workflow",
+  "plan-journal",
 ];
 
 /** Which of the palette's three sections a shortcut belongs in. Search is not a command. */

@@ -1,0 +1,219 @@
+/**
+ * The schedule table: every work item in the plan, in the order the daemon returned it —
+ * ready first and best first, then running, waiting, held, unschedulable and the settled
+ * ones. That order is `computeSchedule`'s and this list never re-sorts it; a column header
+ * that sorted would be the client deciding what the scheduler decides.
+ *
+ * Six columns, and each is a fact the wire carries: the classification, the slug, the
+ * title, the priority score with its first reason as the cell's title, the highest open
+ * risk level, and the run holding the claim. There is no "ready by" and no estimate —
+ * there is nothing on the wire that could fill one (rule 12).
+ *
+ * The badge's **why** opens the explanation, and it opens in the app's one `Menu`: the
+ * lines are `schedule.explain`'s, verbatim, one per row, in the order it returned them.
+ * Choosing a row copies that line, which is the only thing a read-only popover can
+ * usefully do and is what keeps the menu's focus contract intact — a list of items that
+ * are all disabled is a popover focus cannot enter.
+ */
+import { useCallback, useMemo, type JSX } from "react";
+import type { ItemClassification, PlanItemView } from "@orca/protocol";
+import { VirtualList, type MinimapKind, type VirtualListTick } from "../list/index.js";
+import { Chip, Menu, ScheduleBadge, StatusChip, textClass, type MenuItem } from "../ui/index.js";
+import { classificationMark, explanationItems } from "./plan-model.js";
+
+export interface ScheduleTableProps {
+  items: readonly PlanItemView[];
+  selectedId: string | undefined;
+  onSelect: (item: PlanItemView) => void;
+  /** `Enter` on a row, and the badge's **why**: both open the explanation. */
+  onExplain: (item: PlanItemView) => void;
+  /** The item whose explanation is open, and its lines once they have been read. */
+  explainFor: string | undefined;
+  lines: readonly string[] | undefined;
+  onCloseExplanation: () => void;
+  /** The run a claim names, opened through the route table. */
+  onOpenRun: (runId: string) => void;
+}
+
+export const scheduleRowId = (id: string): string => `plan-row-${id}`;
+
+/** The three the minimap marks, as the plan's classifications name them. */
+const TICKS: Partial<Record<ItemClassification, MinimapKind>> = {
+  failed: "failed",
+  waiting: "waiting",
+  unschedulable: "blocked",
+  held: "blocked",
+};
+
+export function ScheduleTable(props: ScheduleTableProps): JSX.Element {
+  const { items, selectedId, onSelect, onExplain, explainFor, lines, onCloseExplanation, onOpenRun } = props;
+
+  const selectedIndex = useMemo(() => {
+    const at = items.findIndex((item) => item.id === selectedId);
+    return at === -1 ? undefined : at;
+  }, [items, selectedId]);
+
+  const ticks = useMemo<VirtualListTick[]>(
+    () =>
+      items.flatMap((item, index) => {
+        const mark = TICKS[item.classification];
+        return mark ? [{ index, kind: mark, label: `${item.slug}, ${item.classification}` }] : [];
+      }),
+    [items],
+  );
+
+  const selectAt = useCallback(
+    (index: number) => {
+      const item = items[index];
+      if (item) onSelect(item);
+    },
+    [items, onSelect],
+  );
+
+  return (
+    <VirtualList
+      className="orca-plan__table"
+      label="Schedule"
+      noun="work item"
+      scope="list"
+      items={items}
+      ticks={ticks}
+      header={<TableHead />}
+      rowId={(item) => scheduleRowId(item.id)}
+      rowClassName={(_item, _index, selected) =>
+        selected ? "orca-plan__row orca-plan__row--selected" : "orca-plan__row"
+      }
+      renderRow={(item) => (
+        <Row
+          item={item}
+          onExplain={onExplain}
+          open={explainFor === item.id}
+          lines={explainFor === item.id ? lines : undefined}
+          onCloseExplanation={onCloseExplanation}
+          onOpenRun={onOpenRun}
+        />
+      )}
+      selectedIndex={selectedIndex}
+      onSelect={selectAt}
+    />
+  );
+}
+
+/** The column headings, in the substrate's sticky header so they stay above the rows. */
+function TableHead(): JSX.Element {
+  return (
+    <span className={`orca-plan__head ${textClass("caption")}`}>
+      <span>Schedule</span>
+      <span>Work item</span>
+      <span>Title</span>
+      <span className="orca-plan__score">Priority</span>
+      <span>Risk</span>
+      <span>Claim</span>
+    </span>
+  );
+}
+
+interface RowProps {
+  item: PlanItemView;
+  onExplain: (item: PlanItemView) => void;
+  open: boolean;
+  lines: readonly string[] | undefined;
+  onCloseExplanation: () => void;
+  onOpenRun: (runId: string) => void;
+}
+
+function Row({ item, onExplain, open, lines, onCloseExplanation, onOpenRun }: RowProps): JSX.Element {
+  const mark = classificationMark(item.classification);
+  /* The first reason, as the cell's title: the whole list is in the explanation and in the
+     inspector, and a row never grows a second line (rule 9). */
+  const reason = item.priority?.reasons[0];
+  const why = (
+    <Explanation item={item} open={open} lines={lines} onOpen={() => onExplain(item)} onClose={onCloseExplanation} />
+  );
+
+  return (
+    <>
+      <span className="orca-plan__cell">
+        {mark.kind === "badge" ? (
+          <ScheduleBadge classification={mark.classification} explanation={why} />
+        ) : (
+          /* A settled item is not in the ordering, so it has no schedule badge to draw:
+             what it has is an outcome, in the run status that means the same thing. The
+             explanation is still one press away, because `schedule.explain` answers for a
+             settled item too. */
+          <>
+            <StatusChip status={mark.status} />
+            {why}
+          </>
+        )}
+      </span>
+
+      <span className={`orca-plan__id ${textClass("mono-id")}`}>{item.slug}</span>
+      <span className={`orca-plan__cell ${textClass("label")}`}>{item.title}</span>
+      <span className={`orca-plan__score ${textClass("mono-id")}`} title={reason}>
+        {item.priority === undefined ? "" : item.priority.score.toFixed(1)}
+      </span>
+      <span className="orca-plan__cell">
+        {item.risk.level === "none" ? null : <Chip>{`${item.risk.level} risk`}</Chip>}
+      </span>
+      <span className="orca-plan__cell">
+        {item.claim === undefined ? null : (
+          <button
+            type="button"
+            className={`orca-bare orca-link ${textClass("mono-id")}`}
+            onClick={() => onOpenRun(item.claim!.runId)}
+          >
+            {item.claim.runId}
+          </button>
+        )}
+      </span>
+    </>
+  );
+}
+
+/**
+ * The explanation popover. It is a `Menu` because every popover in this app is one, and
+ * the lines go in as items untouched — the scheduler's own account of its decision, in the
+ * same words `orca plan explain` prints, dependency and risk lines last because that is
+ * the order `schedule.explain` returns them in.
+ */
+function Explanation({
+  item,
+  open,
+  lines,
+  onOpen,
+  onClose,
+}: {
+  item: PlanItemView;
+  open: boolean;
+  lines: readonly string[] | undefined;
+  onOpen: () => void;
+  onClose: () => void;
+}): JSX.Element {
+  /* Until the lines land the menu still has a row, because a `Menu` with no items renders
+     no trigger at all — and "why" has to be there to be pressed. The row says what is
+     happening rather than standing in for an explanation nobody has read yet. */
+  const items = useMemo<MenuItem[]>(
+    () => (lines === undefined ? [{ id: "reading", label: "Reading the explanation" }] : [...explanationItems(lines)]),
+    [lines],
+  );
+
+  const copy = useCallback((chosen: MenuItem) => {
+    // Nothing in the plan changes from here: the one act a line offers is taking it with
+    // you. A clipboard that is not there (a test, a sandboxed frame) is nothing happening.
+    void navigator.clipboard?.writeText(chosen.label);
+  }, []);
+
+  return (
+    <Menu
+      label={`Why ${item.slug} is ${item.classification}`}
+      items={items}
+      open={open}
+      onOpenChange={(next) => (next ? onOpen() : onClose())}
+      triggerClassName={`orca-badge__why ${textClass("caption")}`}
+      onChoose={copy}
+    >
+      why
+    </Menu>
+  );
+}

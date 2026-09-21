@@ -26,6 +26,7 @@ import { AgentsSurface } from "./agents/agents-surface.js";
 import { ConfigSurface } from "./config/config-surface.js";
 import { AttentionSurface } from "./attention/attention-surface.js";
 import { WorkflowSurface } from "./workflow/workflow-surface.js";
+import { PlanSurface, type PlanHeader } from "./plan/index.js";
 import { useAttention } from "./attention/use-attention.js";
 import { InlineAsksProvider } from "./attention/inline-asks.js";
 import { useAlertActivation } from "./attention/use-alert-activation.js";
@@ -75,7 +76,15 @@ export function App(): JSX.Element {
      the reason is React's: a surface reports from an effect, and a child's effects run
      before its parent's — so a `setCrumbs([])` in the navigation would run *after* the
      surface it was switching to had already said what it had, and throw it away. */
-  const [header, setHeader] = useState<{ surface: SurfaceId; crumbs: readonly Crumb[]; actions: ReactNode }>({
+  const [header, setHeader] = useState<{
+    surface: SurfaceId;
+    crumbs: readonly Crumb[];
+    actions: ReactNode;
+    /* Plan's segmented mode control (#170): a variant of the header rather than a control
+       in the surface, because a mode switch keeps the object and the header is what says
+       which object is on screen. */
+    mode?: PlanHeader["mode"];
+  }>({
     surface: DEFAULT_SURFACE,
     crumbs: [],
     actions: null,
@@ -90,6 +99,22 @@ export function App(): JSX.Element {
       setHeader({ surface: "config", crumbs: reported.crumbs, actions: reported.actions }),
     [],
   );
+  const onPlanHeader = useCallback(
+    (reported: PlanHeader) =>
+      setHeader({ surface: "plan", crumbs: reported.crumbs, actions: reported.actions, mode: reported.mode }),
+    [],
+  );
+  /* What Plan has put in the dock. Held here because the docked panel is above every
+     surface, exactly as the artifact it otherwise shows is. */
+  const [planInspector, setPlanInspector] = useState<ReactNode>(null);
+  /* Selecting a row opens the inspector, which means opening the dock it is drawn in —
+     the same act the artifact panel's `onOpen` performs for a chip on a step. Closing it
+     again is `⌘\`; selecting another row opens it once more, because that press is a
+     person asking to see what the row waits for. */
+  const showInspector = useCallback((content: ReactNode) => {
+    setPlanInspector(content);
+    if (content !== null) setPanelOpen(true);
+  }, []);
 
   const connection = useConnection();
   /* What needs a person, read *here* rather than inside the Attention surface, because the
@@ -124,6 +149,11 @@ export function App(): JSX.Element {
     setRoute(next);
     setActive(next.surface);
   }, []);
+
+  /* Held rather than written inline: Plan memoises its inspector on the callbacks it was
+     handed, and a fresh arrow on every render of the chrome would be a fresh inspector on
+     every render, which is a fresh `onInspector` call, which is another render. */
+  const openRun = useCallback((runId: string) => navigate(runUrl(runId)), [navigate]);
 
   useDeepLinks(navigate);
   const togglePanel = useCallback(() => setPanelOpen((open) => !open), []);
@@ -205,6 +235,7 @@ export function App(): JSX.Element {
                  answering undefined means. */
               <ObjectHeader
                 crumbs={crumbs}
+                {...(header.surface === active && header.mode ? { mode: header.mode } : {})}
                 actions={header.actions}
                 onOpen={(crumb) => {
                   const url = urlForCrumb(crumbs, crumb);
@@ -249,6 +280,18 @@ export function App(): JSX.Element {
                     : undefined
               }
             />
+          ) : activeSurface.id === "plan" ? (
+            /* `orca://item/<slug-or-id>` lands here with the item selected and its
+               explanation open, which is the information architecture's promise for that
+               URL and was the one line in it that named an unbuilt surface. */
+            <PlanSurface
+              connection={connection.state}
+              capabilities={connection.capabilities}
+              open={route?.kind === "item" ? route.itemId : undefined}
+              onHeader={onPlanHeader}
+              onInspector={showInspector}
+              onOpenRun={openRun}
+            />
           ) : activeSurface.id === "agents" ? (
             <AgentsSurface connection={connection.state} />
           ) : activeSurface.id === "config" && route?.kind === "workflow" ? (
@@ -276,7 +319,14 @@ export function App(): JSX.Element {
             <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />
           )}
         </PrimaryPane>
-        {panelOpen ? <DockedPanel onClose={togglePanel} /> : null}
+        {panelOpen ? (
+          <DockedPanel
+            onClose={togglePanel}
+            content={
+              active === "plan" && planInspector !== null ? { label: "Work item", body: planInspector } : undefined
+            }
+          />
+        ) : null}
       </div>
       <StatusBar connection={connection} />
       {/* The app's one polite live region (#167). Here, and only here: a region per surface
