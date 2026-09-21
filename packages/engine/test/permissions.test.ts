@@ -8,6 +8,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import { AgentRegistry, LocalHost, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import { AgentSpecSchema, FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
 import {
+  autoHumanInput,
   humanInputCancelled,
   LocalWorkspaceProvider,
   Orchestrator,
@@ -99,7 +100,11 @@ function fakeSessions(asksPerTurn: number) {
   return { sessionFactory, answers, opened: () => opened };
 }
 
-function make(yaml: string, sessionFactory: SessionFactory, opts: { sessionMode?: "per-step" | "per-run" } = {}) {
+function make(
+  yaml: string,
+  sessionFactory: SessionFactory,
+  opts: { sessionMode?: "per-step" | "per-run"; port?: HumanInputPort } = {},
+) {
   const workflows = new WorkflowRegistry();
   workflows.register(parseWorkflow(yaml));
   const agents = new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })).addAgent(
@@ -119,7 +124,7 @@ function make(yaml: string, sessionFactory: SessionFactory, opts: { sessionMode?
     templates: new TemplateRegistry(),
     workspaceProvider: new LocalWorkspaceProvider("/tmp"),
     clock: new FakeClock(),
-    humanInput,
+    humanInput: opts.port ?? humanInput,
     sessionFactory,
   });
   return { orchestrator, humanInput };
@@ -237,5 +242,47 @@ describe("ask permissions as human input", () => {
       .filter((e) => e.type === "agent.permission")
       .map((e) => state.steps[(e.payload as { stepRunId: string }).stepRunId]?.nodeId);
     expect(perms).toEqual(["first", "second"]);
+  });
+
+  /**
+   * The unattended case #140 is about. `mode: auto` answers gates by taking the first
+   * option; a permission request's options are the *agent's*, and its first option is
+   * conventionally "allow once", so taking it would quietly undo the policy that asked.
+   */
+  describe("with nobody to answer (humanInput mode: auto)", () => {
+    it("refuses the ask instead of taking the agent's first option, and the run carries on", async () => {
+      const fake = fakeSessions(1);
+      const { orchestrator } = make(oneStep, fake.sessionFactory, { port: autoHumanInput() });
+      const state = await orchestrator.startAndRun({ workflowId: "perm" });
+
+      expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+      // The agent was told "cancelled" — not "allow", which is what option[0] would have been.
+      expect(fake.answers).toEqual([undefined]);
+      const events = await orchestrator.events(state.run.id);
+      expect(
+        events.filter((e) => e.type === "agent.permission").map((e) => (e.payload as { decision: string }).decision),
+      ).toEqual(["ask:cancelled"]);
+      // And it is on the record as a question that was asked and went unanswered.
+      expect(events.filter((e) => e.type === "human.requested")).toHaveLength(1);
+      expect(Object.values(state.humanInputs).map((h) => h.answer)).toEqual([""]);
+    });
+
+    it("still takes a named option when the config names one the agent offered", async () => {
+      const fake = fakeSessions(1);
+      const { orchestrator } = make(oneStep, fake.sessionFactory, { port: autoHumanInput("deny") });
+      const state = await orchestrator.startAndRun({ workflowId: "perm" });
+      expect(state.run.status).toBe("completed");
+      expect(fake.answers).toEqual(["deny"]);
+    });
+
+    it("refuses an option the agent never offered rather than guessing a near one", async () => {
+      // `humanInput: { mode: auto, option: approve }` is the demo's gate answer; no agent
+      // offers an option called "approve" on a permission request.
+      const fake = fakeSessions(1);
+      const { orchestrator } = make(oneStep, fake.sessionFactory, { port: autoHumanInput("approve") });
+      const state = await orchestrator.startAndRun({ workflowId: "perm" });
+      expect(state.run.status).toBe("completed");
+      expect(fake.answers).toEqual([undefined]);
+    });
   });
 });
