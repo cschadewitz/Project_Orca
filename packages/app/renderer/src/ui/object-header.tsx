@@ -51,8 +51,28 @@ export interface Crumb {
   version?: string;
 }
 
+/**
+ * One position of the header's segmented mode control.
+ *
+ * A mode that this version of the app does not have is **absent**, not disabled: the graph,
+ * the risk matrix and the decision matrix are v0.6.0 (#171–#173), and a control offering
+ * three positions that never do anything would be three dead ends rather than one honest
+ * pair (docs/design/80-dependency-graph-options.md).
+ */
+export interface HeaderMode {
+  id: string;
+  label: string;
+}
+
 export interface ObjectHeaderProps {
   crumbs: readonly Crumb[];
+  /**
+   * The segmented control that switches what the primary pane draws about *this* object —
+   * Plan's Schedule and Journal (#170). It is a variant of the header rather than a
+   * control in a surface because option B's whole claim is that a mode switch keeps the
+   * object, the selection and the filters, and the header is what says which object.
+   */
+  mode?: { options: readonly HeaderMode[]; active: string; onChange: (id: string) => void; label?: string };
   /** Buttons and controls for the object, pushed to the right of the header. */
   actions?: ReactNode;
   /** Navigate to a crumb. Never called for the current crumb, which is not a link. */
@@ -61,7 +81,7 @@ export interface ObjectHeaderProps {
   onOpenCounterpart?: (crumb: Crumb, counterpart: Counterpart) => void;
 }
 
-export function ObjectHeader({ crumbs, actions, onOpen, onOpenCounterpart }: ObjectHeaderProps): JSX.Element {
+export function ObjectHeader({ crumbs, mode, actions, onOpen, onOpenCounterpart }: ObjectHeaderProps): JSX.Element {
   const keyOf = (crumb: Crumb): string => `${crumb.type}:${crumb.id}`;
 
   return (
@@ -88,8 +108,40 @@ export function ObjectHeader({ crumbs, actions, onOpen, onOpenCounterpart }: Obj
         ))}
       </ol>
       <span className="orca-spacer" />
+      {mode && <ModeControl {...mode} />}
       {actions}
     </nav>
+  );
+}
+
+/**
+ * The segmented control, on the component layer's `.orca-seg`.
+ *
+ * `aria-pressed` rather than a tab list: the modes are two views of one object in one
+ * pane, and `role="tablist"` would promise arrow-key navigation between panels that the
+ * keyboard spec does not give it. The group carries the accessible name so a reader hears
+ * what is being switched rather than two bare words.
+ */
+function ModeControl({
+  options,
+  active,
+  onChange,
+  label = "View",
+}: NonNullable<ObjectHeaderProps["mode"]>): JSX.Element {
+  return (
+    <div className="orca-seg" role="group" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          className={`orca-seg__btn ${textClass("label")}`}
+          aria-pressed={option.id === active}
+          onClick={() => onChange(option.id)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   );
 }
 

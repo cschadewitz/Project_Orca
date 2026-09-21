@@ -180,7 +180,17 @@ export interface RunTreeRowProps {
   onSelect?(id: string): void;
 }
 
-/** An event timeline row (built: `app/renderer/src/runs/timeline/`). */
+/**
+ * An event timeline row (built: `app/renderer/src/runs/timeline/`).
+ *
+ * It was **not** promoted to a shared `ui/` component for the plan journal (#170), which
+ * is drawn on the same `.orca-timeline-entry` class. The two rows are about different
+ * things: an event row carries a run status, an event kind, a sequence range and a copy
+ * menu for an event id, and a plan journal entry has none of those — it has an origin (who
+ * did it) where an event has a status (what happened). Sharing the component would have
+ * made four props optional to serve one caller each, which is two rows in one file. What
+ * is shared is the class, which is where the grid, the row height and the truncation live.
+ */
 export interface TimelineEntryProps {
   /**
    * Event id; shown in mono-id at the end of the row and copied from the row's `Menu`.
@@ -466,11 +476,31 @@ export interface PermissionCardProps {
   goToRun?: () => void;
 }
 
-/** Built. */
+/**
+ * Built, and corrected here against what the Plan surface met (#170). Three changes:
+ *
+ * - **Glyph and word, not word alone.** `SCHEDULE_PRESENTATION` now carries a glyph for
+ *   each of the five, the way `STATUS_PRESENTATION` does: a classification is never
+ *   carried by its tint (rule 4). The glyphs are reused from the run statuses whose colour
+ *   each classification already borrows — ◐ running, ▣ waiting on deps, ⏸ held, ⊘
+ *   unschedulable — with ▸ for `ready`, which means "next" rather than a state.
+ * - **The wire has seven classifications and this draws five.** `ItemClassification`
+ *   (`@orca/protocol`) adds `done` and `failed`, which are item *outcomes* rather than
+ *   places in the schedule — a settled item is not in the ordering at all. A surface draws
+ *   those two with `StatusChip`'s `succeeded` and `failed`, and never invents a sixth
+ *   badge (`renderer/src/plan/plan-model.ts` holds the mapping).
+ * - **`onExplain` is no longer the only disclosure.** The explanation is the app's one
+ *   `Menu`, and a `Menu` owns its own trigger — so a caller may pass the whole disclosure
+ *   as `explanation` instead, which replaces the built-in **why** button and takes the
+ *   same `.orca-badge__why` class. Neither given draws no disclosure at all, which is the
+ *   badge as a *label* (the inspector, the preview gallery).
+ */
 export interface ScheduleBadgeProps {
   classification: ScheduleClass;
   /** Opens the explanation popover. Every classification can explain itself. */
-  onExplain(): void;
+  onExplain?(): void;
+  /** The disclosure itself, when the caller owns it: a `Menu` whose trigger is the why. */
+  explanation?: unknown;
 }
 
 export interface DependencyNodeProps {
@@ -655,7 +685,8 @@ export interface WorkflowNodeProps {
   onOpen?(id: string): void;
 }
 
-export type CrumbType = "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
+/** `plan` is the root of the Plan surface's trail (#170): plan ▸ work item. */
+export type CrumbType = "plan" | "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
 
 export interface Crumb {
   type: CrumbType;
@@ -696,6 +727,25 @@ export interface Counterpart {
  */
 export interface ObjectHeaderProps {
   crumbs: ReadonlyArray<Crumb>;
+  /**
+   * The **mode variant** (#170). `docs/design/80-dependency-graph-options.md` ships option
+   * B, and its second concrete change to the rest of the system is this one: "the object
+   * header gains a mode segmented control, which is a new `ObjectHeader` variant". It
+   * draws `.orca-seg` to the right of the trail, before `actions`.
+   *
+   * The modes are the object's views, not destinations — Plan's Schedule and Journal — and
+   * a mode this build does not have is **absent** rather than disabled: the dependency
+   * graph (#171), the risk matrix (#172) and the decision matrix (#173) are v0.6.0, and a
+   * segment that never does anything is a dead end. `aria-pressed` on buttons in a named
+   * group, not a tablist: one pane, two views, and no arrow-key contract to promise.
+   */
+  mode?: {
+    options: ReadonlyArray<{ id: string; label: string }>;
+    active: string;
+    onChange(id: string): void;
+    /** The group's accessible name. Defaults to "View". */
+    label?: string;
+  };
   actions?: unknown;
   onOpen?(crumb: Crumb): void;
   onOpenCounterpart?(crumb: Crumb, counterpart: Counterpart): void;
@@ -746,6 +796,14 @@ export interface MenuProps {
     menu: { width: number; height: number };
     viewport: { width: number; height: number };
   };
+  /**
+   * Controlled disclosure (#170). Pass both or neither. It exists for the one case a
+   * surface cannot press the trigger itself: `orca://item/<slug>` lands on Plan **with the
+   * explanation open**, and a link that arrives is not a click. Everything else stays the
+   * primitive's, so a controlled menu is the same menu with its open state one level up.
+   */
+  open?: boolean;
+  onOpenChange?(open: boolean): void;
 }
 
 /** Built — rendering only; the state machine that decides which state is live is #163. */

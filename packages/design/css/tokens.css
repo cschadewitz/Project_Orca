@@ -266,6 +266,11 @@
   --col-label-narrow: 116px;
   --col-node-kind: 74px;
   --col-matrix-axis: 108px;
+  --col-classification: 168px;
+  --col-slug: 148px;
+  --col-score: 64px;
+  --col-risk: 96px;
+  --col-claim: 132px;
   --control-xs: 22px;
   --control-sm: 24px;
   --control-sm-5: 26px;

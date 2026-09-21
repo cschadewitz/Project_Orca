@@ -20,7 +20,7 @@ export {
   type MenuPlacement,
   type Rect,
 } from "./menu-placement.js";
-export { ObjectHeader, type Crumb, type ObjectHeaderProps } from "./object-header.js";
+export { ObjectHeader, type Crumb, type HeaderMode, type ObjectHeaderProps } from "./object-header.js";
 export { ScheduleBadge, type ScheduleBadgeProps } from "./schedule-badge.js";
 export { StateView, type StateViewAction, type StateViewProps } from "./state-view.js";
 export { StatusChip, type StatusChipProps } from "./status-chip.js";

@@ -53,11 +53,11 @@
     }
   },
   "scheduleClass": {
-    "unschedulable": { "word": "unschedulable", "fg": "status-cancelled", "bg": "status-cancelled-bg" },
-    "waiting": { "word": "waiting on deps", "fg": "status-blocked", "bg": "status-blocked-bg" },
-    "held": { "word": "held", "fg": "status-held", "bg": "status-held-bg" },
-    "ready": { "word": "ready", "fg": "status-succeeded", "bg": "status-succeeded-bg" },
-    "running": { "word": "running", "fg": "status-running", "bg": "status-running-bg" }
+    "unschedulable": { "word": "unschedulable", "glyph": "⊘", "fg": "status-cancelled", "bg": "status-cancelled-bg" },
+    "waiting": { "word": "waiting on deps", "glyph": "▣", "fg": "status-blocked", "bg": "status-blocked-bg" },
+    "held": { "word": "held", "glyph": "⏸", "fg": "status-held", "bg": "status-held-bg" },
+    "ready": { "word": "ready", "glyph": "▸", "fg": "status-succeeded", "bg": "status-succeeded-bg" },
+    "running": { "word": "running", "glyph": "◐", "fg": "status-running", "bg": "status-running-bg" }
   },
   "connectionState": {
     "live": { "word": "connected", "glyph": "●", "fg": "status-succeeded", "writes": "enabled" },

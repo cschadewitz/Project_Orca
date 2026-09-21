@@ -12,7 +12,7 @@
  * counterpart is an edit here rather than in JSX.
  */
 
-export type CrumbType = "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
+export type CrumbType = "plan" | "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
 
 export interface Counterpart {
   /** Stable key, used as the menu item's id and as what `onOpenCounterpart` reports. */
@@ -24,6 +24,9 @@ export interface Counterpart {
 }
 
 export const COUNTERPARTS: Record<CrumbType, readonly Counterpart[]> = {
+  /* A plan is the root of the Plan surface's trail (#170) and leads nowhere else: its
+     requests are the sidebar and its items are the table, both already on screen. */
+  plan: [],
   request: [],
   item: [
     { id: "runs", label: "Runs that attempted this", leadsTo: "run" },

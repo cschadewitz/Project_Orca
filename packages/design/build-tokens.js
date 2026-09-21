@@ -209,10 +209,11 @@ ${presentation(S.runStatus, true)}
 
 export type ScheduleClass = ${union(Object.keys(S.scheduleClass))};
 export const SCHEDULE_CLASSES: readonly ScheduleClass[] = [${Object.keys(S.scheduleClass).map(quote).join(", ")}] as const;
+/** Word and glyph, like a run status: a classification is never carried by colour alone (rule 4). */
 export const SCHEDULE_PRESENTATION: Record<ScheduleClass, {
-  word: string; fg: string; fgToken: ColorToken; bg: string; bgToken: ColorToken;
+  word: string; glyph: string; fg: string; fgToken: ColorToken; bg: string; bgToken: ColorToken;
 }> = {
-${presentation(S.scheduleClass, false)}
+${presentation(S.scheduleClass, true)}
 };
 
 export type ConnectionState = ${union(Object.keys(S.connectionState))};

@@ -6,7 +6,7 @@ export type ColorToken = 'surface-canvas' | 'surface-base' | 'surface-raised' | 
 
 export type SpacingToken = 'space-0-5' | 'space-1' | 'space-1-5' | 'space-2' | 'space-2-5' | 'space-3' | 'space-4' | 'space-5' | 'space-6' | 'space-8' | 'space-12' | 'space-16';
 export type RadiusToken = 'radius-none' | 'radius-xs' | 'radius-sm' | 'radius-md' | 'radius-lg' | 'radius-full';
-export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'node-min-width' | 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top' | 'editor-min-height';
+export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'col-classification' | 'col-slug' | 'col-score' | 'col-risk' | 'col-claim' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'node-min-width' | 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top' | 'editor-min-height';
 export type BorderToken = 'stroke-hairline' | 'stroke-rail' | 'stroke-focus' | 'stroke-edge-active' | 'stroke-double' | 'stroke-dash-untaken' | 'stroke-dash-back' | 'stroke-dash-draft';
 export type ShadowToken = 'shadow-none' | 'shadow-popover' | 'shadow-modal' | 'shadow-sticky';
 export type DurationToken = 'duration-instant' | 'duration-fast' | 'duration-medium' | 'duration-pulse';
@@ -174,14 +174,15 @@ export const STATUS_PRESENTATION: Record<RunStatus, {
 
 export type ScheduleClass = 'unschedulable' | 'waiting' | 'held' | 'ready' | 'running';
 export const SCHEDULE_CLASSES: readonly ScheduleClass[] = ['unschedulable', 'waiting', 'held', 'ready', 'running'] as const;
+/** Word and glyph, like a run status: a classification is never carried by colour alone (rule 4). */
 export const SCHEDULE_PRESENTATION: Record<ScheduleClass, {
-  word: string; fg: string; fgToken: ColorToken; bg: string; bgToken: ColorToken;
+  word: string; glyph: string; fg: string; fgToken: ColorToken; bg: string; bgToken: ColorToken;
 }> = {
-  unschedulable: { word: 'unschedulable', fg: 'var(--status-cancelled)', fgToken: 'status-cancelled', bg: 'var(--status-cancelled-bg)', bgToken: 'status-cancelled-bg' },
-  waiting: { word: 'waiting on deps', fg: 'var(--status-blocked)', fgToken: 'status-blocked', bg: 'var(--status-blocked-bg)', bgToken: 'status-blocked-bg' },
-  held: { word: 'held', fg: 'var(--status-held)', fgToken: 'status-held', bg: 'var(--status-held-bg)', bgToken: 'status-held-bg' },
-  ready: { word: 'ready', fg: 'var(--status-succeeded)', fgToken: 'status-succeeded', bg: 'var(--status-succeeded-bg)', bgToken: 'status-succeeded-bg' },
-  running: { word: 'running', fg: 'var(--status-running)', fgToken: 'status-running', bg: 'var(--status-running-bg)', bgToken: 'status-running-bg' },
+  unschedulable: { word: 'unschedulable', glyph: '⊘', fg: 'var(--status-cancelled)', fgToken: 'status-cancelled', bg: 'var(--status-cancelled-bg)', bgToken: 'status-cancelled-bg' },
+  waiting: { word: 'waiting on deps', glyph: '▣', fg: 'var(--status-blocked)', fgToken: 'status-blocked', bg: 'var(--status-blocked-bg)', bgToken: 'status-blocked-bg' },
+  held: { word: 'held', glyph: '⏸', fg: 'var(--status-held)', fgToken: 'status-held', bg: 'var(--status-held-bg)', bgToken: 'status-held-bg' },
+  ready: { word: 'ready', glyph: '▸', fg: 'var(--status-succeeded)', fgToken: 'status-succeeded', bg: 'var(--status-succeeded-bg)', bgToken: 'status-succeeded-bg' },
+  running: { word: 'running', glyph: '◐', fg: 'var(--status-running)', fgToken: 'status-running', bg: 'var(--status-running-bg)', bgToken: 'status-running-bg' },
 };
 
 export type ConnectionState = 'live' | 'reconnecting' | 'disconnected' | 'file' | 'mismatch';

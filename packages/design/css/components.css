@@ -927,6 +927,12 @@
   border-color: var(--status-cancelled);
   border-style: dashed;
 }
+/* The classification's glyph: a badge says its class in shape and word, never in tint
+   alone (RULES.md rule 4), exactly as `.orca-chip__glyph` does for a run status. */
+.orca-badge__glyph {
+  font-size: var(--icon-sm);
+  line-height: 1;
+}
 /* type: caption */
 .orca-badge__why {
   margin-left: var(--space-1);

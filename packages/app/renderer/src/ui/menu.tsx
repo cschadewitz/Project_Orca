@@ -75,6 +75,19 @@ export interface MenuProps {
   /** The trigger's class, so a surface keeps its own disclosure styling. */
   triggerClassName?: string;
   measure?: MenuMeasurer;
+  /**
+   * Controlled disclosure, for the one case a surface cannot press the trigger itself:
+   * `orca://item/<slug>` lands on Plan **with the explanation open** (#165, #170), and a
+   * link that arrives is not a click.
+   *
+   * Pass both or neither. Everything else stays the primitive's — focus in on open and
+   * back to the trigger on close, `Esc` through the layer stack, the roving keys, the
+   * placement — so a controlled menu is the same menu with its open state held one level
+   * up, not a second implementation. Omitted, the menu owns its own state, which is what
+   * every other caller wants.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /** The marker `menu`-scope shortcuts use to find the open menu around the focused item. */
@@ -214,8 +227,23 @@ export function Menu({
   children,
   triggerClassName,
   measure = measureInDocument,
+  open: controlled,
+  onOpenChange,
 }: MenuProps): JSX.Element | null {
-  const [open, setOpen] = useState(false);
+  const [uncontrolled, setUncontrolled] = useState(false);
+  const open = controlled ?? uncontrolled;
+  /* One setter, whichever half owns the state: an uncontrolled menu writes its own, a
+     controlled one reports and lets its owner write. Both tell the owner, so a surface
+     that opened a menu hears it close. */
+  const report = useRef(onOpenChange);
+  report.current = onOpenChange;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (controlled === undefined) setUncontrolled(next);
+      report.current?.(next);
+    },
+    [controlled],
+  );
   const [placement, setPlacement] = useState<MenuPlacement>(DEFAULT_PLACEMENT);
   const anchor = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -227,7 +255,7 @@ export function Menu({
     setOpen(false);
     const element = trigger.current;
     if (element?.isConnected) element.focus();
-  }, []);
+  }, [setOpen]);
 
   useTransientLayer(open, { name: "menu", close });
   useMenuKeys(open);
@@ -264,7 +292,7 @@ export function Menu({
     };
     document.addEventListener("mousedown", onPointer);
     return () => document.removeEventListener("mousedown", onPointer);
-  }, [open]);
+  }, [open, setOpen]);
 
   // Typeahead: the next item whose label starts with the letter, wrapping, from the one
   // after the focused item — so pressing the same letter twice cycles the matches.
