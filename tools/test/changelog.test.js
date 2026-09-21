@@ -57,7 +57,7 @@ describe("renderEntries", () => {
     write("12-a.added.md", "- **cli:** something.\n");
 
     expect(render()).toBe(
-      ["### Store format", "", "No change.", "", "### Added", "", "- **cli:** something."].join("\n"),
+      ["### Store format", "", "No change.", "", "### Added", "", "#### cli", "", "- something."].join("\n"),
     );
   });
 
@@ -73,7 +73,9 @@ describe("renderEntries", () => {
         "",
         "### Fixed",
         "",
-        "- **engine:** a fix.",
+        "#### engine",
+        "",
+        "- a fix.",
       ].join("\n"),
     );
   });
@@ -90,9 +92,11 @@ describe("renderEntries", () => {
         "",
         "### Added",
         "",
-        "- **cli:** one.",
+        "#### cli",
+        "",
+        "- one.",
         "  Wrapped onto a second line.",
-        "- **cli:** two.",
+        "- two.",
       ].join("\n"),
     );
   });
@@ -116,7 +120,101 @@ describe("renderEntries", () => {
 
     const lines = render().split("\n");
     expect(lines[0]).toBe("### Store format");
-    expect(lines[lines.length - 1]).toBe("- **cli:** padded with blank lines.");
+    expect(lines[lines.length - 1]).toBe("- padded with blank lines.");
+  });
+});
+
+describe("grouping a section by change target", () => {
+  it("gathers a target's entries under one heading however they were filed, alphabetically", () => {
+    write("12-a.added.md", "- **cli:** the first cli entry.\n");
+    write("13-b.added.md", "- **app:** an app entry.\n");
+    write("14-c.added.md", "- **cli:** the second cli entry.\n");
+
+    expect(render().split("\n").slice(4)).toEqual([
+      "### Added",
+      "",
+      "#### app",
+      "",
+      "- an app entry.",
+      "",
+      "#### cli",
+      "",
+      "- the first cli entry.",
+      "- the second cli entry.",
+    ]);
+  });
+
+  it("splits a fragment whose bullets name different targets", () => {
+    write("12-a.added.md", "- **protocol/daemon:** the control methods.\n- **cli:** the flag over them.\n");
+
+    expect(render().split("\n").slice(4)).toEqual([
+      "### Added",
+      "",
+      "#### cli",
+      "",
+      "- the flag over them.",
+      "",
+      "#### protocol/daemon",
+      "",
+      "- the control methods.",
+    ]);
+  });
+
+  it("keeps a bullet's own continuation lines with it when it is regrouped", () => {
+    write("12-a.changed.md", "- **app:** one.\n  Wrapped.\n- **cli:** two.\n");
+    write("13-b.changed.md", "- **app:** three.\n  - a nested bullet\n");
+
+    expect(render().split("\n").slice(4)).toEqual([
+      "### Changed",
+      "",
+      "#### app",
+      "",
+      "- one.",
+      "  Wrapped.",
+      "- three.",
+      "  - a nested bullet",
+      "",
+      "#### cli",
+      "",
+      "- two.",
+    ]);
+  });
+
+  it("leaves a bullet with no target prefix ungrouped, above the headings", () => {
+    write("12-a.fixed.md", "- **cli:** targeted.\n");
+    write("13-b.fixed.md", "- No prefix on this one.\n");
+
+    expect(render().split("\n").slice(4)).toEqual([
+      "### Fixed",
+      "",
+      "- No prefix on this one.",
+      "",
+      "#### cli",
+      "",
+      "- targeted.",
+    ]);
+  });
+
+  it("groups the store section too, when a store fragment is written as targeted bullets", () => {
+    write("12-a.store.md", "Prose about the store.\n");
+    write("13-b.store.md", "- **engine:** the event payloads moved.\n");
+
+    expect(render()).toBe(
+      ["### Store format", "", "Prose about the store.", "", "#### engine", "", "- the event payloads moved."].join(
+        "\n",
+      ),
+    );
+  });
+
+  it("keeps the prefix on a bullet that is nothing else, rather than leaving a bare marker", () => {
+    write("12-a.added.md", "- **app:**\n  The text starts on the next line.\n");
+
+    expect(render().split("\n").slice(4)).toEqual([
+      "### Added",
+      "",
+      "- **app:**",
+      "  The text starts on the next line.",
+    ]);
   });
 });
 

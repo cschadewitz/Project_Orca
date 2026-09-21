@@ -32,6 +32,31 @@ The file holds the entry verbatim, keeping the area prefix the commits use:
 A pull request with two unrelated entries writes two files. Wrap at the same width as
 `CHANGELOG.md`; the text is copied through untouched.
 
+## The area prefix is the second grouping
+
+Rendering groups a section twice: by change type, which is the `<section>` above, and inside
+that by **change target**, which is the area prefix. The bullet above renders as
+
+```markdown
+### Added
+
+#### cli
+
+- `orca leases [list | break <runId> [--force] [--keep]]`.
+```
+
+— the prefix is removed from the bullet, because the heading it now sits under says it. So
+the prefix is not decoration: spell it the way the commits do (`app`, `cli`, `core`,
+`design`, `protocol`, `engine`, `store`, …), because a typo becomes a heading of its own
+next to the one it meant. A combined prefix like `cli/daemon` is its own target and that is
+fine — it says the change is both. Targets render alphabetically; entries inside one keep
+their issue order.
+
+One fragment's bullets need not share a target — a pull request that moved the protocol and
+the CLI writes both bullets in one file and they are grouped separately. A bullet with no
+prefix at all still renders, ungrouped, above the target headings; that is how `store` prose
+comes out unchanged.
+
 `store` is the section to think about rather than skip: ORCA is event-sourced, so a change
 to the event log, plan journal, artifact index or config schema can invalidate a store
 someone already has. A release with no `store` fragment renders "No change.", which is a
@@ -54,6 +79,7 @@ node tools/release.js notes --unreleased   # what is pending, rendered
 node tools/release.js prepare 0.4.0        # render into CHANGELOG.md and delete the fragments
 ```
 
-`prepare` renders the sections in the order above, each omitted when empty, and the
-fragment deletions land in the `release: vX.Y.Z` pull request alongside the section they
-became.
+`prepare` renders the sections in the order above, each omitted when empty and each grouped
+by target inside, and the fragment deletions land in the `release: vX.Y.Z` pull request
+alongside the section they became — which is also where the rendered notes are read first,
+since that pull request's body is the section verbatim.
