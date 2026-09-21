@@ -76,13 +76,24 @@ when the agents live on another host over SSH, or when this daemon will be `--re
 ### 1.2 Make a workspace
 
 The container is stateless; the workspace is not. Put it somewhere that is not the checkout
-— a worktree can be discarded, while the event store is the thing you want to keep:
+— a worktree can be discarded, while the event store is the thing you want to keep.
+
+**On the host, in the same shell you built the image in.** Nothing here runs in the
+container: this makes the directory §1.3 mounts at `/workspace`, and it is a host path until
+the moment it is mounted. The `cp` is the only line that cares where you are — it reads the
+checkout you just built from, so either stay in it or give the file its absolute path. The
+repository you clone is **your own project**, the one the agents will work on, not this one:
 
 ```bash
 mkdir -p ~/orca
-cp deploy/docker/orca.config.yaml ~/orca/orca.config.yaml
-git clone <your repository> ~/orca/repo
+cp deploy/docker/orca.config.yaml ~/orca/orca.config.yaml   # from the Project_Orca checkout
+git clone <your project> ~/orca/repo
 ```
+
+On Docker Desktop (macOS, Windows) keep the workspace under your home directory, or add its
+path to **Settings ▸ Resources ▸ File sharing** — a bind mount from a directory Docker has
+not been given is silently empty inside the container, and the daemon then serves an empty
+store rather than failing.
 
 ```
 ~/orca/                     mounted at /workspace
