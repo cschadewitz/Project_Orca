@@ -94,7 +94,12 @@ function errorsIn(error: ProtocolError): readonly ConfigValidationError[] {
   );
 }
 
-export function useConfig(): ConfigFeed {
+/**
+ * The feed itself. It is called in exactly one place — `ConfigProvider` — and every screen
+ * reads the result through `useConfig()` (`config-context.tsx`), so that a draft outlives
+ * the surface it was typed on and there is one answer to "what is unsaved".
+ */
+export function useConfigFeed(): ConfigFeed {
   const stream = useNotifications();
   const announce = useAnnounce();
   const [attempt, setAttempt] = useState(0);
@@ -195,12 +200,17 @@ export function useConfig(): ConfigFeed {
                 busy: false,
                 errors,
                 ...(stale ? { conflict: result.error.message } : {}),
-                message: `${result.error.code}: ${result.error.message}`,
+                /* The sentence, not the code: `CONFIG_INVALID` is for a log and a bug
+                   report, and a person reading a bar wants what is wrong (RULES.md
+                   rule 13). The code is still on the wire for whoever needs it. */
+                message: result.error.message,
               },
             }));
-            if (!validateOnly) {
-              announce(`Config not saved: ${errors[0]?.message ?? result.error.message}`);
-            }
+            announce(
+              validateOnly
+                ? `Config not valid: ${errors[0]?.message ?? result.error.message}`
+                : `Config not saved: ${errors[0]?.message ?? result.error.message}`,
+            );
             return;
           }
 
@@ -214,6 +224,11 @@ export function useConfig(): ConfigFeed {
                 message: errors.length === 0 ? "No errors." : `${errors.length} to fix.`,
               },
             }));
+            /* The fields carry their errors but do not interrupt (RULES.md rule 11): an
+               error on the field somebody is editing is in front of them already. The
+               announcer says the first one once, which is what a person who pressed
+               Validate and cannot see the form is owed. */
+            if (errors.length > 0) announce(`Config not valid: ${errors[0]?.message ?? "see the form"}`);
             return;
           }
 

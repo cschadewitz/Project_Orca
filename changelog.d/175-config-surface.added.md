@@ -16,6 +16,11 @@
   moment they are chosen. There is still no settings screen.
 - **app:** `orca://config` and `orca://config/permissions` open the surface on the document
   they name.
-- **app:** the form and the save bar are absent, not disabled, against a daemon that offers
-  no write methods and in file mode; disconnected keeps the last read, dims it and hides the
-  bar.
+- **app:** the form and the save bar are absent, not disabled, in file mode and against a
+  daemon whose `hello.methods` has no `config.set` — the method the button calls, which the
+  connection snapshot now carries, rather than the `runs.control` capability above it.
+  Disconnected and reconnecting keep the bar and the change count, with the reason on
+  Validate and Save.
+- **app:** a configuration draft survives going to another surface and coming back: the
+  draft model is mounted above the surface switch, and the Agents surface's policy panel
+  reads the same one rather than a second copy.

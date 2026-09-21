@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { THEMES } from "@orca/design";
 import { AgentsSurface } from "../src/agents/agents-surface.js";
+import { ConfigProvider } from "../src/config/config-context.js";
 import { releaseConsequence, releaseRefusal } from "../src/agents/agent-groups.js";
 import { commandEntries } from "../src/palette/entries.js";
 import { AS_OF, CLAIMS, HELLO_READ_ONLY } from "./fixtures.js";
@@ -33,7 +34,11 @@ function renderAgents(connection: "live" | "disconnected" = "live"): void {
   const { Providers } = h;
   render(
     <Providers>
-      <AgentsSurface connection={connection} onOpen={() => {}} />
+      {/* The app's one draft model, which `App` mounts above the surface switch: the
+          policy panel reads it rather than holding its own (#175). */}
+      <ConfigProvider>
+        <AgentsSurface connection={connection} onOpen={() => {}} />
+      </ConfigProvider>
     </Providers>,
   );
 }
@@ -191,7 +196,12 @@ describe("releasing a claim", () => {
     /* A `--read-only` daemon leaves the control methods out of `hello.methods` and out of
        its capabilities. A viewer has no greyed buttons on it: writes are absent. */
     fake.script({ hello: () => Promise.resolve({ ok: true, result: HELLO_READ_ONLY }) });
-    fake.connect({ state: "live", since: AS_OF, capabilities: HELLO_READ_ONLY.capabilities });
+    fake.connect({
+      state: "live",
+      since: AS_OF,
+      capabilities: HELLO_READ_ONLY.capabilities,
+      methods: HELLO_READ_ONLY.methods ?? [],
+    });
     renderAgents();
 
     const dead = await claimRow("wi-3");
@@ -207,14 +217,28 @@ describe("the policy panel", () => {
     const panel = await screen.findByRole("complementary", { name: "Permissions for claude" });
     expect(within(panel).getAllByRole("listitem").length).toBeGreaterThan(0);
     expect(panel.textContent).toContain("allow edit under src");
-    // Read once when it opens, and not before: a surface with no panel open asks nothing.
+    // One read for the app, not one per opening: the draft model is above the surfaces
+    // (#175's `ConfigProvider`), so opening the panel asks the daemon nothing new.
     expect(fake.calls.filter((c) => c.method === "config.get")).toHaveLength(1);
   });
 
-  it("is not read at all until a card asks for it", async () => {
+  it("keeps the grant edits it is holding when it is closed and opened again", async () => {
     renderAgents();
-    await screen.findAllByRole("region", { name: /^Host / });
-    expect(fake.calls.some((c) => c.method === "config.get")).toBe(false);
+    fireEvent.click(await screen.findByRole("button", { name: "Permissions for claude" }));
+    const panel = await screen.findByRole("complementary", { name: "Permissions for claude" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Add a grant" }));
+    await screen.findByRole("group", { name: "Unsaved configuration changes" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Close" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("complementary", { name: "Permissions for claude" })).toBeNull(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Permissions for claude" }));
+
+    // The draft outlived the panel, and the file was read once for the whole app.
+    await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(fake.calls.filter((c) => c.method === "config.get")).toHaveLength(1);
   });
 });
 

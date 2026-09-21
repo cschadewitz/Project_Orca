@@ -15,7 +15,14 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import type { ConnectionSnapshot } from "../../../src/bridge.js";
-import { toConnection, writability, writesPresent, type Connection, type Writability } from "../connection.js";
+import {
+  methodPresent,
+  toConnection,
+  writability,
+  writesPresent,
+  type Connection,
+  type Writability,
+} from "../connection.js";
 
 export type { Connection } from "../connection.js";
 
@@ -49,4 +56,17 @@ export function useWritability(): Writability {
 export function useWritesPresent(): boolean {
   const connection = useConnection();
   return writesPresent(connection);
+}
+
+/**
+ * Whether the daemon answers one named method — `hello.methods`, with the capability as the
+ * coarse fallback for a daemon that does not list them (`methodPresent`).
+ *
+ * A control that calls `config.set` or `claims.release` asks this rather than
+ * `useWritesPresent()`: `runs.control` is one word for several dispatch tables, and a
+ * daemon serving a store outside a workspace has no `config.set` while still driving runs.
+ */
+export function useMethodPresent(method: string): boolean {
+  const connection = useConnection();
+  return methodPresent(connection, method);
 }

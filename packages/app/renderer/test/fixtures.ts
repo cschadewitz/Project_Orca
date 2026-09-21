@@ -97,6 +97,10 @@ export const HELLO: HelloResult = {
     "decisions.reopen",
     "risks.update",
     "claims.release",
+    // The Config surface's two (#175, #266). `config.set` needs a control model as well as
+    // a `ConfigModel`, which is why a control asks for the method and not the capability.
+    "config.get",
+    "config.set",
   ],
 };
 
@@ -113,7 +117,9 @@ export const HELLO_READ_ONLY: HelloResult = {
   orcaVersion: "0.2.0-test",
   storeDir: "/work/other/.orca",
   capabilities: ["runs.read"],
-  methods: ["hello", "runs.list", "runs.get", "runs.events", "inputs.list", "claims.list"],
+  /* `config.get` is a read and is here; `config.set` is a write and is not, which is the
+     whole of what a read-only daemon's configuration screen is. */
+  methods: ["hello", "runs.list", "runs.get", "runs.events", "inputs.list", "claims.list", "config.get"],
 };
 
 /** `runs.list` with no filter: newest first, which is how the daemon orders it. */

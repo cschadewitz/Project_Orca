@@ -142,13 +142,19 @@
   list-style: none;
 }
 
+/* A row, so it is `--row-h` tall and it does not wrap (RULES.md rule 9): a rule whose text
+   is long grows the row it is in, which pushes every rule below it out of the rhythm the
+   density sets. The text truncates instead, and the whole rule is in the raw sidecar. */
 .orca-config__rule {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--row-h);
+  height: var(--row-h);
   padding: 0 var(--space-2);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* type: mono-id */
@@ -159,8 +165,13 @@
 }
 
 /* type: mono-body */
+/* The one part of a permission row that can be long, so it is the part that truncates: the
+   order number and the source chip beside it keep their width (rule 9). */
 .orca-config__rule-text {
   font-family: var(--font-mono);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* type: caption */

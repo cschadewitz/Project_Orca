@@ -15,6 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PermissionPolicyFileSchema } from "@orca/protocol";
+import { ConfigProvider } from "../src/config/config-context.js";
 import { PolicyPanel } from "../src/config/policy-editor.js";
 import {
   EMPTY_SIDECAR,
@@ -117,13 +118,18 @@ function renderPanel(): void {
   const { Providers } = h;
   render(
     <Providers>
-      <PolicyPanel
-        agentId="claude"
-        live
-        onOpen={() => {}}
-        onClose={() => {}}
-        now={() => "2026-09-21T12:00:00.000Z"}
-      />
+      {/* The draft model `App` mounts above every surface: the panel reads it rather than
+          holding one of its own, so the Config surface and this are never two answers to
+          "what is unsaved" (#175). */}
+      <ConfigProvider>
+        <PolicyPanel
+          agentId="claude"
+          live
+          onOpen={() => {}}
+          onClose={() => {}}
+          now={() => "2026-09-21T12:00:00.000Z"}
+        />
+      </ConfigProvider>
     </Providers>,
   );
 }

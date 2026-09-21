@@ -24,10 +24,12 @@
  *   permission policy is edited in a panel — which is the Config surface's editor mounted
  *   beside the cards, over the Config surface's own draft model, because a second copy of
  *   `use-config.ts` would be a second answer to "what is unsaved" (`config/policy-editor.tsx`).
- *   Both controls are absent rather than disabled where there is nothing to send to:
- *   `claims.release` and `config.set` both sit behind `runs.control`, which a `--read-only`
- *   daemon leaves out of `hello.methods` *and* out of its capabilities, so `useWritesPresent()`
- *   is one answer to both rather than two checks that could drift.
+ *   Both controls are absent rather than disabled where there is nothing to send to, and
+ *   each asks for the method it calls: `useMethodPresent("claims.release")` here,
+ *   `config.set` in the panel. They travel together behind `--read-only`, but they are two
+ *   dispatch tables — a daemon with no plan answers neither `claims.release` nor the other
+ *   four plan writes while still driving runs — and `hello.methods` is the only thing that
+ *   says so (ADR 0008).
  * - **There is no "force release" here, deliberately.** `claims.release --force` takes an
  *   item away from a run that could still resume, which is a decision with no undo, and a
  *   keyless palette row is the wrong amount of friction for it. It stays a CLI act; a claim
@@ -40,8 +42,8 @@
  */
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 import type { ConnectionState } from "@orca/design";
-import type { ClaimView } from "@orca/protocol";
-import { useWritability, useWritesPresent } from "../chrome/use-connection.js";
+import { CLAIMS_RELEASE_METHOD, type ClaimView } from "@orca/protocol";
+import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
 import { useKeyboard } from "../keyboard-context.js";
 import { scopeProps } from "../keyboard-map.js";
 import { PolicyPanel } from "../config/policy-editor.js";
@@ -72,7 +74,7 @@ export function AgentsSurface({ connection, onOpen }: AgentsSurfaceProps): JSX.E
   const feed = useAgents();
   const { state, reload } = feed;
   const live = connection === "live";
-  const writesPresent = useWritesPresent();
+  const canRelease = useMethodPresent(CLAIMS_RELEASE_METHOD);
 
   /** Whose policy the panel is showing, or nothing. One panel, whichever card opened it. */
   const [policyFor, setPolicyFor] = useState<string | undefined>(undefined);
@@ -82,7 +84,7 @@ export function AgentsSurface({ connection, onOpen }: AgentsSurfaceProps): JSX.E
   const claims = state.phase === "ready" ? state.claims : EMPTY_CLAIMS;
 
   const openPolicy = useCallback((agentId: string) => setPolicyFor(agentId), []);
-  usePaletteActions(agents, claims, writesPresent, openPolicy, feed.releaseClaim);
+  usePaletteActions(agents, claims, canRelease, openPolicy, feed.releaseClaim);
 
   return (
     /* The scope the two keyless commands register in: they are actions on an object on this
@@ -110,7 +112,7 @@ export function AgentsSurface({ connection, onOpen }: AgentsSurfaceProps): JSX.E
           connection={connection}
           onRetry={reload}
           feed={feed}
-          writesPresent={writesPresent}
+          canRelease={canRelease}
           onEditPermissions={openPolicy}
         />
         {/* Mounted only while it is open, and keyed by nothing: switching agents keeps the
@@ -138,7 +140,7 @@ interface BodyProps {
   connection: ConnectionState;
   onRetry: () => void;
   feed: AgentsFeed;
-  writesPresent: boolean;
+  canRelease: boolean;
   onEditPermissions: (agentId: string) => void;
 }
 
@@ -150,7 +152,7 @@ function Body({
   connection,
   onRetry,
   feed,
-  writesPresent,
+  canRelease,
   onEditPermissions,
 }: BodyProps): JSX.Element {
   if (state.phase === "loading") return <StateView kind="loading" title="Loading agents" />;
@@ -197,7 +199,7 @@ function Body({
         asOf={state.asOf}
         live={live}
         feed={feed}
-        writesPresent={writesPresent && live}
+        canRelease={canRelease && live}
       />
     </div>
   );
@@ -255,7 +257,7 @@ interface ClaimsProps {
   live: boolean;
   feed: AgentsFeed;
   /** False where there is no `claims.release` to call: the control is absent, not disabled. */
-  writesPresent: boolean;
+  canRelease: boolean;
 }
 
 /**
@@ -274,7 +276,7 @@ interface ClaimsProps {
  * with the list and moved by no push — a release journals nothing, so there is nothing to
  * listen for, and `use-agents.ts` re-reads them once after the call instead.
  */
-function Claims({ claims, asOf, live, feed, writesPresent }: ClaimsProps): JSX.Element {
+function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Element {
   return (
     <section className="orca-agents__claims" aria-label="Claimed work">
       <div className="orca-agents__host-head">
@@ -305,7 +307,7 @@ function Claims({ claims, asOf, live, feed, writesPresent }: ClaimsProps): JSX.E
                 {claim.owner.name ?? claim.owner.runId}
               </span>
               <Time at={new Date(claim.claimedAt)} show={live ? "both" : "absolute"} />
-              {writesPresent && (
+              {canRelease && (
                 <Release
                   claim={claim}
                   busy={feed.releasing.has(claim.workItemId)}
@@ -394,7 +396,7 @@ function Release({ claim, busy, onRelease }: { claim: ClaimView; busy: boolean; 
 function usePaletteActions(
   agents: readonly { id: string }[] | undefined,
   claims: readonly ClaimView[],
-  writesPresent: boolean,
+  canRelease: boolean,
   onEditPermissions: (agentId: string) => void,
   onRelease: (workItemId: string) => void,
 ): void {
@@ -416,7 +418,7 @@ function usePaletteActions(
   }, [agentIds, keyboard, onEditPermissions]);
 
   useEffect(() => {
-    if (!writesPresent) return;
+    if (!canRelease) return;
     const off = (claimIds === "" ? [] : claimIds.split(" ")).map((workItemId) =>
       keyboard.register({
         scope: "card",
@@ -426,5 +428,5 @@ function usePaletteActions(
       }),
     );
     return () => off.forEach((unregister) => unregister());
-  }, [claimIds, keyboard, onRelease, writesPresent]);
+  }, [claimIds, keyboard, onRelease, canRelease]);
 }

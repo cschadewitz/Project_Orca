@@ -16,12 +16,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { THEMES } from "@orca/design";
+import { THEMES, type ConnectionState } from "@orca/design";
 import type { ConfigSetParams, NotificationMessage } from "@orca/protocol";
+import { ConfigProvider } from "../src/config/config-context.js";
 import { ConfigSurface } from "../src/config/config-surface.js";
 import { CONFIG_GET, CONFIG_REVISION, CONFIG_TEXT } from "./fixtures-config.js";
-import { AS_OF, HELLO_READ_ONLY } from "./fixtures.js";
-import { harness, installBridge, type Harness } from "./harness.js";
+import { AS_OF, HELLO, HELLO_READ_ONLY } from "./fixtures.js";
+import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
 import { expectedToken, installDesignSystem, resolved, setTheme } from "./themes.js";
 
@@ -29,7 +30,14 @@ let fake: FakeBridge;
 let h: Harness;
 const teardown: (() => void)[] = [];
 
-function renderConfig(connection: "live" | "disconnected" | "file" = "live"): void {
+function renderConfig(connection: ConnectionState = "live"): void {
+  /* The word the surface is given and the snapshot the chrome reads are the same daemon:
+     `useWritability()` and `useMethodPresent()` read the snapshot, so a test that said
+     "disconnected" to the surface alone would be testing a screen the app never shows.
+     A test that has already pushed its own connection keeps it. */
+  if (connection !== "live" && fake.connection.state === "live") {
+    fake.connect({ ...fake.connection, state: connection });
+  }
   /* Appearance over the *bridge's* preference store rather than over a memory one: the
      preferences section's whole claim is that it writes through `window.orca.preferences`. */
   h = harness("darwin", window.orca.preferences);
@@ -37,7 +45,11 @@ function renderConfig(connection: "live" | "disconnected" | "file" = "live"): vo
   const { Providers } = h;
   render(
     <Providers>
-      <ConfigSurface connection={connection} />
+      {/* `App` mounts this above the surface switch, so a test of the surface mounts it
+          too: the draft model is one per app, not one per screen (#175). */}
+      <ConfigProvider>
+        <ConfigSurface connection={connection} />
+      </ConfigProvider>
     </Providers>,
   );
 }
@@ -279,7 +291,13 @@ describe("the permission sidecar", () => {
 describe("what the connection changes", () => {
   it("has no save bar on a daemon that does not offer the control methods", async () => {
     fake.script({ hello: () => Promise.resolve({ ok: true, result: HELLO_READ_ONLY }) });
-    fake.connect({ state: "live", since: AS_OF, capabilities: HELLO_READ_ONLY.capabilities });
+    fake.connect({
+      state: "live",
+      since: AS_OF,
+      capabilities: HELLO_READ_ONLY.capabilities,
+      // It answers `config.get` and not `config.set`: the screen is readable, not writable.
+      methods: HELLO_READ_ONLY.methods ?? [],
+    });
     renderConfig();
     await screen.findByRole("region", { name: "Agents" });
 
@@ -300,6 +318,77 @@ describe("what the connection changes", () => {
     // The values dim; the labels around them do not.
     expect(document.querySelector(".orca-config__body")?.classList.contains("orca-stale-value")).toBe(true);
   });
+
+  /**
+   * The gate is `hello.methods`, not the `runs.control` capability (#175's review). The
+   * capability is one word over several dispatch tables: a daemon serving a store outside a
+   * workspace drives runs and has no `config.set` at all, and a client that read the
+   * capability would draw a bar over a method nobody answers.
+   */
+  it("has no save bar when the daemon's methods do not include config.set", async () => {
+    fake.connect({
+      state: "live",
+      since: AS_OF,
+      // The control capability *is* here: this daemon drives runs. It has no configuration.
+      capabilities: HELLO.capabilities,
+      methods: (HELLO.methods ?? []).filter((method) => method !== "config.set"),
+    });
+    renderConfig();
+    await screen.findByRole("region", { name: "Agents" });
+
+    const command = field("Command");
+    expect(command.readOnly).toBe(true);
+    fireEvent.change(command, { target: { value: "claude-code-next" } });
+    expect(screen.queryByRole("group", { name: "Unsaved configuration changes" })).toBeNull();
+    expect(setsOf()).toEqual([]);
+  });
+
+  it("has the save bar when they do", async () => {
+    fake.connect({
+      state: "live",
+      since: AS_OF,
+      capabilities: HELLO.capabilities,
+      methods: HELLO.methods ?? [],
+    });
+    renderConfig();
+    await screen.findByRole("region", { name: "Agents" });
+
+    fireEvent.change(field("Command"), { target: { value: "claude-code-next" } });
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(within(bar).getByRole("button", { name: "Save" }).getAttribute("aria-disabled")).toBeNull();
+  });
+
+  /**
+   * Disconnected is not file mode: the daemon would take this write if it were answering,
+   * so the bar stays, the two buttons say why they will not fire, and the count of what is
+   * unsaved is still on screen (docs/design/40-connection-states.md).
+   */
+  it("keeps the bar and disables its buttons with the reason while disconnected", async () => {
+    renderConfig("disconnected");
+    await screen.findByRole("region", { name: "Agents" });
+
+    fireEvent.change(field("Command"), { target: { value: "claude-code-next" } });
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(within(bar).getByText("1 change")).toBeTruthy();
+
+    for (const name of ["Save", "Validate"]) {
+      const button = within(bar).getByRole("button", { name });
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      // The reason is *on the control*, which is what `disabledReason` is for.
+      expect(button.getAttribute("title")).toContain("no daemon is answering");
+    }
+    fireEvent.click(within(bar).getByRole("button", { name: "Save" }));
+    expect(setsOf()).toEqual([]);
+  });
+
+  it("keeps the bar while reconnecting, for the same reason", async () => {
+    renderConfig("reconnecting");
+    await screen.findByRole("region", { name: "Agents" });
+
+    fireEvent.change(field("Command"), { target: { value: "claude-code-next" } });
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(within(bar).getByRole("button", { name: "Save" }).getAttribute("aria-disabled")).toBe("true");
+  });
 });
 
 describe("app preferences", () => {
@@ -318,6 +407,142 @@ describe("app preferences", () => {
     await waitFor(() => expect(window.orca.preferences.read().theme).toBe("dark"));
     expect(setsOf()).toEqual([]);
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+
+  /**
+   * The section draws what is remembered *now* rather than what was remembered when it
+   * mounted: `⌘⇧L` cycles the theme from the keyboard map, and a copy taken at mount would
+   * leave this screen claiming a theme the window is not in (#175's review).
+   */
+  it("follows ⌘⇧L rather than the snapshot it mounted with", async () => {
+    renderConfig();
+    const section = await screen.findByRole("region", { name: "App preferences" });
+    const theme = (): string | null => within(section).getByRole("button", { name: "Theme" }).textContent;
+    expect(theme()).toBe("system");
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "L", code: "KeyL", metaKey: true, shiftKey: true });
+    });
+
+    await waitFor(() => expect(theme()).toBe(window.orca.preferences.read().theme));
+    expect(theme()).not.toBe("system");
+  });
+});
+
+describe("what the form says out loud, and what it does not", () => {
+  /**
+   * RULES.md rule 11. An error on the field a person is editing is in front of them
+   * already; what is news is the *result* of pressing Validate, and that is one sentence in
+   * the app's one announcer rather than a region per field.
+   */
+  it("places an error without a live region, and announces the first one once", async () => {
+    const said: string[] = [];
+    fake.script({
+      "config.set": () => ({
+        ok: true,
+        result: {
+          document: CONFIG_GET.config,
+          written: false,
+          validation: { errors: [{ path: "agents.0.command", message: "no such executable" }] },
+          asOf: AS_OF,
+        },
+      }),
+    });
+    renderConfig();
+    teardown.push(h.announcements.subscribe((sentence) => said.push(sentence)));
+    await screen.findByRole("region", { name: "Agents" });
+
+    fireEvent.change(field("Command"), { target: { value: "nope" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Validate" }));
+
+    const error = await screen.findByText("no such executable");
+    expect(error.getAttribute("role")).toBeNull();
+    expect(error.closest("[aria-live]")).toBeNull();
+    // Described, so it reaches the person whose focus is on the control.
+    expect(field("Command").getAttribute("aria-describedby")).toContain(error.id);
+
+    await waitFor(() => expect(said).toEqual(["Config not valid: no such executable"]));
+    expect(document.querySelectorAll(".orca-config [role=alert], .orca-config [aria-live]")).toHaveLength(0);
+  });
+
+  it("says the code's message rather than the code", async () => {
+    fake.script({
+      "config.set": () => ({
+        ok: false,
+        error: { code: "CONFIG_INVALID", message: "humanInput.mode must be one of pause, cli, auto" },
+      }),
+    });
+    renderConfig();
+    await screen.findByRole("region", { name: "Agents" });
+
+    fireEvent.change(field("Command"), { target: { value: "claude-code-next" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    await waitFor(() =>
+      expect(bar.textContent).toContain("humanInput.mode must be one of pause, cli, auto"),
+    );
+    // The code belongs in a log and a bug report, not in a sentence (RULES.md rule 13).
+    expect(bar.textContent).not.toContain("CONFIG_INVALID");
+  });
+
+  /** An enum field is a `Menu`, and the `Menu` is the control the field labels. */
+  it("reaches an enum field by its label, not by its position", async () => {
+    renderConfig();
+    await screen.findByRole("region", { name: "Human input" });
+
+    const mode = screen.getByLabelText(/^Mode/);
+    expect(mode.tagName).toBe("BUTTON");
+    fireEvent.click(mode);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "auto" }));
+
+    await screen.findByRole("group", { name: "Unsaved configuration changes" });
+  });
+
+  it("reaches the preferences' theme control by its label too", async () => {
+    renderConfig();
+    await screen.findByRole("region", { name: "App preferences" });
+    expect(screen.getByLabelText(/^Theme/).tagName).toBe("BUTTON");
+  });
+
+  it("says that a saved configuration is read by the next orca serve", async () => {
+    renderConfig();
+    await screen.findByRole("region", { name: "Agents" });
+    expect(screen.getByText(/takes effect on the next orca serve/)).toBeTruthy();
+  });
+});
+
+/**
+ * The draft model is mounted above the surface switch (`ConfigProvider`), which is the only
+ * way "I typed something, looked at a run and came back" can keep what was typed: `App`
+ * unmounts the Config surface like every other screen.
+ */
+describe("a draft and the rest of the app", () => {
+  const goTo = async (surface: string): Promise<void> => {
+    fireEvent.click(await screen.findByRole("button", { name: surface }));
+  };
+
+  it("survives a trip to another surface, change count and all", async () => {
+    stubMatchMedia(1440);
+    h = harness("darwin", window.orca.preferences);
+    teardown.push(h.dispose);
+    renderChrome(h);
+
+    await goTo("Config");
+    await screen.findByRole("region", { name: "Agents" });
+    fireEvent.change(field("Command"), { target: { value: "claude-code-next" } });
+    expect(within(await screen.findByRole("group", { name: "Unsaved configuration changes" })).getByText("1 change"))
+      .toBeTruthy();
+
+    await goTo("Runs");
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Agents" })).toBeNull());
+
+    await goTo("Config");
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(within(bar).getByText("1 change")).toBeTruthy();
+    expect(field("Command").value).toBe("claude-code-next");
+    // And it is still one read: coming back re-reads nothing, because nothing was dropped.
+    expect(reads()).toBe(1);
   });
 });
 

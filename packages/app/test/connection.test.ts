@@ -12,7 +12,14 @@ import { PROTOCOL_VERSION, formatProtocolVersion, type HelloResult } from "@orca
 import type { ConnectionSnapshot } from "../src/bridge.js";
 import { DaemonSubscription, type SocketFactory } from "../src/client/subscription.js";
 import { ConnectionMachine, GIVE_UP_AT_CAP, QUIET_MS, connectionStateFor } from "../src/main/connection-state.js";
-import { writability, toConnection, clocksRun, isStale, timeDisplay } from "../renderer/src/connection.js";
+import {
+  writability,
+  methodPresent,
+  toConnection,
+  clocksRun,
+  isStale,
+  timeDisplay,
+} from "../renderer/src/connection.js";
 
 const hello = (overrides: Partial<HelloResult> = {}): HelloResult => ({
   protocol: PROTOCOL_VERSION,
@@ -83,7 +90,7 @@ describe("ConnectionMachine", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     pushed = [];
-    answer = hello();
+    answer = hello({ methods: ["hello", "config.get"] });
     machine = build();
   });
 
@@ -104,6 +111,9 @@ describe("ConnectionMachine", () => {
     expect(machine.current.state).toBe("live");
     expect(machine.current.orcaVersion).toBe("0.2.0-test");
     expect(machine.current.capabilities).toEqual([]);
+    /* And what it answers, which is the only way the renderer can ask "is `config.set`
+       served": a `HelloResult` never crosses the bridge, a snapshot does. */
+    expect(machine.current.methods).toEqual(["hello", "config.get"]);
     /* Two frames, not one: the socket becomes a stream before the handshake answers, and
        the status bar should say `connected` at the first of those rather than wait out an
        HTTP round trip it does not need. The second frame is the version arriving. */
@@ -231,7 +241,47 @@ describe("what a screen concludes from the state", () => {
     const connection = toConnection({ state: "live", since: "2026-03-01T09:00:00.000Z" });
     expect(connection.since.toISOString()).toBe("2026-03-01T09:00:00.000Z");
     expect(connection.capabilities).toEqual([]);
+    expect(connection.methods).toEqual([]);
     expect(connection.eventCursor).toBeUndefined();
+  });
+});
+
+/**
+ * The fine-grained question, which the capability cannot answer (#175's review): `hello`
+ * lists the dispatch table itself, and `runs.control` covers four tables — a daemon with a
+ * control model but no workspace answers `runs.cancel` and no `config.set` at all
+ * (`methodsFor` in packages/daemon/src/methods.ts).
+ */
+describe("is this method served", () => {
+  const live = (methods: string[], capabilities: string[] = ["runs.read", "runs.control"]) =>
+    ({ state: "live", capabilities, methods }) as Parameters<typeof methodPresent>[0];
+
+  it("answers from hello.methods when the daemon listed them", () => {
+    expect(methodPresent(live(["hello", "config.get", "config.set"]), "config.set")).toBe(true);
+    // Drives runs, serves no configuration: the capability says yes and the truth is no.
+    expect(methodPresent(live(["hello", "runs.cancel"]), "config.set")).toBe(false);
+  });
+
+  it("falls back to the capability for a daemon that listed none", () => {
+    expect(methodPresent(live([], ["runs.read", "runs.control"]), "config.set")).toBe(true);
+    expect(methodPresent(live([], ["runs.read"]), "config.set")).toBe(false);
+  });
+
+  it("is never true in file mode, whatever was advertised", () => {
+    expect(
+      methodPresent({ state: "file", capabilities: ["runs.control"], methods: ["config.set"] }, "config.set"),
+    ).toBe(false);
+  });
+
+  it("keeps the control on screen while the daemon is not answering, if that daemon served it", () => {
+    /* The write is not possible now and would be taken if the connection came back, which
+       is `writability()`'s sentence on the control rather than a control that vanished. A
+       read-only daemon that stopped answering is still read-only, so it stays absent. */
+    const off = (methods: string[], state: "disconnected" | "reconnecting") =>
+      methodPresent({ state, capabilities: [], methods }, "config.set");
+    expect(off(["config.get", "config.set"], "disconnected")).toBe(true);
+    expect(off(["config.get", "config.set"], "reconnecting")).toBe(true);
+    expect(off(["config.get"], "disconnected")).toBe(false);
   });
 });
 

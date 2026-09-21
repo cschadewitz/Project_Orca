@@ -23,6 +23,7 @@ import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
 import { AgentsSurface } from "./agents/agents-surface.js";
+import { ConfigProvider } from "./config/config-context.js";
 import { ConfigSurface } from "./config/config-surface.js";
 import { AttentionSurface } from "./attention/attention-surface.js";
 import { WorkflowSurface } from "./workflow/workflow-surface.js";
@@ -354,9 +355,17 @@ export function App(): JSX.Element {
      itself stays the chrome's, which is what `onOpen` hands over. And the waiting feed, so
      that a step parked on a gate renders the *same* card the Attention list does without a
      second `inputs.list` and a second opinion about the one count (#161). */
+  /* And a third, for a reason of its own: the configuration draft. `ConfigSurface` is
+     unmounted by the surface switch above like every other screen, and a draft that
+     disappeared because somebody looked at a run would be the app throwing away what a
+     person typed. It is held here, outside the switch, and both of its consumers — the
+     Config surface and the Agents surface's policy panel — read the one model
+     (`config/config-context.tsx`). */
   return (
     <ArtifactPanelProvider onOpen={() => setPanelOpen(true)}>
-      <InlineAsksProvider feed={attention}>{chrome}</InlineAsksProvider>
+      <ConfigProvider>
+        <InlineAsksProvider feed={attention}>{chrome}</InlineAsksProvider>
+      </ConfigProvider>
     </ArtifactPanelProvider>
   );
 }

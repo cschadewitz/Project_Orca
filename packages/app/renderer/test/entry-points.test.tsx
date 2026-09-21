@@ -128,6 +128,19 @@ describe("deep links", () => {
     expect(landing()?.textContent).toContain("orca.permissions.json");
   });
 
+  it("lands the bare config link in the YAML, which is the document it names", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+
+    // `orca://config` is the configuration, and the configuration is `orca.config.yaml`
+    // (`route-table.ts`). Landing on a document means being in it, so the bytes take the
+    // keyboard rather than the form the person did not ask for.
+    fake.link("orca://config");
+
+    await waitFor(() => expect(activeSurface()).toContain("Config"));
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("orca.config.yaml"));
+  });
+
   it("lands an item link on Plan, and says which item it is holding", async () => {
     const { fake } = mount();
     await screen.findByRole("button", { name: "Attention" });

@@ -20,8 +20,11 @@
  *
  * - **The save bar is absent, not disabled, where there is nothing to send to.** File mode
  *   and a `--read-only` daemon have no `config.set` at all, and the form goes read-only
- *   with it (`writesPresent`, docs/design/40-connection-states.md). Disconnected keeps the
- *   bar, dims the values it is over and says why the buttons will not fire.
+ *   with it — which is asked of `hello.methods` (`useMethodPresent("config.set")`) rather
+ *   than of the `runs.control` capability, because a daemon serving a store outside a
+ *   workspace drives runs and still has no configuration to write
+ *   (docs/design/40-connection-states.md). Disconnected keeps the bar, dims the values it
+ *   is over and says why the buttons will not fire.
  * - **`⌘S` is registered in the `config` scope**, so it means "save this draft" where a
  *   draft is, and the command palette lists it because the palette is a view of the
  *   registry rather than a second table.
@@ -31,20 +34,20 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import type { ConnectionState } from "@orca/design";
-import type { ConfigDocument } from "@orca/protocol";
+import { CONFIG_SET_METHOD, type ConfigDocument } from "@orca/protocol";
 import { useSurfaceDensity } from "../appearance-context.js";
-import { useWritability, useWritesPresent } from "../chrome/use-connection.js";
+import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
 import { SURFACES } from "../chrome/surfaces.js";
 import { useKeyboard } from "../keyboard-context.js";
 import { scopeProps } from "../keyboard-map.js";
-import { ObjectHeader, StateView, Text, textClass, type ConfigFieldDocument } from "../ui/index.js";
+import { ObjectHeader, StateView, Text, textClass } from "../ui/index.js";
 import { ConfigForm } from "./config-form.js";
 import { DraftBar } from "./draft-bar.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
 import { RawView } from "./raw-view.js";
 import { agentPolicies, buildSections, fieldPaths, patchFrom, placeErrors } from "./config-model.js";
-import { useConfig } from "./use-config.js";
+import { useConfig } from "./config-context.js";
 import "./config.css";
 
 export interface ConfigSurfaceProps {
@@ -65,12 +68,21 @@ export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Ele
   useSurfaceDensity();
   const feed = useConfig();
   const writability = useWritability();
-  const writesPresent = useWritesPresent();
+  /* The method, not the capability: `runs.control` says the daemon drives runs, and a
+     daemon serving a store outside a workspace drives runs and has no `config.set` at all
+     (`methodPresent`, packages/daemon/src/methods.ts `methodsFor`). */
+  const canSet = useMethodPresent(CONFIG_SET_METHOD);
   const live = connection === "live";
 
-  const [view, setView] = useState<View>("form");
-  /** The path **raw** was pressed on, and which document it was in. */
-  const [target, setTarget] = useState<{ path: string; document: ConfigFieldDocument } | undefined>(undefined);
+  const [view, setView] = useState<View>(open === "config" ? "raw" : "form");
+  /** The path **raw** was pressed on. Only the YAML has a "show raw" on this screen. */
+  const [target, setTarget] = useState<string | undefined>(undefined);
+
+  /* A deep link naming the YAML arrives at a surface that may already be mounted — the
+     draft model is above the surface switch now, and this screen is not remounted for it. */
+  useEffect(() => {
+    if (open === "config") setView("raw");
+  }, [open]);
 
   const data = feed.state.phase === "ready" ? feed.state.data : undefined;
   const draft = feed.draftOf("config");
@@ -96,13 +108,17 @@ export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Ele
           : 1
         : patchFrom(draft.fields, data.config.parsed).length;
 
-  const showRaw = useCallback((path: string, document: ConfigFieldDocument) => {
-    setTarget({ path, document });
-    if (document === "config") setView("raw");
+  /* One document has fields with a **raw** button on this screen: the YAML. The sidecar is
+     rendered as its rules and its bytes, and nothing here draws a `document="permissions"`
+     field — the policy editor does, and it is mounted on the Agents surface with no
+     `onShowRaw` at all. So the target is a path, not a path and a document. */
+  const showRaw = useCallback((path: string) => {
+    setTarget(path);
+    setView("raw");
   }, []);
 
   const onSave = useCallback(() => feed.save("config"), [feed]);
-  useSaveKey(changes > 0 && writesPresent && writability.can, onSave);
+  useSaveKey(changes > 0 && canSet && writability.can, onSave);
 
   if (feed.state.phase === "loading") {
     return (
@@ -176,8 +192,12 @@ export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Ele
 
       {/* Last-known values dim; the labels around them do not (40-connection-states.md). */}
       <div className={`orca-config__body${live ? "" : " orca-stale-value"}`}>
+        {/* Visible, and not a live region (RULES.md rule 11). The first error's sentence is
+            announced once by `use-config.ts` when the Validate or the Save comes back; a
+            second region repeating the list would interrupt with what is already on screen
+            and under the person's own cursor. */}
         {placed.unplaced.length > 0 && (
-          <div className="orca-config__unplaced" role="alert">
+          <div className="orca-config__unplaced">
             <Text style="label-strong">The daemon reported errors that belong to no field on this form:</Text>
             <ul>
               {placed.unplaced.map((error) => (
@@ -194,7 +214,7 @@ export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Ele
             sections={sections}
             edits={edits}
             errors={placed.byPath}
-            {...(writesPresent ? { onChange: (path, value) => feed.setField("config", path, value) } : {})}
+            {...(canSet ? { onChange: (path, value) => feed.setField("config", path, value) } : {})}
             onShowRaw={showRaw}
           />
         ) : (
@@ -202,8 +222,11 @@ export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Ele
             path={config.path}
             text={rawText}
             label="orca.config.yaml"
-            {...(target?.document === "config" ? { target: target.path } : {})}
-            {...(writesPresent ? { onChange: (text: string) => feed.setText("config", text) } : {})}
+            /* `orca://config` names this document, and landing on a document means being
+               in it — the same promise `orca://config/permissions` keeps below. */
+            autoFocus={open === "config"}
+            {...(target === undefined ? {} : { target })}
+            {...(canSet ? { onChange: (text: string) => feed.setText("config", text) } : {})}
           />
         )}
 
@@ -214,15 +237,26 @@ export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Ele
           text={permissions.text}
           label="orca.permissions.json"
           autoFocus={open === "permissions"}
-          {...(target?.document === "permissions" ? { target: target.path } : {})}
         />
 
         <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
+
+        {/* Said on the screen that writes the file, because it is the thing a person is
+            most likely to assume wrongly: `orca serve` reads the configuration once, at
+            boot, and the daemon answering right now is running on what it read then. */}
+        <Text style="caption">
+          A saved configuration takes effect on the next orca serve — the running daemon keeps the configuration it
+          booted with.
+        </Text>
       </div>
 
-      {/* Absent where there is nothing to send to, and hidden while disconnected so that a
-          screen of last-known values offers no write at all. */}
-      {writesPresent && live && hasDraft && (
+      {/* Absent where there is nothing to send to — file mode, a `--read-only` daemon, a
+          daemon whose `hello.methods` has no `config.set`. Present and *disabled* while
+          disconnected or reconnecting, with the reason on the two buttons: those are a
+          daemon that would take the write if it were answering, and
+          docs/design/40-connection-states.md asks for the reason on the control rather than
+          for a bar that vanishes with the draft it was counting. */}
+      {canSet && hasDraft && (
         <DraftBar
           changes={changes}
           busy={save.busy}

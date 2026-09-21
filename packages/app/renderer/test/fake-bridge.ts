@@ -267,12 +267,17 @@ const JOURNAL_LIST_LIMIT = 200;
  * which now includes `runs.control`: the daemon writes as of #160, so a screen test runs
  * against a daemon that takes commands. A test of what a read-only daemon looks like
  * pushes a connection whose capabilities say otherwise (#164).
+ *
+ * `methods` comes from the same fixture for the same reason: the main process folds
+ * `hello.methods` onto the snapshot, and a control that asks "is `config.set` served"
+ * (`useMethodPresent`) must be asking about the daemon this fake is.
  */
 const LIVE_CONNECTION: ConnectionSnapshot = {
   state: "live",
   since: AS_OF,
   orcaVersion: HELLO.orcaVersion,
   capabilities: HELLO.capabilities,
+  ...(HELLO.methods === undefined ? {} : { methods: HELLO.methods }),
 };
 
 /**

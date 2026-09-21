@@ -562,10 +562,13 @@ describe("Config: a form of named fields, and one region that speaks", () => {
     expect(screen.getByRole("textbox", { name: "orca.permissions.json" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Permissions" })).toBeTruthy();
 
-    /* Nothing on this surface is a live region except the errors, which are `alert`s on
-       the field they belong to. The save's own sentence goes to the app's one announcer
-       (#175) rather than to a region this screen mounted. */
-    expect(document.querySelectorAll('.orca-config [aria-live="polite"]')).toHaveLength(0);
+    /* Nothing on this surface speaks at all. A field's error is described, not announced —
+       it is on the control the person is editing, and rule 11 keeps interruption for the
+       things a person is not already looking at. The one sentence that is announced is the
+       result of a Validate or a Save, and it goes to the app's one announcer (#175). */
+    expect(
+      document.querySelectorAll(".orca-config [role=alert], .orca-config [role=status], .orca-config [aria-live]"),
+    ).toHaveLength(0);
     expect(announcers()).toHaveLength(1);
   });
 

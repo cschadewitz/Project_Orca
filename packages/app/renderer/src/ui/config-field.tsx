@@ -91,9 +91,16 @@ export function ConfigField({
           </span>
         )}
         {/* An error does not replace the help: "what this key means" is still the thing
-            you need in order to fix it. */}
+            you need in order to fix it.
+
+            It is described, not announced (RULES.md rule 11). `aria-describedby` reaches it
+            the moment focus is on the control, which is where the person editing the field
+            already is, and an error on the field you are typing in does not need to
+            interrupt whatever else is being read. The one sentence that *is* announced is
+            the first error, said once by `use-config.ts` when a Validate or a Save comes
+            back — a result, which is news. */}
         {error !== undefined && (
-          <span className={`orca-field__error ${textClass("caption")}`} id={errorId} role="alert">
+          <span className={`orca-field__error ${textClass("caption")}`} id={errorId}>
             {error}
           </span>
         )}

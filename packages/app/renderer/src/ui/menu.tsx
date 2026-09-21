@@ -65,6 +65,16 @@ export interface MenuItem {
  */
 export type MenuMeasurer = (trigger: Element, menu: Element) => MenuMeasurement;
 
+/**
+ * What may be put on the trigger from outside: the wiring a form field owns, and nothing
+ * that would change what the menu is. `ConfigFieldControl` is exactly this shape.
+ */
+export interface MenuTriggerProps {
+  id?: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: true;
+}
+
 export interface MenuProps {
   /** The accessible name of both the trigger and the list it opens. */
   label: string;
@@ -74,6 +84,17 @@ export interface MenuProps {
   children: ReactNode;
   /** The trigger's class, so a surface keeps its own disclosure styling. */
   triggerClassName?: string;
+  /**
+   * Ids a field wants on the control it wraps — `ConfigField`'s `control`, spread onto the
+   * trigger button.
+   *
+   * A `Menu` *is* the control when it renders an enum field, so the field's `htmlFor`, its
+   * `aria-describedby` and its `aria-invalid` have to land on the button. Without this they
+   * dangled: the label pointed at an id nothing carried, and the help and the error under
+   * the field were written for a screen reader that never reached them. The trigger keeps
+   * its own `aria-label` — an `id` names nothing.
+   */
+  triggerProps?: MenuTriggerProps;
   measure?: MenuMeasurer;
   /**
    * Controlled disclosure, for the one case a surface cannot press the trigger itself:
@@ -226,6 +247,7 @@ export function Menu({
   onChoose,
   children,
   triggerClassName,
+  triggerProps,
   measure = measureInDocument,
   open: controlled,
   onOpenChange,
@@ -314,6 +336,7 @@ export function Menu({
   return (
     <span className="orca-menu-anchor" ref={anchor}>
       <button
+        {...triggerProps}
         type="button"
         ref={trigger}
         className={triggerClassName}

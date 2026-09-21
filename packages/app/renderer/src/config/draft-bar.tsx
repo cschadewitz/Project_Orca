@@ -12,9 +12,10 @@
  *
  * - **It is absent, not disabled, where writes are absent.** File mode and a `--read-only`
  *   daemon have no `config.set` to call, and a greyed Save on a viewer reads as broken
- *   (docs/design/40-connection-states.md). The surface decides that with `writesPresent`
- *   and does not render this at all; `disabledReason` is for the other three states, where
- *   the daemon would take the write if it were answering.
+ *   (docs/design/40-connection-states.md). The surface decides that with
+ *   `useMethodPresent("config.set")` — the method the button calls, not the capability
+ *   above it — and does not render this at all; `disabledReason` is for the other three
+ *   states, where the daemon would take the write if it were answering.
  * - **A conflict is shown here and nowhere else.** `CONFIG_STALE` means somebody else wrote
  *   the file, and the one thing that must not happen is losing the draft over it — so the
  *   bar turns `--blocked`, says what happened and offers **Reload**, and the draft is still

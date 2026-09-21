@@ -17,7 +17,7 @@
  * yet: their surface is the Attention side of the app, and a tier list on this screen
  * would be the second place they are set.
  */
-import { useState, type JSX } from "react";
+import { useEffect, useReducer, type JSX } from "react";
 import type { Density } from "@orca/design";
 import { THEME_PREFERENCES, type ThemePreference } from "../../../src/preferences/schema.js";
 import { useAppearance } from "../appearance-context.js";
@@ -32,12 +32,14 @@ const DENSITIES: readonly Density[] = ["comfortable", "compact"];
 
 export function PreferencesSection({ surfaces }: PreferencesSectionProps): JSX.Element {
   const appearance = useAppearance();
-  const [preferences, setPreferences] = useState(() => appearance.preferences());
+  /* Read on every render rather than snapshotted once: `⌘⇧L` and `⌘⇧D` change the same
+     preferences from the keyboard map, and a copy taken at mount would leave this section
+     showing "light" under a dark window. The re-render comes from `useAppearanceChanges`,
+     which watches the attributes those shortcuts set. */
+  const preferences = appearance.preferences();
+  useAppearanceChanges();
 
-  const choose = (patch: Parameters<typeof appearance.set>[0]): void => {
-    appearance.set(patch);
-    setPreferences(appearance.preferences());
-  };
+  const choose = (patch: Parameters<typeof appearance.set>[0]): void => appearance.set(patch);
 
   return (
     <section className="orca-config__section" aria-label="App preferences">
@@ -58,8 +60,11 @@ export function PreferencesSection({ surfaces }: PreferencesSectionProps): JSX.E
             items={THEME_PREFERENCES.map((theme) => ({ id: theme, label: theme }))}
             onChoose={(item) => choose({ theme: item.id as ThemePreference })}
             triggerClassName="orca-input"
+            /* On the trigger, not on a `<span>`: the button is the control this field
+               labels, and ids on a span wire the label to nothing. */
+            triggerProps={control}
           >
-            <span {...control}>{preferences.theme}</span>
+            {preferences.theme}
           </Menu>
         )}
       </ConfigField>
@@ -77,12 +82,35 @@ export function PreferencesSection({ surfaces }: PreferencesSectionProps): JSX.E
               items={DENSITIES.map((density) => ({ id: density, label: density }))}
               onChoose={(item) => choose({ density: { [surface.id]: item.id as Density } })}
               triggerClassName="orca-input"
+              triggerProps={control}
             >
-              <span {...control}>{preferences.density[surface.id] ?? "comfortable"}</span>
+              {preferences.density[surface.id] ?? "comfortable"}
             </Menu>
           )}
         </ConfigField>
       ))}
     </section>
   );
+}
+
+/**
+ * Re-render when the appearance changes from anywhere else — which today means the two
+ * shortcuts, `⌘⇧L` and `⌘⇧D`.
+ *
+ * `Appearance` is actions and a reader, not a store with subscribers: the truth on screen
+ * is `data-theme` on the document and `data-density` on each surface (`appearance.ts` is
+ * the one owner of both). So this watches exactly those attributes rather than adding a
+ * second notion of current preferences that could disagree with the CSS.
+ */
+function useAppearanceChanges(): void {
+  const [, bump] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const observer = new MutationObserver(() => bump());
+    observer.observe(document.documentElement, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ["data-theme", "data-density"],
+    });
+    return () => observer.disconnect();
+  }, []);
 }

@@ -113,6 +113,19 @@ export interface ConnectionSnapshot {
   orcaVersion?: string;
   /** What the daemon said it can do. Absent means it has not said, which is not an error. */
   capabilities?: readonly DaemonCapability[];
+  /**
+   * The methods this daemon answers — `hello.methods`, which is `Object.keys` of its own
+   * dispatch table (ADR 0008): "a method this daemon will not answer is a method it does
+   * not advertise".
+   *
+   * It is carried beside `capabilities` because the two are different grains and a screen
+   * needs the fine one. `runs.control` says the daemon drives runs; it does not say whether
+   * *this* daemon serves `config.set` (it needs a `ConfigModel` as well) or
+   * `claims.release` (it needs a plan). A control asks for the method it is about to call.
+   * Absent means the daemon has not answered `hello` yet, or is too old to list them, and
+   * the capability is then the coarse fallback (`renderer/src/connection.ts`).
+   */
+  methods?: readonly string[];
 }
 
 /** How the app arrived at the store it is showing. */

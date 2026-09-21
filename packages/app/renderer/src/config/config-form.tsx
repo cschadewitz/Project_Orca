@@ -139,6 +139,9 @@ function Field({ node, edits, errors, onChange, onShowRaw }: FieldProps): JSX.El
               items={choices.map((choice) => ({ id: choice, label: choice }))}
               onChoose={(item) => onChange?.(node.path, item.id)}
               triggerClassName={`orca-input ${textClass("mono-body")}`}
+              /* The trigger *is* this field's control, so the field's ids go on it: a label
+                 pointing at an id nothing carries is a label nobody can follow. */
+              triggerProps={control}
             >
               {asText(value) === "" ? "Choose" : asText(value)}
             </Menu>
