@@ -37,8 +37,11 @@ nothing else about the layout changes per platform.
 
 Attention is a surface, not a notification tray: it is first in the sidebar, it has a
 permanent keyboard address (`⌘1`), and it is the app's landing screen. When nothing is waiting
-it says so and the runs that failed are still listed below, so the top item in the sidebar is
-never a dead end.
+it says so and the runs that failed are still listed below; when nothing has failed either, it
+lists the runs that are in flight, and `Enter` opens the selected one. So the top item in the
+sidebar is never a dead end: it answers "what needs me" first and "what is happening" when the
+answer to the first is nothing. Only a workspace with nothing waiting, nothing failed and
+nothing running is an empty screen, and then the screen is honest.
 
 ## Dual spine
 

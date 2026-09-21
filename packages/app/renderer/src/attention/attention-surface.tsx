@@ -7,6 +7,13 @@
  * - **Two regions, in the tier table's order.** Permission asks and gates are cards, tier 1
  *   above tier 2; failed runs are rows below them and out of the count. A failure is
  *   something to go and read, not something a person is being asked.
+ * - **At zero it says what is running, not that there is nothing (#256).** With nothing
+ *   waiting and nothing failed the surface lists the running runs in place of the empty
+ *   state — not beside the waits, and not as a fourth tier, because a running run is
+ *   explicitly not asking for anybody's attention. It is the landing screen, and "your work
+ *   is all moving, here it is" is the answer a person came for; "nothing needs you" with a
+ *   blank page under it is not. Nothing is running either, and the empty state is the truth
+ *   again.
  * - **Cards are not rows, so they are not virtualised.** The list substrate is for
  *   fixed-height rows read off `--row-h` (rule 9); a card carries a question, its
  *   consequences and its controls and is as tall as it needs to be. What is bounded is the
@@ -30,7 +37,7 @@ import type { OpenInputView, RunSummaryView } from "@orca/protocol";
 import { useWritability } from "../chrome/use-connection.js";
 import { useKeyboard } from "../keyboard-context.js";
 import { VirtualList } from "../list/index.js";
-import { StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
+import { Duration, StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
 import type { AnswerRequest } from "./answer-card.js";
 import { GateCard } from "./gate-card.js";
 import { PermissionCard } from "./permission-card.js";
@@ -65,7 +72,8 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
   const live = connection === "live";
 
   const waits = state.phase === "ready" ? state.waits : EMPTY_WAITS;
-  const failures = state.phase === "ready" ? state.failures : EMPTY_FAILURES;
+  const failures = state.phase === "ready" ? state.failures : EMPTY_RUNS;
+  const running = state.phase === "ready" ? state.running : EMPTY_RUNS;
 
   const [focusIndex, setFocusIndex] = useState(0);
   const [failureIndex, setFailureIndex] = useState<number | undefined>(undefined);
@@ -162,11 +170,19 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
       )}
 
       {waits.length === 0 ? (
-        <StateView
-          kind="empty"
-          title="Nothing needs you"
-          body="Gates and permission asks appear here the moment a run raises one."
-        />
+        /* Nothing is waiting and nothing has failed: the landing screen says what is in
+           flight rather than that there is nothing (#256). With failures below, the screen
+           already has something on it and the empty state stands — the shape only changes
+           where it would otherwise be blank. */
+        failures.length === 0 && running.length > 0 ? (
+          <Running runs={running} live={live} {...(onOpenRun ? { onOpenRun } : {})} />
+        ) : (
+          <StateView
+            kind="empty"
+            title="Nothing needs you"
+            body="Gates and permission asks appear here the moment a run raises one."
+          />
+        )
       ) : (
         <section
           className="orca-attn__section"
@@ -222,7 +238,95 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
 }
 
 const EMPTY_WAITS: readonly OpenInputView[] = [];
-const EMPTY_FAILURES: readonly RunSummaryView[] = [];
+const EMPTY_RUNS: readonly RunSummaryView[] = [];
+
+/**
+ * What is in flight, where the empty state would otherwise be (#256).
+ *
+ * A component of its own rather than a branch inline, because it owns two things that have
+ * to go away with it: a selection, and `Enter`. One list per scope is the substrate's rule
+ * (AGENTS.md), and this list and the failures list are both in `list` — which is safe here
+ * and only here, because this one is drawn *only* when there are no failures, so the two
+ * are never mounted at once.
+ *
+ * A running run is not a tier and is not counted: it asks nothing of anybody. It is here so
+ * that the app's landing screen answers "what is happening" for a person whose work is all
+ * moving, instead of telling them there is nothing.
+ */
+function Running({
+  runs,
+  live,
+  onOpenRun,
+}: {
+  runs: readonly RunSummaryView[];
+  live: boolean;
+  onOpenRun?: (runId: string) => void;
+}): JSX.Element {
+  const [index, setIndex] = useState<number | undefined>(undefined);
+  const keyboard = useKeyboard();
+  /* Through a ref for the reason `useSurfaceKeys` uses one: the list changes on every push
+     and the shortcut must not be unregistered and re-registered under a keypress. */
+  const open = useRef<(() => void) | undefined>(undefined);
+  open.current =
+    onOpenRun === undefined
+      ? undefined
+      : () => {
+          const run = index === undefined ? undefined : runs[index];
+          if (run) onOpenRun(run.id);
+        };
+
+  /* Registered only when there is somewhere to go, the same condition `G` on a card takes:
+     a shortcut that navigates nowhere is worse than one that is not there. */
+  const navigable = onOpenRun !== undefined;
+  useEffect(() => {
+    if (!navigable) return;
+    return keyboard.register({
+      scope: "list",
+      key: "Enter",
+      label: "Open the selected run",
+      action: () => open.current?.(),
+    });
+  }, [keyboard, navigable]);
+
+  return (
+    <section className="orca-attn__section orca-attn__running" aria-label="Running runs">
+      <Text style="eyebrow" as="h2">
+        Running
+      </Text>
+      <Text style="caption">Nothing is waiting on you.</Text>
+      <VirtualList
+        items={runs}
+        label="Running runs"
+        className="orca-attn__running-list"
+        rowId={(run) => `attention-running-${run.id}`}
+        rowClassName={() => "orca-attn__row orca-attn__row--listed"}
+        renderRow={(run) => <RunningRow run={run} live={live} />}
+        selectedIndex={index}
+        onSelect={setIndex}
+        noun="running run"
+        ticks={[]}
+      />
+      {navigable && <Text style="caption">Enter opens the selected run.</Text>}
+    </section>
+  );
+}
+
+/** A running run, as a row: what it is, and how long it has been going. */
+function RunningRow({ run, live }: { run: RunSummaryView; live: boolean }): JSX.Element {
+  return (
+    <>
+      <StatusChip status={run.status} />
+      <span className={`orca-attn__run-name ${textClass("label")}`}>{run.name}</span>
+      {/* Accruing while the daemon is answering; frozen at what it last said when it is
+          not, because a duration that kept ticking off a dead socket would be invented. */}
+      {live && run.startedAt !== undefined ? (
+        <Duration since={new Date(run.startedAt)} />
+      ) : (
+        <Duration ms={run.durationMs ?? 0} />
+      )}
+    </>
+  );
+}
 
 /**
  * One waiting item. The tier decides which card it is and **nothing else differs** — same
@@ -258,7 +362,7 @@ function FailedRow({ run, live }: { run: RunSummaryView; live: boolean }): JSX.E
       {/* The glyph and the word are `StatusChip`'s (rule 4); nothing here says "failed" in
           colour alone or in a second voice. */}
       <StatusChip status={run.status} />
-      <span className={`orca-attn__failed-name ${textClass("label")}`}>{run.name}</span>
+      <span className={`orca-attn__run-name ${textClass("label")}`}>{run.name}</span>
       {run.error && <Text style="caption">{run.error.message}</Text>}
       <Time at={new Date(run.finishedAt ?? run.createdAt)} show={live ? "both" : "absolute"} />
     </>

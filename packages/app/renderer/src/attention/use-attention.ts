@@ -1,6 +1,6 @@
 /**
- * The Attention surface's data: one `inputs.list` and one `runs.list` for the page, then
- * the push stream for everything after them.
+ * The Attention surface's data: one `inputs.list` and two `runs.list` for the page — the
+ * failures and the runs in flight — then the push stream for everything after them.
  *
  * The rule every list in this app keeps — updates without refetching — has one exception
  * here, and it is the same exception `use-runs.ts` makes. `input.opened` carries the
@@ -20,6 +20,13 @@
  * They are deliberately best-effort: a store whose run list will not answer still has gates
  * in it, and hiding the gates behind that failure would be the app withholding the thing a
  * person came for.
+ *
+ * The running runs are read the same way and with the same best-effort rule (#256). They
+ * are **not** a tier: nothing about a running run is asking for a person, and it is only
+ * ever drawn where the empty state would otherwise be. It is one more read on the page and
+ * not one more subscription — the `run.changed` listener below already hears every status
+ * change, so the same frame that drops a run out of the failures can put it into the
+ * running list.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { OpenInputView, ProtocolError, RunSummaryView } from "@orca/protocol";
@@ -38,6 +45,12 @@ export type AttentionState =
       waiting: number;
       /** Tier 3, below the waits and out of the count. */
       failures: readonly RunSummaryView[];
+      /**
+       * What is moving. Not a tier and never beside the waits: this is what the surface
+       * shows instead of "nothing needs you" when nothing is waiting and nothing has
+       * failed (#256).
+       */
+      running: readonly RunSummaryView[];
       /** When the daemon answered the read the page was drawn from. */
       asOf: string;
     };
@@ -72,16 +85,21 @@ export function useAttention(): AttentionFeed {
      "have I seen this?" question is asked out here, off a ref that trails the state by a
      commit. A stale answer costs one redundant call and nothing else, because both merges
      replace rather than duplicate. The same trick `runs/use-runs.ts` uses. */
-  const held = useRef<{ waits: ReadonlySet<string>; failures: ReadonlySet<string> }>({
+  const held = useRef<{ waits: ReadonlySet<string>; failures: ReadonlySet<string>; running: ReadonlySet<string> }>({
     waits: new Set(),
     failures: new Set(),
+    running: new Set(),
   });
 
   useEffect(() => {
     held.current =
       state.phase === "ready"
-        ? { waits: new Set(state.waits.map((i) => i.id)), failures: new Set(state.failures.map((r) => r.id)) }
-        : { waits: new Set(), failures: new Set() };
+        ? {
+            waits: new Set(state.waits.map((i) => i.id)),
+            failures: new Set(state.failures.map((r) => r.id)),
+            running: new Set(state.running.map((r) => r.id)),
+          }
+        : { waits: new Set(), failures: new Set(), running: new Set() };
   }, [state]);
 
   const answered = useCallback((requestId: string) => {
@@ -94,23 +112,26 @@ export function useAttention(): AttentionFeed {
   useEffect(() => {
     let live = true;
     setState({ phase: "loading" });
-    void Promise.all([window.orca.inputs.list(), window.orca.runs.list({ status: ["failed"] })]).then(
-      ([inputs, runs]) => {
-        if (!live) return;
-        if (!inputs.ok) {
-          setState({ phase: "error", error: inputs.error });
-          return;
-        }
-        setState({
-          phase: "ready",
-          waits: orderWaits(inputs.result.inputs),
-          waiting: inputs.result.waiting,
-          // Best-effort, see the header: no gates are hidden because the run list did not answer.
-          failures: runs.ok ? orderRuns(runs.result.runs) : [],
-          asOf: inputs.result.asOf,
-        });
-      },
-    );
+    void Promise.all([
+      window.orca.inputs.list(),
+      window.orca.runs.list({ status: ["failed"] }),
+      window.orca.runs.list({ status: ["running"] }),
+    ]).then(([inputs, failed, running]) => {
+      if (!live) return;
+      if (!inputs.ok) {
+        setState({ phase: "error", error: inputs.error });
+        return;
+      }
+      setState({
+        phase: "ready",
+        waits: orderWaits(inputs.result.inputs),
+        waiting: inputs.result.waiting,
+        // Best-effort, see the header: no gates are hidden because the run list did not answer.
+        failures: failed.ok ? orderRuns(failed.result.runs) : [],
+        running: running.ok ? orderRuns(running.result.runs) : [],
+        asOf: inputs.result.asOf,
+      });
+    });
     return () => {
       live = false;
     };
@@ -140,16 +161,24 @@ export function useAttention(): AttentionFeed {
       });
     };
 
-    /** A run that has just failed: one `runs.get` for the row, then insert it in order. */
-    const resolveFailure = (runId: string): void => {
+    /**
+     * A run this surface does not hold a row for: one `runs.get` for what the notification
+     * does not carry — a name, a workflow, a duration — then file it in the list the
+     * *notification* named.
+     *
+     * The notification decides which list, not the fetched run: the push is the newer of
+     * the two, and a `runs.get` that answers a moment behind it would file a run that has
+     * just failed under what it was doing before. One call serves both lists, because the
+     * two are views of the same object and a run can only be in one of them — a run that
+     * failed and was re-driven leaves the failures and joins the running in one commit.
+     */
+    const resolveRun = (runId: string, into: RunList): void => {
       if (resolvingRuns.current.has(runId)) return;
       resolvingRuns.current.add(runId);
       void window.orca.runs.get({ runId }).then((result) => {
         resolvingRuns.current.delete(runId);
         if (!live || !result.ok) return;
-        setState((prev) =>
-          prev.phase === "ready" ? { ...prev, failures: mergeRun(prev.failures, result.result.run) } : prev,
-        );
+        setState((prev) => (prev.phase === "ready" ? file(prev, result.result.run, into) : prev));
       });
     };
 
@@ -165,20 +194,23 @@ export function useAttention(): AttentionFeed {
       stream.on("input.answered", (params) => answered(params.requestId)),
 
       stream.on("run.changed", (params) => {
-        const known = held.current.failures.has(params.runId);
-        if (params.status === "failed") {
-          if (known) return;
-          // The row needs a name, a workflow and a duration, none of which is on the
-          // notification — one `runs.get`, the same resolution `use-runs.ts` makes.
-          resolveFailure(params.runId);
+        const heldNow = held.current;
+        const listed = heldNow.failures.has(params.runId) || heldNow.running.has(params.runId);
+        if (params.status === "failed" || params.status === "running") {
+          // A row this surface has never drawn needs a name, a workflow and a duration,
+          // none of which is on the notification — one `runs.get`, the same resolution
+          // `use-runs.ts` makes. A run already in the *other* list is resolved too, because
+          // the row it moves to is a different row.
+          const into: RunList = params.status === "failed" ? "failed" : "running";
+          const already = into === "failed" ? heldNow.failures.has(params.runId) : heldNow.running.has(params.runId);
+          if (!already) resolveRun(params.runId, into);
           return;
         }
-        // A failed run that was re-driven and is running again is no longer a failure on
-        // this screen, whatever else it is.
-        if (known) {
-          setState((prev) =>
-            prev.phase === "ready" ? { ...prev, failures: prev.failures.filter((r) => r.id !== params.runId) } : prev,
-          );
+        // Succeeded, cancelled, waiting, stale: not a failure and not in flight, so this
+        // screen has nothing to say about it. A failed run that was re-driven leaves here
+        // by the branch above instead.
+        if (listed) {
+          setState((prev) => (prev.phase === "ready" ? forget(prev, params.runId) : prev));
         }
       }),
     ];
@@ -198,4 +230,31 @@ export function useAttention(): AttentionFeed {
   }, [state]);
 
   return { state, reload, answered };
+}
+
+/** The two lists of runs this surface holds. Neither is a tier; the failures are one. */
+type RunList = "failed" | "running";
+
+/**
+ * Put one resolved run in one of the two lists, and out of the other.
+ *
+ * Written as a pure function of the state so both lists move in a single commit: a run
+ * that failed and was re-driven must not be a row in both of them for the frame between
+ * two updates.
+ */
+function file(state: Extract<AttentionState, { phase: "ready" }>, run: RunSummaryView, into: RunList): AttentionState {
+  return {
+    ...state,
+    failures: into === "failed" ? mergeRun(state.failures, run) : state.failures.filter((r) => r.id !== run.id),
+    running: into === "running" ? mergeRun(state.running, run) : state.running.filter((r) => r.id !== run.id),
+  };
+}
+
+/** Drop a run from both lists: it is neither failed nor in flight any more. */
+function forget(state: Extract<AttentionState, { phase: "ready" }>, runId: string): AttentionState {
+  return {
+    ...state,
+    failures: state.failures.filter((r) => r.id !== runId),
+    running: state.running.filter((r) => r.id !== runId),
+  };
 }

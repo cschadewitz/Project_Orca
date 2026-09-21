@@ -10,8 +10,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import type { NotificationMessage, OpenInputView } from "@orca/protocol";
+import type { NotificationMessage, OpenInputView, RunSummaryView } from "@orca/protocol";
+import { ANNOUNCER_ATTRIBUTE } from "../src/a11y/announcer.js";
 import { cardName } from "../src/attention/answer-card.js";
+import { RUNS } from "./fixtures.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
 import { DESTRUCTIVE_GATE, FIVE_GATES, INPUTS_AS_OF, PERMISSION_ASK, UNLOADED_GATE } from "./fixtures-inputs.js";
@@ -322,6 +324,83 @@ describe("failed runs, below the waits", () => {
     expect(ids.every((id) => id.startsWith("attention-failure-run-"))).toBe(true);
     expect(within(list).getByText("SSO rollout")).toBeTruthy();
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("what the landing screen says at zero (#256)", () => {
+  /** `runs.list` answering from exactly these, honouring the status filter the hook sends. */
+  function serveRuns(runs: readonly RunSummaryView[]): void {
+    fake.script({
+      "runs.list": (params) => {
+        const wanted = params.status;
+        const matching = runs.filter((r) => !wanted?.length || wanted.includes(r.status));
+        return { ok: true, result: { runs: [...matching], total: matching.length, asOf: INPUTS_AS_OF } };
+      },
+    });
+  }
+
+  const RUNNING = RUNS.filter((r) => r.status === "running");
+  const FAILED = RUNS.filter((r) => r.status === "failed");
+
+  it("lists the running runs, rather than saying nothing needs you, when nothing waits and nothing failed", async () => {
+    serve([]);
+    serveRuns(RUNNING);
+    renderChrome(h);
+
+    const list = await screen.findByRole("listbox", { name: "Running runs" });
+    const rows = within(list).getAllByRole("option");
+    expect(rows).toHaveLength(RUNNING.length);
+    expect(within(list).getByText("Add the SSO callback")).toBeTruthy();
+    // The landing screen answers "what is happening" instead of "there is nothing".
+    expect(screen.queryByText("Nothing needs you")).toBeNull();
+    // Still nothing waiting, and the count says so in the daemon's own words.
+    expect(screen.getByText("nothing waiting")).toBeTruthy();
+    // Rows, not cards, and not a second opinion about what is in flight.
+    expect(screen.queryByRole("region", { name: /^gate,/ })).toBeNull();
+  });
+
+  it("says nothing needs you when nothing is waiting, nothing failed and nothing is running", async () => {
+    serve([]);
+    serveRuns([]);
+    renderChrome(h);
+
+    expect(await screen.findByText("Nothing needs you")).toBeTruthy();
+    expect(screen.queryByRole("listbox", { name: "Running runs" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "Failed runs" })).toBeNull();
+  });
+
+  it("is unchanged when something has failed: the rows are the failures, and the running runs stay off", async () => {
+    serve([]);
+    serveRuns([...FAILED, ...RUNNING]);
+    renderChrome(h);
+
+    const list = await screen.findByRole("listbox", { name: "Failed runs" });
+    expect(within(list).getByText("SSO rollout")).toBeTruthy();
+    // One `VirtualList` per scope: the running list is never mounted beside this one, which
+    // is what keeps both of them in `list` legal.
+    expect(screen.queryByRole("listbox", { name: "Running runs" })).toBeNull();
+    expect(screen.getByText("Nothing needs you")).toBeTruthy();
+  });
+
+  it("opens a running run with Enter, and adds no live region and no second subscription", async () => {
+    serve([]);
+    serveRuns(RUNNING);
+    renderChrome(h);
+    const list = await screen.findByRole("listbox", { name: "Running runs" });
+
+    // Still the app's one announcer, and the rows are not in it: a run that is merely
+    // running is not something to say out loud (RULES.md rule 11).
+    expect(document.querySelectorAll(`[${ANNOUNCER_ATTRIBUTE}]`)).toHaveLength(1);
+    expect(list.closest("[aria-live]")).toBeNull();
+    // One feed for the whole app, as #253 left it — the running runs are one more read on
+    // the page, not a second opinion pushed to a second subscriber.
+    expect(fake.subscribers).toBe(1);
+
+    fireEvent.click(within(list).getAllByRole("option")[0]!);
+    fireEvent.keyDown(list, { key: "Enter", code: "Enter" });
+
+    // Each row opens its run: Attention is left behind for the run it named.
+    await waitFor(() => expect(screen.queryByTestId("attention")).toBeNull());
   });
 });
 

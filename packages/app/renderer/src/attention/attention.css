@@ -78,13 +78,16 @@
   padding-bottom: 0;
 }
 
-.orca-attn__failures {
+.orca-attn__failures,
+/* What is in flight, drawn where the empty state would be and only then (#256): it takes
+   the height the failures list would have had, because the two are never both on screen. */
+.orca-attn__running {
   min-height: 0;
   flex: 1;
 }
 
 /* type: label */
-.orca-attn__failed-name {
+.orca-attn__run-name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;

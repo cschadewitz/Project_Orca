@@ -12,6 +12,13 @@ as a notification that can be missed.
 | **Gate** | A run is paused for a human decision | Title bar, Attention, the run it came from, OS notification after 60s | No |
 | **Failure** | A run failed and will not proceed | Attention (below waits), the run, OS notification on run failure only | No |
 
+A running run is **not** a fourth tier and is not in the count: it asks nothing of anybody.
+It appears on this surface in one place only — where the empty state would otherwise be, when
+nothing is waiting and nothing has failed — because the surface is the app's landing screen
+and "your work is all moving, here it is" is a better answer there than "nothing needs you"
+over a blank page (#256). The rows are the failures' rows, `Enter` opens the selected run, and
+the moment anything waits or fails the tiers above take the screen back.
+
 A permission ask is more urgent than a gate because an agent turn is held open and a host is
 occupied while it waits. It is the only thing in the app that may steal focus, and only when
 the window is already focused — it never raises the window.
