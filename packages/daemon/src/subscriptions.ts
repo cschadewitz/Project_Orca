@@ -26,13 +26,14 @@ import {
   AGENT_CHANGED,
   AGENT_UPDATE,
   CONFIG_CHANGED,
+  PLAN_CHANGED,
   type AgentView,
   type ConfigDocument,
   type DaemonNotification,
   type NotificationMessage,
   type SubscribeParams,
 } from "@orca/protocol";
-import { notificationsFor, wants } from "./notifications.js";
+import { notificationsFor, planChangeKindsFor, wants } from "./notifications.js";
 
 /** At most one `agent.update` notification per step per this many milliseconds. */
 export const AGENT_BATCH_MS = 100;
@@ -73,6 +74,28 @@ export interface ConfigChangeSource {
   ): () => void;
 }
 
+/** The four fields `plan.changed` is folded from. Every plan journal entry has them. */
+export interface PlanJournalEntry {
+  planId: string;
+  seq: number;
+  at: string;
+  type: string;
+}
+
+/**
+ * What a subscription needs to push `plan.changed`: the plan journal's own listener seam.
+ * `PlanJournal` (`packages/store/src/plan-store.ts`) satisfies it structurally, so the daemon
+ * keeps one narrow seam onto the store here in the same way `SubscriptionSource` is one onto
+ * the engine - and a test can drive it with an array.
+ *
+ * It hears *this process's* writes, which is the same boundary the run feed has: a plan a CLI
+ * beside the daemon changed lands on the next read, not as a push - a property of an
+ * in-memory listener list rather than of the store, which re-reads under a lock (#196).
+ */
+export interface PlanChangeSource {
+  subscribe(listener: (entry: PlanJournalEntry) => void): () => void;
+}
+
 /** Where a subscription's frames go. The socket writes them; a test collects them. */
 export type SendNotification = (message: NotificationMessage) => void;
 
@@ -93,6 +116,12 @@ export interface SubscriptionOptions {
    * of the workspace, not of a run.
    */
   config?: ConfigChangeSource | undefined;
+  /**
+   * Plan journal changes, when this daemon serves a plan. A subscription scoped to one run
+   * ignores it for the same reason it ignores `agent.changed`: a plan outlives every run in
+   * it, so a run screen would only be woken by work it is not showing.
+   */
+  plans?: PlanChangeSource | undefined;
   /** Overridable so a test can hold the batch window open or close it by hand. */
   batchMs?: number | undefined;
 }
@@ -121,6 +150,7 @@ export class Subscription {
   private detach: (() => void) | undefined;
   private detachAgents: (() => void) | undefined;
   private detachConfig: (() => void) | undefined;
+  private detachPlans: (() => void) | undefined;
   /** Events that arrived while the replay was still reading the log. */
   private buffered: OrcaEvent[] | undefined;
   private stopped = false;
@@ -176,6 +206,24 @@ export class Subscription {
         });
       });
 
+    // A plan is not a run either, so the same rule: store-wide subscriptions only. There is
+    // nothing to replay - `since` is a run's sequence number - and the current answer is one
+    // `schedule.get` away.
+    if (runId === undefined && this.opts.plans)
+      this.detachPlans = this.opts.plans.subscribe((entry) => {
+        if (this.stopped) return;
+        this.emit({
+          method: PLAN_CHANGED,
+          params: {
+            subscriptionId: this.id,
+            planId: entry.planId,
+            kinds: planChangeKindsFor(entry.type),
+            seq: entry.seq,
+            at: entry.at,
+          },
+        });
+      });
+
     let replayed = 0;
     let through = -1;
     if (runId !== undefined && since !== undefined) {
@@ -206,6 +254,8 @@ export class Subscription {
     this.detachAgents = undefined;
     this.detachConfig?.();
     this.detachConfig = undefined;
+    this.detachPlans?.();
+    this.detachPlans = undefined;
   }
 
   /** Route one event, returning how many frames it produced. */

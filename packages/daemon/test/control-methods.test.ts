@@ -27,7 +27,11 @@ import {
   AgentsPingResultSchema,
   CONTROL_METHODS,
   HelloResultSchema,
+  INPUTS_ANSWER_METHOD,
   InputsAnswerResultSchema,
+  RUNS_CANCEL_METHOD,
+  RUNS_RESUME_METHOD,
+  RUNS_START_METHOD,
   RunsStartResultSchema,
   SubscribeParamsSchema,
   parseNotification,
@@ -300,7 +304,11 @@ describe("hello", () => {
     const res = await call(h.ctx, "hello", { client: "test/1", protocol: { major: 1, minor: 4 } });
     const hello = HelloResultSchema.parse(res.result);
     expect(hello.capabilities).toContain("runs.control");
-    for (const m of CONTROL_METHODS) expect(hello.methods).toContain(m);
+    // The four that drive runs. `CONTROL_METHODS` also holds the plan writes as of #169, and
+    // this harness has no plan service - a method this daemon will not answer is a method it
+    // does not advertise, which is the whole rule.
+    for (const m of [RUNS_RESUME_METHOD, RUNS_CANCEL_METHOD, RUNS_START_METHOD, INPUTS_ANSWER_METHOD])
+      expect(hello.methods).toContain(m);
     expect(hello.methods).toContain("agents.ping");
   });
 

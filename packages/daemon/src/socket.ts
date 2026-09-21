@@ -100,6 +100,9 @@ export function attachSocket(server: Server, opts: SocketOptions): () => Promise
             // The configuration lives on the context for the same reason: it is not an
             // event feed, and a daemon can serve a workspace without one or the other.
             ...(opts.ctx.config ? { config: opts.ctx.config } : {}),
+            // Plan changes live on the context for the same reason: the plan journal is not
+            // an event feed, and a daemon can serve one without the other.
+            ...(opts.ctx.planSource ? { plans: opts.ctx.planSource } : {}),
             ...(opts.batchMs === undefined ? {} : { batchMs: opts.batchMs }),
           });
           subscriptions.set(id, subscription);

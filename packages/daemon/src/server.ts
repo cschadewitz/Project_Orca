@@ -98,7 +98,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     capabilities: opts.capabilities,
     reads: opts.reads,
     source: opts.source,
+    planSource: opts.planSource,
     control: opts.control,
+    planControl: opts.planControl,
     agents: opts.agents,
     config: opts.config,
   };

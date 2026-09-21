@@ -7,12 +7,21 @@ import { createRequire } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { openAcpSession, permissionPolicyPath } from "@orca/agents";
-import { AgentModel, ConfigModel, ControlModel, ReadModel, answerAndResume, startDaemon } from "@orca/daemon";
+import {
+  AgentModel,
+  ConfigModel,
+  ControlModel,
+  PlanControlModel,
+  ReadModel,
+  answerAndResume,
+  startDaemon,
+} from "@orca/daemon";
 import {
   AGENTS_PING_METHOD,
   AGENT_METHODS,
   CONTROL_METHODS,
   HELLO_METHOD,
+  PLAN_READ_METHODS,
   PROTOCOL_VERSION,
   READ_METHODS,
   SUBSCRIPTION_METHODS,
@@ -468,8 +477,8 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         // The same function the daemon's `inputs.answer` calls (`@orca/daemon`): answer,
         // then continue, with the refusals classified in one place. The continuation is
         // `ProgramService.resume` here so a finished program run still settles onto its
-        // Request; the daemon passes the plain orchestrator resume, which writes no
-        // documents (#196).
+        // Request; the daemon passes the plain orchestrator resume, because mirroring a
+        // program run onto a Request is `ProgramService`'s job and not a daemon's.
         const { request, state } = await answerAndResume(app.orchestrator, {
           requestId,
           answer: value,
@@ -527,7 +536,9 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         lease: { holder: `orca-serve@${hostname()}:${process.pid}` },
       });
       const storeDir = resolvePath(app.configDir, app.config.storeDir);
-      const reads = new ReadModel({ orchestrator: app.orchestrator });
+      // The plan travels with the read model (#169): `bootstrap` always builds a
+      // `PlanService`, so a daemon over a real workspace answers the nine plan reads too.
+      const reads = new ReadModel({ orchestrator: app.orchestrator, plan: app.plan });
       // Agents regardless of `--read-only`: listing health reads memory, and a ping spawns
       // an agent, shakes hands and closes without touching a run, a lease or a log.
       const agents = new AgentModel({ orchestrator: app.orchestrator, reads });
@@ -547,6 +558,17 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
             // So an "always" answer's sidecar write pushes `config.changed` like any other.
             config,
           });
+      // The plan's writes ride the same switch: `--read-only` omits them with the run
+      // controls, and they are present together or not at all.
+      const planControl =
+        readOnly || !reads.plans
+          ? undefined
+          : new PlanControlModel({
+              plan: app.plan,
+              orchestrator: app.orchestrator,
+              plans: reads.plans,
+              reads,
+            });
       const daemon = await startDaemon({
         host: ctx.flags.host as string | undefined,
         port,
@@ -560,18 +582,28 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         // `runs.subscribe` is a read either way: the socket fans out this process's own
         // event store, so a client sees what runs *this* daemon drives or observes. A run
         // appended by a separate CLI process lands in that store's files, not in this
-        // orchestrator's listeners, and still shows up on the next read (#196).
-        capabilities: readOnly ? ["runs.read", "runs.subscribe"] : ["runs.read", "runs.subscribe", "runs.control"],
+        // orchestrator's listeners, and still shows up on the next read - which is a
+        // property of an in-memory listener list, not of the store (#196 made the store
+        // multi-process safe). `plan.changed` has the same boundary, for the same reason.
+        capabilities: readOnly
+          ? ["runs.read", "runs.subscribe", "plan.read"]
+          : ["runs.read", "runs.subscribe", "runs.control", "plan.read", "plan.write"],
         reads,
         agents,
         config,
         ...(control ? { control } : {}),
+        ...(planControl ? { planControl } : {}),
         source: app.orchestrator,
+        // `plan.changed` is folded from this process's plan journal - the store's own
+        // listener seam. A plan a CLI beside this daemon changes lands on the next read,
+        // the same boundary the run feed has just above.
+        planSource: app.orchestrator.stores.plan.journal,
       });
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
       );
       ctx.out(`serving ${storeDir}: ${READ_METHODS.join(", ")}, ${AGENT_METHODS.join(", ")}`);
+      if (reads.plans) ctx.out(`serving the plan: ${PLAN_READ_METHODS.join(", ")}`);
       if (control) {
         ctx.out(`driving runs: ${CONTROL_METHODS.join(", ")}`);
         // Said out loud because it is a real cost that was accepted, not an oversight. The

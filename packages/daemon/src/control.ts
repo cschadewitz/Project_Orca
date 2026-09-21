@@ -57,11 +57,14 @@ export interface AnswerAndResumeOptions {
   /** Re-drive afterwards and return once the run is parked again or finished. Default true. */
   resume?: boolean | undefined;
   /**
-   * How to continue. Defaults to `Orchestrator.resume`, which is all the daemon may do: a
-   * `ProgramService.resume` additionally mirrors a finished program run onto its Request
-   * *document*, and a daemon writing documents beside a CLI is exactly #196. `orca answer`
-   * passes `ProgramService.resume`, because in a one-shot CLI process there is no second
-   * writer to lose the write to.
+   * How to continue. Defaults to `Orchestrator.resume`; `orca answer` passes
+   * `ProgramService.resume`, which additionally mirrors a finished program run onto its
+   * Request *document*.
+   *
+   * That difference used to be a safety rule - a daemon writing documents beside a CLI was
+   * exactly #196 - and is now a scope one: the document store re-reads under a lock, so the
+   * write would be safe, but mirroring a program run onto a Request is `ProgramService`'s
+   * job and the daemon is not running a program. It stays a caller's choice either way.
    */
   resumeWith?: ((runId: string) => Promise<RunState>) | undefined;
 }
@@ -275,7 +278,9 @@ export class ControlModel {
   /**
    * `runs.start`: create a run and drive it here until it parks or finishes.
    *
-   * A workflow and its vars, and no documents (`RunsStartParamsSchema` says why, #196).
+   * A workflow and its vars, and no documents - not because the store could not take them
+   * (#196 made it multi-process safe) but because submitting a request is a method still to
+   * be designed. `RunsStartParamsSchema` says the rest.
    * `requestId` and `workItemId` travel onto `run.created` and out on the `run.changed`
    * notification; neither is read back from a document store.
    */

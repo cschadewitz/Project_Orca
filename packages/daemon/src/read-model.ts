@@ -40,7 +40,7 @@ import {
   type WorkflowDefinition,
   type WorkItem,
 } from "@orca/core";
-import type { Orchestrator } from "@orca/engine";
+import type { Orchestrator, PlanService } from "@orca/engine";
 import type { WorkItemClaim } from "@orca/store";
 import {
   displayStatusForRun,
@@ -74,6 +74,7 @@ import {
   type WorkflowsListResult,
   type WorkItemView,
 } from "@orca/protocol";
+import { PlanModel } from "./plan-model.js";
 import { workflowSummaryView, workflowView } from "./workflow-model.js";
 
 /** The events a listing needs: a summary's, plus the one that says which agent worked the run. */
@@ -371,6 +372,13 @@ class Pass {
 
 export interface ReadModelOptions {
   orchestrator: Orchestrator;
+  /**
+   * The long-term plan, when this daemon serves one (#169). Present means the nine plan read
+   * methods are answered and advertised; absent means they are not in the table at all, the
+   * same promise `--read-only` makes about the writes. `bootstrap()` always builds one, so in
+   * practice a daemon over a real store has it and an embedder projecting runs alone does not.
+   */
+  plan?: PlanService | undefined;
   /** Defaults to the orchestrator's own clock, so a test can pin every `asOf` and duration. */
   clock?: Clock | undefined;
 }
@@ -378,10 +386,19 @@ export interface ReadModelOptions {
 export class ReadModel {
   private readonly orc: Orchestrator;
   private readonly clock: Clock;
+  /** The plan projection, or `undefined` when this daemon was given no plan service. */
+  readonly plans: PlanModel | undefined;
 
   constructor(opts: ReadModelOptions) {
     this.orc = opts.orchestrator;
     this.clock = opts.clock ?? opts.orchestrator.clock;
+    this.plans = opts.plan
+      ? new PlanModel({
+          plan: opts.plan,
+          orchestrator: opts.orchestrator,
+          ...(opts.clock ? { clock: opts.clock } : {}),
+        })
+      : undefined;
   }
 
   private pass(): Pass {
