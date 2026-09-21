@@ -7,12 +7,20 @@
  * and every rule carries the type style it expects (#211).
  */
 
+/* The root is the scroller, which is the shape a surface takes when it is a stack of
+   content rather than its own split layout (#275). Attention is the one that needs it: its
+   cards are explicitly not fixed-height and not virtualised, so five gates with consequence
+   lists are taller than the window — and the one screen whose whole job is "things blocked
+   on you" must not be able to hide the thing blocking you. `flex: 1` is what gives it the
+   pane's height to scroll against; `.orca-main` is bounded by the window for it. */
 .orca-attn-surface {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: var(--space-4);
   padding: var(--space-4);
   min-height: 0;
+  overflow-y: auto;
 }
 
 .orca-attn__head {
@@ -78,11 +86,17 @@
   padding-bottom: 0;
 }
 
+/* The floor is what keeps the list from being squeezed out of existence now that the root
+   scrolls (#275). Both of these hold a `VirtualList`, which needs a bounded height to
+   window against; inside a scrolling column `flex: 1` alone would let a tall stack of cards
+   shrink them to nothing — a "Failed" heading with no failures under it. Six rows is the
+   smallest list worth the heading, stated as a ratio to the bound row height and never as a
+   number of pixels; past that the root scrolls, which is the point. */
 .orca-attn__failures,
 /* What is in flight, drawn where the empty state would be and only then (#256): it takes
    the height the failures list would have had, because the two are never both on screen. */
 .orca-attn__running {
-  min-height: 0;
+  min-height: calc(var(--row-h) * 6);
   flex: 1;
 }
 

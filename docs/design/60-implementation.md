@@ -259,6 +259,56 @@ Two-line rows are `.orca-list--two-line`, whose height is `calc(var(--row-h) * 2
 the bound height, never a literal. The component layer has no two-line row class and
 `tokens.json` has no second row height; both belong there, beside the row they vary.
 
+## Scrolling is structural, not remembered
+
+`body` is `overflow: hidden` and `.orca-window` is a three-row grid of `--bar-title` / `1fr` /
+`--bar-status`, so a box that outgrows its share is **clipped, not scrolled**: no scrollbar, no
+wheel, no keyboard way down. Content below the fold does not exist. That makes "did this author
+remember a scroller" the difference between a screen working and half of it being silently
+unreachable, which is not a thing to leave to memory (#275).
+
+Two boxes in the shell own it so that a surface does not have to:
+
+- **`.orca-main`** and **`.orca-panel`** are `min-height: 0`. A flex or grid item's automatic
+  minimum size is its content, so without that declaration a tall child stretches the column
+  past the window instead of being bounded by it — and an `overflow-y: auto` under an unbounded
+  parent has infinite room and scrolls nothing. Every box between a scroll region and the pane
+  needs the same, which is why `min-height: 0` is on almost every layout class in the renderer's
+  stylesheets and is never a tidy-up.
+- **`.orca-panel__body`** is the dock's one scroll region, so whatever a surface hands up as
+  `content.body` scrolls without knowing it is in a dock. A surface cannot answer that question
+  for itself — it does not know how tall the column is, or whether it is a grid column or an
+  overlay — so it does not have to. `.orca-panel`'s own `overflow: hidden` is the clip that
+  keeps the enter animation and the overlay's shadow inside the column, and the head stays
+  outside the region it labels.
+
+A surface then chooses between two shapes, and the choice is about what it *is*:
+
+- **A stack of content scrolls at its root** — `flex: 1` for the pane's height, `overflow-y:
+  auto` to scroll against it. Attention is the one that needs it: its cards are deliberately not
+  fixed-height and not virtualised, so a handful of gates with consequence lists is taller than
+  the window, and it is the screen whose whole job is showing what is blocked on a person.
+- **A split layout scrolls in its regions** — Runs, Plan, Config, Agents and the workflow viewer
+  each bound their columns and put the scroll on the region that holds the long thing. **Do not
+  then also scroll the root**: two scrollers in one column is the second-scroller trap, and
+  nothing may nest a scroller inside `.orca-list__scroller` — the virtualiser windows rows
+  against that box, and a scroller inside it takes the wheel and breaks the arithmetic.
+
+A region that holds a `VirtualList` inside a scrolling root needs a **floor**, not just
+`flex: 1`: with the column overflowing there is no free space to grow into, and an item whose
+flex basis is zero shrinks to nothing — a "Failed" heading with no failures under it.
+`.orca-attn__failures` states six rows as `calc(var(--row-h) * 6)`, a ratio to the bound row
+height in the manner of `.orca-list--two-line`.
+
+Scrollbars need nothing: `color-scheme` travels with every theme block the generator emits (see
+the top of this file), so a scroller is in the theme the moment it exists.
+
+`packages/app/renderer/test/scroll-sweep.test.tsx` is the guard. It walks `SURFACES` — so the
+sixth surface is swept the day it is added — installs the real stylesheets off disk, and asserts
+that each surface declares a scroll region and that every box between that region and the pane
+is bounded. It does not measure: happy-dom has no layout engine, and the declaration is what the
+next author gets wrong.
+
 ## Event-sourced rendering
 
 The event log is the source of truth and the UI is a projection of it. Two implications for

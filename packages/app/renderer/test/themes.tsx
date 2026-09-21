@@ -26,7 +26,7 @@
  * `background-color`, … — off the element (`resolved`). Both are exercised in
  * `themes.test.tsx`.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { render, type RenderResult } from "@testing-library/react";
@@ -52,6 +52,43 @@ export function installDesignSystem(): void {
   style.id = STYLE_ID;
   style.textContent = `${css("tokens.css")}\n${css("components.css")}`;
   document.head.append(style);
+}
+
+/** The second `<style>`, so the surfaces can be installed over the layer or without it. */
+const SURFACE_STYLE_ID = "orca-surface-styles";
+
+/** Where the renderer's own stylesheets live; each surface imports its own from its module. */
+const rendererSrc = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+
+/**
+ * The renderer's own stylesheets, after the component layer and in no particular order
+ * among themselves — which is how a bundler emits them, since each is an `import` inside
+ * the surface module that owns it and no surface's rules touch another's.
+ *
+ * Vitest does not process CSS imports, so a surface's geometry is invisible to a test
+ * unless it is read off disk like this. Discovery is a directory walk rather than a list:
+ * a stylesheet added for a new surface has to be covered by `scroll-sweep.test.tsx`
+ * without anybody remembering to add it here, which is the whole point of a sweep.
+ */
+export function installSurfaceStyles(): void {
+  document.getElementById(SURFACE_STYLE_ID)?.remove();
+  const style = document.createElement("style");
+  style.id = SURFACE_STYLE_ID;
+  style.textContent = surfaceStylesheets()
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n");
+  document.head.append(style);
+}
+
+/** Every `.css` under `renderer/src`, `preview/` excluded: it is a dev-only build. */
+function surfaceStylesheets(): string[] {
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) return entry.name === "preview" ? [] : walk(path);
+      return entry.name.endsWith(".css") ? [path] : [];
+    });
+  return walk(rendererSrc).sort();
 }
 
 /** The theme the document is in. `undefined` clears it, which means "follow the OS". */

@@ -165,12 +165,14 @@
 
 /* ---------- the inspector, in the docked panel ---------- */
 
+/* No `overflow-y` here. The dock owns the scroll (`.orca-panel__body`, #275): this is a
+   stack of sections handed up to the chrome, and a scroller of its own would need a height
+   it cannot know — which is why the one it used to declare never scrolled anything. */
 .orca-plan__inspector {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-3);
-  overflow-y: auto;
 }
 .orca-plan__section {
   display: flex;
