@@ -555,10 +555,16 @@ export interface DecisionMatrixProps {
  *   then talks for an hour, so one `lastAt` would have to choose between them. Both are
  *   absent until first contact.
  * - **There is no `policy`.** Nothing in ORCA counts auto-approvals: permission decisions
- *   are evaluated per tool call against the rules in config (`PermissionRule`) and no
- *   running total is kept anywhere, on the wire or off it. Rule 12 forbids inventing one,
- *   so the field is gone rather than approximated. A permission *policy* surface is its own
- *   screen; it is not a line on this card.
+ *   are evaluated per tool call, first-match-wins, against the agent's configured rules and
+ *   then the `orca.permissions.json` sidecar layered after them (ADR 0009, `PermissionRule`)
+ *   — and no running total is kept anywhere, on the wire or off it. Rule 12 forbids
+ *   inventing one, so the field is gone rather than approximated.
+ *
+ *   A permission *policy* surface is its own screen and not a line on this card, and as of
+ *   #176 it is built: the card carries one action, **Permissions**, which opens that agent's
+ *   policy as an inspector beside the cards. The configured rules are read-only there — they
+ *   are the YAML's, and nothing machine-written rewrites a hand-curated array — and the
+ *   sidecar's grants are editable through the `permissions` document of `config.set`.
  * - **And there is no `claim` either, for the same reason.** A `ClaimView` names the work
  *   item and the *run* that owns it; it names no agent, and an `AgentView` names no run. So
  *   "what is this agent on" cannot be answered from `agents.list`, however much the card
@@ -584,6 +590,13 @@ export interface AgentHealthCardProps {
   lastError?: { code: string; message: string };
   /** False when the daemon is not answering: the timestamps stop reading as relative. */
   live?: boolean;
+  /**
+   * Open this agent's permission policy (#176). A *read* — `config.get` is answered by a
+   * read-only daemon too — so the action is present whatever the connection says, and it is
+   * the editor inside that goes read-only. Absent means there is nowhere to open it, and a
+   * card with nowhere to send you draws no button rather than one that does nothing.
+   */
+  onEditPermissions?(): void;
 }
 
 /**

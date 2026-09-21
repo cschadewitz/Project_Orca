@@ -281,7 +281,7 @@ the ADR 0009 permission sidecar beside it, each with its own path, its own conte
 policy per agent. The YAML is drawn twice — as a form over the schema and as the bytes in a
 `textarea` styled by `.orca-yaml` — switched by a segmented control in the object header. The
 sidecar is drawn as the effective rules in evaluation order and as its own raw JSON, and is
-**read-only here**: editing grants is #176.
+**read-only here**: grants are edited from the Agents surface's policy panel (below).
 
 **The draft is edits, not a copy, and it is one of two kinds.** A form draft is a map of
 dotted path to value and is sent as `patch`, which edits the YAML document in place and keeps
@@ -312,6 +312,48 @@ values and hides the bar rather than offering a write nobody will take.
 hands over the bytes, ssh hosts and command lines included, because a form that edits a file
 has to show the file and a redacted `text` written back would destroy what it hid. The raw
 view says so in one line rather than leaving a person to discover it.
+
+## Agents write (as built, v0.5.0)
+
+**A grant is edited in the sidecar, never in the YAML** (#176, ADR 0009). The Agents
+surface's cards carry one action, **Permissions**, which opens that agent's policy as an
+inspector beside them. It shows the whole effective policy in evaluation order: the
+configured rules first, **read-only** — they are `orca.config.yaml`'s, a person curated them,
+and nothing machine-written rewrites a hand-curated array, so the panel links to the Config
+form instead — and then the sidecar's written grants, which are editable. A grant can be
+removed, narrowed or widened (kind, path, path prefix, scope, title pattern), or added by
+hand, in which case it is stamped with the time and with `grantedFor: "added by hand in the
+app"` so a reader of the diff can tell it from one a run wrote.
+
+**It is the Config surface's draft model, mounted elsewhere.** The panel lives in
+`renderer/src/config/` and runs on `use-config.ts`: the same `expectedRevision`, the same
+`CONFIG_STALE` conflict with **Reload**, the same rule that a refused write keeps the draft.
+A save sends the whole sidecar as `config.set { document: "permissions", text }` — `patch`
+edits a YAML document in place and this one is JSON — and the daemon canonicalises the key
+order, so a client compares **revisions, not bytes**. The panel never writes a `default`: the
+sidecar has no fallthrough, because answering one prompt must not change the answer to every
+other one, and a document carrying one is refused rather than stripped.
+
+**Allow-always lands here without a second path.** When a run answers "always", the daemon
+writes the sidecar and pushes `config.changed`; the panel is on the same hook every Config
+screen is, so the rows re-read themselves. A card's "always" that the daemon *refused* to
+derive a rule from says so on the Attention surface rather than promising anything
+(`alwaysOutcome`, #221) — the panel then simply has nothing new to show, which is correct.
+
+**Releasing a claim** (#88) is the surface's other write. Each claim whose
+`owner.releasable` is true gets a danger-toned **Release** with a confirmation `Menu` naming
+the work item, the run it is taken from and what happens next; one the daemon would refuse is
+disabled with the reason on the control. There is no **Force release** here — `--force` takes
+an item from a run that could still resume, which has no undo and stays a CLI act. Nothing
+pushes for a release (it journals no event), so the claims are re-read once after the call,
+and the result's `note` — what releasing did *not* fix, since a dead run's log never moves on
+— is announced into the app's one live region and left on the row.
+
+**And one number that does not exist.** #176 asked for "the auto-approval count explained".
+Nothing in ORCA counts auto-approvals: `decidePermission` is evaluated per tool call and no
+running total is kept, on the wire or off it. The panel says so in words rather than tallying
+anything client-side (RULES.md rule 12), which is also why `AgentHealthCardProps` has no
+`policy` field.
 
 ## What the design assumes ORCA can provide
 

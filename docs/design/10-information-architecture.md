@@ -32,7 +32,7 @@ nothing else about the layout changes per platform.
 | **Attention** | ◆ | What needs me right now | 1 |
 | **Runs** | ☰ | What is happening and what happened | 1 |
 | **Plan** | ⬡ | What is coming, why it is not moving, what it depends on | 2 |
-| **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write |
+| **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write — both shipped |
 | **Config** | ❋ | How the system is wired, and what the workflows are | 2 |
 
 The glyph column is `semantics.json`'s `surface` map, bundled in the symbol face like every
