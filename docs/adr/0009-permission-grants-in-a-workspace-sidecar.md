@@ -65,6 +65,12 @@ a run id, ULID, digest, timestamp or temp directory, which would be a rule that 
 match again. A refusal is reported to the caller, which honours the answer once and does not
 pretend to have recorded it.
 
+**2026‑09‑21 (#140):** the configured `default` is no longer `allow`. An agent that declares
+no `permissions:` — or leaves `default:` unset — now gets `DEFAULT_PERMISSION_POLICY`
+(`ask`, plus rules allowing reads, searches and file changes inside the run's workspace),
+appended *after* its own rules. Nothing above changes: the defaults are ordinary rules, so
+configuration is still matched before the sidecar and a configured `deny` still wins.
+
 ## Consequences
 + The hand‑written half of the config stays hand‑written. Nothing appends to the Nth element
   of a curated `agents:` array, so a machine write can never collide with a human edit.

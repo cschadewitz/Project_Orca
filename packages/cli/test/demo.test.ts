@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { parseOrcaConfig } from "@orca/core";
+import { DEFAULT_PERMISSION_POLICY, parseOrcaConfig } from "@orca/core";
 import { commands, type CommandContext } from "../src/commands/index.js";
 
 const dirs: string[] = [];
@@ -53,9 +53,17 @@ describe("orca demo", () => {
     expect(await commands.demo!.run(ctx(dir, [], { dir }))).toBe(0);
 
     const configPath = join(dir, "orca.config.yaml");
-    const config = parseOrcaConfig(parseYaml(await readFile(configPath, "utf8")));
+    const raw = await readFile(configPath, "utf8");
+    const config = parseOrcaConfig(parseYaml(raw));
     expect(config.agents.map((a) => a.id)).toEqual(["scripted"]);
     expect(config.storeDir).toBe(join(dir, ".orca"));
+
+    // The permission policy is written out in full rather than left to the defaults (#140),
+    // so the config a person copies out of the demo shows what the agent may do.
+    expect(raw).toMatch(/^ {4}permissions:$/m);
+    expect(raw).toMatch(/scope: workspace/);
+    expect(config.agents[0]!.permissions).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(config.agents[0]!.permissions.default).toBe("ask");
 
     // Same invocation as the README quick start: needs the config (without one no
     // agent fills the ai-sdlc roles and bootstrap throws WORKFLOW_INVALID).

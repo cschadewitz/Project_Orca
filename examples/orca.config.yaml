@@ -19,12 +19,24 @@ agents:
     hostId: local
     roles: [planner, designer, reviewer, decomposer]
     sessionMode: per-step
+    # The defaults, written out. Leave `permissions:` off entirely and you get exactly this;
+    # it is spelled out here because what an unattended agent may do is worth reading.
+    # First match wins, and these rules come before the ones ORCA writes into
+    # orca.permissions.json when someone answers a prompt with "always".
     permissions:
-      default: allow
+      default: ask # execute, the network, and anything outside the workspace: ask a person
       rules:
-        - { match: { kind: execute, titlePattern: "rm -rf|git push --force" }, decision: deny }
-        - { match: { pathPrefix: /etc }, decision: ask }
+        - { match: { kind: execute, titlePattern: "rm -rf|git push --force" }, decision: deny } # never, not even on request
+        - { match: { pathPrefix: /etc }, decision: deny }
+        - { match: { kind: read, scope: workspace }, decision: allow } # scope: workspace | outside-workspace
+        - { match: { kind: search, scope: workspace }, decision: allow }
+        - { match: { kind: edit, scope: workspace }, decision: allow }
+        - { match: { kind: delete, scope: workspace }, decision: allow }
+        - { match: { kind: move, scope: workspace }, decision: allow } # both ends must be inside
+        - { match: { kind: think }, decision: allow }
   - id: codex-remote
+    # No `permissions:` block at all: the same defaults, applied silently. Write
+    # `permissions: { default: allow }` instead to opt a sandboxed agent out of being asked.
     command: codex
     args: [acp]
     hostId: buildbox
@@ -66,6 +78,9 @@ workspace:
   hostId: local
 
 humanInput:
-  mode: cli # cli | auto | pause (default: pause = park the run; `orca answer <requestId> <option>` resumes it)
+  # cli | auto | pause (default: pause = park the run; `orca answer <requestId> <option>` resumes it).
+  # An agent `ask` permission cannot be parked: under `pause` it is cancelled, and under
+  # `auto` it is refused unless `option:` names an id the agent offered. Nobody is there.
+  mode: cli
 
 plugins: [] # e.g. ["./plugins/jira.js"]

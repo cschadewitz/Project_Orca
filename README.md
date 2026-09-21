@@ -57,6 +57,10 @@ pnpm run orca leases                       # who is interpreting which run; `lea
 To use real agents, create `orca.config.yaml` (see `examples/orca.config.yaml`),
 list your hosts/agents/roles, then `orca ping <agent>` to verify the ACP
 handshake (works over SSH too) and `orca submit "Add SSO" --body-file req.md`.
+An agent with no `permissions:` block may read, search and change files **inside
+its run's workspace**; running a shell command, and anything outside the
+workspace, is `ask`. `permissions: { default: allow }` opts a sandbox out — see
+"Permissions" in `docs/WORKFLOWS.md`.
 
 To run **inside Kepler / Zed / any ACP client**, register `orca acp` as an agent
 command; prompts sent to it become Requests and progress streams back as ACP
