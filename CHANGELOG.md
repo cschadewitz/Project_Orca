@@ -29,6 +29,566 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.5.0 - 2026-09-21
+
+### Store format
+
+A `.orca` store now has a `<file>.lock` beside each of its document collections —
+`requests.json.lock`, `work-items.json.lock`, `plans.json.lock` and so on — because every
+`JsonFileDocumentStore` mutation runs inside that lock (#196). The lock is created when a
+write happens and removed when it finishes, so one is only on disk while somebody is
+writing, or after a process died mid-write; a stale one is broken by the next writer on the
+same rules the JSONL logs have always used, and a lock file is never a thing to clean up by
+hand. Nothing reads them but ORCA, they carry no data, and a store copied or committed with
+one in it loads exactly as it would without.
+
+The collections themselves are written through a temp file named with a random tag rather
+than the writing process's pid alone, and flushed before the rename, so a crash or a power
+loss mid-write can leave a `<file>.<pid>.<tag>.tmp` behind but can never leave the
+collection itself half-written. A leftover `.tmp` is safe to delete.
+
+An artifact's body is now bytes rather than a UTF-8 string, so a PNG, a PDF or any other
+binary an agent produces round-trips through the store intact. **No field was added to
+`artifacts/index.jsonl` and no blob has to be rewritten:** a blob is still a file named by
+the sha-256 of its content, and hashing a string in Node hashes its UTF-8 bytes, so every
+blob an existing `.orca` store holds is already the same file under the same name. An index
+written by an earlier ORCA loads unchanged.
+
+One value written into the index does change meaning. `size` is now the body's length in
+**bytes**; it was its length in characters, which was the same number only for pure ASCII.
+Nothing computes with it — it is what the artifact panel shows and what `artifacts.get`
+quotes when it declines to carry a body — so an old row's `size` is read as it was written
+and is at most slightly low on prose with an em dash in it. New rows are exact.
+
+### Added
+
+#### agents
+
+- `replacePermissionPolicyFile` and `parsePermissionPolicyDocument`, the
+  operator's half of the sidecar writer.
+
+#### app
+
+- `window.orca.plan` and `window.orca.claims.release` on the preload bridge, so the
+  Plan surface (#170) and the palette's write actions (#178) have something to call.
+- the Plan surface — what is coming, why it is not moving, and what it depends on.
+  The schedule table lists every work item in the order the scheduler put it, with its
+  classification, slug, title, priority score, risk exposure and the run holding its claim;
+  the badge's **why** opens the scheduler's own explanation, word for word, in the app's one
+  popover. `orca://item/<slug-or-id>` lands here with that item selected and its explanation
+  open, which is the last line of the deep-link table that named an unbuilt screen.
+- the Plan sidebar is requests and filters, not a list of sub-screens (option B in
+  `docs/design/80-dependency-graph-options.md`). Classification, status and request are
+  `items.list` parameters the daemon applies to the whole plan; the text field narrows what
+  is held, and the count says which — "3 of 9 items". The counts beside each classification
+  are the plan's own.
+- selecting a row opens the work-item inspector in the docked panel — the panel is
+  a Plan surface as well as a Runs surface now. It shows the priority reasons verbatim, the
+  item's dependencies with **both** the status stored on the document and the scheduler's
+  live evaluation of it, the risks that name the item, and the claim as a link to the run.
+  Every write on this surface is still the palette's (#178).
+- a Journal mode over the plan journal: newest first, one row per entry with the
+  daemon's own summary line and the origin that wrote it, paging backwards with "Load
+  earlier entries". The surface repaints from `plan.changed` and never polls — a frame's
+  `kinds` say which lists went stale, and a sequence number already folded is dropped.
+- the object header gained a mode segmented control, a new `ObjectHeader` variant
+  (`ObjectHeaderProps.mode`). It has two positions; the dependency graph (#171), the risk
+  matrix (#172) and the decision matrix (#173) are absent from it rather than disabled,
+  because a segment that never does anything is a dead end.
+- a `plan-journal` scope in the keyboard map, for the second list on the screen —
+  one `VirtualList` per scope, so `J` means "next" in whichever of the two the focus is in.
+  `Enter` on a schedule row explains it. `docs/design/50-accessibility-and-keyboard.md` has
+  the table; every key in it is in the command palette.
+- the schedule table carries the **request** an item was decomposed from and the
+  item's **own status**, which is not the classification beside it — the classification is
+  where the scheduler put the item, the status is what the item says about itself, and an
+  item is routinely `pending` *and* `ready`. The status is a plain chip with its own word
+  and glyph; the tinted chips still mean a run status and nothing else.
+- the table pages. `items.list` answers a window, so the surface sends its own
+  `limit` and walks it with `offset`; "Load more items" appends the next page in place,
+  leaving the rows and the selection where they are. The count is about what is held, so it
+  no longer claims rows that were never read.
+- a `plan.changed` frame re-reads the table *in place*. It used to blank it, which
+  dropped the selection, tore the inspector out of the dock and put it back a tick later —
+  a repaint is not somebody asking a different question. A filter still blanks it, because
+  that is one. The inspector's dependencies and risks re-read on a frame too, so the stored
+  status and the live evaluation beside it cannot drift apart.
+- the plan journal's rows are selectable. `J`, `K` and the arrows moved the scroll
+  but never the selection, and `aria-activedescendant` was never set. `Enter` on a journal
+  row still does nothing — those acts are #171's and #178's — but a screen reader is now
+  told where it is.
+- the docked panel opens on a *selection*, not on the inspector's content
+  changing, so `⌘\` right after clicking a row no longer closes a panel that comes straight
+  back. And a deep link is acted on once: `orca://item/<slug>` no longer drags the surface
+  back to Schedule on every later frame.
+- a `schedule.explain` that fails is shown as an error rather than as one of the
+  scheduler's lines — an error among them was a menu row a person could choose and copy, as
+  though ORCA had said it about their work item.
+- `window.orca.config.get` / `.set` on the preload bridge and `DaemonClient`.
+  Plumbing for the Configuration and Agents surfaces (#175, #176); no UI yet.
+- `workflows.list` and `workflows.get` on the daemon client and the preload bridge
+  (`window.orca.workflows`), ready for the workflow viewer. No UI yet.
+- the Config surface. `orca.config.yaml` as a form over the schema the daemon
+  describes — a field per key with its dotted path shown, a `Menu` for an enum, a card per
+  element of `agents:`, and whatever the schema cannot describe as read-only JSON — beside
+  the raw file, editable, with **raw** on any field jumping to the line that key is written
+  on. The save bar counts what would be written rather than what was typed, validates
+  without writing, places the daemon's errors on the fields they name, and refuses to lose a
+  draft when somebody else edited the file: `CONFIG_STALE` shows the conflict and offers
+  **Reload**. `⌘S` saves, and the command palette lists it.
+- Config shows the ADR 0009 permission sidecar as its second document (#266): each
+  agent's effective policy in the order ORCA evaluates it, every rule chipped `config` or
+  `sidecar`, the machine-written ones carrying when they were added and which tool call was
+  answered "always", and the fallthrough named as the config's. It is readable here;
+  editing grants is still to come.
+- the app's own preferences — theme and per-surface density — are a section of
+  Config, labelled as stored by the app rather than in `orca.config.yaml`, and save the
+  moment they are chosen. There is still no settings screen.
+- `orca://config` and `orca://config/permissions` open the surface on the document
+  they name.
+- the form and the save bar are absent, not disabled, in file mode and against a
+  daemon whose `hello.methods` has no `config.set` — the method the button calls, which the
+  connection snapshot now carries, rather than the `runs.control` capability above it.
+  Disconnected and reconnecting keep the bar and the change count, with the reason on
+  Validate and Save.
+- a configuration draft survives going to another surface and coming back: the
+  draft model is mounted above the surface switch, and the Agents surface's policy panel
+  reads the same one rather than a second copy.
+- an agent card carries **Permissions**, which opens that agent's policy as an
+  inspector beside the cards: the whole effective policy in the order ORCA evaluates it, with
+  the configured rules read-only — they are `orca.config.yaml`'s, and the panel links to the
+  Config form rather than rewriting an array a person curated — and the `orca.permissions.json`
+  grants editable. A grant can be removed, narrowed or widened by kind, path, path prefix,
+  scope or title pattern, or added by hand, in which case it records the time and
+  `granted for added by hand in the app` so a reader of the diff can tell it from one a run
+  wrote (ADR 0009, #266).
+- saving a grant sends the whole sidecar as `config.set` on the `permissions`
+  document, over the Config surface's own draft model: the same `expectedRevision`, and the
+  same refusal that never costs a draft — `CONFIG_STALE` shows the conflict, offers
+  **Reload**, and what was edited is still there afterwards. Rules nobody touched keep when
+  they were added and what for, and a fallthrough is never written into the sidecar.
+- ORCA's own default rules are drawn as their own read-only group, **ORCA's
+  defaults**, on the policy panel and on the Config surface's read-only view: no file holds
+  them and `config.set` cannot address them, so there is no link out of the group and nothing
+  to edit — writing a fallthrough in the config is what opts out of them (#140).
+- the sidecar's round trip is lossless or it is refused. A key this app does not
+  recognise rides through a save untouched, so editing one grant cannot delete a field on
+  another; and a document with an unknown `version`, or a rule with no `match` or an unknown
+  decision, shows the "cannot be edited here" state and points at the raw view rather than
+  being rewritten into a shape it guessed at. A sidecar somebody hand-wrote with its keys in
+  another order now counts one edit as one change rather than counting every row.
+- a read-only daemon's policy panel shows its grants as text throughout. The enum
+  menus already degraded; the path and pattern fields were boxes that quietly refused typing.
+- a run answering "allow always" reaches the open policy panel through
+  `config.changed`, so the rows are the file's rather than the ones that were read.
+- a claim whose owning run cannot resume gets **Release**, with a confirmation
+  naming the work item, the run it is taken from and what happens next; a claim the daemon
+  would refuse says why on the control instead. What releasing did *not* fix comes back from
+  the daemon in words and is both announced and shown on the row — a dead run's log never
+  moves on, so the item can still read in-progress. Forcing a release out of a run that could
+  still resume stays `orca claims release --force`.
+- both are in the command palette as keyless actions on the object — *Edit
+  permissions for `<agent>`* and *Release claim on `<work item>`*.
+- neither control is drawn at all against a daemon with no `config.set` or
+  `claims.release`; the policy is still readable there, because reading it is a read.
+- ORCA still does not count auto-approvals. The policy panel says so where a count
+  would have gone rather than tallying one in the client.
+- the workflow viewer. `orca://workflow/<name>` draws a workflow as a graph —
+  derived layout, never dragged — and `orca://workflow/<name>?run=<id>` draws the same graph
+  with that run's path over it: the status glyph and word on each node it visited, the
+  attempt count where it went round more than once, the node it is at now marked, and the
+  nodes and edges it never reached faded. Pan by dragging the canvas or with a shifted arrow,
+  zoom with `+` / `-` / `0`, move the selection with the arrows; the selected node's
+  configuration is in the inspector beside it. The run header's "the workflow it executes"
+  now opens the viewer with that run overlaid, instead of saying it cannot.
+- the graph's layout is ORCA's own — `renderer/src/workflow/layout.ts`, no new
+  dependency. Layers are longest-path dependency depth, order within a layer is the
+  barycentre of a node's predecessors, and an edge that returns to a layer it has passed —
+  `ai-sdlc`'s review verdict going back to the build — is drawn as a back edge routed above
+  the graph rather than through it.
+- a `subworkflow` or a `parallel` is collapsed by default and says how many graphs
+  it is hiding; expanding one draws each nested graph in a group box of its own, named by the
+  `parent::node::branch` id the daemon addresses it by.
+- a run pinned to a version that is no longer the newest carries the `◷ pinned`
+  chip, and the viewer says in words which definition is on screen instead — ORCA records the
+  version a run started with but keeps no copy of it, so the graph drawn is always the one on
+  disk and the viewer never implies otherwise.
+- a `workflow` scope in the keyboard map, for a canvas whose arrows move between
+  nodes rather than between rows. `docs/design/50-accessibility-and-keyboard.md` has the
+  table; every one of its keys is in the command palette. A shortcut on a punctuation key now
+  matches the press a keyboard actually makes: `+` is Shift and Equal, so the shift is
+  spelling the character rather than modifying it and is dropped — `Shift+ArrowUp` and
+  `Shift+Enter` are unchanged.
+- the run header names the workflow a run executes *with the version it is pinned
+  to* — `sdlc v2` on the run crumb, from the version the run recorded. Whether that version
+  is still the newest is the viewer's `◷ pinned` chip, which needs the definition on disk and
+  so stays where it is read.
+- every write the daemon serves is in the command palette, as a keyless action on
+  the object in focus: **Answer `<gate>`: `<option>`** for each option a selected card
+  offers, **Cancel** and **Resume** on the run a card is waiting on or the run selected on
+  Runs, **Start a run**, and on the Plan surface **Waive dependency on `<target>`**,
+  **Decide `<key>`**, **Reopen decision `<key>`**, **Update risk `<key>`** and **Release
+  claim on `<item>`**. Nothing was added to the chrome of any screen: the palette is the
+  only place a phase-2 write has to be discoverable.
+- the answer rows are the card's own options in the card's own order — the
+  destructive one last, as `bindOptions` puts it — and they call the same `inputs.answer`
+  path the card does. A free-text ask gets no rows: there is nothing to type into in a list
+  of commands. "Always" stays on the card, where the button can say what it will actually
+  promise.
+- a destructive row confirms inside the palette rather than in a dialog. Choosing
+  it swaps its label for the confirmation — *Cancel run-42 — confirm* — in the danger tone,
+  and a second **Enter** commits; typing, moving the selection or **Esc** disarms it and
+  nothing has been sent. A destructive row also never sorts first, for the same reason a
+  gate's destructive option is never bound to `1`.
+- **Start a run** replaces the palette's list with a picker of the daemon's
+  workflows — name, id, version and node count — and starts the chosen one with the
+  workflow's own vars, then opens the new run through the route table. **There is no vars
+  form**: nothing in the protocol says what a workflow's inputs are called, so the row says
+  what it starts with rather than offering fields it would have had to invent.
+- a write the daemon does not serve has no row at all, and a daemon that is not
+  answering keeps the rows with `useWritability()`'s own sentence beside them — absent where
+  ORCA is a viewer, disabled with a reason where it is waiting.
+- `runs.start` reaches the app for the first time: the daemon has served it since
+  protocol 1.4 and nothing could call it until there was a workflow picker.
+
+#### daemon
+
+- `orca serve` answers all fourteen over `PlanService`. A plan read is one
+  snapshot and one schedule per call, so an item arrives with the scheduler's classification,
+  its priority score and reasons, its risk exposure and the run holding its claim at once; a
+  `schedule.explain` returns `orca plan explain`'s lines word for word rather than a
+  paraphrase. The writes journal with `origin: { kind: "human", actor: "daemon" }`.
+  `orca serve --read-only` omits all five, from the dispatch table and from `hello.methods`.
+- `orca serve` serves the workspace's configuration. `config.get` returns the
+  raw text, the parsed document and a description of the config schema — field paths, types,
+  enums, defaults — walked off `OrcaConfigSchema` rather than written out by hand.
+  `config.set` takes a whole document or a list of field patches; a patch edits the YAML in
+  place, so comments and formatting survive and no schema default is materialised into the
+  file. A schema failure comes back as `CONFIG_INVALID` with the errors keyed by dotted path
+  (`hosts[1].type`), and `validateOnly` reports them without writing. A write against a
+  revision the file no longer has is refused with `CONFIG_STALE` rather than overwriting
+  what landed in between.
+- `config.set` reloads nothing — the daemon goes on serving the configuration it
+  booted with until the next `orca serve`. It takes no run lease and appends no event, so
+  editing the config while a run is in flight disturbs neither.
+- `config.get` returns the ADR 0009 permission sidecar
+  (`orca.permissions.json`) as a second document beside `orca.config.yaml`, each with its own
+  path and its own revision, and reports the effective permission policy per agent — the
+  configured rules first, then the sidecar's, then the built-in defaults, in the order
+  `decidePermission` matches them, each labelled with where it came from (`config`,
+  `permissions`, `default`) and carrying its `addedAt` / `grantedFor`. A client can now show
+  why an agent was allowed something without re-implementing the layering.
+- `config.set` on the `permissions` document writes it through the existing
+  writer in `@orca/agents`, under the same `link()` lock and in the same fixed key order, so
+  an operator editing a grant and a run answering "allow always" both land instead of one
+  silently overwriting the other. A document carrying a `default` is refused: answering one
+  prompt must not change the answer to every other one.
+- `config.changed` is pushed when ORCA writes the sidecar itself, not only when
+  a client does, so a screen watching the policy sees a grant a run just recorded.
+
+#### daemon/cli
+
+- `claims.release` over the wire — the daemon half of `orca claims release`
+  (#88). Refused while the owning run could still resume unless `force`, and it answers with
+  the same "still in-progress" note the CLI prints.
+
+#### design
+
+- `SCHEDULE_PRESENTATION` carries a glyph as well as a word for each of the five
+  classifications, so a schedule badge is never its tint alone (rule 4). The wire's two
+  settled classifications, `done` and `failed`, have no badge and are drawn with
+  `StatusChip`'s succeeded and failed; `component-api.d.ts` says so. Five `col-*` tokens for
+  the schedule table's fixed columns, and a `plan` crumb type.
+- a `workItemStatus` vocabulary in `semantics.json` — the word and glyph for
+  each of the seven work-item statuses, reusing the glyphs of the run statuses and schedule
+  classes that mean the same thing. No `fg` or `bg`: it is drawn as a plain chip, so colour
+  is not one of its channels. `col-request` and `col-status` size the two new columns.
+- `Menu` takes an optional `note` — something a popover has to *say* rather than
+  offer, for an error where a list of choices was expected. It is not a `menuitem`, is never
+  focused, typed to or chosen, and a menu with a note and no items still opens; focus lands
+  on the list itself so `Esc` still returns to the trigger.
+- `Menu` takes an optional controlled `open` / `onOpenChange`, for the one case
+  a surface cannot press a trigger itself: a deep link that has to arrive with the
+  explanation already open. Everything else — focus in and back, `Esc` through the layer
+  stack, the roving keys, the placement — stays the primitive's.
+- `node-w`, `node-h`, `layer-gap` and `rank-gap` tokens, and `GRAPH_GEOMETRY` in
+  `@orca/design` — the four of them as numbers, because an SVG path's `d` cannot reference a
+  custom property. `WorkflowNode` is built and `component-api.d.ts` says so.
+- a back edge is dotted, not dashed — `--stroke-dash-back` beside
+  `--stroke-dash-untaken`, and a legend row for it. "Runs backwards" and "was not taken" are
+  different facts about an edge and an edge can be either, so they are no longer one stroke.
+  A pinned run's chip is a chip tone rather than `--status-running`, and a selected node is
+  `--surface-selected` plus an accent rail rather than an accent outline that read as the
+  focus ring.
+
+#### protocol
+
+- the plan surface, at protocol 1.7. Nine reads under the `plan.read`
+  capability — `plans.list`, `plan.get`, `items.list`, `schedule.get`, `schedule.explain`,
+  `dependencies.list`, `risks.list`, `decisions.list`, `journal.list` — five writes under
+  `plan.write` — `dependencies.waive`, `decisions.decide`, `decisions.reopen`,
+  `risks.update`, `claims.release` — and a `plan.changed` notification carrying which kinds
+  of thing moved. Nothing in the new views carries a date estimate.
+- `config.get` and `config.set`, the `config.changed` notification and the
+  `CONFIG_STALE` error code; protocol 1.7. `config.get` is a read under `runs.read` and
+  `config.set` a write under `runs.control`, so a `--read-only` daemon answers the first and
+  does not have the second.
+- `workflows.list` and `workflows.get` (protocol 1.7), the workflow files as a
+  display graph: nodes with the per‑type fields a viewer shows, edges with their conditions
+  and labels, and the graphs written inline inside a `loop` or a `parallel` carried under the
+  `parent::node` ids the engine addresses them by — so a nested graph can be drawn where it
+  is or fetched again by id. Both are `READ_METHODS`, so `orca serve --read-only` answers
+  them. `WorkflowView.versions` is which versions of a workflow the daemon can *see* — the
+  one on disk plus the ones the store's runs recorded — and `workflows.get` still serves only
+  the one on disk, because ORCA keeps no copy of the definition a finished run used.
+- `runs.get` gains an optional `traversal`: the nodes a run took, in order, one
+  entry per attempt, with the status, the timestamps, the child runs a container spawned and
+  `viaEdge` — which edge of the definition the run arrived on. An edge nobody authored is
+  never invented: a retry, a run resumed mid‑graph and a workflow the daemon no longer has
+  all leave it absent.
+- the `workflows.changed` notification. Nothing emits it yet and that is
+  deliberate — there is no workflow reload path in the runtime — so a client may subscribe
+  now and will hear one when workflow editing can honestly send it.
+
+### Changed
+
+#### agents
+
+- an `ask` that has no human-input channel at all is now recorded as
+  `ask:no-answerer` rather than a bare `ask:cancelled`, because "the policy wanted a person
+  and there was none" is the one a reader of the log has to act on. It was already refused
+  rather than parked — a permission cannot outlive the session that raised it — so it fails
+  the tool call and not the run.
+- the ACP session evaluates the *effective* policy rather than the configured one.
+  It read `agents[].permissions` straight from the parsed config, which was right only for as
+  long as parsing injected the default rules into it; now that they are an explicit layer,
+  `openAcpSession` applies it. Without this an agent with no `permissions:` block would have
+  been asked about reading files in its own workspace.
+
+#### app
+
+- Attention lists the runs that are in flight when nothing is waiting and nothing
+  has failed, instead of saying "nothing needs you" over a blank page. It is the app's
+  landing screen, and a person whose runs are all moving was being told the one thing they
+  did not need to know while the one thing they did — what is actually running — was
+  withheld. The rows are the failures' rows, `Enter` opens the selected run, and a running
+  run is still not a tier and is still not in the waiting count: it appears here and only
+  here, and the moment anything waits or fails the tiers above take the screen back. No
+  second subscription — one more read on the page, folded into the feed the surface and the
+  title bar already share. With nothing waiting, nothing failed and nothing running, the
+  empty state stands, because then it is true.
+- the sidebar reads its order, words and glyphs from `@orca/design` instead of
+  declaring them. Every item keeps its label as its accessible name and its `⌘1`–`⌘5`
+  address at every width; the expanded sidebar is unchanged.
+
+#### build
+
+- a rendered release section is grouped twice — by change type, which is the
+  fragment's `<section>` and has always been `### Added`, and inside that by change target,
+  which is the bullet's own area prefix and is now `#### app`. The prefix is lifted out of
+  the bullet into the heading, so nothing is said twice, and a fragment whose bullets name
+  different targets is split between them rather than filed under the first. Targets render
+  alphabetically; entries inside one keep their issue order. This is the body of the
+  `release: vX.Y.Z` pull request as much as it is `CHANGELOG.md` — v0.4.0 was fifty bullets
+  under four headings, and "what moved in the part I use?" had no heading to answer it.
+  Bullets with no prefix, which is what `store` prose is, render ungrouped above the
+  headings exactly as before.
+
+#### core
+
+- an agent that declares no `permissions:`, or declares one and leaves `default:`
+  unset, no longer gets `default: allow`. The policy it gets instead allows reads, searches, edits, deletes
+  and moves **inside the run's workspace** and asks about everything else — `execute`
+  wherever it runs, the network, any path outside the workspace. `execute` is asked about
+  because ORCA sees a shell command only as the permission title: the agents that matter run
+  commands in their own process rather than through ACP's `terminal`, so there is nothing to
+  scope the grant by. This is a property of the agent and not of how the run was launched, so
+  one config behaves one way. The defaults are ordinary rules and they are the **last** layer:
+  configured rules are matched first, then `orca.permissions.json`, then these, and then
+  `default:` decides whatever none of them matched. So a hand‑written `deny` still wins, and a
+  `reject_always` recorded in the sidecar beats the default allow that made the prompt appear
+  (ADR 0009). Spelling the default rules out in your own `rules:` is not a no‑op: it moves them
+  ahead of the sidecar, where a recorded `reject_always` can no longer reach them.
+- **writing `default:` at all opts an agent out of those default rules** — `ask`
+  exactly as much as `allow`. `permissions: { default: ask }` with no rules now means what it
+  says: ask about everything, in‑workspace reads included; it is no longer the same policy as
+  leaving `permissions:` off. `permissions: { default: allow }` is the other end and is the
+  right thing for a sandbox. If you had `default: ask` written down and want the workspace
+  allows back, delete the line.
+- `orca.config.yaml` parses to exactly what it says. The default rules used to be
+  injected into the parsed config, so anything that read it back — `orca demo`'s generated
+  config, `config.get`'s per‑rule provenance — reported rules nobody had written as if an
+  operator had written them.
+- a permission rule can match on `scope: workspace | outside-workspace` — whether
+  every location of the tool call is inside the run's workspace or any of them is not. It is
+  the one match that needs no path written down, because the path it is about is the run's
+  own. A call with no locations at all matches neither and falls through to `default`.
+
+#### daemon
+
+- `runs.events` and a subscription resuming from a cursor take that page rather
+  than reading the whole log and cutting it in memory. Scrolling a run whose log is tens of
+  thousands of `agent.update` lines now costs a page; the answers are unchanged.
+- `artifacts.get` still declines a binary body — it is the JSON-RPC wire that
+  will not carry 200 MB, not the store any more — and the size and media type it names in
+  `omitted.detail` are now the real ones.
+
+#### design
+
+- the five surfaces have designed glyphs — ◆ Attention, ☰ Runs, ⬡ Plan,
+  ◉ Agents, ❋ Config — declared in `semantics.json` and bundled in the symbol face, so the
+  rail the sidebar collapses to below 960px draws the same five shapes on every platform.
+  They replace the placeholders the app had picked for itself, among them a ⚙ that no
+  bundled face carried and so came from whatever the operating system had, and a filled and
+  an outlined diamond that differed by a hairline on the two surfaces a person moves between
+  most. The five are now told apart in greyscale at icon size: a solid diamond, three bars,
+  a hollow hexagon, a ring round a dot, a radial burst. Attention keeps the waiting status's
+  ◆ on purpose.
+
+#### engine
+
+- `humanInput: { mode: auto }` refuses an agent `ask` permission rather than
+  answering it with the agent's first option. A permission request's options are the agent's,
+  in the agent's order, and the first of them is conventionally "allow once" — so taking it
+  turned every `ask` in an unattended run back into an `allow`. Gates and questions are
+  unchanged, and `option:` still answers a permission when it names an id the agent offered.
+- an artifact's `size` is its length in bytes, not in characters.
+
+#### store
+
+- `EventStore.readRange(runId, { after, before, limit, types, match })` reads one
+  page of a run's log, and `lastSeq(runId)` reads the end of it. The JSONL store scans to the
+  page a chunk at a time and stops there — forward from the start for `after`, backward from
+  the end for `before` — so neither the file nor its parsed events are ever held whole.
+- `ArtifactStore.put` takes a `string` or a `Uint8Array`, and `bytes(id)` reads a
+  body back byte for byte. `content(id)` still returns UTF-8 text and is unchanged for every
+  caller ORCA has today.
+
+### Fixed
+
+#### agents
+
+- "Allow always" now takes effect. The `orca.permissions.json` sidecar (ADR
+  0009) was written but never read at session time, so a standing grant a person recorded
+  was asked about again on the very next tool call. `session/request_permission` now
+  evaluates the agent's configured rules, the sidecar and the defaults together, re-reading
+  the file per ask, so a grant recorded mid-run applies to that run's next tool call.
+
+#### app
+
+- an artifact diff against an empty version no longer counts a removed line that
+  does not exist. `"".split("\n")` is one empty string, so v1 of an artifact — or a body a
+  tool recorded as the empty string — diffed as a file of one blank line and the panel said
+  "1 added, 1 removed" for what is a pure creation. An empty *body* now contributes no
+  lines, in either direction: a creation reads "1 added", an emptied artifact reads "1
+  removed", and two empty versions are no change at all. The gutters and the line bodies
+  were always right; only the sentence above them lied. Splitting is unchanged, so a file
+  whose one line is blank is still a file with a line in it.
+- a chosen store whose daemon will not start is a failed open rather than a silent
+  attachment to whatever else is listening. **File ▸ Open a store…** used to report the
+  failure and then carry on to `ORCA_DAEMON_URL` or `127.0.0.1:6722`, so a store on a USB
+  drive that could not be served showed some other store's runs under a banner naming the USB
+  path as read-only. It now builds no client and opens no stream: the daemon it stopped on the
+  way in stays stopped, the status bar reads `disconnected`, and the reason names the path on
+  the console. The fallback is unchanged for the launch case, where the daemon that would not
+  start was the placeholder over the home directory and the one on the default port is the
+  daemon the app expected anyway.
+
+#### cli
+
+- `orca serve` advertises `plan.read` / `plan.write` only when it actually serves
+  the plan methods, instead of always. A client hiding a plan surface on the capability now
+  hides it at the right times.
+- `orca` installs `unhandledRejection` and `uncaughtException` handlers at its
+  entry point. Anything that escapes a command is logged with its ORCA code instead of
+  arriving as Node's default crash, and `orca serve` keeps serving through it — one run's
+  failed append used to lapse the lease of every other run the daemon was driving.
+
+#### daemon
+
+- `config.set` no longer drops a permission grant recorded while the operator's
+  form was open. The `CONFIG_STALE` revision check and the write were two unsynchronised
+  steps, so a run answering "allow always" between a client's `config.get` and its
+  `config.set` landed in the window between them — and since `config.set` is a replace and
+  not a merge, the save then wrote the grant away with nobody told. The revision is now
+  re-hashed inside the lock the write takes: the sidecar's own `link()` lock, via a new
+  `expectedRevision` on `replacePermissionPolicyFile`, and `<configFile>.lock` for
+  `orca.config.yaml`. Two saves made against one revision can no longer both land; the second
+  is refused with `CONFIG_STALE` and both revisions, which is what it was always supposed to
+  be.
+- `runs.start` and `runs.resume` report a lease taken by (or taken away for)
+  another process as `RUN_LEASED_ELSEWHERE`, the way `runs.cancel` already did, instead of an
+  unclassified internal fault with no run id on it.
+- `claims.release` is served by any daemon that drives runs, not only one that
+  also has a plan. It has always been in the `runs.control` capability's method list on the
+  wire, and it needs no plan at all — but it was behind the plan's writing half, so a daemon
+  over a store with no plan in it advertised the method and then answered "unknown method".
+
+#### design
+
+- the command palette's field draws a focus ring again. It carried the system's
+  one `outline: none`, deferring to a ring on the palette that was never written — so ⌘K put
+  focus into the only focusable thing on screen and nothing indicated it. The suppression is
+  gone rather than the compensating ring being invented: the field takes the same
+  `:focus-visible` ring as everything else, from `--border-focus`, because one ring keyed the
+  way the spec keys it is better than a second one on the overlay that would also draw itself
+  after a mouse click. Its offset is inset by the ring's own width, since the overlay clips
+  its content and a full-width field would otherwise lose three sides of an outward ring.
+  Nothing in the component layer or the app's stylesheets suppresses focus now (RULES.md
+  rule 10), and the test that allowlists suppressions is down to an empty list.
+- the component layer has a `.orca-visually-hidden` utility — in the
+  accessibility tree, nowhere on screen — so nothing app-side has to rewrite the clip. The
+  polite announcer wears it and `app.css` is back to the window filling the window, which
+  takes the app's `orca-allow-literal` count to zero. One note moved with the class and is
+  now the only one in the tree: a single exemption covering the `1px` box that keeps the
+  element rendered, arguing the permanent case rather than naming an issue to wait on —
+  `display: none`, a zero box and `visibility: hidden` each drop the element out of the
+  accessibility tree in some screen reader, which for a live region is not "hidden" but
+  "off". It is a class and deliberately not a component: its callers are a `div`, an `h2`
+  and a `label`, and a wrapper would have to pick one.
+
+#### engine
+
+- an interpreter whose run lease is taken away stops without writing to the log
+  it no longer owns. It used to abort the run and then append `step.cancelled` and
+  `run.cancelled` through the same context — into the log the operator had just handed to
+  another interpreter, which cancelled the run the takeover was meant to continue. A lost
+  lease is now told apart from a cancel we own: the interpreter logs why, closes its agent
+  sessions, writes nothing, and raises `RUN_LEASED` to whoever called `run()`. The run is
+  left exactly as its last write found it, for the new holder to re-attempt.
+- attaching to a run takes the lease *before* it reduces the run's log, so an
+  attach refused with `RUN_LEASED` leaves no half-read state behind for the next one to
+  reuse. A finished run is still read without a lease and still never leaves one on file.
+- a lease lost in the moment between being taken and the run's log being loaded
+  refuses the run rather than driving it. That window was the one the heartbeat could not act
+  on — it fired, found no interpreter to stop, and returned — and the attach then went on to
+  execute, and write, holding no lease. It now raises `RUN_LEASED` as soon as there is a
+  context to stop, having written nothing.
+- a failed `agent.update` append no longer ends the process. The streamed
+  output of a turn goes onto one serialised chain rather than a fire-and-forget promise per
+  update, so a store that refuses a write — a torn lock file, a full disk, a store directory
+  that went away — is caught, logged once against the step, and surfaced when the turn ends
+  as a `STORE_WRITE` failure of that step, which the node's retry budget then applies to.
+  Coalescing is unchanged: the buffer still flushes at 4000 characters and when the kind of
+  update changes.
+- an artifact that is in the index but whose body cannot be read no longer renders as
+  an empty string. The read raises `ARTIFACT_MISSING` naming the artifact, its version and its
+  content hash, so the step fails and the retry policy or a person decides, and the failed read is
+  not cached — the next render tries again once the store is whole.
+
+#### store
+
+- two processes over one store no longer lose each other's documents. A
+  `JsonFileDocumentStore` collection used to be read once and rewritten whole from that
+  first view, so a long-lived `orca serve` beside a one-shot `orca plan decide` wrote back a
+  stale map and dropped whatever the other had written in between — and never saw it on a
+  read either. The cache is now trusted only while the file's `{ino, size, mtimeMs}` is
+  unchanged, so every `get`/`list` picks up another writer's work, and every
+  `put`/`putMany`/`delete` runs inside the `<file>.lock` lock, re-reading under it before it
+  renames the new collection into place. Requests, work items, plans, dependencies, risks
+  and decisions are all covered; writes are still coalesced, still atomic (tmp + rename) and
+  the on-disk format is unchanged.
+
 ## 0.4.0 - 2026-09-21
 
 ### Store format
