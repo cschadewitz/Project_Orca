@@ -267,10 +267,11 @@ export const SURFACE_PRESENTATION: Record<SurfaceId, { word: string; glyph: stri
 };
 
 /** Glyphs the chrome renders that are not a state: the crumb separator and the command key. */
-export type ChromeGlyph = 'crumbSeparator' | 'commandKey';
+export type ChromeGlyph = 'crumbSeparator' | 'commandKey' | 'danger';
 export const CHROME_GLYPHS: Record<ChromeGlyph, string> = {
   crumbSeparator: '▸',
   commandKey: '⌘',
+  danger: '✕',
 };
 
 export type DependencyKind = 'blocks' | 'soft' | 'informs';

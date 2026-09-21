@@ -106,6 +106,17 @@ export interface Shortcut {
    */
   key?: string;
   label: string;
+  /**
+   * The part of `label` (and of `confirm`) that is machine text — a run id, a work item
+   * id, a decision key. The palette draws that substring in mono and the rest in sans,
+   * because "mono means ORCA produced it" is load-bearing (docs/design/RULES.md rule 8)
+   * and "Cancel run-gate — confirm" is two voices in one sentence.
+   *
+   * It is a substring rather than a second label so that the label stays one string: it is
+   * what the palette matches a query against, what `aria-activedescendant` names, and what
+   * a person reads back. A value that does not occur in the text draws nothing special.
+   */
+  labelMachine?: string;
   action: () => void;
   /** Where the palette files it. Defaults to `actions` — most shortcuts act on the current object. */
   section?: ShortcutSection;

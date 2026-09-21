@@ -423,7 +423,11 @@ function useRunWrites(runId: string | undefined, runName: string | undefined): v
     return [
       {
         scope: "run-tree",
+        method: "runs.cancel",
         label: `Cancel ${named}`,
+        // The id is ORCA's, so it is set in mono wherever it is drawn (rule 8) — in the
+        // confirmation here, which is the state of the row that names the run by id.
+        labelMachine: runId,
         detail: "Stops the run where it is; what has already happened stays in the log",
         tone: "danger",
         confirm: `Cancel ${runId} — confirm`,
@@ -431,6 +435,7 @@ function useRunWrites(runId: string | undefined, runName: string | undefined): v
       },
       {
         scope: "run-tree",
+        method: "runs.resume",
         label: `Resume ${named}`,
         detail: "Re-drives a parked run; it returns when the run parks again or finishes",
         action: () => current.current.resume(runId),

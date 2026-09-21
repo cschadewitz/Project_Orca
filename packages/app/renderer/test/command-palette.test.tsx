@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { THEMES } from "@orca/design";
+import { CHROME_GLYPHS, THEMES } from "@orca/design";
 import { LIVE, harness, renderChrome, stubBridge, stubMatchMedia, type Harness } from "./harness.js";
 import { expectedToken, installDesignSystem, resolved, setTheme } from "./themes.js";
 import { commandEntries, filterEntries, groupEntries } from "../src/palette/entries.js";
@@ -95,7 +95,9 @@ describe("the command palette", () => {
 
     const registered = keyboard.list();
     expect(registered.length).toBeGreaterThan(0);
-    const rows = options().map((o) => o.textContent ?? "");
+    /* The glyph a danger row leads with (rule 4) is decorative and is not part of the
+       label, so it comes off before the labels are matched. */
+    const rows = options().map((o) => (o.textContent ?? "").replace(CHROME_GLYPHS.danger, ""));
     for (const shortcut of registered) {
       // ⌘ notation, because the harness reports darwin. Matched on the label *and* the chip
       // rather than on the label alone: the list substrate gives `J` and `↓` one label

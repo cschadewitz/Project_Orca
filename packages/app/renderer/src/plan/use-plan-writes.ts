@@ -122,7 +122,9 @@ export function usePlanWrites({ planId, item, dependencies, risks }: PlanWriteTa
         if (unmet) {
           rows.push({
             scope: "list",
+            method: "decisions.decide",
             label: `Decide ${key}`,
+            labelMachine: key,
             detail: `The decision blocking ${subject.slug}`,
             picker: {
               label: `Which option for ${key}?`,
@@ -152,7 +154,9 @@ export function usePlanWrites({ planId, item, dependencies, risks }: PlanWriteTa
         } else {
           rows.push({
             scope: "list",
+            method: "decisions.reopen",
             label: `Reopen decision ${key}`,
+            labelMachine: key,
             detail: "Clears the choice and reopens every dependency it satisfied",
             action: () => {
               void window.orca.plan.reopen({ planId: plan, key }).then((result) => {
@@ -172,7 +176,11 @@ export function usePlanWrites({ planId, item, dependencies, risks }: PlanWriteTa
       if (unmet) {
         rows.push({
           scope: "list",
+          method: "dependencies.waive",
           label: `Waive dependency on ${name}`,
+          /* The target's slug or key is ORCA's own name for it, so it is set in mono in
+             both states of the row — the label and the confirmation (rule 8). */
+          labelMachine: name,
           detail: `${dependency.type}, now ${dependency.evaluation.state}: ${dependency.evaluation.detail}`,
           tone: "danger",
           confirm: `Waive ${name} — confirm; the way back is to add it again`,
@@ -190,7 +198,9 @@ export function usePlanWrites({ planId, item, dependencies, risks }: PlanWriteTa
     for (const risk of open.filter((r) => r.status !== "closed")) {
       rows.push({
         scope: "list",
+        method: "risks.update",
         label: `Update risk ${risk.key}`,
+        labelMachine: risk.key,
         detail: `${risk.level}, ${risk.status} (L${risk.likelihood} × I${risk.impact})`,
         picker: {
           label: `Which status for ${risk.key}?`,
@@ -222,7 +232,9 @@ export function usePlanWrites({ planId, item, dependencies, risks }: PlanWriteTa
     if (claimed?.owner.releasable === true) {
       rows.push({
         scope: "list",
+        method: "claims.release",
         label: `Release claim on ${claimed.workItemId}`,
+        labelMachine: claimed.workItemId,
         detail: `Takes it back from ${claimed.owner.name ?? claimed.owner.runId}; the item goes back to the scheduler`,
         tone: "danger",
         confirm: `Release ${claimed.workItemId} — confirm`,

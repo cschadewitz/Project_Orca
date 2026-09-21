@@ -435,6 +435,7 @@ function useCardWrites(
       ? []
       : bindOptions(held.options).map(({ option }) => ({
           scope: "card" as const,
+          method: "inputs.answer",
           label: `Answer ${held.question}: ${option.label}`,
           detail: option.consequence ?? `Answers ${held.runName} the way the card's option does`,
           ...(option.destructive ? { tone: "danger" as const } : {}),
@@ -447,7 +448,10 @@ function useCardWrites(
       ...answers,
       {
         scope: "card",
+        method: "runs.cancel",
         label: "Cancel the run this is waiting on",
+        // The run id is ORCA's and is set in mono where the confirmation names it (rule 8).
+        labelMachine: held.runId,
         detail: "Stops the run; the answer is not given",
         tone: "danger",
         confirm: `Cancel ${held.runId} — confirm`,
@@ -458,6 +462,7 @@ function useCardWrites(
       },
       {
         scope: "card",
+        method: "runs.resume",
         label: "Resume the run this is waiting on",
         detail: "Re-drives the run without answering; it returns when the run parks again",
         action: () => {

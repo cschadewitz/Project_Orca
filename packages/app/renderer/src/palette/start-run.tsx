@@ -37,6 +37,7 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
     (): readonly PaletteWrite[] => [
       {
         scope: "global",
+        method: "runs.start",
         label: "Start a run",
         detail: "Starts with the workflow's default vars",
         picker: {

@@ -15,7 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { AS_OF, HELLO_READ_ONLY } from "./fixtures.js";
+import { AS_OF, HELLO, HELLO_READ_ONLY } from "./fixtures.js";
 import { PLAN_ID } from "./fixtures-plan.js";
 import { WORKFLOWS } from "./fixtures-workflows.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
@@ -346,5 +346,139 @@ describe("what a daemon's answer takes away", () => {
     expect(row.getAttribute("aria-disabled")).toBe("true");
     // `useWritability()`'s sentence, verbatim and on the row — never a bare greyed line.
     expect(row.querySelector(".orca-palette__why")?.textContent).toBe("no daemon is answering");
+  });
+
+  /**
+   * The row asks for the *method* it calls, never for the capability above it. `runs.control`
+   * is one word over four dispatch tables (docs/design/40-connection-states.md), so these two
+   * daemons — both live, both plausible — are the ones the capability alone gets wrong in
+   * each direction.
+   */
+  it("drops the rows whose method this daemon does not answer, and keeps the rest", async () => {
+    const plan = ["dependencies.waive", "decisions.decide", "decisions.reopen", "risks.update", "claims.release"];
+    /* A daemon driving runs over a store with no plan in it: `runs.control` and every run
+       method, and not one of the plan writes. */
+    mount({
+      state: "live",
+      since: AS_OF,
+      capabilities: HELLO.capabilities,
+      methods: (HELLO.methods ?? []).filter((method) => !plan.includes(method)),
+    });
+
+    await screen.findByRole("region", { name: /gate, Ship the rollout\?/ });
+    await open();
+    expect(labels().some((label) => label.includes("Cancel the run this is waiting on"))).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Command palette" })).toBeNull());
+
+    /* `wi-store` is blocked by the decision `datastore`, which is both a decision to make
+       and a dependency to waive — one item that would carry two of the dropped rows. */
+    fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+    const table = await screen.findByRole("listbox", { name: "Schedule" });
+    fireEvent.click(within(table).getByRole("option", { name: /Choose and wire the session store/ }));
+    await screen.findByLabelText(/^Work item /);
+    await open();
+
+    expect(labels().some((label) => label.startsWith("Waive dependency"))).toBe(false);
+    expect(labels().some((label) => label.startsWith("Decide "))).toBe(false);
+    // And the palette is the live one, with the writes this daemon *does* serve in it.
+    expect(labels().some((label) => label.startsWith("Start a run"))).toBe(true);
+  });
+
+  it("keeps a row whose method is served by a daemon that claims no capability", async () => {
+    /* The mirror: no `runs.control` in `hello.capabilities` — an older or narrower daemon —
+       but `claims.release` in `hello.methods`, which is `Object.keys` of what it will
+       actually answer. The method list is the honest one, so the row is there. */
+    mount({
+      state: "live",
+      since: AS_OF,
+      capabilities: ["runs.read", "plan.read"],
+      methods: [...(HELLO.methods ?? []).filter((m) => m !== "runs.cancel"), "claims.release"],
+    });
+    fake.script({
+      "claims.list": (params) =>
+        params.workItemId === "wi-metrics"
+          ? {
+              ok: true,
+              result: {
+                claims: [
+                  {
+                    workItemId: "wi-metrics",
+                    branch: "auth-metrics",
+                    claimedAt: AS_OF,
+                    owner: { runId: "run-metrics", status: "stale", missing: true, releasable: true },
+                  },
+                ],
+                asOf: AS_OF,
+              },
+            }
+          : { ok: true, result: { claims: [], asOf: AS_OF } },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+    const table = await screen.findByRole("listbox", { name: "Schedule" });
+    fireEvent.click(within(table).getByRole("option", { name: /Instrument the login funnel/ }));
+    await screen.findByLabelText(/^Work item /);
+    await open();
+
+    const release = rows().find((option) => option.textContent?.includes("Release claim on wi-metrics"));
+    expect(release).toBeTruthy();
+    // A daemon without the capability still cannot be written to *now*, and the row says
+    // so in `useWritability()`'s words rather than disappearing.
+    expect(release!.querySelector(".orca-palette__why")?.textContent).toBe("this daemon offers no run control");
+  });
+});
+
+describe("a row that cannot be run is still a row the keyboard reaches", () => {
+  it("selects the disabled row, names it in aria-activedescendant, and runs nothing", async () => {
+    mount();
+    await screen.findByRole("button", { name: "Attention" });
+    fake.connect({ state: "disconnected", since: AS_OF, capabilities: [] });
+    await screen.findByText(/No daemon/i);
+    await open();
+
+    /* The reason lives on the row (`.orca-palette__why`), so a roving order that stepped
+       over the row would put the reason out of reach of the keyboard — which is exactly
+       what `Button` refuses to do with `disabledReason`
+       (docs/design/40-connection-states.md). */
+    const row = search("Start a run");
+    expect(row.textContent).toContain("Start a run");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(query().getAttribute("aria-activedescendant")).toBe(row.id);
+
+    fireEvent.keyDown(query(), { key: "Enter" });
+    expect(callsTo("workflows.list")).toHaveLength(0);
+    expect(callsTo("runs.start")).toHaveLength(0);
+    // Nothing happened, including closing: `Enter` on a disabled row is a press that means
+    // nothing, not a dismissal.
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeNull();
+
+    // And it is reached by the arrows too, not only by a query that leaves it first.
+    fireEvent.keyDown(query(), { key: "ArrowDown" });
+    fireEvent.keyDown(query(), { key: "ArrowUp" });
+    expect(query().getAttribute("aria-activedescendant")).toBe(row.id);
+  });
+});
+
+describe("a cancelled picker", () => {
+  it("puts focus back in the query field", async () => {
+    mount();
+    await screen.findByRole("button", { name: "Attention" });
+    await open();
+
+    search("Start a run");
+    fireEvent.keyDown(query(), { key: "Enter" });
+    const menu = await screen.findByRole("menu", { name: "Which workflow?" });
+    // The field is still on screen underneath the picker: it is the one thing in this
+    // dialog focus can come back to.
+    expect(query()).toBeTruthy();
+
+    /* `Esc` through the layer stack, which is how every menu closes. The trigger it would
+       hand focus back to goes away with the picker, so the palette has to catch it. */
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(menu.isConnected).toBe(false));
+
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(query()));
   });
 });

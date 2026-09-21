@@ -1950,9 +1950,17 @@
 .orca-palette__row--danger .orca-palette__label {
   color: var(--status-failed);
 }
+/* The word *and* the glyph, never the colour alone (docs/design/RULES.md rule 4): the same
+   ✕ the failed run carries, at the chip's glyph size, leading the label it belongs to. */
+.orca-palette__row--danger .orca-palette__glyph {
+  flex: none;
+  font-size: var(--icon-sm);
+  line-height: 1;
+  color: var(--status-failed);
+}
 /* Chosen once, asking. The rail says it as well as the colour does, because the rail is
    what the eye is already on — it is what marks the selected row — and because colour is
-   never the only carrier of a state (docs/design/RULES.md rule 11). */
+   never the only carrier of a state (docs/design/RULES.md rule 4). */
 .orca-palette__row--armed {
   background: var(--surface-selected);
   border-left-color: var(--status-failed);

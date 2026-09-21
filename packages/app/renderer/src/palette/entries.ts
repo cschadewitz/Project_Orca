@@ -28,6 +28,12 @@ export interface PaletteEntry {
   id: string;
   section: PaletteSection;
   label: string;
+  /**
+   * The substring of `label` (or of `confirm`) that is machine text, drawn in mono where
+   * it occurs (docs/design/RULES.md rule 8). The label stays one string: it is what the
+   * query matches and what the option is named by.
+   */
+  labelMachine?: string;
   /** Second column: the id, path or explanation. */
   detail?: string;
   /** True when `detail` is machine text and must be set in mono (docs/design/RULES.md rule 8). */
@@ -100,6 +106,7 @@ export function commandEntries(
         id: `command:${shortcut.id}`,
         section: shortcut.section ?? "actions",
         label: shortcut.label,
+        ...(shortcut.labelMachine === undefined ? {} : { labelMachine: shortcut.labelMachine }),
         ...(shortcut.detail ? { detail: shortcut.detail } : {}),
         // No chip rather than an empty one: a keyless command has nothing to press (#205).
         ...(shortcut.key === undefined ? {} : { shortcut: shortcutLabel(shortcut.key, platform) }),
@@ -136,6 +143,10 @@ function score(entry: PaletteEntry, needle: string): number {
 export function filterEntries(entries: readonly PaletteEntry[], query: string): readonly PaletteEntry[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return entries;
+  /* The score re-sorts, so "never first" holds for the unfiltered list and not for this
+     one: typing "cancel" can put a danger row at the top, where `Enter` lands. That is the
+     query asking for it, and all `Enter` does there is *arm* the row — the second press is
+     still a second press. */
   return entries
     .map((entry, index) => ({ entry, index, score: score(entry, needle) }))
     .filter((m) => m.score !== -1)
