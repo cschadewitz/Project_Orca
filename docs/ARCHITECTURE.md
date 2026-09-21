@@ -59,7 +59,18 @@ re-serialising it, and routing a sidecar write through `@orca/agents`' `link()` 
 operator's edit and a run answering "always" both land (#174, #266). Writing the config
 reloads nothing: the orchestrator goes on serving the configuration it booted with, and a
 `config.set` while a run is in flight takes no lease and appends no event. `config.changed`
-is pushed to store-wide subscribers by both writers. `orca serve --read-only` opts back out, and then those methods are *absent* from
+is pushed to store-wide subscribers by both writers. Since v0.5.0 it also serves the **plan** (#169): `plans.list`, `plan.get`,
+`items.list`, `schedule.get`, `schedule.explain`, `dependencies.list`, `risks.list`,
+`decisions.list` and `journal.list` under `plan.read`, and `dependencies.waive`,
+`decisions.decide`, `decisions.reopen`, `risks.update` and `claims.release` under
+`plan.write`. Those reads are one projection of `PlanService` (`daemon/src/plan-model.ts`):
+one snapshot and one `computeSchedule` per call, which is where an item's classification, its
+priority reasons, its risk exposure and the live state of every dependency all come from at
+once — and `schedule.explain` returns `core`'s own `explainWorkItem` lines verbatim, the same
+ones `orca plan explain` prints, so the popover and the terminal cannot drift. A plan write is
+not a run write: it takes no lease, drives no interpreter, and journals through
+`PlanService`'s per‑plan lock with `PlanOrigin { kind: "human", actor: "daemon" }`.
+`orca serve --read-only` opts back out of all ten writes, and then those methods are *absent* from
 `hello.methods` rather than present and refusing — which is what makes "can this client
 write" a question about the handshake rather than about a failed call. The lease is the
 guard against a second writer; it is not access control, and any local process can reach the
@@ -80,11 +91,15 @@ handler untouched; a connection carries the ordinary method table plus `subscrib
 `unsubscribe`, whose state is the connection's. `subscriptions.ts` owns one client's stream
 — replay, fan-out and agent batching — over a narrow `SubscriptionSource` seam
 (`subscribe(listener, filter)` + `events(runId)`) that `Orchestrator` satisfies structurally,
-and `notifications.ts` is the pure event→notification fold. The socket fans out this
-process's event store, so a run appended by a separate CLI process still lands only on the
-next read: the stores are safe for two processes now that documents are written under a lock
-and re-read (#196), but nothing pushes another process's write, so a push is this process's
-and a read is everyone's.
+and `notifications.ts` is the pure event→notification fold. `plan.changed` is one of the
+pushes with no `runId` (beside `agent.changed`, `workflows.changed` and `config.changed`): it
+is folded from the plan journal's own listener seam and says only which *kinds* of thing
+moved, never reading the store to enrich itself. The socket fans out this process's event
+store and this process's plan journal, so a run or a plan change written by a separate CLI
+process still lands only on the next read — which is an in-memory listener list, not a stale
+store: the stores are safe for two processes now that documents are written under a lock and
+re-read (#196), but nothing pushes another process's write, so a push is this process's and a
+read is everyone's.
 
 `app` depends on `protocol` and `design` and nothing
 else in the workspace, enforced by the lint config: the desktop app can only see what a

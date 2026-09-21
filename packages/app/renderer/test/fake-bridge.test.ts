@@ -12,9 +12,23 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ClaimsListResultSchema,
   AgentsListResultSchema,
+  ClaimsReleaseResultSchema,
+  DecisionsDecideResultSchema,
+  DecisionsListResultSchema,
+  DecisionsReopenResultSchema,
+  DependenciesListResultSchema,
+  DependenciesWaiveResultSchema,
   HelloResultSchema,
   InputsAnswerResultSchema,
   InputsListResultSchema,
+  ItemsListResultSchema,
+  JournalListResultSchema,
+  PlanGetResultSchema,
+  PlansListResultSchema,
+  RisksListResultSchema,
+  RisksUpdateResultSchema,
+  ScheduleExplainResultSchema,
+  ScheduleGetResultSchema,
   RunsCancelResultSchema,
   RunsEventsResultSchema,
   RunsGetResultSchema,
@@ -24,6 +38,7 @@ import {
   WorkflowsListResultSchema,
 } from "@orca/protocol";
 import { fakeBridge, type FakeBridge } from "./fake-bridge.js";
+import { PLAN_ID } from "./fixtures-plan.js";
 import { DEFAULT_PREFERENCES } from "../../src/preferences/schema.js";
 
 const teardown: (() => void)[] = [];
@@ -65,6 +80,49 @@ describe("fixtures", () => {
     // A graph written inline inside `sdlc`'s `parallel`, by the id the engine gives it.
     WorkflowsGetResultSchema.parse(await result(b.workflows.get({ id: "sdlc::fanout::auth-ui" })));
     AgentsListResultSchema.parse(await result(b.agents.list()));
+  });
+
+  it("are what @orca/protocol says a plan result is (#169)", async () => {
+    const { bridge: b } = bridge();
+    const planId = PLAN_ID;
+    PlansListResultSchema.parse(await result(b.plan.list()));
+    PlanGetResultSchema.parse(await result(b.plan.get({ planId })));
+    ItemsListResultSchema.parse(await result(b.plan.items({ planId })));
+    ScheduleGetResultSchema.parse(await result(b.plan.schedule({ planId })));
+    ScheduleExplainResultSchema.parse(await result(b.plan.explain({ planId, workItemId: "auth-crypto" })));
+    DependenciesListResultSchema.parse(await result(b.plan.dependencies({ planId })));
+    RisksListResultSchema.parse(await result(b.plan.risks({ planId })));
+    DecisionsListResultSchema.parse(await result(b.plan.decisions({ planId })));
+    JournalListResultSchema.parse(await result(b.plan.journal({ planId })));
+    DependenciesWaiveResultSchema.parse(await result(b.plan.waive({ planId, dependencyId: "dep-ui-api" })));
+    DecisionsDecideResultSchema.parse(await result(b.plan.decide({ planId, key: "datastore", option: "redis" })));
+    DecisionsReopenResultSchema.parse(await result(b.plan.reopen({ planId, key: "datastore" })));
+    RisksUpdateResultSchema.parse(await result(b.plan.updateRisk({ planId, key: "key-leak", status: "accepted" })));
+    ClaimsReleaseResultSchema.parse(await result(b.claims.release({ workItemId: "wi-3" })));
+  });
+
+  it("cover every schedule classification, so a Plan screen meets all of them", async () => {
+    const items = await result(bridge().bridge.plan.items({ planId: PLAN_ID }));
+    // In the daemon's order: ready first, then running, waiting, held and the settled ones.
+    expect(items.items.map((i) => [i.slug, i.classification])).toEqual([
+      ["auth-api", "ready"],
+      ["auth-metrics", "running"],
+      ["auth-ui", "waiting"],
+      ["auth-store", "waiting"],
+      ["auth-legal", "waiting"],
+      ["auth-docs", "waiting"],
+      ["auth-crypto", "held"],
+      ["auth-spike", "done"],
+      ["auth-legacy", "failed"],
+    ]);
+  });
+
+  it("refuses `claims.release` without force while the owner could still resume", async () => {
+    const { bridge: b } = bridge();
+    // `wi-2`'s owner is running, and `claims.list` said so with `releasable: false`.
+    const refused = await b.claims.release({ workItemId: "wi-2" });
+    expect(refused).toMatchObject({ ok: false, error: { code: "RUN_STATE" } });
+    expect(await b.claims.release({ workItemId: "wi-2", force: true })).toMatchObject({ ok: true });
   });
 
   it("cover a live run, a finished one, a run asking for a person and a run nobody is driving", async () => {

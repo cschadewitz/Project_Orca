@@ -303,12 +303,38 @@ Every subcommand except `list` accepts the plan key positionally or as `--plan <
 (default: the configured `planning.plan`). The read-only ones (`list`, `show`, `schedule`, `risks`,
 `decisions`, `journal`) also take `--json`.
 
+## Over the wire
+
+`orca serve` projects the same plan for the desktop app (#169, protocol 1.7): `plans.list`,
+`plan.get`, `items.list`, `schedule.get`, `schedule.explain`, `dependencies.list`,
+`risks.list`, `decisions.list` and `journal.list` under the `plan.read` capability, and
+`dependencies.waive`, `decisions.decide`, `decisions.reopen`, `risks.update` and
+`claims.release` under `plan.write`. `orca serve --read-only` omits all five writes, from the
+dispatch table *and* from `hello.methods`, so a client hides an action instead of pressing one
+that would fail. `packages/protocol/README.md` has the shapes.
+
+Four things are worth knowing before reading them:
+
+- **Every method names a `planId`.** A daemon serves a store rather than a person, so it has
+  no `planning.plan` to default to; `plans.list` is how a client finds one.
+- **The reads are one schedule.** `items.list` carries each item's schedule classification,
+  its priority score *and the reasons behind it*, its risk exposure and the run holding its
+  claim, all from one `computeSchedule` per call — so those four cannot disagree with
+  `schedule.get`, and a client never re-implements the scheduler.
+- **`schedule.explain` is `orca plan explain`, word for word.** The lines come from
+  `explainWorkItem` plus the dependency and risk lines this service appends; the wire does not
+  paraphrase them, and a daemon test pins the two together.
+- **The writes are ordinary `PlanService` calls** under its per-plan lock, journalled with
+  `origin: { kind: "human", actor: "daemon" }` — the same shape `orca plan` writes with
+  `actor: "cli"`. A `plan.changed` notification follows, folded from the journal and carrying
+  only *which kinds* of thing moved, so a schedule table repaints without a refetch of
+  anything it did not ask for.
+
 ## Known limitations
 
 Reviewed when the layer was rebased onto main; tracked as issues #77 and #81–#84 (label
 `planning`), #88, #104 and #105. In short: the scheduler still re‑reads the whole plan on every
-wake, which grows with plan age (#83, `docs/ROADMAP.md` item 12); a dead run's claims can
-only be released by editing the store (#88); a *different* choice re-decides a `decided`
+wake, which grows with plan age (#83, `docs/ROADMAP.md` item 12); a *different* choice re-decides a `decided`
 decision without `reopenDecision`, so the decide loop can undo a human's `orca plan decide`
 (#104); artifact intake reconciles even when a signal changed nothing (#105). See
 `docs/ROADMAP.md` item 13. Fixed since: cycle
@@ -320,7 +346,9 @@ one `step.waiting` per distinct reason under a default `waitTimeoutMs` instead o
 poll (#96); scheduler explanations, the critical path and cycle messages agree with each
 other (#80); the JSONL event store and plan journal number events on disk under a lock
 file, so two processes over one store extend one log (#97); a decision the artifact intake
-already made is not re-decided by `custom:decision-matrix` (#79).
+already made is not re-decided by `custom:decision-matrix` (#79); a dead run's claims are
+released by `orca claims release` and by the daemon's `claims.release`, rather than by editing
+the store (#88).
 
 ## Configuration
 

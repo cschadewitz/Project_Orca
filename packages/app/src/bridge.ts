@@ -24,18 +24,42 @@ import type {
   ArtifactsListResult,
   ClaimsListParams,
   ClaimsListResult,
+  ClaimsReleaseParams,
+  ClaimsReleaseResult,
   ConfigGetParams,
   ConfigGetResult,
   ConfigSetParams,
   ConfigSetResult,
   DaemonCapability,
+  DecisionsDecideParams,
+  DecisionsDecideResult,
+  DecisionsListParams,
+  DecisionsListResult,
+  DecisionsReopenParams,
+  DecisionsReopenResult,
+  DependenciesListParams,
+  DependenciesListResult,
+  DependenciesWaiveParams,
+  DependenciesWaiveResult,
   HelloResult,
   InputsAnswerParams,
   InputsAnswerResult,
   InputsListParams,
   InputsListResult,
+  ItemsListParams,
+  ItemsListResult,
+  JournalListParams,
+  JournalListResult,
   NotificationMessage,
+  PlanGetParams,
+  PlanGetResult,
+  PlansListParams,
+  PlansListResult,
   ProtocolError,
+  RisksListParams,
+  RisksListResult,
+  RisksUpdateParams,
+  RisksUpdateResult,
   RunsCancelParams,
   RunsCancelResult,
   RunsEventsParams,
@@ -46,6 +70,10 @@ import type {
   RunsListResult,
   RunsResumeParams,
   RunsResumeResult,
+  ScheduleExplainParams,
+  ScheduleExplainResult,
+  ScheduleGetParams,
+  ScheduleGetResult,
   WorkflowsGetParams,
   WorkflowsGetResult,
   WorkflowsListParams,
@@ -192,6 +220,43 @@ export interface OrcaBridge {
   claims: {
     /** Who owns which work item, and whether that run is still alive. */
     list: (params?: Params<ClaimsListParams>) => Promise<BridgeResult<ClaimsListResult>>;
+    /**
+     * Take a work item away from the run that claimed it (#88). A write, and a destructive
+     * one: it is refused while the owner could still resume unless `force`, and
+     * `ClaimView.owner.releasable` says which it will be *before* the call, so the
+     * confirmation can be honest rather than the error being the first news.
+     */
+    release: (
+      params: Params<ClaimsReleaseParams> & { workItemId: string },
+    ) => Promise<BridgeResult<ClaimsReleaseResult>>;
+  };
+  /**
+   * The plan (#169) — what is coming, why it is not moving, and what it waits for.
+   *
+   * Every call names a `planId`: the daemon serves a store, not a person, so it has no
+   * default plan and `plan.list()` is how a surface finds one. `schedule.explain` is the one
+   * that returns prose, and the prose is `core`'s own — render it, do not re-phrase it.
+   */
+  plan: {
+    list: (params?: Params<PlansListParams>) => Promise<BridgeResult<PlansListResult>>;
+    get: (params: PlanGetParams) => Promise<BridgeResult<PlanGetResult>>;
+    items: (params: Params<ItemsListParams> & { planId: string }) => Promise<BridgeResult<ItemsListResult>>;
+    schedule: (params: ScheduleGetParams) => Promise<BridgeResult<ScheduleGetResult>>;
+    explain: (params: ScheduleExplainParams) => Promise<BridgeResult<ScheduleExplainResult>>;
+    dependencies: (
+      params: Params<DependenciesListParams> & { planId: string },
+    ) => Promise<BridgeResult<DependenciesListResult>>;
+    risks: (params: Params<RisksListParams> & { planId: string }) => Promise<BridgeResult<RisksListResult>>;
+    decisions: (params: Params<DecisionsListParams> & { planId: string }) => Promise<BridgeResult<DecisionsListResult>>;
+    journal: (params: Params<JournalListParams> & { planId: string }) => Promise<BridgeResult<JournalListResult>>;
+    /** Waive a dependency. A write. */
+    waive: (params: DependenciesWaiveParams) => Promise<BridgeResult<DependenciesWaiveResult>>;
+    /** Record a choice; `recommended` comes back beside it when there is a matrix. A write. */
+    decide: (params: DecisionsDecideParams) => Promise<BridgeResult<DecisionsDecideResult>>;
+    /** Clear a choice and the dependencies it satisfied (#104). A write. */
+    reopen: (params: DecisionsReopenParams) => Promise<BridgeResult<DecisionsReopenResult>>;
+    /** Move a risk along its lifecycle. A write. */
+    updateRisk: (params: RisksUpdateParams) => Promise<BridgeResult<RisksUpdateResult>>;
   };
   artifacts: {
     /**

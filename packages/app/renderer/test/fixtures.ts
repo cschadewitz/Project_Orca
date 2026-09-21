@@ -61,7 +61,7 @@ export const HELLO: HelloResult = {
   protocol: { major: 1, minor: 7 },
   orcaVersion: "0.2.0-test",
   storeDir: "/work/orca/.orca",
-  capabilities: ["runs.read", "runs.control"],
+  capabilities: ["runs.read", "runs.control", "plan.read", "plan.write"],
   methods: [
     "hello",
     "runs.list",
@@ -81,6 +81,22 @@ export const HELLO: HelloResult = {
     // Answered by a daemon with `runs.control`, and called by nothing in the app: the app
     // has no workflow picker to start a run from (#178).
     "runs.start",
+    // The plan surface (#169). Nine reads, and five writes that ride the same `--read-only`
+    // switch as the four above.
+    "plans.list",
+    "plan.get",
+    "items.list",
+    "schedule.get",
+    "schedule.explain",
+    "dependencies.list",
+    "risks.list",
+    "decisions.list",
+    "journal.list",
+    "dependencies.waive",
+    "decisions.decide",
+    "decisions.reopen",
+    "risks.update",
+    "claims.release",
   ],
 };
 

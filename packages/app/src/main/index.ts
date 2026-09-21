@@ -98,6 +98,22 @@ handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>
 handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
 handle("orca:config.get", (params: Parameters<DaemonClient["configGet"]>[0]) => client().configGet(params));
 
+// The plan reads (#169). Same channel shape as the run reads; the daemon omits all nine when
+// it serves no plan, so a surface checks `hello.methods` rather than calling and failing.
+handle("orca:plans.list", (params: Parameters<DaemonClient["plansList"]>[0]) => client().plansList(params));
+handle("orca:plan.get", (params: Parameters<DaemonClient["planGet"]>[0]) => client().planGet(params));
+handle("orca:items.list", (params: Parameters<DaemonClient["itemsList"]>[0]) => client().itemsList(params));
+handle("orca:schedule.get", (params: Parameters<DaemonClient["scheduleGet"]>[0]) => client().scheduleGet(params));
+handle("orca:schedule.explain", (params: Parameters<DaemonClient["scheduleExplain"]>[0]) =>
+  client().scheduleExplain(params),
+);
+handle("orca:dependencies.list", (params: Parameters<DaemonClient["dependenciesList"]>[0]) =>
+  client().dependenciesList(params),
+);
+handle("orca:risks.list", (params: Parameters<DaemonClient["risksList"]>[0]) => client().risksList(params));
+handle("orca:decisions.list", (params: Parameters<DaemonClient["decisionsList"]>[0]) => client().decisionsList(params));
+handle("orca:journal.list", (params: Parameters<DaemonClient["journalList"]>[0]) => client().journalList(params));
+
 // The three that write (#160, #161). They reach the daemon the same way the reads do; what
 // makes them different is on the other two sides - the daemon refuses them without the
 // run's lease, and the renderer asks `useWritability()` before offering the control at all.
@@ -108,6 +124,21 @@ handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) =
 // The fourth (#174, #266). It writes a file rather than a run, so no lease is involved, but
 // it is still absent from a `--read-only` daemon and `useWritability()` still governs it.
 handle("orca:config.set", (params: Parameters<DaemonClient["configSet"]>[0]) => client().configSet(params));
+
+// The plan writes and `claims.release` (#169, #88). `--read-only` omits them exactly as it
+// omits the three above, so the same `useWritability()` answer covers all of them.
+handle("orca:dependencies.waive", (params: Parameters<DaemonClient["dependenciesWaive"]>[0]) =>
+  client().dependenciesWaive(params),
+);
+handle("orca:decisions.decide", (params: Parameters<DaemonClient["decisionsDecide"]>[0]) =>
+  client().decisionsDecide(params),
+);
+handle("orca:decisions.reopen", (params: Parameters<DaemonClient["decisionsReopen"]>[0]) =>
+  client().decisionsReopen(params),
+);
+handle("orca:risks.update", (params: Parameters<DaemonClient["risksUpdate"]>[0]) => client().risksUpdate(params));
+handle("orca:claims.release", (params: Parameters<DaemonClient["claimsRelease"]>[0]) => client().claimsRelease(params));
+
 /** Everything the main process pushes goes out the same way: every window, none destroyed. */
 function send(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
