@@ -301,12 +301,46 @@ one the screen already holds is its own write coming back and is dropped. A writ
 is followed by one read, because the effective policy is computed over both files and
 `config.set` answers with neither.
 
+**The draft model is mounted above the surface switch** (`config/config-context.tsx`).
+`App` unmounts Config like every other screen, so a draft held inside it disappeared the
+moment somebody looked at a run; the hook now runs once in a `ConfigProvider` and both
+consumers — this surface and the Agents surface's policy panel — read the one model. That
+is one `config.get` for the app rather than one per mounting, it is one answer to "what is
+unsaved", and closing the policy panel no longer discards the grant edits it was holding.
+
 **The save bar is `.orca-draftbar`, and it is the one the workflow editor reuses** — the
 editor adds **Validate all** and **Publish** to it rather than drawing a second bar
 (70-workflow-editing.md). `⌘S` saves, registered in the `config` scope so the palette lists
 it. The bar is **absent** where there is no `config.set` to call — file mode, a `--read-only`
-daemon — and the form goes read-only with it; disconnected keeps the last read, dims the
-values and hides the bar rather than offering a write nobody will take.
+daemon, or any daemon whose `hello.methods` does not list it — and the form goes read-only
+with it. The gate is the method rather than the `runs.control` capability: the capability is
+one word over four dispatch tables, and a daemon serving a store outside a workspace drives
+runs and has no configuration to write (`methodsFor`). `ConnectionSnapshot` carries
+`methods` from the handshake for exactly this, since a `HelloResult` never crosses the
+bridge. **Disconnected and reconnecting keep the bar**, dimmed values and all, with the
+change count still on it and `writability()`'s reason on Validate and Save — those are a
+daemon that would take the write if it were answering, and 40-connection-states.md asks for
+the reason on the control rather than for a control that vanishes with the draft.
+
+**Nothing on the screen speaks.** A field's error is `aria-describedby` text, not an alert:
+it is on the control the person is editing, and rule 11 keeps interruption for what a person
+is not already looking at. What is announced, once, into the app's one live region is the
+*result* — "Config saved", or the first error's sentence after a Validate or a Save that
+came back with one.
+
+**A saved configuration takes effect on the next `orca serve`.** The daemon reads the
+configuration when it boots and keeps what it read, so a save changes the file and not the
+process answering it. The surface says so in one line beside the bar rather than leaving it
+to be discovered.
+
+**Three deviations from what #175 asked for, recorded rather than quietly shipped.** The raw
+view is *editable*, although the issue described it as read-only: a form over a schema
+cannot express every key a person may need to write, and a read-only view of the bytes would
+send them to an editor outside the app. The notification tiers (#162) are in the preferences
+file and are not on this screen, because their surface is the Attention side of the app and
+a tier list here would be the second place they are set. And there is no stub section for
+#140: a section that names a feature and does nothing is a promise the screen cannot keep
+(rule 12).
 
 **What the surface cannot soften.** Nothing in either document is redacted: `config.get`
 hands over the bytes, ssh hosts and command lines included, because a form that edits a file
@@ -326,8 +360,10 @@ hand, in which case it is stamped with the time and with `grantedFor: "added by 
 app"` so a reader of the diff can tell it from one a run wrote.
 
 **It is the Config surface's draft model, mounted elsewhere.** The panel lives in
-`renderer/src/config/` and runs on `use-config.ts`: the same `expectedRevision`, the same
-`CONFIG_STALE` conflict with **Reload**, the same rule that a refused write keeps the draft.
+`renderer/src/config/` and reads the app's one feed through `ConfigProvider`: the same
+`expectedRevision`, the same `CONFIG_STALE` conflict with **Reload**, the same rule that a
+refused write keeps the draft — and, since the model is above both screens, closing the
+panel keeps the grant edits rather than discarding them.
 A save sends the whole sidecar as `config.set { document: "permissions", text }` — `patch`
 edits a YAML document in place and this one is JSON — and the daemon canonicalises the key
 order, so a client compares **revisions, not bytes**. The panel never writes a `default`: the

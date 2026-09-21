@@ -158,6 +158,10 @@ same two cards mount inline in step detail over the same feed (`attention/inline
 so a gate answered in the run and a gate answered in the list are one read, one component and
 one count.
 
+`renderer/src/config/` has the same deviation for the same kind of reason: the permission
+rows are a `map` rather than a `VirtualList` because what is bounded there is the number of
+rules one agent has, and they are still rows — `--row-h` tall and never wrapping (rule 9).
+
 `renderer/src/config/` is the third, and the first that edits a *file*: a plain
 `config-model.ts` (schema to sections, draft to patch, an error to the field it belongs on),
 one hook holding both documents and the drafts over them, and the markup composed from
