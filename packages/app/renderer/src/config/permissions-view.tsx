@@ -92,8 +92,8 @@ export function PermissionsView({ policies, live, path, exists }: PermissionsVie
                       <Text style="caption" className="orca-config__none">
                         {/* Why this group has no file beside it, said rather than left to be
                             guessed at: there is nothing to open and nothing to edit. */}
-                        ORCA&apos;s own floor, applied when the config left the fallthrough unset. No file holds
-                        them, so they cannot be edited anywhere.
+                        ORCA&apos;s own floor, applied when the config left the fallthrough unset. No file holds them,
+                        so they cannot be edited anywhere.
                       </Text>
                     )}
                     <ol className="orca-config__rules">

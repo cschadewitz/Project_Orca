@@ -415,7 +415,11 @@ function useSurfaceKeys(count: number, focusIndex: number, focusCard: (index: nu
  */
 function useCardWrites(
   input: OpenInputView | undefined,
-  actions: { answer: (input: OpenInputView, request: AnswerRequest) => void; cancel: (runId: string) => void; resume: (runId: string) => void },
+  actions: {
+    answer: (input: OpenInputView, request: AnswerRequest) => void;
+    cancel: (runId: string) => void;
+    resume: (runId: string) => void;
+  },
 ): void {
   /* Through a ref: `useControls` rebuilds its callbacks whenever a call goes in flight, and
      the rows must not be unregistered and re-registered underneath a keypress. The input is

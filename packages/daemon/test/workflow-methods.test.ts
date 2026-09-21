@@ -107,7 +107,9 @@ describe("workflows.get", () => {
     expect(w.id).toBe("ai-sdlc");
     expect(w.name).toBe("AI-native SDLC loop");
     expect(w.start).toBe("start");
-    expect(w.inputs).toEqual({ workItem: "The work item (title, description, acceptance criteria) this run implements." });
+    expect(w.inputs).toEqual({
+      workItem: "The work item (title, description, acceptance criteria) this run implements.",
+    });
     expect(w.vars).toMatchObject({ maxBuildAttempts: 3, maxReviewRounds: 2 });
   });
 

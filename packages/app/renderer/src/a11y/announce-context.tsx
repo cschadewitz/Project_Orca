@@ -17,13 +17,7 @@ import { createAnnouncements, type Announcements } from "./announce.js";
  */
 const AnnouncementsContext = createContext<Announcements>(createAnnouncements());
 
-export function AnnouncementsProvider({
-  value,
-  children,
-}: {
-  value: Announcements;
-  children: ReactNode;
-}): JSX.Element {
+export function AnnouncementsProvider({ value, children }: { value: Announcements; children: ReactNode }): JSX.Element {
   return <AnnouncementsContext.Provider value={value}>{children}</AnnouncementsContext.Provider>;
 }
 

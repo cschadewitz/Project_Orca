@@ -75,14 +75,7 @@ function Nodes({ nodes, edits, errors, onChange, onShowRaw }: NodesProps): JSX.E
           );
         }
         return (
-          <Field
-            key={node.path}
-            node={node}
-            edits={edits}
-            errors={errors}
-            onChange={onChange}
-            onShowRaw={onShowRaw}
-          />
+          <Field key={node.path} node={node} edits={edits} errors={errors} onChange={onChange} onShowRaw={onShowRaw} />
         );
       })}
     </>

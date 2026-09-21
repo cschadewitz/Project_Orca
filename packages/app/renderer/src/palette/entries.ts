@@ -6,12 +6,7 @@
  * run id or an `orca://` URL. Every shortcut in the keyboard map appears in one of the
  * first two with its key beside it; that is the whole point of the registry.
  */
-import {
-  shortcutLabel,
-  type RegisteredShortcut,
-  type ShortcutPicker,
-  type ShortcutScope,
-} from "../keyboard-map.js";
+import { shortcutLabel, type RegisteredShortcut, type ShortcutPicker, type ShortcutScope } from "../keyboard-map.js";
 
 export type PaletteSection = "jump" | "actions" | "navigation" | "search";
 

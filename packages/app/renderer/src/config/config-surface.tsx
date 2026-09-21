@@ -88,10 +88,7 @@ export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Ele
   const draft = feed.draftOf("config");
   const save = feed.saveStateOf("config");
 
-  const sections = useMemo(
-    () => (data ? buildSections(data.schema, data.config.parsed) : []),
-    [data],
-  );
+  const sections = useMemo(() => (data ? buildSections(data.schema, data.config.parsed) : []), [data]);
   const drawn = useMemo(() => fieldPaths(sections), [sections]);
   const placed = useMemo(() => placeErrors(save.errors, drawn), [save.errors, drawn]);
   const policies = useMemo(() => (data ? agentPolicies(data.effective) : []), [data]);

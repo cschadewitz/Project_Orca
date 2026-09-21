@@ -17,13 +17,7 @@ import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import { describe, expect, it } from "vitest";
 import { AgentSpecSchema, type LogLevel, type Logger } from "@orca/core";
-import {
-  LocalHost,
-  openAcpSession,
-  permissionPolicyPath,
-  recordAlwaysDecision,
-  type AgentSession,
-} from "@orca/agents";
+import { LocalHost, openAcpSession, permissionPolicyPath, recordAlwaysDecision, type AgentSession } from "@orca/agents";
 
 /**
  * A minimal ACP agent that raises two `session/request_permission` requests for the same

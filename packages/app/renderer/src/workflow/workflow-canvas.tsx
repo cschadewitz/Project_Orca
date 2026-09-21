@@ -207,13 +207,7 @@ export function WorkflowCanvas({
           role="presentation"
           style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}
         >
-          <Graph
-            layout={layout}
-            overlay={overlay}
-            selected={selected}
-            onSelect={onSelect}
-            expanded={expanded}
-          />
+          <Graph layout={layout} overlay={overlay} selected={selected} onSelect={onSelect} expanded={expanded} />
         </div>
       </div>
 

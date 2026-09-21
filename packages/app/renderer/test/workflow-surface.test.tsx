@@ -208,7 +208,11 @@ describe("collapsing a container", () => {
     const group = await screen.findByRole("region", { name: "Inside Fan out the pieces: sdlc::fanout::auth-ui" });
     expect(within(group).getByText("3 nodes")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Inside Fan out the pieces: sdlc::fanout::auth-docs" })).toBeTruthy();
-    expect(within(group).getAllByRole("option").map((n) => n.id)).toContain(nodeDomId("ui-build"));
+    expect(
+      within(group)
+        .getAllByRole("option")
+        .map((n) => n.id),
+    ).toContain(nodeDomId("ui-build"));
     expect(named(canvas, "fanout").textContent).not.toContain("2 nested graphs");
 
     press(canvas, "Enter", "Enter");

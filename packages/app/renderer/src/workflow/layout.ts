@@ -123,11 +123,7 @@ const isDrawable = (edge: WorkflowEdgeView, ids: ReadonlySet<string>): boolean =
  * Iterative rather than recursive: a workflow is a file a person wrote and a deep chain must
  * not be able to overflow the stack of the window drawing it.
  */
-function backEdges(
-  nodes: readonly WorkflowNodeView[],
-  edges: readonly WorkflowEdgeView[],
-  start: string,
-): Set<string> {
+function backEdges(nodes: readonly WorkflowNodeView[], edges: readonly WorkflowEdgeView[], start: string): Set<string> {
   /* Keyed by `edgeKey`, so two edges between one pair are two entries here and one of them
      can be a back edge without the other becoming one. */
   const out = new Map<string, { edge: WorkflowEdgeView; key: string }[]>();

@@ -114,10 +114,7 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
      compared as text: the daemon canonicalises key order, so bytes are not the question and
      the revision is (`policy-model.ts`). */
   const onDisk = useMemo(() => (data ? parseSidecar(data.permissions.text) : undefined), [data]);
-  const held = useMemo(
-    () => (draft?.kind === "raw" ? parseSidecar(draft.text) : onDisk),
-    [draft, onDisk],
-  );
+  const held = useMemo(() => (draft?.kind === "raw" ? parseSidecar(draft.text) : onDisk), [draft, onDisk]);
 
   const policy = useMemo(
     () => (data ? agentPolicies(data.effective).find((entry) => entry.agentId === agentId) : undefined),
@@ -204,8 +201,8 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
             </div>
             <Text style="caption" className="orca-policy__none">
               {/* Why they are read-only here, said out loud rather than left as a dead row. */}
-              These are the config&apos;s own rules. Nothing machine-written rewrites the agents array a person
-              curated, so they are edited on the Config surface.
+              These are the config&apos;s own rules. Nothing machine-written rewrites the agents array a person curated,
+              so they are edited on the Config surface.
             </Text>
             {configured.length === 0 ? (
               <Text style="caption" className="orca-policy__none">
@@ -240,8 +237,8 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
 
             {held === undefined ? (
               <Text style="caption" className="orca-policy__none">
-                The sidecar is not valid JSON, so it cannot be edited here. Open it in the configuration&apos;s raw
-                view and fix it there.
+                The sidecar is not valid JSON, so it cannot be edited here. Open it in the configuration&apos;s raw view
+                and fix it there.
               </Text>
             ) : rules.length === 0 ? (
               <Text style="caption" className="orca-policy__none">
@@ -311,8 +308,8 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
           )}
           {/* Said once, here, because the issue asks for it and the runtime cannot supply it. */}
           <Text style="caption" className="orca-policy__none">
-            ORCA does not count how often a rule fired: permission decisions are evaluated per tool call and no
-            running total is kept, so there is no auto-approval count to show.
+            ORCA does not count how often a rule fired: permission decisions are evaluated per tool call and no running
+            total is kept, so there is no auto-approval count to show.
           </Text>
         </>
       )}
@@ -360,7 +357,17 @@ interface GrantProps {
  * one file, or a tree — and a control that offered "locations" as one box would have to
  * guess which. `scope` is the third, and it is the one that needs no path written down.
  */
-function Grant({ rule, agentId, index, order, live, editable, onDecision, onMatch, onRemove }: GrantProps): JSX.Element {
+function Grant({
+  rule,
+  agentId,
+  index,
+  order,
+  live,
+  editable,
+  onDecision,
+  onMatch,
+  onRemove,
+}: GrantProps): JSX.Element {
   /* The path into the sidecar this row writes, which is what `ConfigField` says it is for:
      a form over a file a person also hand-edits has to name the key each row changes. */
   const base = `agents.${agentId}.rules[${index}]`;

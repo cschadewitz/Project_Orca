@@ -183,5 +183,4 @@ export class PlanControlModel {
     const risk = await this.svc.updateRisk(plan.id, params.key, { status: params.status }, this.origin);
     return { risk: await this.plans.riskViewOf(plan.id, risk), asOf: this.clock.isoNow() };
   }
-
 }

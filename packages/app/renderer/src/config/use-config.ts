@@ -41,14 +41,10 @@ import { useNotifications } from "../notifications-context.js";
 import { patchFrom, type Draft } from "./config-model.js";
 
 export type ConfigState =
-  | { phase: "loading" }
-  | { phase: "error"; error: ProtocolError }
-  | { phase: "ready"; data: ConfigGetResult };
+  { phase: "loading" } | { phase: "error"; error: ProtocolError } | { phase: "ready"; data: ConfigGetResult };
 
 /** What is unsaved for one document. The two shapes are the two writes `config.set` takes. */
-export type DocumentDraft =
-  | { kind: "form"; fields: Draft }
-  | { kind: "raw"; text: string };
+export type DocumentDraft = { kind: "form"; fields: Draft } | { kind: "raw"; text: string };
 
 /** What the last Validate or Save said about one document. */
 export interface SaveState {

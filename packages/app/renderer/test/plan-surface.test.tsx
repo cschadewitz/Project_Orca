@@ -163,9 +163,7 @@ describe("the sidebar's requests and filters", () => {
     await openPlan();
     const page = { limit: ITEMS_PAGE, offset: 0 };
     fireEvent.click(screen.getByRole("button", { name: "req-1" }));
-    await waitFor(() =>
-      expect(callsTo("items.list").at(-1)).toEqual({ planId: PLAN_ID, requestId: "req-1", ...page }),
-    );
+    await waitFor(() => expect(callsTo("items.list").at(-1)).toEqual({ planId: PLAN_ID, requestId: "req-1", ...page }));
 
     fireEvent.click(screen.getByRole("button", { name: "req-1" }));
     await waitFor(() => expect(callsTo("items.list").at(-1)).toEqual({ planId: PLAN_ID, ...page }));

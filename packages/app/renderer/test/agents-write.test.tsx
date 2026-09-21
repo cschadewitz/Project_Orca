@@ -203,7 +203,9 @@ describe("releasing a claim", () => {
   });
 
   it("says why on the row when the daemon refuses", async () => {
-    fake.script({ "claims.release": () => ({ ok: false, error: { code: "RUN_STATE", message: "run-vanished is running" } }) });
+    fake.script({
+      "claims.release": () => ({ ok: false, error: { code: "RUN_STATE", message: "run-vanished is running" } }),
+    });
     renderAgents();
 
     const dead = await claimRow("wi-3");
@@ -256,9 +258,7 @@ describe("the policy panel", () => {
     await screen.findByRole("group", { name: "Unsaved configuration changes" });
 
     fireEvent.click(within(panel).getByRole("button", { name: "Close" }));
-    await waitFor(() =>
-      expect(screen.queryByRole("complementary", { name: "Permissions for claude" })).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "Permissions for claude" })).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Permissions for claude" }));
 
     // The draft outlived the panel, and the file was read once for the whole app.

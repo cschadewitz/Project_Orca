@@ -271,9 +271,7 @@ describe("the policy editor", () => {
     renderPanel();
     await panel();
 
-    const configured = within(await screen.findByRole("region", { name: "Configured rules" })).getAllByRole(
-      "listitem",
-    );
+    const configured = within(await screen.findByRole("region", { name: "Configured rules" })).getAllByRole("listitem");
     expect(configured).toHaveLength(1);
     expect(configured[0]!.textContent).toContain("allow execute matching ^npm test$");
     expect(configured[0]!.textContent).toContain("config");

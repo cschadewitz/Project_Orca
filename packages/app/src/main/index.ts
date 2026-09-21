@@ -92,9 +92,7 @@ handle("orca:artifacts.get", (params: Parameters<DaemonClient["artifactsGet"]>[0
 handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) => client().agentsList(params));
 // The workflow viewer's two reads (#174, for #177). Reads like the ones above: a
 // `--read-only` daemon answers both, because a workflow is a file and not a run.
-handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>[0]) =>
-  client().workflowsList(params),
-);
+handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>[0]) => client().workflowsList(params));
 handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
 handle("orca:config.get", (params: Parameters<DaemonClient["configGet"]>[0]) => client().configGet(params));
 

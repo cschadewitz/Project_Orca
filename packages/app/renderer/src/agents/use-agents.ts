@@ -134,9 +134,7 @@ export function useAgents(): AgentsFeed {
           const claims = await window.orca.claims.list();
           if (claims.ok) {
             setState((prev) =>
-              prev.phase === "ready"
-                ? { ...prev, claims: claims.result.claims, asOf: claims.result.asOf }
-                : prev,
+              prev.phase === "ready" ? { ...prev, claims: claims.result.claims, asOf: claims.result.asOf } : prev,
             );
           }
         })

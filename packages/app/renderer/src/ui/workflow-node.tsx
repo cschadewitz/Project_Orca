@@ -29,15 +29,7 @@ import { textClass } from "./text.js";
 
 /** The nine types the design system has an icon for. Anything else draws the generic box. */
 export type WorkflowNodeType =
-  | "start"
-  | "end"
-  | "agent"
-  | "decision"
-  | "gate"
-  | "set"
-  | "loop"
-  | "parallel"
-  | "subworkflow";
+  "start" | "end" | "agent" | "decision" | "gate" | "set" | "loop" | "parallel" | "subworkflow";
 
 export const WORKFLOW_NODE_TYPES: readonly WorkflowNodeType[] = [
   "start",
@@ -117,7 +109,9 @@ function overlayModifier(status: RunStatus, current: boolean): string {
  * status is in the accessible name, first"). With no run overlaid there is no status and the
  * name starts with the type, because that is then the first thing true about the node.
  */
-export function workflowNodeName(props: Pick<WorkflowNodeProps, "typeLabel" | "name" | "runState" | "untaken">): string {
+export function workflowNodeName(
+  props: Pick<WorkflowNodeProps, "typeLabel" | "name" | "runState" | "untaken">,
+): string {
   const parts: string[] = [];
   if (props.runState) parts.push(STATUS_PRESENTATION[props.runState.status].word);
   parts.push(props.typeLabel, props.name);
@@ -151,7 +145,12 @@ export function WorkflowNode({
       id={id}
       role="option"
       aria-selected={selected === true}
-      aria-label={workflowNodeName({ typeLabel, name, ...(runState ? { runState } : {}), ...(untaken ? { untaken } : {}) })}
+      aria-label={workflowNodeName({
+        typeLabel,
+        name,
+        ...(runState ? { runState } : {}),
+        ...(untaken ? { untaken } : {}),
+      })}
       className={classes.join(" ")}
       onClick={onOpen ? () => onOpen(id) : undefined}
     >
@@ -251,7 +250,14 @@ function NodeIcon({ type }: { type: WorkflowNodeType | undefined }): JSX.Element
   })();
 
   return (
-    <svg className="orca-node__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor">
+    <svg
+      className="orca-node__icon"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+    >
       {shape}
     </svg>
   );

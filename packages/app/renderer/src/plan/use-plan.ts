@@ -378,11 +378,7 @@ const NO_DETAIL: ItemDetail = { dependencies: [], risks: [] };
  * not hear it would show a stored `status` beside a live detail that no longer agreed with
  * it. Defaulted, so a caller that has no feed to hand still gets the selection behaviour.
  */
-export function useItemDetail(
-  planId: string | undefined,
-  workItemId: string | undefined,
-  revision = 0,
-): ItemDetail {
+export function useItemDetail(planId: string | undefined, workItemId: string | undefined, revision = 0): ItemDetail {
   const [detail, setDetail] = useState<ItemDetail>(NO_DETAIL);
 
   useEffect(() => {

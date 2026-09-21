@@ -122,9 +122,7 @@ describe("deep links", () => {
     await waitFor(() => expect(activeSurface()).toContain("Config"));
     // The sidecar has the keyboard: landing on a document means being in it, and a person
     // who followed that link did not ask for the YAML.
-    await waitFor(() =>
-      expect(document.activeElement?.getAttribute("aria-label")).toBe("orca.permissions.json"),
-    );
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("orca.permissions.json"));
     expect(landing()?.textContent).toContain("orca.permissions.json");
   });
 

@@ -133,15 +133,13 @@ export function usePlanWrites({ planId, item, dependencies, risks }: PlanWriteTa
                 const result = await window.orca.plan.decisions({ planId: plan });
                 if (!result.ok) return [];
                 const decision = result.result.decisions.find((d) => d.key === key || d.id === key);
-                return (decision?.options ?? []).map(
-                  (option): PaletteChoice => ({
-                    id: option.key,
-                    label: option.name,
-                    /* What the matrix would have chosen, said rather than acted on: a
+                return (decision?.options ?? []).map((option): PaletteChoice => ({
+                  id: option.key,
+                  label: option.name,
+                  /* What the matrix would have chosen, said rather than acted on: a
                        person is entitled to decide against it (`plan-control.ts`). */
-                    ...(decision?.result?.recommended === option.key ? { hint: "the matrix's recommendation" } : {}),
-                  }),
-                );
+                  ...(decision?.result?.recommended === option.key ? { hint: "the matrix's recommendation" } : {}),
+                }));
               },
               choose: (option) => {
                 void window.orca.plan.decide({ planId: plan, key, option }).then((result) => {
@@ -209,9 +207,10 @@ export function usePlanWrites({ planId, item, dependencies, risks }: PlanWriteTa
              it holds would write a journal entry saying nothing happened. */
           load: () =>
             Promise.resolve(
-              RISK_STATUSES.filter((status) => status !== risk.status).map(
-                (status): PaletteChoice => ({ id: status, label: status }),
-              ),
+              RISK_STATUSES.filter((status) => status !== risk.status).map((status): PaletteChoice => ({
+                id: status,
+                label: status,
+              })),
             ),
           choose: (status) => {
             void window.orca.plan

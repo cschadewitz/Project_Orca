@@ -39,7 +39,17 @@ const orderOf = (layout: ReturnType<typeof layoutWorkflow>, id: string): number 
 
 describe("layers are longest-path depth from start", () => {
   it("puts a chain in one node per layer", () => {
-    const layout = layoutWorkflow(graph("a", ["a", "b", "c"], [["a", "b"], ["b", "c"]]), UNIT);
+    const layout = layoutWorkflow(
+      graph(
+        "a",
+        ["a", "b", "c"],
+        [
+          ["a", "b"],
+          ["b", "c"],
+        ],
+      ),
+      UNIT,
+    );
     expect([layerOf(layout, "a"), layerOf(layout, "b"), layerOf(layout, "c")]).toEqual([0, 1, 2]);
     expect(layout.layers).toBe(3);
   });
@@ -48,7 +58,16 @@ describe("layers are longest-path depth from start", () => {
     // `a → d` is one hop and `a → b → c → d` is three. A shortest-path layering would draw
     // `d` beside `b`, to the left of its own predecessor `c`.
     const layout = layoutWorkflow(
-      graph("a", ["a", "b", "c", "d"], [["a", "b"], ["b", "c"], ["c", "d"], ["a", "d"]]),
+      graph(
+        "a",
+        ["a", "b", "c", "d"],
+        [
+          ["a", "b"],
+          ["b", "c"],
+          ["c", "d"],
+          ["a", "d"],
+        ],
+      ),
       UNIT,
     );
     expect(layerOf(layout, "d")).toBe(3);
@@ -63,7 +82,18 @@ describe("layers are longest-path depth from start", () => {
   });
 
   it("terminates on a cycle and lays every node in it out once", () => {
-    const layout = layoutWorkflow(graph("a", ["a", "b", "c"], [["a", "b"], ["b", "c"], ["c", "b"]]), UNIT);
+    const layout = layoutWorkflow(
+      graph(
+        "a",
+        ["a", "b", "c"],
+        [
+          ["a", "b"],
+          ["b", "c"],
+          ["c", "b"],
+        ],
+      ),
+      UNIT,
+    );
     expect(layout.nodes).toHaveLength(3);
     expect([layerOf(layout, "b"), layerOf(layout, "c")]).toEqual([1, 2]);
   });
@@ -71,7 +101,18 @@ describe("layers are longest-path depth from start", () => {
 
 describe("back edges", () => {
   it("marks the edge that returns to a layer it has passed, and routes it through the gutter", () => {
-    const layout = layoutWorkflow(graph("a", ["a", "b", "c"], [["a", "b"], ["b", "c"], ["c", "b"]]), UNIT);
+    const layout = layoutWorkflow(
+      graph(
+        "a",
+        ["a", "b", "c"],
+        [
+          ["a", "b"],
+          ["b", "c"],
+          ["c", "b"],
+        ],
+      ),
+      UNIT,
+    );
     const backwards = layout.edges.filter((e) => e.isBack).map((e) => e.pair);
     expect(backwards).toEqual([edgePair({ from: "c", to: "b" })]);
 
@@ -84,7 +125,17 @@ describe("back edges", () => {
   });
 
   it("marks a self edge as a back edge rather than laying a node on top of itself", () => {
-    const layout = layoutWorkflow(graph("a", ["a", "b"], [["a", "b"], ["b", "b"]]), UNIT);
+    const layout = layoutWorkflow(
+      graph(
+        "a",
+        ["a", "b"],
+        [
+          ["a", "b"],
+          ["b", "b"],
+        ],
+      ),
+      UNIT,
+    );
     expect(layout.edges.find((e) => e.pair === edgePair({ from: "b", to: "b" }))!.isBack).toBe(true);
   });
 
@@ -92,7 +143,16 @@ describe("back edges", () => {
     // `d → b` must not push `b` past `d`. Without excluding back edges from the relaxation
     // this graph would not settle at all.
     const layout = layoutWorkflow(
-      graph("a", ["a", "b", "c", "d"], [["a", "b"], ["b", "c"], ["c", "d"], ["d", "b"]]),
+      graph(
+        "a",
+        ["a", "b", "c", "d"],
+        [
+          ["a", "b"],
+          ["b", "c"],
+          ["c", "d"],
+          ["d", "b"],
+        ],
+      ),
       UNIT,
     );
     expect([layerOf(layout, "b"), layerOf(layout, "c"), layerOf(layout, "d")]).toEqual([1, 2, 3]);
@@ -123,7 +183,10 @@ describe("back edges", () => {
     expect(layout.edges).toHaveLength(2);
     expect(new Set(layout.edges.map((e) => e.key)).size).toBe(2);
     // Both are the same pair, and the pair is what an overlay can speak about.
-    expect(layout.edges.map((e) => e.pair)).toEqual([edgePair({ from: "a", to: "b" }), edgePair({ from: "a", to: "b" })]);
+    expect(layout.edges.map((e) => e.pair)).toEqual([
+      edgePair({ from: "a", to: "b" }),
+      edgePair({ from: "a", to: "b" }),
+    ]);
     expect(layout.edges.map((e) => e.edge.when)).toEqual(["choice == 'yes'", "choice == 'no'"]);
     // Neither runs backwards; the marking does not bleed from one onto the other.
     expect(layout.edges.every((e) => !e.isBack)).toBe(true);
@@ -133,7 +196,14 @@ describe("back edges", () => {
     // `b → a` closes the cycle; `a → b` declared twice must stay two forward edges.
     const view = graph("a", ["a", "b"], []);
     const layout = layoutWorkflow(
-      { ...view, edges: [{ from: "a", to: "b" }, { from: "a", to: "b" }, { from: "b", to: "a" }] },
+      {
+        ...view,
+        edges: [
+          { from: "a", to: "b" },
+          { from: "a", to: "b" },
+          { from: "b", to: "a" },
+        ],
+      },
       UNIT,
     );
     expect(layout.edges.filter((e) => e.isBack)).toHaveLength(1);
@@ -163,7 +233,16 @@ describe("order within a layer", () => {
     /* Layer 1 is declared `y, x`; `x` is fed by the first node of layer 0 and `y` by the
        second, so the barycentre turns them round and the edges do not cross. */
     const view: WorkflowView = {
-      ...graph("s", ["s", "a", "b", "y", "x"], [["s", "a"], ["s", "b"], ["a", "x"], ["b", "y"]]),
+      ...graph(
+        "s",
+        ["s", "a", "b", "y", "x"],
+        [
+          ["s", "a"],
+          ["s", "b"],
+          ["a", "x"],
+          ["b", "y"],
+        ],
+      ),
     };
     const layout = layoutWorkflow(view, UNIT);
     expect(orderOf(layout, "a")).toBe(0);
@@ -173,8 +252,28 @@ describe("order within a layer", () => {
   });
 
   it("breaks a tie on node id, so the drawing does not depend on declaration order", () => {
-    const forwards = layoutWorkflow(graph("s", ["s", "zeta", "alpha"], [["s", "zeta"], ["s", "alpha"]]), UNIT);
-    const backwards = layoutWorkflow(graph("s", ["s", "alpha", "zeta"], [["s", "alpha"], ["s", "zeta"]]), UNIT);
+    const forwards = layoutWorkflow(
+      graph(
+        "s",
+        ["s", "zeta", "alpha"],
+        [
+          ["s", "zeta"],
+          ["s", "alpha"],
+        ],
+      ),
+      UNIT,
+    );
+    const backwards = layoutWorkflow(
+      graph(
+        "s",
+        ["s", "alpha", "zeta"],
+        [
+          ["s", "alpha"],
+          ["s", "zeta"],
+        ],
+      ),
+      UNIT,
+    );
     // Both nodes have the same one predecessor, so both barycentres are 0 and the id decides.
     expect(orderOf(forwards, "alpha")).toBe(0);
     expect(orderOf(backwards, "alpha")).toBe(0);
@@ -191,7 +290,17 @@ describe("order within a layer", () => {
 
 describe("positions and extent", () => {
   it("places each node on the grid the metrics make", () => {
-    const layout = layoutWorkflow(graph("s", ["s", "a", "b"], [["s", "a"], ["s", "b"]]), UNIT);
+    const layout = layoutWorkflow(
+      graph(
+        "s",
+        ["s", "a", "b"],
+        [
+          ["s", "a"],
+          ["s", "b"],
+        ],
+      ),
+      UNIT,
+    );
     const a = layout.nodes.find((n) => n.node.id === "a")!;
     const b = layout.nodes.find((n) => n.node.id === "b")!;
     expect([a.x, a.y]).toEqual([20, 0]);

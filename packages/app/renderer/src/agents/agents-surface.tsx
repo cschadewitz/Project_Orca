@@ -194,13 +194,7 @@ function Body({
       {groups.map((group) => (
         <HostSection key={group.hostId} group={group} live={live} onEditPermissions={onEditPermissions} />
       ))}
-      <Claims
-        claims={state.claims}
-        asOf={state.asOf}
-        live={live}
-        feed={feed}
-        canRelease={canRelease && live}
-      />
+      <Claims claims={state.claims} asOf={state.asOf} live={live} feed={feed} canRelease={canRelease && live} />
     </div>
   );
 }
@@ -239,12 +233,7 @@ function HostSection({
       </div>
       <div className="orca-agents__grid">
         {group.agents.map((agent) => (
-          <AgentCard
-            key={agent.id}
-            agent={agent}
-            live={live}
-            onEditPermissions={() => onEditPermissions(agent.id)}
-          />
+          <AgentCard key={agent.id} agent={agent} live={live} onEditPermissions={() => onEditPermissions(agent.id)} />
         ))}
       </div>
     </section>

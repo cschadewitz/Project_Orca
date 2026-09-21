@@ -84,9 +84,7 @@ describe("answering from the palette", () => {
     /* With the mouse: `mouseDown`, because the palette picks before the field is blurred.
        The whole label, because the card's own `2` is in this list too and it *selects* that
        option rather than answering with it — two different commands about one option. */
-    fireEvent.mouseDown(
-      rows().find((row) => row.textContent?.startsWith("Answer Ship the rollout?: Hold for now"))!,
-    );
+    fireEvent.mouseDown(rows().find((row) => row.textContent?.startsWith("Answer Ship the rollout?: Hold for now"))!);
 
     await waitFor(() => expect(callsTo("inputs.answer")).toHaveLength(1));
     // The id, never the label: a label may be reworded between the ask and the answer.
@@ -175,9 +173,9 @@ describe("starting a run", () => {
     /* And the app went to the run, through the route table — which is visible as the Runs
        surface reading the run that has just been started. */
     await waitFor(() =>
-      expect(callsTo("runs.get").some((p) => (p as { runId: string }).runId === `run-started-${WORKFLOWS[0]!.id}`)).toBe(
-        true,
-      ),
+      expect(
+        callsTo("runs.get").some((p) => (p as { runId: string }).runId === `run-started-${WORKFLOWS[0]!.id}`),
+      ).toBe(true),
     );
   });
 

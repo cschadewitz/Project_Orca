@@ -9,15 +9,7 @@
  */
 import { isAbsolute, relative } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
-import {
-  newId,
-  OrcaError,
-  silentLogger,
-  systemClock,
-  type AgentSpec,
-  type Clock,
-  type Logger,
-} from "@orca/core";
+import { newId, OrcaError, silentLogger, systemClock, type AgentSpec, type Clock, type Logger } from "@orca/core";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
 import { loadEffectivePermissionPolicy, resolvePermission } from "./permissions.js";
 import {

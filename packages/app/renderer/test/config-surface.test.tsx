@@ -69,8 +69,7 @@ const setsOf = (): ConfigSetParams[] =>
 const reads = (): number => fake.calls.filter((call) => call.method === "config.get").length;
 
 /** The input a field draws, found by the field's label. */
-const field = (label: string): HTMLInputElement =>
-  screen.getByLabelText<HTMLInputElement>(new RegExp(`^${label}`));
+const field = (label: string): HTMLInputElement => screen.getByLabelText<HTMLInputElement>(new RegExp(`^${label}`));
 
 /** A `config.changed` frame: a document, its new revision, and no cursor — it is not a run. */
 const configChanged = (revision: string, document = "config"): NotificationMessage => ({
@@ -112,7 +111,10 @@ describe("the patch round trip", () => {
         if (params.validateOnly === true) {
           const patched = params.patch?.[0]?.value;
           return patched === "claude-code"
-            ? { ok: true, result: { document: CONFIG_GET.config, written: false, validation: { errors: [] }, asOf: AS_OF } }
+            ? {
+                ok: true,
+                result: { document: CONFIG_GET.config, written: false, validation: { errors: [] }, asOf: AS_OF },
+              }
             : {
                 ok: true,
                 result: {
@@ -177,7 +179,10 @@ describe("the patch round trip", () => {
     // The fake refuses any revision but the fixture's, which is the one refusal a form has
     // to handle: somebody else wrote the file between the read and the save.
     fake.script({
-      "config.set": () => ({ ok: false, error: { code: "CONFIG_STALE", message: "/workspace/orca.config.yaml has changed since you read it" } }),
+      "config.set": () => ({
+        ok: false,
+        error: { code: "CONFIG_STALE", message: "/workspace/orca.config.yaml has changed since you read it" },
+      }),
     });
     fireEvent.click(await screen.findByRole("button", { name: "Save" }));
 
@@ -414,9 +419,7 @@ describe("app preferences", () => {
   it("are labelled as the app's, and are written the moment they are chosen", async () => {
     renderConfig();
     const section = await screen.findByRole("region", { name: "App preferences" });
-    expect(
-      within(section).getByText("App preferences — stored by the app, not in orca.config.yaml"),
-    ).toBeTruthy();
+    expect(within(section).getByText("App preferences — stored by the app, not in orca.config.yaml")).toBeTruthy();
 
     fireEvent.click(within(section).getByRole("button", { name: "Theme" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "dark" }));
@@ -498,9 +501,7 @@ describe("what the form says out loud, and what it does not", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Save" }));
 
     const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
-    await waitFor(() =>
-      expect(bar.textContent).toContain("humanInput.mode must be one of pause, cli, auto"),
-    );
+    await waitFor(() => expect(bar.textContent).toContain("humanInput.mode must be one of pause, cli, auto"));
     // The code belongs in a log and a bug report, not in a sentence (RULES.md rule 13).
     expect(bar.textContent).not.toContain("CONFIG_INVALID");
   });
@@ -550,8 +551,9 @@ describe("a draft and the rest of the app", () => {
     await goTo("Config");
     await screen.findByRole("region", { name: "Agents" });
     fireEvent.change(field("Command"), { target: { value: "claude-code-next" } });
-    expect(within(await screen.findByRole("group", { name: "Unsaved configuration changes" })).getByText("1 change"))
-      .toBeTruthy();
+    expect(
+      within(await screen.findByRole("group", { name: "Unsaved configuration changes" })).getByText("1 change"),
+    ).toBeTruthy();
 
     await goTo("Runs");
     await waitFor(() => expect(screen.queryByRole("region", { name: "Agents" })).toBeNull());

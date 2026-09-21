@@ -118,10 +118,7 @@ export function countLabel(shown: number, total: number): string {
  * appears twice; the order is the order the rows arrived in, which is the daemon's, and
  * this never re-sorts it.
  */
-export function foldItems(
-  held: readonly PlanItemView[],
-  page: readonly PlanItemView[],
-): readonly PlanItemView[] {
+export function foldItems(held: readonly PlanItemView[], page: readonly PlanItemView[]): readonly PlanItemView[] {
   if (page.length === 0) return held;
   const byId = new Map(held.map((item) => [item.id, item]));
   for (const item of page) byId.set(item.id, item);

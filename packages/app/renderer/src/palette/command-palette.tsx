@@ -191,7 +191,9 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
           // The list is gone while the picker is up, so the combobox says so rather than
           // pointing `aria-controls` at an element that is not in the document.
           aria-expanded={picking ? "false" : "true"}
-          {...(picking ? {} : { "aria-controls": LIST_ID, ...(selected ? { "aria-activedescendant": selected.id } : {}) })}
+          {...(picking
+            ? {}
+            : { "aria-controls": LIST_ID, ...(selected ? { "aria-activedescendant": selected.id } : {}) })}
           aria-label="Command palette"
           placeholder="Search actions, or paste a run id or an orca:// link"
           value={query}

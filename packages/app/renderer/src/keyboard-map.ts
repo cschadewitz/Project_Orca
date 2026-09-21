@@ -30,16 +30,7 @@
  *   rather than for the surface because that is what a person's `J` is moving through.
  */
 export type ShortcutScope =
-  | "global"
-  | "list"
-  | "run-tree"
-  | "stream"
-  | "card"
-  | "panel"
-  | "config"
-  | "menu"
-  | "workflow"
-  | "plan-journal";
+  "global" | "list" | "run-tree" | "stream" | "card" | "panel" | "config" | "menu" | "workflow" | "plan-journal";
 
 export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "global",

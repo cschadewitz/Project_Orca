@@ -65,8 +65,7 @@ export function WorkflowSurface({ workflowId, runId, connection, onHeader }: Wor
   const pinned = overlay !== undefined && workflow !== undefined && overlay.run.workflowVersion !== workflow.version;
 
   const crumbs = useMemo<readonly Crumb[]>(
-    () =>
-      workflow ? [{ type: "workflow" as const, id: workflow.id, label: workflow.name, current: true }] : [],
+    () => (workflow ? [{ type: "workflow" as const, id: workflow.id, label: workflow.name, current: true }] : []),
     [workflow],
   );
 
@@ -155,9 +154,7 @@ export function WorkflowSurface({ workflowId, runId, connection, onHeader }: Wor
         {overlay?.unavailable === true && (
           <Text style="caption">This daemon does not send a run&rsquo;s path, so nothing is overlaid.</Text>
         )}
-        {overlayError && (
-          <Text style="caption">{`That run could not be read: ${overlayError.code}.`}</Text>
-        )}
+        {overlayError && <Text style="caption">{`That run could not be read: ${overlayError.code}.`}</Text>}
         <span className="orca-legend">
           <span className="orca-legend__swatch orca-legend__swatch--active" aria-hidden="true" />
           <Text style="caption">taken</Text>
@@ -195,7 +192,9 @@ export function WorkflowSurface({ workflowId, runId, connection, onHeader }: Wor
 const NO_RUN = " none";
 
 function runOptions(runs: readonly RunSummaryView[], picked: string | undefined): readonly MenuItem[] {
-  const rows: MenuItem[] = [{ id: NO_RUN, label: "No run — the definition only", ...(picked === undefined ? { hint: "shown" } : {}) }];
+  const rows: MenuItem[] = [
+    { id: NO_RUN, label: "No run — the definition only", ...(picked === undefined ? { hint: "shown" } : {}) },
+  ];
   for (const run of runs) {
     rows.push({
       id: run.id,

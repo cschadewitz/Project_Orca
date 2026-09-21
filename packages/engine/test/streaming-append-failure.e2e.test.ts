@@ -66,7 +66,14 @@ describe("a store that refuses an agent.update append", () => {
     const base = memoryStores();
     const { store, refused } = refuseFirstUpdate(base.events);
     const h = await harness(
-      { kinds: { note: [{ data: { status: "done" }, body: "noted" }, { data: { status: "done" }, body: "noted" }] } },
+      {
+        kinds: {
+          note: [
+            { data: { status: "done" }, body: "noted" },
+            { data: { status: "done" }, body: "noted" },
+          ],
+        },
+      },
       { workflows, stores: { ...base, events: store } },
     );
     dirs.push(h.dir);

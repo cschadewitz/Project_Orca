@@ -473,7 +473,11 @@ describe("two concurrent config.set on the YAML", () => {
 
     const results = await Promise.allSettled(
       [".one", ".two"].map((storeDir) =>
-        model.set({ document: "config", expectedRevision: read.revision, patch: [{ path: "storeDir", value: storeDir }] }),
+        model.set({
+          document: "config",
+          expectedRevision: read.revision,
+          patch: [{ path: "storeDir", value: storeDir }],
+        }),
       ),
     );
 

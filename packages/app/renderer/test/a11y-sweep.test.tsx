@@ -670,7 +670,9 @@ describe("Plan: two lists, one tab stop each, and nothing that speaks", () => {
    */
   it("mounts no live region of its own, in either mode — only the app's stale banner", async () => {
     const speaking = (): Element[] =>
-      [...document.querySelectorAll(".orca-plan [role=status], .orca-plan [role=alert], .orca-plan [aria-live]")].filter(
+      [
+        ...document.querySelectorAll(".orca-plan [role=status], .orca-plan [role=alert], .orca-plan [aria-live]"),
+      ].filter(
         // The app's shared banner, used identically on every surface that has one.
         (element) => element.closest(".orca-banner--stale") === null,
       );

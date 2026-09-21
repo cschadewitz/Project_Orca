@@ -294,11 +294,10 @@ describe("config.set beside a run (#174, #266)", () => {
  */
 function refusesToDrive(orc: Orchestrator): Orchestrator {
   const boom = (runId: string): never => {
-    throw new OrcaError(
-      "RUN_LEASED",
-      `the lease on run ${runId} was taken away while it was being interpreted here`,
-      { runId, holder: "some-other-process" },
-    );
+    throw new OrcaError("RUN_LEASED", `the lease on run ${runId} was taken away while it was being interpreted here`, {
+      runId,
+      holder: "some-other-process",
+    });
   };
   return new Proxy(orc, {
     get(target, prop) {

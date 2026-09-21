@@ -141,7 +141,7 @@ export function harness(platform = "darwin", store: AppearanceStore = memoryStor
             <NotificationProvider value={notifications}>
               <AppearanceProvider value={appearance}>
                 <AnnouncementsProvider value={announcements}>
-                {/* `App` wraps every surface in this, so a surface test has to as well: a
+                  {/* `App` wraps every surface in this, so a surface test has to as well: a
                     step's artifact chip asks the context to put an artifact in the docked
                     panel, and the context throws rather than silently doing nothing when
                     nothing is above it. `onOpen` is the chrome's and is omitted here —

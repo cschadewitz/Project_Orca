@@ -325,9 +325,7 @@ export function buildSections(schema: ConfigSchemaDescription, parsed: unknown):
     });
   }
 
-  return general.length === 0
-    ? sections
-    : [{ id: GENERAL_SECTION, title: "General", nodes: general }, ...sections];
+  return general.length === 0 ? sections : [{ id: GENERAL_SECTION, title: "General", nodes: general }, ...sections];
 }
 
 /**
@@ -392,10 +390,7 @@ export interface PlacedErrors {
  * dropped: it is listed above the form, because an invalid file with no visible reason is
  * the worst state this screen can be in.
  */
-export function placeErrors(
-  errors: readonly ConfigValidationError[],
-  drawn: ReadonlySet<string>,
-): PlacedErrors {
+export function placeErrors(errors: readonly ConfigValidationError[], drawn: ReadonlySet<string>): PlacedErrors {
   const byPath = new Map<string, string>();
   const unplaced: ConfigValidationError[] = [];
   for (const error of errors) {

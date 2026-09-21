@@ -138,8 +138,7 @@ function nestedGraphs(nodeId: string, node: NodeDef): { id: string; graph: Workf
   const out: { id: string; graph: WorkflowGraph }[] = [];
   if (node.type === "loop" && "graph" in node.body) out.push({ id: nodeId, graph: node.body.graph });
   if (node.type === "parallel") {
-    if (node.forEach?.body && "graph" in node.forEach.body)
-      out.push({ id: nodeId, graph: node.forEach.body.graph });
+    if (node.forEach?.body && "graph" in node.forEach.body) out.push({ id: nodeId, graph: node.forEach.body.graph });
     for (const [branch, ref] of Object.entries(node.branches ?? {}))
       if ("graph" in ref) out.push({ id: `${nodeId}${INLINE_WORKFLOW_SEPARATOR}${branch}`, graph: ref.graph });
   }

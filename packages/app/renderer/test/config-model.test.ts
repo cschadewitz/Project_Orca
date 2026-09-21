@@ -77,11 +77,7 @@ describe("the form", () => {
     expect(card.node).toBe("group");
     // Headed by the agent's own id rather than by "#1": ids are what config and runs use.
     expect(card.label).toBe("claude");
-    expect(card.children.map((child) => child.path)).toEqual([
-      "agents[0].id",
-      "agents[0].command",
-      "agents[0].roles",
-    ]);
+    expect(card.children.map((child) => child.path)).toEqual(["agents[0].id", "agents[0].command", "agents[0].roles"]);
   });
 
   it("draws a control per schema type, and reads the document's value into it", () => {
@@ -93,7 +89,7 @@ describe("the form", () => {
     // The schema path stays on the field: it is what says *which* description drew it.
     expect(id.schemaPath).toBe("agents[].id");
 
-    const mode = (section("humanInput").nodes[0] as FieldNode);
+    const mode = section("humanInput").nodes[0] as FieldNode;
     expect(mode.kind).toBe("enum");
     expect(mode.choices).toEqual(["pause", "cli", "auto"]);
     // The document has no `humanInput:` block at all, and the form says so by having no
@@ -162,10 +158,7 @@ describe("validation errors", () => {
       new Set(["storeDir"]),
     );
     expect(placed.byPath.size).toBe(0);
-    expect(placed.unplaced.map((error) => error.message)).toEqual([
-      "the document is not a mapping",
-      "unknown key",
-    ]);
+    expect(placed.unplaced.map((error) => error.message)).toEqual(["the document is not a mapping", "unknown key"]);
   });
 });
 
