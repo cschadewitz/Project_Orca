@@ -106,7 +106,7 @@ const AUDITED = [
      `items.list` have answered — the demo store's program run registers its work items in a
      plan, so there is one. The last surface to leave the unbuilt list: as of v0.5.0 every
      surface is audited, and a new one goes here on the day it grows content. */
-  { id: "plan", shortcut: 3, ready: '.orca-plan [role="listbox"] [role="option"]' },
+  { id: "plan", shortcut: 3, ready: '.orca-plan [role="grid"] [role="row"]' },
 ] as const;
 
 let daemon: Daemon;
@@ -164,14 +164,20 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "alerts",
     "artifacts",
     "claims",
+    // `config`, `plan` and `workflows` are v0.5.0's: the Config surface's two documents
+    // (#174, #266), the plan's reads and writes (#169, #170, #178) and the workflow the
+    // viewer draws (#177). Written down here, in the PR that widened `src/bridge.ts`.
+    "config",
     "connection",
     "deepLink",
     "hello",
     "inputs",
     "notifications",
+    "plan",
     "platform",
     "preferences",
     "runs",
+    "workflows",
     "workspace",
   ]);
 
@@ -283,9 +289,11 @@ test("no surface is passed off as unbuilt", async () => {
      the other half of that promise, that none of them still shows the placeholder. */
   for (const surface of AUDITED) {
     const pane = await gotoSurface(surface.id, surface.shortcut);
-    await expect(pane.locator(".orca-state.orca-state--empty")).not.toContainText(
-      "This surface has not been built yet.",
-    );
+    /* A count rather than `not.toContainText`: a surface that has been built has no
+       `.orca-state--empty` at all, and a negated text assertion against an element that is
+       not there fails on "element(s) not found" rather than passing. What is being claimed
+       is that the placeholder is nowhere on the pane. */
+    await expect(pane.getByText("This surface has not been built yet.")).toHaveCount(0);
   }
 });
 
