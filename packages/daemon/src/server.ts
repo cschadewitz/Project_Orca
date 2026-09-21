@@ -100,6 +100,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     source: opts.source,
     control: opts.control,
     agents: opts.agents,
+    config: opts.config,
   };
   // A daemon without a store serves `hello` alone, and says so in `hello.methods`: a read
   // method it cannot answer is an unknown method, not a method that fails.

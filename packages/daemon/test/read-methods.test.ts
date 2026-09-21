@@ -15,6 +15,7 @@ import {
   HelloResultSchema,
   InputsListResultSchema,
   PROTOCOL_VERSION,
+  CONFIG_GET_METHOD,
   READ_METHODS,
   RunsEventsResultSchema,
   RunsGetResultSchema,
@@ -476,7 +477,10 @@ describe("hello", () => {
   it("reports the read methods it serves", async () => {
     const r = HelloResultSchema.parse((await call("hello", { client: "test/1", protocol: PROTOCOL_VERSION })).result);
     expect(r.capabilities).toEqual(["runs.read"]);
-    expect(r.methods).toEqual(["hello", ...READ_METHODS]);
+    // `config.get` is a read, but it needs a config directory rather than a store, and this
+    // fixture is a store alone. A method this daemon will not answer is a method it does not
+    // advertise, which is the whole of `methodsFor` (#174).
+    expect(r.methods).toEqual(["hello", ...READ_METHODS.filter((m) => m !== CONFIG_GET_METHOD)]);
     expect(r.storeDir).toBe("/work/orca/.orca");
   });
 

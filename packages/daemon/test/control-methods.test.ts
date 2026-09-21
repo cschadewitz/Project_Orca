@@ -7,7 +7,10 @@
  * lease and reach the same terminal state a CLI would, so the fixture is an orchestrator
  * with `PausingHumanInput` and a workflow, driven until it parks.
  */
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost, SshHost, type AgentSession } from "@orca/agents";
 import {
   AgentSpecSchema,
@@ -32,6 +35,7 @@ import {
 import { memoryStores } from "@orca/store";
 import {
   AgentModel,
+  ConfigModel,
   ControlModel,
   ReadModel,
   Subscription,
@@ -126,12 +130,17 @@ function harness() {
   const reads = new ReadModel({ orchestrator });
   const agentModel = new AgentModel({ orchestrator, reads });
   const control = new ControlModel({ orchestrator, reads });
+  // `orca serve` always builds one of these - a daemon serving a store is serving it out of
+  // a config directory - so a harness without one would advertise a `hello.methods` no real
+  // daemon has. It reads lazily, so an empty directory is a workspace with no config yet.
+  const config = new ConfigModel({ configDir: tmpdir() });
   const ctx: MethodContext = {
     orcaVersion: "0.4.0-test",
     capabilities: ["runs.read", "runs.subscribe", "runs.control"],
     reads,
     control,
     agents: agentModel,
+    config,
   };
   return { clock, stores, orchestrator, agents, agentModel, ctx };
 }
@@ -222,6 +231,45 @@ describe("inputs.answer", () => {
     expect((res.error?.details as { host?: unknown }).host).toEqual(expect.any(String));
     // Refused without writing: the answer is still open for the process that holds the lease.
     expect(await h.orchestrator.pendingInputs(runId)).toHaveLength(1);
+  });
+});
+
+describe("config.set beside a run (#174, #266)", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  it("writes the config while a run is parked mid-flight and disturbs neither", async () => {
+    const h = harness();
+    const { runId, requestId } = await parked(h);
+    const dir = await mkdtemp(join(tmpdir(), "orca-serve-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nstoreDir: .orca\n", "utf8");
+    const config = new ConfigModel({ configDir: dir, configFile: join(dir, "orca.config.yaml") });
+    const ctx: MethodContext = { ...h.ctx, config };
+
+    const before = await h.orchestrator.events(runId);
+    const read = (await call(ctx, "config.get")).result as { config: { revision: string } };
+    const written = await call(ctx, "config.set", {
+      document: "config",
+      expectedRevision: read.config.revision,
+      patch: [{ path: "storeDir", value: ".elsewhere" }],
+    });
+    expect(written.ok, JSON.stringify(written.error)).toBe(true);
+
+    // `config.set` takes no lease, appends no event and touches no run: editing the config
+    // while a run is in flight is a safe thing to do rather than a race (#160's lease story
+    // is about who may *interpret* a run).
+    expect(await h.orchestrator.events(runId)).toHaveLength(before.length);
+    expect((await h.orchestrator.getState(runId)).run.status).toBe("paused");
+    expect(await h.orchestrator.pendingInputs(runId)).toHaveLength(1);
+
+    // And the run still answers and finishes afterwards, under the config it booted with -
+    // nothing here reloads the orchestrator, by design.
+    const answered = await call(ctx, "inputs.answer", { requestId, optionId: "ship" });
+    expect(answered.ok, JSON.stringify(answered.error)).toBe(true);
+    expect((await h.orchestrator.getState(runId)).run.status).toBe("completed");
   });
 });
 

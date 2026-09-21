@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { openAcpSession, permissionPolicyPath } from "@orca/agents";
-import { AgentModel, ControlModel, ReadModel, answerAndResume, startDaemon } from "@orca/daemon";
+import { AgentModel, ConfigModel, ControlModel, ReadModel, answerAndResume, startDaemon } from "@orca/daemon";
 import {
   AGENTS_PING_METHOD,
   AGENT_METHODS,
@@ -531,12 +531,21 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       // Agents regardless of `--read-only`: listing health reads memory, and a ping spawns
       // an agent, shakes hands and closes without touching a run, a lease or a log.
       const agents = new AgentModel({ orchestrator: app.orchestrator, reads });
+      // The two configuration documents, `--read-only` or not: `config.get` is a read, and
+      // `config.set` is kept out by being in the control half of the table (#174, #266).
+      const config = new ConfigModel({
+        configDir: app.configDir,
+        ...(app.configFile ? { configFile: app.configFile } : {}),
+        permissionsFile: permissionPolicyPath(app.configDir),
+      });
       const control = readOnly
         ? undefined
         : new ControlModel({
             orchestrator: app.orchestrator,
             reads,
             permissionsFile: permissionPolicyPath(app.configDir),
+            // So an "always" answer's sidecar write pushes `config.changed` like any other.
+            config,
           });
       const daemon = await startDaemon({
         host: ctx.flags.host as string | undefined,
@@ -555,6 +564,7 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         capabilities: readOnly ? ["runs.read", "runs.subscribe"] : ["runs.read", "runs.subscribe", "runs.control"],
         reads,
         agents,
+        config,
         ...(control ? { control } : {}),
         source: app.orchestrator,
       });

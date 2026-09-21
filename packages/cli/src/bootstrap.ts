@@ -63,6 +63,16 @@ export interface BootstrapOptions {
 export interface OrcaApp {
   config: OrcaConfig;
   configDir: string;
+  /**
+   * The file `config` was read from, when it was read from one. Absent means discovery found
+   * nothing and the schema's defaults are the whole configuration - which is a real state
+   * (`orca serve` in a bare directory), not a failure.
+   *
+   * It is kept rather than discarded because the daemon serves the *file* as well as what it
+   * parsed to: `config.get` returns its bytes and its path, and `config.set` writes it
+   * (#174). Nothing else needs it, and nothing should read it in place of `config`.
+   */
+  configFile?: string | undefined;
   orchestrator: Orchestrator;
   program: ProgramService;
   plan: PlanService;
@@ -91,13 +101,18 @@ export async function findConfig(cwd: string): Promise<string | undefined> {
   }
 }
 
-export async function loadConfig(cwd: string, configPath?: string): Promise<{ config: OrcaConfig; configDir: string }> {
+export async function loadConfig(
+  cwd: string,
+  configPath?: string,
+): Promise<{ config: OrcaConfig; configDir: string; configFile?: string }> {
   const file = configPath ?? (await findConfig(cwd));
   if (!file) return { config: parseOrcaConfig({}), configDir: resolve(cwd) };
   const text = await readFile(file, "utf8");
   const raw = file.endsWith(".json") ? JSON.parse(text) : parseYaml(text);
   try {
-    return { config: parseOrcaConfig(raw), configDir: dirname(resolve(file)) };
+    // The path travels with the parsed config: `config.get`/`config.set` serve the file
+    // itself, and rediscovering it in the daemon could find a different one (#174).
+    return { config: parseOrcaConfig(raw), configDir: dirname(resolve(file)), configFile: resolve(file) };
   } catch (e) {
     throw new OrcaError("CONFIG_INVALID", `${file}: ${(e as Error).message}`, {}, { cause: e });
   }
@@ -139,8 +154,8 @@ export function makeHumanInput(config: OrcaConfig): HumanInputPort {
 
 export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const cwd = opts.cwd ?? process.cwd();
-  const { config, configDir } = opts.config
-    ? { config: opts.config, configDir: opts.configDir ?? cwd }
+  const { config, configDir, configFile } = opts.config
+    ? { config: opts.config, configDir: opts.configDir ?? cwd, configFile: undefined }
     : await loadConfig(cwd, opts.configPath);
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
@@ -213,6 +228,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   return {
     config,
     configDir,
+    ...(configFile ? { configFile } : {}),
     orchestrator,
     program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow),
     plan,

@@ -97,6 +97,9 @@ export function attachSocket(server: Server, opts: SocketOptions): () => Promise
             // Agent health lives on the context rather than on the source: it is not an
             // event feed and a daemon can have one without the other.
             ...(opts.ctx.agents ? { agents: opts.ctx.agents } : {}),
+            // The configuration lives on the context for the same reason: it is not an
+            // event feed, and a daemon can serve a workspace without one or the other.
+            ...(opts.ctx.config ? { config: opts.ctx.config } : {}),
             ...(opts.batchMs === undefined ? {} : { batchMs: opts.batchMs }),
           });
           subscriptions.set(id, subscription);

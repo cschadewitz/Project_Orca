@@ -27,6 +27,7 @@ import { recordAlwaysDecision, type RecordAlwaysResult } from "@orca/agents";
 import type { Orchestrator } from "@orca/engine";
 import {
   ProtocolFault,
+  type ConfigDocument,
   type InputsAnswerParams,
   type InputsAnswerResult,
   type RunsCancelParams,
@@ -174,8 +175,20 @@ export interface ControlModelOptions {
    * rather than honouring the answer once and quietly recording no rule.
    */
   permissionsFile?: string | undefined;
+  /**
+   * Where an "always" answer's sidecar write is announced (#266). `recordAlwaysDecision`
+   * knows nothing about subscriptions, so the push is made here: a config screen watching
+   * the sidecar has to see ORCA's own writes and not only the operator's, or it shows a
+   * policy that was true a moment ago. `ConfigModel` is what satisfies this.
+   */
+  config?: ConfigAnnouncer | undefined;
   /** Defaults to the orchestrator's own clock, so a test can pin every `asOf`. */
   clock?: Clock | undefined;
+}
+
+/** The half of `ConfigModel` the control model needs: "that document moved, tell the clients". */
+export interface ConfigAnnouncer {
+  announce(document: ConfigDocument): Promise<void>;
 }
 
 /** The four writing methods, over one orchestrator holding one lease per run. */
@@ -183,12 +196,14 @@ export class ControlModel {
   private readonly orc: Orchestrator;
   private readonly reads: ReadModel;
   private readonly permissionsFile: string | undefined;
+  private readonly config: ConfigAnnouncer | undefined;
   private readonly clock: Clock;
 
   constructor(opts: ControlModelOptions) {
     this.orc = opts.orchestrator;
     this.reads = opts.reads;
     this.permissionsFile = opts.permissionsFile;
+    this.config = opts.config;
     this.clock = opts.clock ?? opts.orchestrator.clock;
   }
 
@@ -203,6 +218,10 @@ export class ControlModel {
    */
   async answerInput(params: InputsAnswerParams): Promise<InputsAnswerResult> {
     const permission = params.always ? await this.recordAlways(params) : undefined;
+    // Only when the file actually changed: `alreadyPresent` rewrote nothing, and a frame
+    // announcing a revision nobody moved is the kind of noise `agent.changed` refuses to
+    // send on `lastSeenAt`.
+    if (permission && permission.added.length > 0) await this.config?.announce("permissions");
     const { request, state } = await answerAndResume(this.orc, {
       requestId: params.requestId,
       answer: params.optionId,

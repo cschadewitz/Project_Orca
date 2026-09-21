@@ -26,7 +26,11 @@ import {
   ArtifactsGetParamsSchema,
   ArtifactsListParamsSchema,
   CLAIMS_LIST_METHOD,
+  CONFIG_GET_METHOD,
+  CONFIG_SET_METHOD,
   ClaimsListParamsSchema,
+  ConfigGetParamsSchema,
+  ConfigSetParamsSchema,
   HELLO_METHOD,
   HelloParamsSchema,
   INPUTS_ANSWER_METHOD,
@@ -63,6 +67,10 @@ import {
   type ArtifactsGetResult,
   type ArtifactsListResult,
   type ClaimsListResult,
+  type ConfigGetParams,
+  type ConfigGetResult,
+  type ConfigSetParams,
+  type ConfigSetResult,
   type DaemonCapability,
   type HelloResult,
   type InputsAnswerParams,
@@ -86,6 +94,7 @@ import {
 } from "@orca/protocol";
 import type { ZodType } from "zod";
 import type { AgentModel } from "./agent-model.js";
+import type { ConfigModel } from "./config-model.js";
 import type { ControlModel } from "./control.js";
 import type { ReadModel } from "./read-model.js";
 import type { SubscriptionSource } from "./subscriptions.js";
@@ -113,6 +122,13 @@ export interface MethodContext {
    * configured agent registry, `--read-only` or not: neither method touches a run.
    */
   agents?: AgentModel | undefined;
+  /**
+   * The workspace's two configuration documents (#174, #266). Present whenever the daemon
+   * was started over a config directory, `--read-only` or not: `config.get` is a read, and a
+   * read-only daemon answers it. `config.set` additionally needs `control` - it is in
+   * `controlMethods`, so a read-only daemon does not have it at all.
+   */
+  config?: ConfigModel | undefined;
 }
 
 export interface Method<P, R> {
@@ -139,6 +155,14 @@ function control(ctx: MethodContext): ControlModel {
       capabilities: [...ctx.capabilities],
     });
   return ctx.control;
+}
+
+function config(ctx: MethodContext): ConfigModel {
+  if (!ctx.config)
+    throw new OrcaError("NOT_SUPPORTED", "this daemon serves no workspace configuration", {
+      capabilities: [...ctx.capabilities],
+    });
+  return ctx.config;
 }
 
 function agents(ctx: MethodContext): AgentModel {
@@ -224,6 +248,20 @@ export const workflowsGet: Method<Parameters<ReadModel["workflowsGet"]>[0], Work
   handle: (params, ctx) => reads(ctx).workflowsGet(params),
 };
 
+/**
+ * `config.get`: both configuration documents, the schema a form renders, and the effective
+ * permission policy the two of them add up to (#174, #266).
+ *
+ * A read, so a `--read-only` daemon answers it. **It redacts nothing**: `config.text` is the
+ * bytes of `orca.config.yaml`, ssh hosts, command lines and environment names included. A
+ * form that edits a file has to show the file, and a redacted text written back would
+ * destroy what it hid. The port is loopback and unauthenticated either way.
+ */
+export const configGet: Method<ConfigGetParams, ConfigGetResult> = {
+  params: ConfigGetParamsSchema,
+  handle: (_params, ctx) => config(ctx).get(),
+};
+
 // ----------------------------------------------------------------- the writes
 
 /** `inputs.answer`: record a person's answer to an open gate or permission ask, and continue. */
@@ -248,6 +286,24 @@ export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
 export const runsStart: Method<RunsStartParams, RunsStartResult> = {
   params: RunsStartParamsSchema,
   handle: (params, ctx) => control(ctx).startRun(params),
+};
+
+/**
+ * `config.set`: write `orca.config.yaml` or the ADR 0009 permission sidecar (#174, #266).
+ *
+ * A write, so a `--read-only` daemon does not have it. It takes no run lease and appends no
+ * event: a configuration file is not a run, and a `config.set` while a run is in flight
+ * disturbs nothing.
+ *
+ * **The daemon goes on serving the configuration it booted with.** Agents, hosts, workflows
+ * and the store were wired at `bootstrap`; nothing here rewires them, so a run started a
+ * moment after a successful write still uses the old config, and the new one takes effect on
+ * the next `orca serve`. Reloading a live orchestrator is its own piece of work and not a
+ * side effect of a form being saved.
+ */
+export const configSet: Method<ConfigSetParams, ConfigSetResult> = {
+  params: ConfigSetParamsSchema,
+  handle: (params, ctx) => config(ctx).set(params),
 };
 
 // ---------------------------------------------------------------- the agents
@@ -303,7 +359,16 @@ export const methods: MethodTable = {
   [WORKFLOWS_GET_METHOD]: workflowsGet,
 };
 
-/** The four writing methods, kept apart so `--read-only` is one omission and not four. */
+/**
+ * The configuration methods, kept apart from both tables above because they turn on a
+ * different fact: a `ConfigModel`, which a daemon serving a store outside a workspace has
+ * not got. `config.get` needs only that; `config.set` needs a control model too, so it is
+ * absent from a `--read-only` daemon exactly like the other writes.
+ */
+export const configMethods: MethodTable = { [CONFIG_GET_METHOD]: configGet };
+export const configControlMethods: MethodTable = { [CONFIG_SET_METHOD]: configSet };
+
+/** The four run-writing methods, kept apart so `--read-only` is one omission and not four. */
 export const controlMethods: MethodTable = {
   [INPUTS_ANSWER_METHOD]: inputsAnswer,
   [RUNS_RESUME_METHOD]: runsResume,
@@ -333,5 +398,11 @@ export function methodsFor(ctx: MethodContext): MethodTable {
   }
   if (ctx.control) Object.assign(table, controlMethods);
   if (ctx.agents) Object.assign(table, agentMethods);
+  if (ctx.config) {
+    Object.assign(table, configMethods);
+    // Reading the configuration is a read; writing it is a write, and a read-only daemon
+    // has no `control`. Two facts, one `if`, so the two can never drift apart.
+    if (ctx.control) Object.assign(table, configControlMethods);
+  }
   return table;
 }
