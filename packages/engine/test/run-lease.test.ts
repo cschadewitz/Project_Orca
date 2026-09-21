@@ -14,7 +14,7 @@ import {
   runLeaseResource,
   type RunLeaseOptions,
 } from "@orca/engine";
-import { memoryStores, type EventStore, type Stores } from "@orca/store";
+import { memoryStores, type EventStore, type LeaseStore, type Stores } from "@orca/store";
 
 const WORKFLOW = `
 id: leased
@@ -93,6 +93,49 @@ function countingReads(inner: EventStore, count: { full: number }): EventStore {
     listRuns: () => inner.listRuns(),
     subscribe: (listener, filter) => inner.subscribe(listener, filter),
   };
+}
+
+/**
+ * Stores that lose the run's lease in the one window `onLost` cannot act in (#267): after
+ * `takeRunLease` has returned and while `loadContext` is still reducing the log, when there is
+ * no RunContext yet to stop. The first heartbeat reports the lease gone, and the full read is
+ * held open until that has happened, so the race is a certainty rather than a coin flip.
+ */
+function leaseLostWhileLoading(inner: Stores): Stores {
+  let beat = () => {};
+  const beaten = new Promise<void>((r) => (beat = r));
+  // Armed only once the lease has been taken, so a `read` from anywhere else is left alone.
+  let armed = false;
+  const leases: LeaseStore = {
+    acquire: async (request) => {
+      const lease = await inner.leases.acquire(request);
+      armed = true;
+      return lease;
+    },
+    renew: async () => (beat(), undefined),
+    release: (lease) => inner.leases.release(lease),
+    get: (resource) => inner.leases.get(resource),
+    list: () => inner.leases.list(),
+    forceRelease: (resource) => inner.leases.forceRelease(resource),
+  };
+  const events: EventStore = {
+    append: (input) => inner.events.append(input),
+    read: async (runId) => {
+      if (armed) {
+        armed = false;
+        await beaten;
+        // One turn more, so the keeper's beat chain has settled `held` and run `onLost`.
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      return inner.events.read(runId);
+    },
+    readTypes: (runId, types) => inner.events.readTypes(runId, types),
+    readRange: (runId, range) => inner.events.readRange(runId, range),
+    lastSeq: (runId) => inner.events.lastSeq(runId),
+    listRuns: () => inner.events.listRuns(),
+    subscribe: (listener, filter) => inner.events.subscribe(listener, filter),
+  };
+  return { ...inner, leases, events };
 }
 
 const openRun = async (app: App) => app.orchestrator.startRun({ workflowId: "leased" });
@@ -211,6 +254,22 @@ describe("run leases", () => {
     await driving;
     expect((await second.orchestrator.getSummary(runId)).status).toBe("completed");
     expect((await second.orchestrator.run(runId)).run.status).toBe("completed");
+  });
+
+  it("a lease lost while the context loads refuses the run instead of executing without one", async () => {
+    const base = memoryStores();
+    const runId = await openRun(make(base, noWait));
+    const before = (await base.events.read(runId)).map((e) => `${e.seq}:${e.type}`);
+
+    const app = make(leaseLostWhileLoading(base), noWait, { renewMs: 1 });
+    const outcome = await app.orchestrator.run(runId).catch((e: unknown) => e as OrcaError);
+
+    // Without the check after `loadContext` this run executes to completion with no lease: the
+    // heartbeat fired too early for `onLost` to have an interpreter to stop.
+    expect(outcome).toBeInstanceOf(OrcaError);
+    expect((outcome as OrcaError).code).toBe("RUN_LEASED");
+    expect((await base.events.read(runId)).map((e) => `${e.seq}:${e.type}`)).toEqual(before);
+    expect(app.logged).toContain("run lease lost; stopping this interpreter");
   });
 
   it("a finished run is not leased at all - reading it back must not leave a lease on file", async () => {

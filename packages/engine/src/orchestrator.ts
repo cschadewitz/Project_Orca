@@ -117,6 +117,13 @@ export interface RunLeaseOptions {
 /** A lease together with whether it may be taken over without an operator saying so. */
 export type HeldRunLease = Lease & { runId: string; lapsed: boolean };
 
+/**
+ * The keeper of an attached run's lease, plus whether a heartbeat has already found the lease
+ * gone. `held` answers the same question, but `lost` is latched by `onLost` and so survives
+ * whatever the keeper does next; an interpreter reads it once it has a context to stop (#267).
+ */
+type AttachedLease = HeldLease & { readonly lost: boolean };
+
 /** A work-item claim together with the state of the run that holds it. */
 export type HeldClaim = WorkItemClaim & { owner: RunSummary["status"] | "missing" };
 
@@ -639,6 +646,21 @@ export class Orchestrator {
     const held = await this.takeRunLease(runId, summary.workflowId, () => rc);
     try {
       rc = await this.loadContext(runId);
+      // The window between taking the lease and having a context to stop is the one place
+      // `onLost` cannot act on (#267): it fires, finds no `rc`, and returns. Reading the flag
+      // here closes it - an interpreter whose lease went away while the log was being reduced
+      // must refuse, not execute, because `execute` writes. `held.held` is the same answer from
+      // the keeper's side, and either being false is enough.
+      if (held.lost || !held.held) {
+        // Mark the cached context too: a `cancel` in this process must not write to a log we
+        // no longer own either, and `this.live` now has this `rc` in it.
+        rc.leaseLost = true;
+        throw new OrcaError(
+          "RUN_LEASED",
+          `the lease on run ${runId} was taken away while its log was being loaded here; this interpreter stopped without writing. The run is now whoever holds the lease's to drive.`,
+          { runId },
+        );
+      }
       // Terminal again only if it finished between the summary and here; releasing is enough.
       if (isTerminal(rc.state)) return rc.state;
       return await this.execute(rc);
@@ -655,13 +677,14 @@ export class Orchestrator {
    * stands, without a further write, rather than letting two interpreters append to one log.
    *
    * `attached` is read at heartbeat time rather than taken as a value because the lease is
-   * taken before the context exists; a lease lost in that window has nothing to stop yet.
+   * taken before the context exists; a lease lost in that window has nothing to stop yet, so
+   * it is remembered in `lost` instead and `executeLeased` reads it once there is a context.
    */
   private async takeRunLease(
     runId: string,
     note: string,
     attached: () => RunContext | undefined,
-  ): Promise<HeldLease> {
+  ): Promise<AttachedLease> {
     const lease = await this.stores.leases.acquire({
       resource: runLeaseResource(runId),
       holder: this.leaseHolder,
@@ -674,9 +697,11 @@ export class Orchestrator {
         `run ${runId} is already being interpreted by pid ${lease.pid} on ${lease.host} (last heartbeat ${lease.renewedAt}): wait for it, or take the lease with 'orca leases break ${runId} --force'`,
         { runId, ...describeLease(lease) },
       );
-    return keepLease(this.stores.leases, lease, {
+    let lost = false;
+    const keeper = keepLease(this.stores.leases, lease, {
       ...(this.leaseRenewMs !== undefined ? { renewMs: this.leaseRenewMs } : {}),
       onLost: () => {
+        lost = true;
         const rc = attached();
         (rc?.logger ?? this.logger).error("run lease lost; stopping this interpreter", {
           resource: lease.resource,
@@ -689,6 +714,19 @@ export class Orchestrator {
         rc.abort.abort(`lease on run ${runId} was taken away; another process may now be driving it`);
       },
     });
+    return {
+      ...keeper,
+      get lease() {
+        return keeper.lease;
+      },
+      get held() {
+        return keeper.held;
+      },
+      get lost() {
+        return lost;
+      },
+      release: () => keeper.release(),
+    };
   }
 
   private async execute(rc: RunContext): Promise<RunState> {
