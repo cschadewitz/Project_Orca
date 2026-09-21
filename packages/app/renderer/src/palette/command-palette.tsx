@@ -8,10 +8,23 @@
  * rail and not the focus ring (docs/design/50-accessibility-and-keyboard.md, "Focus").
  * `Esc` is not handled here: the palette is on the transient layer stack and the one
  * global `Esc` closes whatever is topmost.
+ *
+ * Two things a write action needs that a navigation row does not (#178):
+ *
+ * - **An inline confirmation.** A destructive row is *armed* by the first `Enter` and run by
+ *   the second: the label becomes the command's `confirm` sentence and the row goes to the
+ *   danger tone. Anything else — typing, moving the selection, `Esc` — disarms it. There is
+ *   no dialog, because a modal over this modal would move focus out of the query field and
+ *   ask the question somewhere other than where the person is looking.
+ * - **A picker.** A command that needs an argument — which workflow, which option, which
+ *   status — replaces the list with a `Menu` of the choices. It is the app's one popover
+ *   primitive rather than a second list here, so the roving keys, the placement, `Esc` and
+ *   the focus contract are the ones every other popover has.
  */
 import { Fragment, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useKeyboard } from "../keyboard-context.js";
-import { textClass } from "../ui/index.js";
+import type { PaletteChoice, ShortcutPicker } from "../keyboard-map.js";
+import { Menu, textClass } from "../ui/index.js";
 import { commandEntries, filterEntries, groupEntries, type PaletteEntry } from "./entries.js";
 import { parseJump, type JumpTarget } from "./jump.js";
 import { usePaletteSources } from "./sources.js";
@@ -36,6 +49,10 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
   const sources = usePaletteSources();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  /** The destructive row waiting for its second `Enter`, by entry id. One at a time. */
+  const [armed, setArmed] = useState<string | undefined>(undefined);
+  /** The command whose choices are on screen in place of the list. */
+  const [picking, setPicking] = useState<ShortcutPicker | undefined>(undefined);
   const input = useRef<HTMLInputElement>(null);
 
   const { entries: fromSources, pending } = useSourceEntries(sources, query, open);
@@ -75,6 +92,8 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
     if (!open) return;
     setQuery("");
     setActive(0);
+    setArmed(undefined);
+    setPicking(undefined);
     input.current?.focus();
   }, [open]);
 
@@ -82,16 +101,58 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
 
   const move = (delta: number): void => {
     if (runnable.length === 0) return;
+    // Moving off a row disarms it: an armed row is a question about *that* row, and a
+    // question nobody is looking at any more has been answered by leaving.
+    setArmed(undefined);
     setActive((at) => (at + delta + runnable.length) % runnable.length);
   };
 
   const run = (entry: PaletteEntry | undefined): void => {
     if (!entry || entry.unavailable) return;
+    if (entry.picker) {
+      // The list is replaced rather than the palette closed: the choice is still part of
+      // running this command, and cancelling it comes back to the row it was chosen from.
+      setPicking(entry.picker);
+      return;
+    }
+    if (entry.confirm !== undefined && armed !== entry.id) {
+      setArmed(entry.id);
+      return;
+    }
     // Close first: closing restores focus to where the palette was opened from, and the
     // action may well move focus somewhere else on purpose.
     close();
     entry.run();
   };
+
+  if (picking) {
+    return (
+      <div className="orca-palette-layer" onMouseDown={close}>
+        <div
+          className="orca-palette"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Command palette"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <Picker
+            picker={picking}
+            onCancel={() => setPicking(undefined)}
+            onChoose={(id) => {
+              setPicking(undefined);
+              close();
+              picking.choose(id);
+            }}
+          />
+          <div className={`orca-palette__hint ${textClass("caption")}`}>
+            <span>↑ ↓ to move</span>
+            <span>Enter to choose</span>
+            <span>Esc to go back</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "ArrowDown") {
@@ -139,6 +200,7 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
           onChange={(event) => {
             setQuery(event.target.value);
             setActive(0);
+            setArmed(undefined);
           }}
           onKeyDown={onKeyDown}
         />
@@ -157,6 +219,7 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
                 <Row
                   key={entry.id}
                   entry={entry}
+                  armed={entry.id === armed}
                   selected={entry.id === selected?.id}
                   onPick={() => run(entry)}
                   onHover={() => {
@@ -188,17 +251,23 @@ export function CommandPalette({ controller, onJump }: CommandPaletteProps): JSX
 
 function Row({
   entry,
+  armed,
   selected,
   onPick,
   onHover,
 }: {
   entry: PaletteEntry;
+  /** Chosen once already: this row is asking, and the next `Enter` commits. */
+  armed: boolean;
   selected: boolean;
   onPick: () => void;
   onHover: () => void;
 }): JSX.Element {
   const row = `orca-palette__row ${textClass("label")}`;
-  const className = selected ? `${row} orca-palette__row--active` : row;
+  const tone = entry.tone === "danger" ? ` orca-palette__row--danger` : "";
+  const className = `${row}${tone}${selected ? " orca-palette__row--active" : ""}${
+    armed ? " orca-palette__row--armed" : ""
+  }`;
   return (
     <li
       id={entry.id}
@@ -213,8 +282,9 @@ function Row({
       }}
       onMouseEnter={onHover}
     >
-      <span className="orca-palette__label">{entry.label}</span>
-      {entry.detail ? (
+      {/* The armed row says what the second Enter will do, in the command's own words. */}
+      <span className="orca-palette__label">{armed && entry.confirm !== undefined ? entry.confirm : entry.label}</span>
+      {entry.detail && !armed ? (
         <span
           className={
             entry.detailIsMachine
@@ -230,5 +300,68 @@ function Row({
       ) : null}
       {entry.shortcut ? <kbd className={`orca-kbd ${textClass("mono-id")}`}>{entry.shortcut}</kbd> : null}
     </li>
+  );
+}
+
+/**
+ * The second step of a command that needs an argument: the choices as a `Menu`, opened by
+ * the palette rather than by a press.
+ *
+ * The menu is *controlled* — the same door `orca://item/<slug>` comes through, which is the
+ * one case `Menu` was already given for a disclosure nobody clicked — so everything else
+ * about it stays the primitive's: focus moves into the list, `↑`/`↓` rove in the `menu`
+ * scope, and `Esc` closes it through the layer stack, which is what brings the palette's own
+ * list back.
+ *
+ * The load happens here and not in the parent so that a cancelled picker takes its pending
+ * read with it, and so the "reading…" line is one state of one component. A picker that
+ * answers nothing says the command's own sentence rather than showing an empty menu.
+ */
+function Picker({
+  picker,
+  onCancel,
+  onChoose,
+}: {
+  picker: ShortcutPicker;
+  onCancel: () => void;
+  onChoose: (id: string) => void;
+}): JSX.Element {
+  const [choices, setChoices] = useState<readonly PaletteChoice[] | undefined>(undefined);
+
+  useEffect(() => {
+    let live = true;
+    void picker.load().then((loaded) => {
+      if (live) setChoices(loaded);
+    });
+    return () => {
+      live = false;
+    };
+  }, [picker]);
+
+  return (
+    <div className="orca-palette__picker">
+      {choices === undefined ? (
+        <p className={`orca-palette__note ${textClass("caption")}`}>Reading the choices…</p>
+      ) : choices.length === 0 ? (
+        <p className={`orca-palette__note ${textClass("caption")}`}>{picker.empty}</p>
+      ) : (
+        <Menu
+          label={picker.label}
+          items={choices.map((choice) => ({
+            id: choice.id,
+            label: choice.label,
+            ...(choice.hint === undefined ? {} : { hint: choice.hint }),
+          }))}
+          onChoose={(item) => onChoose(item.id)}
+          open
+          onOpenChange={(next) => {
+            if (!next) onCancel();
+          }}
+          triggerClassName={`orca-bare orca-palette__picker-trigger ${textClass("label")}`}
+        >
+          {picker.label}
+        </Menu>
+      )}
+    </div>
   );
 }

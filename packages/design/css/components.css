@@ -1930,6 +1930,32 @@
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
+/* A destructive command (#178). The tone is on the label rather than on the whole row: the
+   row is still a row, and a filled red band in a list of commands would read as an error
+   that has already happened rather than as an act that has not. */
+.orca-palette__row--danger .orca-palette__label {
+  color: var(--status-failed);
+}
+/* Chosen once, asking. The rail says it as well as the colour does, because the rail is
+   what the eye is already on — it is what marks the selected row — and because colour is
+   never the only carrier of a state (docs/design/RULES.md rule 11). */
+.orca-palette__row--armed {
+  background: var(--surface-selected);
+  border-left-color: var(--status-failed);
+}
+.orca-palette__picker {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+/* type: label */
+.orca-palette__picker-trigger {
+  display: flex;
+  align-items: center;
+  height: var(--control-md);
+  color: var(--ink-primary);
+  text-align: left;
+}
 .orca-palette__label {
   overflow: hidden;
   text-overflow: ellipsis;

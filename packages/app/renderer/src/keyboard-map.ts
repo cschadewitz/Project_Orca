@@ -64,6 +64,35 @@ export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
 /** Which of the palette's three sections a shortcut belongs in. Search is not a command. */
 export type ShortcutSection = "actions" | "navigation";
 
+/**
+ * One choice in a palette picker. Structurally a `Menu`'s `MenuItem` — the palette renders
+ * these *as* menu items — written out here rather than imported so the keyboard map keeps
+ * knowing nothing about the UI primitives.
+ */
+export interface PaletteChoice {
+  id: string;
+  label: string;
+  /** A trailing note: a workflow's version and node count, a decision option's rationale. */
+  hint?: string;
+}
+
+/**
+ * A command that asks which one before it acts (#178): **Start a run** needs a workflow,
+ * **Decide** needs an option. Choosing the row replaces the palette's list with a `Menu`
+ * of these — the app's one popover primitive, so the palette grows no second one.
+ *
+ * `load` runs when the row is chosen and never before: a palette that read `workflows.list`
+ * to draw its rows would read it on every ⌘K, whether or not anybody wanted a workflow.
+ */
+export interface ShortcutPicker {
+  /** The accessible name of the menu, and the line above it. */
+  label: string;
+  load: () => Promise<readonly PaletteChoice[]>;
+  choose: (id: string) => void;
+  /** What the palette says when `load` answers nothing at all. A sentence, not a shrug. */
+  empty: string;
+}
+
 export interface Shortcut {
   scope: ShortcutScope;
   /**
@@ -82,6 +111,27 @@ export interface Shortcut {
   section?: ShortcutSection;
   /** A second line for the palette: what the action is for, when the label cannot say it. */
   detail?: string;
+  /**
+   * Why this command cannot be run right now — `useWritability()`'s sentence, verbatim
+   * (#178). The palette draws the row disabled with this beside it, which is the same
+   * contract `Button`'s `disabledReason` has: a control that is dead and silent reads as
+   * broken. A command that is not merely unavailable but *absent* — a method this daemon
+   * does not serve — does not register at all.
+   */
+  unavailable?: string;
+  /**
+   * A destructive command's second row state (#178): choosing the row swaps its label for
+   * this one and a second `Enter` commits. `tone: "danger"` goes with it.
+   *
+   * It is in the registry rather than in the palette because the confirmation is a property
+   * of the *command* — "cancelling run-42 cannot be undone" is true wherever the command is
+   * offered from — and because the palette must not have to know which labels are dangerous.
+   */
+  confirm?: string;
+  /** `danger` draws the row in the status colour for a destructive act. */
+  tone?: "danger";
+  /** A command that asks which one first — see `ShortcutPicker`. Never with `confirm`. */
+  picker?: ShortcutPicker;
 }
 
 /**
