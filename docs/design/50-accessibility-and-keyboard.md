@@ -62,9 +62,16 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Workflow canvas | `Enter` | Expand or collapse the selected `subworkflow` or `parallel` |
 | Workflow canvas | `+` / `-` / `0` | Zoom in, zoom out, back to rest |
 | Workflow canvas | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
+| Schedule table | `Enter` | Explain the selected work item |
+| Plan journal | `J` / `K`, `↑` / `↓` | Move selection |
 | Panel | `[` / `]` | Previous / next artifact version |
 | Config | `⌘S` | Save the configuration draft |
 | Anywhere | `Esc` | Close the topmost transient layer, never lose an unsent draft |
+
+The two Plan rows are one screen with two lists on it (#170), and the second list is why
+there is a `plan-journal` scope beside `list`: the substrate registers the movement keys in
+whichever scope a list names, one list per scope, so `J` means "next" in whichever of the
+two the focus is in. The schedule table is `list`, like every other primary list.
 
 Every action in this map is also in the command palette, with its key shown beside it. The
 converse does not hold, and deliberately: a command may register with **no key at all** and be

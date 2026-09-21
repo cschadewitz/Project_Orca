@@ -45,6 +45,36 @@ than where you land — if you open the app and go look at the dependency graph 
 open a project board — then it deserves its own destination and A is right. That is an
 empirical question about how you use it, and you will know inside a week of phase 2.
 
+## As built (v0.5.0)
+
+B shipped, with A's inspector, in #170 (`packages/app/renderer/src/plan/`). What is on
+screen now:
+
+- **The sidebar is requests and filters.** The plan's requests as a list, chips for the
+  seven classifications with the plan's own counts beside them, and chips for the work-item
+  statuses. Classification, status and request are `items.list` parameters, so the daemon
+  applies them to the whole plan; the text field narrows what is held and the count says
+  which ("3 of 9 items").
+- **The object header gained the mode variant**, which is `ObjectHeaderProps.mode` and
+  draws `.orca-seg`. It has **two** positions, Schedule and Journal. The graph (#171), the
+  risk matrix (#172) and the decision matrix (#173) are v0.6.0 and are *absent* from the
+  control rather than disabled in it: a segment that never does anything is a dead end, and
+  the control will gain each position with the mode behind it.
+- **The docked panel is a Plan surface as well as a Runs surface.** The schedule row's
+  selection opens the work-item inspector there — title, slug, status, classification,
+  request, the priority reasons verbatim, its dependencies with both the stored `status`
+  and the live `evaluation.detail`, its risks and the claim. #171's relationship inspector
+  (blocked by, blocks, waive) is the same dock with the edge selected instead of the row.
+- **The explanation is the badge's `why`, in the one `Menu`**, listing `schedule.explain`'s
+  lines word for word. `orca://item/<slug>` lands on Plan with it open, which is what made
+  `Menu` take an optional controlled `open` — a link that arrives is not a click.
+- **Two lists, two scopes**: the schedule table is `list`, the journal is `plan-journal`
+  (`docs/design/50-accessibility-and-keyboard.md`).
+
+What is *not* built, and is deliberately not stubbed: the graph, the risk matrix, the
+decision matrix, the pinned row strip under the canvas, the second (graph-only) filter
+rail, and `orca://plan?mode=deps&focus=…`. Every write on this surface is #178's.
+
 If you pick B, the three concrete changes to the rest of the system are: the Plan sidebar
 loses its Schedule/Dependencies/Risks/Decisions/Journal list in favour of requests and
 filters (as drawn in Option B); the object header gains a mode segmented control, which is a

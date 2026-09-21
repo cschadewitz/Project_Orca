@@ -96,9 +96,11 @@ one is worth keeping in mind before a new form is added:
   so `orca://artifact/spec.md@v3` alone names as many artifacts as there are runs with a
   `spec.md`. The `?run=` form is canonical and is what **Copy link** emits; a bare name is a
   palette *search*, not a link.
-- **`orca://item/…` names a surface that does not exist yet** — Plan (#170) is v0.5.0. It
-  resolves all the same: the surface is selected and the id is shown on its unbuilt state. A
-  link is never dropped because the screen behind it has not been built.
+- **`orca://item/…` named a surface that did not exist yet** — Plan (#170) shipped in
+  v0.5.0, and the link now lands on the schedule with that work item selected and its
+  explanation open, exactly as the table above promises. An id this plan does not have
+  leaves the table as it is and says which id it was holding, because a link is never
+  dropped and never answered with something that was not asked for.
   **`orca://workflow/…` is built as of #177** and lands on the viewer, on the Config surface,
   with `?run=` overlaying that run's path over the graph. Config's own screen is still
   ahead of it, so `⌘5` with no workflow named still says the surface is unbuilt; a workflow is
