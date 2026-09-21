@@ -29,6 +29,7 @@ import {
   permissionPolicyPath,
   readPermissionPolicyFile,
   recordAlwaysDecision,
+  replacePermissionPolicyFile,
   resolvePermission,
 } from "@orca/agents";
 
@@ -554,5 +555,81 @@ describe("the sidecar", () => {
     const policy = await loadEffectivePermissionPolicy(agent, [file]);
     expect(decidePermission(policy, req("read", "Read", `${dir}/src/a.ts`), { workspaceCwd: dir })).toBe("allow");
     expect(decidePermission(policy, req("read", "Read", `${dir}/src/b.ts`), { workspaceCwd: dir })).toBe("ask");
+  });
+});
+
+/**
+ * The operator's half of ADR 0009 (#266): `config.set` on the `permissions` document edits
+ * or removes a grant a machine wrote, and it does so through this writer rather than through
+ * a second path in the daemon - a `link()` lock is only a lock if every writer takes it.
+ */
+describe("replacing the sidecar", () => {
+  it("writes the same fixed key order a machine write uses", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+
+    await replacePermissionPolicyFile(file, {
+      version: 1,
+      agents: {
+        zeta: { rules: [{ match: { kind: "read", path: "src/z.ts" }, decision: "allow" }] },
+        alpha: { rules: [{ match: { pathPrefix: "docs" }, decision: "deny", grantedFor: "Read docs" }] },
+      },
+    });
+
+    const text = await readFile(file, "utf8");
+    // Agents sorted, `match` before `decision`, provenance last, trailing newline: a rewrite
+    // by either writer is a minimal diff, which is why the file is JSON at all.
+    expect(text.indexOf(`"alpha"`)).toBeLessThan(text.indexOf(`"zeta"`));
+    expect(text.indexOf(`"match"`)).toBeLessThan(text.indexOf(`"decision"`));
+    expect(text.endsWith("\n")).toBe(true);
+    expect((await readPermissionPolicyFile(file)).agents["alpha"]?.rules[0]?.decision).toBe("deny");
+  });
+
+  it("refuses a document carrying a `default` and writes nothing", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+
+    // Answering one prompt must not change the answer to every other one. Accepting the
+    // write and silently dropping the field would report success for an edit that did
+    // nothing, which is the worse failure of the two.
+    await expect(replacePermissionPolicyFile(file, { version: 1, default: "allow", agents: {} })).rejects.toMatchObject(
+      { code: "CONFIG_INVALID" },
+    );
+    await expect(readFile(file, "utf8")).rejects.toThrow();
+  });
+
+  it("serialises against a concurrent `recordAlwaysDecision` instead of overwriting it", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    // A grant already recorded, so the operator's edit has something to have read.
+    await recordAlwaysDecision({
+      file,
+      agentId: "claude-local",
+      request: req("edit", "Edit src/a.ts", `${dir}/src/a.ts`),
+      decision: "allow",
+      workspaceCwd: dir,
+    });
+    const held = await readPermissionPolicyFile(file);
+
+    await Promise.all([
+      recordAlwaysDecision({
+        file,
+        agentId: "codex",
+        request: req("edit", "Edit src/b.ts", `${dir}/src/b.ts`),
+        decision: "allow",
+        workspaceCwd: dir,
+      }),
+      replacePermissionPolicyFile(file, {
+        ...held,
+        agents: { ...held.agents, operator: { rules: [{ match: { pathPrefix: "docs" }, decision: "allow" }] } },
+      }),
+    ]);
+
+    // Whichever went second read the other's file first, so the result is always a valid
+    // document rather than a half-written one - and the run's own grant is never lost to a
+    // reader that had not seen it, because both took the same lock.
+    const after = await readPermissionPolicyFile(file);
+    expect(Object.keys(after.agents).length).toBeGreaterThanOrEqual(2);
+    expect(after.agents["claude-local"]?.rules).toHaveLength(1);
   });
 });

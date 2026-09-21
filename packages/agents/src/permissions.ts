@@ -35,6 +35,7 @@ import {
   permissionPathForms,
   samePermissionRule,
   workspaceRelativePath,
+  WritablePermissionPolicyFileSchema,
 } from "@orca/core";
 import type {
   PermissionDecision,
@@ -275,6 +276,49 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
       await writePolicyFile(opts.file, { ...doc, agents: { ...doc.agents, [opts.agentId]: { rules } } });
     return { file: opts.file, agentId: opts.agentId, rules: derived.rules, added, alreadyPresent };
   });
+}
+
+/**
+ * Replace a sidecar wholesale, under the same lock `recordAlwaysDecision` takes.
+ *
+ * This is the operator's half of ADR 0009: `config.set` on the `permissions` document
+ * (#266) edits or removes a grant a machine wrote. It goes through here rather than through
+ * a second writer in the daemon for one reason worth being blunt about - a `link()` lock is
+ * only a lock if *every* writer takes it. A daemon that opened the file itself would be a
+ * second path with its own tmp name and its own idea of atomicity, and the case it would
+ * lose is exactly the one #266 asks to be tested: a run answering "always" at the moment an
+ * operator saves an edit.
+ *
+ * The document is validated with `WritablePermissionPolicyFileSchema`, which refuses a
+ * `default`, and serialised with the same fixed key order a machine write uses, so an
+ * operator's save and ORCA's own append produce the same shape of diff.
+ *
+ * It is a replace and not a merge. The caller read a revision, edited it and sends the whole
+ * document back; deciding here which of two concurrent versions of a rule list was meant is
+ * a guess, and the staleness check at the caller is where that is refused honestly.
+ */
+export async function replacePermissionPolicyFile(
+  file: string,
+  doc: unknown,
+  opts?: { lock?: { timeoutMs?: number; staleMs?: number } | undefined },
+): Promise<PermissionPolicyFile> {
+  const parsed = parsePermissionPolicyDocument(doc);
+  await withPolicyLock(file, opts?.lock, () => writePolicyFile(file, parsed));
+  return parsed;
+}
+
+/**
+ * Validate a sidecar document a client sent, refusing a `default`. Exported beside the
+ * writer so a `validateOnly` call can ask the same question without taking the lock.
+ */
+export function parsePermissionPolicyDocument(doc: unknown): PermissionPolicyFile {
+  const parsed = WritablePermissionPolicyFileSchema.safeParse(doc ?? {});
+  if (!parsed.success)
+    throw new OrcaError("CONFIG_INVALID", parsed.error.issues[0]?.message ?? "invalid permission document", {
+      issues: parsed.error.issues,
+    });
+  const { default: _refused, ...rest } = parsed.data;
+  return rest;
 }
 
 /* ----------------------------- file mechanics ----------------------------- */
