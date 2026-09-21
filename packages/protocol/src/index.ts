@@ -18,3 +18,4 @@ export * from "./subscriptions.js";
 export * from "./artifacts.js";
 export * from "./agents.js";
 export * from "./control.js";
+export * from "./workflows.js";

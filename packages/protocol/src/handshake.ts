@@ -13,6 +13,7 @@ import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_STAR
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import { RUNS_EVENTS_METHOD, RUNS_GET_METHOD, RUNS_LIST_METHOD } from "./runs.js";
 import { SUBSCRIBE_METHOD, UNSUBSCRIBE_METHOD } from "./subscriptions.js";
+import { WORKFLOWS_GET_METHOD, WORKFLOWS_LIST_METHOD } from "./workflows.js";
 
 export const HELLO_METHOD = "hello";
 
@@ -30,6 +31,11 @@ export const READ_METHODS = [
   CLAIMS_LIST_METHOD,
   ARTIFACTS_LIST_METHOD,
   ARTIFACTS_GET_METHOD,
+  // Protocol 1.7 (#174): the workflow viewer's two reads. They touch no run, no lease and
+  // no log - a workflow is a file the daemon already has parsed - so a `--read-only` daemon
+  // answers them like any other read.
+  WORKFLOWS_LIST_METHOD,
+  WORKFLOWS_GET_METHOD,
 ] as const;
 
 /**

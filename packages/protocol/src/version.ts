@@ -36,8 +36,21 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * existing views, so a minor by the rule above; nothing sent before is sent differently.
  * It is optional on the wire as well as in the rule - a workflow gate is nobody's agent -
  * so a client reads its absence as "no agent is blocked", never as a field that failed.
+ *
+ * 1.7 (2026-09-21) adds the workflow viewer's wire (#174, for #177): the two read methods
+ * `workflows.list` and `workflows.get` with `WorkflowSummaryView` and `WorkflowView` behind
+ * them, an optional `traversal` on `RunsGetResult` - the nodes a run took, in order, with
+ * their attempts and the edges between them - and the `workflows.changed` notification.
+ * Three additions by this file's own rule: two methods joining `READ_METHODS`, one optional
+ * field joining an existing result, one method joining `NOTIFICATION_METHODS`. Nothing sent
+ * before is sent differently, and a 1.6 client reading a 1.7 daemon sees a `runs.get` with
+ * one more key it ignores.
+ *
+ * `workflows.changed` is in the list with nothing emitting it, which is stated rather than
+ * hidden: there is no workflow reload path in the runtime today (see its schema), so a
+ * client may subscribe now and will hear one when v0.6.0's editor can honestly send it.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 6 };
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 7 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
   return `${v.major}.${v.minor}`;

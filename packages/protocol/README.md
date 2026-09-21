@@ -127,7 +127,7 @@ id alone when something better exists, and never invented.
 
 ```ts
 params: { runId }
-result: { run: RunSummaryView; workspace; vars; steps: StepView[];
+result: { run: RunSummaryView; workspace; vars; steps: StepView[]; traversal?: RunTraversalView[];
           artifacts: ArtifactView[]; lastSeq; asOf }
 ```
 
@@ -139,7 +139,56 @@ inside a loop). Each `StepView` carries `status`, `waitingOn?`, its timestamps a
 `branch?`, `workItemId?`, `resumed?`) and its `skippedBranches` — the fan-out branches that
 never became child runs, so the whole fan-out is shown and not just the part that ran.
 
+`traversal` (protocol **1.7**, #174) is the same visits in node order, shaped for the
+workflow viewer's overlay: `nodeId`, `stepRunId`, `attempt`, `status`, `startedAt?`,
+`endedAt?`, `viaEdge?` and `childRunIds?`. It exists beside `steps` for `viaEdge` — which
+edge of the *definition* the run arrived on, which no step run records and which a client
+could recover only by holding the workflow and the run side by side. Where the pair
+(previous node, this node) is not an edge there is none to name: a retry of the same node, a
+run resumed mid-graph, a workflow this daemon no longer has. The field is then absent rather
+than guessed. It is optional on the wire, so a 1.6 daemon simply does not send it.
+
 `RUN_NOT_FOUND` when the store has no log for `runId`.
+
+### `workflows.list` / `workflows.get` — the workflow files as a graph
+
+```ts
+params: {}
+result: { workflows: WorkflowSummaryView[]; asOf }
+
+params: { id; version? }
+result: { workflow: WorkflowView; asOf }
+```
+
+Reads, added in **1.7** for the workflow viewer (#177). `WorkflowSummaryView` is `id`,
+`name`, `version`, `description?`, `nodeCount`, `edgeCount`, `start`. There is deliberately
+no "shipped or user-defined" flag: a daemon loads every workflow from one glob into one
+registry and does not keep the path, so the distinction is not one it can make.
+
+`WorkflowView` is `id`, `name`, `version`, `description?`, `start`, `inputs?`, `vars?`,
+`nodes`, `edges`, `versions?`. A `WorkflowNodeView` carries `id`, `type`, `name?`,
+`description?`, `maxAttempts?` and **`fields`** — the per-type configuration flattened for
+display (an agent's `role` / `agentId` and `template`, a decision's `source`, a gate's
+`options`, a loop's bounds, a subworkflow's target), never the `NodeDef` whole. An unknown or
+`custom:<name>` type passes everything but the base fields through, so a plugin's node draws
+as a generic node rather than as nothing. Edges are `from`, `to`, `when?`, `label?`.
+
+**Nested graphs are inline and addressable.** A `loop` body, a `forEach` body and each named
+`parallel` branch arrives as a nested `WorkflowView` under its node, with the id the engine
+runs it under — `parent::node`, or `parent::node::branch` (`INLINE_WORKFLOW_SEPARATOR`). So a
+viewer may draw the graph it was given or fetch the same one again by id when a collapsed
+node is expanded, and both name one thing.
+
+**`versions` is what the daemon can see, not what it can serve.** ORCA records
+`workflowVersion` on `run.created` but keeps no copy of that definition — a workflow is one
+file at whatever version it is at now — so `versions` is the version on disk unioned with the
+versions the store's runs were started against. `workflows.get({ id, version })` therefore
+answers only for the version on disk and gives `WORKFLOW_NOT_FOUND` for any other, with both
+versions in the details. A client uses the list to say a run is pinned to a version that is no
+longer the newest, not to offer a picker that would 404.
+
+`WORKFLOW_NOT_FOUND` for an unknown id, and for a `parent::node` whose node has no nested
+graph.
 
 ### `runs.events` — the timeline, paged by sequence number
 
@@ -265,7 +314,7 @@ params: { subscriptionId }
 result: { stopped }
 ```
 
-`runId` absent means every run in the store. `methods` absent or empty means all seven.
+`runId` absent means every run in the store. `methods` absent or empty means all eight.
 `since` is a resume cursor and **requires `runId`** — see below. `stopped: false` means the
 id was not live; unsubscribing twice is not an error, and closing the socket ends every
 subscription on it.
@@ -274,13 +323,13 @@ Over `/rpc` these answer `NOT_SUPPORTED` — there is nowhere to push to. They a
 `hello.methods` regardless, so a client can tell "this daemon can stream" from "this daemon
 is old". The capability is `runs.subscribe`.
 
-### The seven notifications
+### The eight notifications
 
 Six are about a run. Each carries `subscriptionId` (one connection may hold several),
 `runId`, `seq` — the sequence number, within that run, of the event behind it, and therefore
 **the cursor** — and `at`, the event's own timestamp rather than the moment the frame was
-sent. The seventh, `agent.changed`, is about the process and carries none of `runId` or
-`seq`; it has its own section below.
+sent. The other two, `agent.changed` and `workflows.changed`, are about the process and carry
+none of `runId` or `seq`; they have their own sections below.
 
 - **`run.changed`** — `status`, the `run.*` `event`, and `outcome?` / `reason?` / `error?`.
 - **`step.changed`** — `stepRunId`, `status`, `event`, plus `nodeId`/`nodeType`/`attempt` on
@@ -339,7 +388,7 @@ a separate CLI process is not pushed and appears on the next read (`docs/ROADMAP
 params: { subscriptionId; at; agent: AgentView }
 ```
 
-One of the seven since **1.5**, and the only one with neither `runId` nor `seq`. Agent health
+In the union since **1.5**, and the first with neither `runId` nor `seq`. Agent health
 lives in the daemon's memory and not in any log: there is no run it belongs to, no sequence
 number to resume from, and nothing for a reconnect to replay, because the current answer is
 one `agents.list` away. A client that folds the cursor therefore tests for a `seq`
@@ -357,6 +406,24 @@ A daemon sends it only to subscriptions that did **not** scope themselves to a r
 on a handshake succeeding or failing — never on `lastSeenAt` moving, which happens with every
 batch of agent output and would be exactly the firehose the `agent.update` coalescing exists
 to prevent.
+
+### `workflows.changed` — declared, and not yet sent
+
+```ts
+params: { subscriptionId; id; version; at }
+```
+
+The second push that is not about a run, added in **1.7** (#174). Like `agent.changed` it has
+no `runId` and no cursor: a client re-reads `workflows.get`.
+
+**Nothing emits it today, and that is the honest state rather than an omission.** ORCA loads
+workflows once, at bootstrap, from the glob in `orca.config.yaml`; there is no file watcher
+and no reload path, so the daemon has no moment at which it could truthfully say a workflow
+changed, and inventing one would be a runtime feature smuggled in behind a notification. It
+is on the wire now so the viewer (#177) can subscribe from the version it ships in, and so
+the editor (#181) — where publishing a draft *is* a write the daemon performs — has a frame
+to send rather than a protocol bump mid-feature. A client that subscribes today never hears
+one, which is what a workflow nobody edited looks like.
 
 ## The control methods
 

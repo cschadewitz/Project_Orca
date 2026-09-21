@@ -1,6 +1,7 @@
 /**
- * `subscribe` / `unsubscribe` and the seven notifications a subscription produces: six about
- * a run, and `agent.changed`, which is a push about the process rather than about a run.
+ * `subscribe` / `unsubscribe` and the eight notifications a subscription produces: six about
+ * a run, and `agent.changed` and `workflows.changed`, which are pushes about the process
+ * rather than about a run.
  *
  * Everything else in this package is request/response. This is the other direction: the
  * daemon pushes, so a client renders a transition when it happens instead of asking five
@@ -61,6 +62,7 @@ export const NOTIFICATION_METHODS = [
   "input.answered",
   "event.appended",
   "agent.changed",
+  "workflows.changed",
 ] as const;
 export const NotificationMethodSchema = z.enum(NOTIFICATION_METHODS);
 export type NotificationMethod = z.infer<typeof NotificationMethodSchema>;
@@ -72,6 +74,7 @@ export const INPUT_OPENED = "input.opened";
 export const INPUT_ANSWERED = "input.answered";
 export const EVENT_APPENDED = "event.appended";
 export const AGENT_CHANGED = "agent.changed";
+export const WORKFLOWS_CHANGED = "workflows.changed";
 
 /**
  * What every *run* notification carries: which subscription asked for it, which run it is
@@ -248,6 +251,35 @@ export const AgentChangedParamsSchema = z.object({
 });
 export type AgentChangedParams = z.infer<typeof AgentChangedParamsSchema>;
 
+/**
+ * `workflows.changed` - a workflow definition on disk is not what it was. Like
+ * `agent.changed` it is about the process rather than about a run, so it carries neither
+ * `runId` nor `seq` and there is nothing to resume from: a client re-reads `workflows.get`.
+ *
+ * **Nothing emits this yet, and that is deliberate (#174).** ORCA loads workflows once, at
+ * bootstrap, from the glob in `orca.config.yaml`; there is no file watcher and no reload
+ * path, so a daemon has no cheap moment at which it could honestly say a workflow changed.
+ * Inventing a watcher to fill this in would be a runtime feature smuggled in behind a
+ * notification, and polling every workflow file to find out would be the firehose the agent
+ * batching exists to prevent.
+ *
+ * It is defined now so the viewer (#177) can subscribe to it from the version it ships in,
+ * and so the editor (#181, v0.6.0) - which *does* have the moment, because publishing a
+ * draft is a write the daemon performs - has the frame to send rather than a protocol bump
+ * in the middle of a feature. A client that subscribes today simply never hears one, which
+ * is indistinguishable from a workflow nobody edited.
+ */
+export const WorkflowsChangedParamsSchema = z.object({
+  subscriptionId: z.string(),
+  /** The workflow id, or a nested graph's `parent::node`. */
+  id: z.string(),
+  /** The version the definition carries *after* the change. */
+  version: z.string(),
+  /** When the daemon saw the change, by its own clock. Not a cursor. */
+  at: z.string(),
+});
+export type WorkflowsChangedParams = z.infer<typeof WorkflowsChangedParamsSchema>;
+
 /** Each notification method's params schema, so a client can validate one it routed by name. */
 export const NOTIFICATION_PARAMS = {
   [RUN_CHANGED]: RunChangedParamsSchema,
@@ -257,6 +289,7 @@ export const NOTIFICATION_PARAMS = {
   [INPUT_ANSWERED]: InputAnsweredParamsSchema,
   [EVENT_APPENDED]: EventAppendedParamsSchema,
   [AGENT_CHANGED]: AgentChangedParamsSchema,
+  [WORKFLOWS_CHANGED]: WorkflowsChangedParamsSchema,
 } as const satisfies Record<NotificationMethod, z.ZodType>;
 
 /** Method name to params type, for a client that switches on the method. */
@@ -268,6 +301,7 @@ export interface NotificationParamsByMethod {
   "input.answered": InputAnsweredParams;
   "event.appended": EventAppendedParams;
   "agent.changed": AgentChangedParams;
+  "workflows.changed": WorkflowsChangedParams;
 }
 
 /** A parsed notification: a discriminated union, so `switch (n.method)` narrows `n.params`. */
