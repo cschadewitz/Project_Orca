@@ -33,6 +33,7 @@ import { InlineAsksProvider } from "./attention/inline-asks.js";
 import { useAlertActivation } from "./attention/use-alert-activation.js";
 import type { AlertActivation } from "../../src/bridge.js";
 import { PaletteObjectSources } from "./palette/object-sources.js";
+import { PaletteStartRun } from "./palette/start-run.js";
 import {
   describeRoute,
   gateUrl,
@@ -341,6 +342,9 @@ export function App(): JSX.Element {
           can be asked for. Registered here rather than inside a surface because they are
           reads of the store rather than views of a surface's state (#206). */}
       <PaletteObjectSources onOpen={navigate} />
+      {/* And the one write that belongs to no surface: start a run of any registered
+          workflow, from wherever a person is standing (#178). */}
+      <PaletteStartRun onOpen={navigate} />
       {/* Last, so it is over the panel in paint order as well as in z-index. */}
       <CommandPalette controller={palette} onJump={(target) => navigate(target.url)} />
       {/* Blocking, once per detection, and last of all: a version mismatch is the one

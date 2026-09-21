@@ -31,11 +31,13 @@
  *   `Enter`, `⇧Enter`, `G` — is registered by whichever card has focus, which is what lets
  *   the same card be mounted inline in a run and bring its keys with it.
  */
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import type { ConnectionState } from "@orca/design";
 import type { OpenInputView, RunSummaryView } from "@orca/protocol";
 import { useWritability } from "../chrome/use-connection.js";
 import { useKeyboard } from "../keyboard-context.js";
+import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
+import { bindOptions, isFreeText } from "./card-model.js";
 import { VirtualList } from "../list/index.js";
 import { Duration, StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
 import type { AnswerRequest } from "./answer-card.js";
@@ -108,16 +110,10 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
        be pulled back to the list every time a person clicked a card's option. */
   }, [ids, waits.length]);
 
-  useSurfaceKeys(waits.length, focusIndex, focusCard, {
-    cancel: () => {
-      const run = waits[focusIndex]?.runId;
-      if (run) controls.cancel(run);
-    },
-    resume: () => {
-      const run = waits[focusIndex]?.runId;
-      if (run) controls.resume(run);
-    },
-  });
+  useSurfaceKeys(waits.length, focusIndex, focusCard);
+  /* The palette's rows are about the card the person is on, which is what "actions on the
+     current object" means when the object is one of five cards (#178). */
+  useCardWrites(waits[focusIndex], controls);
 
   const cannotWrite = writability.can ? undefined : writability.reason;
   const report = controls.report;
@@ -370,26 +366,15 @@ function FailedRow({ run, live }: { run: RunSummaryView; live: boolean }): JSX.E
 }
 
 /**
- * The keys that belong to the *list* of cards rather than to a card: `J`/`K`, and the two
- * keyless commands (#205).
- *
- * Cancel and resume have no key on purpose. The design's keyboard table is short and every
- * letter in it is spoken for; these two are real write actions all the same, and #205's
- * whole point is that a command with no key is still a command as long as the palette can
- * find it. They are registered while there is something to act on, so what is in the
- * registry is what a person can actually do right now.
+ * The keys that belong to the *list* of cards rather than to a card: `J`/`K`, and nothing
+ * else. The writes moved to `useCardWrites` below when #178 gave every write in the app the
+ * same two gates.
  */
-function useSurfaceKeys(
-  count: number,
-  focusIndex: number,
-  focusCard: (index: number) => void,
-  actions: { cancel: () => void; resume: () => void },
-): void {
+function useSurfaceKeys(count: number, focusIndex: number, focusCard: (index: number) => void): void {
   const keyboard = useKeyboard();
-  const current = useRef({ count, focusIndex, focusCard, actions });
-  current.current = { count, focusIndex, focusCard, actions };
-  // Registered while there is something to act on, so the palette lists what can be done
-  // now rather than four commands that would do nothing.
+  const current = useRef({ count, focusIndex, focusCard });
+  current.current = { count, focusIndex, focusCard };
+  // Registered while there is something to move between.
   const anything = count > 0;
 
   useEffect(() => {
@@ -402,19 +387,86 @@ function useSurfaceKeys(
     const off = [
       keyboard.register({ scope: "card", key: "J", label: "Next card", action: () => move(1) }),
       keyboard.register({ scope: "card", key: "K", label: "Previous card", action: () => move(-1) }),
-      keyboard.register({
-        scope: "card",
-        label: "Cancel the run this is waiting on",
-        detail: "Stops the run; the answer is not given",
-        action: () => current.current.actions.cancel(),
-      }),
-      keyboard.register({
-        scope: "card",
-        label: "Resume the run this is waiting on",
-        detail: "Re-drives the run without answering; it returns when the run parks again",
-        action: () => current.current.actions.resume(),
-      }),
     ];
     return () => off.forEach((remove) => remove());
   }, [keyboard, anything]);
+}
+
+/**
+ * The card's three writes in the palette (#178): answer it with each option it offers,
+ * cancel the run it is waiting on, resume that run.
+ *
+ * **The options are the card's options, in the card's order.** `bindOptions` is what puts
+ * the destructive ones last and gives the rest `1`–`9` on the card itself
+ * (docs/design/20-attention-and-gates.md: the destructive option is never bound to `1` and
+ * never focused by default), and a second ordering here would be a second answer to a
+ * safety rule. A destructive option carries the danger tone, which sinks it below every
+ * other row in the palette as well.
+ *
+ * **The rows call the card's own path.** `useControls().answer` — the same hook, the same
+ * one-call-in-flight, the same reading of what an "always" actually wrote. What the rows do
+ * *not* offer is "always": that is a standing rule written into the workspace sidecar and
+ * its two buttons say what they will promise before they are pressed (`alwaysOutcome`); a
+ * palette row that wrote one from a single word would be promising on the daemon's behalf.
+ *
+ * **A free-text ask gets no rows at all.** `options` empty is the protocol's way of saying
+ * "type an answer", and there is nothing to type into in a list of commands. The card is
+ * where that one is answered, and it says so by being the only place it can be.
+ */
+function useCardWrites(
+  input: OpenInputView | undefined,
+  actions: { answer: (input: OpenInputView, request: AnswerRequest) => void; cancel: (runId: string) => void; resume: (runId: string) => void },
+): void {
+  /* Through a ref: `useControls` rebuilds its callbacks whenever a call goes in flight, and
+     the rows must not be unregistered and re-registered underneath a keypress. The input is
+     held the same way and for the same reason — a push rebuilds the whole list. */
+  const current = useRef({ input, actions });
+  current.current = { input, actions };
+
+  /* What the rows are *about*, as one string. The options are part of it because a gate
+     re-asked with different options is a different set of rows. */
+  const signature =
+    input === undefined ? "" : [input.id, input.runId, input.question, ...input.options.map((o) => o.id)].join("|");
+
+  const rows = useMemo((): readonly PaletteWrite[] => {
+    const held = current.current.input;
+    if (held === undefined || signature === "") return [];
+    const answers = isFreeText(held.options)
+      ? []
+      : bindOptions(held.options).map(({ option }) => ({
+          scope: "card" as const,
+          label: `Answer ${held.question}: ${option.label}`,
+          detail: option.consequence ?? `Answers ${held.runName} the way the card's option does`,
+          ...(option.destructive ? { tone: "danger" as const } : {}),
+          action: () => {
+            const { input: now, actions: act } = current.current;
+            if (now) act.answer(now, { optionId: option.id });
+          },
+        }));
+    return [
+      ...answers,
+      {
+        scope: "card",
+        label: "Cancel the run this is waiting on",
+        detail: "Stops the run; the answer is not given",
+        tone: "danger",
+        confirm: `Cancel ${held.runId} — confirm`,
+        action: () => {
+          const { input: now, actions: act } = current.current;
+          if (now) act.cancel(now.runId);
+        },
+      },
+      {
+        scope: "card",
+        label: "Resume the run this is waiting on",
+        detail: "Re-drives the run without answering; it returns when the run parks again",
+        action: () => {
+          const { input: now, actions: act } = current.current;
+          if (now) act.resume(now.runId);
+        },
+      },
+    ];
+  }, [signature]);
+
+  usePaletteWrites(rows);
 }

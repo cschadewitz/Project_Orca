@@ -491,7 +491,7 @@ describe("the keyboard map and the palette", () => {
     expect(within(palette).getByRole("option", { name: /Resume the run this is waiting on/ })).toBeTruthy();
   });
 
-  it("cancels the run the focused card is waiting on", async () => {
+  it("cancels the run the focused card is waiting on, after the row has been confirmed", async () => {
     mount([FIVE_GATES[0]!]);
     await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
 
@@ -500,6 +500,12 @@ describe("the keyboard map and the palette", () => {
     // `mouseDown`, not `click`: the palette picks on mousedown so that the query field is
     // not blurred first (`command-palette.tsx`).
     fireEvent.mouseDown(within(palette).getByRole("option", { name: /Cancel the run this is waiting on/ }));
+
+    /* Cancelling is destructive, so the first choice arms the row rather than running it
+       (#178): the label becomes the confirmation and nothing has been sent. */
+    const armed = await within(palette).findByRole("option", { name: /Cancel run-1 — confirm/ });
+    expect(fake.calls.some((c) => c.method === "runs.cancel")).toBe(false);
+    fireEvent.mouseDown(armed);
 
     await waitFor(() => expect(fake.calls.some((c) => c.method === "runs.cancel")).toBe(true));
     expect(fake.calls.find((c) => c.method === "runs.cancel")?.params).toMatchObject({ runId: "run-1" });

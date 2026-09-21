@@ -21,8 +21,10 @@
  * - **A daemon with no plan is a state, not an error.** `plan.read` absent from
  *   `hello.capabilities` means this daemon serves no plan, and so does a store with no
  *   plan in it. Neither is a failure and neither is retried.
- * - **Nothing here writes.** `useWritability()` is not consulted because no control on
- *   this surface sends anything; the writes are the palette's (#178).
+ * - **What writes is the palette, not this pane (#178).** Waive, decide, reopen, update a
+ *   risk and release the claim are keyless commands on the selected item
+ *   (`use-plan-writes.ts`); the surface and the inspector draw none of them, which is what
+ *   "the palette is the only place a phase-2 write has to be discoverable" buys.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import type { ConnectionState } from "@orca/design";
@@ -35,6 +37,7 @@ import { PlanSidebar } from "./plan-sidebar.js";
 import { ScheduleTable } from "./schedule-table.js";
 import { countLabel, isFiltered, matchesText, NO_FILTERS, type ItemStatus, type PlanFilters } from "./plan-model.js";
 import { useItemDetail, usePlan } from "./use-plan.js";
+import { usePlanWrites } from "./use-plan-writes.js";
 import "./plan.css";
 
 /** The two modes that exist. The graph, the risks and the decisions are v0.6.0 (#171–#173). */
@@ -106,6 +109,9 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
 
   const selected = useMemo(() => visible.find((item) => item.id === selectedId), [visible, selectedId]);
   const detail = useItemDetail(planId, selected?.id);
+  /* The selected item's writes, in the palette and nowhere else (#178). The inspector
+     draws the same dependencies, risks and claim and offers none of them. */
+  usePlanWrites({ planId, item: selected, dependencies: detail.dependencies, risks: detail.risks });
 
   /* A link that arrived. `orca://item/<slug-or-id>` selects the item and opens the
      explanation, which is the information architecture's promise for that URL — so it
