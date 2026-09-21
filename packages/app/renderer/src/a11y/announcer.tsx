@@ -58,7 +58,12 @@ export function Announcer(): JSX.Element {
 
   return (
     <div
-      className="orca-announcer"
+      /* In the accessibility tree and nowhere else. The clip is the component layer's
+         `.orca-visually-hidden` (#262), not three literals in `app.css`: every alternative
+         way of hiding this — `display: none`, `visibility: hidden`, a zero box — takes the
+         region out of the tree in some screen reader, which turns it off rather than
+         hiding it, and that argument belongs in one place for everything that needs it. */
+      className="orca-visually-hidden"
       {...{ [ANNOUNCER_ATTRIBUTE]: "" }}
       role="status"
       aria-live="polite"

@@ -31,6 +31,7 @@ import { cardName } from "../src/attention/answer-card.js";
 import { AGENTS } from "./fixtures-agents.js";
 import { FIVE_GATES, INPUTS_AS_OF, PERMISSION_ASK } from "./fixtures-inputs.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
+import { installDesignSystem, resolved } from "./themes.js";
 import type { FakeBridge } from "./fake-bridge.js";
 
 let fake: FakeBridge;
@@ -95,6 +96,35 @@ describe("the one polite announcer", () => {
     expect(announcers()).toHaveLength(1);
     // And it is the same element throughout, not a fresh one per surface.
     expect(announcers()[0]).toBe(announcer);
+  });
+
+  it("is invisible and still in the accessibility tree, on the component layer's own class", async () => {
+    /* The two halves of #262's utility, asserted together because either one alone is a
+       bug: an announcer that can be seen is a paragraph of chrome nobody asked for, and an
+       announcer hidden the other ways — `display: none`, `visibility: hidden`, a zero box —
+       is a region some screen reader has quietly switched off.
+
+       The clip is `.orca-visually-hidden` in `packages/design/css/components.css` rather
+       than three literals in `app.css`, so this reads the real stylesheet to check it. */
+    installDesignSystem();
+    document.body.classList.add("orca");
+    serveWaits();
+    renderChrome(h);
+    await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
+    const announcer = announcers()[0]!;
+
+    expect(announcer.classList.contains("orca-visually-hidden")).toBe(true);
+    expect(resolved(announcer, "clip-path")).toBe("inset(50%)");
+    expect(resolved(announcer, "position")).toBe("absolute");
+
+    // Hidden, but never the two ways that would also hide it from a reader.
+    expect(resolved(announcer, "display")).not.toBe("none");
+    expect(resolved(announcer, "visibility")).not.toBe("hidden");
+    // And nothing has taken it out of the tree by hand either: it is a named live region.
+    expect(announcer.hasAttribute("aria-hidden")).toBe(false);
+    expect(screen.getAllByRole("status")).toContain(announcer);
+
+    document.body.classList.remove("orca");
   });
 
   it("announces a step transition and a run's terminal state, and never the output", async () => {

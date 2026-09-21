@@ -10,16 +10,17 @@
    that need a size without the rest of a style reference `--text-*-size`; a glyph sized as a
    glyph references `--icon-*`.
 
-   There are no `orca-allow-literal` notes left. #211 removed 140 literals and left 38 of
-   these notes, #240 took five more, and #244 took the last 32 — because they were never 32
+   There is one `orca-allow-literal` note left, on `.orca-visually-hidden` (#262), and it is
+   the permanent kind this paragraph asks for rather than a finding waiting on a token.
+   #211 removed 140 literals and left 38 of these
+   notes, #240 took five more, and #244 took the last 32 — because they were never 32
    numbers. They were five families tokens.json did not have (`bar-*`, `badge-*`, `mark-*`,
    `col-*` and the spacing half rungs), two rungs that extend `control-*`, four boxes that
    simply needed naming, and two values that were arithmetic somebody had written out as a
-   number. The note was always described here as a finding waiting on a token rather than a
-   permanent exemption, and those findings are now closed. Adding one back is a claim nobody
-   has made yet: that a value exists which no token could sensibly name. Make that argument
-   in the note itself — say why it is permanent, not which issue it is waiting on — or add
-   the token, which is almost always the right fix. */
+   number. Each of those notes was a finding waiting on a token, and those findings are
+   closed. A note added now is the other claim: that a value exists which no token could
+   sensibly name. Make that argument in the note itself — say why it is permanent, not which
+   issue it is waiting on — or add the token, which is almost always the right fix. */
 
 /* ---------- roots ---------- */
 
@@ -122,6 +123,35 @@
   outline: var(--stroke-focus) solid var(--border-focus);
   outline-offset: var(--stroke-hairline);
   border-radius: var(--radius-xs);
+}
+
+/* ---------- utilities ---------- */
+
+/* Read, never seen: an element that stays in the accessibility tree and takes no space on
+   screen — a live region, a heading a sighted reader gets from the layout, the word a glyph
+   already says. It is here rather than in an app stylesheet because nothing about it is
+   app-specific, and every stylesheet that needed it would otherwise rewrite the clip (#262).
+
+   The alternatives are all worse and that is the whole reason for the shape: `display: none`,
+   `visibility: hidden` and a zero-sized box each drop the element *out* of the accessibility
+   tree in at least one screen reader, which for a live region is not "hidden" but "off".
+   `clip-path` does the hiding; the 1px box is only what keeps the element rendered at all.
+   It is absolutely positioned, so it is already out of flow and moves nothing — the
+   `margin: -1px` the snippet is usually copied with compensates for an in-flow variant this
+   rule does not have, and is left out rather than carried along unexamined.
+
+   The one exemption below is the only `orca-allow-literal` in this file, and it is the
+   permanent kind the header describes: no token could sensibly name 1px-of-nothing. */
+.orca-visually-hidden {
+  position: absolute;
+  /* The note covers this line and the next, which is the whole of the exemption. */
+  width: 1px; /* orca-allow-literal: the smallest rendered box, which is not a size — no token could sensibly name it, and a rung that did would name a family with one invisible member. Callers take the class, never these two numbers. */
+  height: 1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* ---------- status chip ---------- */

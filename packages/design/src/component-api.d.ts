@@ -108,6 +108,23 @@ export interface TextProps {
 }
 
 /**
+ * `.orca-visually-hidden` (built, in the CSS layer only — #262): in the accessibility tree
+ * and nowhere on screen. The app's polite announcer is what it was written for; a word a
+ * glyph already carries, or a heading the layout gives a sighted reader, is the same shape.
+ *
+ * **It is a class and gets no component**, deliberately, which is why this entry is a class
+ * name rather than a props interface. A `<VisuallyHidden>` wrapper would have to choose an
+ * element, and the callers do not agree: the announcer is a `div` with `role="status"`, a
+ * hidden heading is an `h2`, a hidden label is a `label` bound to an input. Wrapping them in
+ * a `div` would break two of the three, and an `as` prop would be `className` with extra
+ * steps. Rule 14 the short way: reach for the class.
+ *
+ * Nothing composes with it that would fight it — it sets position, box and clipping, so a
+ * caller adding its own layout to the same element is the one mistake to look for.
+ */
+export type VisuallyHiddenClass = "orca-visually-hidden";
+
+/**
  * An elapsed span (built), to two units at most. Exactly one of `ms` (finished) or
  * `since` (accruing) — `since` ticks at 1Hz off one clock shared by the whole renderer.
  */
