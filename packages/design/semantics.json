@@ -59,6 +59,15 @@
     "ready": { "word": "ready", "glyph": "▸", "fg": "status-succeeded", "bg": "status-succeeded-bg" },
     "running": { "word": "running", "glyph": "◐", "fg": "status-running", "bg": "status-running-bg" }
   },
+  "workItemStatus": {
+    "pending": { "word": "pending", "glyph": "◌" },
+    "ready": { "word": "ready", "glyph": "▸" },
+    "in-progress": { "word": "in progress", "glyph": "◐" },
+    "blocked": { "word": "blocked", "glyph": "▣" },
+    "done": { "word": "done", "glyph": "✓" },
+    "failed": { "word": "failed", "glyph": "✕" },
+    "cancelled": { "word": "cancelled", "glyph": "⊘" }
+  },
   "connectionState": {
     "live": { "word": "connected", "glyph": "●", "fg": "status-succeeded", "writes": "enabled" },
     "reconnecting": { "word": "reconnecting", "glyph": "◌", "fg": "status-waiting", "writes": "queued" },

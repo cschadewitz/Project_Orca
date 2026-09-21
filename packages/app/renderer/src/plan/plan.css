@@ -103,7 +103,7 @@
   display: grid;
   grid-template-columns:
     var(--col-classification) var(--col-slug) minmax(0, 1fr)
-    var(--col-score) var(--col-risk) var(--col-claim);
+    var(--col-request) var(--col-status) var(--col-score) var(--col-risk) var(--col-claim);
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-3);

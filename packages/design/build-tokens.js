@@ -216,6 +216,25 @@ export const SCHEDULE_PRESENTATION: Record<ScheduleClass, {
 ${presentation(S.scheduleClass, true)}
 };
 
+export type WorkItemStatus = ${union(Object.keys(S.workItemStatus))};
+export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [${Object.keys(S.workItemStatus).map(quote).join(", ")}] as const;
+/**
+ * A plan work item's own stored status — not a run status and not a schedule
+ * classification. The classification is where the scheduler *put* the item; this is what
+ * the item says about itself, and the schedule table draws both because they answer
+ * different questions.
+ *
+ * Word and glyph, and deliberately no \`fg\` or \`bg\`: the eight tinted chips mean a run
+ * status and nothing else, so this is drawn as a plain \`Chip\` and colour is not one of its
+ * channels at all. The glyphs are reused from the run statuses and schedule classes that
+ * mean the same thing, so nothing new goes into the symbol faces.
+ */
+export const WORK_ITEM_STATUS_PRESENTATION: Record<WorkItemStatus, {
+  word: string; glyph: string;
+}> = {
+${presentation(S.workItemStatus, true)}
+};
+
 export type ConnectionState = ${union(Object.keys(S.connectionState))};
 export const CONNECTION_PRESENTATION: Record<ConnectionState, {
   word: string; glyph: string; fg: string; fgToken: ColorToken; writes: string;

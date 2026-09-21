@@ -25,7 +25,7 @@
  *   the CLI's word for word (`schedule.explain`), and a surface that re-sentenced it would
  *   be a second explanation to keep true.
  */
-import type { RunStatus, ScheduleClass } from "@orca/design";
+import { WORK_ITEM_STATUS_PRESENTATION, type RunStatus, type ScheduleClass } from "@orca/design";
 import {
   ITEM_CLASSIFICATIONS,
   type ItemClassification,
@@ -110,6 +110,25 @@ export function countLabel(shown: number, total: number): string {
 }
 
 /**
+ * A page of work items folded into what is held, in the daemon's order.
+ *
+ * The append is by id rather than by concatenation for the same reason the journal's fold
+ * is by `seq`: a page read at an offset may overlap what is held, because the schedule is
+ * recomputed between two reads and an item can move. An overlap replaces, so a row never
+ * appears twice; the order is the order the rows arrived in, which is the daemon's, and
+ * this never re-sorts it.
+ */
+export function foldItems(
+  held: readonly PlanItemView[],
+  page: readonly PlanItemView[],
+): readonly PlanItemView[] {
+  if (page.length === 0) return held;
+  const byId = new Map(held.map((item) => [item.id, item]));
+  for (const item of page) byId.set(item.id, item);
+  return [...byId.values()];
+}
+
+/**
  * How a classification is drawn.
  *
  * `badge` is one of the design system's five `ScheduleClass`es. `outcome` is the two that
@@ -127,6 +146,29 @@ export function classificationMark(classification: ItemClassification): Classifi
   return outcome === undefined
     ? { kind: "badge", classification: classification as ScheduleClass }
     : { kind: "outcome", status: outcome };
+}
+
+/**
+ * How a work item's own status is drawn: its word and, when the design system has one for
+ * it, its glyph (rule 4).
+ *
+ * The wire types this field as an open `string` (`WorkItemViewSchema`), so a daemon ahead
+ * of this app can send a status the design system has no drawing for. That is not an error
+ * and it is not a blank cell: the word goes on screen exactly as the daemon said it, with
+ * no glyph, because a glyph chosen here would be this app deciding what a status it has
+ * never heard of *looks* like (rule 12). `plan-model.test.ts` asserts the seven the wire
+ * filters by all have one, so the fallback stays the far case it is meant to be.
+ */
+export interface StatusMark {
+  word: string;
+  glyph?: string;
+}
+
+const STATUS_DRAWINGS = WORK_ITEM_STATUS_PRESENTATION as Record<string, { word: string; glyph: string } | undefined>;
+
+export function workItemStatusMark(status: string): StatusMark {
+  const known = STATUS_DRAWINGS[status];
+  return known === undefined ? { word: status } : { word: known.word, glyph: known.glyph };
 }
 
 /**

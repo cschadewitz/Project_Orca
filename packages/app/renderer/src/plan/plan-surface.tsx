@@ -62,8 +62,15 @@ export interface PlanSurfaceProps {
   /** `orca://item/<slug-or-id>` — select that item and open its explanation. */
   open?: string | undefined;
   onHeader?: (header: PlanHeader) => void;
-  /** The inspector, handed up for the docked panel to draw (the dock is the chrome's). */
-  onInspector?: (inspector: ReactNode) => void;
+  /**
+   * The inspector, handed up for the docked panel to draw (the dock is the chrome's).
+   *
+   * `open` says whether this report is a person asking to *see* it — a new row selected —
+   * rather than the same inspector re-rendered with the detail that has since landed. Only
+   * the first may open the dock: a content update that opened it would undo the `⌘\` a
+   * person pressed a moment after clicking a row.
+   */
+  onInspector?: (inspector: ReactNode, options: { open: boolean }) => void;
   /** A claim's run, opened through the route table. */
   onOpenRun: (runId: string) => void;
 }
@@ -96,6 +103,8 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
   /** The item whose explanation is open, and the lines once `schedule.explain` has answered. */
   const [explainFor, setExplainFor] = useState<string | undefined>(undefined);
   const [lines, setLines] = useState<readonly string[] | undefined>(undefined);
+  /** What the daemon said when it could not explain. Held apart from the lines on purpose. */
+  const [explainError, setExplainError] = useState<string | undefined>(undefined);
 
   const feed = usePlan(filters);
   const plan = feed.state.phase === "ready" ? feed.state.plan : undefined;
@@ -103,23 +112,42 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
 
   const held = feed.items.phase === "ready" ? feed.items.items : EMPTY;
   const total = feed.items.phase === "ready" ? feed.items.total : 0;
+  /* Whether the plan continues past what is held. `items.list` answers a page, so a count
+     that said "260 items" over 200 rows would be a claim about rows that are not here. */
+  const hasMore = feed.items.phase === "ready" && feed.items.hasMore;
+  const loadingMore = feed.items.phase === "ready" && feed.items.loadingMore;
   /* The local half of the filter. The daemon applied the other three across the whole
      plan; this one narrows what came back, and the count below says so. */
   const visible = useMemo(() => held.filter((item) => matchesText(item, filters.text)), [held, filters.text]);
 
   const selected = useMemo(() => visible.find((item) => item.id === selectedId), [visible, selectedId]);
-  const detail = useItemDetail(planId, selected?.id);
+  /* The revision is a dependency of the detail read, not only the selection: a
+     `dependencies`, `risks` or `decisions` frame changes an `evaluation.detail` without
+     changing which item is selected (`use-plan.ts`). */
+  const detail = useItemDetail(planId, selected?.id, feed.itemsRevision);
   /* The selected item's writes, in the palette and nowhere else (#178). The inspector
      draws the same dependencies, risks and claim and offers none of them. */
   usePlanWrites({ planId, item: selected, dependencies: detail.dependencies, risks: detail.risks });
 
   /* A link that arrived. `orca://item/<slug-or-id>` selects the item and opens the
      explanation, which is the information architecture's promise for that URL — so it
-     lands once the table has the row, and says nothing when the plan does not have it. */
+     lands once the table has the row, and says nothing when the plan does not have it.
+
+     Acted on **once per link**, tracked in a ref. `held` is a new array on every re-read,
+     so an effect that only depended on it re-fired on every `plan.changed` frame — which
+     forced the mode back to Schedule and re-opened the explanation under somebody who had
+     since switched to the Journal or closed it. A link is a thing that arrives, not a
+     thing that keeps arriving. */
+  const landed = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (open === undefined) return;
+    if (open === undefined) {
+      landed.current = undefined;
+      return;
+    }
+    if (landed.current === open) return;
     const match = held.find((item) => item.id === open || item.slug === open);
     if (!match) return;
+    landed.current = open;
     setMode("schedule");
     setSelectedId(match.id);
     setExplainFor(match.id);
@@ -130,15 +158,22 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
   useEffect(() => {
     if (planId === undefined || explainFor === undefined) {
       setLines(undefined);
+      setExplainError(undefined);
       return;
     }
     let live = true;
     setLines(undefined);
+    setExplainError(undefined);
     void window.orca.plan.explain({ planId, workItemId: explainFor }).then((result) => {
       if (!live) return;
-      // A daemon that cannot explain an item says so as a protocol error; the popover says
-      // the code rather than inventing a reason the scheduler never gave (rule 12).
-      setLines(result.ok ? result.result.lines : [`${result.error.code}: ${result.error.message}`]);
+      /* A daemon that cannot explain an item says so as a protocol error, and the popover
+         says the code rather than inventing a reason the scheduler never gave (rule 12) —
+         but it says it *as an error*, not as a line. The lines are the scheduler's own
+         account and each one is a row a person can copy; a failure folded in among them
+         would be a sentence ORCA never wrote, carried off on the clipboard as though it
+         had. So the two are held apart here and drawn apart in `Explanation`. */
+      if (result.ok) setLines(result.result.lines);
+      else setExplainError(`${result.error.code}: ${result.error.message}`);
     });
     return () => {
       live = false;
@@ -221,9 +256,17 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
   );
   const reportInspector = useRef(onInspector);
   reportInspector.current = onInspector;
+  /* Whether *this* report is a new selection, which is the only thing that may open the
+     dock. The content is memoised over `detail`, and the detail lands a tick after the
+     selection does — so a report is made twice per click, and a dock that opened on
+     "content changed" re-opened itself on the second one. `⌘\` right after a click closed
+     a panel that then came straight back. A person closing the dock is closing it. */
+  const shown = useRef<string | undefined>(undefined);
   useEffect(() => {
-    reportInspector.current?.(inspector);
-  }, [inspector]);
+    const selectionChanged = shown.current !== selected?.id;
+    shown.current = selected?.id;
+    reportInspector.current?.(inspector, { open: selectionChanged && selected !== undefined });
+  }, [inspector, selected]);
 
   const live = connection === "live";
   const filtered = isFiltered(filters);
@@ -295,6 +338,22 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
                   placeholder="Slug or title"
                   onChange={(event) => setFilters((current) => ({ ...current, text: event.target.value }))}
                 />
+                {/* "Load more" is here rather than as a last row in the table, for the two
+                    reasons the journal's "Load earlier" is: `.orca-list__scroller` is an
+                    overflow container and a control inside one is clipped by it, and a row
+                    that is not a work item would be a row of a different height in a list
+                    whose whole arithmetic is `--row-h` (rule 9). The page is appended in
+                    place, so nothing a person is looking at moves. */}
+                {hasMore && (
+                  <button
+                    type="button"
+                    className={`orca-btn ${textClass("caption")} orca-btn--ghost orca-btn--sm`}
+                    onClick={feed.loadMore}
+                    disabled={loadingMore}
+                  >
+                    {loadingMore ? "Loading more items" : "Load more items"}
+                  </button>
+                )}
                 <Text style="caption" className="orca-plan__count">
                   {countLabel(visible.length, total)}
                 </Text>
@@ -310,6 +369,7 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
                 onExplain={explain}
                 explainFor={explainFor}
                 lines={lines}
+                explainError={explainError}
                 onCloseExplanation={() => setExplainFor(undefined)}
                 onOpenRun={onOpenRun}
                 onRetry={feed.reload}
@@ -347,6 +407,7 @@ interface ScheduleBodyProps {
   onExplain: (item: PlanItemView) => void;
   explainFor: string | undefined;
   lines: readonly string[] | undefined;
+  explainError: string | undefined;
   onCloseExplanation: () => void;
   onOpenRun: (runId: string) => void;
   onRetry: () => void;
@@ -400,6 +461,7 @@ function ScheduleBody(props: ScheduleBodyProps): JSX.Element {
       onExplain={props.onExplain}
       explainFor={props.explainFor}
       lines={props.lines}
+      explainError={props.explainError}
       onCloseExplanation={props.onCloseExplanation}
       onOpenRun={props.onOpenRun}
     />

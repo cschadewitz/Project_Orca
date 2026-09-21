@@ -817,6 +817,18 @@ export interface MenuProps {
    */
   open?: boolean;
   onOpenChange?(open: boolean): void;
+  /**
+   * Something the popover has to *say* rather than offer (#170): an error where a list of
+   * choices was expected. Rendered above the items, never a `menuitem`, never focused,
+   * typed to or chosen — so it cannot be copied as though it were one of them. A menu with
+   * a note and no items still renders its trigger and still opens; focus lands on the list
+   * itself, so `Esc` returns it to the trigger.
+   *
+   * It is deliberately not a disabled item: a disabled item is still counted and read as
+   * one of the choices, and a menu whose only row is a disabled error is a popover focus
+   * cannot enter.
+   */
+  note?: unknown;
 }
 
 /** Built — rendering only; the state machine that decides which state is live is #163. */

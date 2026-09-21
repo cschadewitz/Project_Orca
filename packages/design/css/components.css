@@ -1730,6 +1730,20 @@
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
+/* A note the popover makes rather than a choice it offers: no hover, no pointer, no
+   height rung, and it wraps, because what it says is a sentence and not a row. */
+/* type: caption */
+.orca-menu__note {
+  /* The width the menu already sets as its floor: a note widens nothing. */
+  max-width: var(--panel-width);
+  padding: var(--space-2);
+  color: var(--ink-secondary);
+  white-space: normal;
+}
+/* type: caption */
+.orca-menu__error {
+  color: var(--status-failed);
+}
 
 /* connection indicator */
 /* type: mono-id */

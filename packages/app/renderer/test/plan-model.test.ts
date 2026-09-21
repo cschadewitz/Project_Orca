@@ -5,11 +5,13 @@
  * through untouched.
  */
 import { describe, expect, it } from "vitest";
+import { WORK_ITEM_STATUSES } from "@orca/design";
 import {
   classificationMark,
   countLabel,
   earliestSeq,
   explanationItems,
+  foldItems,
   foldJournal,
   isFiltered,
   isNewFrame,
@@ -17,6 +19,8 @@ import {
   matchesText,
   newestFirst,
   staleFor,
+  workItemStatusMark,
+  ITEM_STATUSES,
   NO_FILTERS,
 } from "../src/plan/plan-model.js";
 import { EXPLANATIONS, JOURNAL, PLAN_ID, PLAN_ITEMS } from "./fixtures-plan.js";
@@ -131,5 +135,65 @@ describe("the explanation", () => {
     expect(rows[rows.length - 1]!.label).toBe("risk key-leak: open (L4 x I5)");
     // Two identical lines would be two rows, so the id is the position and not the text.
     expect(explanationItems(["same", "same"]).map((row) => row.id)).toEqual(["0", "1"]);
+  });
+});
+
+describe("a page of work items folded in", () => {
+  const page = (...slugs: string[]) => slugs.map((slug) => item(slug));
+
+  it("appends in the order the rows arrived, which is the daemon's", () => {
+    const held = page("auth-api", "auth-metrics");
+    const folded = foldItems(held, page("auth-ui", "auth-store"));
+
+    expect(folded.map((row) => row.slug)).toEqual(["auth-api", "auth-metrics", "auth-ui", "auth-store"]);
+  });
+
+  it("replaces rather than duplicates where a page overlaps what is held", () => {
+    /* The schedule is recomputed between two reads, so a page taken at an offset can hand
+       back a row already on screen. It is one row, and it is the newer copy. */
+    const held = page("auth-api", "auth-metrics");
+    const moved = { ...item("auth-api"), title: "Add the SSO callback (renamed)" };
+    const folded = foldItems(held, [moved, item("auth-ui")]);
+
+    expect(folded.map((row) => row.slug)).toEqual(["auth-api", "auth-metrics", "auth-ui"]);
+    expect(folded[0]!.title).toBe("Add the SSO callback (renamed)");
+  });
+
+  it("is what is held when the page is empty, and never a new array for nothing", () => {
+    const held = page("auth-api");
+    expect(foldItems(held, [])).toBe(held);
+  });
+});
+
+describe("a work item's own status", () => {
+  /**
+   * Every status the wire *filters* by has a drawing, which is what keeps the fallback
+   * below the far case it is meant to be. The two lists come from different places on
+   * purpose — the filter's from the protocol's parameter type, the drawing's from
+   * `semantics.json` — and this is where they are made to agree.
+   */
+  it("draws every status the wire filters by, with a word and a glyph", () => {
+    expect([...WORK_ITEM_STATUSES].sort()).toEqual([...ITEM_STATUSES].sort());
+
+    for (const status of ITEM_STATUSES) {
+      const mark = workItemStatusMark(status);
+      expect(mark.word, status).toBeTruthy();
+      // Glyph *and* word: a status is never carried by its tint, and this one has no tint
+      // at all — it is the plain chip, so the glyph is the second channel (rule 4).
+      expect(mark.glyph, status).toBeTruthy();
+      expect([...mark.glyph!], status).toHaveLength(1);
+    }
+  });
+
+  it("reads 'in progress' rather than the wire's key", () => {
+    expect(workItemStatusMark("in-progress").word).toBe("in progress");
+  });
+
+  /* `WorkItemViewSchema` types this field as an open string, so a daemon ahead of this app
+     can send one nothing here has a drawing for. The word goes up as the daemon said it
+     and no glyph is chosen for it: a glyph picked here would be this app deciding what a
+     status it has never heard of looks like (rule 12). */
+  it("says a status it has no drawing for in the daemon's own word, with no glyph", () => {
+    expect(workItemStatusMark("superseded")).toEqual({ word: "superseded" });
   });
 });

@@ -109,6 +109,18 @@ export interface MenuProps {
    */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Something the popover has to *say* rather than offer: an error where a list of choices
+   * was expected, and nothing else. It is rendered above the items, is not a `menuitem`,
+   * is never focused, never typed to and never chosen — so it cannot be mistaken for, or
+   * copied as, one of them.
+   *
+   * It is here rather than as a disabled item because a disabled item is still an item: it
+   * is counted, named and read as one of the choices, and a menu whose only row is a
+   * disabled error is a popover focus cannot enter. A note keeps the menu openable with no
+   * items at all, and focus goes to the list itself so `Esc` still returns to the trigger.
+   */
+  note?: ReactNode;
 }
 
 /** The marker `menu`-scope shortcuts use to find the open menu around the focused item. */
@@ -251,6 +263,7 @@ export function Menu({
   measure = measureInDocument,
   open: controlled,
   onOpenChange,
+  note,
 }: MenuProps): JSX.Element | null {
   const [uncontrolled, setUncontrolled] = useState(false);
   const open = controlled ?? uncontrolled;
@@ -282,11 +295,17 @@ export function Menu({
   useTransientLayer(open, { name: "menu", close });
   useMenuKeys(open);
 
-  // Focus moves into the menu on open: the first item, so ↓ and Enter work immediately.
+  /* Focus moves into the menu on open: the first item, so ↓ and Enter work immediately.
+     A menu that is only a note has no item to land on, so focus goes to the list itself —
+     which is what keeps the layer something focus is *inside*, so `Esc` returns it to the
+     trigger rather than stranding it. */
   useEffect(() => {
     if (!open) return;
     const menu = list.current;
-    if (menu) itemsOf(menu)[0]?.focus();
+    if (!menu) return;
+    const first = itemsOf(menu)[0];
+    if (first) first.focus();
+    else menu.focus();
   }, [open]);
 
   /* Measured after layout and again on resize, so a menu opened near an edge flips on the
@@ -331,7 +350,8 @@ export function Menu({
   };
 
   // A trigger for an empty menu is a control that does nothing; the surface draws neither.
-  if (items.length === 0) return null;
+  // A note is something to say, so a menu that has one is not empty.
+  if (items.length === 0 && note === undefined) return null;
 
   return (
     <span className="orca-menu-anchor" ref={anchor}>
@@ -354,9 +374,17 @@ export function Menu({
           aria-label={label}
           ref={list}
           onKeyDown={onTypeahead}
+          /* Focusable only as a fallback: with items, focus lives on them and the list is
+             never the active element. */
+          tabIndex={-1}
           {...{ [MENU_ATTRIBUTE]: "" }}
           {...scopeProps("menu")}
         >
+          {note === undefined ? null : (
+            <li className="orca-menu__note" role="none">
+              {note}
+            </li>
+          )}
           {items.map((item) => (
             <li key={item.id} role="none">
               <button

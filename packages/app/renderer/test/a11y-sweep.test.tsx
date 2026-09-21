@@ -647,6 +647,77 @@ describe("Plan: two lists, one tab stop each, and nothing that speaks", () => {
     expect(document.querySelectorAll(".orca-plan [aria-live]")).toHaveLength(0);
     expect(politeRegions().length).toBeLessThanOrEqual(2);
   });
+
+  /**
+   * The whole sweep for this surface, not just `aria-live`: `role="status"` and
+   * `role="alert"` are live regions too — the role implies the behaviour — and a surface
+   * that repainted inside one would announce every frame without ever writing
+   * `aria-live` (rule 11).
+   *
+   * **One exception, and it is the app's rather than Plan's: the stale banner.** It is the
+   * same element on every surface that has one — `.orca-banner.orca-banner--stale` with
+   * `role="status"`, saying that what is on screen is the last the daemon said — on Runs
+   * (`runs-surface.tsx`), Attention (`attention-surface.tsx`), Config
+   * (`config-surface.tsx`), Plan (`plan-surface.tsx`) and in the chrome itself
+   * (`App.tsx`'s deep-link landing, `chrome/connection-banner.tsx`). It is *not* moved
+   * above the surfaces here: each one puts it inside its own scroll and stale region, at
+   * the top of the pane it makes a claim about, and a single banner in the chrome would
+   * have to say "something on this screen is stale" without saying which pane — which is
+   * a worse sentence and a bigger change than this review. So it is excluded by pattern,
+   * and the assertion below is that Plan mounts *nothing else* that speaks.
+   *
+   * `toHaveLength(0)` rather than a cap: a surface either mounts a region or it does not.
+   */
+  it("mounts no live region of its own, in either mode — only the app's stale banner", async () => {
+    const speaking = (): Element[] =>
+      [...document.querySelectorAll(".orca-plan [role=status], .orca-plan [role=alert], .orca-plan [aria-live]")].filter(
+        // The app's shared banner, used identically on every surface that has one.
+        (element) => element.closest(".orca-banner--stale") === null,
+      );
+
+    await goToPlan();
+    expect(speaking()).toHaveLength(0);
+
+    // With a row selected, which is what puts the inspector in the dock.
+    const table = await screen.findByRole("listbox", { name: "Schedule" });
+    fireEvent.keyDown(table, { key: "Home", code: "Home" });
+    await waitFor(() => expect(table.getAttribute("aria-activedescendant")).toBeTruthy());
+    expect(speaking()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Journal" }));
+    await screen.findByRole("listbox", { name: "Plan journal" });
+    expect(speaking()).toHaveLength(0);
+    expect(announcers()).toHaveLength(1);
+  });
+
+  /**
+   * The journal's rows are selectable. They were not: `selectedIndex` was `undefined` with
+   * a no-op `onSelect`, so `J`, `K` and the arrows scrolled the list and
+   * `aria-activedescendant` was never set — which is the whole of how a screen reader is
+   * told where it is in a listbox, and is the same claim this file makes about every other
+   * list in the app (rule 10).
+   */
+  it("moves the journal's selection with the keys, and says where it is", async () => {
+    await goToPlan();
+    fireEvent.click(screen.getByRole("button", { name: "Journal" }));
+    const journal = await screen.findByRole("listbox", { name: "Plan journal" });
+    await waitFor(() => expect(within(journal).getAllByRole("option").length).toBeGreaterThan(1));
+
+    expect(journal.getAttribute("aria-activedescendant")).toBeNull();
+
+    fireEvent.keyDown(journal, { key: "j", code: "KeyJ" });
+    await waitFor(() => expect(journal.getAttribute("aria-activedescendant")).toBeTruthy());
+    const first = journal.getAttribute("aria-activedescendant");
+    // The selected row is the one named, and it is marked as selected rather than focused.
+    const selected = within(journal)
+      .getAllByRole("option")
+      .find((option) => option.id === first)!;
+    expect(selected.getAttribute("aria-selected")).toBe("true");
+    expect(selected.hasAttribute("tabindex")).toBe(false);
+
+    fireEvent.keyDown(journal, { key: "j", code: "KeyJ" });
+    await waitFor(() => expect(journal.getAttribute("aria-activedescendant")).not.toBe(first));
+  });
 });
 
 /* ---------- the frames the announcer is fed ---------- */

@@ -6,7 +6,7 @@ export type ColorToken = 'surface-canvas' | 'surface-base' | 'surface-raised' | 
 
 export type SpacingToken = 'space-0-5' | 'space-1' | 'space-1-5' | 'space-2' | 'space-2-5' | 'space-3' | 'space-4' | 'space-5' | 'space-6' | 'space-8' | 'space-12' | 'space-16';
 export type RadiusToken = 'radius-none' | 'radius-xs' | 'radius-sm' | 'radius-md' | 'radius-lg' | 'radius-full';
-export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'col-classification' | 'col-slug' | 'col-score' | 'col-risk' | 'col-claim' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'node-min-width' | 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top' | 'editor-min-height';
+export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'col-classification' | 'col-slug' | 'col-request' | 'col-status' | 'col-score' | 'col-risk' | 'col-claim' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'node-min-width' | 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top' | 'editor-min-height';
 export type BorderToken = 'stroke-hairline' | 'stroke-rail' | 'stroke-focus' | 'stroke-edge-active' | 'stroke-double' | 'stroke-dash-untaken' | 'stroke-dash-back' | 'stroke-dash-draft';
 export type ShadowToken = 'shadow-none' | 'shadow-popover' | 'shadow-modal' | 'shadow-sticky';
 export type DurationToken = 'duration-instant' | 'duration-fast' | 'duration-medium' | 'duration-pulse';
@@ -183,6 +183,31 @@ export const SCHEDULE_PRESENTATION: Record<ScheduleClass, {
   held: { word: 'held', glyph: '⏸', fg: 'var(--status-held)', fgToken: 'status-held', bg: 'var(--status-held-bg)', bgToken: 'status-held-bg' },
   ready: { word: 'ready', glyph: '▸', fg: 'var(--status-succeeded)', fgToken: 'status-succeeded', bg: 'var(--status-succeeded-bg)', bgToken: 'status-succeeded-bg' },
   running: { word: 'running', glyph: '◐', fg: 'var(--status-running)', fgToken: 'status-running', bg: 'var(--status-running-bg)', bgToken: 'status-running-bg' },
+};
+
+export type WorkItemStatus = 'pending' | 'ready' | 'in-progress' | 'blocked' | 'done' | 'failed' | 'cancelled';
+export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = ['pending', 'ready', 'in-progress', 'blocked', 'done', 'failed', 'cancelled'] as const;
+/**
+ * A plan work item's own stored status — not a run status and not a schedule
+ * classification. The classification is where the scheduler *put* the item; this is what
+ * the item says about itself, and the schedule table draws both because they answer
+ * different questions.
+ *
+ * Word and glyph, and deliberately no `fg` or `bg`: the eight tinted chips mean a run
+ * status and nothing else, so this is drawn as a plain `Chip` and colour is not one of its
+ * channels at all. The glyphs are reused from the run statuses and schedule classes that
+ * mean the same thing, so nothing new goes into the symbol faces.
+ */
+export const WORK_ITEM_STATUS_PRESENTATION: Record<WorkItemStatus, {
+  word: string; glyph: string;
+}> = {
+  pending: { word: 'pending', glyph: '◌' },
+  ready: { word: 'ready', glyph: '▸' },
+  'in-progress': { word: 'in progress', glyph: '◐' },
+  blocked: { word: 'blocked', glyph: '▣' },
+  done: { word: 'done', glyph: '✓' },
+  failed: { word: 'failed', glyph: '✕' },
+  cancelled: { word: 'cancelled', glyph: '⊘' },
 };
 
 export type ConnectionState = 'live' | 'reconnecting' | 'disconnected' | 'file' | 'mismatch';

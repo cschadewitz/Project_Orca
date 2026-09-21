@@ -33,10 +33,30 @@ import type {
   RiskView,
 } from "@orca/protocol";
 import { useNotifications } from "../notifications-context.js";
-import { earliestSeq, foldJournal, isNewFrame, itemsParams, staleFor, type PlanFilters } from "./plan-model.js";
+import {
+  earliestSeq,
+  foldItems,
+  foldJournal,
+  isNewFrame,
+  itemsParams,
+  staleFor,
+  type ItemsParams,
+  type PlanFilters,
+} from "./plan-model.js";
 
 /** One page of journal entries. Short: a journal row is read, not scrolled past. */
 export const JOURNAL_PAGE = 50;
+
+/**
+ * One page of work items, sent explicitly rather than left to the wire's default.
+ *
+ * `items.list` caps a page at the schema's `limit`, and a surface that said nothing about
+ * paging was silently truncated at that cap while its count claimed the whole plan. The
+ * page size is stated here, `loadMore` walks it with `offset`, and the count says how many
+ * of the total are held — so "200 of 260 items" is a fact about this screen with a control
+ * beside it, rather than a number that lies.
+ */
+export const ITEMS_PAGE = 200;
 
 export type PlanState =
   | { phase: "loading" }
@@ -48,7 +68,16 @@ export type PlanState =
 export type ItemsState =
   | { phase: "loading" }
   | { phase: "error"; error: ProtocolError }
-  | { phase: "ready"; items: readonly PlanItemView[]; total: number; asOf: string };
+  | {
+      phase: "ready";
+      items: readonly PlanItemView[];
+      /** How many items match the daemon's half of the filter, held or not. */
+      total: number;
+      asOf: string;
+      /** Whether the plan continues past what is held — what "Load more" is for. */
+      hasMore: boolean;
+      loadingMore: boolean;
+    };
 
 export interface JournalState {
   entries: readonly PlanJournalEntryView[];
@@ -66,6 +95,16 @@ export interface PlanFeed {
   journal: JournalState;
   /** Page backwards, the way the timeline's "Load earlier" does. */
   loadEarlier: () => void;
+  /** The next page of work items, appended to what is held. */
+  loadMore: () => void;
+  /**
+   * How many `plan.changed` frames have moved the items, the schedule, the dependencies,
+   * the risks or the decisions. The inspector's two reads depend on it: a dependency's
+   * `evaluation.detail` is recomputed by the daemon and nothing about the *selection*
+   * changes when it moves, so without this the stored `status` and the live detail drift
+   * apart on screen.
+   */
+  itemsRevision: number;
   /** Re-read everything. The error state's retry, and what a person reaches for after a blip. */
   reload: () => void;
 }
@@ -142,15 +181,44 @@ export function usePlan(filters: PlanFilters, wanted?: string): PlanFeed {
     [planId, filters.classification.join(","), filters.status.join(","), filters.requestId],
   );
 
+  /* How many rows are held, for the two reads below that have to ask for the same span
+     again. A ref rather than a dependency: a re-read must not re-run because its own
+     answer changed the count. */
+  const itemsRef = useRef<ItemsState>(items);
+  itemsRef.current = items;
+  const heldItems = items.phase === "ready" ? items.items.length : 0;
+  const heldItemsRef = useRef(heldItems);
+  heldItemsRef.current = heldItems;
+
+  /* What the last read was *for*. A `plan.changed` frame is "read that again", not "a new
+     question": it re-reads the same span in place and the rows, the selection and the
+     inspector opened over them stay exactly where they are. Only a new question — a
+     changed filter, a different plan, or the retry a person pressed — blanks the table,
+     because only then is what is on screen an answer to something nobody asked. */
+  const askedFor = useRef<{ params: ItemsParams; attempt: number } | undefined>(undefined);
+
   useEffect(() => {
     if (params === undefined) return;
     let live = true;
-    setItems({ phase: "loading" });
-    void window.orca.plan.items(params).then((result) => {
+    const asked = askedFor.current;
+    const isNewQuestion = asked === undefined || asked.params !== params || asked.attempt !== attempt;
+    askedFor.current = { params, attempt };
+    /* A revision bump re-reads every page already held, not just the first: a person who
+       pressed "Load more" twice keeps all three pages through a repaint. */
+    const limit = isNewQuestion ? ITEMS_PAGE : Math.max(ITEMS_PAGE, heldItemsRef.current);
+    if (isNewQuestion) setItems({ phase: "loading" });
+    void window.orca.plan.items({ ...params, limit, offset: 0 }).then((result) => {
       if (!live) return;
       setItems(
         result.ok
-          ? { phase: "ready", items: result.result.items, total: result.result.total, asOf: result.result.asOf }
+          ? {
+              phase: "ready",
+              items: result.result.items,
+              total: result.result.total,
+              asOf: result.result.asOf,
+              hasMore: result.result.items.length < result.result.total,
+              loadingMore: false,
+            }
           : { phase: "error", error: result.error },
       );
     });
@@ -158,6 +226,34 @@ export function usePlan(filters: PlanFilters, wanted?: string): PlanFeed {
       live = false;
     };
   }, [params, itemsRevision, attempt]);
+
+  /* The next page, appended in place. `offset` is what is held rather than a page number,
+     because the page size is this surface's and the daemon's answer is a window over one
+     ordering — and an append never disturbs the selection above it. */
+  const loadMore = useCallback(() => {
+    const current = itemsRef.current;
+    if (params === undefined || current.phase !== "ready" || current.loadingMore || !current.hasMore) return;
+    const offset = current.items.length;
+    setItems({ ...current, loadingMore: true });
+    void window.orca.plan.items({ ...params, limit: ITEMS_PAGE, offset }).then((result) => {
+      setItems((latest) => {
+        if (latest.phase !== "ready") return latest;
+        if (!result.ok) return { ...latest, loadingMore: false };
+        /* Appended to whatever is held *now*: a `plan.changed` frame may have landed while
+           this was in flight, and the answer to "the rows after 200" is still the rows
+           after 200. Folded by id so an overlap replaces rather than duplicates. */
+        const items = foldItems(latest.items, result.result.items);
+        return {
+          phase: "ready",
+          items,
+          total: result.result.total,
+          asOf: result.result.asOf,
+          hasMore: items.length < result.result.total,
+          loadingMore: false,
+        };
+      });
+    });
+  }, [params]);
 
   /* The journal's first page, newest last. A plan whose journal fits in one page is one
      call; a longer one is two, and the second is the only place `lastSeq` could have come
@@ -260,7 +356,7 @@ export function usePlan(filters: PlanFilters, wanted?: string): PlanFeed {
     });
   }, [stream, planId]);
 
-  return { state, items, journal, loadEarlier, reload };
+  return { state, items, journal, loadEarlier, loadMore, itemsRevision, reload };
 }
 
 /** The selected item's dependencies and risks — the inspector's two reads and nothing else. */
@@ -275,8 +371,18 @@ const NO_DETAIL: ItemDetail = { dependencies: [], risks: [] };
  * `dependencies.list` filtered to the item's own `from` side, and `risks.list` filtered to
  * the risks that name it. Both take an id or a slug, so the selection is handed over as it
  * is rather than resolved here.
+ *
+ * `revision` is `PlanFeed.itemsRevision`, and it is a dependency because neither read is
+ * about the selection alone: a `dependencies`, `risks` or `decisions` frame recomputes an
+ * `evaluation.detail` without the selected item changing at all, and an inspector that did
+ * not hear it would show a stored `status` beside a live detail that no longer agreed with
+ * it. Defaulted, so a caller that has no feed to hand still gets the selection behaviour.
  */
-export function useItemDetail(planId: string | undefined, workItemId: string | undefined): ItemDetail {
+export function useItemDetail(
+  planId: string | undefined,
+  workItemId: string | undefined,
+  revision = 0,
+): ItemDetail {
   const [detail, setDetail] = useState<ItemDetail>(NO_DETAIL);
 
   useEffect(() => {
@@ -298,7 +404,7 @@ export function useItemDetail(planId: string | undefined, workItemId: string | u
     return () => {
       live = false;
     };
-  }, [planId, workItemId]);
+  }, [planId, workItemId, revision]);
 
   return detail;
 }

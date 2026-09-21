@@ -19,7 +19,7 @@
  * earlier page lands at the *end* of the list and no index a person is looking at moves.
  * `shiftBy` is for a page that arrives in front of them.
  */
-import { useCallback, useMemo, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 import type { PlanJournalEntryView } from "@orca/protocol";
 import { VirtualList } from "../list/index.js";
 import { Chip, Text, Time, textClass } from "../ui/index.js";
@@ -40,9 +40,36 @@ export function Journal({ entries, hasEarlier, loadingEarlier, loadEarlier, live
   /* Newest first is the reading order of a journal; the wire pages oldest-first whichever
      anchor it was given, so the reversal happens once, here, at the edge. */
   const rows = useMemo(() => newestFirst(entries), [entries]);
-  // Nothing on this list is selectable yet — #178's actions are what a row would lead to —
-  // so selection is the substrate's own and this only has to not fight it.
-  const onSelect = useCallback(() => {}, []);
+
+  /* Selection is held here, exactly as `ScheduleTable` holds the schedule's.
+     `selectedIndex={undefined}` with a no-op `onSelect` was the substrate being asked to
+     move something nobody was holding: `J`, `K` and the arrows scrolled, no row was ever
+     marked, and `aria-activedescendant` was never set — which is the whole of how a
+     screen reader is told where it is in a list (rule 10).
+     `Enter` on a journal row still does nothing, deliberately: an entry is a record of
+     something that already happened and the acts a row could lead to — opening the item,
+     the decision or the risk it names — are #171's and #178's. What moves now is the
+     selection, because "where am I" is not an act and does not wait on them. */
+  const [selectedSeq, setSelectedSeq] = useState<number | undefined>(undefined);
+  const selectedIndex = useMemo(() => {
+    const at = rows.findIndex((entry) => entry.seq === selectedSeq);
+    return at === -1 ? undefined : at;
+  }, [rows, selectedSeq]);
+
+  /* Held by `seq` rather than by index so that a page of earlier entries, or a push that
+     puts a newer one on top, leaves the selection on the entry a person put it on. An
+     entry that is no longer held stops being selected rather than selecting its neighbour. */
+  useEffect(() => {
+    if (selectedSeq !== undefined && !rows.some((entry) => entry.seq === selectedSeq)) setSelectedSeq(undefined);
+  }, [rows, selectedSeq]);
+
+  const onSelect = useCallback(
+    (index: number) => {
+      const entry = rows[index];
+      if (entry) setSelectedSeq(entry.seq);
+    },
+    [rows],
+  );
 
   return (
     <div className="orca-plan__journal">
@@ -76,7 +103,7 @@ export function Journal({ entries, hasEarlier, loadingEarlier, loadEarlier, live
           selected ? "orca-timeline-entry orca-timeline-entry--selected" : "orca-timeline-entry"
         }
         renderRow={(entry) => <JournalRow entry={entry} live={live} />}
-        selectedIndex={undefined}
+        selectedIndex={selectedIndex}
         onSelect={onSelect}
       />
     </div>

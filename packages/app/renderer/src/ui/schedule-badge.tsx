@@ -2,9 +2,14 @@
  * `ScheduleBadge` — a work item's scheduler classification, which is not a run status and
  * is drawn differently on purpose (`orca-badge`, not `orca-chip`).
  *
- * `onExplain` is required rather than optional: every classification in ORCA can say why
- * it is what it is, and a badge that cannot be asked is a dead end for whoever is looking
- * at a work item that will not start.
+ * **Every classification in ORCA can say why it is what it is**, and a badge that cannot be
+ * asked is a dead end for whoever is looking at a work item that will not start. That is
+ * the rule; `onExplain` is only one of the two ways to keep it. It is *optional* because
+ * the other way is `explanation`, which is the caller hanging its own disclosure — the
+ * app's one `Menu` — off the badge, and a badge given one of those has no callback to
+ * take. What a badge must never be is drawn with neither: that is the dead end, and it is
+ * a thing to catch in review rather than in the type, because the type cannot say "one of
+ * these two" without making both of them lies.
  *
  * Glyph **and** word, like `StatusChip` (rule 4): the classification is never carried by
  * the tint alone. The glyphs are `semantics.json`'s and are the ones already bundled in

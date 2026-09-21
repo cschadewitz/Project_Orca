@@ -112,10 +112,16 @@ export function App(): JSX.Element {
   /* Selecting a row opens the inspector, which means opening the dock it is drawn in —
      the same act the artifact panel's `onOpen` performs for a chip on a step. Closing it
      again is `⌘\`; selecting another row opens it once more, because that press is a
-     person asking to see what the row waits for. */
-  const showInspector = useCallback((content: ReactNode) => {
+     person asking to see what the row waits for.
+
+     A *selection* is what opens it, never a change of content. The inspector re-renders
+     when the dependencies and risks behind it land, a tick after the click, and when a
+     `plan.changed` frame moves them again later — and a dock that reopened on each of
+     those would take back the `⌘\` a person had just pressed. The surface says which kind
+     of report this is; the dock only has to believe it. */
+  const showInspector = useCallback((content: ReactNode, options: { open: boolean }) => {
     setPlanInspector(content);
-    if (content !== null) setPanelOpen(true);
+    if (content !== null && options.open) setPanelOpen(true);
   }, []);
 
   const connection = useConnection();
