@@ -44,7 +44,12 @@ export const AGENT_BATCH_MS = 100;
  */
 export interface SubscriptionSource {
   subscribe(listener: (event: OrcaEvent) => void, filter?: { runId?: string | undefined }): () => void;
-  events(runId: string): Promise<OrcaEvent[]>;
+  /**
+   * One page of a run's log. A resume asks for everything after its cursor, which on a long
+   * log is a short read near the end rather than the whole file (#208) - the reconnect after
+   * a blip is the common case and it is the one that must not re-read a run.
+   */
+  eventsRange(runId: string, range?: { after?: number | undefined }): Promise<OrcaEvent[]>;
 }
 
 /**
@@ -174,8 +179,7 @@ export class Subscription {
     let replayed = 0;
     let through = -1;
     if (runId !== undefined && since !== undefined) {
-      for (const event of await this.opts.source.events(runId)) {
-        if (event.seq <= since) continue;
+      for (const event of await this.opts.source.eventsRange(runId, { after: since })) {
         replayed += this.deliver(event);
         through = event.seq;
       }

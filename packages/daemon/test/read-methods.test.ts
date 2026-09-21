@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost, SshHost } from "@orca/agents";
 import { FakeClock, OrcaError, SshHostSchema, TemplateRegistry, WorkflowRegistry, silentLogger } from "@orca/core";
 import { Orchestrator } from "@orca/engine";
-import { memoryStores } from "@orca/store";
+import { memoryStores, type EventRange } from "@orca/store";
 import {
   ArtifactsGetResultSchema,
   ArtifactsListResultSchema,
@@ -290,6 +290,50 @@ describe("runs.events", () => {
 
   it("answers RUN_NOT_FOUND for an empty log", async () => {
     await expect(reads.runsEvents({ runId: "run-nope", limit: 10 })).rejects.toThrow(OrcaError);
+  });
+
+  /**
+   * #208: a page is a ranged read, so the cost of scrolling a run whose log is tens of
+   * thousands of `agent.update` lines is a page rather than the log. The projection cannot
+   * show that by its answers - they are identical either way - so what is asserted is the
+   * call it makes: the range, once, with the limit the client asked for plus the one event
+   * that answers `hasMore`, and never `events()`.
+   */
+  it("pages through the store's ranged read and never reads the whole log", async () => {
+    const whole: string[] = [];
+    const ranges: EventRange[] = [];
+    const spy = new Proxy(f.orchestrator, {
+      get(target, prop) {
+        if (prop === "events")
+          return (runId: string) => {
+            whole.push(runId);
+            return target.events(runId);
+          };
+        if (prop === "eventsRange")
+          return (runId: string, range: EventRange) => {
+            ranges.push(range);
+            return target.eventsRange(runId, range);
+          };
+        const value: unknown = Reflect.get(target, prop, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const model = new ReadModel({ orchestrator: spy });
+
+    const back = await model.runsEvents({ runId: "run-parent", before: 16, limit: 3 });
+    expect(back.events.map((e) => e.seq)).toEqual([13, 14, 15]);
+    expect(back.hasMore).toBe(true);
+    // The whole log is what the ranged read replaces; `lastSeq` comes from the store too.
+    expect(whole).toEqual([]);
+    expect(ranges).toEqual([{ before: 16, limit: 4 }]);
+    expect(back.lastSeq).toBe((await f.orchestrator.events("run-parent")).at(-1)!.seq);
+
+    ranges.length = 0;
+    const forward = await model.runsEvents({ runId: "run-parent", after: 2, limit: 1, types: ["step.scheduled"] });
+    expect(forward.events.length).toBe(1);
+    expect(forward.hasMore).toBe(true);
+    expect(ranges).toEqual([{ after: 2, limit: 2, types: ["step.scheduled"] }]);
+    expect(whole).toEqual([]);
   });
 });
 

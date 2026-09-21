@@ -14,6 +14,32 @@ export interface EventFilter {
 
 export type EventListener = (event: OrcaEvent) => void;
 
+/**
+ * One page of a run's log, by sequence number. `after` walks forward from a cursor and
+ * `before` walks backward from one; giving both is a caller error and reads as `before`.
+ * The filters are an AND and they are applied *before* `limit`, so a page is always `limit`
+ * matching events rather than `limit` events of which some match.
+ */
+export interface EventRange {
+  /** Events with `seq` greater than this, oldest first. */
+  after?: number | undefined;
+  /** The `limit` events *immediately* before this `seq`, still oldest first. */
+  before?: number | undefined;
+  /** At most this many events, nearest the anchor. Unbounded when absent. */
+  limit?: number | undefined;
+  /**
+   * Only these event types. Stated as plain strings because the caller is usually a client:
+   * a type this build's engine does not emit matches nothing rather than failing.
+   */
+  types?: readonly string[] | undefined;
+  /**
+   * A further test on the parsed event, for filters the store cannot see in a raw line -
+   * `stepRunId`, say, which lives in a payload. Applied after `types`, and counted against
+   * `limit` like `types` is, so paging stays correct through it.
+   */
+  match?: ((event: OrcaEvent) => boolean) | undefined;
+}
+
 export interface EventStore {
   append(input: OrcaEventInput): Promise<OrcaEvent>;
   read(runId: string): Promise<OrcaEvent[]>;
@@ -23,9 +49,27 @@ export interface EventStore {
    * on runs whose logs are dominated by `agent.update`.
    */
   readTypes(runId: string, types: readonly OrcaEvent["type"][]): Promise<OrcaEvent[]>;
+  /**
+   * One page of the run's log, oldest first whichever direction it was taken in.
+   * Implementations may stop reading once `limit` is reached, which is what keeps a page
+   * of a long log from costing the whole log.
+   */
+  readRange(runId: string, range?: EventRange): Promise<OrcaEvent[]>;
+  /**
+   * The highest `seq` in the run - the timeline's cursor - or `undefined` when the store has
+   * no such run. Separate from the page because it is the answer regardless of any filter,
+   * and because a store can know it without materialising the log.
+   */
+  lastSeq(runId: string): Promise<number | undefined>;
   /** All run ids known to the store, oldest first. */
   listRuns(): Promise<string[]>;
   subscribe(listener: EventListener, filter?: EventFilter): () => void;
+}
+
+/** Whether an event passes a range's filters. The anchors and `limit` are the caller's; these are not. */
+export function matchesRange(event: OrcaEvent, range: EventRange): boolean {
+  if (range.types?.length && !range.types.includes(event.type)) return false;
+  return !range.match || range.match(event);
 }
 
 export abstract class BaseEventStore implements EventStore {
@@ -44,6 +88,28 @@ export abstract class BaseEventStore implements EventStore {
   /** Correct for any store; override when the backing format allows skipping the other events. */
   async readTypes(runId: string, types: readonly OrcaEvent["type"][]): Promise<OrcaEvent[]> {
     return (await this.read(runId)).filter((e) => types.includes(e.type));
+  }
+
+  /**
+   * Correct for any store, and for an in-memory one it is also the cheap answer - the log is
+   * already an array. A store that reads from disk overrides it so the page, not the log, is
+   * what it reads.
+   */
+  async readRange(runId: string, range: EventRange = {}): Promise<OrcaEvent[]> {
+    const matching = (await this.read(runId)).filter((e) => matchesRange(e, range));
+    const { after, before, limit } = range;
+    if (before !== undefined) {
+      const earlier = matching.filter((e) => e.seq < before);
+      return limit === undefined ? earlier : earlier.slice(Math.max(0, earlier.length - limit));
+    }
+    const later = after === undefined ? matching : matching.filter((e) => e.seq > after);
+    return limit === undefined ? later : later.slice(0, limit);
+  }
+
+  /** Correct for any store; override when the end of the log can be found without reading it. */
+  async lastSeq(runId: string): Promise<number | undefined> {
+    const events = await this.read(runId);
+    return events[events.length - 1]?.seq;
   }
 
   async append(input: OrcaEventInput): Promise<OrcaEvent> {

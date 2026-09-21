@@ -51,6 +51,7 @@ import {
   ownsLease,
   type EventFilter,
   type EventListener,
+  type EventRange,
   type HeldLease,
   type Lease,
   type Stores,
@@ -302,6 +303,14 @@ export class Orchestrator {
 
   events(runId: string): Promise<OrcaEvent[]> {
     return this.stores.events.read(runId);
+  }
+  /** One page of a run's log. A reader that pages - the timeline, a resuming subscription - takes this, not `events`. */
+  eventsRange(runId: string, range?: EventRange): Promise<OrcaEvent[]> {
+    return this.stores.events.readRange(runId, range);
+  }
+  /** The run's highest `seq`, or `undefined` when the store has no such run. */
+  lastSeq(runId: string): Promise<number | undefined> {
+    return this.stores.events.lastSeq(runId);
   }
   subscribe(listener: EventListener, filter?: EventFilter): () => void {
     return this.stores.events.subscribe(listener, filter);

@@ -49,8 +49,9 @@ class TestEvents implements SubscriptionSource {
     return () => void this.listeners.delete(entry);
   }
 
-  async events(runId: string): Promise<OrcaEvent[]> {
-    return [...(this.log.get(runId) ?? [])];
+  async eventsRange(runId: string, range?: { after?: number | undefined }): Promise<OrcaEvent[]> {
+    const all = this.log.get(runId) ?? [];
+    return range?.after === undefined ? [...all] : all.filter((e) => e.seq > range.after!);
   }
 
   /** Append and fan out, the way `BaseEventStore` does: durable first, listeners after. */

@@ -444,41 +444,39 @@ export class ReadModel {
    * to the `limit` events immediately preceding one; either way the page reads oldest first,
    * so the timeline renders the same code path in both directions.
    *
-   * The run's log is read whole and cut in memory. That is deliberate for now: the store has
-   * no index by sequence number, and inventing one before the event stream (the WebSocket
-   * that will push these same events) knows what it needs would be guesswork.
+   * The page is a ranged read, not a slice of the whole log (#208): the store scans to the
+   * page and stops, so scrolling up through a run whose log is tens of thousands of
+   * `agent.update` lines costs a page rather than the log. `lastSeq` comes from the store
+   * for the same reason - it is the end of the log, which no page has to contain.
+   *
+   * `hasMore` is one event's worth of over-asking: the page is requested one longer than the
+   * client asked for, and the extra - which is the *oldest* of a backward page and the
+   * newest of a forward one - is dropped after it has answered the question.
    */
   async runsEvents(params: RunsEventsParams): Promise<RunsEventsResult> {
     const asOf = this.clock.isoNow();
-    const all = await this.orc.events(params.runId);
-    if (!all.length) throw new OrcaError("RUN_NOT_FOUND", `run ${params.runId} not found`, { runId: params.runId });
-    const lastSeq = all[all.length - 1]!.seq;
+    const lastSeq = await this.orc.lastSeq(params.runId);
+    if (lastSeq === undefined)
+      throw new OrcaError("RUN_NOT_FOUND", `run ${params.runId} not found`, { runId: params.runId });
     const types = params.types;
     const stepRunId = params.stepRunId;
     // An unknown type matches nothing rather than failing: a newer client may ask for an
-    // event type this daemon's engine does not emit. The two filters are an AND, and both
-    // cut the log *before* it is paged, so the cursors below are cursors into the filtered
-    // sequence while staying the run's own sequence numbers.
-    const matching =
-      types?.length || stepRunId
-        ? all.filter(
-            (e) =>
-              (!types?.length || types.includes(e.type)) && (stepRunId === undefined || stepRunIdOf(e) === stepRunId),
-          )
-        : all;
-
-    let page: OrcaEvent[];
-    let hasMore: boolean;
-    if (params.before !== undefined) {
-      const earlier = matching.filter((e) => e.seq < params.before!);
-      page = earlier.slice(Math.max(0, earlier.length - params.limit));
-      hasMore = earlier.length > page.length;
-    } else {
-      const after = params.after;
-      const later = after === undefined ? matching : matching.filter((e) => e.seq > after);
-      page = later.slice(0, params.limit);
-      hasMore = later.length > page.length;
-    }
+    // event type this daemon's engine does not emit. The two filters are an AND, and the
+    // store applies both *before* it counts against the limit, so the cursors below are
+    // cursors into the filtered sequence while staying the run's own sequence numbers.
+    const got = await this.orc.eventsRange(params.runId, {
+      ...(params.after !== undefined ? { after: params.after } : {}),
+      ...(params.before !== undefined ? { before: params.before } : {}),
+      limit: params.limit + 1,
+      ...(types?.length ? { types } : {}),
+      ...(stepRunId !== undefined ? { match: (e: OrcaEvent) => stepRunIdOf(e) === stepRunId } : {}),
+    });
+    const hasMore = got.length > params.limit;
+    const page = !hasMore
+      ? got
+      : params.before !== undefined
+        ? got.slice(got.length - params.limit)
+        : got.slice(0, params.limit);
     const first = page[0];
     const last = page[page.length - 1];
     return {
