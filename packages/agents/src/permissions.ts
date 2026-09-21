@@ -2,9 +2,15 @@
  * Permission policy evaluation for ACP `session/request_permission`, and the sidecar file
  * that "allow always" writes to.
  *
- * ORCA is usually unattended, so the default is to allow and to log. Rules can
- * deny or route specific tool kinds/paths to a human (or, in ACP-facade mode,
- * to the upstream client that launched ORCA).
+ * ORCA is usually unattended, so an agent that declares no policy gets the conservative one
+ * (`DEFAULT_PERMISSION_POLICY` in `@orca/core`): reads, searches and edits inside the run's
+ * workspace are allowed and logged, and everything else — `execute`, the network, a path in
+ * a sibling checkout — is `ask`. Rules can deny, allow or route specific tool kinds/paths to
+ * a human (or, in ACP-facade mode, to the upstream client that launched ORCA).
+ *
+ * An `ask` nobody can answer is refused, not parked: `resolvePermission` with no `ask`
+ * callback, and a `PausingHumanInput` that declines to persist a permission question,
+ * both come back `cancelled`, which ends the tool call rather than the run.
  *
  * A policy has two halves. The configured half is `agents[].permissions` in
  * `orca.config.yaml`: hand-curated, and no place for a machine to append. The written half
@@ -28,6 +34,7 @@ import {
   PermissionPolicyFileSchema,
   permissionPathForms,
   samePermissionRule,
+  workspaceRelativePath,
 } from "@orca/core";
 import type {
   PermissionDecision,
@@ -65,10 +72,16 @@ export function decidePermission(
   const title = tc.title ?? "";
   const kind = tc.kind ?? "other";
   const cwd = ctx?.workspaceCwd;
-  const paths = (tc.locations ?? []).flatMap((l) => permissionPathForms(l.path, cwd));
+  const locations = (tc.locations ?? []).map((l) => l.path);
+  const paths = locations.flatMap((p) => permissionPathForms(p, cwd));
+  // Both are false for a call with no locations, so `scope` never matches one (#140).
+  const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
+  const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
   for (const rule of policy.rules) {
     const m = rule.match;
     if (m.kind && m.kind !== kind) continue;
+    if (m.scope === "workspace" && !allInside) continue;
+    if (m.scope === "outside-workspace" && !anyOutside) continue;
     if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) continue;
     if (m.path !== undefined) {
       const wanted = permissionPathForms(m.path, cwd);
@@ -107,7 +120,11 @@ export async function resolvePermission(
     case "deny":
       return select(pick(options, ["reject_once", "reject_always"]), "deny");
     case "ask": {
-      const chosen = ctx.ask ? await ctx.ask(ctx.request) : undefined;
+      // Nothing to ask through: the run has no human-input channel at all. Say so in the
+      // decision rather than logging a bare "cancelled", because "the policy wanted a person
+      // and there was none" is the one a person reading the log has to act on (#140).
+      if (!ctx.ask) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:no-answerer" };
+      const chosen = await ctx.ask(ctx.request);
       const o = chosen ? options.find((x) => x.optionId === chosen) : undefined;
       return o
         ? { response: { outcome: { outcome: "selected", optionId: o.optionId } }, decision: `ask:${o.kind}` }
@@ -266,7 +283,7 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
 function serialize(doc: PermissionPolicyFile): string {
   const rule = (r: RecordedPermissionRule): Record<string, unknown> => {
     const match: Record<string, unknown> = {};
-    for (const key of ["kind", "titlePattern", "path", "pathPrefix"] as const)
+    for (const key of ["kind", "titlePattern", "path", "pathPrefix", "scope"] as const)
       if (r.match[key] !== undefined) match[key] = r.match[key];
     const out: Record<string, unknown> = { match, decision: r.decision };
     if (r.addedAt !== undefined) out["addedAt"] = r.addedAt;
