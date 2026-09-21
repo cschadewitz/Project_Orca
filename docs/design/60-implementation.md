@@ -106,28 +106,46 @@ why it does not draw the focus ring.
 
 ### Palette write actions (as built, v0.5.0)
 
-Every write the daemon serves is a keyless row on the object in focus (#178): answer a gate
+Every phase-2 object write the daemon serves is a keyless row on the object in focus (#178):
+answer a gate
 or an ask with each option it offers, cancel or resume a run, start a run, waive a
 dependency, decide or reopen a decision, move a risk along its lifecycle, release a claim,
 and the Agents surface's two from #176. Nothing was added to the chrome of any screen,
 which is the point of "the palette is the only place a phase-2 write action needs to be
 discoverable".
 
+**Two writes are deliberately not rows.** `config.set` is the save bar (`.orca-draftbar`):
+it does not write an object, it writes a *file* against a draft that is sitting on the
+screen, and a command that saved a form from somewhere else would save edits nobody was
+looking at. And a permission ask's "always" answer stays on the card, because only the card
+can read back what the daemon actually wrote — `alwaysOutcome` (`attention/card-model.ts`)
+has to see `permission.refused`, `permission.added` or neither before it says "ORCA will
+not ask again", and a palette row that had closed the palette would have nowhere to say it.
+
 **Absent, or disabled with the reason — never silently dead.** One hook asks both questions
-(`palette/use-write-actions.ts`). Where the daemon serves no run control the row is *not
-registered*: a `--read-only` daemon leaves the control methods out of `hello.methods` and
-`runs.control` out of its capabilities together, so the capability answers for all of them,
-and a screen with no cancel row reads as a viewer rather than as something broken. Where
-the daemon is simply not answering the row stays, `aria-disabled`, with `useWritability()`'s
-own sentence in `.orca-palette__why` — the same sentence `Button`'s `disabledReason` shows.
-The per-*method* check is the refinement still wanted: `hello.methods` names them one by
-one and the renderer only sees `capabilities` today; when the connection snapshot carries
-the method list, `writesPresent` is where that check goes, once.
+(`palette/use-write-actions.ts`). Where the daemon does not serve the method the row is *not
+registered*, and a screen with no cancel row reads as a viewer rather than as something
+broken. Where the daemon is simply not answering the row stays, `aria-disabled`, with
+`useWritability()`'s own sentence in `.orca-palette__why` — the same sentence `Button`'s
+`disabledReason` shows. A disabled row keeps its place in the roving order and is only
+skipped by `Enter`: the reason is *on* the row, so an order that stepped over it would put
+the reason out of reach of the keyboard.
+
+**The question is asked per method, not per capability.** Every row names the wire method it
+calls — `runs.cancel`, `decisions.decide`, `claims.release` — and `methodPresent` answers it
+from the connection snapshot's `methods`, which is `hello.methods`, which is `Object.keys` of
+the daemon's own dispatch table. `runs.control` is one word over four of those tables, so the
+capability alone is wrong in both directions: it would draw a waive row at a daemon serving a
+store with no plan in it, and hide a release row at a daemon that answers `claims.release`
+without claiming the capability. A daemon too old to list its methods falls back to the
+capability, inside `methodPresent` and nowhere else.
 
 **A destructive row confirms inline, as a second state of the same row.** `Shortcut.confirm`
 and `tone: "danger"` say so, and the palette arms the row on the first `Enter`: the label
-becomes the confirmation ("Cancel run-42 — confirm"), the row takes the danger tone, and a
-second `Enter` commits. Typing, moving the selection or `Esc` disarms it, and nothing has
+becomes the confirmation ("Cancel run-42 — confirm"), the row takes the danger tone — the
+colour *and* the `✕` it leads with, since colour is never the only channel (rule 4) — and a
+second `Enter` commits. Typing or moving the selection disarms it; `Esc` closes the palette,
+which unarms with it, since the armed row does not outlive the list it is in. Nothing has
 been sent in the meantime. There is no dialog, deliberately — a modal over this modal would
 move focus out of the query field, put a second layer on the stack for `Esc` to unwind, and
 ask the question somewhere other than where the person is looking. Cancel, waive and release
@@ -136,7 +154,9 @@ decision and reopening one are all acts with a way back.
 
 **A destructive row is never first.** It sorts below every other command, whatever scope it
 is in, for the reason a gate's destructive option is never bound to `1`: the first row is
-where `Enter` lands and where a held key repeats.
+where `Enter` lands and where a held key repeats. It holds for the list as it is offered;
+typing re-sorts by match score, so a query of "cancel" can put the cancel row at the top —
+which is the query asking for it, and all `Enter` does there is arm the row.
 
 **A command that needs an argument opens a picker.** `Shortcut.picker` replaces the palette's
 list with a `Menu` of the choices — the app's one popover primitive, controlled the way a
@@ -153,6 +173,22 @@ default vars" rather than leaving that to be discovered. **A vars form is specif
 nowhere**, and `WorkflowSummaryView` does not carry a workflow's `inputs`, so a form here
 would be inventing its own fields (rule 12). The run is opened through the route table like
 every other link.
+
+**Two things #178 asked for and did not get, on purpose.** *Start a run for this request or
+work item, with its vars* is not built: `runs.start` takes a `workflowId` and vars on the
+wire and takes no work item at all, so the row would have to guess which workflow a work
+item means and which vars carry it there — inventing both (rule 12). The plain **Start a
+run** above is what is left when the guessing is taken out. *Config: show in YAML* is not
+built either: the config surface renders a form over a schema, the raw document is a read
+the daemon already serves, and a palette row that opened a viewer over it would be a second
+way to look at the same file rather than a write. Both stay open as their own work.
+
+**A palette label sets its ids in mono.** `Shortcut.labelMachine` names the substring of the
+label (and of the confirmation) that ORCA produced — a run id, a work item id, a decision
+key — and the row draws that span in `mono-id` and the rest in sans, because mono means ORCA
+produced it and "Release claim on `wi-metrics`" is two voices in one sentence (rule 8). It
+is a substring rather than a second string so that the label stays the one thing the query
+matches and the one thing that names the option.
 
 ## Popovers are one primitive
 
