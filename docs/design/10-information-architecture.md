@@ -123,7 +123,9 @@ rather than opening a second one onto the same store.
 ## Command palette
 
 `⌘K` / `Ctrl+K`. Three kinds of entry, in this order: **actions** on the current object
-(answer gate, cancel run, resume run, waive dependency, toggle density), **navigation**
+(answer a gate with each option it offers, cancel or resume a run, start a run, waive a
+dependency, decide or reopen a decision, update a risk, release a claim, toggle density —
+every write the daemon serves, as of #178), **navigation**
 (recent runs, work items, agents, config files, workflows), and **search** (step and artifact
 names). Typing a bare run id or an `orca://` URL jumps straight to it. The
 palette is the only place a phase-2 write action needs to be discoverable, which keeps the

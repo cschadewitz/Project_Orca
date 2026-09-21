@@ -73,7 +73,8 @@ command worth doing but not worth one of the letters left registers without a ke
 slot of its own, nothing can dispatch to it, and the palette draws its row with no chip. The
 palette is then the only way to it, which is a decision about how prominent the command is
 rather than an admission that it is unreachable. **Cancel the run this is waiting on** and
-**Resume the run this is waiting on** are the first two.
+**Resume the run this is waiting on** were the first two; as of #178 every write action in
+the app is one of these (see "Palette write actions" below).
 
 Three rules fall out of it:
 
@@ -102,6 +103,56 @@ route table, which is what keeps one resolver for links, crumbs and palette rows
 Focus stays in the query field for as long as the palette is open. The highlighted row is
 *selection* — `aria-activedescendant` on the field, the accent rail on the row — which is
 why it does not draw the focus ring.
+
+### Palette write actions (as built, v0.5.0)
+
+Every write the daemon serves is a keyless row on the object in focus (#178): answer a gate
+or an ask with each option it offers, cancel or resume a run, start a run, waive a
+dependency, decide or reopen a decision, move a risk along its lifecycle, release a claim,
+and the Agents surface's two from #176. Nothing was added to the chrome of any screen,
+which is the point of "the palette is the only place a phase-2 write action needs to be
+discoverable".
+
+**Absent, or disabled with the reason — never silently dead.** One hook asks both questions
+(`palette/use-write-actions.ts`). Where the daemon serves no run control the row is *not
+registered*: a `--read-only` daemon leaves the control methods out of `hello.methods` and
+`runs.control` out of its capabilities together, so the capability answers for all of them,
+and a screen with no cancel row reads as a viewer rather than as something broken. Where
+the daemon is simply not answering the row stays, `aria-disabled`, with `useWritability()`'s
+own sentence in `.orca-palette__why` — the same sentence `Button`'s `disabledReason` shows.
+The per-*method* check is the refinement still wanted: `hello.methods` names them one by
+one and the renderer only sees `capabilities` today; when the connection snapshot carries
+the method list, `writesPresent` is where that check goes, once.
+
+**A destructive row confirms inline, as a second state of the same row.** `Shortcut.confirm`
+and `tone: "danger"` say so, and the palette arms the row on the first `Enter`: the label
+becomes the confirmation ("Cancel run-42 — confirm"), the row takes the danger tone, and a
+second `Enter` commits. Typing, moving the selection or `Esc` disarms it, and nothing has
+been sent in the meantime. There is no dialog, deliberately — a modal over this modal would
+move focus out of the query field, put a second layer on the stack for `Esc` to unwind, and
+ask the question somewhere other than where the person is looking. Cancel, waive and release
+carry one; resume, decide and reopen do not, because re-driving a parked run, deciding a
+decision and reopening one are all acts with a way back.
+
+**A destructive row is never first.** It sorts below every other command, whatever scope it
+is in, for the reason a gate's destructive option is never bound to `1`: the first row is
+where `Enter` lands and where a held key repeats.
+
+**A command that needs an argument opens a picker.** `Shortcut.picker` replaces the palette's
+list with a `Menu` of the choices — the app's one popover primitive, controlled the way a
+deep link controls one, so the roving keys, the placement, `Esc` and the focus contract are
+every other popover's. The choices are read when the row is chosen and never on open, so
+`⌘K` costs nothing extra for the person who wanted something else. Three use it: **Start a
+run** (the workflows), **Decide** (the decision's options) and **Update risk** (the statuses
+the risk is not already in).
+
+**Start a run asks for a workflow and for nothing else.** The picker lists `workflows.list`
+— name, id, version and node count — and the choice calls `runs.start { workflowId }` with
+no vars, so the run takes the workflow's own; the row says "starts with the workflow's
+default vars" rather than leaving that to be discovered. **A vars form is specified
+nowhere**, and `WorkflowSummaryView` does not carry a workflow's `inputs`, so a form here
+would be inventing its own fields (rule 12). The run is opened through the route table like
+every other link.
 
 ## Popovers are one primitive
 
