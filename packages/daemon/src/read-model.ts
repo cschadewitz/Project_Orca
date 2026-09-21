@@ -17,10 +17,11 @@
  * leases. One `runs.list` over a hundred runs sharing one work item reads that work item
  * once, and no cache outlives the call, so nothing here serves a name it cached earlier.
  *
- * The store underneath is another matter: `JsonFileDocumentStore` holds a collection in
- * memory for the life of the process, so a long-lived daemon will keep showing the work
- * items and requests it first read while a CLI writes new ones beside it (#196). Run logs
- * are not affected - the event store re-reads them - so statuses and trees stay current.
+ * The store underneath re-reads too, as of #196: `JsonFileDocumentStore` trusts its cached
+ * collection only while the file's `{ino, size, mtimeMs}` is unchanged, so a long-lived
+ * daemon shows the work items and requests a CLI wrote beside it rather than the ones it
+ * first read. Run logs were never affected - the event store re-reads them - so statuses
+ * and trees stay current the same way.
  */
 import {
   OrcaError,

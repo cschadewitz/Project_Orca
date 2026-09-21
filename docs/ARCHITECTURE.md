@@ -59,7 +59,9 @@ handler untouched; a connection carries the ordinary method table plus `subscrib
 (`subscribe(listener, filter)` + `events(runId)`) that `Orchestrator` satisfies structurally,
 and `notifications.ts` is the pure event→notification fold. The socket fans out this
 process's event store, so a run appended by a separate CLI process still lands only on the
-next read (#196).
+next read: the stores are safe for two processes now that documents are written under a lock
+and re-read (#196), but nothing pushes another process's write, so a push is this process's
+and a read is everyone's.
 
 `app` depends on `protocol` and `design` and nothing
 else in the workspace, enforced by the lint config: the desktop app can only see what a

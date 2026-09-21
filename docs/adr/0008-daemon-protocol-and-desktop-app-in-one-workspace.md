@@ -77,6 +77,12 @@ Option 3.
   workflow and vars only and passes `requestId` / `workItemId` straight through onto
   `run.created` without creating either document. Run logs are unaffected — the event store
   re-reads them — which is exactly what makes appending safe and writing documents not.
+  **Resolved 2026-09-21 (#196):** `JsonFileDocumentStore` now re-reads the file whenever its
+  `{ino, size, mtimeMs}` has changed, and every mutation runs inside the `withFileLock` lock
+  on `<file>.lock`, re-reading under the lock before it rewrites — the same "trust `stat`,
+  write under the lock" shape the JSONL logs already had. A daemon and a CLI over one store
+  no longer clobber each other's documents; `runs.start` keeps its narrow shape until a
+  protocol change gives it a reason to change.
 − Electron and its builder are a large dependency closure. CI skips the binary download
   (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`) and never launches the app; desktop packaging gets its
   own workflow with platform runners.
