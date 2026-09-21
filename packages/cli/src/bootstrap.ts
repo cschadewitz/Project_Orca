@@ -6,7 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { AgentRegistry } from "@orca/agents";
+import { AgentRegistry, openAcpSession, permissionPolicyPath, type OpenSessionOptions } from "@orca/agents";
 import {
   consoleLogger,
   loadTemplates,
@@ -32,6 +32,7 @@ import {
   type OrcaPlugin,
   type PluginApi,
   type RunLeaseOptions,
+  type SessionFactory,
   type WorkspaceProvider,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
@@ -141,6 +142,26 @@ export function makeWorkspaceProvider(config: OrcaConfig, configDir: string, age
   }
 }
 
+/**
+ * `openAcpSession` with the workspace permission sidecar bound to it (#271).
+ *
+ * This is the whole of the plumbing ADR 0009 was missing: the file the daemon's
+ * `ControlModel` appends an "always" answer to is `permissionPolicyPath(configDir)`, and it
+ * has to be the *same* path the session evaluating the next ask reads, or a recorded grant
+ * never applies. Binding it here rather than on `OrchestratorOptions` keeps the knowledge in
+ * one place — the engine has no config directory and should not learn about one — and it
+ * covers every caller of `bootstrap` at once: `orca run`, `orca resume`, `orca serve` and
+ * the ACP facade all get their sessions through the orchestrator this returns, including the
+ * daemon's `agents.ping`, which goes through `Orchestrator.sessionFactory` too.
+ *
+ * `open` exists so a test can read the options this builds without spawning an agent; it is
+ * `openAcpSession` everywhere else.
+ */
+export function makeSessionFactory(configDir: string, open: SessionFactory = openAcpSession): SessionFactory {
+  const permissionFiles = [permissionPolicyPath(configDir)];
+  return (options: OpenSessionOptions) => open({ ...options, permissionFiles });
+}
+
 export function makeHumanInput(config: OrcaConfig): HumanInputPort {
   switch (config.humanInput.mode) {
     case "auto":
@@ -223,6 +244,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     workspaceProvider,
     plan,
     logger,
+    // An ephemeral bootstrap deliberately gets none: it is a one-shot over in-memory stores
+    // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
+    // durable workspace state of exactly the kind `ephemeral` means to leave alone.
+    ...(opts.ephemeral ? {} : { sessionFactory: makeSessionFactory(configDir) }),
     ...(opts.lease ? { lease: opts.lease } : {}),
   });
   return {

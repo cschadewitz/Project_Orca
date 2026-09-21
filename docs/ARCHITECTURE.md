@@ -160,7 +160,9 @@ that never started get a fresh child run.
    answers `session/request_permission` through the agent's permission policy —
    the rules configured on the agent first, then any the workspace sidecar has
    recorded (ADR 0009), first match winning, so a configured `deny` can never be
-   undone by something a machine wrote.
+   undone by something a machine wrote. The sidecar is **re‑read per ask**, not
+   per session (#271), so an "allow always" answered while the run is in flight
+   decides that run's next tool call rather than only the next session's.
    An `ask` decision becomes its own human‑input request (`human.requested` /
    `human.answered`, one `hi_*` id per ask), so several pending tool calls can be
    listed and answered independently.

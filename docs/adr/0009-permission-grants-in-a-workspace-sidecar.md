@@ -109,6 +109,26 @@ refused rather than stripped, which is this ADR's central rule stated at the mom
 tries the opposite. Nothing above changes: the file, the layering and the writer are the
 ones decided here, and what is new is only that a client can see them.
 
+**2026‑09‑21 (#271):** the reading half landed. Everything above was decided in v0.4.0 and
+the writer shipped with it, but nothing ever evaluated the file: `openAcpSession` answered
+`session/request_permission` against the agent's configured policy, the engine's session
+factory passed no sidecar path, and `loadEffectivePermissionPolicy` had no production caller
+at all. So a person who answered "always" was told the grant was recorded — it was — and was
+then asked the same question on the next tool call, in that run and in every later one.
+
+`openAcpSession` now takes `permissionFiles` and evaluates through
+`loadEffectivePermissionPolicy` **on every ask**, not once per session: "always" is answered
+*while a session is open*, so a policy captured at `session/new` would still be the old one
+when the next tool call arrived. The path is bound in `makeSessionFactory`
+(`packages/cli/src/bootstrap.ts`) to `permissionPolicyPath(app.configDir)` — the same value
+the daemon's `ControlModel` receives — so the file that is written and the file that is read
+are the same file by construction, for `orca run`, `orca resume`, `orca serve` and the ACP
+facade alike. Two smaller corrections travel with it: the session now passes the run's
+workspace as the evaluation scope, without which the workspace‑relative paths this ADR
+insists on could never match anything; and a sidecar that is corrupt is logged once at warn
+and skipped for the ask rather than failing it, because an unreadable file must not be able
+to block an agent — and skipping only ever loses a grant, never a restriction.
+
 ## Consequences
 + The hand‑written half of the config stays hand‑written. Nothing appends to the Nth element
   of a curated `agents:` array, so a machine write can never collide with a human edit.
