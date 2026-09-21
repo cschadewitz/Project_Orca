@@ -71,10 +71,23 @@ describe("preferences", () => {
     const file = new PreferencesFile(join(dir, "preferences.json"));
     expect(() => file.write({ theme: "sepia" })).toThrow();
     expect(() => file.write({ density: { runs: "tiny" } })).toThrow();
-    // A pane size is a positive whole number of pixels, so neither of these is one (#276).
+    /* A pane size is a whole number of px or a fraction of its container below 1 (#276,
+       #281). A pane of nothing is neither, and nor is a fractional *length*. */
     expect(() => file.write({ panes: { sidebar: 0 } })).toThrow();
     expect(() => file.write({ panes: { sidebar: 240.5 } })).toThrow();
+    expect(() => file.write({ panes: { "runs-tree": -0.4 } })).toThrow();
     expect(() => file.write("dark")).toThrow();
+  });
+
+  it("takes a fraction as well as a length, because a stacked boundary is a ratio (#281)", () => {
+    const file = new PreferencesFile(join(dir, "fractions", "preferences.json"));
+    /* Which id is which shape is the renderer's registry, not this schema's: what is asserted
+       here is only that both shapes survive a write and a re-read of the file. */
+    expect(file.write({ panes: { "runs-tree": 0.42, sidebar: 300 } }).panes).toEqual({
+      "runs-tree": 0.42,
+      sidebar: 300,
+    });
+    expect(new PreferencesFile(file.path).read().panes).toEqual({ "runs-tree": 0.42, sidebar: 300 });
   });
 
   it("merges density by surface and replaces the theme", () => {

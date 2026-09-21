@@ -58,12 +58,29 @@ export const AlertPreferencesPatchSchema = z.object({
 });
 
 /**
- * A dragged pane width or height in px, per boundary id (#276). A positive integer and nothing
- * else: zero is not a pane. A boundary that is back at its default is **absent** from the
- * record rather than set to the default — the size token in `tokens.css` is the default, and a
- * number here would be a second copy of it that the next token change would not reach.
+ * A dragged pane size, per boundary id (#276), in one of **two shapes** (#281).
+ *
+ * A boundary between two columns is a length: a whole number of px, because a side pane is
+ * sized to what it holds and 520px means the same thing on a laptop and on a 34" display. A
+ * boundary between two stacked panes is a ratio of its container: a number strictly between
+ * 0 and 1, because neither half is sized to its content and what a person chose is "more
+ * tree than timeline" — which a length does not carry from one window height to another.
+ *
+ * Which shape a given id takes is the renderer's registry (`renderer/src/panes.ts`), not this
+ * file's: the schema's job is to accept both and reject everything else. Below 1 is a
+ * fraction, 1 and up is px — an unambiguous split, since a pane of half a pixel is not a
+ * thing and neither is a pane that is all of its container.
+ *
+ * A boundary that is back at its default is **absent** from the record rather than set to the
+ * default — the size token in `tokens.css` is the default, and a number here would be a
+ * second copy of it that the next token change would not reach.
  */
-export const PaneSizeSchema = z.number().int().positive();
+export const PaneSizeSchema = z
+  .number()
+  .positive()
+  .refine((size) => size < 1 || Number.isInteger(size), {
+    message: "a pane size is a whole number of px, or a fraction of its container below 1",
+  });
 
 export const PreferencesSchema = z.object({
   theme: ThemePreferenceSchema.default("system"),

@@ -172,7 +172,25 @@ describe("resizing from the keyboard", () => {
     expect(prefs.writes).toEqual([]);
 
     fireEvent.keyDown(splitter(), { key: "ArrowDown" });
-    expect(applied("runs-tree")).toBe("336px");
+    /* A percentage, not a length: this is the one boundary whose size is a ratio of its
+       container, so 336 of the container's 800 is applied as 42% and remembered as 0.42 —
+       which is what makes the split travel between two window heights (#281). */
+    expect(applied("runs-tree")).toBe("42.00%");
+    expect(prefs.writes).toEqual([{ panes: { "runs-tree": 0.42 } }]);
+    // The separator still counts in px, because px is what it moves in.
+    expect(splitter().getAttribute("aria-valuenow")).toBe("336");
+  });
+
+  it("brings a remembered ratio back as the same share of a container of another height", () => {
+    // 0.4 of 800 is 320; the same preference on a 500px column is 200, not 320 clamped.
+    mount({ boundary: "runs-tree", extent: 800, pane: 320 }, { "runs-tree": 0.4 });
+    expect(applied("runs-tree")).toBe("40.00%");
+    expect(splitter().getAttribute("aria-valuenow")).toBe("320");
+
+    cleanup();
+    mount({ boundary: "runs-tree", extent: 500, pane: 200 }, { "runs-tree": 0.4 });
+    expect(applied("runs-tree")).toBe("40.00%");
+    expect(splitter().getAttribute("aria-valuenow")).toBe("200");
   });
 
   it("will not step past the floor, however many times it is pressed", () => {

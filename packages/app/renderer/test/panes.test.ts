@@ -19,6 +19,8 @@ import {
   dragPaneSize,
   keyPaneSize,
   paneExtent,
+  panePreferenceOf,
+  panePx,
   readPaneSize,
 } from "../src/panes.js";
 
@@ -42,6 +44,46 @@ describe("pane boundaries", () => {
        stylesheet's `2fr`, which is not a length, and the container is its only ceiling. */
     expect(TREE.max).toBeUndefined();
     expect(TREE.token).toBeUndefined();
+  });
+
+  it("says which boundaries are a length and which is a ratio, and names each one", () => {
+    /* The four column boundaries are lengths, because a side pane is sized to what it holds.
+       The stacked one is a ratio, because its two halves are not (#281). */
+    expect(PANE_IDS.filter((id) => PANE_BOUNDARIES[id].size === "fraction")).toEqual(["runs-tree"]);
+    expect(PANE_IDS.filter((id) => PANE_BOUNDARIES[id].orientation === "horizontal")).toEqual(["runs-tree"]);
+    // Every boundary has something a person would call it: the preferences section lists them.
+    for (const id of PANE_IDS) expect(PANE_BOUNDARIES[id].label).not.toBe("");
+  });
+});
+
+describe("a preference and the px it means", () => {
+  it("leaves a length alone in both directions, with or without a container", () => {
+    expect(panePx(SIDEBAR, 268, 1400)).toBe(268);
+    expect(panePx(SIDEBAR, 268, 0)).toBe(268);
+    expect(panePreferenceOf(SIDEBAR, 268.4, 1400)).toBe(268);
+    expect(panePreferenceOf(SIDEBAR, 268.4, 0)).toBe(268);
+  });
+
+  it("turns a stacked boundary into a share of its container, and back", () => {
+    expect(panePreferenceOf(TREE, 320, 800)).toBe(0.4);
+    expect(panePx(TREE, 0.4, 800)).toBe(320);
+    // The same choice on a shorter column is the same split rather than the same height.
+    expect(panePx(TREE, 0.4, 500)).toBe(200);
+  });
+
+  it("keeps a fraction strictly inside its own range, whatever the clamp handed it", () => {
+    /* A container too small for two panes has `clampPaneSize` return the floor, which can be
+       more than the container — "more than all of it" is not a ratio, and the schema rejects
+       1 as much as 0. */
+    expect(panePreferenceOf(TREE, 900, 400)).toBeLessThan(1);
+    expect(panePreferenceOf(TREE, 0, 400)).toBeGreaterThan(0);
+  });
+
+  it("answers nothing for a ratio with no container to be a ratio of", () => {
+    // Which is every container under happy-dom, and every one before the first layout.
+    expect(panePx(TREE, 0.4, 0)).toBeUndefined();
+    expect(panePreferenceOf(TREE, 320, 0)).toBeUndefined();
+    expect(panePx(TREE, undefined, 800)).toBeUndefined();
   });
 });
 
@@ -131,6 +173,22 @@ describe("applyPaneSize", () => {
        stylesheet's `var(--pane-sidebar, var(--sidebar-width))` keeps one statement of it. */
     expect(host.getAttribute("style") ?? "").not.toContain("--pane-sidebar");
     expect(readPaneSize(host, SIDEBAR)).toBeUndefined();
+  });
+
+  it("writes a stacked boundary as a percentage, which is what travels between two heights", () => {
+    const host = document.createElement("div");
+    applyPaneSize(host, TREE, 336, 800);
+    expect(host.style.getPropertyValue("--pane-runs-tree")).toBe("42.00%");
+    // And reads back as the px it was, given the same container it was written against.
+    expect(readPaneSize(host, TREE, 800)).toBe(336);
+  });
+
+  it("leaves the stylesheet's own fraction in place while there is nothing to measure", () => {
+    /* `2fr` is a better answer than a percentage of nothing: the default holds until the
+       container has a height, rather than the pane collapsing for one frame. */
+    const host = document.createElement("div");
+    applyPaneSize(host, TREE, 336, 0);
+    expect(host.getAttribute("style") ?? "").not.toContain("--pane-runs-tree");
   });
 });
 
