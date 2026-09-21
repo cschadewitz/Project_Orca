@@ -75,6 +75,13 @@ function emit(fields: Map<string, ConfigFieldDescription>, field: ConfigFieldDes
  * `z.string().default("x")` is a `default` node wrapping a `string`; for a form the string
  * is the type and the default is why it is not required. `optional` and `nullable` say the
  * same thing without a value.
+ *
+ * It does **not** peel a `pipe`, which is what `.transform()` produces, and that is a
+ * constraint on the schema rather than a gap here: a transformed field describes as an opaque
+ * `pipe` with no fields under it, and a form cannot draw what it cannot see.
+ * `agents[].permissions` was such a field until #140 moved the default-rule injection out of
+ * `PermissionPolicySchema` and into evaluation; if a `.transform()` is ever added back to
+ * `OrcaConfigSchema`, peel `def.in` here and the field will describe again.
  */
 function unwrap(node: ZodNode): { node: ZodNode; required: boolean; hasDefault: boolean; value?: unknown } {
   let current = node;

@@ -3,7 +3,7 @@
  * needs get/put/list/delete; swap in a database-backed implementation by
  * implementing DocumentStore<T>.
  */
-import { mkdir, readFile, stat, writeFile, rename } from "node:fs/promises";
+import { mkdir, open, readFile, stat, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ZodType } from "zod";
 import type { Clock, Logger, Request, WorkItem } from "@orca/core";
@@ -157,8 +157,21 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Document
           const map = new Map(await this.load());
           for (const m of batch) apply(map, m);
           const body = JSON.stringify([...map.values()], null, 2);
-          const tmp = `${this.file}.${process.pid}.tmp`;
-          await writeFile(tmp, body, "utf8");
+          // A random tag, not the pid alone (file-lock.ts uses the same idiom): two writers
+          // in one process - two collections is the ordinary case, and a pid is reused after
+          // a crash - would otherwise share one tmp path and rename each other's bytes into
+          // place. The lock makes that unlikely rather than impossible; the name makes it so.
+          const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+          // Flushed before the rename: the rename is what makes the new file visible, and a
+          // machine that loses power between the two would otherwise publish a name pointing
+          // at bytes that never reached the disk. `writeFile` alone does not promise that.
+          const handle = await open(tmp, "w");
+          try {
+            await handle.writeFile(body, "utf8");
+            await handle.sync();
+          } finally {
+            await handle.close();
+          }
           await rename(tmp, this.file);
           this.cache = map;
           this.fingerprint = await this.fingerprintOf();

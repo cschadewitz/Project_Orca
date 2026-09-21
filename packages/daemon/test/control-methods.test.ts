@@ -303,12 +303,12 @@ function refusesToDrive(orc: Orchestrator): Orchestrator {
   return new Proxy(orc, {
     get(target, prop) {
       if (prop === "run" || prop === "resume") return (runId: string) => boom(runId);
-      const value = Reflect.get(target, prop) as unknown;
+      const value: unknown = Reflect.get(target, prop);
       // Bound to the target: these are class instances with private state, and an unbound
       // method called on the proxy would read it through the trap and lose `this`.
       return typeof value === "function" ? value.bind(target) : value;
     },
-  }) as Orchestrator;
+  });
 }
 
 describe("a lease lost while the daemon drives", () => {

@@ -6,9 +6,17 @@
   commands in their own process rather than through ACP's `terminal`, so there is nothing to
   scope the grant by. This is a property of the agent and not of how the run was launched, so
   one config behaves one way; `permissions: { default: allow }` is the explicit opt‑out and
-  is the right thing for a sandbox. The defaults are ordinary rules appended after the
-  configured ones, so a hand‑written `deny` still wins and the `orca.permissions.json`
-  sidecar is still layered last (ADR 0009).
+  is the right thing for a sandbox. The defaults are ordinary rules and they are the **last**
+  layer: configured rules are matched first, then `orca.permissions.json`, then these, then
+  the configured `default` decides the rest. So a hand‑written `deny` still wins, and a
+  `reject_always` recorded in the sidecar beats the default allow that made the prompt appear
+  (ADR 0009). They are appended whatever `default:` says — they only ever allow inside the
+  run's own workspace, which `default: allow` was going to allow anyway. Spelling them out in
+  your own `rules:` is not a no‑op: it moves them ahead of the sidecar.
+- **core:** `orca.config.yaml` parses to exactly what it says. The default rules used to be
+  injected into the parsed config, so anything that read it back — `orca demo`'s generated
+  config, `config.get`'s per‑rule provenance — reported rules nobody had written as if an
+  operator had written them.
 - **core:** a permission rule can match on `scope: workspace | outside-workspace` — whether
   every location of the tool call is inside the run's workspace or any of them is not. It is
   the one match that needs no path written down, because the path it is about is the run's
