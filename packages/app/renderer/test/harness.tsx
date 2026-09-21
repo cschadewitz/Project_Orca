@@ -15,7 +15,7 @@ import type { JSX, ReactNode } from "react";
 import type { HelloResult } from "@orca/protocol";
 import { App } from "../src/App.js";
 import { AppearanceProvider } from "../src/appearance-context.js";
-import { installAppearance, type AppearanceStore } from "../src/appearance.js";
+import { installAppearance, type Appearance, type AppearanceStore } from "../src/appearance.js";
 import { KeyboardMap } from "../src/keyboard-map.js";
 import { KeyboardProvider } from "../src/keyboard-context.js";
 import { LayerStack } from "../src/layers.js";
@@ -95,6 +95,8 @@ export interface Harness {
   notifications: NotificationStream;
   /** What a surface says in the one live region about a write of its own (#175). */
   announcements: Announcements;
+  /** The installed appearance, so a test can change a preference from outside the component. */
+  appearance: Appearance;
   dispose: () => void;
   /** The providers `main.tsx` wraps the app in, around whatever is being tested. */
   Providers: (props: { children: ReactNode }) => JSX.Element;
@@ -130,6 +132,7 @@ export function harness(platform = "darwin", store: AppearanceStore = memoryStor
     paletteSources,
     notifications,
     announcements,
+    appearance,
     dispose: () => {
       unlisten();
       appearance.dispose();

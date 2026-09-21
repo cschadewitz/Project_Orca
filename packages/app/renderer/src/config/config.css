@@ -192,3 +192,11 @@
 .orca-config__granted {
   color: var(--ink-secondary);
 }
+
+/* A remembered pane size beside the button that forgets it (#280). The value first, because
+   the row is answering "how wide is it" and the restore is what you do about the answer. */
+.orca-config__pane-size {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}

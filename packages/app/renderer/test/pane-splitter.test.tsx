@@ -11,7 +11,7 @@
  * boundaries the app actually offers.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, type RenderResult } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, type RenderResult } from "@testing-library/react";
 import type { JSX } from "react";
 import { PaneSplitter } from "../src/chrome/pane-splitter.js";
 import { PANE_BOUNDARIES, type PaneId } from "../src/panes.js";
@@ -93,7 +93,10 @@ function Host({ boundary, extent, pane }: HostProps): JSX.Element {
   );
 }
 
-function mount(props: HostProps, panes: Record<string, number> = {}): ReturnType<typeof recordingStore> {
+function mount(
+  props: HostProps,
+  panes: Record<string, number> = {},
+): ReturnType<typeof recordingStore> & { appearance: Harness["appearance"] } {
   const recorder = recordingStore(panes);
   const h = harness("darwin", recorder.store);
   teardown.push(h.dispose);
@@ -102,7 +105,7 @@ function mount(props: HostProps, panes: Record<string, number> = {}): ReturnType
       <Host {...props} />
     </h.Providers>,
   );
-  return recorder;
+  return { ...recorder, appearance: h.appearance };
 }
 
 const host = (): HTMLElement => screen.getByTestId("host");
@@ -223,6 +226,19 @@ describe("back to the default", () => {
 
     expect(applied("panel")).toBe("");
     expect(prefs.writes).toEqual([{ panes: { panel: null } }]);
+  });
+
+  it("moves when the boundary is restored from somewhere else in the app", () => {
+    /* The Config surface's preferences section lists what has been dragged and offers a
+       restore, and the palette has a command that forgets all of them (#280). Both go
+       through `appearance.set`, which is not this component's state — so the line has to
+       move on an announcement, or the file would say "default" while the pane stayed wide. */
+    const prefs = mount({ boundary: "panel", extent: 1400, pane: 420 }, { panel: 600 });
+    expect(applied("panel")).toBe("600px");
+
+    act(() => prefs.appearance.set({ panes: { panel: null } }));
+
+    expect(applied("panel")).toBe("");
   });
 });
 

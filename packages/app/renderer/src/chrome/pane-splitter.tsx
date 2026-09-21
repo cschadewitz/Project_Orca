@@ -109,6 +109,16 @@ export function PaneSplitter({ boundary, label }: PaneSplitterProps): JSX.Elemen
     setNow(Math.round(current()));
   }, [container, current, desired, extent, spec]);
 
+  /* A boundary can now be restored from somewhere other than the boundary: the Config
+     surface's preferences section lists what has been dragged, and the palette has a command
+     that forgets all of them (#280). Both go through `appearance.set`, which is not this
+     component's state — so the splitter listens, and a restore from across the app moves the
+     line the same way `Enter` on the handle does. */
+  useEffect(
+    () => appearance.subscribe(() => setRemembered(appearance.preferences().panes[boundary])),
+    [appearance, boundary],
+  );
+
   /* The container's extent, watched rather than read once: a boundary dragged wide on a maximised
      window must not leave the pane opposite with nothing when the window is made small again. */
   useEffect(() => {
