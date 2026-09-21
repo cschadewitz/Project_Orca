@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import type { ConnectionState } from "@orca/design";
 import type { RunSummaryView, WorkflowNodeView } from "@orca/protocol";
+import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { Chip, Menu, StateView, StatusChip, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
 import { findNode } from "./layout.js";
 import { WorkflowCanvas } from "./workflow-canvas.js";
@@ -182,6 +183,11 @@ export function WorkflowSurface({ workflowId, runId, connection, onHeader }: Wor
           onToggleExpanded={toggleExpanded}
           label={`${workflow.name} graph`}
         />
+        {/* The inspector's boundary (#276). It shares the docked panel's id, and so its
+            remembered width: they are the same kind of column, which is the decision the
+            `panel-width` token had already made for their defaults. The canvas beside it pans on
+            a drag of its own, and the splitter keeps the gesture from reaching it. */}
+        <PaneSplitter boundary="panel" label="Resize the node inspector" />
         <Inspector node={node} />
       </div>
     </div>

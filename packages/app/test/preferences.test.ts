@@ -19,6 +19,8 @@ describe("preferences", () => {
     expect(DEFAULT_PREFERENCES).toEqual({
       theme: "system",
       density: {},
+      // Every pane at the width the design chose, which is the absence of a remembered one (#276).
+      panes: {},
       // Opt-in per tier, and the one tier that holds an agent turn open is the one that is
       // on (#162, docs/design/20-attention-and-gates.md).
       alerts: { permission: true, gate: false, failure: false, unfocusedEscalationMs: 300_000 },
@@ -29,10 +31,11 @@ describe("preferences", () => {
   it("writes a patch over what is on disk and reads it back", () => {
     const file = new PreferencesFile(join(dir, "nested", "preferences.json"));
     const alerts = DEFAULT_PREFERENCES.alerts;
-    expect(file.write({ theme: "dark" })).toEqual({ theme: "dark", density: {}, alerts });
+    expect(file.write({ theme: "dark" })).toEqual({ theme: "dark", density: {}, panes: {}, alerts });
     expect(file.write({ density: { runs: "compact" } })).toEqual({
       theme: "dark",
       density: { runs: "compact" },
+      panes: {},
       alerts,
     });
     expect(file.write({ density: { config: "comfortable" } }).density).toEqual({
@@ -42,6 +45,7 @@ describe("preferences", () => {
     expect(new PreferencesFile(file.path).read()).toEqual({
       theme: "dark",
       density: { runs: "compact", config: "comfortable" },
+      panes: {},
       alerts,
     });
     expect(JSON.parse(readFileSync(file.path, "utf8"))).toEqual(file.read());
@@ -58,6 +62,7 @@ describe("preferences", () => {
     expect(file.write({ theme: "light" })).toEqual({
       theme: "light",
       density: {},
+      panes: {},
       alerts: DEFAULT_PREFERENCES.alerts,
     });
   });
@@ -66,6 +71,9 @@ describe("preferences", () => {
     const file = new PreferencesFile(join(dir, "preferences.json"));
     expect(() => file.write({ theme: "sepia" })).toThrow();
     expect(() => file.write({ density: { runs: "tiny" } })).toThrow();
+    // A pane size is a positive whole number of pixels, so neither of these is one (#276).
+    expect(() => file.write({ panes: { sidebar: 0 } })).toThrow();
+    expect(() => file.write({ panes: { sidebar: 240.5 } })).toThrow();
     expect(() => file.write("dark")).toThrow();
   });
 
@@ -75,8 +83,20 @@ describe("preferences", () => {
     expect(mergePreferences(current, { theme: "system", density: { plan: "compact" } })).toEqual({
       theme: "system",
       density: { runs: "compact", plan: "compact" },
+      panes: {},
       alerts: DEFAULT_PREFERENCES.alerts,
     });
+  });
+
+  it("merges pane sizes by boundary, and null is how one goes back to its default (#276)", () => {
+    const file = new PreferencesFile(join(dir, "panes", "preferences.json"));
+    expect(file.write({ panes: { sidebar: 300 } }).panes).toEqual({ sidebar: 300 });
+    // A second boundary is a second key: resizing the dock says nothing about the sidebar.
+    expect(file.write({ panes: { panel: 560 } }).panes).toEqual({ sidebar: 300, panel: 560 });
+    /* Back to the default is a deletion and not a write of the token's value: the record holds
+       only the sizes somebody chose, so the next change to `panel-width` reaches this window. */
+    expect(file.write({ panes: { panel: null } }).panes).toEqual({ sidebar: 300 });
+    expect(new PreferencesFile(file.path).read().panes).toEqual({ sidebar: 300 });
   });
 
   it("merges alert tiers one at a time, so turning gates on says only that", () => {

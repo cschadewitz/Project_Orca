@@ -112,10 +112,24 @@ const quote = (s) => `'${String(s).replace(/'/g, "\\'")}'`;
  */
 const GRAPH_GEOMETRY = ["node-w", "node-h", "layer-gap", "rank-gap"];
 
+/**
+ * The size tokens a pane splitter does arithmetic with (#276). A drag is a pointer
+ * coordinate minus another one, and neither a clamp nor an `aria-valuemin` can be written as
+ * a `var()`, so these six are emitted as numbers for the same reason the four above are.
+ */
+const PANE_GEOMETRY = [
+  "pane-step",
+  "pane-min-sidebar",
+  "pane-max-sidebar",
+  "pane-min-side",
+  "pane-max-side",
+  "pane-min-stack",
+];
+
 /** One size token's value, or a hard failure — a missing geometry token must not emit NaN. */
-function sizeValue(name) {
+function sizeValue(name, needs) {
   const token = T.size.tokens.find((t) => t.name === name);
-  if (!token) throw new Error(`tokens.json has no size token ${name}, which GRAPH_GEOMETRY needs`);
+  if (!token) throw new Error(`tokens.json has no size token ${name}, which ${needs} needs`);
   return token.value;
 }
 
@@ -194,7 +208,20 @@ export type GraphGeometryToken = ${union(GRAPH_GEOMETRY)};
  * for them, so the algorithm stays a plain module with a plain test.
  */
 export const GRAPH_GEOMETRY: Record<GraphGeometryToken, number> = {
-${GRAPH_GEOMETRY.map((name) => `  ${quote(name)}: ${Number.parseInt(sizeValue(name), 10)},`).join("\n")}
+${GRAPH_GEOMETRY.map((name) => `  ${quote(name)}: ${Number.parseInt(sizeValue(name, "GRAPH_GEOMETRY"), 10)},`).join("\n")}
+};
+
+export type PaneGeometryToken = ${union(PANE_GEOMETRY)};
+
+/**
+ * The pane splitters' step and limits in px (#276). A drag is arithmetic on pointer
+ * coordinates and a clamp is a comparison against a number, so — as with \`GRAPH_GEOMETRY\` —
+ * no \`var()\` can be written where these are used. The boundary registry takes them as
+ * values rather than reaching into the cascade, so clamping stays a plain function with a
+ * plain test.
+ */
+export const PANE_GEOMETRY: Record<PaneGeometryToken, number> = {
+${PANE_GEOMETRY.map((name) => `  ${quote(name)}: ${Number.parseInt(sizeValue(name, "PANE_GEOMETRY"), 10)},`).join("\n")}
 };
 
 export type RunStatus = ${union(Object.keys(S.runStatus))};

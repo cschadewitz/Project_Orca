@@ -48,19 +48,28 @@
 
 /* ---------- the two columns ---------- */
 
-/* The tree above the timeline on the left, the step detail on the right. The detail is a
-   fixed column so the tree and the timeline keep one width whatever is selected; the panel
-   width token is the one the docked panel already uses, because they are the same kind of
-   column and two statements of "how wide is a side pane" would drift. */
+/* The tree above the timeline on the left, the step detail on the right. The detail keeps one
+   width whatever is selected, so the tree and the timeline keep one too; the panel width token
+   is the one the docked panel already uses, because they are the same kind of column and two
+   statements of "how wide is a side pane" would drift.
+
+   Both boundaries are draggable (#276), and the `auto` tracks are where their splitters sit. A
+   dragged size is `var(--pane-…, <the token>)`: the token stays the single statement of the
+   default and the property is one person's override of it. */
 .orca-runs__split {
   display: grid;
-  grid-template-columns: 1fr var(--panel-width);
+  grid-template-columns: minmax(0, 1fr) auto var(--pane-runs-detail, var(--panel-width));
   flex: 1;
   min-height: 0;
 }
+/* A grid of rows rather than a flex column, for the boundary's sake: the tree's share of this
+   column was `flex: 2` against the timeline's `flex: 3`, and a ratio is not something a length
+   can override. As tracks the default ratio is the same 2:3, and a dragged height is a first
+   track that reads the property instead — the fallback is the whole `minmax()`, so the fraction
+   keeps the floor of zero a `flex` item had and cannot be pushed out by a deep tree. */
 .orca-runs__left {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: var(--pane-runs-tree, minmax(0, 2fr)) auto minmax(0, 3fr);
   min-width: 0;
   min-height: 0;
 }
@@ -68,27 +77,23 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  border-left: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-base);
 }
 
-/* The tree takes what the timeline does not. Both are scroll regions of their own, so
-   neither can push the other off the screen. */
+/* Both halves are scroll regions of their own, so neither can push the other off the screen.
+   Neither carries a `flex` any more and neither draws the hairline between them: the track
+   above says how tall the tree is and the splitter draws the boundary. */
 .orca-runs__tree {
-  flex: 2;
   min-height: 0;
 }
 .orca-runs__tree-state,
 .orca-runs__timeline-state {
-  flex: 1;
   min-height: 0;
 }
 .orca-runs__timeline-pane {
   display: flex;
-  flex: 3;
   flex-direction: column;
   min-height: 0;
-  border-top: var(--stroke-hairline) solid var(--border-hairline);
 }
 .orca-runs__timeline {
   flex: 1;

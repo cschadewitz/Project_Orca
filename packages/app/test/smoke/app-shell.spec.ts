@@ -58,6 +58,8 @@ interface SmokeWindow {
   orca?: {
     platform: string;
     hello: () => Promise<{ ok: true; result: { capabilities: string[] } } | { ok: false; error: unknown }>;
+    /** Only the part the pane-boundary test reads back: the sizes a drag left behind (#276). */
+    preferences: { read: () => { panes: Record<string, number> } };
   };
 }
 
@@ -235,6 +237,48 @@ test("both themes render, and the shortcut is what switches them", async () => {
   expect(shots.dark?.canvas).toMatch(/^#[0-9a-f]{6}$/i);
   expect(shots.light?.canvas).not.toBe(shots.dark?.canvas);
   expect(shots.light?.ink).not.toBe(shots.dark?.ink);
+});
+
+test("a pane boundary drags, and the width it is left at is remembered", async () => {
+  /* The one thing the renderer tests cannot claim (#276). happy-dom has no layout and no
+     pointer, so `pane-splitter.test.tsx` asserts the markup, the keys and the preference over
+     stubbed rects; whether a real drag moves a real grid track, at a real `col-resize` cursor,
+     is only answerable in a window. */
+  const sidebar = page.locator(".orca-sidebar");
+  const handle = page.getByRole("separator", { name: "Resize the sidebar" });
+  await expect(handle).toBeVisible();
+
+  const before = await sidebar.boundingBox();
+  const grip = await handle.boundingBox();
+  expect(before && grip).toBeTruthy();
+  if (!before || !grip) return;
+
+  // The cursor says what the boundary is before it is touched, which is half the affordance.
+  expect(await handle.evaluate((node) => getComputedStyle(node).cursor)).toBe("col-resize");
+
+  const y = grip.y + grip.height / 2;
+  await page.mouse.move(grip.x + grip.width / 2, y);
+  await page.mouse.down();
+  // In steps, so the drag is a stream of moves as a hand's is and not one jump.
+  await page.mouse.move(grip.x + grip.width / 2 + 80, y, { steps: 8 });
+  await page.mouse.up();
+
+  const widened = Math.round(before.width) + 80;
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(widened);
+  // The separator says where it is, and the preferences file has it: a resize that reset on
+  // relaunch would be worse than no resize.
+  await expect(handle).toHaveAttribute("aria-valuenow", String(widened));
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as SmokeWindow).orca!.preferences.read().panes.sidebar))
+    .toBe(widened);
+
+  // And back: a double-click is the boundary going home, which is a deletion rather than a
+  // write of the token's value, so the property comes off the element entirely.
+  await handle.dblclick();
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(Math.round(before.width));
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as SmokeWindow).orca!.preferences.read().panes.sidebar))
+    .toBeUndefined();
 });
 
 /* ---------------------------------------------------------------- the surfaces */

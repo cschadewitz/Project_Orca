@@ -17,9 +17,12 @@
   flex: 1;
 }
 
+/* The request rail, the boundary between it and the schedule or journal beside it, and them.
+   The rail's default width is the sidebar token's and a dragged width overrides it (#276); the
+   `auto` track is where the splitter sits. */
 .orca-plan__body {
   display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-columns: var(--pane-plan-rail, var(--sidebar-width)) auto minmax(0, 1fr);
   min-height: 0;
   flex: 1;
 }
@@ -32,7 +35,8 @@
   gap: var(--space-4);
   padding: var(--space-3);
   overflow-y: auto;
-  border-right: var(--stroke-hairline) solid var(--border-hairline);
+  /* No border — the splitter beside it draws the boundary's hairline (#276), and a pane that
+     kept its own border next to one would put two lines two pixels apart. */
 }
 .orca-plan__group {
   display: flex;

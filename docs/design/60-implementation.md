@@ -60,6 +60,45 @@ config form stays comfortable. `packages/app/renderer/src/density.ts` is the onl
 touches the attribute; a component that renders a surface root calls `useSurfaceDensity()`
 so it gets its remembered density once it is in the document.
 
+## Pane sizes
+
+Every boundary between two panes is draggable and the size is remembered per boundary, the way
+density is remembered per surface (#276). There are five, and they are the ones that exist:
+sidebar ↔ primary pane, primary pane ↔ docked panel (which the workflow node inspector shares,
+being the same kind of column), the Runs left column ↔ step detail, the run tree ↔ the event
+timeline, and the Plan request rail ↔ the schedule or journal beside it.
+
+A size is a **CSS custom property on the container whose track reads it**, and every track is
+spelled `var(--pane-<boundary>, var(--<token>))`:
+
+```css
+.orca-body {
+  grid-template-columns: var(--pane-sidebar, var(--sidebar-width)) auto minmax(0, 1fr);
+}
+```
+
+So the token stays the single statement of the default, an unset property *is* the default
+rather than a copy of it, and there is never a second answer to "how wide is a side pane". The
+`auto` track is where the splitter sits. `packages/app/renderer/src/panes.ts` holds the registry
+of boundaries and the clamp, and is the only code that writes a `--pane-*` property;
+`chrome/pane-splitter.tsx` is the control over it, and it goes in the **shell** rather than in a
+surface, so a surface that lands later inherits a resizable edge instead of inventing one.
+
+Four rules it keeps:
+
+- **Limits are tokens, not numbers in the component.** `--pane-min-sidebar`, `--pane-max-side`
+  and the rest, emitted as `PANE_GEOMETRY` in `@orca/design` because a clamp is arithmetic and
+  no `var()` can be written inside one.
+- **The breakpoints win.** Below `bp-sidebar-collapse` the rail is icons at its own width and no
+  sidebar splitter is rendered; below `bp-panel-overlay` the panel floats at the token's width
+  and neither is its own. A dragged width never fights a layout rule.
+- **A window too narrow for the remembered size shows what fits, and remembers what was
+  asked for.** The clamp is re-applied on every container resize and the preference is left
+  alone, so widening the window again brings a person's choice back rather than the default.
+- **The default is reachable.** `Enter` or a double-click on the splitter *forgets* the size —
+  the property comes off the element and the key comes out of the preferences file — because a
+  number written back would be a copy of the token that the next token change would not reach.
+
 ## The keyboard map and the palette
 
 There is one registry and the palette is a view of it. A component registers

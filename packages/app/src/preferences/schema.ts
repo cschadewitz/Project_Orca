@@ -57,18 +57,34 @@ export const AlertPreferencesPatchSchema = z.object({
   unfocusedEscalationMs: z.number().int().positive().optional(),
 });
 
+/**
+ * A dragged pane width or height in px, per boundary id (#276). A positive integer and nothing
+ * else: zero is not a pane. A boundary that is back at its default is **absent** from the
+ * record rather than set to the default — the size token in `tokens.css` is the default, and a
+ * number here would be a second copy of it that the next token change would not reach.
+ */
+export const PaneSizeSchema = z.number().int().positive();
+
 export const PreferencesSchema = z.object({
   theme: ThemePreferenceSchema.default("system"),
   /** Density per surface id (`data-surface`), so the run tree can be compact while the config form stays comfortable. */
   density: z.record(z.string(), DensitySchema).default({}),
+  /** Pane size per boundary id (`renderer/src/panes.ts`), so a resize survives a relaunch (#276). */
+  panes: z.record(z.string(), PaneSizeSchema).default({}),
   alerts: AlertPreferencesSchema.prefault({}),
 });
 export type Preferences = z.infer<typeof PreferencesSchema>;
 
-/** What a writer may change at once. `density` and `alerts` merge; `theme` replaces. */
+/** What a writer may change at once. `density`, `panes` and `alerts` merge; `theme` replaces. */
 export const PreferencesPatchSchema = z.object({
   theme: ThemePreferenceSchema.optional(),
   density: z.record(z.string(), DensitySchema).optional(),
+  /**
+   * Merges by boundary, and `null` is how a boundary goes back to its default: the record
+   * holds only the sizes somebody chose, so restoring one is a deletion and not a write of
+   * the token's value (which is what "absent means default" costs — and is worth).
+   */
+  panes: z.record(z.string(), PaneSizeSchema.nullable()).optional(),
   /** Merges by tier, so turning gates on says only that. */
   alerts: AlertPreferencesPatchSchema.optional(),
 });
@@ -87,10 +103,24 @@ function definedOnly<T extends object>(patch: T): { [K in keyof T]?: Exclude<T[K
   };
 }
 
+/** The panes record with the patch applied: a number sets a boundary, `null` restores it. */
+function mergePanes(
+  current: Readonly<Record<string, number>>,
+  patch: Readonly<Record<string, number | null>> | undefined,
+): Record<string, number> {
+  const merged: Record<string, number> = { ...current };
+  for (const [id, size] of Object.entries(patch ?? {})) {
+    if (size === null) delete merged[id];
+    else merged[id] = size;
+  }
+  return merged;
+}
+
 export function mergePreferences(current: Preferences, patch: PreferencesPatch): Preferences {
   return {
     theme: patch.theme ?? current.theme,
     density: { ...current.density, ...(patch.density ?? {}) },
+    panes: mergePanes(current.panes, patch.panes),
     /* Spread of a `Partial`, so an explicitly-undefined tier would overwrite a set one:
        the entries are filtered rather than spread blind. */
     alerts: { ...current.alerts, ...definedOnly(patch.alerts ?? {}) },

@@ -12,6 +12,7 @@ import { Sidebar } from "./chrome/sidebar.js";
 import { TitleBar } from "./chrome/title-bar.js";
 import { StatusBar } from "./chrome/status-bar.js";
 import { PrimaryPane } from "./chrome/primary-pane.js";
+import { PaneSplitter } from "./chrome/pane-splitter.js";
 import { DockedPanel } from "./chrome/docked-panel.js";
 import { useConnection } from "./chrome/use-connection.js";
 import { ConnectionBanner, MismatchDialog } from "./chrome/connection-banner.js";
@@ -229,6 +230,11 @@ export function App(): JSX.Element {
         data-panel={panelOpen && panelOverlay ? "overlay" : undefined}
       >
         <Sidebar active={active} onSelect={selectSurface} waitingCount={waitingCount} />
+        {/* The first of the app's pane boundaries (#276), and a grid item between the two it
+            separates. Not rendered below `bp-sidebar-collapse`: there the rail is icons and its
+            width is the breakpoint's, so a boundary offered there would be a control fighting a
+            layout rule. */}
+        {!sidebarCollapsed && <PaneSplitter boundary="sidebar" label="Resize the sidebar" />}
         {/* Keyed by surface: a switch mounts a new pane, which is what re-applies that
             surface's remembered density. */}
         <PrimaryPane
@@ -329,6 +335,10 @@ export function App(): JSX.Element {
             <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />
           )}
         </PrimaryPane>
+        {/* The dock's boundary, and only while the dock is a grid column: an overlaid panel is
+            the layout a narrow window falls back to, and it floats over the pane rather than
+            trading width with it, so there is nothing there to drag (#276). */}
+        {gridPanel && <PaneSplitter boundary="panel" label="Resize the panel" />}
         {panelOpen ? (
           <DockedPanel
             onClose={togglePanel}

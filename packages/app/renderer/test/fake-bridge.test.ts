@@ -293,6 +293,7 @@ describe("installation", () => {
     expect(await result(Promise.resolve(window.orca.preferences.write({ theme: "dark" })))).toEqual({
       theme: "dark",
       density: {},
+      panes: {},
       alerts: DEFAULT_PREFERENCES.alerts,
     });
     expect(window.orca.preferences.read().theme).toBe("dark");

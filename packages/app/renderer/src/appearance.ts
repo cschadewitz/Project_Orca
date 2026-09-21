@@ -31,10 +31,17 @@ export interface Appearance {
    */
   preferences: () => Preferences;
   /**
-   * Choose a theme, or a density for a named surface, outright. Applied first and persisted
-   * after, exactly as the shortcuts are — and through this rather than through
-   * `window.orca.preferences` directly, so that the attribute on the document and the file
-   * on disk keep one owner (`density.ts` is the only code that touches `data-density`).
+   * Choose a theme, a density for a named surface, or a size for a named pane boundary,
+   * outright. Applied first and persisted after, exactly as the shortcuts are — and through
+   * this rather than through `window.orca.preferences` directly, so that the attribute on the
+   * document and the file on disk keep one owner (`density.ts` is the only code that touches
+   * `data-density`).
+   *
+   * A pane size is the one field this does not apply itself. A density is an attribute on a
+   * surface root, and every surface root in the document can be found from here; a pane size
+   * is a custom property on *the container whose grid track reads it*, and only the splitter
+   * standing in that container knows which element that is. So `chrome/pane-splitter.tsx`
+   * applies it through `panes.ts` and this persists it (#276).
    */
   set: (patch: PreferencesPatch) => void;
   dispose: () => void;
@@ -91,11 +98,25 @@ export function installAppearance(win: Window, store: AppearanceStore, keyboard:
     }),
   ];
 
+  /* The same merge `mergePreferences` performs in the main process, written out here rather
+     than imported: `preferences/schema.ts` is a Zod module and the renderer takes its types
+     only. A `null` size is a boundary going back to its default, which is a deletion — the
+     record holds only what somebody chose (#276). */
+  const mergePanes = (patch: NonNullable<PreferencesPatch["panes"]>): Record<string, number> => {
+    const merged = { ...current.panes };
+    for (const [id, size] of Object.entries(patch)) {
+      if (size === null) delete merged[id];
+      else merged[id] = size;
+    }
+    return merged;
+  };
+
   const set = (patch: PreferencesPatch) => {
     current = {
       ...current,
       ...(patch.theme === undefined ? {} : { theme: patch.theme }),
       ...(patch.density === undefined ? {} : { density: { ...current.density, ...patch.density } }),
+      ...(patch.panes === undefined ? {} : { panes: mergePanes(patch.panes) }),
     };
     if (patch.theme !== undefined) applyTheme(doc.documentElement, patch.theme);
     if (patch.density !== undefined) applyDensities(doc, current.density);

@@ -105,6 +105,18 @@ primitive's, and a second implementation is the thing #202 exists to prevent. If
 body is not a list of choices, extend `Menu` rather than growing a rival — the keyboard and
 focus contract has to stay in one place.
 
+**Every pane boundary is a `PaneSplitter`.** A screen with two panes does not state a width for
+either of them: the track is `var(--pane-<boundary>, var(--<token>))` and a `<PaneSplitter>` sits
+in the `auto` track between them (#276). The registry of boundaries, the clamp and the only code
+that writes a `--pane-*` property are `renderer/src/panes.ts`; the limits are tokens
+(`PANE_GEOMETRY`), not numbers in a component; the size is remembered per boundary in the app's
+preferences the way density is remembered per surface. Two panes of the same kind share one
+boundary id and so one remembered width — the docked panel and the workflow inspector do. A
+splitter needs nothing but its position in the markup: it is a child of the container whose track
+sizes the pane, with that pane as its immediate sibling, which is where it reads the size from and
+where it writes it to. The boundary's hairline is the splitter's; a pane beside one draws no border
+of its own, or the window gets two lines two pixels apart.
+
 **Lists do not poll. The daemon pushes.** `window.orca.notifications.subscribe` is the raw
 envelope stream; wrap it with `createNotificationStream` (`renderer/src/notifications.ts`)
 and listen to one method — `run.changed`, `step.changed`, `agent.update`, `input.opened`,

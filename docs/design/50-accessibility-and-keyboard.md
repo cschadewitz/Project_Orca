@@ -101,10 +101,31 @@ filled glyph. `prefers-contrast: more` is honoured by swapping `border-hairline`
 `border-control` and `ink-tertiary` to `ink-secondary`; no new palette is introduced. Theme
 follows `prefers-color-scheme` unless the person has chosen one explicitly.
 
+## Resizing a pane
+
+Every pane boundary is draggable, and every one is a control rather than a decoration (#276): a
+`role="separator"` with a tab stop, `aria-orientation`, and `aria-valuenow` / `aria-valuemin` /
+`aria-valuemax` in pixels. `←` and `→` move a boundary between two columns by one grid step,
+`↑` and `↓` move one between two stacked panes, and `Enter` — the keyboard's double-click — puts
+it back where the design had it. `aria-valuemax` is the *current* ceiling, so on a window too
+narrow for the design's it says what the window allows.
+
+**Those keys are deliberately not in the map below**, and it is the same call the `Menu`'s roving
+focus made: they belong to whichever separator has focus, not to the app. There are two splitters
+on screen in the chrome alone, so one registration per key could not say which boundary it meant.
+
+The splitter is `--splitter-thickness` across, which is below `hit-min` and is the one target
+allowed to be: it spans the whole edge of a pane, so it is narrow on one axis only, and the tab
+stop with the arrows on it is the path for anyone who cannot land on six pixels.
+`60-implementation.md` has the rest — where the size is written, and how it survives a relaunch.
+
 ## Window sizing
 
-The layout holds from 960px to 2560px. Below 1100px the docked panel becomes an overlay over
-the primary pane; below 960px the sidebar collapses to icons. There is no phone layout and
+The layout holds from 960px to 2560px. Below 1100px the docked panel becomes an overlay over the
+primary pane; below 960px the sidebar collapses to icons. Neither of those two layouts offers a
+splitter, and a boundary dragged wider than a narrowed window allows shows what fits while
+keeping what was asked for: a dragged width never fights one of these rules. There is no phone
+layout and
 none is planned. The five glyphs that rail collapses to are designed and declared — they are
 `semantics.json`'s `surface` map, bundled in the symbol face and listed in
 `10-information-architecture.md` beside the surfaces they name (#261). Each button keeps its
@@ -123,6 +144,7 @@ changes, the check named beside it is the thing that has to change with it.
 | Status without colour | `renderer/test/a11y-sweep.test.tsx` asserts glyph **and** word in the accessible name of every status row; `test/smoke/app-shell.spec.ts` re-reads them under `filter: grayscale(1)` in both themes and keeps a picture beside the assertion |
 | Focus | `renderer/test/focus-and-selection.test.ts` reads the stylesheets: the ring is `:focus-visible` everywhere, selection never borrows `--border-focus`, and every `outline: none` matches a named allowlist |
 | Keyboard map | `renderer/test/keyboard-map-agreement.test.tsx` — the table below is transcribed and asserted in both directions, so a mouse-only action cannot be added quietly |
+| Resizing a pane | `renderer/test/pane-splitter.test.tsx` — the separator's role, range and arrow keys, the restore, and which boundaries the app offers at which width; `renderer/test/panes.test.ts` for the clamp. The real drag and the real cursor are `test/smoke/app-shell.spec.ts`, in an Electron window |
 | Screen readers and live regions | `a11y-sweep.test.tsx` — exactly one polite announcer across all surfaces, assertive cards, the output pane's `role="log"` with `aria-live="off"`; `renderer/test/announcements.test.ts` covers what the announcer says and, as much, what it stays silent about |
 | Reduced motion and preferences | The `prefers-reduced-motion` and `prefers-contrast: more` blocks in `components.css`. No automated check — see the gap below |
 | Everything, per surface | `AxeBuilder` over Attention, Runs and Agents in both themes in the smoke job, with the failing rule ids in the message |
