@@ -1824,10 +1824,23 @@
 .orca-palette__input::placeholder {
   color: var(--ink-tertiary);
 }
-/* The ring belongs to the palette, not to the field inside it: the field is the only
-   focusable thing in the layer, so a second ring around it is noise. */
-.orca-palette__input:focus {
-  outline: none;
+/* The field draws the system's ring, like everything else (#260).
+
+   This rule used to be `outline: none`, on the argument that "the ring belongs to the
+   palette, not to the field inside it" — but `.orca-palette` never drew one, so ⌘K put
+   focus somewhere with no focus indicator at all. Rule 10 allows suppressing the ring only
+   against a compensating affordance, and the way to make that true again was to draw the
+   compensating ring on the container or to stop suppressing this one. Stopping is the
+   smaller and the truer fix: the ring then stays one look, keyed on `:focus-visible` as the
+   spec keys it, rather than a second ring on `:focus-within` that would draw itself after a
+   mouse click too and would have to be kept in step with the first by hand.
+
+   The only palette-specific part is the offset. `.orca-palette` clips its content, and this
+   field spans the overlay's full width, so a ring offset *outwards* would have three of its
+   four sides clipped away. Inset by its own width it sits wholly inside the field: the same
+   token, the same 2px, and visible the whole way round. */
+.orca-palette__input:focus-visible {
+  outline-offset: calc(-1 * var(--stroke-focus));
 }
 .orca-palette__list {
   max-height: var(--palette-max-height);

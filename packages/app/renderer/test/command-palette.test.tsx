@@ -6,7 +6,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { THEMES } from "@orca/design";
 import { LIVE, harness, renderChrome, stubBridge, stubMatchMedia, type Harness } from "./harness.js";
+import { expectedToken, installDesignSystem, resolved, setTheme } from "./themes.js";
 import { commandEntries, filterEntries, groupEntries } from "../src/palette/entries.js";
 import type { RegisteredShortcut } from "../src/keyboard-map.js";
 import { parseJump } from "../src/palette/jump.js";
@@ -55,6 +57,36 @@ describe("the command palette", () => {
     await screen.findByRole("button", { name: "Attention" });
     fireEvent.click(screen.getByRole("button", { name: /Commands/ }));
     expect(palette()).toBeTruthy();
+  });
+
+  it("gives the field the system's own focus ring, drawn from --border-focus (#260)", async () => {
+    /* Rule 10 from the pixels' side, and the fix for #260. The field used to carry
+       `outline: none`, deferring to a ring on `.orca-palette` that was never written — so
+       ⌘K led to the only focusable thing on screen and nothing said so.
+
+       `focus-and-selection.test.ts` reads the stylesheets as text and asserts nothing
+       suppresses the ring anywhere; this asserts the other half, which text cannot: that
+       *this* field, focused, in the real cascade, comes out bound to `--border-focus`. The
+       expected side is the token's value in the theme, never a hex written here. */
+    installDesignSystem();
+    document.body.classList.add("orca"); // `index.html` puts it there; the layer is scoped under it.
+    mount();
+    await open();
+    query().focus();
+    expect(document.activeElement).toBe(query());
+
+    for (const theme of THEMES) {
+      setTheme(theme);
+      expect(resolved(query(), "outline-color"), theme).toBe(expectedToken(theme, "border-focus"));
+      // The ring's own width, and the palette-specific inset that keeps all four sides of
+      // it inside an overlay that clips its content. Both are tokens, read as tokens.
+      const width = resolved(document.documentElement, "--stroke-focus");
+      expect(resolved(query(), "outline-width"), theme).toBe(width);
+      expect(resolved(query(), "outline-style"), theme).toBe("solid");
+      expect(resolved(query(), "outline-offset"), theme).toBe(`calc(-1 * ${width})`);
+    }
+    setTheme(undefined);
+    document.body.classList.remove("orca");
   });
 
   it("lists every registered shortcut, each with its key beside it", async () => {

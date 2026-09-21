@@ -27,6 +27,15 @@ suppressed. It holds 3:1 on every surface and every status tint in both themes. 
 always visible for keyboard interaction; `:focus-visible` governs whether it is drawn after a
 mouse click, but it is never removed from the stylesheet.
 
+There is one ring and one rule that draws it, and nothing turns it off. The command palette
+was the exception until #260: its field suppressed the ring against a compensating ring on
+the overlay that was never drawn, so ⌘K led somewhere with no focus indicator at all. The
+field draws the ordinary ring now, and the palette draws none of its own — a `:focus-within`
+ring on the overlay would be a second look, drawn after a mouse click as well, to be kept in
+step with the first by hand. The field's only difference is that its ring is inset by its own
+width rather than offset outwards: the overlay clips its content and the field spans its full
+width, so an outward ring would lose three of its four sides. Same token, same 2px.
+
 Selection and focus are separate and look different: selection is `surface-selected` plus a
 2px `accent` left rail, focus is the ring. A row can be selected without being focused (the
 list has selection, the palette has focus), and the design must keep both legible at once.
