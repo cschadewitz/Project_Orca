@@ -1567,18 +1567,47 @@
   color: var(--status-waiting);
   font-weight: 500;
 }
+/* The primary pane. `min-height: 0` is not a tidy-up: a grid item's automatic minimum size
+   is its content, so without it a surface taller than the window grows this column instead
+   of being bounded by it — and `body { overflow: hidden }` then clips whatever falls off
+   the bottom with no scrollbar, no wheel and no keyboard way down (#275). It is also what
+   makes a surface's own `overflow-y: auto` mean anything, since a scroller needs a definite
+   height to have something to scroll against. */
 .orca-main {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: var(--surface-base);
   border-right: var(--stroke-hairline) solid var(--border-hairline);
 }
+/* The dock: a head that stays put over a body that scrolls. `overflow: hidden` here is the
+   clip that keeps the enter animation and the overlay's shadow inside the column — it is
+   not a scroll region, and before #275 it was the reason a panel body taller than the
+   window simply disappeared. The scroll is `.orca-panel__body`'s, one level in, so whatever
+   a surface hands the dock scrolls without knowing it is in a dock. */
 .orca-panel {
+  display: flex;
+  flex-direction: column;
   background: var(--surface-base);
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   animation: orca-panel-enter var(--duration-medium) var(--ease-entrance);
+}
+/* A bar is its height and nothing else: scoped to the dock rather than written on
+   `.orca-pane__head`, which is also the virtual list's sticky context header and is not a
+   flex item there. */
+.orca-panel > .orca-pane__head {
+  flex: none;
+}
+/* The one scroll region in the dock, and the reason a surface's panel content needs none of
+   its own. A block rather than a flex column: `.orca-artifact` is `height: 100%` and reads
+   that off this box, and a panel body that is a stack of prose should size to its prose. */
+.orca-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 @keyframes orca-panel-enter {
   from {

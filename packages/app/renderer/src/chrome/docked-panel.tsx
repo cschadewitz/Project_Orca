@@ -53,13 +53,20 @@ export function DockedPanel({ onClose, content }: DockedPanelProps): JSX.Element
           </span>
         </Button>
       </div>
-      {content !== undefined ? (
-        content.body
-      ) : target === undefined ? (
-        <StateView kind="empty" title="Nothing pinned" body="Artifacts open here — click one on a step." />
-      ) : (
-        <ArtifactPanel target={target} />
-      )}
+      {/* The dock's scroll region, and the dock's rather than the content's (#275). A
+          surface hands up a `body` without knowing how tall the column is or whether it is
+          a grid column or an overlay, so the one thing it cannot decide is whether it needs
+          a scroller — and a panel that clips what a person put there to read is the worst
+          version of that. `.orca-panel__body` is the region; the head above it stays put. */}
+      <div className="orca-panel__body">
+        {content !== undefined ? (
+          content.body
+        ) : target === undefined ? (
+          <StateView kind="empty" title="Nothing pinned" body="Artifacts open here — click one on a step." />
+        ) : (
+          <ArtifactPanel target={target} />
+        )}
+      </div>
     </div>
   );
 }

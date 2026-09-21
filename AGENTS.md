@@ -81,6 +81,22 @@ rather than writing class names, and see them all in both themes at `#preview` i
 (`#type` proves the bundled faces and glyphs). If an implementation has to diverge from
 `component-api.d.ts`, correct that file in the same PR.
 
+**Say where your screen scrolls; the window will not scroll it for you.** `body` is
+`overflow: hidden` and `.orca-window` is a fixed three-row grid, so a box that outgrows its
+share is clipped and unreachable — no scrollbar, no wheel, no keyboard way down, and nothing
+that looks like a failure (#275). The shell owns two of the answers already: `.orca-main` and
+`.orca-panel` are `min-height: 0` so a surface is bounded by the window rather than stretching
+past it, and `.orca-panel__body` is the dock's scroll region, so anything a surface hands up
+as panel content scrolls without declaring a scroller of its own. What is left is your choice
+of shape: a surface that is **a stack of content** scrolls at its root (`flex: 1` plus
+`overflow-y: auto` — Attention), and a surface that is **its own split layout** bounds its
+columns and scrolls the region holding the long thing (Runs, Plan, Config, Agents, the
+workflow viewer). Never both, and never a scroller inside `.orca-list__scroller` — the
+virtualiser windows rows against that box. `scroll-sweep.test.tsx` walks every surface in
+`SURFACES` and will fail on a new one that declares neither;
+`docs/design/60-implementation.md` ("Scrolling is structural") has the rest, including the
+floor a `VirtualList` needs inside a scrolling root.
+
 **Every popover is a `Menu`.** Roving focus with `↑`/`↓`/`Home`/`End`, `Enter` to choose,
 typeahead on a letter, focus onto the first item on open and back to the trigger on close —
 including on `Esc`. Placement flips rather than clips. Do not add an `Escape` handler, an
