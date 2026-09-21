@@ -438,7 +438,7 @@ describe("plan.changed", () => {
   it("reaches a store-wide subscriber after a write, and never a run-scoped one", async () => {
     const f = await planFixture();
     const sent: NotificationMessage[] = [];
-    const source = { subscribe: () => () => {}, events: async () => [] };
+    const source = { subscribe: () => () => {}, eventsRange: async () => [] };
     const wide = new Subscription({
       id: "sub-1",
       params: { methods: [PLAN_CHANGED] },
