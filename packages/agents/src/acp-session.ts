@@ -8,7 +8,16 @@
  */
 import { isAbsolute, relative } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
-import { newId, OrcaError, silentLogger, type AgentSpec, type Clock, type Logger, systemClock } from "@orca/core";
+import {
+  effectivePermissionPolicy,
+  newId,
+  OrcaError,
+  silentLogger,
+  systemClock,
+  type AgentSpec,
+  type Clock,
+  type Logger,
+} from "@orca/core";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
 import { resolvePermission } from "./permissions.js";
 import {
@@ -54,6 +63,13 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const roots = [opts.cwd, ...(opts.additionalDirectories ?? [])];
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   let acpSessionId = "";
+  // The *evaluated* policy, not `opts.agent.permissions`, which is only what the config says.
+  // Until #140 the parsed config carried `DEFAULT_PERMISSION_POLICY`'s rules because the
+  // schema injected them, so reading the spec here happened to be right; now the layering is
+  // explicit and this is where it has to be applied, or an agent with no `permissions:` block
+  // would be asked about reading its own workspace. No sidecar overlay yet - that is #176's
+  // plumbing, and passing none is the same answer this line has always given.
+  const policy = effectivePermissionPolicy(opts.agent.permissions);
 
   const proc: AgentProcessHandle = await opts.host.spawnAgent(opts.agent, {
     cwd: opts.cwd,
@@ -74,7 +90,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       for (const l of listeners) l(e);
     })
     .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
-      const { response, decision } = await resolvePermission(opts.agent.permissions, {
+      const { response, decision } = await resolvePermission(policy, {
         request: ctx.params,
         ...(opts.askPermission ? { ask: opts.askPermission } : {}),
       });

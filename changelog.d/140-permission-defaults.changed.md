@@ -35,3 +35,8 @@
   and there was none" is the one a reader of the log has to act on. It was already refused
   rather than parked — a permission cannot outlive the session that raised it — so it fails
   the tool call and not the run.
+- **agents:** the ACP session evaluates the *effective* policy rather than the configured one.
+  It read `agents[].permissions` straight from the parsed config, which was right only for as
+  long as parsing injected the default rules into it; now that they are an explicit layer,
+  `openAcpSession` applies it. Without this an agent with no `permissions:` block would have
+  been asked about reading files in its own workspace.
