@@ -53,6 +53,13 @@ export interface RunContextDeps {
 export class RunContext {
   readonly abort = new AbortController();
   /**
+   * Set when this interpreter's run lease was taken away (#267). The abort that follows is
+   * *not* an operator's cancel: the log belongs to whoever holds the lease now, so the
+   * interpreter stops without appending anything to it - no `step.cancelled`, no
+   * `run.cancelled`. Only the orchestrator's lease heartbeat sets this.
+   */
+  leaseLost = false;
+  /**
    * Artifact bodies by content hash. Blobs are content-addressed and therefore immutable, and
    * `evalContext()` runs for every render, condition, route and input resolution - without this
    * each of those re-read every visible artifact from disk.

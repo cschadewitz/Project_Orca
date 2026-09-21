@@ -213,7 +213,12 @@ a run. Breaking a lease that is still live is the operator's act, the way releas
 claim is: `orca leases` lists them, `orca leases break <runId> --force` takes one, and
 because a resumed parent drives the children its interrupted attempt spawned, `break`
 covers the run's subtree unless `--keep` says otherwise. The broken holder finds out at
-its next heartbeat and cancels itself rather than continuing to write.
+its next heartbeat and stops there, **without writing** — not even the `step.cancelled` and
+`run.cancelled` it would append for a cancel of its own, because the log is the new holder's
+now and a cancellation written into it would cancel the run the operator was taking over.
+It logs why and raises `RUN_LEASED` to whoever called `run()`; the run itself is left
+exactly as the last write found it, still running, its interrupted step still open, for the
+new holder to re-attempt.
 
 Claims and leases answer different questions and neither replaces the other: a claim says
 who *owns a work item*, outlives the process that took it, and is never released on its

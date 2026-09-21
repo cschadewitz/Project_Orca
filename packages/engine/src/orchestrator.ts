@@ -617,11 +617,21 @@ export class Orchestrator {
    * reader cannot corrupt anyone's story.
    */
   private async executeLeased(runId: string): Promise<RunState> {
-    const rc = await this.loadContext(runId);
-    // A finished run is not driven at all, so it needs no lease.
-    if (isTerminal(rc.state)) return rc.state;
-    const held = await this.takeRunLease(runId, rc);
+    // The summary comes first because it is cheap - it never replays the step events - and it
+    // answers both questions that have to be answered before the log is reduced: what to write
+    // on the lease, and whether this run is finished. A finished run is not driven at all, so
+    // it needs no lease and must never be left holding one.
+    const summary = await this.getSummary(runId);
+    if (isTerminalStatus(summary.status)) return this.getState(runId);
+    // Then the lease, *before* `loadContext` (#267): loading caches a RunContext in `this.live`,
+    // and an interpreter that is about to be refused must leave nothing behind there for the
+    // next attach - or for a `getState` or `cancel` in this process - to reuse.
+    let rc: RunContext | undefined;
+    const held = await this.takeRunLease(runId, summary.workflowId, () => rc);
     try {
+      rc = await this.loadContext(runId);
+      // Terminal again only if it finished between the summary and here; releasing is enough.
+      if (isTerminal(rc.state)) return rc.state;
       return await this.execute(rc);
     } finally {
       await held.release();
@@ -632,15 +642,22 @@ export class Orchestrator {
    * Claim the right to interpret `runId`, and keep claiming it: an attached interpreter
    * heartbeats for as long as it is attached, so a second one can tell "still working, mostly
    * waiting on an agent" from "died an hour ago" without a human deciding. Losing the lease
-   * mid-run (only an operator can take a live one away) cancels the run rather than letting
-   * two interpreters append to one log.
+   * mid-run (only an operator can take a live one away) stops this interpreter where it
+   * stands, without a further write, rather than letting two interpreters append to one log.
+   *
+   * `attached` is read at heartbeat time rather than taken as a value because the lease is
+   * taken before the context exists; a lease lost in that window has nothing to stop yet.
    */
-  private async takeRunLease(runId: string, rc: RunContext): Promise<HeldLease> {
+  private async takeRunLease(
+    runId: string,
+    note: string,
+    attached: () => RunContext | undefined,
+  ): Promise<HeldLease> {
     const lease = await this.stores.leases.acquire({
       resource: runLeaseResource(runId),
       holder: this.leaseHolder,
       ttlMs: this.leaseTtlMs,
-      note: rc.definition.id,
+      note,
     });
     if (!ownsLease(lease, this.leaseHolder))
       throw new OrcaError(
@@ -651,7 +668,15 @@ export class Orchestrator {
     return keepLease(this.stores.leases, lease, {
       ...(this.leaseRenewMs !== undefined ? { renewMs: this.leaseRenewMs } : {}),
       onLost: () => {
-        rc.logger.error("run lease lost; stopping this interpreter", { resource: lease.resource });
+        const rc = attached();
+        (rc?.logger ?? this.logger).error("run lease lost; stopping this interpreter", {
+          resource: lease.resource,
+          runId,
+        });
+        if (!rc) return;
+        // The flag, not the abort reason, is what tells the interpreter apart from an operator's
+        // cancel: a cancel we own still writes `run.cancelled`, a lost lease writes nothing.
+        rc.leaseLost = true;
         rc.abort.abort(`lease on run ${runId} was taken away; another process may now be driving it`);
       },
     });
@@ -759,6 +784,18 @@ export class Orchestrator {
       }
     } catch (e) {
       const err = describeError(e);
+      if (rc.leaseLost) {
+        // The lease was taken away mid-run (#267). Another interpreter may already be reducing
+        // and extending this log, so there is nothing safe to say here: a `step.cancelled` or
+        // `run.cancelled` from this process would cancel *their* run. Stop, say why in the log
+        // of this process (not of the run), and let the caller know the run is not ours.
+        log.error("run lease lost; stopping without writing to the run's log", { stoppedAt: err.code });
+        throw new OrcaError(
+          "RUN_LEASED",
+          `the lease on run ${runId} was taken away while it was being interpreted here; this interpreter stopped without writing. The run is now whoever holds the lease's to drive.`,
+          { runId },
+        );
+      }
       if (err.code === "CANCELLED" || rc.abort.signal.aborted) {
         // A step interrupted mid-flight (an agent turn, a parked human question) never reports back; close it here.
         for (const s of openSteps(rc.state)) await rc.emit({ type: "step.cancelled", payload: { stepRunId: s.id } });
@@ -1139,7 +1176,12 @@ export function runLeaseResource(runId: string): string {
 }
 
 export function isTerminal(state: RunState): boolean {
-  return state.run.status === "completed" || state.run.status === "failed" || state.run.status === "cancelled";
+  return isTerminalStatus(state.run.status);
+}
+
+/** The same question of a status alone, for the summary a run is leased against. */
+function isTerminalStatus(status: RunSummary["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 /** Steps that have been scheduled but not yet settled (scheduled, running or waiting). */

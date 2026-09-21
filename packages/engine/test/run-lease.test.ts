@@ -14,7 +14,7 @@ import {
   runLeaseResource,
   type RunLeaseOptions,
 } from "@orca/engine";
-import { memoryStores, type Stores } from "@orca/store";
+import { memoryStores, type EventStore, type Stores } from "@orca/store";
 
 const WORKFLOW = `
 id: leased
@@ -75,6 +75,21 @@ function make(stores: Stores, step: () => Promise<void>, lease?: RunLeaseOptions
       logger: recordingLogger(logged),
       ...(lease ? { lease } : {}),
     }),
+  };
+}
+
+/**
+ * The same store, with every *full* read counted. `readTypes` goes to the inner store
+ * directly, so the cheap summary projection an attach begins with is not counted as reducing
+ * the whole log - which is the thing a refused interpreter must not do (#267).
+ */
+function countingReads(inner: EventStore, count: { full: number }): EventStore {
+  return {
+    append: (input) => inner.append(input),
+    read: (runId) => (count.full++, inner.read(runId)),
+    readTypes: (runId, types) => inner.readTypes(runId, types),
+    listRuns: () => inner.listRuns(),
+    subscribe: (listener, filter) => inner.subscribe(listener, filter),
   };
 }
 
@@ -151,20 +166,59 @@ describe("run leases", () => {
     expect(await first.stores.leases.list()).toEqual([]);
   });
 
-  it("losing the lease mid-run stops that interpreter instead of letting two write one log", async () => {
+  it("losing the lease mid-run stops that interpreter without writing to the log it no longer owns", async () => {
     const g = gate();
     const app = make(memoryStores(), g.step, { renewMs: 2 });
     const runId = await openRun(app);
-    const driving = app.orchestrator.run(runId);
+    const driving = app.orchestrator.run(runId).catch((e: unknown) => e as OrcaError);
     await g.entered;
 
+    const before = (await app.stores.events.read(runId)).map((e) => `${e.seq}:${e.type}`);
     await app.orchestrator.breakLease(runId, { force: true });
     await until("the heartbeat to notice", () => app.logged.includes("run lease lost; stopping this interpreter"));
     g.release();
-    const state = await driving;
-    expect(state.run.status).toBe("cancelled");
-    const cancelled = (await app.stores.events.read(runId)).find((e) => e.type === "run.cancelled");
-    expect((cancelled?.payload as { reason?: string }).reason ?? "").toContain("lease");
+
+    // Not one event after the break: a `step.cancelled`/`run.cancelled` from here would land in
+    // the log the operator has just handed to somebody else, and cancel *their* run (#267).
+    expect((await app.stores.events.read(runId)).map((e) => `${e.seq}:${e.type}`)).toEqual(before);
+    expect((await app.orchestrator.getSummary(runId)).status).toBe("running");
+    // The caller is told rather than handed a state that stopped for no stated reason.
+    const outcome = await driving;
+    expect(outcome).toBeInstanceOf(OrcaError);
+    expect((outcome as OrcaError).code).toBe("RUN_LEASED");
+    expect(app.logged).toContain("run lease lost; stopping without writing to the run's log");
+    // The lease that was taken away is the new holder's now; stopping must not release it.
+    expect(await app.stores.leases.get(runLeaseResource(runId))).toBeUndefined();
+  });
+
+  it("a refused interpreter reduces nothing, so a RUN_LEASED refusal leaves no context behind", async () => {
+    const g = gate();
+    const first = make(memoryStores(), g.step);
+    const runId = await openRun(first);
+    const driving = first.orchestrator.run(runId);
+    await g.entered;
+
+    const count = { full: 0 };
+    const second = make({ ...first.stores, events: countingReads(first.stores.events, count) }, noWait);
+    await expect(second.orchestrator.run(runId)).rejects.toMatchObject({ code: "RUN_LEASED" });
+    // The lease is decided before the log is read, so the refusal has nothing to cache: the
+    // next attach reduces the log the *holder* left, never the one this attempt saw.
+    expect(count.full).toBe(0);
+
+    g.release();
+    await driving;
+    expect((await second.orchestrator.getSummary(runId)).status).toBe("completed");
+    expect((await second.orchestrator.run(runId)).run.status).toBe("completed");
+  });
+
+  it("a finished run is not leased at all - reading it back must not leave a lease on file", async () => {
+    const app = make(memoryStores(), noWait);
+    const runId = await openRun(app);
+    expect((await app.orchestrator.run(runId)).run.status).toBe("completed");
+    expect(await app.stores.leases.list()).toEqual([]);
+
+    expect((await app.orchestrator.run(runId)).run.status).toBe("completed");
+    expect(await app.stores.leases.list()).toEqual([]);
   });
 
   it("breakLease refuses a live lease without force, and then finds nothing left to break", async () => {
