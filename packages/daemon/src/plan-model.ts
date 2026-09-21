@@ -516,9 +516,11 @@ export class PlanModel {
   /**
    * `journal.list`: one page of the audit trail, with `runs.events`'s cursor semantics.
    *
-   * The store reads the journal whole and this cuts it in memory, exactly as `runs.events`
-   * does and for the same reason: `JsonlLogDir` has no index by sequence number, and inventing
-   * one before a client has said how it pages would be guesswork.
+   * The store reads the journal whole and this cuts it in memory. `runs.events` no longer does
+   * (#208 gave the event store a ranged read), so this is now the last of the two and it says
+   * so rather than pointing at a sibling that has moved on: `JsonlLogDir` has no index by
+   * sequence number, and a plan's journal is orders of magnitude shorter than a run's log, so
+   * the range seam #208 built for one has not been worth building for the other yet.
    */
   async journalList(params: JournalListParams): Promise<JournalListResult> {
     const pass = this.pass();

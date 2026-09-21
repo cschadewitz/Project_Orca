@@ -364,10 +364,13 @@ describe("plan writes", () => {
     });
   });
 
+  // `claims.release` is a run control, not a plan write (#169): it is in `CONTROL_METHODS` on
+  // the wire and needs no `PlanService`. The plan fixture still exercises it, because a plan
+  // is what puts a claim on a work item in the first place.
   it("claims.release frees an item whose owner is gone, and says what it did not fix", async () => {
     const f = await planFixture();
     const result = ClaimsReleaseResultSchema.parse(
-      await f.control.releaseClaim({ workItemId: f.ids["auth-metrics"]!, force: false }),
+      await f.runControl.releaseClaim({ workItemId: f.ids["auth-metrics"]!, force: false }),
     );
     expect(result.claim.workItemId).toBe(f.ids["auth-metrics"]);
     expect(result.claim.owner.runId).toBe("run-metrics");
@@ -377,7 +380,7 @@ describe("plan writes", () => {
     expect(await f.stores.claims.get(f.ids["auth-metrics"]!)).toBeUndefined();
     expect(result.note).toContain("still in-progress");
 
-    await expect(f.control.releaseClaim({ workItemId: "wi_nope", force: false })).rejects.toMatchObject({
+    await expect(f.runControl.releaseClaim({ workItemId: "wi_nope", force: false })).rejects.toMatchObject({
       code: "CLAIM_NOT_FOUND",
     });
   });
@@ -385,12 +388,12 @@ describe("plan writes", () => {
   it("claims.release refuses while the owner run is live, and obeys force", async () => {
     const f = await planFixtureWithLiveClaim();
     const workItemId = f.ids["auth-api"]!;
-    await expect(f.control.releaseClaim({ workItemId, force: false })).rejects.toMatchObject({ code: "RUN_STATE" });
+    await expect(f.runControl.releaseClaim({ workItemId, force: false })).rejects.toMatchObject({ code: "RUN_STATE" });
     // `claims.list` predicted that refusal, which is what lets a client grey the action out.
     const listed = await f.reads.claimsList({ workItemId });
     expect(listed.claims[0]!.owner.releasable).toBe(false);
 
-    const forced = ClaimsReleaseResultSchema.parse(await f.control.releaseClaim({ workItemId, force: true }));
+    const forced = ClaimsReleaseResultSchema.parse(await f.runControl.releaseClaim({ workItemId, force: true }));
     expect(forced.claim.owner.runId).toBe("run-live");
     // This item is not in-progress, so there is nothing left over to warn about.
     expect(forced.note).toBeUndefined();
@@ -403,21 +406,20 @@ describe("the plan surface in the handshake", () => {
     orcaVersion: "0.5.0",
     capabilities: readOnly ? ["runs.read", "plan.read"] : ["runs.read", "runs.control", "plan.read", "plan.write"],
     reads: f.reads,
-    ...(readOnly ? {} : { planControl: f.control }),
+    // Both switches, because `--read-only` is one switch over both halves: the run controls
+    // (which `claims.release` is one of since #169) and the plan writes go together.
+    ...(readOnly ? {} : { control: f.runControl, planControl: f.control }),
   });
 
   it("advertises the nine reads, and the writes only when it is not read-only", async () => {
     const f = await planFixture();
     const writable = Object.keys(methodsFor(base(f, false)));
     for (const method of PLAN_READ_METHODS) expect(writable).toContain(method);
-    for (const method of [
-      "dependencies.waive",
-      "decisions.decide",
-      "decisions.reopen",
-      "risks.update",
-      "claims.release",
-    ])
+    for (const method of ["dependencies.waive", "decisions.decide", "decisions.reopen", "risks.update"])
       expect(writable).toContain(method);
+    // A control method, and it is in the table on `control` rather than on `planControl`.
+    expect(writable).toContain("claims.release");
+    expect(Object.keys(methodsFor({ ...base(f, false), planControl: undefined }))).toContain("claims.release");
 
     const readOnly = Object.keys(methodsFor(base(f, true)));
     for (const method of PLAN_READ_METHODS) expect(readOnly).toContain(method);

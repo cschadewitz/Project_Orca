@@ -1,5 +1,5 @@
 /**
- * The plan's writing methods, and `claims.release`.
+ * The plan's writing methods.
  *
  * They sit apart from `ControlModel` (control.ts) because they are a different kind of write.
  * A run control takes the run's single-writer lease, drives an interpreter and answers when
@@ -14,18 +14,17 @@
  * for logs and is not retained per connection), so `actor` is settable by the embedder rather
  * than derived from a client that has not told us who it is.
  *
- * **`claims.release` is here and not in `ControlModel` for the same reason.** It is
- * `Orchestrator.releaseClaim` - a compare-and-delete against the store - and it is about a
- * work item, not about driving a run. It keeps the CLI's two behaviours exactly: refuse while
- * the owner could still resume unless `force`, and say so when the item is left `in-progress`
- * by a dead run's log (#88).
+ * **`claims.release` used to be here and is now in `ControlModel`.** It looked like a plan
+ * write - it is about a work item - but `handshake.ts` has always listed it in
+ * `CONTROL_METHODS`, and a table that disagreed with the contract is not a taxonomy, it is a
+ * bug: a control daemon over a store with no plan in it advertised `runs.control` and then
+ * answered "unknown method" to one of the methods that capability names. It needs
+ * `Orchestrator.releaseClaim` and the run projection's `ClaimView`, both of which
+ * `ControlModel` already has, and nothing from `PlanService` at all (#169, #88).
  */
 import { OrcaError, type Clock, type PlanOrigin } from "@orca/core";
 import type { Orchestrator, PlanService } from "@orca/engine";
 import type {
-  ClaimsReleaseParams,
-  ClaimsReleaseResult,
-  ClaimView,
   DecisionsDecideParams,
   DecisionsDecideResult,
   DecisionsReopenParams,
@@ -185,34 +184,4 @@ export class PlanControlModel {
     return { risk: await this.plans.riskViewOf(plan.id, risk), asOf: this.clock.isoNow() };
   }
 
-  /**
-   * `claims.release`: take a work item away from the run that claimed it (#88).
-   *
-   * `Orchestrator.releaseClaim` is the whole of the rule - it refuses while the owner could
-   * still resume unless `force`, and it compares and deletes against the incumbent it
-   * inspected, so a claim another run took in the meantime survives. What is added here is
-   * the `ClaimView` the wire speaks and the note `orca claims release` prints: the claim
-   * decides who may *launch* the item, and an item left `in-progress` by a dead run's log is
-   * still treated as running by the scheduler until that status changes.
-   */
-  async releaseClaim(params: ClaimsReleaseParams): Promise<ClaimsReleaseResult> {
-    const asOf = this.clock.isoNow();
-    // The claim as `claims.list` would have shown it, taken before the release, because
-    // afterwards there is no claim to project.
-    const before = await this.reads.claimsList({ workItemId: params.workItemId });
-    const released = await this.orc.releaseClaim(params.workItemId, { force: params.force });
-    const claim: ClaimView = before.claims[0] ?? {
-      workItemId: released.workItemId,
-      branch: released.branch,
-      claimedAt: released.at,
-      owner: { runId: released.runId, status: "stale", missing: true, releasable: true },
-      ...(released.stepRunId ? { stepRunId: released.stepRunId } : {}),
-    };
-    const item = await this.orc.stores.workItems.get(params.workItemId);
-    const note =
-      item?.status === "in-progress"
-        ? `${params.workItemId} is still in-progress${item.runId ? ` (run ${item.runId})` : ""}; the plan scheduler treats it as running until that status changes`
-        : undefined;
-    return { claim, ...(note ? { note } : {}), asOf };
-  }
 }

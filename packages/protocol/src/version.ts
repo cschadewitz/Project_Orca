@@ -74,6 +74,23 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * differently - so a minor by this file's rule. A 1.6 client's `parseNotification` drops
  * `plan.changed` as a method it has never heard of, which is what it will go on doing, and a
  * 1.6 client reading `hello.methods` simply sees fourteen names it does not call.
+ *
+ * The plan surface *does* mint capabilities, unlike the configuration methods above:
+ * `plan.read` and `plan.write` join `DAEMON_CAPABILITIES` in 1.7. They are not a `runs.read` /
+ * `runs.control` restatement - a daemon can serve a store that has no plan in it at all, and
+ * then answers the run methods and none of the plan ones - so a client that wants to know
+ * whether to draw a plan surface has a question to ask that `runs.read` cannot answer. Both
+ * are derived from what the daemon was actually built with rather than asserted, so a
+ * capability and the methods behind it cannot disagree. Two new names in an enum a 1.6 client
+ * reads by lookup: it finds the two it knows and ignores the rest.
+ *
+ * `EffectivePermissionRule.source` gains a third value, `default`, for the rules
+ * `@orca/agents` appends after both documents (#140). An addition to an enum inside a
+ * `config.get` result, not a new field: 1.7 is the first version to carry `config.get` at all,
+ * so no client has ever seen this field with only two values in it. It is deliberately not a
+ * `ConfigDocument` - there is no file behind it and `config.set` cannot address it - and a
+ * client that switches on the source shows it as the floor it is rather than as config
+ * somebody wrote.
  */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 7 };
 

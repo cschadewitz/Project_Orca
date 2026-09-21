@@ -585,9 +585,19 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
         // orchestrator's listeners, and still shows up on the next read - which is a
         // property of an in-memory listener list, not of the store (#196 made the store
         // multi-process safe). `plan.changed` has the same boundary, for the same reason.
-        capabilities: readOnly
-          ? ["runs.read", "runs.subscribe", "plan.read"]
-          : ["runs.read", "runs.subscribe", "runs.control", "plan.read", "plan.write"],
+        //
+        // Derived, never asserted: `plan.read` is exactly "this read model has a plan" and
+        // `plan.write` exactly "a PlanControlModel was built", which are the same two facts
+        // `methodsFor` puts the plan methods in the table on. Hardcoding them meant a daemon
+        // over a store with no plan advertised a capability whose nine methods `hello` did
+        // not list, and a client hid nothing on the strength of it.
+        capabilities: [
+          "runs.read",
+          "runs.subscribe",
+          ...(control ? (["runs.control"] as const) : []),
+          ...(reads.plans ? (["plan.read"] as const) : []),
+          ...(planControl ? (["plan.write"] as const) : []),
+        ],
         reads,
         agents,
         config,

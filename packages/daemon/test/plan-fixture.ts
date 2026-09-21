@@ -18,7 +18,7 @@ import { AgentRegistry } from "@orca/agents";
 import { FakeClock, TemplateRegistry, WorkflowRegistry, silentLogger, type PlanOrigin } from "@orca/core";
 import { Orchestrator, PlanService } from "@orca/engine";
 import { memoryStores, type Stores } from "@orca/store";
-import { PlanControlModel, PlanModel, ReadModel } from "../src/index.js";
+import { ControlModel, PlanControlModel, PlanModel, ReadModel } from "../src/index.js";
 
 export const PLAN_START = Date.UTC(2026, 2, 1, 9, 0, 0);
 
@@ -36,6 +36,8 @@ export interface PlanFixture {
   reads: ReadModel;
   plans: PlanModel;
   control: PlanControlModel;
+  /** `claims.release` moved here from `PlanControlModel` (#169); it needs no plan. */
+  runControl: ControlModel;
   /** The plan every method in the tests is called with. */
   planId: string;
   /** `slug -> workItemId`, so an assertion can name an item the way a person does. */
@@ -147,6 +149,7 @@ export async function planFixture(): Promise<PlanFixture> {
   const reads = new ReadModel({ orchestrator, plan, clock });
   const plans = reads.plans!;
   const control = new PlanControlModel({ plan, orchestrator, plans, reads, clock });
+  const runControl = new ControlModel({ orchestrator, reads, clock });
 
   return {
     clock,
@@ -156,6 +159,7 @@ export async function planFixture(): Promise<PlanFixture> {
     reads,
     plans,
     control,
+    runControl,
     planId: p.id,
     ids,
     decisionId: registered.decisions[0]!.id,

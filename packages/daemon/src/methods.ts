@@ -469,10 +469,16 @@ export const risksUpdate: Method<RisksUpdateParams, RisksUpdateResult> = {
   handle: (params, ctx) => planControl(ctx).updateRisk(params),
 };
 
-/** `claims.release`: take a work item away from the run that claimed it (#88). */
+/**
+ * `claims.release`: take a work item away from the run that claimed it (#88).
+ *
+ * Answered by `ControlModel`, not `PlanControlModel`: it is in `CONTROL_METHODS` on the wire
+ * and it touches no plan, so gating it on one made a control daemon over a plan-less store
+ * refuse a method its own `hello` had promised (#169).
+ */
 export const claimsRelease: Method<ClaimsReleaseParams, ClaimsReleaseResult> = {
   params: ClaimsReleaseParamsSchema,
-  handle: (params, ctx) => planControl(ctx).releaseClaim(params),
+  handle: (params, ctx) => control(ctx).releaseClaim(params),
 };
 
 // ---------------------------------------------------------------- the agents
@@ -553,21 +559,29 @@ export const planMethods: MethodTable = {
   [JOURNAL_LIST_METHOD]: journalList,
 };
 
-/** The four run-writing methods, kept apart so `--read-only` is one omission and not four. */
+/**
+ * The five writing methods that need no plan, kept apart so `--read-only` is one omission and
+ * not five.
+ *
+ * `claims.release` is one of them (#169): `handshake.ts` has always listed it in
+ * `CONTROL_METHODS`, it needs only `Orchestrator.releaseClaim` and the run projection, and a
+ * control daemon over a store with no plan in it must answer every method the `runs.control`
+ * capability it advertises names.
+ */
 export const controlMethods: MethodTable = {
   [INPUTS_ANSWER_METHOD]: inputsAnswer,
   [RUNS_RESUME_METHOD]: runsResume,
   [RUNS_CANCEL_METHOD]: runsCancel,
   [RUNS_START_METHOD]: runsStart,
+  [CLAIMS_RELEASE_METHOD]: claimsRelease,
 };
 
-/** The five plan-writing methods, omitted by `--read-only` alongside the four above. */
+/** The four plan-writing methods, omitted by `--read-only` alongside the five above. */
 export const planControlMethods: MethodTable = {
   [DEPENDENCIES_WAIVE_METHOD]: dependenciesWaive,
   [DECISIONS_DECIDE_METHOD]: decisionsDecide,
   [DECISIONS_REOPEN_METHOD]: decisionsReopen,
   [RISKS_UPDATE_METHOD]: risksUpdate,
-  [CLAIMS_RELEASE_METHOD]: claimsRelease,
 };
 
 export const agentMethods: MethodTable = {
