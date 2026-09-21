@@ -778,6 +778,10 @@ export class Orchestrator {
   private async route(rc: RunContext, nodeId: string, result: StepResult): Promise<Edge | undefined> {
     const edges = outgoing(rc.definition, nodeId);
     if (edges.length === 0) return undefined;
+    // Only build the eval context when something asks a question of it. Since #270 an
+    // unreadable artifact body fails the context instead of reading as "", and a graph
+    // whose edges are all unconditional has no reason to touch a blob to pick one.
+    if (!edges.some((e) => e.when)) return edges.find((e) => !e.when);
     const ctx = await rc.evalContext({ choice: result.choice ?? rc.lastChoice(), result });
     for (const e of edges) if (e.when && evaluateCondition(e.when, ctx)) return e;
     return edges.find((e) => !e.when);
