@@ -193,6 +193,7 @@ describe("density", () => {
     expect(p.saved()).toEqual({
       theme: "system",
       density: { config: "comfortable", runs: "compact" },
+      panes: {},
       alerts: DEFAULT_PREFERENCES.alerts,
     });
   });

@@ -6,7 +6,7 @@ export type ColorToken = 'surface-canvas' | 'surface-base' | 'surface-raised' | 
 
 export type SpacingToken = 'space-0-5' | 'space-1' | 'space-1-5' | 'space-2' | 'space-2-5' | 'space-3' | 'space-4' | 'space-5' | 'space-6' | 'space-8' | 'space-12' | 'space-16';
 export type RadiusToken = 'radius-none' | 'radius-xs' | 'radius-sm' | 'radius-md' | 'radius-lg' | 'radius-full';
-export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'col-classification' | 'col-slug' | 'col-request' | 'col-status' | 'col-score' | 'col-risk' | 'col-claim' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'panel-w-policy' | 'node-min-width' | 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top' | 'editor-min-height';
+export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'col-classification' | 'col-slug' | 'col-request' | 'col-status' | 'col-score' | 'col-risk' | 'col-claim' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'panel-w-policy' | 'node-min-width' | 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top' | 'editor-min-height' | 'splitter-thickness' | 'pane-step' | 'pane-min-sidebar' | 'pane-max-sidebar' | 'pane-min-side' | 'pane-max-side' | 'pane-min-stack';
 export type BorderToken = 'stroke-hairline' | 'stroke-rail' | 'stroke-focus' | 'stroke-edge-active' | 'stroke-double' | 'stroke-dash-untaken' | 'stroke-dash-back' | 'stroke-dash-draft';
 export type ShadowToken = 'shadow-none' | 'shadow-popover' | 'shadow-modal' | 'shadow-sticky';
 export type DurationToken = 'duration-instant' | 'duration-fast' | 'duration-medium' | 'duration-pulse';
@@ -153,6 +153,24 @@ export const GRAPH_GEOMETRY: Record<GraphGeometryToken, number> = {
   'node-h': 64,
   'layer-gap': 64,
   'rank-gap': 32,
+};
+
+export type PaneGeometryToken = 'pane-step' | 'pane-min-sidebar' | 'pane-max-sidebar' | 'pane-min-side' | 'pane-max-side' | 'pane-min-stack';
+
+/**
+ * The pane splitters' step and limits in px (#276). A drag is arithmetic on pointer
+ * coordinates and a clamp is a comparison against a number, so — as with `GRAPH_GEOMETRY` —
+ * no `var()` can be written where these are used. The boundary registry takes them as
+ * values rather than reaching into the cascade, so clamping stays a plain function with a
+ * plain test.
+ */
+export const PANE_GEOMETRY: Record<PaneGeometryToken, number> = {
+  'pane-step': 16,
+  'pane-min-sidebar': 160,
+  'pane-max-sidebar': 420,
+  'pane-min-side': 320,
+  'pane-max-side': 720,
+  'pane-min-stack': 120,
 };
 
 export type RunStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'blocked' | 'held' | 'stale';

@@ -1487,21 +1487,37 @@
   font-family: var(--font-mono);
   color: var(--ink-secondary);
 }
+/* Three tracks and a splitter between the first two, five with the panel docked (#276). The
+   width of a pane is `var(--pane-<id>, <the token>)`: the token stays the single statement of
+   the default and a dragged width is an override of it, never a second default. The `auto`
+   tracks are the splitters, which are absent below their breakpoints — the collapsed rule
+   below goes back to two tracks because nothing is there to size. */
 .orca-body {
   display: grid;
-  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-columns: var(--pane-sidebar, var(--sidebar-width)) auto minmax(0, 1fr);
   min-height: 0;
 }
 .orca-body--panel {
-  grid-template-columns: var(--sidebar-width) 1fr var(--panel-width);
+  grid-template-columns: var(--pane-sidebar, var(--sidebar-width)) auto minmax(0, 1fr) auto var(
+      --pane-panel,
+      var(--panel-width)
+    );
 }
 /* Below the sidebar breakpoint (packages/design/tokens.ts BREAKPOINTS['bp-sidebar-collapse'],
-   applied in JS since a media query cannot read a custom property): icon-only sidebar. */
+   applied in JS since a media query cannot read a custom property): icon-only sidebar, and a
+   dragged width that does not fight it — the collapsed track ignores `--pane-sidebar`, and
+   `App` renders no splitter to drag. The hairline is the sidebar's again while there is no
+   splitter to draw it. */
 .orca-body[data-sidebar="collapsed"] {
-  grid-template-columns: var(--sidebar-width-collapsed) 1fr;
+  grid-template-columns: var(--sidebar-width-collapsed) minmax(0, 1fr);
+}
+.orca-body[data-sidebar="collapsed"] .orca-sidebar {
+  border-right: var(--stroke-hairline) solid var(--border-hairline);
 }
 /* Below the panel breakpoint (BREAKPOINTS['bp-panel-overlay']): the panel floats over the
-   primary pane instead of taking a grid column. */
+   primary pane instead of taking a grid column. Its width is the token's, for the same
+   reason — an overlay is the layout the window is too narrow for, so it is not a boundary a
+   person is offered. */
 .orca-body[data-panel="overlay"] {
   position: relative;
 }
@@ -1514,8 +1530,72 @@
   box-shadow: var(--shadow-modal);
   z-index: var(--z-panel-overlay);
 }
+
+/* ---------- pane splitters ---------- */
+
+/* A draggable boundary between two panes (#276): a `role="separator"` with a tab stop, arrow
+   keys and `aria-valuenow`, not a decoration.
+
+   **It draws the boundary's hairline, and the panes either side of it draw none.** One
+   separator per boundary: a splitter beside a pane that kept its own border would be two
+   lines two pixels apart. Where a splitter is not rendered — the collapsed sidebar, the
+   overlaid panel — the rule that replaces it hands the hairline back, above.
+
+   The line is centred in the gutter and thickens to the rail width on hover and through a
+   drag, which is the whole of the affordance: accent means interactive (rule 5), and a
+   boundary a person is holding is as interactive as it gets. */
+.orca-splitter {
+  position: relative;
+  /* A grid item takes its `auto` track and a flex item would otherwise shrink out of it: the
+     workflow inspector's boundary sits in a flex row (`.orca-wf__body`), the other four in
+     grids, and one class has to hold its thickness in both. */
+  flex: none;
+  border: none;
+  padding: 0;
+  background: none;
+  /* A drag is the pointer's, so the browser must not also read it as a scroll or a pan —
+     including the canvas pan of an `.orca-wfcanvas__viewport` next door. */
+  touch-action: none;
+}
+.orca-splitter::after {
+  content: "";
+  position: absolute;
+  background: var(--border-hairline);
+}
+.orca-splitter[aria-orientation="vertical"] {
+  width: var(--splitter-thickness);
+  cursor: col-resize;
+}
+.orca-splitter[aria-orientation="vertical"]::after {
+  inset-block: 0;
+  left: 50%;
+  width: var(--stroke-hairline);
+  transform: translateX(-50%);
+}
+.orca-splitter[aria-orientation="horizontal"] {
+  height: var(--splitter-thickness);
+  cursor: row-resize;
+}
+.orca-splitter[aria-orientation="horizontal"]::after {
+  inset-inline: 0;
+  top: 50%;
+  height: var(--stroke-hairline);
+  transform: translateY(-50%);
+}
+.orca-splitter:hover::after,
+.orca-splitter[data-dragging]::after,
+.orca-splitter:focus-visible::after {
+  background: var(--accent);
+}
+.orca-splitter[aria-orientation="vertical"]:hover::after,
+.orca-splitter[aria-orientation="vertical"][data-dragging]::after {
+  width: var(--stroke-rail);
+}
+.orca-splitter[aria-orientation="horizontal"]:hover::after,
+.orca-splitter[aria-orientation="horizontal"][data-dragging]::after {
+  height: var(--stroke-rail);
+}
 .orca-sidebar {
-  border-right: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
   padding: var(--space-2);
   overflow: auto;
@@ -1572,14 +1652,17 @@
    of being bounded by it — and `body { overflow: hidden }` then clips whatever falls off
    the bottom with no scrollbar, no wheel and no keyboard way down (#275). It is also what
    makes a surface's own `overflow-y: auto` mean anything, since a scroller needs a definite
-   height to have something to scroll against. */
+   height to have something to scroll against.
+
+   No border on either side: both of the pane's boundaries are splitters now and a splitter
+   draws the hairline (#276). The one that was here was drawn whether or not the panel was
+   open, so with the dock shut it was a line against the window edge. */
 .orca-main {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   background: var(--surface-base);
-  border-right: var(--stroke-hairline) solid var(--border-hairline);
 }
 /* The dock: a head that stays put over a body that scrolls. `overflow: hidden` here is the
    clip that keeps the enter animation and the overlay's shadow inside the column — it is

@@ -25,6 +25,16 @@ A custom title bar with `-webkit-app-region: drag`, no OS chrome relied upon, in
 macOS traffic lights and for the Windows caption buttons by platform-detected padding only —
 nothing else about the layout changes per platform.
 
+The two widths in that diagram are defaults, not fixtures. Every boundary in the window is
+draggable and the size is remembered per boundary (#276) — the sidebar and the docked panel here,
+and inside the surfaces the Runs step detail, the run tree over the event timeline, and the Plan
+request rail. Each has a floor and a ceiling so neither pane can be dragged to something
+unusable, and each gives way to the collapse and overlay rules below their breakpoints;
+`50-accessibility-and-keyboard.md` has the keys, `60-implementation.md` has where the size lives.
+The splitter is the shell's, so a surface still to be built inherits a resizable edge rather than
+inventing one — the dependency graph, the risk matrix and the decision log all want a pane
+boundary and none of them has to draw its own.
+
 ## Five surfaces
 
 | Surface | Glyph | What it answers | Phase |

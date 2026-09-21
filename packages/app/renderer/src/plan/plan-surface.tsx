@@ -30,6 +30,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type React
 import type { ConnectionState } from "@orca/design";
 import type { ItemClassification, PlanItemView } from "@orca/protocol";
 import { useKeyboard } from "../keyboard-context.js";
+import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StateView, Text, textClass, type Crumb, type HeaderMode } from "../ui/index.js";
 import { Journal } from "./journal.js";
 import { Inspector } from "./inspector.js";
@@ -325,6 +326,10 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
             setFilters((current) => ({ ...current, status: toggle(current.status, status) }))
           }
         />
+
+        {/* The rail's boundary (#276). A request title is as long as somebody made it, so this
+            is the one rail whose right width is not the design's to know. */}
+        <PaneSplitter boundary="plan-rail" label="Resize the requests rail" />
 
         <div className="orca-plan__pane">
           {mode === "schedule" ? (

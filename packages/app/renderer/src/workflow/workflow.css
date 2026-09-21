@@ -102,11 +102,13 @@
 
 /* ---------- the inspector ---------- */
 
+/* The same kind of column as the docked panel, so the same boundary id and the same remembered
+   width (#276): `--pane-panel` over the token both of them default to. No border-left — the
+   splitter beside it draws the hairline. */
 .orca-wf__inspector {
   flex: none;
-  width: var(--panel-width);
+  width: var(--pane-panel, var(--panel-width));
   padding: var(--space-4);
-  border-left: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-base);
   overflow: auto;
 }

@@ -38,6 +38,7 @@ import { useAnnounce } from "../a11y/announce-context.js";
 import { useControls } from "../attention/use-controls.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
 import { Menu, StateView, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StepDetail } from "../step/index.js";
 import { matchesText } from "./run-rows.js";
 import { RunTree } from "./tree/run-tree.js";
@@ -285,6 +286,10 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
               setStatus("all");
             }}
           />
+          {/* The boundary between the two lists in this column (#276), and a grid item between
+              them. A deep run tree was stuck at two fifths of the left column however much the
+              timeline below it had to say; this is where that is traded. */}
+          <PaneSplitter boundary="runs-tree" label="Resize the run tree" />
           <Timeline
             state={events.state}
             currentStep={currentStep}
@@ -299,6 +304,10 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
             onHold={onHold}
           />
         </div>
+
+        {/* And the boundary between the two columns: wide output in the step detail wrapped at
+            the panel width on a 34" display while two thirds of the window sat empty. */}
+        <PaneSplitter boundary="runs-detail" label="Resize the step detail" />
 
         {/* The right column. `detail` is the one `runs.get` projection the tree already
             caches, so the pane reads nothing of its own; `stepRunId` absent renders the run

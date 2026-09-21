@@ -298,6 +298,13 @@
   --palette-max-height: 440px;
   --palette-offset-top: 96px;
   --editor-min-height: 360px;
+  --splitter-thickness: 6px;
+  --pane-step: 16px;
+  --pane-min-sidebar: 160px;
+  --pane-max-sidebar: 420px;
+  --pane-min-side: 320px;
+  --pane-max-side: 720px;
+  --pane-min-stack: 120px;
   /* z */
   --z-sticky: 2;
   --z-menu: 3;
