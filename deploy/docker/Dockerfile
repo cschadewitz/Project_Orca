@@ -81,6 +81,20 @@ COPY templates /opt/orca/templates
 RUN printf '#!/bin/sh\nexec node /opt/orca/orca-daemon.mjs "$@"\n' > /usr/local/bin/orca \
     && chmod +x /usr/local/bin/orca
 
+# The agents' credential directories, created here and owned by `node` — which is the whole
+# point of the line, because Docker initialises an empty named volume from the image path it
+# covers. With no such path in the image it makes the mountpoint `root:root`, and then the
+# container user cannot write the volume it was given: `claude /login` reports success,
+# fails to write `~/.claude/.credentials.json`, and the next screen says "Not logged in",
+# with "Transcript writes are failing (permission denied — EACCES)" underneath it. The
+# failure is silent in the one place it matters, so the directories exist before the volume
+# does.
+#
+# This fixes a *fresh* volume. One already created against an image without these lines
+# keeps its root ownership, and is repaired with
+# `docker run --rm -v orca-claude-home:/c alpine chown -R 1000:1000 /c`.
+RUN mkdir -p /home/node/.claude /home/node/.codex && chown -R node:node /home/node
+
 # uid 1000, from the base image. The agents write to /workspace as this user, so a bind
 # mount from the host wants a host directory this uid can write — `user:` in compose.yaml
 # is where to change that.

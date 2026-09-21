@@ -243,6 +243,18 @@ docker exec -it orca-daemon claude /login    # prints a URL; paste the code back
 docker exec -it orca-daemon claude -p "say pong"
 ```
 
+A login that reports **`Login successful`** and then sits under a status line reading
+**`Not logged in · Run /login`**, with `Transcript writes are failing (permission denied —
+EACCES)` beside it, has not failed to log in: it has failed to *write down* that it did.
+`/home/node/.claude` is a named volume, and Docker creates an empty volume's mountpoint
+`root:root` unless the image already has that directory — which is why the image now makes
+both of them, owned by `node`, before it drops to that user. A volume created against an
+earlier build keeps its ownership and is repaired in place:
+
+```bash
+docker run --rm -v orca-claude-home:/c -v orca-codex-home:/x alpine chown -R 1000:1000 /c /x
+```
+
 Or give the agent a credential instead of a login — `ANTHROPIC_API_KEY`, or
 `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` on a machine you can log in on. Both are
 passed through by `compose.yaml`; neither goes into the image. A login is the cheaper habit,
@@ -653,6 +665,7 @@ piece is a transport, not a network. Roadmap item 2.
 | `orca ping` says "recorded nothing: no daemon answered" although one is | The CLI gives the daemon 2 s, and a cold agent spawn takes longer, so it fell back to an in-process handshake. Run it again — the second one goes through the daemon and records the health the Agents surface reads |
 | `FAIL … Authentication required` from `orca ping codex` | `codex login` in the container, into the mounted `~/.codex` volume |
 | `orca ping claude` is OK but the first step fails on auth | The Claude adapter opens a session unauthenticated; `claude -p "say pong"` is the check that means something |
+| `Login successful`, then `Not logged in`, with `EACCES` on transcript writes | The credential volume's mountpoint is root-owned, from an image built before it created those directories. `docker run --rm -v orca-claude-home:/c -v orca-codex-home:/x alpine chown -R 1000:1000 /c /x`, restart the container, log in again (§1.5) |
 | `claude_code_version_too_old` on the first prompt | The adapter used its own bundled Claude Code; set `CLAUDE_CODE_EXECUTABLE` in `agents[].env` (the image does) |
 | `spawn codex-acp ENOENT`, or `codex acp` "unrecognized subcommand" | Codex has no ACP mode; the agent's `command` is the adapter, `codex-acp` |
 | `WORKFLOW_INVALID: no agent fills role …` | A role in the workflow is in no agent's `roles:`, or the daemon started without the config — `orca agents` lists what it sees |
