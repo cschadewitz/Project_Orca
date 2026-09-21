@@ -29,6 +29,93 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.5.1 - 2026-09-21
+
+### Store format
+
+No change.
+
+### Added
+
+#### app
+
+- Every pane boundary in the window is draggable, and the width is remembered. The
+  sidebar, the docked panel, the Runs step detail, the run tree over the event timeline, the
+  Plan request rail and the workflow node inspector each carry a `role="separator"` with a tab
+  stop, `←`/`→` (or `↑`/`↓`) by one grid step, and `Enter` or a double-click to put the
+  boundary back where the design had it. Each has a floor and a ceiling so a drag cannot make
+  either pane unusable, each stays out of the way of the collapsed sidebar and the overlaid
+  panel below their breakpoints, and each size is kept per boundary in the app's own
+  preferences file beside the density choices.
+- Config's **App preferences** section now lists every pane boundary that has been
+  dragged — its size, and a **restore** that puts it back where the design had it. A pane
+  width is the one remembered appearance a person can set by accident, and until now the only
+  way back was `Enter` or a double-click on the boundary itself, which nothing said. A
+  boundary still at its default is not listed, so the section does not grow five rows that all
+  read "default".
+- **Restore the pane widths** in the command palette, with no key, forgets every
+  remembered boundary at once.
+
+#### design
+
+- `--splitter-thickness`, `--pane-step` and the five `--pane-min-*` / `--pane-max-*`
+  size tokens, with `PANE_GEOMETRY` in `@orca/design` for the arithmetic a `var()` cannot do;
+  `.orca-splitter` in the component layer. A pane's width is now
+  `var(--pane-<boundary>, var(--<token>))`, so the token stays the single statement of the
+  default and a dragged width is an override of it.
+
+### Changed
+
+#### app
+
+- the Electron smoke test now *measures* scrolling rather than taking the
+  stylesheet's word for it. With the window shrunk too short for any surface, each surface and
+  the docked panel have to overflow the box they say they scroll, take a scroll to its end,
+  and have their last content on screen when they get there. The renderer's sweep runs under
+  happy-dom, which has no layout engine and so can only check the declaration.
+- the run tree's share of the Runs left column is remembered as a **ratio** rather
+  than a height in pixels, so a split chosen on a tall monitor is the same split on a laptop.
+  It is the one boundary between two stacked panes, where what a person chooses is "more tree
+  than timeline" and not a length; the four boundaries between two columns are still px,
+  because a side pane is sized to what it holds. The drag, the arrow keys and the separator's
+  reported position are unchanged.
+
+#### design
+
+- `.orca-attn__row` is bound to `--row-h` like every other row class, rather than
+  being padded to a height of its own. The Attention surface's failed-runs and running-runs
+  lists are virtualised, and the virtualiser reads a row's height back off that token, so a
+  padded row was a row the window arithmetic was wrong about. The app's own correcting
+  modifier is gone with it.
+- `.orca-agent__health` — the glyph-and-word an agent card leads with — is in the
+  component layer next to `.orca-agent__name`, where the rest of the card already was. It was
+  written in the Agents surface's own stylesheet because nothing named it here.
+
+### Fixed
+
+#### app
+
+- surfaces no longer clip content that outgrows the window. The Attention surface
+  scrolls at its root, so gates and permission asks below the fold are reachable instead of
+  silently cut off, and the failed-runs list keeps a floor rather than being squeezed out by
+  a tall stack of cards.
+- the docked panel scrolls its body, so anything a surface puts in the dock — the
+  Plan inspector today — is readable to the end whatever the window height, with the panel's
+  header staying put above it.
+- the Agents surface scrolls its cards again in a short window. It is a split
+  layout — cards beside the policy inspector — but it scrolled at its root, and the split
+  under that root shrank to the window while the host sections and the claims inside it
+  spilled out below its bottom edge: the scrollbar moved a box the content had already left,
+  so the claims were unreachable. The cards column is the scroll region now, the summary
+  above it stays put, and the inspector beside it still scrolls on its own. Found by the
+  measuring smoke test in the same release (#277).
+
+#### design
+
+- `.orca-main` and `.orca-panel` are bounded by the window (`min-height: 0`)
+  rather than stretching past it, which is what gives a scroll region inside a surface a
+  height to scroll against; `.orca-panel__body` is the dock's scroll region.
+
 ## 0.5.0 - 2026-09-21
 
 ### Store format
