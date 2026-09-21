@@ -82,6 +82,10 @@ letters left stays discoverable. Nothing is reachable by keyboard alone or by mo
 
 - The run tree is a `tree` with `treeitem` rows carrying `aria-level`, `aria-expanded` and
   `aria-selected`. The status is in the accessible name, first: "failed, build, attempt 2 of 3".
+- A list whose rows hold **controls** is a `grid` of `row`s with `gridcell` cells, not a
+  `listbox` of `option`s: an `option` is a leaf, so the button inside one — the schedule
+  badge's **why**, the claim's run — is a control nothing can reach, and that is what axe
+  calls `nested-interactive`. The plan's schedule table is the one such list today.
 - Streaming output is **not** a live region. An agent producing 40 lines a second would make
   the app unusable with a screen reader. Instead, a polite live region announces step
   transitions and terminal states only ("build step failed, 3 attempts"), and the output pane

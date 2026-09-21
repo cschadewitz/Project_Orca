@@ -197,8 +197,8 @@ describe("the plan's writes", () => {
   /** Go to Plan and select one work item by its title. */
   async function selectItem(title: string): Promise<void> {
     fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
-    const table = await screen.findByRole("listbox", { name: "Schedule" });
-    fireEvent.click(within(table).getByRole("option", { name: new RegExp(title) }));
+    const table = await screen.findByRole("grid", { name: "Schedule" });
+    fireEvent.click(within(table).getByRole("row", { name: new RegExp(title) }));
     await screen.findByLabelText(/^Work item /);
   }
 
@@ -372,8 +372,8 @@ describe("what a daemon's answer takes away", () => {
     /* `wi-store` is blocked by the decision `datastore`, which is both a decision to make
        and a dependency to waive — one item that would carry two of the dropped rows. */
     fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
-    const table = await screen.findByRole("listbox", { name: "Schedule" });
-    fireEvent.click(within(table).getByRole("option", { name: /Choose and wire the session store/ }));
+    const table = await screen.findByRole("grid", { name: "Schedule" });
+    fireEvent.click(within(table).getByRole("row", { name: /Choose and wire the session store/ }));
     await screen.findByLabelText(/^Work item /);
     await open();
 
@@ -414,8 +414,8 @@ describe("what a daemon's answer takes away", () => {
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
-    const table = await screen.findByRole("listbox", { name: "Schedule" });
-    fireEvent.click(within(table).getByRole("option", { name: /Instrument the login funnel/ }));
+    const table = await screen.findByRole("grid", { name: "Schedule" });
+    fireEvent.click(within(table).getByRole("row", { name: /Instrument the login funnel/ }));
     await screen.findByLabelText(/^Work item /);
     await open();
 

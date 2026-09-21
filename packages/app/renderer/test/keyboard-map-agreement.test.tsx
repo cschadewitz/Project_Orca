@@ -191,7 +191,7 @@ function chromeOnThePlan(mode: "schedule" | "journal"): () => Promise<Harness> {
     const h = harness();
     renderChrome(h);
     fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
-    await screen.findByRole("listbox", { name: "Schedule" });
+    await screen.findByRole("grid", { name: "Schedule" });
     if (mode === "journal") {
       fireEvent.click(screen.getByRole("button", { name: "Journal" }));
       await screen.findByRole("listbox", { name: "Plan journal" });

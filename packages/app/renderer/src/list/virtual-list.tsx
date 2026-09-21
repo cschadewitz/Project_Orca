@@ -128,15 +128,23 @@ export interface VirtualListProps<T> {
   /**
    * What the rows *are*, as ARIA sees them. `listbox` of `option`s is a flat list of
    * choices and is the default; `tree` of `treeitem`s is a list whose rows have depth, and
-   * the run tree is one (#156, docs/design/50-accessibility-and-keyboard.md).
+   * the run tree is one (#156, docs/design/50-accessibility-and-keyboard.md); `grid` of
+   * `row`s is a list whose rows have *controls* in them, and the plan's schedule table is
+   * one (#170).
+   *
+   * That third one is not a preference. An `option` is a leaf: a control inside one is
+   * unreachable — the row is one stop and the button inside it is not another — and axe
+   * says so as `nested-interactive`. A `grid` is the role that carries cells which may
+   * themselves be interactive, so a surface whose rows hold a button asks for it and gives
+   * each cell `role="gridcell"` in `renderRow`.
    *
    * It is the substrate's to set because the substrate owns the row element — a surface
    * that put `aria-level` on a span inside the row, or a `treeitem` inside an `option`,
    * would be writing invalid ARIA and a screen reader would read a flat list either way.
-   * Everything else is the same for both roles: one tab stop, `aria-activedescendant`,
+   * Everything else is the same for all three: one tab stop, `aria-activedescendant`,
    * `aria-selected`.
    */
-  role?: "listbox" | "tree";
+  role?: "listbox" | "tree" | "grid";
   /**
    * Per-row ARIA only the surface can know: `aria-level` and `aria-expanded` on a tree row.
    * Merged onto the row element the substrate renders, after the attributes the substrate
@@ -148,7 +156,7 @@ export interface VirtualListProps<T> {
 }
 
 /** The row role that goes with each container role. A tree of `option`s is not a tree. */
-const ROW_ROLE = { listbox: "option", tree: "treeitem" } as const;
+const ROW_ROLE = { listbox: "option", tree: "treeitem", grid: "row" } as const;
 
 export function VirtualList<T>(props: VirtualListProps<T>): JSX.Element {
   const {

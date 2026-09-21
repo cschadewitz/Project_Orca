@@ -596,18 +596,23 @@ describe("Plan: two lists, one tab stop each, and nothing that speaks", () => {
   async function goToPlan(): Promise<HTMLElement> {
     renderChrome(h);
     await goTo("Plan");
-    return screen.findByRole("listbox", { name: "Schedule" });
+    /* A `grid` of `row`s, not the `listbox` of `option`s every other list in the app is:
+       the schedule's rows hold controls — the badge's **why** and the claim's run — and a
+       control inside an `option` is one nothing can reach, which axe reports as
+       `nested-interactive` (#170). Everything the sweep claims below is the same either
+       way: one tab stop, `aria-activedescendant`, `aria-selected` per row. */
+    return screen.findByRole("grid", { name: "Schedule" });
   }
 
   it("is one tab stop with aria-activedescendant, and selection survives focus leaving", async () => {
     const table = await goToPlan();
     expect(table.getAttribute("tabindex")).toBe("0");
 
-    const options = within(table).getAllByRole("option");
-    expect(options.length).toBeGreaterThan(0);
+    const rows = within(table).getAllByRole("row");
+    expect(rows.length).toBeGreaterThan(0);
     // Selection is an attribute on the container, never focus on nine rows (rule 10).
-    expect(options.some((option) => option.hasAttribute("tabindex"))).toBe(false);
-    for (const option of options) expect(option.hasAttribute("aria-selected")).toBe(true);
+    expect(rows.some((row) => row.hasAttribute("tabindex"))).toBe(false);
+    for (const row of rows) expect(row.hasAttribute("aria-selected")).toBe(true);
 
     fireEvent.keyDown(table, { key: "End", code: "End" });
     await waitFor(() => expect(table.getAttribute("aria-activedescendant")).toBeTruthy());
@@ -622,7 +627,7 @@ describe("Plan: two lists, one tab stop each, and nothing that speaks", () => {
   it("names every classification in words, so a greyscale row still reads", async () => {
     const table = await goToPlan();
     const text = within(table)
-      .getAllByRole("option")
+      .getAllByRole("row")
       .map((row) => row.textContent ?? "");
     // The badge's word, not only its tint and not only its glyph (rules 3 and 4).
     expect(text.some((row) => row.includes("ready"))).toBe(true);
@@ -681,7 +686,7 @@ describe("Plan: two lists, one tab stop each, and nothing that speaks", () => {
     expect(speaking()).toHaveLength(0);
 
     // With a row selected, which is what puts the inspector in the dock.
-    const table = await screen.findByRole("listbox", { name: "Schedule" });
+    const table = await screen.findByRole("grid", { name: "Schedule" });
     fireEvent.keyDown(table, { key: "Home", code: "Home" });
     await waitFor(() => expect(table.getAttribute("aria-activedescendant")).toBeTruthy());
     expect(speaking()).toHaveLength(0);

@@ -906,7 +906,8 @@ export interface MinimapTickProps {
  * **Selection and focus are different things** (docs/design/RULES.md rule 10). One tab
  * stop, on the container; `aria-activedescendant` carries the selection; the ring is the
  * container's and the accent rail is the row's. The container is a `listbox` of `option`s
- * by default and a `tree` of `treeitem`s when `role` says so — see `role` and `rowProps`.
+ * by default, a `tree` of `treeitem`s or a `grid` of `row`s when `role` says so — see
+ * `role` and `rowProps`.
  *
  * **The keys are registered, not listened for.** `J`/`K`, `↑`/`↓`, `Home`/`End` and the
  * page keys go on the `KeyboardMap` in the scope `scope` names, so the command palette
@@ -951,15 +952,22 @@ export interface VirtualListProps<T> {
   scope?: "list" | "run-tree" | "stream";
   /**
    * What the rows are, as ARIA sees them: a `listbox` of `option`s (the default, a flat
-   * list of choices) or a `tree` of `treeitem`s (rows with depth — the run tree, #156).
+   * list of choices), a `tree` of `treeitem`s (rows with depth — the run tree, #156) or a
+   * `grid` of `row`s (rows that hold controls — the plan's schedule table, #170).
+   *
+   * The third is not a preference. An `option` is a leaf, so a button inside one is a
+   * button nothing can reach — the row is one stop and the control inside it is not
+   * another — and axe reports it as `nested-interactive`. A `grid` is the role that
+   * carries cells which may themselves be interactive, so a surface whose rows hold a
+   * control asks for it and gives each cell `role="gridcell"` in `renderRow`.
    *
    * It is the substrate's because the substrate owns the row element. A surface cannot fix
    * this from `renderRow`, which returns only the row's *children*: `aria-level` on a span
    * inside a row, or a `treeitem` nested in an `option`, is invalid ARIA and reads as a
-   * flat list either way. Everything else is identical for both roles — one tab stop,
+   * flat list either way. Everything else is identical for all three — one tab stop,
    * `aria-activedescendant`, `aria-selected`.
    */
-  role?: "listbox" | "tree";
+  role?: "listbox" | "tree" | "grid";
   /**
    * Per-row ARIA only the surface can know — `aria-level` and `aria-expanded` on a tree
    * row — merged onto the row element. Applied *before* the attributes the substrate owns,

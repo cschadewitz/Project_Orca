@@ -130,10 +130,12 @@ which is the intended way to find out. There are three scopes to have: `list` (t
 `run-tree` and `stream`, so a screen can be a run tree above a timeline beside a stream of
 output and `J` still means "next" in whichever one the focus is in. A fourth list on one
 screen is not a missing scope. Selection is `aria-activedescendant` on a single tab stop, and it is a different visual
-from focus (rule 10). The rows are a `listbox` of `option`s unless `role="tree"` makes them a
-`tree` of `treeitem`s, and either way the roles are the substrate's, because the row element
-is: a surface reaches the row's *children* through `renderRow`, and adds `aria-level` and
-`aria-expanded` through `rowProps`. A list that pages backwards calls `shiftBy(rows)` on the
+from focus (rule 10). The rows are a `listbox` of `option`s unless `role` makes them a
+`tree` of `treeitem`s or a `grid` of `row`s, and in every case the roles are the substrate's,
+because the row element is: a surface reaches the row's *children* through `renderRow`, and
+adds `aria-level` and `aria-expanded` through `rowProps`. Reach for `grid` when the rows hold
+*controls* — the plan's schedule table does — because a button inside an `option` is a button
+nothing can reach, and the cells then carry `role="gridcell"`. A list that pages backwards calls `shiftBy(rows)` on the
 ref after a prepend, or it throws a person back by exactly the page they asked for; a stream
 takes `follow` and hears `onHold` once when a scroll leaves the end.
 `renderer/src/runs/` is the worked adoption: there is no `scrollIntoView` anywhere, because it

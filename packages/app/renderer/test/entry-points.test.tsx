@@ -149,7 +149,7 @@ describe("deep links", () => {
     // The surface is built as of #170, so the link lands on the schedule itself. `wi-1` is
     // not in this store's plan, which leaves the table as it is and the landing naming the
     // id — a link is never dropped because the object behind it is not there.
-    await screen.findByRole("listbox", { name: "Schedule" });
+    await screen.findByRole("grid", { name: "Schedule" });
     expect(landing()?.textContent).toContain("wi-1");
   });
 });

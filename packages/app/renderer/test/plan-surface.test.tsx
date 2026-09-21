@@ -49,10 +49,10 @@ async function openPlan(options: { deepLink?: string; journalPage?: number } = {
   if (options.deepLink === undefined) {
     fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
   }
-  return screen.findByRole("listbox", { name: "Schedule" });
+  return screen.findByRole("grid", { name: "Schedule" });
 }
 
-const rows = (table: HTMLElement): HTMLElement[] => within(table).getAllByRole("option");
+const rows = (table: HTMLElement): HTMLElement[] => within(table).getAllByRole("row");
 const callsTo = (method: string): unknown[] => fake.calls.filter((call) => call.method === method).map((c) => c.params);
 
 describe("the schedule table", () => {
@@ -93,7 +93,7 @@ describe("the schedule table", () => {
    */
   it("carries the request and the item's own status, told apart from the classification", async () => {
     const table = await openPlan();
-    // The sticky head is the substrate's, above the rows rather than inside the listbox.
+    // The sticky head is the substrate's, above the rows rather than inside the grid.
     const head = document.querySelector(".orca-plan__head")!;
     expect([...head.children].map((cell) => cell.textContent)).toEqual([
       "Schedule",
@@ -149,7 +149,7 @@ describe("the sidebar's requests and filters", () => {
         offset: 0,
       }),
     );
-    await waitFor(() => expect(rows(screen.getByRole("listbox", { name: "Schedule" }))).toHaveLength(4));
+    await waitFor(() => expect(rows(screen.getByRole("grid", { name: "Schedule" }))).toHaveLength(4));
 
     // The text half never reaches the daemon, and the count says so: "1 of 4 items".
     const before = callsTo("items.list").length;
@@ -228,7 +228,7 @@ describe("the explanation", () => {
     const menu = await screen.findByRole("menu", { name: "Why auth-api is ready" });
     expect(within(menu).getAllByRole("menuitem")[0]!.textContent).toBe("auth-api: pending (priority high)");
     // And the row it named is the selected one.
-    const table = screen.getByRole("listbox", { name: "Schedule" });
+    const table = screen.getByRole("grid", { name: "Schedule" });
     expect(table.getAttribute("aria-activedescendant")).toBe(scheduleRowId("wi-api"));
   });
 
@@ -256,7 +256,7 @@ describe("the explanation", () => {
 
     // Still the journal, and still no explanation: the link was handled when it landed.
     expect(screen.getByRole("listbox", { name: "Plan journal" })).toBeTruthy();
-    expect(screen.queryByRole("listbox", { name: "Schedule" })).toBeNull();
+    expect(screen.queryByRole("grid", { name: "Schedule" })).toBeNull();
     expect(screen.queryByRole("menu", { name: "Why auth-api is ready" })).toBeNull();
   });
 
@@ -298,7 +298,7 @@ describe("the inspector, in the docked panel", () => {
 
     // The priority reasons are the scheduler's lines, not a paraphrase.
     fireEvent.click(
-      rows(screen.getByRole("listbox", { name: "Schedule" })).find((r) => r.id === scheduleRowId("wi-api"))!,
+      rows(screen.getByRole("grid", { name: "Schedule" })).find((r) => r.id === scheduleRowId("wi-api"))!,
     );
     const api = await screen.findByLabelText("Work item auth-api");
     expect(within(api).getByLabelText("Why it is in this position").textContent).toContain(
@@ -537,7 +537,7 @@ describe("paging the table", () => {
     teardown.push(h.dispose);
     renderChrome(h);
     fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
-    return screen.findByRole("listbox", { name: "Schedule" });
+    return screen.findByRole("grid", { name: "Schedule" });
   }
 
   it("sends its own page, says how much of the plan that is, and offers the rest", async () => {

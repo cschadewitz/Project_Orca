@@ -88,6 +88,11 @@ export function ScheduleTable(props: ScheduleTableProps): JSX.Element {
       label="Schedule"
       noun="work item"
       scope="list"
+      /* A `grid`, not the substrate's default `listbox`: a row here holds controls — the
+         badge's **why** and the claim's run — and a control inside an `option` is a
+         control nothing can reach (`nested-interactive`). The cells below carry
+         `role="gridcell"`, which is what makes those controls legal and reachable. */
+      role="grid"
       items={items}
       ticks={ticks}
       header={<TableHead />}
@@ -157,7 +162,7 @@ function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, o
 
   return (
     <>
-      <span className="orca-plan__cell">
+      <span className="orca-plan__cell" role="gridcell">
         {mark.kind === "badge" ? (
           <ScheduleBadge classification={mark.classification} explanation={why} />
         ) : (
@@ -172,26 +177,32 @@ function Row({ item, onExplain, open, lines, explainError, onCloseExplanation, o
         )}
       </span>
 
-      <span className={`orca-plan__id ${textClass("mono-id")}`}>{item.slug}</span>
-      <span className={`orca-plan__cell ${textClass("label")}`}>{item.title}</span>
+      <span className={`orca-plan__id ${textClass("mono-id")}`} role="gridcell">
+        {item.slug}
+      </span>
+      <span className={`orca-plan__cell ${textClass("label")}`} role="gridcell">
+        {item.title}
+      </span>
 
       {/* The request this item was decomposed from, in mono because it is ORCA's own name
           for that object and not prose about it (rule 8). */}
-      <span className={`orca-plan__id ${textClass("mono-id")}`}>{item.requestId}</span>
+      <span className={`orca-plan__id ${textClass("mono-id")}`} role="gridcell">
+        {item.requestId}
+      </span>
 
       {/* The item's own status: word and glyph, in the plain chip, never the tinted one —
           a tinted chip on screen means a run status and this is not one (ui/chip.tsx). */}
-      <span className="orca-plan__cell">
+      <span className="orca-plan__cell" role="gridcell">
         <Chip {...(status.glyph === undefined ? {} : { glyph: status.glyph })}>{status.word}</Chip>
       </span>
 
-      <span className={`orca-plan__score ${textClass("mono-id")}`} title={reason}>
+      <span className={`orca-plan__score ${textClass("mono-id")}`} title={reason} role="gridcell">
         {item.priority === undefined ? "" : item.priority.score.toFixed(1)}
       </span>
-      <span className="orca-plan__cell">
+      <span className="orca-plan__cell" role="gridcell">
         {item.risk.level === "none" ? null : <Chip>{`${item.risk.level} risk`}</Chip>}
       </span>
-      <span className="orca-plan__cell">
+      <span className="orca-plan__cell" role="gridcell">
         {item.claim === undefined ? null : (
           <button
             type="button"
