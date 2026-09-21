@@ -148,13 +148,24 @@ export const ConfigSchemaDescriptionSchema = z.array(ConfigFieldDescriptionSchem
 export type ConfigSchemaDescription = z.infer<typeof ConfigSchemaDescriptionSchema>;
 
 /**
+ * Where an effective rule came from. The two documents, plus `default` — the built-in rules
+ * `@orca/agents` appends last (#140). `default` is *not* a `ConfigDocument`: there is no file
+ * behind it and `config.set` cannot address it, which is exactly why it needs its own name.
+ * Adding it was the fix for the Config surface reporting rules nobody wrote as `config`.
+ */
+export const EFFECTIVE_RULE_SOURCES = [...CONFIG_DOCUMENTS, "default"] as const;
+export const EffectiveRuleSourceSchema = z.enum(EFFECTIVE_RULE_SOURCES);
+export type EffectiveRuleSource = z.infer<typeof EffectiveRuleSourceSchema>;
+
+/**
  * One rule of an agent's effective policy, with where it came from. The order of the array
  * is the order `decidePermission` matches in, so a form that lists them top to bottom is
- * showing the real precedence: configured rules first, then the sidecar's (ADR 0009).
+ * showing the real precedence: configured rules first, then the sidecar's, then the
+ * defaults' (ADR 0009, as corrected by #140).
  */
 export const EffectivePermissionRuleSchema = PermissionRuleSchema.extend({
-  source: ConfigDocumentSchema,
-  /** Sidecar provenance, per ADR 0009. Absent on a configured rule. */
+  source: EffectiveRuleSourceSchema,
+  /** Sidecar provenance, per ADR 0009. Absent on a configured or default rule. */
   addedAt: z.string().optional(),
   grantedFor: z.string().optional(),
 });

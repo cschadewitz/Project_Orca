@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { recordAlwaysDecision, readPermissionPolicyFile } from "@orca/agents";
-import { FakeClock } from "@orca/core";
+import { DEFAULT_PERMISSION_POLICY, FakeClock } from "@orca/core";
 import {
   CONFIG_CHANGED,
   CONFIG_GET_METHOD,
@@ -51,6 +51,9 @@ agents:
       rules:
         - match: { kind: execute, titlePattern: "^npm test$" }
           decision: allow
+  # No permissions block at all: everything it gets is the #140 default layer.
+  - id: codex
+    command: codex
 `;
 
 const dirs: string[] = [];
@@ -135,12 +138,32 @@ describe("config.get", () => {
     const { effective } = await model.get();
     const claude = effective.agents["claude"];
 
-    // Configured first, sidecar second: `layerPermissionPolicies`' order, which is the
-    // order `decidePermission` matches in (ADR 0009).
-    expect(claude?.rules.map((r) => r.source)).toEqual(["config", "permissions"]);
+    // Configured first, sidecar second, the built-in defaults last: `layerPermissionPolicies`'
+    // order, which is the order `decidePermission` matches in (ADR 0009, #140).
+    expect(claude?.rules.map((r) => r.source)).toEqual([
+      "config",
+      "permissions",
+      ...DEFAULT_PERMISSION_POLICY.rules.map(() => "default"),
+    ]);
     expect(claude?.rules[1]).toMatchObject({ grantedFor: "Edit src/index.ts", addedAt: "2026-09-20T10:00:00.000Z" });
+    // A default rule has no provenance to report: nobody wrote it and no file holds it.
+    expect(claude?.rules[2]).toEqual({ ...DEFAULT_PERMISSION_POLICY.rules[0], source: "default" });
     // The default comes from configuration alone and the sidecar cannot supply one.
     expect(claude?.default).toBe("ask");
+  });
+
+  /**
+   * #140's first cut folded the default rules into the parsed config, so `config.get` counted
+   * them as configured and the Config surface offered to edit rules that are not in any file.
+   */
+  it("labels the built-in rules `default`, not `config`, for an agent with no permissions block", async () => {
+    const { model } = await workspace();
+    const { effective } = await model.get();
+    const bare = effective.agents["codex"];
+
+    expect(bare?.rules.map((r) => r.source)).toEqual(DEFAULT_PERMISSION_POLICY.rules.map(() => "default"));
+    expect(bare?.rules.some((r) => r.source === "config")).toBe(false);
+    expect(bare?.default).toBe("ask");
   });
 });
 
