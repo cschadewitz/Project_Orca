@@ -1,0 +1,79 @@
+/* The permission policy inspector (#176): geometry only.
+
+   Every surface in it is a component-layer class already — `.orca-field*` for a row,
+   `.orca-input` for a control, `.orca-chip` for the document a rule came from,
+   `.orca-btn--danger` for **Remove**, `.orca-draftbar` for the save bar — and the rule rows
+   are the Config surface's own `.orca-config__rule*`, imported with `config.css` rather than
+   restated. What is left here is the column the panel stacks in and the box one grant sits
+   in, so nothing below names a colour, a radius or a duration of its own. */
+
+.orca-policy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* A column of its own beside the cards, wide enough for a rule sentence and no wider.
+     `ch` because it is a column of text: a ratio to the font already chosen. */
+  flex: 0 0 52ch;
+  min-width: 0;
+  padding: var(--space-4);
+  border-left: var(--stroke-hairline) solid var(--border-hairline);
+  background: var(--surface-raised);
+  overflow-y: auto;
+}
+
+.orca-policy__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.orca-policy__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.orca-policy__section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* type: caption */
+.orca-policy__none {
+  color: var(--ink-secondary);
+}
+
+.orca-policy__grants {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One grant is a box rather than a row: it is six controls and its provenance, which is a
+   card's worth of content, and rule 9's fixed row height is about rows. */
+.orca-policy__grant {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: var(--stroke-hairline) solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-base);
+}
+
+.orca-policy__grant-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.orca-policy__provenance {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}

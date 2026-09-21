@@ -256,7 +256,8 @@ describe("the permission sidecar", () => {
     const permissions = await screen.findByRole("region", { name: "Permissions" });
     const rules = within(permissions).getAllByRole("listitem");
 
-    expect(rules).toHaveLength(2);
+    // One configured, two written (#176's fixture): the whole effective policy, in order.
+    expect(rules).toHaveLength(3);
     // Configured first, sidecar second — the order ORCA evaluates in, not one this screen chose.
     expect(rules[0]!.textContent).toContain("config");
     expect(rules[0]!.textContent).toContain("allow execute matching ^npm test$");

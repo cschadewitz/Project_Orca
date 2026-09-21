@@ -177,6 +177,7 @@ describe("the effective permission policy", () => {
     expect(policy!.rows.map((row) => [row.order, row.source])).toEqual([
       [1, "config"],
       [2, "sidecar"],
+      [3, "sidecar"],
     ]);
     // Provenance rides on the sidecar rows only.
     expect(policy!.rows[0]!.addedAt).toBeUndefined();

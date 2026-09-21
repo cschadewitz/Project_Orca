@@ -25,16 +25,39 @@ agents:
     roles: [developer]
 `;
 
+/**
+ * Two written grants, not one, and that is load-bearing for #176: removing a grant has to
+ * leave the *other* rows exactly as they were — `addedAt` and `grantedFor` included — and a
+ * fixture with a single rule could not tell a save that preserved the rest from one that
+ * rewrote them.
+ *
+ * The bytes are what `@orca/agents`' own writer produces: fixed key order, two spaces, a
+ * trailing newline. That matters because the app composes the same bytes when it saves an
+ * edited grant, and a fixture formatted some other way would let a client that formatted it
+ * some third way pass.
+ */
 export const PERMISSIONS_TEXT = `{
   "version": 1,
   "agents": {
     "claude": {
       "rules": [
         {
-          "match": { "kind": "edit", "pathPrefix": "src" },
+          "match": {
+            "kind": "edit",
+            "pathPrefix": "src"
+          },
           "decision": "allow",
           "addedAt": "2026-09-20T10:00:00.000Z",
           "grantedFor": "Edit src/index.ts"
+        },
+        {
+          "match": {
+            "kind": "execute",
+            "titlePattern": "^git status$"
+          },
+          "decision": "allow",
+          "addedAt": "2026-09-20T11:00:00.000Z",
+          "grantedFor": "Run git status"
         }
       ]
     }
@@ -76,6 +99,12 @@ export const CONFIG_GET: ConfigGetResult = {
               addedAt: "2026-09-20T10:00:00.000Z",
               grantedFor: "Edit src/index.ts",
             },
+            {
+              match: { kind: "execute", titlePattern: "^git status$" },
+              decision: "allow",
+              addedAt: "2026-09-20T11:00:00.000Z",
+              grantedFor: "Run git status",
+            },
           ],
         },
       },
@@ -106,6 +135,13 @@ export const CONFIG_GET: ConfigGetResult = {
             source: "permissions",
             addedAt: "2026-09-20T10:00:00.000Z",
             grantedFor: "Edit src/index.ts",
+          },
+          {
+            match: { kind: "execute", titlePattern: "^git status$" },
+            decision: "allow",
+            source: "permissions",
+            addedAt: "2026-09-20T11:00:00.000Z",
+            grantedFor: "Run git status",
           },
         ],
       },
