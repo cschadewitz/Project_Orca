@@ -389,6 +389,66 @@ describe("Agents: health in the name, before the id", () => {
   });
 });
 
+describe("Workflow: a graph read as a list, with the status first", () => {
+  /**
+   * The fourth surface (#177). It is the one that is not a list of rows — a canvas — which
+   * is exactly why it is in this sweep: the claims below are the app's rather than a
+   * component's, and a canvas is where they are easiest to lose.
+   *
+   * axe itself is not run here. The Electron smoke test runs it over each *audited* surface
+   * in both themes (`test/smoke/app-shell.spec.ts`), and Config is still in that file's
+   * unbuilt list because it *is* unbuilt until a workflow is named — a viewer reached by
+   * link does not change what `⌘5` lands on.
+   */
+  async function openWorkflow(url: string): Promise<HTMLElement> {
+    cleanup();
+    while (teardown.length) teardown.pop()?.();
+    fake = installBridge({ deepLink: url });
+    teardown.push(fake.install());
+    h = harness();
+    teardown.push(h.dispose);
+    renderChrome(h);
+    return screen.findByRole("listbox", { name: /graph$/ });
+  }
+
+  it("is one tab stop with aria-activedescendant, never a node per tab", async () => {
+    const canvas = await openWorkflow("orca://workflow/ai-sdlc");
+    expect(canvas.getAttribute("tabindex")).toBe("0");
+    const options = within(canvas).getAllByRole("option");
+    expect(options).toHaveLength(16);
+    // Selection is an attribute on the container, not focus on sixteen elements (rule 10).
+    expect(options.some((option) => option.hasAttribute("tabindex"))).toBe(false);
+    for (const option of options) expect(option.hasAttribute("aria-selected")).toBe(true);
+  });
+
+  it("puts the status word first in an overlaid node's name, and says which were not taken", async () => {
+    const canvas = await openWorkflow("orca://workflow/sdlc?run=run-parent");
+    await waitFor(() =>
+      expect(within(canvas).getAllByRole("option").some((o) => (o.getAttribute("aria-label") ?? "").startsWith("succeeded"))).toBe(
+        true,
+      ),
+    );
+    const names = within(canvas)
+      .getAllByRole("option")
+      .map((option) => option.getAttribute("aria-label") ?? "");
+    // "succeeded, agent, Build: plan and implement, attempt 2" — the word before anything
+    // else, which is the same claim the run rows make (rules 3 and 4).
+    expect(names.some((name) => name.startsWith("succeeded") && name.includes("attempt 2"))).toBe(true);
+    expect(names.some((name) => name.startsWith("running") && name.includes("current node"))).toBe(true);
+    // Untaken is in the name, not only in the opacity: opacity is not a channel a reader has.
+    expect(names.some((name) => name.endsWith("not taken"))).toBe(true);
+  });
+
+  it("adds no live region of its own, and keeps the chrome's one announcer", async () => {
+    await openWorkflow("orca://workflow/sdlc?run=run-parent");
+    expect(announcers()).toHaveLength(1);
+    // A graph that redrew on every push would be the streaming-output mistake in another
+    // place (rule 11): nothing on this surface speaks.
+    expect(document.querySelectorAll(".orca-wf [aria-live]")).toHaveLength(0);
+    expect(politeRegions().length).toBeLessThanOrEqual(2);
+  });
+});
+
 /* ---------- the frames the announcer is fed ---------- */
 
 const ENVELOPE = { subscriptionId: "sub-1", runId: "run-parent", seq: 7, at: "2026-03-01T09:00:07.000Z" } as const;

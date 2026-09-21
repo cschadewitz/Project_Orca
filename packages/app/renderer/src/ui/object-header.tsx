@@ -26,6 +26,17 @@ export interface Crumb {
   id: string;
   label: string;
   current?: boolean;
+  /**
+   * The ids this crumb's counterparts name, when the surface that built the crumb knows
+   * them: `{ workflow: "ai-sdlc" }` on a run crumb (#177).
+   *
+   * A counterpart is a link to a *different* object, and most of them are queries over data
+   * the breadcrumb does not hold — which is why `counterpartUrl` answered undefined for all
+   * but one of them and the menu item said so. Where the surface does hold the id, this is
+   * how it says so without the route table learning to read runs. Keyed by
+   * `Counterpart.id`, so the map in `counterparts.ts` stays the list of what exists.
+   */
+  counterpartIds?: Readonly<Record<string, string>>;
 }
 
 export interface ObjectHeaderProps {

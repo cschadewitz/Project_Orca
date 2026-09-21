@@ -1,0 +1,139 @@
+/* The workflow viewer's layout. Every box and every colour on the canvas itself is
+   `.orca-node` / `.orca-edge` in the design system's component layer; what is here is where
+   the canvas, the inspector and the group boxes sit relative to one another, and nothing
+   else. No literal colours, sizes or durations (docs/design/RULES.md rule 1). */
+
+.orca-wf {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.orca-wf__body {
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  flex: 1;
+}
+
+.orca-wf__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---------- the canvas ---------- */
+
+.orca-wfcanvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface-canvas);
+}
+
+/* The one tab stop. The ring is drawn here and the selection is drawn on the node, because
+   they are different things and both have to stay legible (rule 10). */
+.orca-wfcanvas__viewport {
+  position: relative;
+  min-height: 100%;
+  padding: var(--space-4);
+  cursor: grab;
+}
+.orca-wfcanvas__viewport:active {
+  cursor: grabbing;
+}
+
+.orca-wfcanvas__scene {
+  transform-origin: top left;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.orca-wfcanvas__plane {
+  position: relative;
+}
+
+/* Under the boxes: an edge is geometry and never takes the pointer, so a drag that lands on
+   one is a drag on the canvas and pans it. */
+.orca-wfcanvas__edges {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* A back edge is the same stroke routed the other way round, marked so the legend and a
+   future editor can speak about it. */
+.orca-edge--back {
+  stroke-dasharray: var(--mark-sm) var(--mark-sm);
+}
+
+.orca-wfcanvas__box {
+  position: absolute;
+  width: var(--node-w);
+  min-height: var(--node-h);
+}
+.orca-wfcanvas__box > .orca-node {
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+/* An expanded container's body: its own drawing, inside a box that says whose it is. */
+.orca-wfcanvas__group {
+  margin: var(--space-4);
+  padding: var(--space-3);
+  border: var(--stroke-hairline) dashed var(--border-control);
+  border-radius: var(--radius-md);
+  background: var(--surface-base);
+  overflow: auto;
+}
+.orca-wfcanvas__group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+/* ---------- the inspector ---------- */
+
+.orca-wf__inspector {
+  flex: none;
+  width: var(--panel-width);
+  padding: var(--space-4);
+  border-left: var(--stroke-hairline) solid var(--border-hairline);
+  background: var(--surface-base);
+  overflow: auto;
+}
+
+.orca-wf__inspector-name {
+  margin: 0 0 var(--space-2);
+  color: var(--ink-primary);
+}
+
+.orca-wf__inspector-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.orca-wf__fields {
+  display: grid;
+  grid-template-columns: var(--col-label-narrow) 1fr;
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-3) 0 0;
+}
+.orca-wf__field {
+  display: contents;
+}
+.orca-wf__field > dt {
+  color: var(--ink-secondary);
+  margin: 0;
+}
+.orca-wf__value {
+  margin: 0;
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}

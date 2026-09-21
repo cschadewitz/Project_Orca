@@ -57,6 +57,11 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Streams | `G` / `⇧G` | Top / bottom, `⇧G` re-enters following |
 | Streams | `/` | Search within the stream, `N` / `⇧N` to cycle matches |
 | Cards | `1`–`9`, `Enter`, `⇧Enter`, `G` | Select option, submit, submit with a note, go to the run |
+| Workflow canvas | `↑` / `↓` | Move the selection within a layer |
+| Workflow canvas | `→` / `←` | Move the selection to the next / previous layer |
+| Workflow canvas | `Enter` | Expand or collapse the selected `subworkflow` or `parallel` |
+| Workflow canvas | `+` / `-` / `0` | Zoom in, zoom out, back to rest |
+| Workflow canvas | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
 | Panel | `[` / `]` | Previous / next artifact version |
 | Anywhere | `Esc` | Close the topmost transient layer, never lose an unsent draft |
 

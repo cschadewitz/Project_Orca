@@ -92,6 +92,18 @@ const KEYBOARD_MAP: readonly { scope: ShortcutScope; key: string; action: string
   { scope: "card", key: "G", action: "Go to the run" },
   { scope: "panel", key: "[", action: "Previous artifact version" },
   { scope: "panel", key: "]", action: "Next artifact version" },
+  { scope: "workflow", key: "ArrowDown", action: "Next node in this layer" },
+  { scope: "workflow", key: "ArrowUp", action: "Previous node in this layer" },
+  { scope: "workflow", key: "ArrowRight", action: "Next layer" },
+  { scope: "workflow", key: "ArrowLeft", action: "Previous layer" },
+  { scope: "workflow", key: "Enter", action: "Expand or collapse the selected node" },
+  { scope: "workflow", key: "+", action: "Zoom in" },
+  { scope: "workflow", key: "-", action: "Zoom out" },
+  { scope: "workflow", key: "0", action: "Reset the zoom and the pan" },
+  { scope: "workflow", key: "Shift+ArrowRight", action: "Pan right" },
+  { scope: "workflow", key: "Shift+ArrowLeft", action: "Pan left" },
+  { scope: "workflow", key: "Shift+ArrowDown", action: "Pan down" },
+  { scope: "workflow", key: "Shift+ArrowUp", action: "Pan up" },
 ];
 
 const slotsOf = (shortcuts: readonly RegisteredShortcut[]): Set<string> =>
@@ -144,6 +156,21 @@ async function chromeOnAStep(): Promise<Harness> {
   return h;
 }
 
+/**
+ * The chrome on a workflow, reached the way every arrival at one is: an `orca://workflow/…`
+ * URL through the route table. The canvas is the whole of the `workflow` scope, and it holds
+ * the scope alone — a nested graph draws through the same component with no registrations of
+ * its own, because two `↑`s in one scope is an error by design.
+ */
+async function chromeOnAWorkflow(): Promise<Harness> {
+  fake = installBridge({ deepLink: "orca://workflow/ai-sdlc" });
+  teardown.push(fake.install());
+  const h = harness();
+  renderChrome(h);
+  await screen.findByRole("listbox", { name: /graph$/ });
+  return h;
+}
+
 /** The docked panel on an artifact with three versions: `panel`. */
 async function panelOnAnArtifact(): Promise<Harness> {
   fake.script({
@@ -175,12 +202,12 @@ function Opener({ target }: { target: ArtifactTarget }): null {
 
 describe("every action in the map is registered", () => {
   it("covers the whole table, in the scope the table files it under", async () => {
-    /* Three mountings rather than one, because the table spans three screens: no single
-       screen has a card, a run tree, a stream and an open artifact panel at once, and a
-       fourth list on one screen is not a missing scope (AGENTS.md). The union is what the
-       app offers across the surfaces that exist. */
+    /* Four mountings rather than one, because the table spans four screens: no single
+       screen has a card, a run tree, a stream, an open artifact panel and a graph canvas at
+       once, and a fourth list on one screen is not a missing scope (AGENTS.md). The union is
+       what the app offers across the surfaces that exist. */
     const found = new Set<string>();
-    for (const mount of [chromeOnAttention, chromeOnAStep, panelOnAnArtifact]) {
+    for (const mount of [chromeOnAttention, chromeOnAStep, panelOnAnArtifact, chromeOnAWorkflow]) {
       for (const slot of slotsOf(await registered(mount))) found.add(slot);
     }
 

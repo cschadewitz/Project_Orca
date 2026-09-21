@@ -24,3 +24,12 @@ export { Text, textClass, type TextProps } from "./text.js";
 export { useTick } from "./ticker.js";
 export { Duration, Time, type DurationProps, type TimeProps } from "./time.js";
 export { Well, type WellProps } from "./well.js";
+export {
+  WorkflowNode,
+  WORKFLOW_NODE_TYPES,
+  asNodeType,
+  workflowNodeName,
+  type WorkflowNodeProps,
+  type WorkflowNodeRunState,
+  type WorkflowNodeType,
+} from "./workflow-node.js";

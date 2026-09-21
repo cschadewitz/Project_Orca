@@ -105,6 +105,20 @@ function buildCss() {
 const union = (keys) => keys.map((k) => `'${k}'`).join(" | ");
 const quote = (s) => `'${String(s).replace(/'/g, "\\'")}'`;
 
+/**
+ * The four size tokens the workflow canvas does arithmetic with (#177). Named here rather
+ * than guessed from a prefix, so adding a `node-*` token does not silently change what the
+ * layout module is handed.
+ */
+const GRAPH_GEOMETRY = ["node-w", "node-h", "layer-gap", "rank-gap"];
+
+/** One size token's value, or a hard failure — a missing geometry token must not emit NaN. */
+function sizeValue(name) {
+  const token = T.size.tokens.find((t) => t.name === name);
+  if (!token) throw new Error(`tokens.json has no size token ${name}, which GRAPH_GEOMETRY needs`);
+  return token.value;
+}
+
 function buildTs() {
   const familyNames = Object.fromEntries(
     [["color", T.color], ...scalarFamilies()].map(([k, fam]) => [k, fam.tokens.map((t) => t.name)]),
@@ -169,6 +183,18 @@ export const rawTokens: Record<ThemeId, Record<string, string>> = ${JSON.stringi
 /** Breakpoint thresholds in px, for \`matchMedia\` — a CSS media query cannot read a custom property. */
 export const BREAKPOINTS: Record<BreakpointToken, number> = {
 ${T.breakpoint.tokens.map((t) => `  ${quote(t.name)}: ${Number.parseInt(t.value, 10)},`).join("\n")}
+};
+
+export type GraphGeometryToken = ${union(GRAPH_GEOMETRY)};
+
+/**
+ * The workflow canvas's box and gaps in px, for the same reason \`BREAKPOINTS\` is here: an
+ * SVG path's \`d\` attribute and a node's \`x\`/\`y\` are arithmetic, and no \`var()\` can be
+ * written inside either. The layout module takes these as an argument rather than reaching
+ * for them, so the algorithm stays a plain module with a plain test.
+ */
+export const GRAPH_GEOMETRY: Record<GraphGeometryToken, number> = {
+${GRAPH_GEOMETRY.map((name) => `  ${quote(name)}: ${Number.parseInt(sizeValue(name), 10)},`).join("\n")}
 };
 
 export type RunStatus = ${union(Object.keys(S.runStatus))};

@@ -166,7 +166,169 @@ const NIGHTLY: WorkflowView = {
 };
 
 /**
- * Every workflow `workflows.get` can answer, by id — the three registered ones and the two
+ * `ai-sdlc`, projected from `workflows/ai-sdlc.yaml` exactly as the daemon's read model
+ * projects it (#177).
+ *
+ * The other three fixtures here are shaped around the run fixtures; this one is shaped
+ * around the *file*, because the issue's "done when" is about that file: sixteen nodes — the
+ * eleven working ones plus `start`, two `set`s and three `end`s — and a review verdict that
+ * returns to the build, which is the back edge the canvas has to draw. It is a copy rather
+ * than a read of the YAML on purpose: the renderer's tests know about `window.orca` and
+ * nothing else, and a test that parsed a workflow file would be testing the loader.
+ *
+ * It appears in `workflows.list` and in `workflows.get` and no run fixture is started
+ * against it, which is the other case worth having: a workflow with no run to overlay.
+ */
+export const AI_SDLC: WorkflowView = {
+  id: "ai-sdlc",
+  name: "AI-native SDLC loop",
+  version: "1",
+  description: "Drive one work item from intent to a reviewed, deployable change.",
+  start: "start",
+  inputs: { workItem: "The work item (title, description, acceptance criteria) this run implements." },
+  vars: { maxBuildAttempts: 3, maxReviewRounds: 2, buildAttempt: 0, reviewRound: 0 },
+  nodes: [
+    { id: "start", type: "start", fields: {} },
+    {
+      id: "plan",
+      type: "agent",
+      name: "Plan: capture intent",
+      fields: { role: "planner", template: "sdlc/plan", inputs: [], produces: [{ kind: "intent" }] },
+    },
+    {
+      id: "design",
+      type: "agent",
+      name: "Design: requirements + design spec",
+      fields: { role: "designer", template: "sdlc/design", inputs: [{ kind: "intent" }], produces: [{ kind: "spec" }] },
+    },
+    {
+      id: "spec-gate",
+      type: "gate",
+      name: "Approve spec",
+      fields: {
+        question: "Approve the spec (risk: {{ artifacts.spec.data.risk }})?",
+        options: [
+          { id: "approve", label: "approve" },
+          { id: "reject", label: "reject" },
+        ],
+        autoApproveWhen: "artifacts.spec.data.risk != 'high'",
+        autoOption: "approve",
+      },
+    },
+    {
+      // A plugin's node: the viewer draws the generic box for a type it does not know.
+      id: "await-deps",
+      type: "custom:plan-await",
+      name: "Wait for upstream work this build needs",
+      fields: { phase: "build" },
+    },
+    { id: "bump-build", type: "set", fields: { vars: { buildAttempt: "=vars.buildAttempt + 1" } } },
+    {
+      id: "build",
+      type: "agent",
+      name: "Build: plan and implement",
+      fields: {
+        role: "builder",
+        template: "sdlc/build",
+        inputs: [{ kind: "spec" }],
+        produces: [{ kind: "plan" }, { kind: "implementation" }],
+        completion: { mode: "turn-end", maxFollowUps: 2, maxAttempts: 2 },
+      },
+    },
+    {
+      id: "test",
+      type: "agent",
+      name: "Test: run and report",
+      fields: {
+        role: "tester",
+        template: "sdlc/test",
+        inputs: [{ kind: "spec" }, { kind: "implementation" }],
+        produces: [{ kind: "test-report" }],
+      },
+    },
+    {
+      id: "tests-passed",
+      type: "decision",
+      name: "Did tests pass?",
+      fields: {
+        source: { kind: "artifact", artifact: "testReport", field: "passed" },
+        options: ["true", "false"],
+        defaultOption: "false",
+      },
+    },
+    { id: "bump-review", type: "set", fields: { vars: { reviewRound: "=vars.reviewRound + 1" } } },
+    {
+      id: "review",
+      type: "agent",
+      name: "Review: agentic PR review",
+      fields: {
+        role: "reviewer",
+        template: "sdlc/review",
+        inputs: [{ kind: "spec" }, { kind: "implementation" }],
+        produces: [{ kind: "review" }],
+      },
+    },
+    {
+      id: "review-verdict",
+      type: "decision",
+      name: "Review verdict",
+      fields: {
+        source: { kind: "artifact", artifact: "review", field: "verdict" },
+        options: ["approve", "changes-requested"],
+      },
+    },
+    {
+      id: "deploy",
+      type: "agent",
+      name: "Deploy: open PR / ship",
+      fields: {
+        role: "deployer",
+        template: "sdlc/deploy",
+        inputs: [{ kind: "implementation" }, { kind: "review" }],
+        produces: [{ kind: "deploy-report" }],
+      },
+    },
+    { id: "done", type: "end", fields: { outcome: "success", message: "Work item delivered." } },
+    { id: "rejected", type: "end", fields: { outcome: "failure", message: "Spec rejected at gate." } },
+    { id: "exhausted", type: "end", fields: { outcome: "failure", message: "Build/review budget exhausted." } },
+  ],
+  edges: [
+    { from: "start", to: "plan" },
+    { from: "plan", to: "design" },
+    { from: "design", to: "spec-gate" },
+    { from: "spec-gate", to: "await-deps", when: "choice == 'approve'" },
+    { from: "spec-gate", to: "rejected", when: "choice == 'reject'" },
+    { from: "await-deps", to: "bump-build" },
+    { from: "bump-build", to: "build" },
+    { from: "build", to: "test" },
+    { from: "test", to: "tests-passed" },
+    { from: "tests-passed", to: "bump-review", when: "choice == 'true'", label: "passed" },
+    // The first of the two back edges: a failed test round returns to the build.
+    {
+      from: "tests-passed",
+      to: "bump-build",
+      when: "choice == 'false' && vars.buildAttempt < vars.maxBuildAttempts",
+      label: "failed, retry",
+    },
+    { from: "tests-passed", to: "exhausted", label: "failed, give up" },
+    { from: "bump-review", to: "review" },
+    { from: "review", to: "review-verdict" },
+    { from: "review-verdict", to: "deploy", when: "choice == 'approve'" },
+    // The review-to-build loop the issue names.
+    {
+      from: "review-verdict",
+      to: "bump-build",
+      when: "choice == 'changes-requested' && vars.reviewRound < vars.maxReviewRounds",
+      label: "changes requested",
+    },
+    { from: "review-verdict", to: "exhausted", label: "give up" },
+    { from: "deploy", to: "done" },
+  ],
+  versions: ["1"],
+};
+
+/**
+ * Every workflow `workflows.get` can answer, by id — the four registered ones and the two
  * graphs written inline inside `sdlc`'s `parallel`, under the `parent::node::branch` ids the
  * daemon addresses them by. A nested graph is fetchable by id *and* present under its node,
  * exactly as the daemon sends it, so a test can take either route.
@@ -175,12 +337,13 @@ export const WORKFLOW_VIEWS: Readonly<Record<string, WorkflowView>> = {
   sdlc: SDLC,
   "sdlc-item": SDLC_ITEM,
   nightly: NIGHTLY,
+  "ai-sdlc": AI_SDLC,
   "sdlc::fanout::auth-ui": FANOUT_BRANCHES[0]!,
   "sdlc::fanout::auth-docs": FANOUT_BRANCHES[1]!,
 };
 
 /** `workflows.list`: the registered workflows only, by id, as the daemon orders them. */
-export const WORKFLOWS: readonly WorkflowSummaryView[] = [NIGHTLY, SDLC, SDLC_ITEM].map((w) => ({
+export const WORKFLOWS: readonly WorkflowSummaryView[] = [AI_SDLC, NIGHTLY, SDLC, SDLC_ITEM].map((w) => ({
   id: w.id,
   name: w.name,
   version: w.version,

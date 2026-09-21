@@ -572,14 +572,41 @@ export interface ConfigFieldProps {
   onShowRaw(path: string): void;
 }
 
+/**
+ * Built (#177), in `renderer/src/ui/workflow-node.tsx`. Four corrections the implementation
+ * forced, each of them a thing the draft could not express:
+ *
+ * - **`type` may be undefined and `typeLabel` is separate.** `WorkflowNodeView.type` is the
+ *   node type verbatim and may be a `custom:<name>` a plugin registered; the protocol says a
+ *   client that does not know a type draws the generic node rather than dropping it. So the
+ *   icon takes one of the nine or nothing, and the eyebrow prints the type as written.
+ * - **`id` is required, and `onOpen` takes it.** Selection on the canvas is
+ *   `aria-activedescendant` over one tab stop, which needs a DOM id — and a node's *name* is
+ *   not unique (two nodes may share one) while its id is.
+ * - **`collapsed`** — a collapsed `subworkflow` or `parallel` says how many graphs it is
+ *   hiding, which is the whole of what a person gets back for the ones they cannot see.
+ * - **`untaken` draws at `--opacity-untaken`, not `--opacity-stale`.** The component layer
+ *   already bound `.orca-node--untaken` to the token named for it; `opacity-stale` is the
+ *   one a disconnected surface uses, and they are different states.
+ *
+ * `onOpen` is optional: a node drawn inside an expanded group box in a read-only viewer is
+ * a picture of a node, and a click target that does nothing is worse than none.
+ */
 export interface WorkflowNodeProps {
-  type: WorkflowNodeType;
+  id: string;
+  /** One of the nine, or undefined for a `custom:*` with no icon of its own. */
+  type?: WorkflowNodeType;
+  /** The type as written, which is what the kind eyebrow prints. */
+  typeLabel: string;
   name: string;
   /** Present only when a run is overlaid. Absent means 'definition view'. */
   runState?: { status: RunStatus; attempts?: number; current?: boolean };
   /** True when a run is overlaid and this node was not traversed. */
   untaken?: boolean;
-  onOpen(name: string): void;
+  selected?: boolean;
+  /** What a collapsed container is hiding, counted: `2 nested graphs`. */
+  collapsed?: string;
+  onOpen?(id: string): void;
 }
 
 export type CrumbType = "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
@@ -589,6 +616,12 @@ export interface Crumb {
   id: string;
   label: string;
   current?: boolean;
+  /**
+   * The ids this crumb's counterparts name, where the surface that built it knows them:
+   * `{ workflow: "ai-sdlc" }` on a run crumb (#177). Most counterparts are queries over data
+   * no breadcrumb holds; this is how the one that is not says so.
+   */
+  counterpartIds?: Readonly<Record<string, string>>;
 }
 
 /**

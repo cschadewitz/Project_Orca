@@ -277,6 +277,10 @@
   --sidebar-width-collapsed: 48px;
   --panel-width: 420px;
   --node-min-width: 132px;
+  --node-w: 192px;
+  --node-h: 64px;
+  --layer-gap: 64px;
+  --rank-gap: 32px;
   --risk-cell-width: 92px;
   --risk-cell-height: 62px;
   --measure-prose: 68ch;

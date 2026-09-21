@@ -18,9 +18,12 @@
  * - **`orca://artifact/<name>@v<n>` names no run.** Versions are monotonic per (run, name),
  *   so the bare form addresses nothing — the canonical form carries `?run=`, which is what
  *   **Copy link** emits, and a bare name is a palette *search* rather than a link.
- * - **`orca://item/…` and `orca://workflow/…` name surfaces that do not exist yet** (Plan is
- *   v0.5.0, workflow viewing v0.6.0). They resolve, select their surface and land on its
- *   unbuilt state with the id shown. They are not dropped and they are not errors.
+ * - **`orca://item/…` names a surface that does not exist yet** (Plan is v0.5.0). It
+ *   resolves, selects its surface and lands on its unbuilt state with the id shown; it is
+ *   not dropped and it is not an error. `orca://workflow/…` was in the same sentence until
+ *   #177 built the viewer: it lands on Config, on the real surface, with `?run=` overlaying
+ *   the run — while Config with no workflow named is still the unbuilt state, because
+ *   Config's own screen is #180.
  * - **`orca://agent/<id>`** is added: the Agents surface shipped in v0.4.0 and the palette
  *   lists agents, and every palette entry has to return a canonical URL.
  */
@@ -182,21 +185,34 @@ export function urlForCrumb(crumbs: readonly Crumb[], crumb: Crumb): string | un
  * The URL behind a crumb's counterpart, or undefined when the app cannot name the object
  * from what the header holds.
  *
- * Only one of the four the spec lists is addressable from the trail alone: a run's work
- * item is the crumb above it, because the trail *is* request ▸ work item ▸ run ▸ step. The
- * other three — the workflow a run executes, the runs that attempted a work item, a work
- * item's dependencies — are queries over data the object header does not have, and they
- * belong to the surfaces that will answer them (Plan is v0.5.0). Undefined is what makes
- * those items render disabled and named rather than silently doing nothing.
+ * Two of the four the spec lists are addressable now, by two different routes, and the
+ * difference is worth keeping straight:
+ *
+ * - **the work item a run claims** is the crumb above it, because the trail *is* request ▸
+ *   work item ▸ run ▸ step. Nothing has to be carried for it.
+ * - **the workflow a run executes** is not in the trail — a `RunSummaryView` has a
+ *   `workflowId` and the breadcrumb does not — so the surface that built the crumb puts it
+ *   in `counterpartIds` and this reads it back (#177). The run is carried through as `?run=`,
+ *   which is what makes the menu item open the viewer *with the run overlaid* rather than
+ *   the bare definition.
+ *
+ * The other two — the runs that attempted a work item, a work item's dependencies — are
+ * queries over data no crumb holds, and they belong to the Plan surface that will answer
+ * them. Undefined is what makes those items say so rather than silently doing nothing.
  */
 export function counterpartUrl(
   crumbs: readonly Crumb[],
   crumb: Crumb,
   counterpart: { id: string },
 ): string | undefined {
-  if (crumb.type === "run" && counterpart.id === "claimed-item") {
+  if (crumb.type !== "run") return undefined;
+  if (counterpart.id === "claimed-item") {
     const item = crumbs.find((c) => c.type === "item");
     return item ? itemUrl(item.id) : undefined;
+  }
+  if (counterpart.id === "workflow") {
+    const workflowId = crumb.counterpartIds?.["workflow"];
+    return workflowId === undefined ? undefined : workflowUrl(workflowId, crumb.id);
   }
   return undefined;
 }

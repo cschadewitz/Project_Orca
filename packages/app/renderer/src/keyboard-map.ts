@@ -13,12 +13,18 @@
  */
 
 /**
- * The scopes in docs/design/50-accessibility-and-keyboard.md's table, plus `menu`: an open
- * popover is a place focus can be, and its roving keys have to out-rank the `↑`/`↓` of the
- * list underneath it. Scope resolution is innermost first, so marking the open list with
- * `scopeProps("menu")` is all that takes.
+ * The scopes in docs/design/50-accessibility-and-keyboard.md's table, plus two the table
+ * gained as the surfaces that need them landed:
+ *
+ * - `menu` — an open popover is a place focus can be, and its roving keys have to out-rank
+ *   the `↑`/`↓` of the list underneath it. Scope resolution is innermost first, so marking
+ *   the open list with `scopeProps("menu")` is all that takes.
+ * - `workflow` (#177) — the graph canvas is not a list: its `↑`/`↓` move between *nodes* in
+ *   a layer rather than between rows, its `←`/`→` move between layers, and it binds `+`,
+ *   `-` and `0` for zoom, which no list has. A canvas inside a surface that also has a list
+ *   is the same situation `run-tree` beside `list` is, and it is settled the same way.
  */
-export type ShortcutScope = "global" | "list" | "run-tree" | "stream" | "card" | "panel" | "menu";
+export type ShortcutScope = "global" | "list" | "run-tree" | "stream" | "card" | "panel" | "menu" | "workflow";
 
 export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "global",
@@ -28,6 +34,7 @@ export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "card",
   "panel",
   "menu",
+  "workflow",
 ];
 
 /** Which of the palette's three sections a shortcut belongs in. Search is not a command. */
@@ -123,6 +130,13 @@ const MODIFIERS = ["Mod", "Shift", "Alt"] as const;
 /** `mod+shift+l` → `Mod+Shift+L`; the same shortcut always produces the same string. */
 export function normalizeKey(key: string): string {
   const parts = key.split("+").map((p) => p.trim());
+  /* `+` is both this notation's separator and a key a person presses — the workflow
+     canvas's zoom in (#177). Splitting leaves it as two empty tails (`"+"` → `["", ""]`,
+     `"Shift++"` → `["Shift", "", ""]`), which is unambiguous, so it is folded back into the
+     one key it was rather than rejected as naming none. */
+  if (parts.length > 1 && parts[parts.length - 1] === "" && parts[parts.length - 2] === "") {
+    parts.splice(-2, 2, "+");
+  }
   const main = parts.pop();
   if (!main) throw new Error(`shortcut ${JSON.stringify(key)} names no key`);
   const mods = new Set(parts.map((p) => p.toLowerCase()));

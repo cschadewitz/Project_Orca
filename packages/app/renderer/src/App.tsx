@@ -24,6 +24,7 @@ import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
 import { AgentsSurface } from "./agents/agents-surface.js";
 import { AttentionSurface } from "./attention/attention-surface.js";
+import { WorkflowSurface } from "./workflow/workflow-surface.js";
 import { useAttention } from "./attention/use-attention.js";
 import { InlineAsksProvider } from "./attention/inline-asks.js";
 import { useAlertActivation } from "./attention/use-alert-activation.js";
@@ -46,6 +47,9 @@ import { Button, ObjectHeader, StateView, Text, textClass, type Crumb } from "./
 // space with runs nobody has to look at.
 const DEFAULT_SURFACE: SurfaceId = "attention";
 
+/** One empty trail, so a surface with no object does not remount the header every render. */
+const NO_CRUMBS: readonly Crumb[] = [];
+
 export function App(): JSX.Element {
   const [active, setActive] = useState<SurfaceId>(DEFAULT_SURFACE);
   /* Where a URL led. The route table resolves every `orca://` URL — a cold start's, an
@@ -62,7 +66,29 @@ export function App(): JSX.Element {
      place. A surface hands up the crumbs for whatever it has selected and the chrome draws
      them into `PrimaryPane`'s header slot — Runs is the first surface with an object to put
      there. */
-  const [crumbs, setCrumbs] = useState<readonly Crumb[]>([]);
+  /* …and the controls for it: the workflow viewer's version text, its `◷ pinned` chip and
+     its overlay picker are the header's actions (#177).
+
+     The surface that reported them is held with them, and the header is drawn only while
+     that is the surface on screen. Clearing on the way to a new surface does not work and
+     the reason is React's: a surface reports from an effect, and a child's effects run
+     before its parent's — so a `setCrumbs([])` in the navigation would run *after* the
+     surface it was switching to had already said what it had, and throw it away. */
+  const [header, setHeader] = useState<{ surface: SurfaceId; crumbs: readonly Crumb[]; actions: ReactNode }>({
+    surface: DEFAULT_SURFACE,
+    crumbs: [],
+    actions: null,
+  });
+  const crumbs = header.surface === active ? header.crumbs : NO_CRUMBS;
+  const setCrumbs = useCallback(
+    (next: readonly Crumb[]) => setHeader({ surface: "runs", crumbs: next, actions: null }),
+    [],
+  );
+  const onWorkflowHeader = useCallback(
+    (reported: { crumbs: readonly Crumb[]; actions: ReactNode }) =>
+      setHeader({ surface: "config", crumbs: reported.crumbs, actions: reported.actions }),
+    [],
+  );
 
   const connection = useConnection();
   /* What needs a person, read *here* rather than inside the Attention surface, because the
@@ -170,7 +196,7 @@ export function App(): JSX.Element {
           key={activeSurface.id}
           surface={activeSurface.id}
           header={
-            activeSurface.id === "runs" && crumbs.length > 0 ? (
+            crumbs.length > 0 ? (
               /* Both openers go through the route table rather than through a second
                  navigation path: a crumb, a counterpart, a palette row and a pasted URL
                  are four ways of naming the same object and there is one resolver (#165).
@@ -178,6 +204,7 @@ export function App(): JSX.Element {
                  answering undefined means. */
               <ObjectHeader
                 crumbs={crumbs}
+                actions={header.actions}
                 onOpen={(crumb) => {
                   const url = urlForCrumb(crumbs, crumb);
                   if (url) navigate(url);
@@ -223,6 +250,19 @@ export function App(): JSX.Element {
             />
           ) : activeSurface.id === "agents" ? (
             <AgentsSurface connection={connection.state} />
+          ) : activeSurface.id === "config" && route?.kind === "workflow" ? (
+            /* The workflow viewer lands on Config, which is where the route table has always
+               put `orca://workflow/…` — "how the system is wired, and what the workflows
+               are" (docs/design/10-information-architecture.md). Config's own screen is
+               #180; until it exists a person reaches a workflow by link, by the run header's
+               "the workflow it executes", or from the palette, and the surface with no
+               workflow named still says it has not been built. */
+            <WorkflowSurface
+              workflowId={route.workflowId}
+              runId={route.runId}
+              connection={connection.state}
+              onHeader={onWorkflowHeader}
+            />
           ) : (
             <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />
           )}

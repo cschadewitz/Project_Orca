@@ -1100,8 +1100,21 @@
   font-family: var(--font-mono);
   font-weight: 500;
 }
+/* The node type's icon: inline SVG on the 16px grid, drawn in the eyebrow's ink. Shapes
+   rather than characters, so there is no bundled face for them and no glyph token. */
+.orca-node__icon {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
+  stroke-width: var(--stroke-hairline);
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
 /* type: caption */
 .orca-node__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--ink-secondary);
 }
 .orca-node--start,

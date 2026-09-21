@@ -96,11 +96,14 @@ one is worth keeping in mind before a new form is added:
   so `orca://artifact/spec.md@v3` alone names as many artifacts as there are runs with a
   `spec.md`. The `?run=` form is canonical and is what **Copy link** emits; a bare name is a
   palette *search*, not a link.
-- **`orca://item/…` and `orca://workflow/…` name surfaces that do not exist yet** — Plan
-  (#170) and the workflow viewer (#177) are both v0.5.0; workflow *editing* is v0.6.0. They
-  resolve all the same: the surface is selected
-  and the id is shown on its unbuilt state. A link is never dropped because the screen behind
-  it has not been built.
+- **`orca://item/…` names a surface that does not exist yet** — Plan (#170) is v0.5.0. It
+  resolves all the same: the surface is selected and the id is shown on its unbuilt state. A
+  link is never dropped because the screen behind it has not been built.
+  **`orca://workflow/…` is built as of #177** and lands on the viewer, on the Config surface,
+  with `?run=` overlaying that run's path over the graph. Config's own screen is still
+  ahead of it, so `⌘5` with no workflow named still says the surface is unbuilt; a workflow is
+  reached by link, from the palette, or from the run header's "the workflow it executes".
+  Workflow *editing* remains v0.6.0.
 - **`orca://agent/…` was missing.** The Agents surface shipped in v0.4.0 and the palette lists
   agents, and every palette entry has to hand back a canonical URL.
 

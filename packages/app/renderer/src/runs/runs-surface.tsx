@@ -166,7 +166,16 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
     if (selectedRun.workItem) {
       trail.push({ type: "item", id: selectedRun.workItem.id, label: selectedRun.workItem.title });
     }
-    trail.push({ type: "run", id: selectedRun.id, label: selectedRun.name });
+    /* The workflow this run executes is a counterpart rather than a crumb — the trail is
+       request ▸ work item ▸ run ▸ step and a workflow is not on it — so the id travels on
+       the crumb and `counterpartUrl` turns it into `orca://workflow/<id>?run=<run>`. That
+       menu item is the run header's link to the viewer with this run overlaid (#177). */
+    trail.push({
+      type: "run",
+      id: selectedRun.id,
+      label: selectedRun.name,
+      counterpartIds: { workflow: selectedRun.workflowId },
+    });
     if (selectedStepRunId !== undefined && currentStep !== undefined) {
       trail.push({ type: "step", id: selectedStepRunId, label: currentStep });
     }
