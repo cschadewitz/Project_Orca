@@ -158,13 +158,24 @@ same two cards mount inline in step detail over the same feed (`attention/inline
 so a gate answered in the run and a gate answered in the list are one read, one component and
 one count.
 
+`renderer/src/config/` is the third, and the first that edits a *file*: a plain
+`config-model.ts` (schema to sections, draft to patch, an error to the field it belongs on),
+one hook holding both documents and the drafts over them, and the markup composed from
+`ui/`. Two rules it sets for anything that writes a document — a draft is the edits and
+never a copy of the file, because a copy has to decide what every untouched key is; and a
+refused write keeps the draft, since `CONFIG_STALE` is somebody else having saved, which is
+a thing to say and not a reason to throw away what a person typed. Its save bar
+(`.orca-draftbar`) is the one the workflow editor reuses rather than redraws.
+
 `renderer/src/a11y/` is not a surface. It holds the **one** polite live region the whole app
 announces through, mounted once by `App` and fed by listening to the feed the surfaces already
 hold — a listener, never a second subscription. Its plain module is `announcements.ts`, which
 folds a `run.changed` or `step.changed` into one sentence **or into nothing**: transitions and
 terminal states only, per `docs/design/50-accessibility-and-keyboard.md`, because a region that
 spoke on every frame would be the streaming-output mistake in another place. A surface that
-wants to announce something adds to that fold; it does not add a region. `a11y-sweep.test.tsx`
+wants to announce something adds to that fold; it does not add a region. What the daemon
+never pushes — a write this app made, or a write it refused — goes through `useAnnounce()`
+(`a11y/announce.ts`), which is one channel into that same region and not a second one. `a11y-sweep.test.tsx`
 asserts there is exactly one, and that it is the same element across every surface.
 
 **Every shortcut goes in the keyboard map.** Register `{ scope, key, label, action }` on the

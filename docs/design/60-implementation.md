@@ -273,6 +273,46 @@ take attention only inside a window that already has focus, and nothing raises a
 anybody" is guaranteed rather than remembered. A click comes back with the item it was about
 and is resolved through the route table, like every other way of arriving at an object.
 
+## Config surface (as built, v0.5.0)
+
+**Two documents, one screen** (#175, #266). `config.get` answers with `orca.config.yaml` and
+the ADR 0009 permission sidecar beside it, each with its own path, its own content-hash
+`revision` and its raw `text`, plus a flat schema description and the effective permission
+policy per agent. The YAML is drawn twice — as a form over the schema and as the bytes in a
+`textarea` styled by `.orca-yaml` — switched by a segmented control in the object header. The
+sidecar is drawn as the effective rules in evaluation order and as its own raw JSON, and is
+**read-only here**: editing grants is #176.
+
+**The draft is edits, not a copy, and it is one of two kinds.** A form draft is a map of
+dotted path to value and is sent as `patch`, which edits the YAML document in place and keeps
+its comments; a raw draft is the bytes and is sent as `text`. There is no merge of the two
+that is not a guess, so editing in one view drops the other's draft — **last edited wins**,
+and the bar says so before it happens. An edit back to the file's own value is not a change,
+which is what makes "N changes" a count of what would be written. Clearing an optional field
+sends a patch entry with no `value`, which deletes the key so its default comes back.
+
+**Staleness is a refusal, and a refusal never costs a draft.** `expectedRevision` is the
+revision the draft was made against; a daemon whose bytes have moved answers `CONFIG_STALE`,
+and the bar turns `--blocked`, says the file changed and offers **Reload**. The draft is
+still there afterwards, to be sent against the new revision.
+
+**Nothing polls.** One `config.get` on mount, then `config.changed`; a push whose revision is
+one the screen already holds is its own write coming back and is dropped. A write that lands
+is followed by one read, because the effective policy is computed over both files and
+`config.set` answers with neither.
+
+**The save bar is `.orca-draftbar`, and it is the one the workflow editor reuses** — the
+editor adds **Validate all** and **Publish** to it rather than drawing a second bar
+(70-workflow-editing.md). `⌘S` saves, registered in the `config` scope so the palette lists
+it. The bar is **absent** where there is no `config.set` to call — file mode, a `--read-only`
+daemon — and the form goes read-only with it; disconnected keeps the last read, dims the
+values and hides the bar rather than offering a write nobody will take.
+
+**What the surface cannot soften.** Nothing in either document is redacted: `config.get`
+hands over the bytes, ssh hosts and command lines included, because a form that edits a file
+has to show the file and a redacted `text` written back would destroy what it hid. The raw
+view says so in one line rather than leaving a person to discover it.
+
 ## What the design assumes ORCA can provide
 
 Everything in these screens maps to something described in the ORCA model: events, steps,

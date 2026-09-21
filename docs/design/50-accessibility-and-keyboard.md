@@ -63,6 +63,7 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Workflow canvas | `+` / `-` / `0` | Zoom in, zoom out, back to rest |
 | Workflow canvas | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
 | Panel | `[` / `]` | Previous / next artifact version |
+| Config | `⌘S` | Save the configuration draft |
 | Anywhere | `Esc` | Close the topmost transient layer, never lose an unsent draft |
 
 Every action in this map is also in the command palette, with its key shown beside it. The

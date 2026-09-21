@@ -143,4 +143,13 @@ is a denial of service against your own daemon.
 - **No global search screen.** Search lives in the palette and in per-surface filter fields.
 - **No settings screen separate from Config.** Application preferences (theme, density,
   notifications) are a section of the Config surface, stored separately from the ORCA YAML and
-  labelled as such, so there is one place to look.
+  labelled as such, so there is one place to look. They save immediately and have no draft:
+  they are the person's own window, not the workspace's configuration, and a Save button
+  would imply a choice had not taken effect while it plainly had.
+
+  **Config shows two documents, and the second is not YAML (#266).** The ADR 0009 permission
+  sidecar — `orca.permissions.json`, where an answer of "allow always" is written — is the
+  other document `config.get` returns, and Config renders it beside the YAML: each agent's
+  effective policy in evaluation order, every rule chipped `config` or `sidecar`, and the
+  sidecar's own JSON in a second raw view. So the surface holds three things stored in three
+  places, and each one says where it lives.

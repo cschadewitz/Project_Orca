@@ -345,6 +345,10 @@ where re-running the whole matrix would not be.
   plain Node, owned by the main process as `preferences.json` under the Electron user-data
   directory, reached from the renderer through `window.orca.preferences` and shared with it
   as types only. They are about the person, not about ORCA, so they never go in the YAML.
+  They are edited on the **Config surface**, in a section labelled as stored by the app, and
+  they save the moment they are chosen: `Appearance.set` applies the attribute and persists
+  the patch, so `data-theme`, `data-density` and the file keep one owner
+  (`renderer/src/appearance.ts`) rather than the surface writing the bridge behind its back.
 - Renderer tests run in `happy-dom` against the real `tokens.css` and `components.css` (see
   `packages/app/test/appearance.test.ts`). Build one `Window` per scenario: happy-dom caches
   computed style per document and does not invalidate it when the device settings (colour
@@ -411,11 +415,11 @@ that launches the real thing: Playwright's Electron driver against the *built* a
 daemon on an `orca demo` store. It asserts the window comes up with a bridge in it — which
 is exactly what an ESM preload broke (#198) — that `hello` reached the daemon, that both
 themes render and resolve different tokens, that axe finds no violations on **Attention,
-Runs or Agents** in either theme, and that every status on the attention list, the run tree
-and the status bar still carries its glyph and its word with the colour taken away (#167).
-Plan and Config are asserted to be the unbuilt `StateView`s they are in v0.4.0, rather than
-audited — a screen that says "not built yet" passes an axe run and means nothing by it, so
-the day one of them grows content that assertion fails and says which.
+Runs, Agents or Config** in either theme, and that every status on the attention list, the
+run tree and the status bar still carries its glyph and its word with the colour taken away
+(#167). Plan is asserted to be the unbuilt `StateView` it still is, rather than audited — a
+screen that says "not built yet" passes an axe run and means nothing by it, so the day it
+grows content that assertion fails and says so. Config made that trip in #175.
 
 Run it with `pnpm run build && pnpm run app:smoke`; on a headless box,
 `xvfb-run -a pnpm run app:smoke`, and in a container without unprivileged user namespaces
