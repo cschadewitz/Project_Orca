@@ -39,7 +39,16 @@ async function open(url: string): Promise<HTMLElement> {
   h = harness();
   teardown.push(h.dispose);
   renderChrome(h);
-  return screen.findByRole("listbox", { name: /graph$/ });
+  const canvas = await screen.findByRole("listbox", { name: /graph$/ });
+  /* `findByRole` resolves on the DOM, and React commits the DOM *before* it runs the
+     passive effects — which is where the canvas registers its twelve shortcuts. A press
+     dispatched in that window resolves its scope, finds nothing registered for the key and
+     is dropped; nothing ever re-fires it, so the `waitFor` after it times out on a
+     selection that was never made. That is the first-press flake this file showed roughly
+     once in forty runs, on whichever test happened to press first. One empty `act` flushes
+     whatever is pending, so every press below meets a registered map. */
+  await act(async () => {});
+  return canvas;
 }
 
 /**

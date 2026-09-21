@@ -442,6 +442,14 @@ describe("app preferences", () => {
     const theme = (): string | null => within(section).getByRole("button", { name: "Theme" }).textContent;
     expect(theme()).toBe("system");
 
+    /* `findByRole` resolves on the DOM, which React commits before it runs the passive
+       effects — and the section subscribes to the preference store in one of those. A
+       press dispatched in that window writes the preference and is never heard, which
+       leaves the row showing the snapshot it mounted with: the very thing this test says
+       does not happen, failing about once in a dozen runs for a reason a person could
+       never produce. The flush closes the window. */
+    await act(async () => {});
+
     act(() => {
       fireEvent.keyDown(window, { key: "L", code: "KeyL", metaKey: true, shiftKey: true });
     });
