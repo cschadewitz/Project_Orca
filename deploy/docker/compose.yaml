@@ -1,0 +1,74 @@
+# The local ORCA daemon: one container, one mounted workspace, one published port.
+#
+#   cd deploy/docker
+#   ORCA_WORKSPACE_DIR=$HOME/orca docker compose up --build
+#
+# docs/SETUP.md has the whole of it, including what to do before this reaches a network:
+# the port carries no authentication of any kind.
+
+# Named, because the default is the directory — `docker` — and that is what every volume
+# and network here would be prefixed with.
+name: orca
+
+services:
+  orca:
+    build:
+      # The repository root: the image builds the daemon from this checkout.
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: orca:0.5.0
+    container_name: orca-daemon
+    command: ["serve", "--host", "0.0.0.0", "--port", "6722"]
+
+    # 127.0.0.1 on the host side, deliberately. Published as `6722:6722` the daemon would be
+    # reachable from the network with no authentication in front of it, and anything that
+    # reached it could start, cancel and answer runs.
+    #
+    # ORCA_PORT moves the *host* side only — the default `orca serve` port is where every
+    # client looks first, so it is worth keeping unless something already holds it, which on
+    # a machine that also runs a daemon from a checkout it will.
+    ports:
+      - "127.0.0.1:${ORCA_PORT:-6722}:6722"
+
+    # uid:gid the container runs as. It has to be able to write the mounted workspace, so
+    # it defaults to the image's `node` user (1000) and the environment overrides it:
+    #   ORCA_UID=$(id -u) ORCA_GID=$(id -g) docker compose up
+    # Not `UID`: that one is readonly in bash, and the assignment fails before compose runs.
+    user: "${ORCA_UID:-1000}:${ORCA_GID:-1000}"
+
+    volumes:
+      # The workspace: orca.config.yaml, the .orca store, the repository the agents work in.
+      - ${ORCA_WORKSPACE_DIR:-./workspace}:/workspace
+      # Agent credentials, kept in named volumes so `claude /login` and `codex login` are
+      # done once rather than on every container. Bind-mount your own ~/.claude instead if
+      # you would rather share the host's login.
+      - claude-home:/home/node/.claude
+      - codex-home:/home/node/.codex
+
+    environment:
+      # Or CLAUDE_CODE_OAUTH_TOKEN / OPENAI_API_KEY. Unset is fine when the volumes above
+      # hold a login. Nothing here goes into the image.
+      - ANTHROPIC_API_KEY
+      - CLAUDE_CODE_OAUTH_TOKEN
+      - OPENAI_API_KEY
+
+    # `GET /health` is what the daemon has for a supervisor. It answers before any agent
+    # exists, which is right: a daemon with no agents configured still serves its store.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:6722/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+    restart: unless-stopped
+
+volumes:
+  claude-home:
+  codex-home:

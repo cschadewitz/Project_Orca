@@ -2,6 +2,7 @@
 
 | Document | Read it when you want to… |
 | --- | --- |
+| [SETUP.md](SETUP.md) | stand up a daemon (in Docker, locally or on another machine), give it Claude Code and Codex, and point the app or Kepler at it |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | understand the layers, the interpreter, the agent hand‑off and where ORCA sits relative to Kepler / T3 Code |
 | [DATA-MODEL.md](DATA-MODEL.md) | know every entity, event type and the expression/template context |
 | [PLANNING.md](PLANNING.md) | understand the long‑term plan: dependencies across requests, the risk matrix, decision matrices, the scheduler and `orca plan` |

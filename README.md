@@ -83,6 +83,10 @@ To run **inside Kepler / Zed / any ACP client**, register `orca acp` as an agent
 command; prompts sent to it become Requests and progress streams back as ACP
 plan/tool‑call updates (see `docs/INTEGRATIONS.md`).
 
+For the whole of it end to end — the daemon in Docker with both agents behind it,
+the app, Kepler, and what a daemon on another machine needs before it is exposed —
+follow **`docs/SETUP.md`**; the image it builds is `deploy/docker/`.
+
 Requests accumulate in a **long‑term plan**: work items from different requests can
 depend on each other (or on a decision, or on something external), risks are scored
 on a likelihood × impact matrix and can hold work for a human, and decisions are made

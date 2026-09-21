@@ -1,0 +1,15 @@
+# The build context for deploy/docker/Dockerfile is the repository root, and the build
+# stage runs `pnpm install` itself. Everything a working checkout accumulates is therefore
+# cost without use — and `.orca` would be somebody's event store, copied into an image.
+node_modules
+**/node_modules
+dist
+**/dist
+*.tsbuildinfo
+**/*.tsbuildinfo
+.orca
+**/.orca
+coverage
+test-results
+playwright-report
+.git

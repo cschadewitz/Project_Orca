@@ -1,0 +1,63 @@
+# The configuration the containerised daemon reads. Copy it to the root of the workspace
+# you mount at /workspace and edit it there — it is your file from that point on, and
+# `config.set` (the app's Config surface) writes to it.
+#
+# Everything in it is a path inside the container, not on the host.
+version: 1
+
+# Under /workspace, so the event log, artifacts and plan survive the container.
+storeDir: .orca
+
+hosts:
+  - id: local
+    type: local
+
+agents:
+  # The adapters the image installs. Neither CLI speaks ACP by itself: these wrap them.
+  - id: claude
+    command: claude-agent-acp
+    hostId: local
+    roles: [planner, designer, decomposer, reviewer]
+    sessionMode: per-step
+    env:
+      # The adapter bundles a Claude Code of its own; this points it at the current CLI the
+      # image installs (docs/SETUP.md, "Connect to Claude Code").
+      CLAUDE_CODE_EXECUTABLE: /usr/local/bin/claude
+  - id: codex
+    command: codex-acp
+    hostId: local
+    roles: [builder, tester, deployer]
+    sessionMode: per-step
+
+# No `permissions:` block on either agent, so ORCA's own defaults are the policy: read,
+# search, edit, delete, move and think inside the run's own workspace, and `ask` for
+# everything else — `execute` included. Every ask reaches the Attention surface. Add
+# `permissions: { default: allow }` to an agent only if this container is a sandbox you do
+# not mind it roaming.
+
+# Absolute, because the workflows and templates are in the image and the workspace holds
+# neither. Copy them into the workspace and make these relative if you want to edit them.
+workflows: ["/opt/orca/workflows/**/*.yaml"]
+templates: ["/opt/orca/templates/**/*.md"]
+
+program:
+  workflow: program
+  itemWorkflow: ai-sdlc
+
+workspace:
+  # One git worktree and branch per work item, under /workspace/worktrees. `local` instead
+  # would point every run at one checkout and let concurrent items fight over the branch.
+  provider: git-worktree
+  repo: /workspace/repo
+  worktreeRoot: /workspace/worktrees
+  baseBranch: main
+  branchPrefix: orca/
+  hostId: local
+
+humanInput:
+  # The only mode that makes sense for a daemon: a gate parks the run in its event log and
+  # is answered from the app (or `orca answer`), by a person who was not at a terminal when
+  # it was asked. `cli` would prompt on a terminal nobody is watching.
+  mode: pause
+
+plugins: []
