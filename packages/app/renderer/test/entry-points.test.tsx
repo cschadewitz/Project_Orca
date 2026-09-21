@@ -128,14 +128,17 @@ describe("deep links", () => {
     expect(landing()?.textContent).toContain("orca.permissions.json");
   });
 
-  it("lands an item link on Plan, whose surface is not built yet", async () => {
+  it("lands an item link on Plan, and says which item it is holding", async () => {
     const { fake } = mount();
     await screen.findByRole("button", { name: "Attention" });
 
     fake.link("orca://item/wi-1");
 
     await waitFor(() => expect(activeSurface()).toContain("Plan"));
-    expect(screen.getByText("This surface has not been built yet.")).toBeTruthy();
+    // The surface is built as of #170, so the link lands on the schedule itself. `wi-1` is
+    // not in this store's plan, which leaves the table as it is and the landing naming the
+    // id — a link is never dropped because the object behind it is not there.
+    await screen.findByRole("listbox", { name: "Schedule" });
     expect(landing()?.textContent).toContain("wi-1");
   });
 });

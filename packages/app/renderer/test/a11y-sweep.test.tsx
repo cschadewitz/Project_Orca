@@ -424,9 +424,11 @@ describe("Workflow: a graph read as a list, with the status first", () => {
   it("puts the status word first in an overlaid node's name, and says which were not taken", async () => {
     const canvas = await openWorkflow("orca://workflow/sdlc?run=run-parent");
     await waitFor(() =>
-      expect(within(canvas).getAllByRole("option").some((o) => (o.getAttribute("aria-label") ?? "").startsWith("succeeded"))).toBe(
-        true,
-      ),
+      expect(
+        within(canvas)
+          .getAllByRole("option")
+          .some((o) => (o.getAttribute("aria-label") ?? "").startsWith("succeeded")),
+      ).toBe(true),
     );
     const names = within(canvas)
       .getAllByRole("option")
@@ -514,6 +516,68 @@ describe("Config: a form of named fields, and one region that speaks", () => {
     // The same element the run transitions come out of: one region, two kinds of sentence.
     await waitFor(() => expect(announcer.textContent).toBe("Config saved"));
     expect(announcers()).toHaveLength(1);
+  });
+});
+
+describe("Plan: two lists, one tab stop each, and nothing that speaks", () => {
+  /**
+   * The fifth surface (#170). It is the first with *two* lists on one screen — the
+   * schedule table and the plan journal — which is why it is in this sweep: "one scope
+   * holds one `VirtualList`" is an app-level claim, and so is the one announcer.
+   */
+  async function goToPlan(): Promise<HTMLElement> {
+    renderChrome(h);
+    await goTo("Plan");
+    return screen.findByRole("listbox", { name: "Schedule" });
+  }
+
+  it("is one tab stop with aria-activedescendant, and selection survives focus leaving", async () => {
+    const table = await goToPlan();
+    expect(table.getAttribute("tabindex")).toBe("0");
+
+    const options = within(table).getAllByRole("option");
+    expect(options.length).toBeGreaterThan(0);
+    // Selection is an attribute on the container, never focus on nine rows (rule 10).
+    expect(options.some((option) => option.hasAttribute("tabindex"))).toBe(false);
+    for (const option of options) expect(option.hasAttribute("aria-selected")).toBe(true);
+
+    fireEvent.keyDown(table, { key: "End", code: "End" });
+    await waitFor(() => expect(table.getAttribute("aria-activedescendant")).toBeTruthy());
+    const selected = table.getAttribute("aria-activedescendant");
+
+    const filter = screen.getByRole("searchbox", { name: "Filter work items" });
+    filter.focus();
+    expect(document.activeElement).toBe(filter);
+    expect(table.getAttribute("aria-activedescendant")).toBe(selected);
+  });
+
+  it("names every classification in words, so a greyscale row still reads", async () => {
+    const table = await goToPlan();
+    const text = within(table)
+      .getAllByRole("option")
+      .map((row) => row.textContent ?? "");
+    // The badge's word, not only its tint and not only its glyph (rules 3 and 4).
+    expect(text.some((row) => row.includes("ready"))).toBe(true);
+    expect(text.some((row) => row.includes("waiting on deps"))).toBe(true);
+    expect(text.some((row) => row.includes("held"))).toBe(true);
+    // And the two settled ones, in the run statuses' words.
+    expect(text.some((row) => row.includes("succeeded"))).toBe(true);
+    expect(text.some((row) => row.includes("failed"))).toBe(true);
+  });
+
+  it("gives the journal its own list and its own scope, and adds no live region", async () => {
+    await goToPlan();
+    fireEvent.click(screen.getByRole("button", { name: "Journal" }));
+    const journal = await screen.findByRole("listbox", { name: "Plan journal" });
+
+    expect(journal.getAttribute("tabindex")).toBe("0");
+    // The scope is marked on the substrate's root, which is what resolution walks out to.
+    expect(journal.closest("[data-kbd-scope]")?.getAttribute("data-kbd-scope")).toBe("plan-journal");
+    // The chrome's one announcer, still one; nothing on Plan speaks — a schedule that
+    // repainted out loud would be the streaming-output mistake in another place (rule 11).
+    expect(announcers()).toHaveLength(1);
+    expect(document.querySelectorAll(".orca-plan [aria-live]")).toHaveLength(0);
+    expect(politeRegions().length).toBeLessThanOrEqual(2);
   });
 });
 
