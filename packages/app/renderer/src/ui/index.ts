@@ -1,7 +1,12 @@
 export { Button, type ButtonProps, type ButtonSize, type ButtonTone } from "./button.js";
 export { Card, type CardProps, type CardTone } from "./card.js";
 export { Chip, type ChipProps } from "./chip.js";
-export { ConfigField, type ConfigFieldControl, type ConfigFieldProps } from "./config-field.js";
+export {
+  ConfigField,
+  type ConfigFieldControl,
+  type ConfigFieldDocument,
+  type ConfigFieldProps,
+} from "./config-field.js";
 export { ConnectionIndicator, type ConnectionIndicatorProps } from "./connection-indicator.js";
 export { COUNTERPARTS, counterpartsFor, type Counterpart, type CrumbType } from "./counterparts.js";
 export { formatAbsolute, formatDuration, formatRelative } from "./format-time.js";

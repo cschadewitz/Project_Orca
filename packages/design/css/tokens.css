@@ -289,6 +289,7 @@
   --palette-width: 560px;
   --palette-max-height: 440px;
   --palette-offset-top: 96px;
+  --editor-min-height: 360px;
   /* z */
   --z-sticky: 2;
   --z-menu: 3;

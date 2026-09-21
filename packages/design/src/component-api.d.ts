@@ -557,19 +557,65 @@ export interface AgentHealthCardProps {
 }
 
 /**
- * Built. `children` is a render function, not a node: the field owns no control, but it
- * does own the ids that tie the label, the help and the error to whatever control the
- * caller puts inside it, and it has to hand them over to do that.
+ * Built, and corrected twice by building it (#175, #266).
+ *
+ * `children` is a render function, not a node: the field owns no control, but it does own
+ * the ids that tie the label, the help and the error to whatever control the caller puts
+ * inside it, and it has to hand them over to do that.
+ *
+ * - **The path is into a *document*, not into "the YAML".** Config shows two: the YAML and
+ *   the ADR 0009 permission sidecar, which is JSON and has keys of its own. `document` says
+ *   which, and it is what makes **raw** open the right file; it defaults to `config`,
+ *   because most of the form is about the YAML.
+ * - **`onShowRaw` is optional.** One section of the Config surface is fields of a document
+ *   ORCA does not own — the app's own preferences (theme, per-surface density) — which have
+ *   a key and no raw view anywhere in the app to show it in. Those fields still show their
+ *   path, because it is what gets written, and draw no **raw** button rather than a button
+ *   that does nothing.
  */
+export type ConfigFieldDocument = "config" | "permissions";
+
 export interface ConfigFieldProps {
   label: string;
-  /** Dotted path into the YAML — always shown, it is how the form maps to the file. */
+  /** Dotted path into `document` — always shown, it is how the form maps to the file. */
   path: string;
+  /** Which of the workspace's two configuration documents that path is in. Defaults to `config`. */
+  document?: ConfigFieldDocument;
   children(control: { id: string; "aria-describedby"?: string; "aria-invalid"?: true }): unknown;
   help?: string;
   error?: string;
-  /** Opens the raw YAML view scrolled to and highlighting this path. */
-  onShowRaw(path: string): void;
+  /** Opens that document's raw view, scrolled to and highlighting this path. */
+  onShowRaw?(path: string, document: ConfigFieldDocument): void;
+}
+
+/**
+ * Built (#175). The config surface's save bar, over `.orca-draftbar` — and the bar the
+ * workflow editor reuses rather than redraws: "the draft bar is the config editor's save
+ * bar with two more actions" (docs/design/70-workflow-editing.md), those two being
+ * **Validate all** and **Publish**.
+ *
+ * `changes` counts what would be *written*, not what was typed: a field edited back to the
+ * file's own value is not a change. The bar is **absent** rather than disabled where there
+ * is no `config.set` to call at all — file mode, and a `--read-only` daemon — which is the
+ * caller's decision; `disabledReason` is for the states where the daemon would take the
+ * write if it were answering, and it comes from `useWritability()`.
+ */
+export interface DraftBarProps {
+  changes: number;
+  /** A call is out; the buttons wait rather than sending a second write. */
+  busy: boolean;
+  /** The `CONFIG_STALE` message. Turns the bar `--blocked` and offers **Reload**; the draft is kept. */
+  conflict?: string;
+  /** What the last Validate or Save said, in words. */
+  message?: string;
+  /** Why the daemon cannot take a write right now. Never composed by the bar itself. */
+  disabledReason?: string;
+  /** Which of the form and the raw editor holds the live draft: the last edited wins. */
+  note?: string;
+  onValidate(): void;
+  onSave(): void;
+  onDiscard(): void;
+  onReload(): void;
 }
 
 /**
