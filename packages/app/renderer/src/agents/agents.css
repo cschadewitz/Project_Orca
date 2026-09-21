@@ -13,12 +13,18 @@
    Widths are in `ch` where they are columns of text: a ratio to the font already chosen
    rather than a design decision of its own (tools/eslint-config/css-tokens.js). */
 
+/* The root is bounded and does not scroll: this surface is a split layout, not a stack of
+   content, so each of its columns scrolls for itself (AGENTS.md, "Say where your screen
+   scrolls"). The root carried `overflow-y: auto` until #277 measured it in a 340px window
+   and found it scrolling a box the content was no longer in — `.orca-agents__split` is
+   `flex: 1` against a bounded column, so it shrank to the window while the cards inside it
+   spilled out below its bottom edge, and the root's scrollbar then moved a split whose
+   content had already left it. */
 .orca-agents {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
 }
 
 .orca-agents__summary {
@@ -29,11 +35,16 @@
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
 
+/* The cards column, and the region that scrolls: the long thing on this screen is the
+   stack of host sections and the claims below them, and the policy inspector beside it
+   scrolls on its own (`config/policy.css`). The summary above stays put, which is what a
+   count of what is on screen is for. */
 .orca-agents__body {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
   padding: var(--space-4);
+  overflow-y: auto;
 }
 
 /* ---------- one host, and its agents ---------- */
