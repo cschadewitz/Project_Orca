@@ -69,6 +69,20 @@ ARG AGENTS="@agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp
 RUN if [ -n "$AGENTS" ]; then npm install --global $AGENTS && npm cache clean --force; fi
 ENV CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude
 
+# An identity for the commits the agents make. A container has none — no `~/.gitconfig`, no
+# `/etc/mailname` — and git will not guess one, so the build step of a first run ends at
+# "Author identity unknown. *** Please tell me who you are." after the work was done. As
+# environment variables rather than a `git config --global`, because the latter writes
+# `/home/node/.gitconfig`, which is not one of the mounted volumes and goes with the
+# container.
+#
+# Override them when the commits are going somewhere that cares:
+# `--env GIT_AUTHOR_EMAIL=you@example.com --env GIT_COMMITTER_EMAIL=you@example.com`.
+ENV GIT_AUTHOR_NAME="ORCA agent" \
+    GIT_AUTHOR_EMAIL="orca@localhost" \
+    GIT_COMMITTER_NAME="ORCA agent" \
+    GIT_COMMITTER_EMAIL="orca@localhost"
+
 COPY --from=build /orca-daemon.mjs /orca-daemon.mjs.map /opt/orca/
 # The shipped workflow graphs and prompt templates. A mounted orca.config.yaml names them
 # by these absolute paths, so a workspace holds a store and a config and need not carry a

@@ -344,6 +344,61 @@ deliberate here. If you would rather approve each command yourself, delete the
 Kepler, where an `ask` becomes Kepler's own approval prompt — both of those are channels
 that can hold a turn open while a person looks at it. A daemon is not.
 
+### 1.8 A first run, and where to watch it
+
+Three things about the repository at `/workspace/repo` first, because the run reaches them
+in this order and each fails in a way that reads like something else:
+
+- **It is a git repository with a commit in it.** The `git-worktree` provider cuts a branch
+  and a worktree per work item; there is nothing to branch from otherwise.
+- **`workspace.baseBranch` is the branch it actually has.** A repository whose default is
+  `master` against a config saying `main` fails at `git worktree add`, in the dispatch step,
+  after decomposition has already cost you tokens.
+- **The commits have an identity.** The image supplies one (`ORCA agent
+  <orca@localhost>`), because a container has no `~/.gitconfig` and git will not guess:
+  without it the build step ends at *"Author identity unknown"* having done all the work.
+  Override it with `--env GIT_AUTHOR_EMAIL=…` if the commits are going anywhere real.
+
+Then submit something small:
+
+```bash
+docker exec -it orca-daemon orca submit "Add a slugify helper" \
+  --body "slugify(input) in the string utilities, with tests. Lowercase, hyphenate, strip punctuation."
+```
+
+That drives the **program** workflow: decompose the request into work items, register them
+in the plan, assess risks, decide anything that needs deciding, schedule, pass the plan gate
+(it auto-approves for twelve items or fewer with no critical risk), dispatch one `ai-sdlc`
+child run per item, summarise. Each child runs plan → design → gate → build → test → review
+→ deploy, every stage a fresh ACP session prompted from `templates/sdlc/*.md` and ending in
+an artifact ORCA reads back and validates.
+
+**Submit is the way in, and not `runs.start`.** The app's palette can start a run, and for a
+workflow that needs no context that is the better route — the daemon interprets it, so it
+streams. But `runs.start` takes a workflow and vars only: it writes no request and no work
+item, so an `ai-sdlc` started that way is handed an empty work-item context and asked to
+turn nothing into an intent. Submitting is what creates the records the prompts read.
+
+Where to watch it, and this is the part that surprises people:
+
+| | |
+| --- | --- |
+| the terminal | `orca submit` follows the run it started and prints each node as it goes |
+| `orca runs` / `orca status <runId>` / `orca events <runId>` | the store, from any process |
+| `orca plan show` / `plan schedule` / `plan journal` | what the scheduler did and why |
+| the app | the same runs — **on a read** |
+
+The daemon pushes what *it* interprets, and a run `orca submit` starts is interpreted by
+that CLI process (it takes the run's single-writer lease itself). The store is shared and
+safe; the notification stream is not crossed. So the app shows the run when something makes
+it read — changing a filter, selecting the run, opening a surface — rather than filling in
+live. Nothing is wrong when that happens, and §3.2 has the reason.
+
+The exception is worth trying on purpose: **answer a parked gate from the app**. The run is
+in the log, `inputs.answer` records the answer and resumes it, and the daemon is what
+resumes it — so from that moment the run is the daemon's, and the rest of it streams into
+the app the way a daemon-started run does.
+
 ---
 
 ## 2. Setup the ORCA UI app
@@ -701,6 +756,9 @@ piece is a transport, not a network. Roadmap item 2.
 | Kepler shows the agent but sessions never start | The launcher is not executable, or something printed on stdout — stdout is the protocol channel and logs must go to stderr |
 | Writes are missing from the app rather than disabled | The daemon is `--read-only`, or it is a file-mode store. That is the design: absence is the honest rendering |
 | A step fails with every command refused, `ask:cancelled` in the log | The agent is on a policy that asks, and a daemon cannot ask (§1.7). Give it an explicit `permissions:` block, or drive that run from the CLI or Kepler |
+| The build step ends at `Author identity unknown` | An image built before it set `GIT_AUTHOR_*`. Rebuild, or pass `--env GIT_AUTHOR_NAME --env GIT_AUTHOR_EMAIL --env GIT_COMMITTER_NAME --env GIT_COMMITTER_EMAIL` |
+| Dispatch fails at `git worktree add` | `workspace.baseBranch` names a branch the repository does not have — `master` against a config saying `main` (§1.8) |
+| `fatal: detected dubious ownership in repository` | The bind-mounted repository's uid does not match the container user. `docker exec orca-daemon git config --global --add safe.directory '*'` — but it goes with the container, so make the mount's ownership match if it recurs |
 | `Permission deny rule (managed policy settings): Write(…) is not matched…` from `claude` | Claude Code's own managed policy, not ORCA's — its `Write(…)` deny rules no longer match file edits and are inert. Advisory: the line after them is the real result. ORCA's policy is enforced daemon-side regardless |
 | The app is a beat behind on runs the CLI or Kepler started | Pushes do not cross processes; the socket fans out the daemon's own store. The next read catches up |
 | `orca demo` fails with `workflow 'program' not registered` inside the container | `demo` finds the shipped workflows relative to its own module, which a single-file bundle has moved. Run it from a checkout; `orca validate` is the container's equivalent smoke test |
