@@ -282,9 +282,12 @@ export interface ToolCallRowProps {
  * panel's open state are one controller held above every surface
  * (`renderer/src/artifacts/panel-context.tsx`), not a callback a parent has to hold.
  *
- * There is **no rendered/raw toggle**. Markdown renders raw; a renderer is a dependency
- * decision `packages/app` has not taken, and the control is absent rather than disabled so
- * that nothing on screen promises a feature nobody has decided on.
+ * There is **no rendered/raw toggle**, and that is decided (#245, v0.5.0), not pending:
+ * an artifact body is machine output (rule 8, mono means ORCA produced it) written by an
+ * agent, so it is untrusted input, and rendering it would mean a sanitising markdown
+ * dependency `packages/app` has chosen not to take. The body stays raw in `mono-log`; a
+ * remote link or image in it is never fetched, because it is never turned into markup.
+ * Reopening this means a new issue with the dependency named, not a toggle.
  */
 export interface ArtifactPanelProps {
   target: {
