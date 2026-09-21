@@ -19,23 +19,21 @@ agents:
     hostId: local
     roles: [planner, designer, reviewer, decomposer]
     sessionMode: per-step
-    # The defaults, written out. Leave `permissions:` off entirely and you get exactly this;
-    # it is spelled out here because what an unattended agent may do is worth reading.
-    # First match wins, and these rules come before the ones ORCA writes into
-    # orca.permissions.json when someone answers a prompt with "always".
+    # Two rules of this agent's own. First match wins, and these are matched before anything
+    # ORCA writes into orca.permissions.json when someone answers a prompt with "always" —
+    # which is the point of writing them here rather than answering a prompt.
+    #
+    # The defaults (#140) are NOT written out here, deliberately: they are appended last, after
+    # the sidecar, so an `always: deny` recorded for a file inside the workspace still wins.
+    # Spell them out and you move them ahead of the sidecar, which is rarely what you want.
     permissions:
       default: ask # execute, the network, and anything outside the workspace: ask a person
       rules:
         - { match: { kind: execute, titlePattern: "rm -rf|git push --force" }, decision: deny } # never, not even on request
-        - { match: { pathPrefix: /etc }, decision: deny }
-        - { match: { kind: read, scope: workspace }, decision: allow } # scope: workspace | outside-workspace
-        - { match: { kind: search, scope: workspace }, decision: allow }
-        - { match: { kind: edit, scope: workspace }, decision: allow }
-        - { match: { kind: delete, scope: workspace }, decision: allow }
-        - { match: { kind: move, scope: workspace }, decision: allow } # both ends must be inside
-        - { match: { kind: think }, decision: allow }
+        - { match: { pathPrefix: /etc }, decision: deny } # scope: workspace | outside-workspace
   - id: codex-remote
-    # No `permissions:` block at all: the same defaults, applied silently. Write
+    # No `permissions:` block at all: the defaults alone — read, search, edit, delete, move
+    # and think inside the run's workspace, and `ask` for everything else. Write
     # `permissions: { default: allow }` instead to opt a sandboxed agent out of being asked.
     command: codex
     args: [acp]

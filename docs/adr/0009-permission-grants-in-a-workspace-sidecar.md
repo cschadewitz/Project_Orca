@@ -65,11 +65,29 @@ a run id, ULID, digest, timestamp or temp directory, which would be a rule that 
 match again. A refusal is reported to the caller, which honours the answer once and does not
 pretend to have recorded it.
 
-**2026‑09‑21 (#140):** the configured `default` is no longer `allow`. An agent that declares
-no `permissions:` — or leaves `default:` unset — now gets `DEFAULT_PERMISSION_POLICY`
-(`ask`, plus rules allowing reads, searches and file changes inside the run's workspace),
-appended *after* its own rules. Nothing above changes: the defaults are ordinary rules, so
-configuration is still matched before the sidecar and a configured `deny` still wins.
+**2026‑09‑21 (#140):** the configured `default` is no longer `allow`. An agent that leaves
+`default:` unset gets `ask`, and every agent gets `DEFAULT_PERMISSION_POLICY`'s rules —
+allowing reads, searches and file changes inside the run's own workspace, and `think`.
+
+**Corrected 2026‑09‑21 (#140):** those rules are a **third layer, appended last**, after the
+sidecar. The first cut of #140 folded them into the parsed config, inside
+`PermissionPolicySchema`'s transform, which put them *ahead* of the sidecar and so contradicted
+this ADR's central rule twice over. A default `allow` on an in‑workspace edit was matched
+before the sidecar got a turn, so a `reject_always` an operator had recorded could never fire;
+and anything that read the parsed config back — `orca demo`'s generated `orca.config.yaml`,
+`config.get`'s per‑rule provenance — reported rules nobody had written as if a person had
+written them. The layering is now **configuration → sidecar → defaults**, assembled in one
+place (`loadEffectivePermissionPolicy` in `@orca/agents`), and the parsed config is exactly
+what the file says. A configured `deny` still wins everything; a sidecar `deny` now beats a
+default `allow`, which is what "configuration first, then the sidecar" was always supposed to
+mean for a layer that is neither.
+
+The defaults are appended whatever the configured `default` says, `allow` included. Every one
+of them allows something inside the run's own workspace (or `think`), which a `default: allow`
+agent was going to get anyway; the configured `default` decides everything they do not match,
+and that — `ask` versus `allow` for `execute`, the network, and paths outside the workspace —
+is the whole of the opt‑out. `config.get` labels them `source: "default"` so a surface can
+show them as the floor they are rather than as config.
 
 **2026‑09‑21 (#266):** the sidecar is now readable and editable over the protocol.
 `config.get` returns it as a second document beside `orca.config.yaml` — its own path, its

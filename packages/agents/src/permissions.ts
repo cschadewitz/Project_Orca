@@ -12,12 +12,14 @@
  * callback, and a `PausingHumanInput` that declines to persist a permission question,
  * both come back `cancelled`, which ends the tool call rather than the run.
  *
- * A policy has two halves. The configured half is `agents[].permissions` in
+ * A policy has two halves and a floor. The configured half is `agents[].permissions` in
  * `orca.config.yaml`: hand-curated, and no place for a machine to append. The written half
  * is `orca.permissions.json` beside it — the workspace sidecar, added to whenever someone
  * answers a prompt with "always", and layered *under* the configured rules so configuration
  * always outranks it. The file is plain JSON with provenance on every rule because a
- * standing permission grant ought to be something a teammate can read in a diff.
+ * standing permission grant ought to be something a teammate can read in a diff. The floor
+ * is `DEFAULT_PERMISSION_POLICY`, appended last by `loadEffectivePermissionPolicy`, so that
+ * a `deny` from either half outranks it (#140).
  *
  * The schemas, the layering and the derivation are in `@orca/core`
  * (`model/agent.ts`), which is node-free; the reading, writing and locking are here.
@@ -27,6 +29,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  DEFAULT_PERMISSION_POLICY,
   derivePermissionRules,
   layerPermissionPolicies,
   OrcaError,
@@ -179,8 +182,19 @@ export function permissionOverlayFor(doc: PermissionPolicyFile, agentId: string)
 
 /**
  * The policy to evaluate for an agent: its configured rules first, then each sidecar in the
- * order given. Today `files` is one entry — the workspace sidecar. A user-scoped file layers
- * *under* it by being passed after it; nothing else about this has to change.
+ * order given, then `DEFAULT_PERMISSION_POLICY`'s rules last. Today `files` is one entry —
+ * the workspace sidecar. A user-scoped file layers *under* it by being passed after it;
+ * nothing else about this has to change.
+ *
+ * The defaults go **last**, and this is the only place they are added (#140). They used to be
+ * folded into the parsed config by `PermissionPolicySchema`, which put them *ahead* of the
+ * sidecar: a default `allow` on an in-workspace edit matched first, and a `reject_always`
+ * somebody had written into `orca.permissions.json` could never fire. ADR 0009 says
+ * configuration first and then the sidecar, and rules nobody configured are neither.
+ *
+ * They are appended whatever the configured `default` is — they only ever allow inside the
+ * workspace, and the configured `default` still decides everything they do not match, which
+ * is what `default: allow` is for.
  *
  * A file that is missing contributes nothing, so a workspace where nobody has ever answered
  * "always" evaluates exactly as it did before this existed.
@@ -191,7 +205,7 @@ export async function loadEffectivePermissionPolicy(
 ): Promise<PermissionPolicy> {
   const overlays: PermissionRule[][] = [];
   for (const file of files) overlays.push(permissionOverlayFor(await readPermissionPolicyFile(file), agent.id));
-  return layerPermissionPolicies(agent.permissions, ...overlays);
+  return layerPermissionPolicies(agent.permissions, ...overlays, DEFAULT_PERMISSION_POLICY.rules);
 }
 
 export interface RecordAlwaysOptions {

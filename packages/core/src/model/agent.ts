@@ -109,10 +109,19 @@ export type PermissionRule = z.infer<typeof PermissionRuleSchema>;
  * `permissions: { default: allow }` in `orca.config.yaml` restores the old behaviour for
  * that agent, and is the right thing for a sandbox.
  *
- * These are *rules*, not a special case in the evaluator, so ADR 0009's layering is
- * untouched: configured rules are still matched first, these sit behind them, and the
- * `orca.permissions.json` sidecar still comes last. A configured `deny` therefore beats
- * this, and so does a configured `allow`.
+ * These are *rules*, not a special case in the evaluator, and they are the **last** layer:
+ * `loadEffectivePermissionPolicy` (`@orca/agents`) appends them after the configured rules
+ * *and* after the `orca.permissions.json` sidecar, which is what ADR 0009's "configuration
+ * first, then the sidecar" requires. A configured `deny` beats them; so does a sidecar
+ * `deny`, which is the point — until #140 these were folded into the parsed config by
+ * `PermissionPolicySchema`, so a default `allow` on an in-workspace edit was matched before
+ * the sidecar ever got a turn and a written `reject_always` could not take effect.
+ *
+ * They are appended whatever the configured `default` says, including `default: allow`.
+ * There is nothing to gain from suppressing them: every rule here either allows something
+ * inside the run's own workspace or allows `think`, both of which a `default: allow` was
+ * going to allow anyway. What the configured `default` decides is everything they do *not*
+ * match — which is the whole opt-out, because that is where `ask` and `allow` differ.
  */
 export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
   default: "ask",
@@ -131,21 +140,20 @@ export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
  * Governs `session/request_permission` calls from an agent. "ask" is routed to
  * the HumanInputPort (or, in ACP-facade mode, forwarded to the upstream client).
  *
- * Leaving `default:` out opts in to `DEFAULT_PERMISSION_POLICY`: the default decision
- * becomes `ask` and its rules are appended *after* whatever rules were configured, so a
- * hand-written rule still wins the first match. Writing `default:` — including
- * `default: allow` — says the author has thought about it, and nothing is appended.
+ * This is the *configured* half and nothing else: `rules` is exactly what the file says, in
+ * the order the file says it. `DEFAULT_PERMISSION_POLICY`'s rules are **not** folded in here
+ * (#140) — they are the last layer, appended by `loadEffectivePermissionPolicy`, so that a
+ * sidecar `deny` still outranks a default `allow`. Injecting them here also meant anything
+ * that re-serialises a parsed `AgentSpec` (`orca demo`'s generated config, `config.get`'s
+ * per-rule provenance) reported rules nobody had written as if they had been.
+ *
+ * Leaving `default:` out means `ask`, which is `DEFAULT_PERMISSION_POLICY.default`. Writing
+ * `default: allow` is the explicit opt-out, and decides only what no rule matched.
  */
-export const PermissionPolicySchema = z
-  .object({
-    default: PermissionDecisionSchema.optional(),
-    rules: z.array(PermissionRuleSchema).default([]),
-  })
-  .transform(({ default: decision, rules }) =>
-    decision === undefined
-      ? { default: DEFAULT_PERMISSION_POLICY.default, rules: [...rules, ...DEFAULT_PERMISSION_POLICY.rules] }
-      : { default: decision, rules },
-  );
+export const PermissionPolicySchema = z.object({
+  default: PermissionDecisionSchema.default(() => DEFAULT_PERMISSION_POLICY.default),
+  rules: z.array(PermissionRuleSchema).default([]),
+});
 export type PermissionPolicy = { default: PermissionDecision; rules: PermissionRule[] };
 
 /* -------------------------------------------------------------------------- *
@@ -445,11 +453,12 @@ export const AgentSpecSchema = z.object({
   hostId: z.string().default(LOCAL_HOST_ID),
   /** Roles this agent can fill (e.g. "planner", "builder", "reviewer"). */
   roles: z.array(z.string()).default([]),
-  /** Absent means `DEFAULT_PERMISSION_POLICY`: ask for `execute` and for anything outside the workspace. */
-  permissions: PermissionPolicySchema.default(() => ({
-    default: DEFAULT_PERMISSION_POLICY.default,
-    rules: DEFAULT_PERMISSION_POLICY.rules.map((r) => ({ match: { ...r.match }, decision: r.decision })),
-  })),
+  /**
+   * Absent means no configured rules and `ask` as the fallthrough; `DEFAULT_PERMISSION_POLICY`
+   * is then the only layer that allows anything, and it allows only inside the run's own
+   * workspace. It is added at evaluation time, not here — see `PermissionPolicySchema`.
+   */
+  permissions: PermissionPolicySchema.default(() => ({ default: DEFAULT_PERMISSION_POLICY.default, rules: [] })),
   /** MCP servers passed in `session/new`. */
   mcpServers: z.array(McpServerConfigSchema).default([]),
   /** Reuse one ACP session for a whole run, or open a fresh one per step. */

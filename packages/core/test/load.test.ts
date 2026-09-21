@@ -37,19 +37,20 @@ describe("glob loaders", () => {
   });
 
   /**
-   * The example is what a person copies into a real repo, so it has to parse, and the
-   * permission policy it spells out has to be the one ORCA would have applied anyway (#140).
+   * The example is what a person copies into a real repo, so it has to parse — and what it
+   * parses to has to be *only* what it says (#140). Parsing no longer injects
+   * `DEFAULT_PERMISSION_POLICY`'s rules: they are a layer added at evaluation time, after the
+   * sidecar, and a config that claimed them as its own would put them ahead of it.
    */
   it("parses the shipped examples/orca.config.yaml, policy and all", async () => {
     const config = parseOrcaConfig(parseYaml(await readFile(join(repoRoot, "examples", "orca.config.yaml"), "utf8")));
     const byId = (id: string) => config.agents.find((a) => a.id === id)!;
-    // Written out in full for the agent that shows it, defaulted in for the one that does not.
-    expect(byId("codex-remote").permissions).toEqual(DEFAULT_PERMISSION_POLICY);
+    // No `permissions:` block is no configured rules at all, and `ask` as the fallthrough.
+    expect(byId("codex-remote").permissions).toEqual({ default: DEFAULT_PERMISSION_POLICY.default, rules: [] });
     expect(byId("claude-local").permissions.default).toBe("ask");
     expect(byId("claude-local").permissions.rules).toEqual([
       { match: { kind: "execute", titlePattern: "rm -rf|git push --force" }, decision: "deny" },
       { match: { pathPrefix: "/etc" }, decision: "deny" },
-      ...DEFAULT_PERMISSION_POLICY.rules,
     ]);
   });
 

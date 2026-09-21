@@ -58,11 +58,13 @@ describe("orca demo", () => {
     expect(config.agents.map((a) => a.id)).toEqual(["scripted"]);
     expect(config.storeDir).toBe(join(dir, ".orca"));
 
-    // The permission policy is written out in full rather than left to the defaults (#140),
-    // so the config a person copies out of the demo shows what the agent may do.
+    // The demo serialises the *parsed* AgentSpec, so whatever parsing injects it claims as
+    // configured. Since #140's defaults moved out of the schema and into evaluation, there is
+    // nothing to inject: the file says `default: ask` and no rules, which is the truth, and
+    // the default rules stay a layer that the sidecar is still matched ahead of.
     expect(raw).toMatch(/^ {4}permissions:$/m);
-    expect(raw).toMatch(/scope: workspace/);
-    expect(config.agents[0]!.permissions).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(raw).not.toMatch(/scope: workspace/);
+    expect(config.agents[0]!.permissions).toEqual({ default: DEFAULT_PERMISSION_POLICY.default, rules: [] });
     expect(config.agents[0]!.permissions.default).toBe("ask");
 
     // Same invocation as the README quick start: needs the config (without one no

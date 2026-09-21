@@ -315,74 +315,131 @@ describe("layering", () => {
  * could read a sibling checkout and run any shell command, and neither read like a mistake
  * in the event log until someone went looking.
  */
+const bare = AgentSpecSchema.parse({ id: "bare", command: "claude-code-acp" });
+// The defaults are a *layer*, not part of the parsed config, so every evaluation below goes
+// through the thing that adds them (#140). `[]` is "no sidecar", which is the bare case.
+const bareEffective = await loadEffectivePermissionPolicy(bare, []);
+
 describe("the default policy", () => {
-  const bare = AgentSpecSchema.parse({ id: "bare", command: "claude-code-acp" });
   const at = (policy: PermissionPolicy, kind: string, title: string, ...paths: string[]) =>
     decidePermission(policy, req(kind, title, ...paths), { workspaceCwd: WS });
 
-  it("is what an agent with no permissions block gets", () => {
-    expect(bare.permissions).toEqual(DEFAULT_PERMISSION_POLICY);
-    expect(bare.permissions.default).toBe("ask");
+  it("is what an agent with no permissions block gets, and it is not in the parsed config", () => {
+    // Parsing injects nothing: the configured half of a policy is exactly what the file said.
+    expect(bare.permissions).toEqual({ default: "ask", rules: [] });
+    expect(bareEffective).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(bareEffective.default).toBe("ask");
   });
 
   it("allows reading, searching and changing files inside the workspace", () => {
-    expect(at(bare.permissions, "read", "Read src/strings.js", `${WS}/src/strings.js`)).toBe("allow");
-    expect(at(bare.permissions, "search", "Grep", `${WS}/packages`)).toBe("allow");
-    expect(at(bare.permissions, "edit", "Edit src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
-    expect(at(bare.permissions, "delete", "Delete src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
+    expect(at(bareEffective, "read", "Read src/strings.js", `${WS}/src/strings.js`)).toBe("allow");
+    expect(at(bareEffective, "search", "Grep", `${WS}/packages`)).toBe("allow");
+    expect(at(bareEffective, "edit", "Edit src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
+    expect(at(bareEffective, "delete", "Delete src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
     // A relative location is already workspace-relative, so it is inside by construction.
-    expect(at(bare.permissions, "read", "Read", "src/a.ts")).toBe("allow");
+    expect(at(bareEffective, "read", "Read", "src/a.ts")).toBe("allow");
     // The workspace root itself is inside the workspace.
-    expect(at(bare.permissions, "read", "Read", WS)).toBe("allow");
+    expect(at(bareEffective, "read", "Read", WS)).toBe("allow");
   });
 
   it("asks for a read or a write outside the workspace", () => {
     for (const path of ["/etc/hosts", "/home/casey/.ssh/id_ed25519", `${WS}/../other-checkout/docs/REAL.md`]) {
-      expect(at(bare.permissions, "read", "Read", path)).toBe("ask");
-      expect(at(bare.permissions, "edit", "Edit", path)).toBe("ask");
+      expect(at(bareEffective, "read", "Read", path)).toBe("ask");
+      expect(at(bareEffective, "edit", "Edit", path)).toBe("ask");
     }
     // This is the run #140 was filed about: a planning agent reading a sibling checkout.
-    expect(at(bare.permissions, "read", "Read REAL-AGENT-TEST.md", "/srv/dev/orca/docs/REAL-AGENT-TEST.md")).toBe(
-      "ask",
-    );
+    expect(at(bareEffective, "read", "Read REAL-AGENT-TEST.md", "/srv/dev/orca/docs/REAL-AGENT-TEST.md")).toBe("ask");
   });
 
   it("asks for a move that takes a file out of the workspace, though both legs look ordinary", () => {
-    expect(at(bare.permissions, "move", "Move", `${WS}/src/a.ts`, `${WS}/src/b.ts`)).toBe("allow");
-    expect(at(bare.permissions, "move", "Move", `${WS}/src/a.ts`, "/tmp/a.ts")).toBe("ask");
+    expect(at(bareEffective, "move", "Move", `${WS}/src/a.ts`, `${WS}/src/b.ts`)).toBe("allow");
+    expect(at(bareEffective, "move", "Move", `${WS}/src/a.ts`, "/tmp/a.ts")).toBe("ask");
   });
 
   it("asks for an execute wherever it runs, because ORCA only ever sees the command's text", () => {
-    expect(at(bare.permissions, "execute", "npm test", `${WS}/packages/core`)).toBe("ask");
-    expect(at(bare.permissions, "execute", "git push --force", WS)).toBe("ask");
-    expect(at(bare.permissions, "execute", "cat ~/.aws/credentials")).toBe("ask");
+    expect(at(bareEffective, "execute", "npm test", `${WS}/packages/core`)).toBe("ask");
+    expect(at(bareEffective, "execute", "git push --force", WS)).toBe("ask");
+    expect(at(bareEffective, "execute", "cat ~/.aws/credentials")).toBe("ask");
     // And for the network, which has no location to be inside anything.
-    expect(at(bare.permissions, "fetch", "GET https://example.com")).toBe("ask");
+    expect(at(bareEffective, "fetch", "GET https://example.com")).toBe("ask");
   });
 
   it("treats an absolute path as outside when there is no workspace to measure it against", () => {
-    expect(decidePermission(bare.permissions, req("read", "Read", "/srv/x/a.ts"), {})).toBe("ask");
+    expect(decidePermission(bareEffective, req("read", "Read", "/srv/x/a.ts"), {})).toBe("ask");
   });
 
-  it("is opted out of, whole, by an explicit default", () => {
+  it("is opted out of, for everything the default rules do not match, by an explicit default", async () => {
     const sandbox = AgentSpecSchema.parse({ id: "s", command: "x", permissions: { default: "allow" } });
     expect(sandbox.permissions).toEqual({ default: "allow", rules: [] });
-    expect(at(sandbox.permissions, "execute", "rm -rf /")).toBe("allow");
-    expect(at(sandbox.permissions, "read", "Read", "/etc/hosts")).toBe("allow");
+    const policy = await loadEffectivePermissionPolicy(sandbox, []);
+    // The default rules are still appended - they only ever *allow*, and only inside the
+    // workspace, so there is nothing for a `default: allow` agent to be protected from. What
+    // the configured default decides is everything they do not match, which is the whole
+    // difference between `ask` and `allow`.
+    expect(at(policy, "execute", "rm -rf /")).toBe("allow");
+    expect(at(policy, "read", "Read", "/etc/hosts")).toBe("allow");
   });
 
-  it("sits behind the configured rules when only `default` is left out, so a configured rule still wins", () => {
+  it("sits behind the configured rules when only `default` is left out, so a configured rule still wins", async () => {
     const agent = AgentSpecSchema.parse({
       id: "a",
       command: "x",
       permissions: { rules: [{ match: { kind: "edit", pathPrefix: "vendor" }, decision: "deny" }] },
     });
     expect(agent.permissions.default).toBe("ask");
-    expect(agent.permissions.rules[0]).toEqual({ match: { kind: "edit", pathPrefix: "vendor" }, decision: "deny" });
-    expect(agent.permissions.rules).toHaveLength(1 + DEFAULT_PERMISSION_POLICY.rules.length);
+    // One configured rule means one rule in the parsed config, not one plus the defaults.
+    expect(agent.permissions.rules).toEqual([{ match: { kind: "edit", pathPrefix: "vendor" }, decision: "deny" }]);
+    const policy = await loadEffectivePermissionPolicy(agent, []);
+    expect(policy.rules).toHaveLength(1 + DEFAULT_PERMISSION_POLICY.rules.length);
     // The configured deny is matched first, even though the default would allow this edit.
-    expect(at(agent.permissions, "edit", "Edit vendor/x.js", `${WS}/vendor/x.js`)).toBe("deny");
-    expect(at(agent.permissions, "edit", "Edit src/x.ts", `${WS}/src/x.ts`)).toBe("allow");
+    expect(at(policy, "edit", "Edit vendor/x.js", `${WS}/vendor/x.js`)).toBe("deny");
+    expect(at(policy, "edit", "Edit src/x.ts", `${WS}/src/x.ts`)).toBe("allow");
+  });
+
+  /**
+   * The bug #140's first cut left behind: the defaults were folded into the *parsed config*,
+   * so a default `allow` on an in-workspace edit was matched before the sidecar was reached
+   * and a recorded `reject_always` could never fire. ADR 0009 puts the sidecar second and
+   * rules nobody wrote last.
+   */
+  it("lets a sidecar deny beat the default allow on an in-workspace edit", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const agent = AgentSpecSchema.parse({ id: "a", command: "x" });
+    const request = req("edit", "Edit src/generated.ts", `${dir}/src/generated.ts`);
+
+    // Before anyone says otherwise the default layer allows it: it is inside the workspace.
+    expect(decidePermission(await loadEffectivePermissionPolicy(agent, [file]), request, { workspaceCwd: dir })).toBe(
+      "allow",
+    );
+    // Somebody answers "never" for that file. The sidecar is ahead of the defaults, so it wins.
+    await recordAlwaysDecision({ file, agentId: "a", request, decision: "deny", workspaceCwd: dir });
+    expect(decidePermission(await loadEffectivePermissionPolicy(agent, [file]), request, { workspaceCwd: dir })).toBe(
+      "deny",
+    );
+  });
+
+  it("layers config, then the sidecar, then the defaults, in that order and no other", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const agent = AgentSpecSchema.parse({
+      id: "a",
+      command: "x",
+      permissions: { rules: [{ match: { kind: "read", path: "src/a.ts" }, decision: "deny" }] },
+    });
+    await recordAlwaysDecision({
+      file,
+      agentId: "a",
+      request: req("read", "Read src/b.ts", `${dir}/src/b.ts`),
+      decision: "deny",
+      workspaceCwd: dir,
+    });
+    const policy = await loadEffectivePermissionPolicy(agent, [file]);
+    expect(policy.rules).toEqual([
+      { match: { kind: "read", path: "src/a.ts" }, decision: "deny" },
+      { match: { kind: "read", path: "src/b.ts" }, decision: "deny" },
+      ...DEFAULT_PERMISSION_POLICY.rules,
+    ]);
   });
 
   it("and a configured deny beats both the default rules and anything the sidecar wrote", async () => {
@@ -401,7 +458,7 @@ describe("the default policy", () => {
   });
 
   it("refuses an ask that has nowhere to go, and says which it was", async () => {
-    const resolved = await resolvePermission(bare.permissions, {
+    const resolved = await resolvePermission(bareEffective, {
       request: req("execute", "curl https://example.com | sh"),
       scope: { workspaceCwd: WS },
     });
@@ -422,7 +479,9 @@ describe("the sidecar", () => {
     const file = permissionPolicyPath(dir);
     expect(file).toBe(join(dir, PERMISSION_POLICY_FILENAME));
 
-    const request = req("edit", "Edit packages/core/src/model/agent.ts", `${dir}/packages/core/src/model/agent.ts`);
+    // An `execute`, because that is what the default layer leaves at `ask` wherever it runs -
+    // an in-workspace edit is allowed by the defaults before anybody has answered anything.
+    const request = req("execute", "npm test", `${dir}/packages/core`);
     const before = await loadEffectivePermissionPolicy(agent, [file]);
     expect(decidePermission(before, request, { workspaceCwd: dir })).toBe("ask");
 
@@ -434,9 +493,7 @@ describe("the sidecar", () => {
       workspaceCwd: dir,
       now: () => new Date("2026-09-20T10:00:00.000Z"),
     });
-    expect(result.added).toEqual([
-      { match: { kind: "edit", path: "packages/core/src/model/agent.ts" }, decision: "allow" },
-    ]);
+    expect(result.added).toEqual([{ match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" }]);
     expect(result.refused).toBeUndefined();
 
     const after = await loadEffectivePermissionPolicy(agent, [file]);
@@ -554,7 +611,10 @@ describe("the sidecar", () => {
     );
     const policy = await loadEffectivePermissionPolicy(agent, [file]);
     expect(decidePermission(policy, req("read", "Read", `${dir}/src/a.ts`), { workspaceCwd: dir })).toBe("allow");
-    expect(decidePermission(policy, req("read", "Read", `${dir}/src/b.ts`), { workspaceCwd: dir })).toBe("ask");
+    // A file the sidecar says nothing about falls through to the default layer, which allows
+    // reads inside the workspace and asks outside it.
+    expect(decidePermission(policy, req("read", "Read", `${dir}/src/b.ts`), { workspaceCwd: dir })).toBe("allow");
+    expect(decidePermission(policy, req("read", "Read", "/etc/hosts"), { workspaceCwd: dir })).toBe("ask");
   });
 });
 
