@@ -98,8 +98,14 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    with `orca serve --read-only` behind it, so the writes are absent rather than disabled —
    and `reconnecting` now gives up at backoff saturation (#239). One thing in that list is
    still not true: writes are not queued while reconnecting, and a control says the daemon is
-   not answering rather than promising a send. What remains in phase 1 is the accessibility
-   pass and the cross‑platform screenshots (#167, #213). Phase 2 makes it the
+   not answering rather than promising a send. The accessibility pass and the cross‑platform
+   screenshots have landed (#167, #213), which **completes phase 1**: the app announces step
+   transitions and terminal states through one polite live region, the output pane is a
+   labelled `log` region rather than a narrated flood, `prefers-contrast: more` is honoured,
+   axe runs over every built surface in both themes, and the bundled type faces are checked by
+   machine on Linux, macOS and Windows against committed baselines. What those checks do *not*
+   reach is written down beside them in `docs/design/50-accessibility-and-keyboard.md`, which
+   now names the check that enforces each of its paragraphs. Phase 2 makes it the
    first‑class configuration and monitoring surface (config, agents, plan); the dependency
    graph goes in as a mode of Plan with a docked inspector unless use shows it is a
    starting point (`docs/design/80-dependency-graph-options.md`). Workflow editing

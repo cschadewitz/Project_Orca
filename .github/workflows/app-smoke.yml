@@ -1,10 +1,26 @@
-# Launch the built desktop app against a real daemon, in a real Electron window.
+# Launch the desktop app in a real Electron window: once against a real daemon, and once
+# more on each platform at `#type` to check the bundled faces by machine.
 #
 # Separate from ci.yml on purpose. That workflow sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1` —
 # it typechecks, lints and builds the app but never runs it, and skipping the ~100 MB
 # binary keeps every one of its matrix legs fast. This one needs that binary, so it
 # installs without the flag and only on the pull requests that could break the app: the
 # app itself, the design system it renders, and the daemon and protocol it talks to.
+#
+# ## Pull requests only, and that is a decision
+#
+# There is no `push` trigger and no `workflow_call`, so `release-publish.yml` does not run
+# this and the faces are not re-checked at release time. That gap is **#254**, filed and
+# deliberately deferred: every path that can change a glyph — a token, a subset, a
+# stylesheet, a renderer, a dependency — goes through one of the four filtered packages or
+# through the lockfile, so a PR-gated check covers the realistic cases. If you came here
+# looking for the release-time run, read #254 rather than adding a trigger.
+#
+# ## The paths filter covers the screenshot baselines
+#
+# The `type-proof` job's baselines live in `packages/app/test/smoke/*-snapshots/`, which
+# `packages/app/**` already matches, and the fonts and tokens they are a picture of are
+# under `packages/design/**`. The filter needs nothing added for the second job.
 name: App smoke
 
 on:
@@ -55,6 +71,29 @@ jobs:
       - name: Allow unprivileged user namespaces, so the Chromium sandbox works
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
+      # Electron's binary, on disk before any test's clock is running.
+      #
+      # `pnpm-workspace.yaml` allows electron's postinstall, but the pnpm store this job
+      # restores is keyed on the lockfile and shared with `ci.yml`, which installs under
+      # ELECTRON_SKIP_BINARY_DOWNLOAD=1. So the store can hold an electron that is *built*
+      # and has no binary, and `pnpm install` above has nothing left to run — its log shows
+      # esbuild's postinstall and not electron's. `node_modules/electron/index.js` then
+      # fetches the binary on first `require`, through a blocking `spawnSync`, inside
+      # whichever test hook reached it first.
+      #
+      # Hygiene rather than a fix: it is five seconds on a Windows runner, so it was never
+      # the three-minute hang it was briefly blamed for (`playwright.config.ts` records that
+      # dead end). What it buys is that the download is not inside a hook's timeout and has
+      # its own line in the step list, which is where a download belongs.
+      #
+      # From `packages/app`, the package that depends on electron: pnpm's node_modules is
+      # strict, so the root has no `electron` to resolve and the first attempt at this step
+      # failed with MODULE_NOT_FOUND.
+      - name: Put the Electron binary on disk, rather than inside a test's timeout
+        shell: bash
+        working-directory: packages/app
+        run: node -e "console.log(require('electron'))"
+
       # The smoke test runs the built app and the built CLI, not the sources.
       - name: Build
         run: pnpm run build
@@ -64,13 +103,90 @@ jobs:
       - name: Smoke test
         run: xvfb-run -a pnpm run app:smoke
 
-      # Screenshots of both themes, the axe results and a trace for anything that failed.
+      # Screenshots of both themes, the greyscale pictures, the axe results per surface and
+      # a trace for anything that failed. None of these is a baseline — see the spec header.
       - name: Upload the smoke test's output
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: app-smoke
           path: |
+            test-results/
+            playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # The second job, and deliberately not a wider first one: it launches `#type` and nothing
+  # else, on the three platforms ORCA ships to, and diffs committed per-platform baselines
+  # (#213). The `smoke` job above stays on Linux alone, because what it is about is the app
+  # coming up at all and three runners would buy one answer three times.
+  #
+  # `#type` is dev-only — `renderer/src/routes.tsx` gates it behind `import.meta.env.DEV` so
+  # it never reaches a shipped bundle — so the spec starts a Vite dev server and points the
+  # main process at it with `ORCA_RENDERER_URL`, exactly as `packages/app/scripts/dev.js`
+  # does. There is no `pnpm run build` step here: the spec compiles main and preload itself
+  # (`tsc -b packages/app/tsconfig.preload.json`) and the renderer is served, not built.
+  type-proof:
+    name: type proof (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Every leg is a different answer to the same question. A Windows failure must not
+      # cancel the macOS run that would have told us whether the glyph is wrong everywhere.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Without ELECTRON_SKIP_BINARY_DOWNLOAD, as above: the binary is the point.
+      - run: pnpm install --frozen-lockfile
+
+      # Linux only, and in the step rather than in a third job: macOS and Windows runners
+      # have neither AppArmor nor this sysctl, and running it there is an error, not a
+      # no-op. See the `smoke` job for why the restriction is lifted rather than worked
+      # around with `--no-sandbox`.
+      - name: Allow unprivileged user namespaces, so the Chromium sandbox works
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # As in the `smoke` job above, and this is the job that found it.
+      # From `packages/app`, which is the package that depends on electron: pnpm's node_modules
+      # is strict, so the root has no `electron` to resolve and the first attempt at this step
+      # failed with MODULE_NOT_FOUND.
+      - name: Put the Electron binary on disk, rather than inside a test's timeout
+        shell: bash
+        working-directory: packages/app
+        run: node -e "console.log(require('electron'))"
+
+      # Two steps for one command, for the same reason: there is no display server on a
+      # Linux runner and no xvfb on the other two.
+      - name: Type proof (Linux, under xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm run app:type-proof
+
+      - name: Type proof
+        if: runner.os != 'Linux'
+        run: pnpm run app:type-proof
+
+      # The baselines *and* the report. On the first run for a platform there is no
+      # committed baseline, so Playwright writes the actual image to the baseline path and
+      # fails the job; downloading this artifact and committing what is in it is how the
+      # three platforms' baselines are created. Afterwards this carries the diff instead.
+      # `docs/DEVELOPMENT.md`, "Screenshot baselines", is the procedure.
+      - name: Upload the type proof's screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: type-proof-${{ matrix.os }}
+          path: |
+            packages/app/test/smoke/type-proof.spec.ts-snapshots/
             test-results/
             playwright-report/
           retention-days: 14

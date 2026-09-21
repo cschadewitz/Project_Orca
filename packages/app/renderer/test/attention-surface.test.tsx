@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { NotificationMessage, OpenInputView } from "@orca/protocol";
+import { cardName } from "../src/attention/answer-card.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
 import { DESTRUCTIVE_GATE, FIVE_GATES, INPUTS_AS_OF, PERMISSION_ASK, UNLOADED_GATE } from "./fixtures-inputs.js";
@@ -34,7 +35,10 @@ function mount(inputs: readonly OpenInputView[]): void {
   renderChrome(h);
 }
 
-const card = (question: string): HTMLElement => screen.getByRole("region", { name: question });
+/* A card's accessible name is the tier's word and then the question — "gate, Ship release
+   1?" (#167) — so a test that knows only the question asks for a name that ends in it. */
+const card = (question: string): HTMLElement => screen.getByRole("region", { name: endingIn(question) });
+const endingIn = (question: string): RegExp => new RegExp(`${question.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 const answerButton = (question: string): HTMLElement => within(card(question)).getByRole("button", { name: /^Answer/ });
 
 beforeEach(() => {
@@ -82,10 +86,17 @@ describe("clearing what is waiting", () => {
       // `Enter` on the focused card answers with the option that is selected, which is the
       // first non-destructive one — no digit needed, and no mouse.
       fireEvent.keyDown(document.activeElement!, { key: "Enter", code: "Enter" });
-      await waitFor(() => expect(screen.queryByRole("region", { name: `Ship release ${n}?` })).toBeNull());
-      // Focus never left the list: the next card took the place of the answered one.
+      await waitFor(() =>
+        expect(screen.queryByRole("region", { name: cardName("gate", `Ship release ${n}?`) })).toBeNull(),
+      );
+      // Focus never left the list: the next card took the place of the answered one. Waited
+      // for, not read at once: the surface moves focus in a passive effect after the commit
+      // that removed the card, and `waitFor` above returns on the DOM mutation itself, so on a
+      // loaded runner the assertion can run in the gap between the two (CI on #263).
       if (n < 5) {
-        expect(document.activeElement?.getAttribute("aria-label")).toBe(`Ship release ${n + 1}?`);
+        await waitFor(() =>
+          expect(document.activeElement?.getAttribute("aria-label")).toBe(cardName("gate", `Ship release ${n + 1}?`)),
+        );
       }
     }
 
@@ -97,7 +108,7 @@ describe("clearing what is waiting", () => {
 
   it("answers with the digit that was pressed, and sends the option's id and not its label", async () => {
     mount([FIVE_GATES[0]!]);
-    const first = await screen.findByRole("region", { name: "Ship release 1?" });
+    const first = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
     first.focus();
 
     fireEvent.keyDown(first, { key: "2", code: "Digit2" });
@@ -113,7 +124,7 @@ describe("clearing what is waiting", () => {
   it("keeps the ask when the daemon refuses the write, and says why", async () => {
     mount([FIVE_GATES[0]!]);
     fake.fail("inputs.answer", { code: "RUN_LEASED_ELSEWHERE", message: "run-1 is held by pid 811 on build-2" });
-    const first = await screen.findByRole("region", { name: "Ship release 1?" });
+    const first = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
 
     fireEvent.click(within(first).getByRole("button", { name: /^Answer/ }));
 
@@ -146,7 +157,7 @@ describe("the destructive option", () => {
 describe("what a person is not allowed to approve blind", () => {
   it("disables the options with the reason when the artifacts did not load", async () => {
     mount([UNLOADED_GATE]);
-    const gate = await screen.findByRole("region", { name: "Approve the spec?" });
+    const gate = await screen.findByRole("region", { name: cardName("gate", "Approve the spec?") });
 
     const approve = within(gate).getByRole("button", { name: /Approve$/ });
     expect(approve.getAttribute("aria-disabled")).toBe("true");
@@ -156,7 +167,7 @@ describe("what a person is not allowed to approve blind", () => {
 
   it("disables every answer with the connection's own reason when it cannot write", async () => {
     mount([FIVE_GATES[0]!]);
-    await screen.findByRole("region", { name: "Ship release 1?" });
+    await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
 
     fake.connect({ state: "disconnected", since: INPUTS_AS_OF });
 
@@ -178,7 +189,7 @@ describe("what a person is not allowed to approve blind", () => {
 describe("the permission card", () => {
   it("shows the command verbatim and offers always, which promises only what was written", async () => {
     mount([PERMISSION_ASK]);
-    const ask = await screen.findByRole("region", { name: "Run a shell command?" });
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
     expect(within(ask).getByText("rm -rf build/")).toBeTruthy();
 
     fake.script({
@@ -212,7 +223,7 @@ describe("the permission card", () => {
 
   it("does not promise when the daemon refused to derive a rule", async () => {
     mount([PERMISSION_ASK]);
-    const ask = await screen.findByRole("region", { name: "Run a shell command?" });
+    const ask = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
     fake.script({
       "inputs.answer": (params) => ({
         ok: true,
@@ -263,7 +274,7 @@ describe("the push stream", () => {
       }),
     );
 
-    expect(await screen.findByRole("region", { name: "Ship release 1?" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeTruthy();
     // One call, scoped to the run — not a re-read of the whole list.
     const scoped = () =>
       fake.calls.filter((c) => c.method === "inputs.list" && (c.params as { runId?: string }).runId !== undefined);
@@ -286,13 +297,13 @@ describe("the push stream", () => {
 
   it("drops an ask answered somewhere else", async () => {
     mount([FIVE_GATES[0]!, FIVE_GATES[1]!]);
-    await screen.findByRole("region", { name: "Ship release 1?" });
+    await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
 
     fake.notify(
       envelope("input.answered", { runId: "run-1", stepRunId: "s-gate-1", requestId: "gate-1", answer: "approve" }),
     );
 
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Ship release 1?" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeNull());
     expect(await screen.findByRole("button", { name: /1 waiting/ })).toBeTruthy();
   });
 });
@@ -328,7 +339,7 @@ describe("what the main process is told", () => {
         };
       },
     });
-    await screen.findByRole("region", { name: "Run a shell command?" });
+    await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
 
     await waitFor(() => expect(fake.alerts.length).toBeGreaterThan(0));
     const sent = fake.alerts.at(-1)!;
@@ -344,10 +355,10 @@ describe("what the main process is told", () => {
 describe("a notification that was clicked", () => {
   it("opens Attention, wherever the person was", async () => {
     mount([FIVE_GATES[0]!]);
-    await screen.findByRole("region", { name: "Ship release 1?" });
+    await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
 
     fireEvent.click(screen.getByRole("button", { name: "Runs" }));
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Ship release 1?" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeNull());
 
     // The main process has already focused the window; this is the renderer's half. The
     // item on the activation is what #165 turns into the card's own deep link.
@@ -363,14 +374,14 @@ describe("a notification that was clicked", () => {
       },
     });
 
-    expect(await screen.findByRole("region", { name: "Ship release 1?" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") })).toBeTruthy();
   });
 });
 
 describe("the keyboard map and the palette", () => {
   it("registers the card keys only while a card has focus", async () => {
     mount([FIVE_GATES[0]!]);
-    const gate = await screen.findByRole("region", { name: "Ship release 1?" });
+    const gate = await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
     const cardKeys = (): string[] =>
       h.keyboard
         .list()
@@ -390,7 +401,7 @@ describe("the keyboard map and the palette", () => {
 
   it("lists the two keyless write commands, with no chip beside them", async () => {
     mount([FIVE_GATES[0]!]);
-    await screen.findByRole("region", { name: "Ship release 1?" });
+    await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
 
     fireEvent.keyDown(window, { key: "k", code: "KeyK", metaKey: true });
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
@@ -403,7 +414,7 @@ describe("the keyboard map and the palette", () => {
 
   it("cancels the run the focused card is waiting on", async () => {
     mount([FIVE_GATES[0]!]);
-    await screen.findByRole("region", { name: "Ship release 1?" });
+    await screen.findByRole("region", { name: cardName("gate", "Ship release 1?") });
 
     fireEvent.keyDown(window, { key: "k", code: "KeyK", metaKey: true });
     const palette = await screen.findByRole("dialog", { name: "Command palette" });

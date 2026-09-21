@@ -79,4 +79,30 @@ follows `prefers-color-scheme` unless the person has chosen one explicitly.
 
 The layout holds from 960px to 2560px. Below 1100px the docked panel becomes an overlay over
 the primary pane; below 960px the sidebar collapses to icons. There is no phone layout and
-none is planned.
+none is planned. The five glyphs that rail collapses to were never designed — `surfaces.ts`
+invented them, and #261 is the decision to make about that.
+
+## How this is enforced
+
+Up to v0.4.0 this file was a specification. Most of it is now a check with a name, and a new
+surface will be held to them rather than to a reading of the prose. When a paragraph above
+changes, the check named beside it is the thing that has to change with it.
+
+| Section | What enforces it |
+| --- | --- |
+| Contrast | `packages/design/test/contrast.test.ts` — every pairing, both themes, before the token lands |
+| Status without colour | `renderer/test/a11y-sweep.test.tsx` asserts glyph **and** word in the accessible name of every status row; `test/smoke/app-shell.spec.ts` re-reads them under `filter: grayscale(1)` in both themes and keeps a picture beside the assertion |
+| Focus | `renderer/test/focus-and-selection.test.ts` reads the stylesheets: the ring is `:focus-visible` everywhere, selection never borrows `--border-focus`, and every `outline: none` matches a named allowlist |
+| Keyboard map | `renderer/test/keyboard-map-agreement.test.tsx` — the table below is transcribed and asserted in both directions, so a mouse-only action cannot be added quietly |
+| Screen readers and live regions | `a11y-sweep.test.tsx` — exactly one polite announcer across all surfaces, assertive cards, the output pane's `role="log"` with `aria-live="off"`; `renderer/test/announcements.test.ts` covers what the announcer says and, as much, what it stays silent about |
+| Reduced motion and preferences | The `prefers-reduced-motion` and `prefers-contrast: more` blocks in `components.css`. No automated check — see the gap below |
+| Everything, per surface | `AxeBuilder` over Attention, Runs and Agents in both themes in the smoke job, with the failing rule ids in the message |
+| The bundled faces | `test/smoke/type-proof.spec.ts` on Linux, macOS and Windows, against committed baselines |
+
+**What none of these prove.** The renderer tests run in happy-dom, which has no cascade, no
+layout and no input modality: they assert that the rules and the markup are right, not that
+the pixels are. The computed focus ring, whether `:focus-visible` really stays dark after a
+mouse click, the two media queries' output, and the collapsed sidebar below 960px are all
+checked by eye or not at all. Real screen-reader behaviour is checked by neither — that a
+`log` region with `aria-live="off"` gives navigation without narration is a reading of the
+ARIA specification, asserted here only as attributes.

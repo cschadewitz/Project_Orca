@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type JSX } from "react";
+import { cardName } from "../src/attention/answer-card.js";
 import { InlineAsksProvider, StepAsks } from "../src/attention/inline-asks.js";
 import { useAttention } from "../src/attention/use-attention.js";
 import { harness, installBridge, stubMatchMedia, type Harness } from "./harness.js";
@@ -59,7 +60,7 @@ describe("a card inline in the run it came from", () => {
   it("draws the ask on the step that is parked on it, and answers it by id", async () => {
     mount(PERMISSION_ASK.stepRunId);
 
-    const card = await screen.findByRole("region", { name: "Run a shell command?" });
+    const card = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
     // The permission card's own three properties, unchanged by the mounting: the subject
     // verbatim, who is blocked, and the options.
     expect(card.textContent).toContain("rm -rf build/");
@@ -77,6 +78,6 @@ describe("a card inline in the run it came from", () => {
     mount("s-some-other-step");
 
     await waitFor(() => expect(fake.calls.filter((c) => c.method === "inputs.list").length).toBe(1));
-    expect(screen.queryByRole("region", { name: "Run a shell command?" })).toBeNull();
+    expect(screen.queryByRole("region", { name: cardName("permission", "Run a shell command?") })).toBeNull();
   });
 });
