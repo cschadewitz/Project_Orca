@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type React
 import type { ConnectionState } from "@orca/design";
 import type { RunSummaryView, WorkflowNodeView } from "@orca/protocol";
 import { Chip, Menu, StateView, StatusChip, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { findNode } from "./layout.js";
 import { WorkflowCanvas } from "./workflow-canvas.js";
 import { indexTraversal, useWorkflow } from "./use-workflow.js";
 import "./workflow.css";
@@ -122,7 +123,10 @@ export function WorkflowSurface({ workflowId, runId, connection, onHeader }: Wor
     );
   }
 
-  const node = workflow.nodes.find((candidate) => candidate.id === selected);
+  /* Across the nested graphs too (#177): clicking a node inside an expanded `parallel` branch
+     selects it, and a lookup over `workflow.nodes` alone would leave the inspector saying
+     "select a node" about the node just selected. One selection, wherever the node lives. */
+  const node = findNode(workflow, selected);
 
   return (
     <div className="orca-wf">
@@ -161,6 +165,13 @@ export function WorkflowSurface({ workflowId, runId, connection, onHeader }: Wor
         <span className="orca-legend">
           <span className="orca-legend__swatch orca-legend__swatch--soft" aria-hidden="true" />
           <Text style="caption">not taken</Text>
+        </span>
+        {/* The third stroke on the canvas, and it was the one with no word beside it: a back
+            edge is dotted where an untaken edge is dashed, and two dashed strokes meaning
+            two different things is what rule 4 forbids. */}
+        <span className="orca-legend">
+          <span className="orca-legend__swatch orca-legend__swatch--back" aria-hidden="true" />
+          <Text style="caption">loops back</Text>
         </span>
       </div>
 

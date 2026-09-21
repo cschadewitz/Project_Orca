@@ -63,10 +63,14 @@
   pointer-events: none;
 }
 
-/* A back edge is the same stroke routed the other way round, marked so the legend and a
-   future editor can speak about it. */
+/* A back edge is the same stroke routed the other way round. It is *dotted* rather than
+   dashed, because `.orca-edge--untaken` is the dash and rule 4 does not let one stroke carry
+   two facts: an edge can run backwards and have been taken, or run forwards and not have
+   been, and a reader has to be able to tell those apart. The round cap is what turns a
+   1px-on segment into a dot; the legend on the control rail names it. */
 .orca-edge--back {
-  stroke-dasharray: var(--mark-sm) var(--mark-sm);
+  stroke-dasharray: var(--stroke-dash-back);
+  stroke-linecap: round;
 }
 
 .orca-wfcanvas__box {

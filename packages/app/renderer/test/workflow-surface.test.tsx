@@ -250,14 +250,18 @@ describe("the keyboard", () => {
     const at = (): string => scene.style.transform;
     const rest = at();
 
-    press(canvas, "+", "Equal");
+    /* Pressed as a keyboard presses it: `+` is Shift and Equal, so the event carries
+       `shiftKey: true` and it is `keyOfEvent`'s job to see that the shift spelled the
+       character rather than modifying it. Sending a bare `+` here passed while the real
+       key did nothing at all (#177). */
+    press(canvas, "+", "Equal", true);
     await waitFor(() => expect(at()).not.toBe(rest));
     expect(at()).toContain("scale(1.5)");
 
     press(canvas, "-", "Minus");
     await waitFor(() => expect(at()).toBe(rest));
 
-    press(canvas, "+", "Equal");
+    press(canvas, "+", "Equal", true);
     press(canvas, "0", "Digit0");
     await waitFor(() => expect(at()).toBe(rest));
   });
@@ -295,6 +299,32 @@ describe("the inspector", () => {
     expect(within(inspector).getByText("role")).toBeTruthy();
     expect(within(inspector).getByText("builder")).toBeTruthy();
     expect(within(inspector).getByText("sdlc/build")).toBeTruthy();
+  });
+
+  it("shows a node selected inside an expanded branch, which is the same one selection", async () => {
+    const canvas = await open("orca://workflow/sdlc");
+    fireEvent.click(named(canvas, "fanout"));
+    press(canvas, "Enter", "Enter");
+
+    const group = await screen.findByRole("region", { name: "Inside Fan out the pieces: sdlc::fanout::auth-ui" });
+    const nested = within(group)
+      .getAllByRole("option")
+      .find((option) => option.id === nodeDomId("ui-build"))!;
+    fireEvent.click(nested);
+
+    /* The selection is one id held by the surface, and it is resolved across the nested
+       graphs — a click here used to select a node the inspector could not then find, which
+       left the panel saying "select a node" about the node just selected (#177). */
+    const inspector = await screen.findByRole("complementary", { name: "Node detail: Wire the login button" });
+    expect(within(inspector).getByText("role")).toBeTruthy();
+    expect(within(inspector).getByText("builder")).toBeTruthy();
+
+    /* And the listbox that holds it is the one pointing at it: `aria-activedescendant` has
+       to name an element its own listbox contains, so the group's does and the viewport's
+       does not. */
+    const listbox = within(group).getByRole("listbox", { name: "Nodes of sdlc::fanout::auth-ui" });
+    await waitFor(() => expect(listbox.getAttribute("aria-activedescendant")).toBe(nodeDomId("ui-build")));
+    expect(canvas.getAttribute("aria-activedescendant")).toBeNull();
   });
 
   it("says a node type carries no configuration rather than showing an empty list", async () => {

@@ -16,6 +16,20 @@
  * (RULES.md rule 10) — the ring is on the viewport, the selected node takes
  * `.orca-node--selected`.
  *
+ * **Every `option` is inside a `listbox`, and every wrapper between them says it is scenery.**
+ * The boxes are positioned by three nested divs — the scene that is panned and zoomed, the
+ * plane the edges are drawn on, and the absolutely-placed box itself — and a div between a
+ * `listbox` and its `option`s is a node a screen reader has to walk past for nothing. They
+ * are all `role="presentation"`. An *expanded* container's group box sits outside the
+ * viewport (see below), so its plane carries a `listbox` role and a label of its own rather
+ * than leaving its nodes as options belonging to nothing.
+ *
+ * **Which listbox carries `aria-activedescendant` follows the selection.** `aria-activedescendant`
+ * has to name an element the listbox contains, so when the selected node lives in an expanded
+ * group it is that group's listbox that points at it and the viewport that does not — one
+ * selection (70-workflow-editing.md), two places it can be. The viewport stays the only tab
+ * stop; the group listboxes are reached by the same arrows, through the same scope.
+ *
  * **The keys are the map's, and they are registered once.** `↑`/`↓` move within a layer,
  * `←`/`→` between layers, `Enter` expands or collapses a container, `+`/`-`/`0` zoom and `⇧`
  * with an arrow pans — all in the `workflow` scope, so the palette lists every one of them.
@@ -188,7 +202,11 @@ export function WorkflowCanvas({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        <div className="orca-wfcanvas__scene" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}>
+        <div
+          className="orca-wfcanvas__scene"
+          role="presentation"
+          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}
+        >
           <Graph
             layout={layout}
             overlay={overlay}
@@ -216,13 +234,18 @@ export function WorkflowCanvas({
             <span className={`orca-id ${textClass("mono-id")}`}>{nested.id}</span>
             <Text style="caption">{countLabel(nested)}</Text>
           </header>
-          <div className="orca-wfcanvas__scene">
+          <div className="orca-wfcanvas__scene" role="presentation">
             <Graph
               layout={layoutWorkflow(nested, METRICS)}
               overlay={overlay}
               selected={selected}
               onSelect={onSelect}
               expanded={expanded}
+              /* Its own listbox, because these options are outside the viewport's: a node
+                 inside a `listbox` is an option of that listbox, and an option with no
+                 listbox over it is a role with nothing to belong to. Not named `… graph`,
+                 which is the viewport's name and has to stay the one match for it. */
+              owns={{ label: `Nodes of ${nested.id}`, holds: nested.nodes }}
             />
           </div>
         </section>
@@ -239,15 +262,28 @@ interface GraphProps {
   selected: string | undefined;
   onSelect: (nodeId: string) => void;
   expanded: ReadonlySet<string>;
+  /**
+   * Set when this drawing is not inside the viewport's `listbox` — an expanded container's
+   * group box — so the plane has to be the `listbox` its options belong to. `holds` is the
+   * graph's own nodes, which is what decides whether this listbox is the one pointing at the
+   * selection.
+   */
+  owns?: { label: string; holds: readonly WorkflowNodeView[] };
 }
 
 /** The drawing itself: the edges under the boxes. Registers nothing and owns no state. */
-function Graph({ layout, overlay, selected, onSelect, expanded }: GraphProps): JSX.Element {
+function Graph({ layout, overlay, selected, onSelect, expanded, owns }: GraphProps): JSX.Element {
   const width = layout.width + PAD * 2;
   const height = layout.height + PAD * 2;
+  const mine = owns !== undefined && selected !== undefined && owns.holds.some((node) => node.id === selected);
 
   return (
-    <div className="orca-wfcanvas__plane" style={{ width: `${width}px`, height: `${height}px` }}>
+    <div
+      className="orca-wfcanvas__plane"
+      {...(owns ? { role: "listbox", "aria-label": owns.label } : { role: "presentation" })}
+      {...(mine && selected !== undefined ? { "aria-activedescendant": nodeDomId(selected) } : {})}
+      style={{ width: `${width}px`, height: `${height}px` }}
+    >
       <svg
         className="orca-wfcanvas__edges"
         viewBox={`${-PAD} ${-PAD} ${width} ${height}`}
@@ -260,7 +296,9 @@ function Graph({ layout, overlay, selected, onSelect, expanded }: GraphProps): J
           const classes = ["orca-edge"];
           // With a run overlaid an edge is either one the run took or one it did not; with
           // no run there is no such fact, and the edge is drawn plain.
-          if (overlay) classes.push(overlay.edges.has(placed.key) ? "orca-edge--active" : "orca-edge--untaken");
+          // By the pair, not by the layout's key: a traversal names the ends it came over and
+          // cannot say which of two parallel edges it was.
+          if (overlay) classes.push(overlay.edges.has(placed.pair) ? "orca-edge--active" : "orca-edge--untaken");
           if (placed.isBack) classes.push("orca-edge--back");
           const label = placed.edge.label ?? placed.edge.when;
           return (
@@ -287,6 +325,7 @@ function Graph({ layout, overlay, selected, onSelect, expanded }: GraphProps): J
         <div
           key={placed.node.id}
           className="orca-wfcanvas__box"
+          role="presentation"
           style={{ left: `${placed.x + PAD}px`, top: `${placed.y + PAD}px` }}
         >
           <WorkflowNode

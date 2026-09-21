@@ -88,7 +88,7 @@ export interface WorkflowNodeProps {
   /** True when a run is overlaid and this node was not traversed. */
   untaken?: boolean;
   selected?: boolean;
-  /** A container's hidden children, as a count: `2 branches`. Absent when nothing is hidden. */
+  /** A container's hidden children, as a count: `2 nested graphs`. Absent when nothing is hidden. */
   collapsed?: string;
   onOpen?: (id: string) => void;
 }

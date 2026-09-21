@@ -70,8 +70,19 @@ export interface PlacedNode {
 /** One edge, routed. `path` is an SVG `d` in the same coordinate space as the nodes. */
 export interface PlacedEdge {
   edge: WorkflowEdgeView;
-  /** `from`/`to`, so a caller does not re-derive the key the canvas draws by. */
+  /**
+   * This edge's identity within the layout: its index and its ends. It carries the index
+   * because a `decision` with two branches to one target is two edges, and keying them both
+   * `a→b` gave React two children with one key and made "is this a back edge?" a question
+   * about the *pair* rather than about the edge — so marking one back dashed the other too.
+   */
   key: string;
+  /**
+   * `from→to`. The overlay's key, not the layout's: a traversal says which pair a visit
+   * arrived over and cannot say which of two parallel edges it was, so this is what
+   * `OverlayIndex.edges` is looked up by.
+   */
+  pair: string;
   /**
    * True when the edge runs back into a layer it has already passed: the review-to-build
    * loop, a `loop` body's return. Drawn around the layers rather than through them.
@@ -117,12 +128,15 @@ function backEdges(
   edges: readonly WorkflowEdgeView[],
   start: string,
 ): Set<string> {
-  const out = new Map<string, WorkflowEdgeView[]>();
-  for (const edge of edges) {
+  /* Keyed by `edgeKey`, so two edges between one pair are two entries here and one of them
+     can be a back edge without the other becoming one. */
+  const out = new Map<string, { edge: WorkflowEdgeView; key: string }[]>();
+  edges.forEach((edge, index) => {
+    const entry = { edge, key: edgeKey(edge, index) };
     const list = out.get(edge.from);
-    if (list) list.push(edge);
-    else out.set(edge.from, [edge]);
-  }
+    if (list) list.push(entry);
+    else out.set(edge.from, [entry]);
+  });
 
   const back = new Set<string>();
   /** `open` is the DFS stack as a set: an edge into one of these is an edge into a cycle. */
@@ -143,8 +157,8 @@ function backEdges(
         done.add(frame.id);
         continue;
       }
-      const edge = outgoing[frame.next++]!;
-      if (open.has(edge.to)) back.add(edgeKey(edge));
+      const { edge, key } = outgoing[frame.next++]!;
+      if (open.has(edge.to)) back.add(key);
       else if (!done.has(edge.to)) {
         open.add(edge.to);
         stack.push({ id: edge.to, next: 0 });
@@ -211,7 +225,7 @@ export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): G
   const back = backEdges(workflow.nodes, edges, workflow.start);
   const depth = depths(
     workflow.nodes,
-    edges.filter((edge) => !back.has(edgeKey(edge))),
+    edges.filter((edge, index) => !back.has(edgeKey(edge, index))),
     workflow.start,
   );
 
@@ -224,19 +238,19 @@ export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): G
   // The second net: an edge the search came into a node by can still end up pointing left
   // once the longest paths settle, and an edge that points left is a back edge whatever
   // found it.
-  for (const edge of edges) {
-    if (layerOf(edge.to) <= layerOf(edge.from)) back.add(edgeKey(edge));
-  }
+  edges.forEach((edge, index) => {
+    if (layerOf(edge.to) <= layerOf(edge.from)) back.add(edgeKey(edge, index));
+  });
 
   // Forward predecessors per node: the barycentre's input, and the reason a back edge does
   // not drag a node back up into the layer it loops to.
   const predecessors = new Map<string, string[]>();
-  for (const edge of edges) {
-    if (back.has(edgeKey(edge))) continue;
+  edges.forEach((edge, index) => {
+    if (back.has(edgeKey(edge, index))) return;
     const list = predecessors.get(edge.to);
     if (list) list.push(edge.from);
     else predecessors.set(edge.to, [edge.from]);
-  }
+  });
 
   const byLayer = new Map<number, WorkflowNodeView[]>();
   for (const node of workflow.nodes) {
@@ -285,7 +299,10 @@ export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): G
      edge never runs under a node and never leaves the drawing. */
   const gutter = -metrics.rankGap / 2;
 
-  const routed = edges.map((edge) => route(edge, boxes, metrics, back.has(edgeKey(edge)), gutter));
+  const routed = edges.map((edge, index) => {
+    const key = edgeKey(edge, index);
+    return route(edge, key, boxes, metrics, back.has(key), gutter);
+  });
 
   return {
     nodes: placed,
@@ -296,8 +313,46 @@ export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): G
   };
 }
 
-/** `from→to`: the key the canvas draws an edge by, and the one `layoutWorkflow` dedupes on. */
-export const edgeKey = (edge: WorkflowEdgeView): string => `${edge.from}→${edge.to}`;
+/**
+ * The key an edge is drawn and marked by: its position in the workflow's edge list and its
+ * ends. The index is what makes two edges between one pair two edges — `decision` nodes
+ * branching twice to the same target are the ordinary case, and a key of `from→to` alone
+ * handed React a duplicate and let a back-edge mark on one bleed onto the other.
+ *
+ * `edgePair` is the same edge without the index, for the one question that is genuinely
+ * about the pair: whether a run's traversal came this way.
+ */
+export const edgeKey = (edge: WorkflowEdgeView, index: number): string => `${index}:${edge.from}→${edge.to}`;
+
+/** `from→to` — what a traversal can say about an edge, and all it can say. */
+export const edgePair = (edge: WorkflowEdgeView): string => `${edge.from}→${edge.to}`;
+
+/**
+ * The node with this id, anywhere in the view — including inside a container's nested graphs,
+ * and inside theirs.
+ *
+ * There is **one selection** (docs/design/70-workflow-editing.md): selecting a node on the
+ * canvas, in an expanded group box or (later) in the editor's node list is the same act, so
+ * the id the surface holds has to be resolvable wherever the node actually lives. Looking
+ * only at `workflow.nodes` made a click inside an expanded `parallel` select a node the
+ * inspector could not then find — a selection with nothing on the other end of it.
+ *
+ * Ids are unique within a graph but a nested graph is its own namespace, so this is
+ * first-match in draw order: the outer graph before the bodies hanging off it, which is the
+ * order a person reads them in.
+ */
+export function findNode(workflow: WorkflowView, id: string | undefined): WorkflowNodeView | undefined {
+  if (id === undefined) return undefined;
+  const here = workflow.nodes.find((node) => node.id === id);
+  if (here) return here;
+  for (const node of workflow.nodes) {
+    for (const nested of node.nested ?? []) {
+      const found = findNode(nested, id);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
 
 /**
  * One edge as an SVG path.
@@ -314,6 +369,7 @@ export const edgeKey = (edge: WorkflowEdgeView): string => `${edge.from}→${edg
  */
 function route(
   edge: WorkflowEdgeView,
+  key: string,
   boxes: ReadonlyMap<string, PlacedNode>,
   metrics: GraphMetrics,
   isBack: boolean,
@@ -321,7 +377,7 @@ function route(
 ): PlacedEdge {
   const from = boxes.get(edge.from)!;
   const to = boxes.get(edge.to)!;
-  const key = edgeKey(edge);
+  const pair = edgePair(edge);
 
   if (isBack) {
     const x1 = from.x + metrics.nodeW / 2;
@@ -330,6 +386,7 @@ function route(
     return {
       edge,
       key,
+      pair,
       isBack: true,
       path: `M ${x1} ${from.y} L ${x1} ${top} L ${x2} ${top} L ${x2} ${to.y}`,
       labelX: (x1 + x2) / 2,
@@ -345,6 +402,7 @@ function route(
   return {
     edge,
     key,
+    pair,
     isBack: false,
     path: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`,
     labelX: (x1 + x2) / 2,

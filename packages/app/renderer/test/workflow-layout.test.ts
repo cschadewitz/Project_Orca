@@ -9,8 +9,8 @@
 import { describe, expect, it } from "vitest";
 import { GRAPH_GEOMETRY } from "@orca/design";
 import type { WorkflowView } from "@orca/protocol";
-import { edgeKey, layoutWorkflow, type GraphMetrics } from "../src/workflow/layout.js";
-import { AI_SDLC } from "./fixtures-workflows.js";
+import { edgeKey, edgePair, findNode, layoutWorkflow, type GraphMetrics } from "../src/workflow/layout.js";
+import { AI_SDLC, WORKFLOW_VIEWS } from "./fixtures-workflows.js";
 
 /** A unit grid: a 10x10 node, a 10 gap each way, so a layer step is 20 and a rank step 20. */
 const UNIT: GraphMetrics = { nodeW: 10, nodeH: 10, layerGap: 10, rankGap: 10 };
@@ -72,8 +72,8 @@ describe("layers are longest-path depth from start", () => {
 describe("back edges", () => {
   it("marks the edge that returns to a layer it has passed, and routes it through the gutter", () => {
     const layout = layoutWorkflow(graph("a", ["a", "b", "c"], [["a", "b"], ["b", "c"], ["c", "b"]]), UNIT);
-    const backwards = layout.edges.filter((e) => e.isBack).map((e) => e.key);
-    expect(backwards).toEqual([edgeKey({ from: "c", to: "b" })]);
+    const backwards = layout.edges.filter((e) => e.isBack).map((e) => e.pair);
+    expect(backwards).toEqual([edgePair({ from: "c", to: "b" })]);
 
     // Out of the top of the source, level through the gutter above the graph, down into the
     // top of the target: an `L` path at a negative y, never the forward cubic.
@@ -85,7 +85,7 @@ describe("back edges", () => {
 
   it("marks a self edge as a back edge rather than laying a node on top of itself", () => {
     const layout = layoutWorkflow(graph("a", ["a", "b"], [["a", "b"], ["b", "b"]]), UNIT);
-    expect(layout.edges.find((e) => e.key === edgeKey({ from: "b", to: "b" }))!.isBack).toBe(true);
+    expect(layout.edges.find((e) => e.pair === edgePair({ from: "b", to: "b" }))!.isBack).toBe(true);
   });
 
   it("leaves a back edge out of the layering, so the loop's head is not dragged forward", () => {
@@ -101,7 +101,60 @@ describe("back edges", () => {
   it("drops an edge whose end is not in the graph rather than routing to nothing", () => {
     const view = graph("a", ["a", "b"], [["a", "b"]]);
     const layout = layoutWorkflow({ ...view, edges: [...view.edges, { from: "b", to: "ghost" }] }, UNIT);
-    expect(layout.edges.map((e) => e.key)).toEqual([edgeKey({ from: "a", to: "b" })]);
+    expect(layout.edges.map((e) => e.key)).toEqual([edgeKey({ from: "a", to: "b" }, 0)]);
+  });
+
+  it("keys two edges between the same pair apart, and marks only the one that runs back", () => {
+    /* A `decision` with two branches to one target is the ordinary case — `ai-sdlc`'s
+       `tests-passed` is one — and `from→to` gave both of them the same key: React saw a
+       duplicate child, and marking one a back edge marked the other too (#177). */
+    const view = graph("a", ["a", "b"], []);
+    const layout = layoutWorkflow(
+      {
+        ...view,
+        edges: [
+          { from: "a", to: "b", when: "choice == 'yes'" },
+          { from: "a", to: "b", when: "choice == 'no'" },
+        ],
+      },
+      UNIT,
+    );
+
+    expect(layout.edges).toHaveLength(2);
+    expect(new Set(layout.edges.map((e) => e.key)).size).toBe(2);
+    // Both are the same pair, and the pair is what an overlay can speak about.
+    expect(layout.edges.map((e) => e.pair)).toEqual([edgePair({ from: "a", to: "b" }), edgePair({ from: "a", to: "b" })]);
+    expect(layout.edges.map((e) => e.edge.when)).toEqual(["choice == 'yes'", "choice == 'no'"]);
+    // Neither runs backwards; the marking does not bleed from one onto the other.
+    expect(layout.edges.every((e) => !e.isBack)).toBe(true);
+  });
+
+  it("marks the back edge of a pair drawn twice without marking its forward twin", () => {
+    // `b → a` closes the cycle; `a → b` declared twice must stay two forward edges.
+    const view = graph("a", ["a", "b"], []);
+    const layout = layoutWorkflow(
+      { ...view, edges: [{ from: "a", to: "b" }, { from: "a", to: "b" }, { from: "b", to: "a" }] },
+      UNIT,
+    );
+    expect(layout.edges.filter((e) => e.isBack)).toHaveLength(1);
+    expect(layout.edges.find((e) => e.isBack)!.pair).toBe(edgePair({ from: "b", to: "a" }));
+  });
+});
+
+describe("finding the selected node", () => {
+  const sdlc = WORKFLOW_VIEWS.sdlc!;
+
+  it("finds a node in the graph itself and a node inside a container's nested graph", () => {
+    expect(findNode(sdlc, "build")!.name).toBe("Build: plan and implement");
+    /* The one the canvas could not resolve before: `ui-build` lives inside the `parallel`'s
+       `auth-ui` branch, and the surface holds one selection wherever the node is (#177). */
+    expect(findNode(sdlc, "ui-build")!.name).toBe("Wire the login button");
+    expect(findNode(sdlc, "docs-write")).toBeDefined();
+  });
+
+  it("answers nothing for an id no graph has, and for no selection at all", () => {
+    expect(findNode(sdlc, "nobody")).toBeUndefined();
+    expect(findNode(sdlc, undefined)).toBeUndefined();
   });
 });
 
@@ -159,10 +212,12 @@ describe("ai-sdlc, the graph the issue names", () => {
     expect(layout.nodes).toHaveLength(16);
     expect(layerOf(layout, "start")).toBe(0);
 
-    const backwards = layout.edges.filter((e) => e.isBack).map((e) => e.key);
+    const backwards = layout.edges.filter((e) => e.isBack).map((e) => e.pair);
     // Both retry edges return to `bump-build`: the test decision's and the review verdict's.
-    expect(backwards).toContain(edgeKey({ from: "review-verdict", to: "bump-build" }));
-    expect(backwards).toContain(edgeKey({ from: "tests-passed", to: "bump-build" }));
+    expect(backwards).toContain(edgePair({ from: "review-verdict", to: "bump-build" }));
+    expect(backwards).toContain(edgePair({ from: "tests-passed", to: "bump-build" }));
+    // And every edge in the graph has a key of its own, whatever pairs repeat.
+    expect(new Set(layout.edges.map((e) => e.key)).size).toBe(layout.edges.length);
   });
 
   it("puts every node on a whole number of 16px grid steps", () => {

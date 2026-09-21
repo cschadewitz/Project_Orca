@@ -298,6 +298,13 @@ describe("the run tree", () => {
     expect(crumbs.map((c) => c.label)).toEqual(["req-1", "Add the SSO callback", "Add the SSO callback"]);
     expect(crumbs[2]!.current).toBe(true);
 
+    /* The run crumb carries the workflow it executes *and* the version it is pinned to —
+       `sdlc v2` — which is 70-workflow-editing.md's "shown wherever a run's workflow is
+       named", on the run header (#177). The `◷ pinned` chip is not here: whether v2 is still
+       the version on disk is a `workflows.get` this surface does not make. */
+    expect(crumbs[2]!.version).toBe("sdlc v2");
+    expect(crumbs.filter((c) => c.version !== undefined)).toHaveLength(1);
+
     // And the step, once a step is selected.
     act(() => press("Enter", "Enter"));
     press("ArrowDown", "ArrowDown");

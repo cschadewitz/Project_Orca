@@ -23,4 +23,17 @@
   custom property. `WorkflowNode` is built and `component-api.d.ts` says so.
 - **app:** a `workflow` scope in the keyboard map, for a canvas whose arrows move between
   nodes rather than between rows. `docs/design/50-accessibility-and-keyboard.md` has the
-  table; every one of its keys is in the command palette.
+  table; every one of its keys is in the command palette. A shortcut on a punctuation key now
+  matches the press a keyboard actually makes: `+` is Shift and Equal, so the shift is
+  spelling the character rather than modifying it and is dropped — `Shift+ArrowUp` and
+  `Shift+Enter` are unchanged.
+- **app:** the run header names the workflow a run executes *with the version it is pinned
+  to* — `sdlc v2` on the run crumb, from the version the run recorded. Whether that version
+  is still the newest is the viewer's `◷ pinned` chip, which needs the definition on disk and
+  so stays where it is read.
+- **design:** a back edge is dotted, not dashed — `--stroke-dash-back` beside
+  `--stroke-dash-untaken`, and a legend row for it. "Runs backwards" and "was not taken" are
+  different facts about an edge and an edge can be either, so they are no longer one stroke.
+  A pinned run's chip is a chip tone rather than `--status-running`, and a selected node is
+  `--surface-selected` plus an accent rail rather than an accent outline that read as the
+  focus ring.

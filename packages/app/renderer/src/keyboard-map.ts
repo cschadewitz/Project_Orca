@@ -164,6 +164,15 @@ export function normalizeKey(key: string): string {
   return [...ordered, main.length === 1 ? main.toUpperCase() : main].join("+");
 }
 
+/**
+ * A key `event.key` reports as a printable character that is neither a letter nor a digit:
+ * `+`, `?`, `_`, `:`, `~`. On every layout that has them, Shift is how they are typed — `+`
+ * *is* Shift and Equal — so the shift is spelling the character rather than modifying it, and
+ * a registration of `+` has no `Shift+` to name. `ArrowUp` and `Enter` are not one character,
+ * so `Shift+ArrowUp` and `Shift+Enter` are untouched by this.
+ */
+const shiftSpellsTheCharacter = (key: string): boolean => key.length === 1 && !/[a-zA-Z0-9]/.test(key);
+
 /** The key a `keydown` event spells in the map's notation, or `undefined` for a bare modifier. */
 export function keyOfEvent(event: KeyboardEvent, platform: string): string | undefined {
   const mod = platform === "darwin" ? event.metaKey : event.ctrlKey;
@@ -172,7 +181,12 @@ export function keyOfEvent(event: KeyboardEvent, platform: string): string | und
   const letter = /^Key([A-Z])$/.exec(event.code)?.[1] ?? /^Digit([0-9])$/.exec(event.code)?.[1];
   const main = letter ?? event.key;
   if (["Meta", "Control", "Shift", "Alt"].includes(main)) return undefined;
-  return [mod ? "Mod" : "", event.shiftKey ? "Shift" : "", event.altKey ? "Alt" : "", main].filter(Boolean).join("+");
+  /* A punctuation key produced *by* Shift drops it (#177): the workflow canvas registers `+`
+     for zoom in, and a real keyboard sends `{ key: "+", code: "Equal", shiftKey: true }` —
+     which spelled `Shift++` and matched nothing. `code` is no help here, because which
+     character `Equal` shifts to is exactly what a layout decides. */
+  const shift = event.shiftKey && !(letter === undefined && shiftSpellsTheCharacter(main));
+  return [mod ? "Mod" : "", shift ? "Shift" : "", event.altKey ? "Alt" : "", main].filter(Boolean).join("+");
 }
 
 /** How the palette shows a key: `⌘⇧L` on macOS, `Ctrl+Shift+L` elsewhere. */

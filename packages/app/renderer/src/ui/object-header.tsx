@@ -37,6 +37,18 @@ export interface Crumb {
    * `Counterpart.id`, so the map in `counterparts.ts` stays the list of what exists.
    */
   counterpartIds?: Readonly<Record<string, string>>;
+  /**
+   * The workflow this object runs, with the version it is pinned to: `ai-sdlc v11` (#177).
+   *
+   * A prop rather than something the header derives, because the version is a fact on the
+   * *run* and the header knows objects, not read models. It exists because
+   * docs/design/70-workflow-editing.md asks for the version "wherever a run's workflow is
+   * named — the run header, the workflow viewer's overlay control, the step detail's node
+   * line", and the run header is a crumb. The `◷ pinned` chip that goes with it is not here:
+   * a chip is a comparison against the definition on disk, which the runs surface would need
+   * a second read to know (see that file), so the viewer is where it is drawn.
+   */
+  version?: string;
 }
 
 export interface ObjectHeaderProps {
@@ -87,6 +99,10 @@ function CrumbLabel({ crumb }: { crumb: Crumb }): JSX.Element {
     <>
       <span>{crumb.label}</span>
       <span className={`orca-crumb__type ${textClass("eyebrow")}`}>{crumb.type}</span>
+      {/* Mono, because it is an id and a number the daemon recorded, not prose. */}
+      {crumb.version !== undefined && (
+        <span className={`orca-crumb__version ${textClass("mono-id")}`}>{crumb.version}</span>
+      )}
     </>
   );
 }

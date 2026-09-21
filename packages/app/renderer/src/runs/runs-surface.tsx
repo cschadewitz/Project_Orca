@@ -169,12 +169,21 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
     /* The workflow this run executes is a counterpart rather than a crumb — the trail is
        request ▸ work item ▸ run ▸ step and a workflow is not on it — so the id travels on
        the crumb and `counterpartUrl` turns it into `orca://workflow/<id>?run=<run>`. That
-       menu item is the run header's link to the viewer with this run overlaid (#177). */
+       menu item is the run header's link to the viewer with this run overlaid (#177).
+
+       The *version* is printed on the crumb, because a run records the version it started
+       against and 70-workflow-editing.md asks for it wherever a run's workflow is named.
+       The `◷ pinned` chip that goes beside it there is not drawn here: "pinned" is
+       `run.workflowVersion !== the version on disk`, and this surface has never read the
+       definition — it would take a `workflows.get` per run in the tree to know. The version
+       alone is a fact; the chip would be a guess (rule 12). The viewer draws the chip, and
+       the crumb's own menu is the way to it. */
     trail.push({
       type: "run",
       id: selectedRun.id,
       label: selectedRun.name,
       counterpartIds: { workflow: selectedRun.workflowId },
+      version: `${selectedRun.workflowId} v${selectedRun.workflowVersion}`,
     });
     if (selectedStepRunId !== undefined && currentStep !== undefined) {
       trail.push({ type: "step", id: selectedStepRunId, label: currentStep });

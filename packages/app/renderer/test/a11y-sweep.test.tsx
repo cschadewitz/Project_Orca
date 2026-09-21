@@ -439,6 +439,37 @@ describe("Workflow: a graph read as a list, with the status first", () => {
     expect(names.some((name) => name.endsWith("not taken"))).toBe(true);
   });
 
+  it("keeps every option inside a listbox, and every listbox holding options", async () => {
+    /* The claim a role attribute cannot make on its own. An `option` is defined by the
+       `listbox` that owns it, and this canvas positions its boxes through three nested
+       divs — the panned scene, the edge plane, the absolutely-placed box — any of which
+       would break that ownership by being an unnamed generic in between. They are all
+       `role="presentation"`.
+
+       The second half is the group boxes: an expanded container's nodes are drawn *outside*
+       the viewport, so they are options of a listbox of their own or of nothing at all. */
+    const canvas = await openWorkflow("orca://workflow/sdlc");
+    const fanout = within(canvas)
+      .getAllByRole("option")
+      .find((option) => (option.getAttribute("aria-label") ?? "").includes("Fan out"))!;
+    fireEvent.click(fanout);
+    act(() => canvas.focus());
+    fireEvent.keyDown(canvas, { key: "Enter", code: "Enter" });
+    // Two branches, so two group boxes: the `parallel`'s `auth-ui` and its `auth-docs`.
+    expect(await screen.findAllByRole("region", { name: /^Inside Fan out/ })).toHaveLength(2);
+
+    const listboxes = screen.getAllByRole("listbox");
+    // More than the viewport: each expanded branch is one, named for itself.
+    expect(listboxes.length).toBeGreaterThan(1);
+    for (const listbox of listboxes) {
+      expect(listbox.getAttribute("aria-label")).toBeTruthy();
+      expect(within(listbox).getAllByRole("option").length).toBeGreaterThan(0);
+    }
+    for (const option of screen.getAllByRole("option")) {
+      expect(option.closest('[role="listbox"]'), option.id).not.toBeNull();
+    }
+  });
+
   it("adds no live region of its own, and keeps the chrome's one announcer", async () => {
     await openWorkflow("orca://workflow/sdlc?run=run-parent");
     expect(announcers()).toHaveLength(1);
