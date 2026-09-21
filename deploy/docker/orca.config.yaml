@@ -23,17 +23,38 @@ agents:
       # The adapter bundles a Claude Code of its own; this points it at the current CLI the
       # image installs (docs/SETUP.md, "Connect to Claude Code").
       CLAUDE_CODE_EXECUTABLE: /usr/local/bin/claude
+    permissions: &container-policy
+      # An explicit policy, because a daemon cannot ask. `orca serve` drives runs with
+      # `PausingHumanInput`: a workflow gate parks in the event log and waits for an answer,
+      # but a permission `ask` is *refused*, since a permission cannot outlive the agent
+      # session that raised it. ORCA's own defaults (what you get with no `permissions:`
+      # block) ask about every `execute` — which for a build or a test step is every command
+      # the agent runs — so under this daemon they would refuse the run's real work.
+      #
+      # Writing `default:` at all opts this agent out of those defaults, which is the
+      # intent here. What it buys and what it costs:
+      #
+      #   allowed   anything inside the run's own workspace, and any `execute` — a shell
+      #             command has no location to scope it by, so `default` is what decides it.
+      #             That includes network access from inside the container.
+      #   denied    any tool call touching a path outside the workspace, and two commands
+      #             worth naming even in a sandbox.
+      #
+      # This is a policy for a container: an isolated filesystem, a repository you are
+      # willing to see rewritten, and credentials scoped to these two agents. It is not one
+      # to copy onto a workstation. To go the other way — a person approving each command —
+      # delete this block and drive runs from the CLI (`humanInput.mode: cli`) or from
+      # Kepler, where an ask becomes Kepler's own approval prompt.
+      default: allow
+      rules:
+        - { match: { scope: outside-workspace }, decision: deny }
+        - { match: { kind: execute, titlePattern: "rm -rf|git push --force" }, decision: deny }
   - id: codex
     command: codex-acp
     hostId: local
     roles: [builder, tester, deployer]
     sessionMode: per-step
-
-# No `permissions:` block on either agent, so ORCA's own defaults are the policy: read,
-# search, edit, delete, move and think inside the run's own workspace, and `ask` for
-# everything else — `execute` included. Every ask reaches the Attention surface. Add
-# `permissions: { default: allow }` to an agent only if this container is a sandbox you do
-# not mind it roaming.
+    permissions: *container-policy
 
 # Absolute, because the workflows and templates are in the image and the workspace holds
 # neither. Copy them into the workspace and make these relative if you want to edit them.

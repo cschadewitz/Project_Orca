@@ -305,17 +305,44 @@ FAIL codex on local: ACP handshake with 'codex' failed: Authentication required,
 That asymmetry is worth remembering in both directions: a green `ping` for `claude` says
 less than a green `ping` for `codex`.
 
-### 1.7 What the daemon does with a gate
+### 1.7 What the daemon does with a question, and why the policy is explicit
 
-`humanInput.mode: pause` in the shipped config, and for a daemon it is the only mode that
-makes sense: a gate parks the run in its event log, the interpreter lets go, and the
-question waits on `inputs.list` until somebody answers it from the app's Attention surface
-or from `orca answer <requestId> <option>`. `cli` would prompt on a terminal nobody is
-watching; `auto` would answer on your behalf.
+A daemon is asked two different kinds of question, and it treats them differently. This is
+the paragraph to read before the first real run, because the second kind decides whether the
+shipped config works at all.
 
-What it costs is written down in the roadmap and worth knowing before your first gate: the
-agent's session does **not** survive the wait. The step that resumes afterwards opens a
-fresh session, so the agent loses the conversation it was in the middle of (#237).
+**A workflow gate parks.** `humanInput.mode: pause` — the only mode that makes sense here —
+writes the question into the run's event log, lets the interpreter go, and leaves it on
+`inputs.list` until somebody answers from the app's Attention surface or with
+`orca answer <requestId> <option>`. `cli` would prompt on a terminal nobody is watching;
+`auto` would answer on your behalf. What parking costs is worth knowing before your first
+gate: the agent's session does **not** survive the wait, so the step that resumes opens a
+fresh one and the agent loses the conversation it was in the middle of (#237).
+
+**An agent's permission `ask` cannot park, so it is refused.** A permission cannot outlive
+the agent session that raised it — the turn is blocked on the answer — so under `orca serve`
+an `ask` is cancelled and the tool call fails. Not the run: the agent is told no and carries
+on.
+
+Those two together are why `deploy/docker/orca.config.yaml` writes a policy out rather than
+taking ORCA's defaults. The defaults ask about every `execute`, and ORCA sees a shell
+command only as the permission title, with no location to scope a grant by — so a build step
+under this daemon would have every command it ran refused, one after another, and fail
+having done nothing. A config for a daemon has to decide in advance what it decides in
+advance.
+
+What the shipped policy says, and it is a container's policy rather than a workstation's:
+
+| | |
+| --- | --- |
+| allowed | anything inside the run's own workspace, and any `execute` — including network access from inside the container |
+| denied | any tool call touching a path outside the workspace, and `rm -rf` / `git push --force` by title |
+
+Writing `default:` at all is what opts an agent out of ORCA's defaults, and that is
+deliberate here. If you would rather approve each command yourself, delete the
+`permissions:` block and drive runs from the CLI with `humanInput.mode: cli`, or from
+Kepler, where an `ask` becomes Kepler's own approval prompt — both of those are channels
+that can hold a turn open while a person looks at it. A daemon is not.
 
 ---
 
@@ -673,6 +700,8 @@ piece is a transport, not a network. Roadmap item 2.
 | A work item is claimed by a run that died | `orca claims`, then `orca claims release <workItemId>` — or **Release** on the Agents surface |
 | Kepler shows the agent but sessions never start | The launcher is not executable, or something printed on stdout — stdout is the protocol channel and logs must go to stderr |
 | Writes are missing from the app rather than disabled | The daemon is `--read-only`, or it is a file-mode store. That is the design: absence is the honest rendering |
+| A step fails with every command refused, `ask:cancelled` in the log | The agent is on a policy that asks, and a daemon cannot ask (§1.7). Give it an explicit `permissions:` block, or drive that run from the CLI or Kepler |
+| `Permission deny rule (managed policy settings): Write(…) is not matched…` from `claude` | Claude Code's own managed policy, not ORCA's — its `Write(…)` deny rules no longer match file edits and are inert. Advisory: the line after them is the real result. ORCA's policy is enforced daemon-side regardless |
 | The app is a beat behind on runs the CLI or Kepler started | Pushes do not cross processes; the socket fans out the daemon's own store. The next read catches up |
 | `orca demo` fails with `workflow 'program' not registered` inside the container | `demo` finds the shipped workflows relative to its own module, which a single-file bundle has moved. Run it from a checkout; `orca validate` is the container's equivalent smoke test |
 | The `.orca` store is owned by uid 1000 on the host | Start the container with `--user "$(id -u):$(id -g)"` |
