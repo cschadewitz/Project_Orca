@@ -326,6 +326,149 @@ for (const surface of AUDITED) {
   }
 }
 
+/* ---------------------------------------------------------------- scrolling (#277) */
+
+/**
+ * The half of "scrolling is structural" that only a layout engine can answer.
+ *
+ * `renderer/test/scroll-sweep.test.tsx` walks every surface under happy-dom, which has no
+ * layout, so it can assert the *declaration* — a scroll region exists in the subtree and
+ * every box between it and `.orca-main` is bounded — and nothing about height. That is the
+ * gap between "the CSS says the right words" and "the screen works": a rule that takes its
+ * height from an unexpected place (a `position: absolute` up the tree, a grid track that
+ * resolved differently, a `height: 100%` against a parent nobody gave a height to) passes
+ * the sweep and still hides content, with no scrollbar, no wheel and no keyboard way down.
+ *
+ * So this makes the window **too short for any surface** and asks the two questions the
+ * sweep cannot: does the box that is supposed to scroll actually overflow, and having
+ * scrolled it to its end, is the last thing in it on the screen? The second is the one that
+ * catches a scroller that scrolls the wrong box — a region can overflow and still be the
+ * wrong element, in which case the content below it never comes into view.
+ *
+ * Keep the unit sweep. It runs in a second and fails on a new surface that declares nothing,
+ * which is the common case; this covers the rarer, harder one and is worth its runtime here
+ * rather than in `pnpm test`.
+ */
+const SHORT_WINDOW = { width: 1280, height: 340 } as const;
+
+/** What one scroll region measured, after being scrolled to its end. */
+interface ScrollProof {
+  /** The region's class, so a failure names the box rather than "an element". */
+  region: string;
+  overflows: boolean;
+  /** `scrollTop + clientHeight` reached `scrollHeight`: the region really took the scroll. */
+  reachedEnd: boolean;
+  /** The last thing in the region is inside the region's own box once it is at the end. */
+  lastVisible: boolean;
+  last: string;
+}
+
+/**
+ * Every scroll region inside `selector` that has more content than height, scrolled to its
+ * end and measured. The regions are found the way the sweep finds them — a computed
+ * `overflow`/`overflow-y` of `auto`, `scroll` or `overlay` — so the two tests are looking at
+ * the same set of boxes and neither has its own list.
+ */
+async function scrollProofs(selector: string): Promise<ScrollProof[]> {
+  return page.evaluate((root) => {
+    const scrollable = new Set(["auto", "scroll", "overlay"]);
+    const host = document.querySelector(root);
+    if (!host) return [];
+    const regions = [host, ...host.querySelectorAll("*")].filter((element): element is HTMLElement => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element);
+      return scrollable.has(style.overflowY) || scrollable.has(style.overflow);
+    });
+    return regions
+      .filter((element) => element.scrollHeight > element.clientHeight + 1)
+      .map((element) => {
+        element.scrollTop = element.scrollHeight;
+        const box = element.getBoundingClientRect();
+        /* The last child with a box of its own is the end of the region's content: a
+           virtualised list's spacer, a surface's final section, the inspector's last block.
+           Asking about *it* rather than about `scrollTop` is what makes this an assertion
+           about the screen — a region that scrolls while its content is drawn somewhere
+           else fails here and passes every arithmetic check. */
+        const children = [...element.children].filter((child) => child.getBoundingClientRect().height > 0);
+        const last = children.at(-1);
+        const lastBox = last?.getBoundingClientRect();
+        return {
+          region: element.className || element.tagName,
+          overflows: true,
+          /* Two pixels of slack on both, and no more: a fractional device pixel ratio moves
+             a rounded `clientHeight` and a `getBoundingClientRect` by under one. Anything
+             larger is content off the bottom of the box, which is the bug. */
+          reachedEnd: Math.abs(element.scrollTop + element.clientHeight - element.scrollHeight) <= 2,
+          last: last?.className ?? "",
+          lastVisible: lastBox !== undefined && lastBox.bottom <= box.bottom + 2 && lastBox.bottom > box.top,
+        };
+      });
+  }, selector);
+}
+
+/** Set the window's content size and wait for the renderer to have been laid out at it. */
+async function setWindowSize(width: number, height: number): Promise<void> {
+  // Not `window`: that name is the renderer's inside the `page.evaluate` below, and shadowing
+  // it here is how this first failed to compile.
+  const browserWindow = await app.browserWindow(page);
+  await browserWindow.evaluate((win, size) => win.setContentSize(size.width, size.height), { width, height });
+  // Within a couple of pixels: a window manager may round, and the point is "short", not "340".
+  await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(height + 4);
+}
+
+test.describe("a window too short for what is in it", () => {
+  test.beforeAll(async () => {
+    /* Short, and still wide: the sidebar collapses and the dock becomes an overlay below
+       their breakpoints, which would be a different layout rather than a shorter one. */
+    await setWindowSize(SHORT_WINDOW.width, SHORT_WINDOW.height);
+  });
+
+  test.afterAll(async () => {
+    // Back to what the main process opens, so the specs after this see the window they expect.
+    await setWindowSize(1200, 800);
+  });
+
+  for (const surface of AUDITED) {
+    test(`${surface.id} scrolls the box it says it scrolls, and its end is reachable`, async () => {
+      await gotoSurface(surface.id, surface.shortcut);
+      await expect(page.locator(surface.ready).first()).toBeVisible();
+
+      const proofs = await scrollProofs(`main.orca-main[data-surface="${surface.id}"]`);
+      /* Not "a region exists" but "a region overflowed": at this height every surface has
+         more content than window, so a surface with nothing overflowing is a surface whose
+         content went somewhere other than into the box that scrolls. */
+      expect(proofs.length, `${surface.id} overflowed nothing in a ${SHORT_WINDOW.height}px window`).toBeGreaterThan(0);
+      for (const proof of proofs) {
+        expect(proof.reachedEnd, `${surface.id}: .${proof.region} would not scroll to its end`).toBe(true);
+        expect(
+          proof.lastVisible,
+          `${surface.id}: .${proof.region} scrolled but .${proof.last} never came into view`,
+        ).toBe(true);
+      }
+    });
+  }
+
+  test("the docked panel scrolls the Plan inspector rather than clipping it", async () => {
+    /* The content that most easily outgrows its column: a work item's dependencies, risks
+       and journal in a 420px-wide dock, in a window this short. The panel's own
+       `overflow: hidden` is the clip that keeps the enter animation inside the column, so
+       the region that has to take this is `.orca-panel__body` and nothing else. */
+    const plan = await gotoSurface("plan", 3);
+    await expect(plan.locator('[role="grid"] [role="row"]').first()).toBeVisible();
+    // Selecting a row is what opens the dock on this surface, the way a person opens it.
+    await plan.locator('[role="grid"] [role="row"]').first().click();
+    await expect(page.locator(".orca-panel")).toBeVisible();
+    await expect(page.locator(".orca-panel .orca-pane__head")).toContainText("Work item");
+
+    const proofs = await scrollProofs(".orca-panel");
+    expect(proofs.map((proof) => proof.region.includes("orca-panel__body"))).toContain(true);
+    for (const proof of proofs) {
+      expect(proof.reachedEnd, `.${proof.region} would not scroll to its end`).toBe(true);
+      expect(proof.lastVisible, `.${proof.region} scrolled but .${proof.last} never came into view`).toBe(true);
+    }
+  });
+});
+
 test("no surface is passed off as unbuilt", async () => {
   /* Through v0.4.0 the surfaces that had no screen yet were asserted to be the empty
      `StateView` `App.tsx` gives them, so that the day one grew content the assertion failed
