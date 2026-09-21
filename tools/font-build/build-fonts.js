@@ -69,7 +69,7 @@ const BOX = chars(range(0x2500, 0x257f));
 
 /**
  * The glyphs ORCA renders as glyphs: the eight run statuses, the connection states, agent
- * health, the breadcrumb separator and the command key. Kept in sync with
+ * health, the breadcrumb separator, the command key and the five surfaces. Kept in sync with
  * packages/design/semantics.json by the check below.
  *
  * Four glyphs carry a word in more than one domain, which is deliberate rather than an
@@ -89,6 +89,14 @@ const SYMBOLS = chars(
   0x25cc, // ◌ reconnecting · empty and no-results state views · agent health unknown
   0x25b8, // ▸ breadcrumb separator
   0x2318, // ⌘ command key, in palette and menu hints
+  /* The five surfaces, for the rail the sidebar collapses to below 960px (#261). ◆ above is
+     Attention's as well as waiting's, deliberately; these four are the rest. A cog would be
+     the obvious fifth and there is no OFL cog here to bundle — U+2699 is in neither Noto
+     face — which is why Config is radial rather than toothed. */
+  0x2630, // ☰ surface runs
+  0x2b21, // ⬡ surface plan
+  0x25c9, // ◉ surface agents
+  0x274b, // ❋ surface config
 );
 
 /** Not in Noto Sans Symbols 2; Noto Sans Math carries it. */

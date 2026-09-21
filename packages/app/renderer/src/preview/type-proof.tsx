@@ -31,6 +31,7 @@ import {
   RUN_STATUSES,
   STATE_VIEW_PRESENTATION,
   STATUS_PRESENTATION,
+  SURFACE_PRESENTATION,
   THEMES,
   type ConnectionState,
   type TextStyle,
@@ -319,6 +320,7 @@ const GLYPHS: readonly GlyphUse[] = (() => {
   for (const [status, presentation] of Object.entries(STATUS_PRESENTATION)) add(presentation.glyph, `status ${status}`);
   for (const [state, presentation] of Object.entries(CONNECTION_PRESENTATION)) add(presentation.glyph, state);
   for (const [kind, presentation] of Object.entries(STATE_VIEW_PRESENTATION)) add(presentation.glyph, `${kind} view`);
+  for (const [id, presentation] of Object.entries(SURFACE_PRESENTATION)) add(presentation.glyph, `${id} surface`);
   for (const [name, glyph] of Object.entries(CHROME_GLYPHS)) add(glyph, name);
 
   return [...found].map(([glyph, names]) => ({ glyph, names }));

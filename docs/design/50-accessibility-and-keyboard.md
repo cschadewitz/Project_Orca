@@ -88,8 +88,11 @@ follows `prefers-color-scheme` unless the person has chosen one explicitly.
 
 The layout holds from 960px to 2560px. Below 1100px the docked panel becomes an overlay over
 the primary pane; below 960px the sidebar collapses to icons. There is no phone layout and
-none is planned. The five glyphs that rail collapses to were never designed — `surfaces.ts`
-invented them, and #261 is the decision to make about that.
+none is planned. The five glyphs that rail collapses to are designed and declared — they are
+`semantics.json`'s `surface` map, bundled in the symbol face and listed in
+`10-information-architecture.md` beside the surfaces they name (#261). Each button keeps its
+label as its accessible name and its `⌘1`–`⌘5` address at every width, so the rail loses the
+word on screen and nothing else.
 
 ## How this is enforced
 

@@ -210,6 +210,21 @@ export const STATE_VIEW_PRESENTATION: Record<StateViewKind, {
   'no-results': { word: 'no results', glyph: '◌', fg: 'var(--ink-tertiary)', fgToken: 'ink-tertiary' },
 };
 
+export type SurfaceId = 'attention' | 'runs' | 'plan' | 'agents' | 'config';
+export const SURFACE_IDS: readonly SurfaceId[] = ['attention', 'runs', 'plan', 'agents', 'config'] as const;
+/**
+ * The five top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
+ * Word and glyph are not optional: below the sidebar breakpoint the label is hidden and the
+ * glyph is the whole of the navigation, so the word stays on as the accessible name (#261).
+ */
+export const SURFACE_PRESENTATION: Record<SurfaceId, { word: string; glyph: string }> = {
+  attention: { word: 'Attention', glyph: '◆' },
+  runs: { word: 'Runs', glyph: '☰' },
+  plan: { word: 'Plan', glyph: '⬡' },
+  agents: { word: 'Agents', glyph: '◉' },
+  config: { word: 'Config', glyph: '❋' },
+};
+
 /** Glyphs the chrome renders that are not a state: the crumb separator and the command key. */
 export type ChromeGlyph = 'crumbSeparator' | 'commandKey';
 export const CHROME_GLYPHS: Record<ChromeGlyph, string> = {

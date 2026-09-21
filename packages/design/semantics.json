@@ -103,6 +103,33 @@
       "note": "Things exist, this filter matched none. The action clears the filter, never the data."
     }
   },
+  "surface": {
+    "attention": {
+      "word": "Attention",
+      "glyph": "◆",
+      "note": "The waiting glyph, on purpose: the surface for the things waiting on a person carries the same shape the waiting status does. Nothing else in the rail is a diamond."
+    },
+    "runs": {
+      "word": "Runs",
+      "glyph": "☰",
+      "note": "Three stacked bars — a list of runs. Not a play triangle: the surface is what is happening and what happened, never a control that starts one."
+    },
+    "plan": {
+      "word": "Plan",
+      "glyph": "⬡",
+      "note": "An outlined hexagon — a node in the dependency graph the surface draws."
+    },
+    "agents": {
+      "word": "Agents",
+      "glyph": "◉",
+      "note": "A ring around a filled centre: one who is doing the work. Solid ring, so it never reads as the half-filled running glyph."
+    },
+    "config": {
+      "word": "Config",
+      "glyph": "❋",
+      "note": "Radial, in the place a cog would sit: U+2699 is in no OFL face ORCA bundles, so a cog here would be the OS's drawing on every platform."
+    }
+  },
   "chrome": {
     "crumbSeparator": { "glyph": "▸", "note": "Between object-header crumbs. Decorative: aria-hidden." },
     "commandKey": { "glyph": "⌘", "note": "In keyboard hints, the command palette and menus." }

@@ -27,13 +27,23 @@ nothing else about the layout changes per platform.
 
 ## Five surfaces
 
-| Surface | What it answers | Phase |
-| --- | --- | --- |
-| **Attention** | What needs me right now | 1 |
-| **Runs** | What is happening and what happened | 1 |
-| **Plan** | What is coming, why it is not moving, what it depends on | 2 |
-| **Agents** | Who is doing the work and are they healthy | 1 read, 2 write |
-| **Config** | How the system is wired, and what the workflows are | 2 |
+| Surface | Glyph | What it answers | Phase |
+| --- | :---: | --- | --- |
+| **Attention** | ◆ | What needs me right now | 1 |
+| **Runs** | ☰ | What is happening and what happened | 1 |
+| **Plan** | ⬡ | What is coming, why it is not moving, what it depends on | 2 |
+| **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write |
+| **Config** | ❋ | How the system is wired, and what the workflows are | 2 |
+
+The glyph column is `semantics.json`'s `surface` map, bundled in the symbol face like every
+other glyph the app draws — it is never the OS's. It sits beside the label in the sidebar and
+becomes the whole of it below 960px, where the rail collapses (`50-accessibility-and-keyboard.md`),
+so the five are chosen to be told apart in greyscale at `--icon-md`: a solid diamond, three
+bars, a hollow hexagon, a ring round a dot, a radial burst. Attention carries the same ◆ the
+waiting status does, deliberately — the surface for what is waiting on a person is the one
+place that shape means the same thing twice. Config is radial rather than a cog because no
+OFL face ORCA bundles draws one (U+2699 is in neither Noto subset), and an OS cog would be a
+different drawing on each platform.
 
 Attention is a surface, not a notification tray: it is first in the sidebar, it has a
 permanent keyboard address (`⌘1`), and it is the app's landing screen. When nothing is waiting

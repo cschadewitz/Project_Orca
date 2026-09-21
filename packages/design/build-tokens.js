@@ -219,6 +219,17 @@ export const STATE_VIEW_PRESENTATION: Record<StateViewKind, {
 ${presentation(S.stateView, true)}
 };
 
+export type SurfaceId = ${union(Object.keys(S.surface))};
+export const SURFACE_IDS: readonly SurfaceId[] = [${Object.keys(S.surface).map(quote).join(", ")}] as const;
+/**
+ * The five top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
+ * Word and glyph are not optional: below the sidebar breakpoint the label is hidden and the
+ * glyph is the whole of the navigation, so the word stays on as the accessible name (#261).
+ */
+export const SURFACE_PRESENTATION: Record<SurfaceId, { word: string; glyph: string }> = {
+${presentation(S.surface, true)}
+};
+
 /** Glyphs the chrome renders that are not a state: the crumb separator and the command key. */
 export type ChromeGlyph = ${union(Object.keys(S.chrome))};
 export const CHROME_GLYPHS: Record<ChromeGlyph, string> = {
