@@ -99,18 +99,18 @@ const AUDITED = [
   },
   { id: "runs", shortcut: 2, ready: ".orca-runs__tree .orca-tree-row" },
   { id: "agents", shortcut: 4, ready: ".orca-agents__host .orca-agent" },
+  /* Config (#175): a field of the form, which only exists once `config.get` has answered
+     with a schema — the demo daemon serves its own `orca.config.yaml`, so there is one. */
+  { id: "config", shortcut: 5, ready: ".orca-config__form .orca-field" },
 ] as const;
 
 /**
- * Plan and Config, which are `StateView`s in v0.4.0 and are asserted as such below rather
- * than audited. A surface that says "this has not been built yet" would pass an axe run
- * and mean nothing by it; when one of them grows content, the assertion fails and whoever
- * built it moves the entry up into `AUDITED`.
+ * Plan, which is a `StateView` in v0.5.0 and is asserted as such below rather than audited.
+ * A surface that says "this has not been built yet" would pass an axe run and mean nothing
+ * by it; when it grows content, the assertion fails and whoever built it moves the entry up
+ * into `AUDITED` — which is what happened to Config in #175.
  */
-const UNBUILT = [
-  { id: "plan", shortcut: 3, label: "Plan" },
-  { id: "config", shortcut: 5, label: "Config" },
-] as const;
+const UNBUILT = [{ id: "plan", shortcut: 3, label: "Plan" }] as const;
 
 let daemon: Daemon;
 let app: ElectronApplication;
@@ -279,7 +279,7 @@ for (const surface of AUDITED) {
   }
 }
 
-test("Plan and Config are unbuilt, and are not being passed off as audited", async () => {
+test("Plan is unbuilt, and is not being passed off as audited", async () => {
   for (const surface of UNBUILT) {
     const pane = await gotoSurface(surface.id, surface.shortcut);
     /* `StateView kind="empty"`, with the surface's own label and the sentence `App.tsx`

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentUrl,
   artifactUrl,
+  configUrl,
   counterpartUrl,
   describeRoute,
   resolveRoute,
@@ -76,6 +77,19 @@ describe("resolveRoute", () => {
     });
   });
 
+  it("resolves the Config surface's two documents, the YAML being the bare URL", () => {
+    // "The configuration" means the YAML to everybody not thinking about ADR 0009; the
+    // sidecar is a different object and names itself (#175, #266).
+    expect(resolveRoute("orca://config")).toEqual({ kind: "config", surface: "config", document: "config" });
+    expect(resolveRoute("orca://config/permissions")).toEqual({
+      kind: "config",
+      surface: "config",
+      document: "permissions",
+    });
+    // Not a document: somebody expecting a link into the file, which this app does not have.
+    expect(resolveRoute("orca://config/agents")).toBeUndefined();
+  });
+
   it("answers nothing for a URL it does not know, rather than guessing a surface", () => {
     expect(resolveRoute("https://example.test/run/7f3a2c")).toBeUndefined();
     expect(resolveRoute("orca://nonsense/1")).toBeUndefined();
@@ -95,6 +109,8 @@ describe("resolveRoute", () => {
     expect(resolveRoute(artifactUrl("run_1", "spec.md"))).toMatchObject({ name: "spec.md", runId: "run_1" });
     expect(resolveRoute(workflowUrl("ai-sdlc"))).toMatchObject({ workflowId: "ai-sdlc" });
     expect(resolveRoute(agentUrl("claude-local"))).toMatchObject({ agentId: "claude-local" });
+    expect(resolveRoute(configUrl())).toMatchObject({ document: "config" });
+    expect(resolveRoute(configUrl("permissions"))).toMatchObject({ document: "permissions" });
   });
 
   it("survives an id with a slash or a space in it", () => {
@@ -116,9 +132,19 @@ describe("urlForCrumb", () => {
     expect(urlForCrumb(crumbs, crumbs[0]!)).toBe("orca://item/wi-1");
   });
 
+  it("addresses a config crumb by its document, which is what the Config surface shows", () => {
+    /* The crumb's id is an absolute path and would differ between two checkouts of one
+       repo, so the URL names the *document* instead — and the label is what says which. */
+    expect(urlForCrumb(crumbs, { type: "config", id: "/w/orca.config.yaml", label: "orca.config.yaml" })).toBe(
+      "orca://config",
+    );
+    expect(
+      urlForCrumb(crumbs, { type: "config", id: "/w/orca.permissions.json", label: "orca.permissions.json" }),
+    ).toBe("orca://config/permissions");
+  });
+
   it("answers nothing for a crumb type with no canonical form yet", () => {
     expect(urlForCrumb(crumbs, { type: "request", id: "req-1", label: "req-1" })).toBeUndefined();
-    expect(urlForCrumb(crumbs, { type: "config", id: "orca.config.yaml", label: "config" })).toBeUndefined();
     // A step with no run above it in the trail cannot be addressed at all.
     expect(urlForCrumb([], { type: "step", id: "s-1", label: "build" })).toBeUndefined();
   });
@@ -157,5 +183,10 @@ describe("describeRoute", () => {
     expect(describeRoute(resolveRoute("orca://artifact/spec.md")!)).toEqual({ type: "artifact", id: "spec.md" });
     expect(describeRoute(resolveRoute("orca://workflow/ai-sdlc")!)).toEqual({ type: "workflow", id: "ai-sdlc" });
     expect(describeRoute(resolveRoute("orca://agent/a1")!)).toEqual({ type: "agent", id: "a1" });
+    expect(describeRoute(resolveRoute("orca://config")!)).toEqual({ type: "document", id: "orca.config.yaml" });
+    expect(describeRoute(resolveRoute("orca://config/permissions")!)).toEqual({
+      type: "document",
+      id: "orca.permissions.json",
+    });
   });
 });

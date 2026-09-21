@@ -23,6 +23,7 @@ import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
 import { AgentsSurface } from "./agents/agents-surface.js";
+import { ConfigSurface } from "./config/config-surface.js";
 import { AttentionSurface } from "./attention/attention-surface.js";
 import { WorkflowSurface } from "./workflow/workflow-surface.js";
 import { useAttention } from "./attention/use-attention.js";
@@ -253,15 +254,23 @@ export function App(): JSX.Element {
           ) : activeSurface.id === "config" && route?.kind === "workflow" ? (
             /* The workflow viewer lands on Config, which is where the route table has always
                put `orca://workflow/…` — "how the system is wired, and what the workflows
-               are" (docs/design/10-information-architecture.md). Config's own screen is
-               #180; until it exists a person reaches a workflow by link, by the run header's
-               "the workflow it executes", or from the palette, and the surface with no
-               workflow named still says it has not been built. */
+               are" (docs/design/10-information-architecture.md). A person reaches a workflow
+               by link, by the run header's "the workflow it executes", or from the palette;
+               with no workflow named, Config shows its own two documents (#175). */
             <WorkflowSurface
               workflowId={route.workflowId}
               runId={route.runId}
               connection={connection.state}
               onHeader={onWorkflowHeader}
+            />
+          ) : activeSurface.id === "config" ? (
+            /* Its own header rather than the chrome's: the two documents Config shows are
+               its objects, and the segmented control that switches between the form and the
+               raw text is an action on the one in view (#175). A workflow route lands on the
+               viewer above (#177) rather than on a config document. */
+            <ConfigSurface
+              connection={connection.state}
+              {...(route?.kind === "config" ? { open: route.document } : {})}
             />
           ) : (
             <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />

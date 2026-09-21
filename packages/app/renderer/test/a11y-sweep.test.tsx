@@ -449,6 +449,43 @@ describe("Workflow: a graph read as a list, with the status first", () => {
   });
 });
 
+describe("Config: a form of named fields, and one region that speaks", () => {
+  it("names every field and its error without adding a live region of its own", async () => {
+    renderChrome(h);
+    await goTo("Config");
+    await screen.findByRole("region", { name: "Agents" });
+
+    /* Every control is reachable by its label, which is what `ConfigField` wiring the ids
+       is for: a form whose inputs are labelled by position is a form a screen reader reads
+       as a list of empty boxes. */
+    expect(screen.getByLabelText(/^Command/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Store dir/)).toBeTruthy();
+    // Both documents are named regions, told apart by the file they are.
+    expect(screen.getByRole("textbox", { name: "orca.permissions.json" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Permissions" })).toBeTruthy();
+
+    /* Nothing on this surface is a live region except the errors, which are `alert`s on
+       the field they belong to. The save's own sentence goes to the app's one announcer
+       (#175) rather than to a region this screen mounted. */
+    expect(document.querySelectorAll('.orca-config [aria-live="polite"]')).toHaveLength(0);
+    expect(announcers()).toHaveLength(1);
+  });
+
+  it("says a save happened in the app's one region, from the surface that did it", async () => {
+    renderChrome(h);
+    await goTo("Config");
+    const command = await screen.findByLabelText(/^Command/);
+    const announcer = announcers()[0]!;
+
+    fireEvent.change(command, { target: { value: "claude-code-next" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+
+    // The same element the run transitions come out of: one region, two kinds of sentence.
+    await waitFor(() => expect(announcer.textContent).toBe("Config saved"));
+    expect(announcers()).toHaveLength(1);
+  });
+});
+
 /* ---------- the frames the announcer is fed ---------- */
 
 const ENVELOPE = { subscriptionId: "sub-1", runId: "run-parent", seq: 7, at: "2026-03-01T09:00:07.000Z" } as const;

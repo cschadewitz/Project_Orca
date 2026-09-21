@@ -26,7 +26,13 @@
  *   Config's own screen is #180.
  * - **`orca://agent/<id>`** is added: the Agents surface shipped in v0.4.0 and the palette
  *   lists agents, and every palette entry has to return a canonical URL.
+ * - **`orca://config` and `orca://config/permissions`** are added with the Config surface
+ *   (#175). The surface shows two documents, and a link to "the permission sidecar" is a
+ *   link to a different object than "the configuration" — so the document is the path,
+ *   defaulting to the YAML. There is no third form: a link to one *field* would be a link
+ *   into a file whose keys change, and the palette's config rows name documents.
  */
+import type { ConfigDocument } from "@orca/protocol";
 import type { SurfaceId } from "./chrome/surfaces.js";
 import type { Crumb, CrumbType } from "./ui/index.js";
 
@@ -50,7 +56,8 @@ export type Route =
   | { kind: "item"; surface: "plan"; itemId: string }
   | { kind: "artifact"; surface: "runs"; name: string; version?: number; runId?: string }
   | { kind: "workflow"; surface: "config"; workflowId: string; runId?: string }
-  | { kind: "agent"; surface: "agents"; agentId: string };
+  | { kind: "agent"; surface: "agents"; agentId: string }
+  | { kind: "config"; surface: "config"; document: ConfigDocument };
 
 /** `build.2` — the node, and the attempt when one is named. */
 function parseStep(segment: string): StepAddress {
@@ -121,6 +128,15 @@ export function resolveRoute(url: string): Route | undefined {
         : { kind: "workflow", surface: "config", workflowId: first, ...(run !== undefined ? { runId: run } : {}) };
     case "agent":
       return first === undefined ? undefined : { kind: "agent", surface: "agents", agentId: first };
+    case "config":
+      /* The bare URL is the YAML, which is what "the configuration" means to everybody who
+         is not thinking about ADR 0009. An unrecognised second segment resolves to nothing
+         rather than silently landing on the YAML: `orca://config/agents` is somebody
+         expecting a link this app does not have. */
+      if (first === undefined) return { kind: "config", surface: "config", document: "config" };
+      return first === "permissions" || first === "config"
+        ? { kind: "config", surface: "config", document: first }
+        : undefined;
     default:
       return undefined;
   }
@@ -144,6 +160,10 @@ export const itemUrl = (itemId: string): string => path("item", itemId);
 
 export const agentUrl = (agentId: string): string => path("agent", agentId);
 
+/** The Config surface. The YAML is the bare URL; the ADR 0009 sidecar names itself. */
+export const configUrl = (document: ConfigDocument = "config"): string =>
+  document === "config" ? "orca://config" : path("config", document);
+
 /**
  * An artifact always carries its run. A version is monotonic per (run, name), so
  * `spec.md@v3` on its own names as many artifacts as there are runs that produced one.
@@ -163,9 +183,9 @@ export const workflowUrl = (workflowId: string, runId?: string): string =>
  * A step crumb is the one that cannot be written as a link from the crumb alone: its id is
  * a step *run* id and the canonical form is node-and-attempt within a run, so the run's
  * crumb has to be in hand — which it always is, because the trail is request ▸ item ▸ run ▸
- * step and a step crumb never appears without the run above it. Config and agent crumbs
- * have no addressable form yet and answer undefined, which is what leaves them plain text
- * rather than a link that goes nowhere.
+ * step and a step crumb never appears without the run above it. A crumb type with no
+ * canonical URL answers undefined, which is what leaves it plain text rather than a link
+ * that goes nowhere — `request` is the only one left, because nothing addresses a request.
  */
 export function urlForCrumb(crumbs: readonly Crumb[], crumb: Crumb): string | undefined {
   const runId = crumbs.find((c) => c.type === "run")?.id;
@@ -174,6 +194,10 @@ export function urlForCrumb(crumbs: readonly Crumb[], crumb: Crumb): string | un
     item: () => itemUrl(crumb.id),
     workflow: () => workflowUrl(crumb.id),
     agent: () => agentUrl(crumb.id),
+    /* The Config surface's crumb is one of its two documents, and the crumb's label is the
+       file name — which is how the sidecar is told from the YAML without putting an
+       absolute path in a URL that would then differ between two checkouts of one repo. */
+    config: () => configUrl(crumb.label.endsWith(".json") ? "permissions" : "config"),
     // The label is the node id (`runs-surface.tsx` builds the crumb from `StepView.nodeId`),
     // and the attempt is already part of that label where there is more than one.
     step: () => (runId === undefined ? undefined : stepUrl(runId, crumb.label)),
@@ -242,5 +266,9 @@ export function describeRoute(route: Route): { type: string; id: string } {
       return { type: "workflow", id: route.workflowId };
     case "agent":
       return { type: "agent", id: route.agentId };
+    case "config":
+      return route.document === "permissions"
+        ? { type: "document", id: "orca.permissions.json" }
+        : { type: "document", id: "orca.config.yaml" };
   }
 }

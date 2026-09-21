@@ -113,6 +113,21 @@ describe("deep links", () => {
     await waitFor(() => expect(landing()).toBeUndefined());
   });
 
+  it("lands a config link on the document it names", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+
+    fake.link("orca://config/permissions");
+
+    await waitFor(() => expect(activeSurface()).toContain("Config"));
+    // The sidecar has the keyboard: landing on a document means being in it, and a person
+    // who followed that link did not ask for the YAML.
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("orca.permissions.json"),
+    );
+    expect(landing()?.textContent).toContain("orca.permissions.json");
+  });
+
   it("lands an item link on Plan, whose surface is not built yet", async () => {
     const { fake } = mount();
     await screen.findByRole("button", { name: "Attention" });
