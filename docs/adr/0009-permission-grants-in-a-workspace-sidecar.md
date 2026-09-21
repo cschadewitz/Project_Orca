@@ -71,6 +71,17 @@ no `permissions:` — or leaves `default:` unset — now gets `DEFAULT_PERMISSIO
 appended *after* its own rules. Nothing above changes: the defaults are ordinary rules, so
 configuration is still matched before the sidecar and a configured `deny` still wins.
 
+**2026‑09‑21 (#266):** the sidecar is now readable and editable over the protocol.
+`config.get` returns it as a second document beside `orca.config.yaml` — its own path, its
+own content‑hash revision, its raw text — together with the effective policy per agent, in
+`layerPermissionPolicies`' evaluation order, each rule labelled with the document it came
+from; `config.set` writes it through `replacePermissionPolicyFile` in `@orca/agents`, under
+the same `link()` lock and in the same fixed key order a machine write uses, so an
+operator's edit and a run answering "always" both land. A document carrying a `default` is
+refused rather than stripped, which is this ADR's central rule stated at the moment somebody
+tries the opposite. Nothing above changes: the file, the layering and the writer are the
+ones decided here, and what is new is only that a client can see them.
+
 ## Consequences
 + The hand‑written half of the config stays hand‑written. Nothing appends to the Nth element
   of a curated `agents:` array, so a machine write can never collide with a human edit.

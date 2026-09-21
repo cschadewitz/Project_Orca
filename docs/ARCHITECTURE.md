@@ -47,7 +47,19 @@ it depends on `engine` and `store` to project them, and `cli` starts one with `o
 Since v0.4.0 that daemon is a **writer**, not a reader: it drives runs under a single‑writer
 lease of its own (`orca-serve@<host>:<pid>`), advertises the `runs.control` capability, and
 answers `inputs.answer`, `runs.resume`, `runs.cancel` and `runs.start` as well as the read
-methods. `orca serve --read-only` opts back out, and then those methods are *absent* from
+methods (`runs.list`, `runs.get`, `runs.events`, `inputs.list`, `claims.list`,
+`artifacts.list`, `artifacts.get`, `config.get`) and the agent methods (`agents.list`,
+`agents.ping`). Since v0.5.0 it also serves the workspace's **configuration**: `config.get`
+returns both documents — `orca.config.yaml` and the ADR 0009 permission sidecar
+`orca.permissions.json` — each with its own path, raw text and content-hash revision, plus a
+description of the config schema a form can render and the effective permission policy the
+two layer up to; `config.set` writes exactly one of them, refusing a stale revision with
+`CONFIG_STALE`, editing the YAML through the comment-preserving `yaml` `Document` rather than
+re-serialising it, and routing a sidecar write through `@orca/agents`' `link()` lock so an
+operator's edit and a run answering "always" both land (#174, #266). Writing the config
+reloads nothing: the orchestrator goes on serving the configuration it booted with, and a
+`config.set` while a run is in flight takes no lease and appends no event. `config.changed`
+is pushed to store-wide subscribers by both writers. `orca serve --read-only` opts back out, and then those methods are *absent* from
 `hello.methods` rather than present and refusing — which is what makes "can this client
 write" a question about the handshake rather than about a failed call. The lease is the
 guard against a second writer; it is not access control, and any local process can reach the
