@@ -28,10 +28,43 @@
  */
 import { z } from "zod";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
-import { PermissionDecisionSchema, PermissionRuleSchema } from "@orca/core/schemas";
+import { PermissionDecisionSchema, PermissionRuleSchema, ToolKindSchema } from "@orca/core/schemas";
 
 export const CONFIG_GET_METHOD = "config.get";
 export const CONFIG_SET_METHOD = "config.set";
+
+/**
+ * The sidecar document itself, as a client composes it for `config.set { document:
+ * "permissions", text }` (#176).
+ *
+ * Re-exported from `@orca/core` rather than restated here. The daemon validates the bytes a
+ * client sends through `replacePermissionPolicyFile`, which parses against *this* schema, so
+ * a second spelling of the shape in the protocol would be a second answer to "is this a
+ * valid sidecar" and the two would drift on the first field either of them gained. What the
+ * wire adds over the file is nothing: the sidecar is a document, not a message.
+ *
+ * Note the file's central rule is enforced at the daemon, not here: `PermissionPolicyFile`
+ * has no `default` field, and a document carrying one is *refused* by the writer rather than
+ * stripped (ADR 0009, #266). An editor must therefore never offer one.
+ */
+export {
+  PermissionPolicyFileSchema,
+  RecordedPermissionRuleSchema,
+  PERMISSION_POLICY_FILENAME,
+} from "@orca/core/schemas";
+export type { PermissionPolicyFile, RecordedPermissionRule } from "@orca/core/schemas";
+
+/**
+ * The ten ACP tool kinds and the three decisions, as arrays rather than as a type.
+ *
+ * A form that edits a permission rule has to *draw* the choices, and a renderer may not
+ * import `@orca/core` to get at `ToolKindSchema` (ADR 0008: the app imports `@orca/protocol`
+ * and `@orca/design` and nothing else). These are the schemas' own option lists, so a kind
+ * added to the vocabulary appears in the control without this line being edited — and a
+ * client that hard-coded ten strings could not say the same.
+ */
+export const TOOL_KINDS = ToolKindSchema.options;
+export const PERMISSION_DECISIONS = PermissionDecisionSchema.options;
 
 /**
  * Which of the workspace's two configuration documents. `config` is `orca.config.yaml` (or
