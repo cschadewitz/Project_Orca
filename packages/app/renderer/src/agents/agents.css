@@ -6,22 +6,25 @@
    groups stack in, the grid the cards sit in, and the two blocks the card grows below its
    roles row.
 
-   One class here is not this surface's and should not be: `.orca-agents__health` is the
-   glyph-and-word the card leads with, and the component layer has no class for it —
-   `.orca-agent--degraded` tints the border but nothing carries the state's own foreground.
-   It is written from the same tokens `AGENT_HEALTH_PRESENTATION` names, so the two cannot
-   drift in value, but it belongs in `components.css` as `.orca-agent__health` next to
-   `.orca-agent__name`. Reported rather than edited (packages/design is not this change's).
+   The glyph-and-word the card leads with used to be `.orca-agents__health`, written here
+   because the component layer had no class for it. It is `.orca-agent__health` in
+   `components.css` now, next to `.orca-agent__name` where the rest of the card is (#278).
 
    Widths are in `ch` where they are columns of text: a ratio to the font already chosen
    rather than a design decision of its own (tools/eslint-config/css-tokens.js). */
 
+/* The root is bounded and does not scroll: this surface is a split layout, not a stack of
+   content, so each of its columns scrolls for itself (AGENTS.md, "Say where your screen
+   scrolls"). The root carried `overflow-y: auto` until #277 measured it in a 340px window
+   and found it scrolling a box the content was no longer in — `.orca-agents__split` is
+   `flex: 1` against a bounded column, so it shrank to the window while the cards inside it
+   spilled out below its bottom edge, and the root's scrollbar then moved a split whose
+   content had already left it. */
 .orca-agents {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
 }
 
 .orca-agents__summary {
@@ -32,11 +35,16 @@
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
 
+/* The cards column, and the region that scrolls: the long thing on this screen is the
+   stack of host sections and the claims below them, and the policy inspector beside it
+   scrolls on its own (`config/policy.css`). The summary above stays put, which is what a
+   count of what is on screen is for. */
 .orca-agents__body {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
   padding: var(--space-4);
+  overflow-y: auto;
 }
 
 /* ---------- one host, and its agents ---------- */
@@ -80,28 +88,6 @@
 }
 
 /* ---------- inside a card ---------- */
-
-/* The state, never colour alone (rule 4): the glyph and the word travel together and the
-   card's tinted border is the third channel. See the note at the top of this file.
-   type: caption */
-.orca-agents__health {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-1);
-  white-space: nowrap;
-}
-.orca-agents__health--unknown {
-  color: var(--ink-tertiary);
-}
-.orca-agents__health--ok {
-  color: var(--status-succeeded);
-}
-.orca-agents__health--degraded {
-  color: var(--status-waiting);
-}
-.orca-agents__health--down {
-  color: var(--status-failed);
-}
 
 /* The metric block spans the card, under the roles: `.orca-agent` is a three-column grid and
    these are label/value pairs rather than a fourth column. */

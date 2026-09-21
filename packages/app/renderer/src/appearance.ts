@@ -44,6 +44,18 @@ export interface Appearance {
    * applies it through `panes.ts` and this persists it (#276).
    */
   set: (patch: PreferencesPatch) => void;
+  /**
+   * Hear about a change, whoever made it. Returns the unsubscribe.
+   *
+   * There are now three ways the same preference is changed from three places — a shortcut,
+   * the Config surface's preferences section, and (for a pane) the splitter standing on the
+   * boundary — and two of them are on screen at once. A theme or a density can be watched
+   * as an attribute, because the document is where those land; a pane size lands on a custom
+   * property on one container that nobody else can find, so "the sidebar is 400px" has no
+   * reader unless this says so (#280). One announcement rather than a store: what is
+   * current is still `preferences()`, and this only says to go and look again.
+   */
+  subscribe: (listener: () => void) => () => void;
   dispose: () => void;
 }
 
@@ -53,6 +65,8 @@ export const TOGGLE_DENSITY_KEY = "Mod+Shift+D";
 export function installAppearance(win: Window, store: AppearanceStore, keyboard: KeyboardMap): Appearance {
   const doc = win.document;
   let current = store.read();
+  const listeners = new Set<() => void>();
+  const announce = () => listeners.forEach((listener) => listener());
 
   applyTheme(doc.documentElement, current.theme);
   applyDensities(doc, current.density);
@@ -73,6 +87,7 @@ export function installAppearance(win: Window, store: AppearanceStore, keyboard:
     current = { ...current, theme };
     applyTheme(doc.documentElement, theme);
     persist({ theme });
+    announce();
   };
 
   const toggle = () => {
@@ -81,6 +96,7 @@ export function installAppearance(win: Window, store: AppearanceStore, keyboard:
     const density = toggleDensity(surface);
     current = { ...current, density: { ...current.density, [surfaceId(surface)]: density } };
     persist({ density: { [surfaceId(surface)]: density } });
+    announce();
   };
 
   const unregister = [
@@ -121,7 +137,29 @@ export function installAppearance(win: Window, store: AppearanceStore, keyboard:
     if (patch.theme !== undefined) applyTheme(doc.documentElement, patch.theme);
     if (patch.density !== undefined) applyDensities(doc, current.density);
     persist(patch);
+    announce();
   };
+
+  /* Keyless, deliberately (#205): the recovery action for a thing a person can do by
+     *accident*. A pane width is the one remembered appearance a drag can set without anybody
+     meaning to, and the only other way back is `Enter` or a double-click on the boundary
+     itself, which nobody has been told. A command worth having and not worth one of the
+     letters left belongs in the palette with no chip beside it (#280). */
+  /** Forget every remembered boundary at once — a deletion each, never a write of a default. */
+  const restorePanes = () => {
+    const remembered = Object.keys(current.panes);
+    if (remembered.length === 0) return;
+    set({ panes: Object.fromEntries(remembered.map((id) => [id, null])) });
+  };
+
+  unregister.push(
+    keyboard.register({
+      scope: "global",
+      label: "Restore the pane widths",
+      detail: "Put every boundary you have dragged back where the design had it.",
+      action: restorePanes,
+    }),
+  );
 
   return {
     refresh: (scope = doc) => applyDensities(scope, current.density),
@@ -129,6 +167,13 @@ export function installAppearance(win: Window, store: AppearanceStore, keyboard:
     toggleDensity: toggle,
     preferences: () => current,
     set,
-    dispose: () => unregister.forEach((u) => u()),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    dispose: () => {
+      unregister.forEach((u) => u());
+      listeners.clear();
+    },
   };
 }

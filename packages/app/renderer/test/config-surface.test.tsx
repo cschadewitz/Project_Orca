@@ -457,6 +457,46 @@ describe("app preferences", () => {
     await waitFor(() => expect(theme()).toBe(window.orca.preferences.read().theme));
     expect(theme()).not.toBe("system");
   });
+
+  /**
+   * The third remembered appearance, and the one a person can set by *accident* (#280). A
+   * theme and a density are chosen from a menu; a pane width is a drag, and the only other
+   * way back to the design's default is `Enter` or a double-click on the boundary itself.
+   */
+  it("lists a boundary once it has been dragged, and nothing while every one is at its default", async () => {
+    renderConfig();
+    const section = await screen.findByRole("region", { name: "App preferences" });
+    await act(async () => {});
+
+    /* Nothing dragged, so nothing listed: five rows all reading "default" would be five rows
+       saying nothing, and would bury the theme and the densities that are worth reading. */
+    expect(within(section).queryByText("Sidebar size")).toBeNull();
+    expect(within(section).queryByRole("button", { name: /^Restore/ })).toBeNull();
+
+    act(() => h.appearance.set({ panes: { sidebar: 400 } }));
+
+    expect(within(section).getByText("Sidebar size")).toBeTruthy();
+    expect(within(section).getByText("400px")).toBeTruthy();
+
+    fireEvent.click(within(section).getByRole("button", { name: "Restore the sidebar" }));
+
+    /* A deletion rather than a write of the token's value: `panes` holds only what somebody
+       chose, so absent is what "default" means and the next change to the token reaches here. */
+    await waitFor(() => expect(window.orca.preferences.read().panes.sidebar).toBeUndefined());
+    expect(within(section).queryByText("Sidebar size")).toBeNull();
+  });
+
+  it("says a stacked boundary as the share of its column it is, because that is what is kept", async () => {
+    renderConfig();
+    const section = await screen.findByRole("region", { name: "App preferences" });
+    await act(async () => {});
+
+    act(() => h.appearance.set({ panes: { "runs-tree": 0.42 } }));
+
+    /* Not a px count (#281): the run tree's size is a ratio, and reporting it in px would be
+       inventing a window height — the very thing storing it as a ratio exists to avoid. */
+    expect(within(section).getByText("42% of its column")).toBeTruthy();
+  });
 });
 
 describe("what the form says out loud, and what it does not", () => {

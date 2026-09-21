@@ -424,6 +424,16 @@ is content to find. Through v0.4.0 a surface with no screen yet was asserted to 
 moved it into `AUDITED` — the trip Config made in #175 and Plan in #170. As of v0.5.0 the
 list is full; a new surface starts in that unbuilt assertion again.
 
+It is also the only place **scrolling can be measured** (#277). The renderer's
+`scroll-sweep.test.tsx` runs under happy-dom, which has no layout engine, so it can assert
+that a surface *declares* a scroll region and no more. This spec shrinks the window to
+1280×340 — too short for any surface — and asserts that the box which should scroll actually
+overflows, that it takes a scroll to its end, and that its last child is on screen when it
+gets there, for every surface and for the docked panel with the Plan inspector in it. A rule
+that takes its height from somewhere unexpected passes the sweep and still hides content;
+this is what finds it. The window is put back to 1200×800 afterwards, because the specs after
+it are written against the size the main process opens.
+
 The type‑proof baselines are the other thing to expect red: #261 replaced the app's
 placeholder surface glyphs with five designed ones in the symbol face, and `#type` draws the
 declared glyphs, so the committed pictures no longer match. They cannot be regenerated on one

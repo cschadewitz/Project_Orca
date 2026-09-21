@@ -11,7 +11,7 @@
  * boundaries the app actually offers.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, type RenderResult } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, type RenderResult } from "@testing-library/react";
 import type { JSX } from "react";
 import { PaneSplitter } from "../src/chrome/pane-splitter.js";
 import { PANE_BOUNDARIES, type PaneId } from "../src/panes.js";
@@ -93,7 +93,10 @@ function Host({ boundary, extent, pane }: HostProps): JSX.Element {
   );
 }
 
-function mount(props: HostProps, panes: Record<string, number> = {}): ReturnType<typeof recordingStore> {
+function mount(
+  props: HostProps,
+  panes: Record<string, number> = {},
+): ReturnType<typeof recordingStore> & { appearance: Harness["appearance"] } {
   const recorder = recordingStore(panes);
   const h = harness("darwin", recorder.store);
   teardown.push(h.dispose);
@@ -102,7 +105,7 @@ function mount(props: HostProps, panes: Record<string, number> = {}): ReturnType
       <Host {...props} />
     </h.Providers>,
   );
-  return recorder;
+  return { ...recorder, appearance: h.appearance };
 }
 
 const host = (): HTMLElement => screen.getByTestId("host");
@@ -172,7 +175,25 @@ describe("resizing from the keyboard", () => {
     expect(prefs.writes).toEqual([]);
 
     fireEvent.keyDown(splitter(), { key: "ArrowDown" });
-    expect(applied("runs-tree")).toBe("336px");
+    /* A percentage, not a length: this is the one boundary whose size is a ratio of its
+       container, so 336 of the container's 800 is applied as 42% and remembered as 0.42 —
+       which is what makes the split travel between two window heights (#281). */
+    expect(applied("runs-tree")).toBe("42.00%");
+    expect(prefs.writes).toEqual([{ panes: { "runs-tree": 0.42 } }]);
+    // The separator still counts in px, because px is what it moves in.
+    expect(splitter().getAttribute("aria-valuenow")).toBe("336");
+  });
+
+  it("brings a remembered ratio back as the same share of a container of another height", () => {
+    // 0.4 of 800 is 320; the same preference on a 500px column is 200, not 320 clamped.
+    mount({ boundary: "runs-tree", extent: 800, pane: 320 }, { "runs-tree": 0.4 });
+    expect(applied("runs-tree")).toBe("40.00%");
+    expect(splitter().getAttribute("aria-valuenow")).toBe("320");
+
+    cleanup();
+    mount({ boundary: "runs-tree", extent: 500, pane: 200 }, { "runs-tree": 0.4 });
+    expect(applied("runs-tree")).toBe("40.00%");
+    expect(splitter().getAttribute("aria-valuenow")).toBe("200");
   });
 
   it("will not step past the floor, however many times it is pressed", () => {
@@ -205,6 +226,19 @@ describe("back to the default", () => {
 
     expect(applied("panel")).toBe("");
     expect(prefs.writes).toEqual([{ panes: { panel: null } }]);
+  });
+
+  it("moves when the boundary is restored from somewhere else in the app", () => {
+    /* The Config surface's preferences section lists what has been dragged and offers a
+       restore, and the palette has a command that forgets all of them (#280). Both go
+       through `appearance.set`, which is not this component's state — so the line has to
+       move on an announcement, or the file would say "default" while the pane stayed wide. */
+    const prefs = mount({ boundary: "panel", extent: 1400, pane: 420 }, { panel: 600 });
+    expect(applied("panel")).toBe("600px");
+
+    act(() => prefs.appearance.set({ panes: { panel: null } }));
+
+    expect(applied("panel")).toBe("");
   });
 });
 

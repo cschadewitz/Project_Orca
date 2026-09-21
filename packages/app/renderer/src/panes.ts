@@ -16,6 +16,13 @@
  * Two boundaries share an id on purpose: the docked panel and the workflow node inspector are
  * the same kind of column, and one remembered width for both is the same decision the
  * `panel-width` token already made.
+ *
+ * **A size is not always a length.** A boundary says which of the two it is (`PaneSizeKind`,
+ * #281): the four column boundaries are remembered in px, and the one stacked boundary is
+ * remembered as a fraction of its container, because a ratio is what a person chooses there
+ * and a ratio is the only thing that travels between two window heights. Everything in
+ * between — the drag, the arrow keys, the clamp, the separator's `aria-valuenow` — is px
+ * either way; the conversion happens at the two edges, `panePreferenceOf` and `panePx`.
  */
 import { PANE_GEOMETRY, type SizeToken } from "@orca/design";
 
@@ -36,11 +43,32 @@ export type PaneOrientation = "vertical" | "horizontal";
  */
 export type PaneEdge = "leading" | "trailing";
 
+/**
+ * Whether the boundary's size is **a length or a ratio** — which is the difference between a
+ * pane sized to what it holds and two halves of one column (#281).
+ *
+ * A `length` is right for a boundary between two *columns*: a side pane holds a line of
+ * output or a rule sentence, and 520px means the same thing on a laptop and on a 34" display.
+ * It is wrong for a stacked boundary, where neither half is sized to its content and what a
+ * person chooses is "more tree than timeline" — remembered as a length, a tree dragged to
+ * 600px on a tall monitor arrives as most of the column on a laptop.
+ *
+ * The distinction is only about what is **remembered and applied**: a `fraction` boundary is
+ * still dragged, stepped and clamped in px against its container, because px is what a
+ * pointer moves in and what `aria-valuemin`/`max` are stated in. It is converted on the way
+ * into the preference and back out of it (`panePreferenceOf`, `panePx`).
+ */
+export type PaneSizeKind = "length" | "fraction";
+
 export interface PaneBoundary {
   /** The custom property the size is written to, and the one the stylesheet reads. */
   readonly property: string;
+  /** What the person resizing it would call the two panes, for a list of what is remembered. */
+  readonly label: string;
   /** The size token the stylesheet falls back to; `undefined` where the default is a fraction. */
   readonly token: SizeToken | undefined;
+  /** A length in px, or a ratio of the container. See `PaneSizeKind`. */
+  readonly size: PaneSizeKind;
   readonly orientation: PaneOrientation;
   readonly edge: PaneEdge;
   /** The floor for the sized pane, and the floor the pane opposite keeps for itself. */
@@ -52,7 +80,9 @@ export interface PaneBoundary {
 export const PANE_BOUNDARIES: Readonly<Record<PaneId, PaneBoundary>> = {
   sidebar: {
     property: "--pane-sidebar",
+    label: "Sidebar",
     token: "sidebar-width",
+    size: "length",
     orientation: "vertical",
     edge: "leading",
     min: PANE_GEOMETRY["pane-min-sidebar"],
@@ -60,7 +90,9 @@ export const PANE_BOUNDARIES: Readonly<Record<PaneId, PaneBoundary>> = {
   },
   panel: {
     property: "--pane-panel",
+    label: "Docked panel",
     token: "panel-width",
+    size: "length",
     orientation: "vertical",
     edge: "trailing",
     min: PANE_GEOMETRY["pane-min-side"],
@@ -68,7 +100,9 @@ export const PANE_BOUNDARIES: Readonly<Record<PaneId, PaneBoundary>> = {
   },
   "runs-detail": {
     property: "--pane-runs-detail",
+    label: "Step detail",
     token: "panel-width",
+    size: "length",
     orientation: "vertical",
     edge: "trailing",
     min: PANE_GEOMETRY["pane-min-side"],
@@ -78,10 +112,14 @@ export const PANE_BOUNDARIES: Readonly<Record<PaneId, PaneBoundary>> = {
      of the left column is a fraction of it (`2fr` against the timeline's `3fr`), which is not
      a length and cannot be one — a default height in pixels would be wrong at every window
      size. So the fallback is in the stylesheet and there is no ceiling here; the container is
-     the ceiling. */
+     the ceiling. And what is remembered is a fraction for the same reason the default is one:
+     the two halves are not sized to what they hold, so what a person chose is a ratio and it
+     has to travel between a tall monitor and a laptop (#281). */
   "runs-tree": {
     property: "--pane-runs-tree",
+    label: "Run tree",
     token: undefined,
+    size: "fraction",
     orientation: "horizontal",
     edge: "leading",
     min: PANE_GEOMETRY["pane-min-stack"],
@@ -89,7 +127,9 @@ export const PANE_BOUNDARIES: Readonly<Record<PaneId, PaneBoundary>> = {
   },
   "plan-rail": {
     property: "--pane-plan-rail",
+    label: "Requests rail",
     token: "sidebar-width",
+    size: "length",
     orientation: "vertical",
     edge: "leading",
     min: PANE_GEOMETRY["pane-min-sidebar"],
@@ -154,19 +194,82 @@ export function paneExtent(container: Element, boundary: PaneBoundary): number {
 }
 
 /**
+ * A fraction is kept strictly inside `(0, 1)`, and to four places.
+ *
+ * Strictly, because a boundary at `0` or `1` is a pane that is not there and the preferences
+ * schema rejects both — and because `clampPaneSize` can return a floor larger than the
+ * container when the window is too small for two panes, which would otherwise be remembered
+ * as "more than all of it". Four places is a tenth of a pixel on a 1000px column, which is
+ * finer than anything a person can drag to and short enough to read in a JSON file.
+ */
+const FRACTION_EPSILON = 0.0001;
+
+function asFraction(ratio: number): number {
+  const rounded = Math.round(ratio * 10_000) / 10_000;
+  return Math.min(1 - FRACTION_EPSILON, Math.max(FRACTION_EPSILON, rounded));
+}
+
+/**
+ * The px a remembered preference means, in a container of `extent` along the axis.
+ *
+ * `undefined` for a fractional boundary whose container has not been laid out: a ratio of a
+ * container of nothing is not a length, and the honest answer there is "not yet" rather than
+ * zero. A length boundary needs no container and so never answers that.
+ */
+export function panePx(boundary: PaneBoundary, preference: number | undefined, extent: number): number | undefined {
+  if (preference === undefined) return undefined;
+  if (boundary.size === "length") return preference;
+  return extent > 0 ? preference * extent : undefined;
+}
+
+/** The preference a px size is remembered as: a whole number of px, or a fraction of the container. */
+export function panePreferenceOf(boundary: PaneBoundary, size: number, extent: number): number | undefined {
+  if (boundary.size === "length") return Math.round(size);
+  return extent > 0 ? asFraction(size / extent) : undefined;
+}
+
+/**
+ * The CSS a px size is written as for this boundary: a length, or a **percentage** of the
+ * container. The percentage is the point of a fractional boundary — a track of `42%` keeps
+ * the ratio through every window height, where a track of `336px` is a different split at
+ * each one (#281).
+ */
+export function paneSizeValue(boundary: PaneBoundary, size: number, extent: number): string | undefined {
+  if (boundary.size === "length") return `${Math.round(size)}px`;
+  const fraction = panePreferenceOf(boundary, size, extent);
+  return fraction === undefined ? undefined : `${(fraction * 100).toFixed(2)}%`;
+}
+
+/**
  * Write a size onto the container, or hand the boundary back to its default by removing the
  * property. The only code that touches a `--pane-*` property, as `density.ts` is the only code
  * that touches `data-density`.
+ *
+ * `size` is px, always, whatever the boundary remembers — the drag and the arrow keys work in
+ * one unit. A fractional boundary with no container to be a fraction of writes nothing, which
+ * leaves the stylesheet's own `2fr` in place: the default is the right answer until there is
+ * something to measure against.
  */
-export function applyPaneSize(container: HTMLElement, boundary: PaneBoundary, size: number | undefined): void {
-  if (size === undefined) container.style.removeProperty(boundary.property);
-  else container.style.setProperty(boundary.property, `${Math.round(size)}px`);
+export function applyPaneSize(
+  container: HTMLElement,
+  boundary: PaneBoundary,
+  size: number | undefined,
+  extent = 0,
+): void {
+  const value = size === undefined ? undefined : paneSizeValue(boundary, size, extent);
+  if (value === undefined) container.style.removeProperty(boundary.property);
+  else container.style.setProperty(boundary.property, value);
 }
 
-/** What is applied to the container right now, or `undefined` while it is at its default. */
-export function readPaneSize(container: HTMLElement, boundary: PaneBoundary): number | undefined {
-  const value = container.style.getPropertyValue(boundary.property);
+/**
+ * What is applied to the container right now in px, or `undefined` while it is at its default.
+ * A percentage needs the same `extent` it was written against to be read back as a length.
+ */
+export function readPaneSize(container: HTMLElement, boundary: PaneBoundary, extent = 0): number | undefined {
+  const value = container.style.getPropertyValue(boundary.property).trim();
   if (value === "") return undefined;
-  const px = Number.parseFloat(value);
-  return Number.isFinite(px) ? px : undefined;
+  const number = Number.parseFloat(value);
+  if (!Number.isFinite(number)) return undefined;
+  if (!value.endsWith("%")) return number;
+  return extent > 0 ? (number / 100) * extent : undefined;
 }

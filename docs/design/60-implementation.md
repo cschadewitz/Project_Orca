@@ -84,7 +84,21 @@ of boundaries and the clamp, and is the only code that writes a `--pane-*` prope
 `chrome/pane-splitter.tsx` is the control over it, and it goes in the **shell** rather than in a
 surface, so a surface that lands later inherits a resizable edge instead of inventing one.
 
-Four rules it keeps:
+**A size is not always a length (#281).** Four of the five boundaries are between two
+*columns*, and a column is sized to what it holds — a line of output, a rule sentence — so
+520px means the same thing on a laptop and on a 34" display. The run tree over the event
+timeline is not that: its default is deliberately a fraction (`minmax(0, 2fr)` against the
+timeline's `3fr`), because neither half is sized to its content and what a person chooses is a
+**ratio**, "more tree than timeline". So a boundary in the registry says which of the two its
+size is, and the stacked one says fraction: its preference is a number between 0 and 1, what is
+written to `--pane-runs-tree` is a percentage rather than a length, and a split chosen on a tall
+monitor arrives as the same split on a laptop. Everything between the two ends stays px — the
+drag, the arrow keys, the clamp, and `aria-valuenow`/`min`/`max`, because px is what the
+separator moves in — and the conversion happens at the two edges only (`panePreferenceOf`,
+`panePx`). The next stacked split the roadmap implies (the risk matrix over its detail, #172;
+the decision log, #173) arrives with this answered.
+
+Five rules it keeps:
 
 - **Limits are tokens, not numbers in the component.** `--pane-min-sidebar`, `--pane-max-side`
   and the rest, emitted as `PANE_GEOMETRY` in `@orca/design` because a clamp is arithmetic and
@@ -98,6 +112,13 @@ Four rules it keeps:
 - **The default is reachable.** `Enter` or a double-click on the splitter *forgets* the size —
   the property comes off the element and the key comes out of the preferences file — because a
   number written back would be a copy of the token that the next token change would not reach.
+- **What was dragged is written down where the other preferences are (#280).** A pane size is
+  the one remembered appearance a person can set *by accident*, and the boundary is the only
+  place that says so — which is no use to somebody who does not know the window is wrong. So
+  Config's **App preferences** section lists a row per boundary that has been dragged, with its
+  size and a **restore**, and the palette carries a keyless **Restore the pane widths** for all
+  of them at once. A boundary at its default is not listed: five rows reading "default" would
+  bury the two preferences worth reading. Both write the same deletion the splitter writes.
 
 ## The keyboard map and the palette
 
@@ -342,11 +363,25 @@ height in the manner of `.orca-list--two-line`.
 Scrollbars need nothing: `color-scheme` travels with every theme block the generator emits (see
 the top of this file), so a scroller is in the theme the moment it exists.
 
-`packages/app/renderer/test/scroll-sweep.test.tsx` is the guard. It walks `SURFACES` — so the
-sixth surface is swept the day it is added — installs the real stylesheets off disk, and asserts
-that each surface declares a scroll region and that every box between that region and the pane
-is bounded. It does not measure: happy-dom has no layout engine, and the declaration is what the
-next author gets wrong.
+There are **two guards, and they answer two different questions** (#277).
+
+`packages/app/renderer/test/scroll-sweep.test.tsx` is the cheap one. It walks `SURFACES` — so
+the sixth surface is swept the day it is added — installs the real stylesheets off disk, and
+asserts that each surface declares a scroll region and that every box between that region and
+the pane is bounded. It does not measure: happy-dom has no layout engine, so "is this taller
+than the window" is not a question it can answer. The *declaration* is what the next author
+gets wrong, and this fails in a second when they do.
+
+`packages/app/test/smoke/app-shell.spec.ts` is the expensive one, and it is the only place in
+the repo with a real layout engine and a real window. It sets the window to 1280×340 — too
+short for any surface — and then asks what the sweep cannot: that the box which is supposed to
+scroll **actually overflows** (`scrollHeight > clientHeight`), that it takes a scroll to its
+end, and that the last thing in it is **inside the box** once it is there. The last of those is
+what catches a scroller that scrolls the wrong box: a rule that takes its height from an
+unexpected place — a `position: absolute` up the tree, a grid track that resolved differently,
+a `height: 100%` against a parent nobody gave a height to — declares everything correctly and
+still hides content. The docked panel is measured the same way with the Plan inspector in it,
+which is the content that most easily outgrows a 420px column.
 
 ## Event-sourced rendering
 

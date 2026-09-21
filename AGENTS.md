@@ -93,7 +93,10 @@ of shape: a surface that is **a stack of content** scrolls at its root (`flex: 1
 columns and scrolls the region holding the long thing (Runs, Plan, Config, Agents, the
 workflow viewer). Never both, and never a scroller inside `.orca-list__scroller` — the
 virtualiser windows rows against that box. `scroll-sweep.test.tsx` walks every surface in
-`SURFACES` and will fail on a new one that declares neither;
+`SURFACES` and will fail on a new one that declares neither — and because happy-dom has no
+layout engine, `test/smoke/app-shell.spec.ts` shrinks a real window to 340px and *measures*
+each surface and the docked panel: the box that should scroll overflows, takes a scroll to its
+end, and has its last child on screen when it gets there (#277).
 `docs/design/60-implementation.md` ("Scrolling is structural") has the rest, including the
 floor a `VirtualList` needs inside a scrolling root.
 
@@ -115,7 +118,14 @@ boundary id and so one remembered width — the docked panel and the workflow in
 splitter needs nothing but its position in the markup: it is a child of the container whose track
 sizes the pane, with that pane as its immediate sibling, which is where it reads the size from and
 where it writes it to. The boundary's hairline is the splitter's; a pane beside one draws no border
-of its own, or the window gets two lines two pixels apart.
+of its own, or the window gets two lines two pixels apart. **A boundary says whether its size is a
+length or a ratio (#281):** a column boundary is remembered in px, and a *stacked* one — the run
+tree over the event timeline, and every stacked split after it — is remembered as a fraction of
+its container and applied as a percentage, because what a person chose there is "more tree than
+timeline" and a length does not travel between two window heights. The drag, the keys, the clamp
+and `aria-valuenow` stay px either way. A dragged size is also **listed in Config's App
+preferences with a restore**, and the palette has a keyless command that restores them all (#280):
+it is the one remembered appearance a drag can set by accident.
 
 **Lists do not poll. The daemon pushes.** `window.orca.notifications.subscribe` is the raw
 envelope stream; wrap it with `createNotificationStream` (`renderer/src/notifications.ts`)

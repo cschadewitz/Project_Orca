@@ -38,7 +38,8 @@ import {
   dragPaneSize,
   keyPaneSize,
   paneExtent,
-  readPaneSize,
+  panePreferenceOf,
+  panePx,
   type PaneBoundary,
   type PaneId,
 } from "../panes.js";
@@ -58,12 +59,20 @@ export function PaneSplitter({ boundary, label }: PaneSplitterProps): JSX.Elemen
   const appearance = useAppearance();
   const spec = PANE_BOUNDARIES[boundary];
   const handle = useRef<HTMLDivElement>(null);
-  /** What a person asked for, `undefined` while the boundary is at the design's default. */
-  const [desired, setDesired] = useState<number | undefined>(() => appearance.preferences().panes[boundary]);
+  /**
+   * What a person asked for **as it is remembered** — px on a column boundary, a fraction of
+   * the container on a stacked one — or `undefined` while the boundary is at the design's
+   * default. Everything below works in px; this is the one value in the component that does
+   * not, because it is the one that reaches the preferences file (#281).
+   */
+  const [remembered, setRemembered] = useState<number | undefined>(() => appearance.preferences().panes[boundary]);
   /** The container's extent along the axis: the second ceiling, and it changes with the window. */
   const [extent, setExtent] = useState(0);
   /** What the pane actually measures, which is what `aria-valuenow` has to say. */
   const [now, setNow] = useState(0);
+
+  /** The remembered size in px for the container as it is right now. */
+  const desired = panePx(spec, remembered, extent);
 
   const container = useCallback((): HTMLElement | null => handle.current?.parentElement ?? null, []);
   /** The pane this boundary sizes: the sibling on the side the registry names. */
@@ -96,9 +105,19 @@ export function PaneSplitter({ boundary, label }: PaneSplitterProps): JSX.Elemen
   useEffect(() => {
     const host = container();
     if (!host) return;
-    applyPaneSize(host, spec, desired === undefined ? undefined : clampPaneSize(spec, desired, extent));
+    applyPaneSize(host, spec, desired === undefined ? undefined : clampPaneSize(spec, desired, extent), extent);
     setNow(Math.round(current()));
   }, [container, current, desired, extent, spec]);
+
+  /* A boundary can now be restored from somewhere other than the boundary: the Config
+     surface's preferences section lists what has been dragged, and the palette has a command
+     that forgets all of them (#280). Both go through `appearance.set`, which is not this
+     component's state — so the splitter listens, and a restore from across the app moves the
+     line the same way `Enter` on the handle does. */
+  useEffect(
+    () => appearance.subscribe(() => setRemembered(appearance.preferences().panes[boundary])),
+    [appearance, boundary],
+  );
 
   /* The container's extent, watched rather than read once: a boundary dragged wide on a maximised
      window must not leave the pane opposite with nothing when the window is made small again. */
@@ -114,13 +133,27 @@ export function PaneSplitter({ boundary, label }: PaneSplitterProps): JSX.Elemen
     return () => observer.disconnect();
   }, [container, spec]);
 
-  /** Remember a size, or `null` to forget one and hand the boundary back to its default. */
+  /**
+   * Remember a size in px, or `null` to forget one and hand the boundary back to its default.
+   *
+   * `span` is the container the size was measured against, which a drag knows more exactly
+   * than this render does — it took its own measurement at `pointerdown`. A fractional
+   * boundary with no container to be a fraction of remembers nothing rather than a number
+   * that would mean something else on the next window.
+   */
   const remember = useCallback(
-    (size: number | null) => {
-      setDesired(size ?? undefined);
-      appearance.set({ panes: { [boundary]: size === null ? null : Math.round(size) } });
+    (size: number | null, span = extent) => {
+      if (size === null) {
+        setRemembered(undefined);
+        appearance.set({ panes: { [boundary]: null } });
+        return;
+      }
+      const preference = panePreferenceOf(spec, size, span);
+      if (preference === undefined) return;
+      setRemembered(preference);
+      appearance.set({ panes: { [boundary]: preference } });
     },
-    [appearance, boundary],
+    [appearance, boundary, extent, spec],
   );
 
   const onPointerDown = useCallback(
@@ -155,7 +188,7 @@ export function PaneSplitter({ boundary, label }: PaneSplitterProps): JSX.Elemen
         if (frame !== 0) return;
         frame = requestAnimationFrame(() => {
           frame = 0;
-          applyPaneSize(host, spec, latest);
+          applyPaneSize(host, spec, latest, span);
         });
       };
 
@@ -169,12 +202,12 @@ export function PaneSplitter({ boundary, label }: PaneSplitterProps): JSX.Elemen
            size a boundary already had would turn a default into a choice, and freeze the pane
            against the next change to the token behind it. */
         if (!moved) {
-          applyPaneSize(host, spec, desired === undefined ? undefined : clampPaneSize(spec, desired, span));
+          applyPaneSize(host, spec, desired === undefined ? undefined : clampPaneSize(spec, desired, span), span);
           return;
         }
-        applyPaneSize(host, spec, latest);
+        applyPaneSize(host, spec, latest, span);
         // Now, and only now, does the size become state and reach the preferences file.
-        remember(readPaneSize(host, spec) ?? latest);
+        remember(latest, span);
       };
 
       self.addEventListener("pointermove", move);

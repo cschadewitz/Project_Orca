@@ -872,11 +872,21 @@
   flex-direction: column;
   gap: var(--space-2);
 }
+/* A row, and so `--row-h` tall and never wrapping (RULES.md rule 9), like `.orca-tree-row`
+   and `.orca-plan__row`. It is the row of the Attention surface's failed and running lists,
+   which are `VirtualList`s — and the virtualiser reads a row's height back off this very
+   token (`renderer/src/list/row-height.ts`), so a padded row whose height did not match it
+   was a row the window arithmetic was wrong about (#278). Block padding is therefore the
+   token's job and not a value of its own; the inline padding stays, because that is the
+   row's indent and not its height. */
 .orca-attn__row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  height: var(--row-h);
+  min-height: var(--row-h);
+  padding: 0 var(--space-3);
+  white-space: nowrap;
   border: var(--stroke-hairline) solid var(--border-hairline);
   border-left: var(--stroke-rail) solid var(--status-waiting);
   border-radius: var(--radius-sm);
@@ -1231,6 +1241,28 @@
 .orca-agent--down {
   border-color: var(--status-failed);
   background: var(--status-failed-bg);
+}
+/* The state the card leads with, never colour alone (rule 4): the glyph and the word travel
+   together and the card's tinted border is the third channel. The values are the ones
+   `AGENT_HEALTH_PRESENTATION` names, so the two cannot drift (#278).
+   type: caption */
+.orca-agent__health {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+.orca-agent__health--unknown {
+  color: var(--ink-tertiary);
+}
+.orca-agent__health--ok {
+  color: var(--status-succeeded);
+}
+.orca-agent__health--degraded {
+  color: var(--status-waiting);
+}
+.orca-agent__health--down {
+  color: var(--status-failed);
 }
 /* type: mono-strong */
 .orca-agent__name {

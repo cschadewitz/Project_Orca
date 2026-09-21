@@ -70,7 +70,12 @@ function page(device: Device = {}, initial: Partial<Preferences> = {}) {
     read: () => saved,
     write: (patch) => {
       writes.push(patch);
-      saved = { ...saved, theme: patch.theme ?? saved.theme, density: { ...saved.density, ...patch.density } };
+      const panes = { ...saved.panes };
+      for (const [id, size] of Object.entries(patch.panes ?? {})) {
+        if (size === null) delete panes[id];
+        else panes[id] = size;
+      }
+      saved = { ...saved, theme: patch.theme ?? saved.theme, density: { ...saved.density, ...patch.density }, panes };
       return Promise.resolve({ ok: true, result: saved });
     },
   };
@@ -233,20 +238,44 @@ describe("motion", () => {
 });
 
 describe("keyboard map", () => {
-  it("lists both shortcuts with their labels", () => {
+  it("lists the two shortcuts with their labels, and the keyless command with none", () => {
     const p = page();
     const map = new KeyboardMap("darwin");
     installAppearance(p.win, p.store, map);
     expect(
-      // Both of these have a key; `Shortcut.key` is optional as of #205 and the fallback
-      // is what keeps this a comparison of strings rather than of `string | undefined`.
+      // `Shortcut.key` is optional as of #205, so the label is only asked for where there
+      // is a key — the third of these is deliberately keyless and the palette is its way in.
       map
         .list()
-        .map((s) => [s.scope, s.key, shortcutLabel(s.key ?? "", "darwin"), shortcutLabel(s.key ?? "", "win32")]),
+        .map((s) => [
+          s.scope,
+          s.key,
+          ...(s.key === undefined ? [] : [shortcutLabel(s.key, "darwin"), shortcutLabel(s.key, "win32")]),
+        ]),
     ).toEqual([
       ["global", "Mod+Shift+L", "⌘⇧L", "Ctrl+Shift+L"],
       ["global", "Mod+Shift+D", "⌘⇧D", "Ctrl+Shift+D"],
+      ["global", undefined],
     ]);
+  });
+
+  it("restores every remembered pane width at once, and does nothing when none is", () => {
+    /* The palette's recovery command (#280). It is a deletion per boundary rather than a
+       write of the token's value, and a person who has dragged nothing writes nothing at
+       all — a `set` with an empty patch would still be a save of the file. */
+    const p = page({}, { panes: { sidebar: 400, "runs-tree": 0.42 } });
+    const map = new KeyboardMap("darwin");
+    const appearance = installAppearance(p.win, p.store, map);
+    const restore = map.list().find((s) => s.label === "Restore the pane widths");
+    expect(restore).toBeDefined();
+
+    restore!.action();
+    expect(appearance.preferences().panes).toEqual({});
+    expect(p.writes.at(-1)).toEqual({ panes: { sidebar: null, "runs-tree": null } });
+
+    const before = p.writes.length;
+    restore!.action();
+    expect(p.writes.length).toBe(before);
   });
 
   it("refuses two registrations of one key in one scope, and frees the key on unregister", () => {

@@ -75,16 +75,10 @@
   margin-top: var(--space-2);
 }
 
-/* The failures list is the substrate's, and the substrate reads a row's height back off
-   `--row-h` (`renderer/src/list/row-height.ts`). `.orca-attn__row` in the design layer is
-   padded rather than fixed-height — it predates rule 9's `--row-h` — so the height is bound
-   here, on this surface's own modifier, rather than by editing a class this package does
-   not own. Correcting `.orca-attn__row` itself belongs to `packages/design`. */
-.orca-attn__row--listed {
-  height: var(--row-h);
-  padding-top: 0;
-  padding-bottom: 0;
-}
+/* `.orca-attn__row--listed` used to live here: a modifier whose only job was to bind
+   `--row-h` on a design-layer class that was padded rather than row-height bound. The
+   correction went where it belonged, into `.orca-attn__row` itself (#278), so the rows now
+   pass `orca-attn__row` alone and this surface states no row height at all. */
 
 /* The floor is what keeps the list from being squeezed out of existence now that the root
    scrolls (#275). Both of these hold a `VirtualList`, which needs a bounded height to

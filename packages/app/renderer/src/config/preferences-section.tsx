@@ -1,5 +1,6 @@
 /**
- * App preferences: the theme, and the density of each surface.
+ * App preferences: the theme, the density of each surface, and the pane boundaries somebody
+ * has dragged.
  *
  * They are on the Config surface because there is no settings screen separate from Config
  * — "one place to look" (docs/design/10-information-architecture.md) — and they are a
@@ -16,12 +17,22 @@
  * The notification tiers (#162) are in the preferences file and are deliberately not here
  * yet: their surface is the Attention side of the app, and a tier list on this screen
  * would be the second place they are set.
+ *
+ * **The pane widths are listed because they are the one a person can set by accident (#280).**
+ * A theme and a density are chosen from a menu; a drag is a drag, and the only other way back
+ * to the design's default is `Enter` or a double-click on the boundary itself, which nobody
+ * has been told. So a window that opens with a 400px sidebar and no memory of having done it
+ * has somewhere to look. Two rules the list follows: **a boundary at its default is not
+ * listed**, because five rows all reading "default" would be five rows saying nothing; and
+ * **restore is a deletion**, not a write of the token's value, because `panes` holds only what
+ * somebody chose and absent is what "default" means (#276).
  */
 import { useEffect, useReducer, type JSX } from "react";
 import type { Density } from "@orca/design";
 import { THEME_PREFERENCES, type ThemePreference } from "../../../src/preferences/schema.js";
 import { useAppearance } from "../appearance-context.js";
-import { ConfigField, Menu, Text } from "../ui/index.js";
+import { PANE_BOUNDARIES, PANE_IDS } from "../panes.js";
+import { Button, ConfigField, Menu, Text } from "../ui/index.js";
 
 /** The surfaces a density is remembered for — `data-surface`'s five ids, in sidebar order. */
 export interface PreferencesSectionProps {
@@ -33,9 +44,9 @@ const DENSITIES: readonly Density[] = ["comfortable", "compact"];
 export function PreferencesSection({ surfaces }: PreferencesSectionProps): JSX.Element {
   const appearance = useAppearance();
   /* Read on every render rather than snapshotted once: `⌘⇧L` and `⌘⇧D` change the same
-     preferences from the keyboard map, and a copy taken at mount would leave this section
-     showing "light" under a dark window. The re-render comes from `useAppearanceChanges`,
-     which watches the attributes those shortcuts set. */
+     preferences from the keyboard map, a splitter changes one from the boundary itself, and
+     a copy taken at mount would leave this section showing "light" under a dark window. The
+     re-render comes from `useAppearanceChanges`. */
   const preferences = appearance.preferences();
   useAppearanceChanges();
 
@@ -89,20 +100,62 @@ export function PreferencesSection({ surfaces }: PreferencesSectionProps): JSX.E
           )}
         </ConfigField>
       ))}
+
+      {/* A map over the registry rather than a second list of boundaries: a boundary added to
+          `panes.ts` is listed here the day it is added, and one removed stops being. */}
+      {PANE_IDS.filter((id) => preferences.panes[id] !== undefined).map((id) => (
+        <ConfigField
+          key={id}
+          label={`${PANE_BOUNDARIES[id].label} size`}
+          path={`panes.${id}`}
+          help="Dragged from its default. Enter or a double-click on the boundary itself does the same thing."
+        >
+          {(control) => (
+            <span className="orca-config__pane-size">
+              <Text style="mono-id">{paneSizeLabel(id, preferences.panes[id]!)}</Text>
+              {/* Named in full rather than by the word on it: the field's label is what the
+                  row is *about*, and "Restore" alone out of a list of commands says which
+                  nothing. `aria-label` out-ranks the label the field wires up, which is the
+                  right way round here — the control is an action, not the value. */}
+              <Button
+                size="sm"
+                aria-label={`Restore the ${PANE_BOUNDARIES[id].label.toLowerCase()}`}
+                onClick={() => choose({ panes: { [id]: null } })}
+                {...control}
+              >
+                Restore
+              </Button>
+            </span>
+          )}
+        </ConfigField>
+      ))}
     </section>
   );
 }
 
 /**
- * Re-render when the appearance changes from anywhere else — which today means the two
- * shortcuts, `⌘⇧L` and `⌘⇧D`.
+ * What a remembered size reads as. Two shapes, because there are two (#281): a column
+ * boundary is a length and says so in px, and the stacked one is a ratio of its column and
+ * says *that* — reporting a fraction as a px count would be inventing a window height, which
+ * is the whole reason it is not stored as one.
+ */
+function paneSizeLabel(id: (typeof PANE_IDS)[number], size: number): string {
+  return PANE_BOUNDARIES[id].size === "fraction" ? `${Math.round(size * 100)}% of its column` : `${size}px`;
+}
+
+/**
+ * Re-render when the appearance changes from anywhere else — the two shortcuts, `⌘⇧L` and
+ * `⌘⇧D`, a `PaneSplitter` being dragged, or the palette's restore.
  *
- * `Appearance` is actions and a reader, not a store with subscribers: the truth on screen
- * is `data-theme` on the document and `data-density` on each surface (`appearance.ts` is
- * the one owner of both). So this watches exactly those attributes rather than adding a
- * second notion of current preferences that could disagree with the CSS.
+ * Two sources, for two kinds of change. `data-theme` and `data-density` land **on the
+ * document**, so watching the attributes reads the same truth the CSS does rather than a
+ * second notion of it — including a change made by something that never went through
+ * `Appearance`. A pane size lands on a custom property on one container elsewhere in the
+ * tree, which is not something this section can watch and not something the document
+ * records; `appearance.subscribe` is what says a drag happened (#280).
  */
 function useAppearanceChanges(): void {
+  const appearance = useAppearance();
   const [, bump] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     const observer = new MutationObserver(() => bump());
@@ -113,4 +166,5 @@ function useAppearanceChanges(): void {
     });
     return () => observer.disconnect();
   }, []);
+  useEffect(() => appearance.subscribe(() => bump()), [appearance]);
 }
