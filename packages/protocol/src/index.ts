@@ -20,3 +20,5 @@ export * from "./agents.js";
 export * from "./control.js";
 export * from "./workflows.js";
 export * from "./config.js";
+export * from "./plan.js";
+export * from "./plan-control.js";

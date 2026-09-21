@@ -8,10 +8,27 @@ import { z } from "zod";
 import { ProtocolVersionSchema } from "./version.js";
 import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
-import { CLAIMS_LIST_METHOD } from "./claims.js";
+import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
 import { CONFIG_GET_METHOD, CONFIG_SET_METHOD } from "./config.js";
 import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
+import {
+  DECISIONS_DECIDE_METHOD,
+  DECISIONS_REOPEN_METHOD,
+  DEPENDENCIES_WAIVE_METHOD,
+  RISKS_UPDATE_METHOD,
+} from "./plan-control.js";
+import {
+  DECISIONS_LIST_METHOD,
+  DEPENDENCIES_LIST_METHOD,
+  ITEMS_LIST_METHOD,
+  JOURNAL_LIST_METHOD,
+  PLANS_LIST_METHOD,
+  PLAN_GET_METHOD,
+  RISKS_LIST_METHOD,
+  SCHEDULE_EXPLAIN_METHOD,
+  SCHEDULE_GET_METHOD,
+} from "./plan.js";
 import { RUNS_EVENTS_METHOD, RUNS_GET_METHOD, RUNS_LIST_METHOD } from "./runs.js";
 import { SUBSCRIBE_METHOD, UNSUBSCRIBE_METHOD } from "./subscriptions.js";
 import { WORKFLOWS_GET_METHOD, WORKFLOWS_LIST_METHOD } from "./workflows.js";
@@ -47,7 +64,26 @@ export const READ_METHODS = [
 ] as const;
 
 /**
- * The methods behind the `runs.control` capability - the five that write.
+ * The plan reads, behind the `plan.read` capability. They are listed apart from
+ * `READ_METHODS` for the same reason the agent methods are: a daemon serving a store with no
+ * plan in it still answers them (`plans.list` returns nothing), but a client that wants to
+ * know whether this daemon speaks the plan surface at all asks the handshake once rather
+ * than nine times.
+ */
+export const PLAN_READ_METHODS = [
+  PLANS_LIST_METHOD,
+  PLAN_GET_METHOD,
+  ITEMS_LIST_METHOD,
+  SCHEDULE_GET_METHOD,
+  SCHEDULE_EXPLAIN_METHOD,
+  DEPENDENCIES_LIST_METHOD,
+  RISKS_LIST_METHOD,
+  DECISIONS_LIST_METHOD,
+  JOURNAL_LIST_METHOD,
+] as const;
+
+/**
+ * The methods behind the `runs.control` capability - the ones that write.
  *
  * `orca serve --read-only` leaves every one of them out of the dispatch table *and* out of
  * `HelloResult.methods`, and drops `runs.control` from `capabilities`. That is the whole of
@@ -59,6 +95,11 @@ export const READ_METHODS = [
  * this daemon is serving, and "read-only" that edited the configuration would be a read-only
  * daemon in name only. It reuses `runs.control` rather than minting a capability of its own,
  * for the same reason `config.get` reuses `runs.read`.
+ *
+ * The four plan writes and `claims.release` joined them in protocol 1.7 too (#169, #88). They
+ * are one list rather than two because `--read-only` is one switch: a daemon that will not
+ * drive a run will not waive a dependency either, and a client that asked two questions to
+ * draw one disabled state would eventually get a different answer to each.
  */
 export const CONTROL_METHODS = [
   INPUTS_ANSWER_METHOD,
@@ -66,6 +107,11 @@ export const CONTROL_METHODS = [
   RUNS_CANCEL_METHOD,
   RUNS_START_METHOD,
   CONFIG_SET_METHOD,
+  DEPENDENCIES_WAIVE_METHOD,
+  DECISIONS_DECIDE_METHOD,
+  DECISIONS_REOPEN_METHOD,
+  RISKS_UPDATE_METHOD,
+  CLAIMS_RELEASE_METHOD,
 ] as const;
 
 /**

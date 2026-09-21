@@ -1,7 +1,8 @@
 /**
- * `subscribe` / `unsubscribe` and the nine notifications a subscription produces: six about
- * a run, plus `agent.changed`, `workflows.changed` and `config.changed`, which are pushes
- * about the process and about the workspace's files rather than about a run.
+ * `subscribe` / `unsubscribe` and the ten notifications a subscription produces: six about
+ * a run; `agent.changed`, `workflows.changed` and `config.changed`, which are pushes about
+ * the process and about the workspace's files rather than about a run; and `plan.changed`,
+ * which is about the plan that outlives every run in it.
  *
  * Everything else in this package is request/response. This is the other direction: the
  * daemon pushes, so a client renders a transition when it happens instead of asking five
@@ -15,10 +16,12 @@
  *   the highest `seq` it has seen can `subscribe({ runId, since: seq })` after a dropped
  *   connection and be sent `seq + 1` onwards, so a blip costs latency and not data. Sequence
  *   numbers are per-run and gap-free (`EventStore`), which is what makes that work.
- *   `agent.changed` is the one method with neither `runId` nor `seq`: it is about the
- *   process, so there is nothing to resume from. A client that folds the cursor tests for a
- *   `seq` instead of assuming one - see the block at the bottom of this file, which is where
- *   that decision was made, unmade and written down.
+ *   `agent.changed` and `plan.changed` are the two that carry no `runId`: one is about the
+ *   process and one about a plan, and neither is about a run. `agent.changed` has no cursor
+ *   at all; `plan.changed` has a `seq`, but it is the *plan journal's* and not a run's, so it
+ *   is not something `subscribe({ since })` takes. A client that folds the run cursor
+ *   therefore tests for a `runId` and a `seq` instead of assuming both - see the block at the
+ *   bottom of this file, which is where that decision was made, unmade and written down.
  * - **The folded shapes are derived from the transition alone.** `run.changed` and
  *   `step.changed` carry a `DisplayStatus`, folded the same way `runs.list` folds it, but
  *   from the event and nothing else - no store read per notification, and no lease check, so
@@ -65,6 +68,7 @@ export const NOTIFICATION_METHODS = [
   "agent.changed",
   "workflows.changed",
   "config.changed",
+  "plan.changed",
 ] as const;
 export const NotificationMethodSchema = z.enum(NOTIFICATION_METHODS);
 export type NotificationMethod = z.infer<typeof NotificationMethodSchema>;
@@ -78,6 +82,7 @@ export const EVENT_APPENDED = "event.appended";
 export const AGENT_CHANGED = "agent.changed";
 export const WORKFLOWS_CHANGED = "workflows.changed";
 export const CONFIG_CHANGED = "config.changed";
+export const PLAN_CHANGED = "plan.changed";
 
 /**
  * What every *run* notification carries: which subscription asked for it, which run it is
@@ -314,6 +319,51 @@ export const ConfigChangedParamsSchema = z.object({
 });
 export type ConfigChangedParams = z.infer<typeof ConfigChangedParamsSchema>;
 
+/**
+ * What a `plan.changed` frame says has moved. Coarse on purpose: one kind per *area* of the
+ * plan surface, so a schedule table repaints because the schedule changed and not because a
+ * journal line was written.
+ */
+export const PLAN_CHANGE_KINDS = ["items", "dependencies", "risks", "decisions", "schedule", "journal"] as const;
+export const PlanChangeKindSchema = z.enum(PLAN_CHANGE_KINDS);
+export type PlanChangeKind = z.infer<typeof PlanChangeKindSchema>;
+
+/**
+ * `plan.changed` - something in a plan moved. Another notification with no `runId`, and
+ * for the same reason as `agent.changed`: a plan outlives every run in it, so there is no
+ * run to scope it to and no run cursor to resume from.
+ *
+ * It is folded from the **plan journal** (`PlanEventListener`, `packages/store/src/plan-store.ts`),
+ * which every mutation in `PlanService` appends to, so a change made by a CLI beside the
+ * daemon is *not* announced - a journal listener hears this process's writes. That is the
+ * same boundary the run stream already has (#196), and it is why a client treats this as
+ * "repaint what I hold" rather than as the only way it learns anything.
+ *
+ * Three properties it keeps deliberately:
+ *
+ * - **It never reads the store.** `kinds` is derived from the journal entry's `type` alone,
+ *   the same way `notificationsFor` derives a run notification from an event. A push that
+ *   had to project a schedule would make every plan write pay for every subscriber.
+ * - **`seq` is the journal's, not a run's.** It is per plan, monotonic and gap-free, so a
+ *   client can tell a frame it has already folded from a new one. `subscribe({ since })`
+ *   still refuses to travel without a `runId`: there is no plan replay, and the current
+ *   answer is one `schedule.get` away.
+ * - **Several kinds may arrive at once.** One journal entry can be both a decision and the
+ *   schedule that now differs because of it, and folding that into two frames would make a
+ *   client repaint twice for one act.
+ */
+export const PlanChangedParamsSchema = z.object({
+  subscriptionId: z.string(),
+  planId: z.string(),
+  /** Never empty. Which areas a client holding this plan should consider stale. */
+  kinds: z.array(PlanChangeKindSchema).min(1),
+  /** The plan journal's sequence number for the entry behind this frame. Not a run cursor. */
+  seq: z.number().int().nonnegative(),
+  /** The journal entry's own timestamp, not the moment the frame was sent. */
+  at: z.string(),
+});
+export type PlanChangedParams = z.infer<typeof PlanChangedParamsSchema>;
+
 /** Each notification method's params schema, so a client can validate one it routed by name. */
 export const NOTIFICATION_PARAMS = {
   [RUN_CHANGED]: RunChangedParamsSchema,
@@ -325,6 +375,7 @@ export const NOTIFICATION_PARAMS = {
   [AGENT_CHANGED]: AgentChangedParamsSchema,
   [WORKFLOWS_CHANGED]: WorkflowsChangedParamsSchema,
   [CONFIG_CHANGED]: ConfigChangedParamsSchema,
+  [PLAN_CHANGED]: PlanChangedParamsSchema,
 } as const satisfies Record<NotificationMethod, z.ZodType>;
 
 /** Method name to params type, for a client that switches on the method. */
@@ -338,6 +389,7 @@ export interface NotificationParamsByMethod {
   "agent.changed": AgentChangedParams;
   "workflows.changed": WorkflowsChangedParams;
   "config.changed": ConfigChangedParams;
+  "plan.changed": PlanChangedParams;
 }
 
 /** A parsed notification: a discriminated union, so `switch (n.method)` narrows `n.params`. */

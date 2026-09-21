@@ -93,8 +93,9 @@ result: { protocol, orcaVersion, storeDir?, capabilities: DaemonCapability[], me
 `capabilities` is coarse (`runs.read`, `runs.subscribe`, `runs.control`, `plan.read`,
 `plan.write`); `methods` (protocol 1.1) is exactly what this daemon answers, so a newer
 client can light up one screen against an older daemon. A daemon serving no store answers
-`hello` and nothing else. `READ_METHODS` is the seven below, `CONTROL_METHODS` the four that
-write and `AGENT_METHODS` the two about agents.
+`hello` and nothing else. `READ_METHODS` is the seven run reads below, `PLAN_READ_METHODS`
+the nine plan reads, `CONTROL_METHODS` the nine that write and `AGENT_METHODS` the two about
+agents.
 
 **`methods` is the check that matters, not `capabilities`.** `orca serve --read-only` leaves
 the control methods out of the dispatch table *and* out of `methods`, and drops
@@ -365,6 +366,96 @@ prompt must not change the answer to every other one (ADR 0009).
 takes effect on the next `orca serve`. `config.set` takes no lease and appends no event, so
 editing the config while a run is in flight disturbs neither.
 
+## The plan methods
+
+Nine reads under `plan.read` (#169). They project `PlanService`, and every one of them takes
+an explicit `planId`: a daemon serves a store rather than a person, so it has no default plan
+and `plans.list` is how a client finds one.
+
+**Nothing here carries a date estimate** (#174). `criticalPathLength` is in the plan's own
+estimate units and is not a duration; `dueBy` on a decision is something a person wrote down.
+
+### `plans.list` / `plan.get` — the plan, and what is in it
+
+```ts
+params: {} | { planId }
+result: { plans: PlanView[]; asOf } | { plan: PlanView; asOf }
+```
+
+A `PlanView` is `id`, `key`, `title`, `description`, `status`, `requestIds`, `counts` (one
+number per classification, and every item is in exactly one), `riskMatrix`, `policy`
+(`strategy`, `concurrency`, `riskAppetite`) and the timestamps. Deliberately *not* the
+snapshot: items, dependencies, risks, decisions and the journal are five calls of their own.
+
+### `items.list` — the schedule table
+
+```ts
+params: { planId; status?; classification?; requestId?; text?; limit = 200; offset = 0 }
+result: { items: PlanItemView[]; total: number; asOf }
+```
+
+In schedule order — ready first and best first, then running, waiting, held, unschedulable
+and the settled ones — so a client that renders the rows as given is showing the order a
+dispatcher would take. `total` counts the filter, not the page.
+
+A `PlanItemView` is the `WorkItemView` (`id`, `slug`, `title`, `status`) plus `requestId`,
+`kind`, `priorityBand`, and the four things only the scheduler knows: `classification`
+(`ready | running | waiting | held | unschedulable | done | failed`), `priority`
+(`score` and the `reasons` behind it), `risk` (the open risks that name this item, scored and
+levelled) and `claim` (the run holding it, if one does). A *cancelled* item reports `failed`
+here; its own `status` still says `cancelled`.
+
+### `schedule.get` / `schedule.explain` — what may run, and why
+
+```ts
+params: { planId } | { planId; workItemId }
+result: { schedule: ScheduleView; asOf } | { lines: string[]; asOf }
+```
+
+`ScheduleView` is `core`'s `CompactSchedule` with the work-item id added to every bucket
+entry: `ready` with scores and reasons, `waiting` with one line per unmet dependency, `held`
+with the level and the reason, `unschedulable`, `waves`, `criticalPath`, `cycles`, the risk
+summary and the open decisions.
+
+`schedule.explain` returns the lines `orca plan explain <slug>` prints, in the same order and
+word for word — `core`'s `explainWorkItem`, then one line per dependency and one per risk that
+names the item. They are strings on purpose: giving a client the parts to re-sentence would
+let the popover and the terminal disagree about why an item is blocked, which is the one thing
+this method exists to prevent. `workItemId` takes an id or a slug.
+
+### `dependencies.list` / `risks.list` / `decisions.list`
+
+```ts
+params: { planId; workItemId?; status? }
+result: { dependencies: DependencyView[]; asOf }
+params: { planId; status?; workItemId? }
+result: { risks: RiskView[]; matrix; appetite; asOf }
+params: { planId; status? }
+result: { decisions: DecisionView[]; asOf }
+```
+
+A `DependencyView` carries both the stored `status` and the scheduler's live `evaluation`
+(`state` and a one-line `detail`), and they can differ: `status` is what was last written,
+`evaluation` is what the plan says now. Its `target` is resolved for display — a work item
+with its slug and any `stage`, a decision with its key, or an external key.
+
+`risks.list` answers highest score first, with the plan's `matrix` and its `appetite` beside
+the rows, because a level means nothing without the grid it was scored on. `decisions.list`
+carries the criteria, the options, the matrix `result` and `blocks` — the work items the
+decision gates, which are the dependencies targeting it, resolved; a `Decision` keeps no copy.
+
+### `journal.list` — the audit trail, paged
+
+```ts
+params: { planId; after?; before?; types?; limit = 200 }
+result: { entries: PlanJournalEntryView[]; nextCursor?; prevCursor?; hasMore; lastSeq; asOf }
+```
+
+Exactly `runs.events`'s cursor semantics over the plan journal's per-plan sequence: `after`
+walks forward, `before` walks back to the `limit` entries immediately preceding one, both
+read oldest first, and giving both is an error. An entry carries its `payload` as the journal
+recorded it plus `summary`, the one-line rendering `orca plan journal` prints.
+
 ## The push channel
 
 ### `subscribe` / `unsubscribe` — socket only
@@ -377,7 +468,7 @@ params: { subscriptionId }
 result: { stopped }
 ```
 
-`runId` absent means every run in the store. `methods` absent or empty means all eight.
+`runId` absent means every run in the store. `methods` absent or empty means all ten.
 `since` is a resume cursor and **requires `runId`** — see below. `stopped: false` means the
 id was not live; unsubscribing twice is not an error, and closing the socket ends every
 subscription on it.
@@ -386,13 +477,15 @@ Over `/rpc` these answer `NOT_SUPPORTED` — there is nowhere to push to. They a
 `hello.methods` regardless, so a client can tell "this daemon can stream" from "this daemon
 is old". The capability is `runs.subscribe`.
 
-### The eight notifications
+### The ten notifications
 
 Six are about a run. Each carries `subscriptionId` (one connection may hold several),
 `runId`, `seq` — the sequence number, within that run, of the event behind it, and therefore
 **the cursor** — and `at`, the event's own timestamp rather than the moment the frame was
-sent. The other three, `agent.changed`, `workflows.changed` and `config.changed`, are about
-the process and about the workspace's files; none carries `runId` or `seq`, and each has its
+sent. The other four are not about a run and carry no `runId`: `agent.changed`,
+`workflows.changed` and `config.changed` are about the process and about the workspace's
+files and have no cursor at all, and `plan.changed` is about a plan and carries the *plan
+journal's* sequence number, which is not something `subscribe({ since })` takes. Each has its
 own section below.
 
 - **`run.changed`** — `status`, the `run.*` `event`, and `outcome?` / `reason?` / `error?`.
@@ -443,8 +536,9 @@ before any other notification for the same run and on unsubscribe, so agent outp
 lands after the `step.completed` that ended it.
 
 One limit worth knowing: the socket fans out *this process's* event store. A run appended by
-a separate CLI process is not pushed and appears on the next read (`docs/ROADMAP.md`, item 1;
-#196).
+a separate CLI process is not pushed and appears on the next read. That is a property of an
+in-memory listener list and not of the store — reads have always been current, and are more
+so since #196 — so the fix, when it is wanted, is a watcher rather than a lock.
 
 ### `agent.changed` — a push that is not about a run
 
@@ -509,9 +603,28 @@ It carries no `text`: a document can be large and the frame goes to every store-
 subscriber. `revision` is enough to know that what is held is stale, and a client that finds
 it equal to the revision it already has — its own write, echoed back — re-reads nothing.
 
+### `plan.changed` — a push about the plan, not about a run
+
+```ts
+params: { subscriptionId; planId; kinds: ("items"|"dependencies"|"risks"|"decisions"|"schedule"|"journal")[]; seq; at }
+```
+
+One frame per plan journal entry, on store-wide subscriptions only — a plan outlives every
+run in it, so a run screen would be woken by work it is not showing.
+
+`kinds` is coarse and is folded from the entry's *type alone*: the push never reads the
+store. Almost everything includes `schedule`, because almost everything changes what may run
+now, and everything includes `journal`, because every entry is one. A client is told which
+areas to consider stale and re-reads the one list it is holding; `seq` is the plan journal's
+per-plan, gap-free sequence number, so a frame already folded can be told from a new one.
+
+There is no replay: `since` still refuses to travel without a `runId`, and the current answer
+is one `schedule.get` away.
+
 ## The control methods
 
-Behind the `runs.control` capability, and absent entirely from a `--read-only` daemon.
+Behind the `runs.control` capability, and absent entirely from a `--read-only` daemon. Nine
+of them: the four that drive runs, the four that write to the plan, and `claims.release`.
 
 ### `inputs.answer` — settle an open gate or permission ask
 
@@ -568,17 +681,68 @@ params: { workflowId; vars = {}; requestId?; workItemId? }
 result: { runId; run: RunSummaryView; asOf }
 ```
 
-**No request document and no work-item document are written or read (#196.)** Those two
-collections live in `JsonFileDocumentStore`, which holds a collection in memory and rewrites
-it whole, so a daemon and a CLI writing beside each other would each keep serving what they
-first read and each clobber the other. Run logs are not affected — the event store re-reads
-them — which is precisely why this may append `run.created` and may not create a document.
+**No request document and no work-item document are written or read.** The constraint that
+originally forced that is gone — `JsonFileDocumentStore` re-reads a collection under a lock
+before every write (#196), so the store is multi-process safe and a daemon writing documents
+beside a CLI no longer clobbers it.
+
+The narrow method is kept by decision. Submitting a *request* and decomposing it into work
+items is `orca submit`'s job — a workflow, an agent and an artifact, not a record insert —
+and growing this method into it would settle that design inside the schema of a method whose
+job is "run this workflow". A `requests.submit` method goes beside this one when it is
+designed.
 
 `requestId` and `workItemId` are still accepted: they are recorded on `run.created` and
 travel out on `run.changed`, so a client that already knows a work item can start a run
 against it and find the run again. A run named after a work item this daemon has not got
-falls back to the workflow id, which is the fallback chain `name` has always had. When #196
-closes, a `requests.submit` method can go beside this one.
+falls back to the workflow id, which is the fallback chain `name` has always had.
+
+### The plan writes — `dependencies.waive`, `decisions.decide`, `decisions.reopen`, `risks.update`
+
+```ts
+params: { planId; dependencyId; rationale? }      result: { dependency: DependencyView; asOf }
+params: { planId; key; option; rationale? }       result: { decision: DecisionView; choice; recommended?; asOf }
+params: { planId; key }                           result: { decision: DecisionView; reopenedDependencyIds; asOf }
+params: { planId; key; status }                   result: { risk: RiskView; asOf }
+```
+
+Not guarded by a run lease, because a plan is not a run: what serialises them is
+`PlanService`'s per-plan lock, and each one journals with
+`PlanOrigin { kind: "human", actor: "daemon" }` — the same shape `orca plan` writes with
+`actor: "cli"`. The journal is the audit trail, and "a human, through the daemon" is the
+honest entry: these only ever run because a person pressed something.
+
+**A decided decision is reopened explicitly, never overwritten** (#104). Deciding one the
+same way again is idempotent and journals nothing; deciding it *differently* re-decides it,
+which is what asking for it means. `recommended` comes back beside the choice when the
+decision has a matrix, so a client can show that a person went against it without the daemon
+deciding what that means. An option the decision does not offer is `PLAN_INVALID` — the
+daemon does not fall back to the matrix on a person's behalf.
+
+`decisions.reopen` names the dependencies it set back to `open`, because that is the
+consequence: items that were dispatchable a moment ago are not any more.
+
+`risks.update` moves a risk along `open → mitigating → mitigated | accepted | realized →
+closed`. Accepting one is how an item held above the plan's appetite is released without
+changing the appetite. Only `status` may be set from here.
+
+### `claims.release` — take a work item back from a dead run
+
+```ts
+params: { workItemId; force = false }
+result: { claim: ClaimView; note?: string; asOf }
+```
+
+A claim is never released on its own (#88): a finished run keeps its items so they are not
+dispatched twice, and a claim outlives the process that took it. This is the operator's act,
+and it is **refused with `RUN_STATE` while the owning run could still resume** — running,
+paused or waiting — unless `force`. `ClaimView.owner.releasable` from `claims.list` predicts
+which it will be, so a confirmation can be honest before the call rather than after it.
+
+`note` is what releasing did *not* fix: the claim decides who may launch the item, but the
+item's own status is projected from the owning run's log, and a dead run's log never moves
+on — so an item left `in-progress` is still treated as running by the scheduler. It is the
+same sentence `orca claims release` prints.
 
 ## The agent methods
 
@@ -628,5 +792,5 @@ nothing (#225).
 
 ## What is not here yet
 
-The plan methods over `PlanService`, and `requests.submit` (blocked on #196). See
-`docs/ROADMAP.md`, item 1.
+`requests.submit`: submitting a request and decomposing it is a workflow, and the method that
+starts one is still to be designed (see `runs.start` above). See `docs/ROADMAP.md`, item 1.

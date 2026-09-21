@@ -65,6 +65,15 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `config.set` under `runs.control`, so a 1.6 client that hid its write buttons on the
  * absence of `runs.control` goes on hiding exactly the right ones, and a `--read-only`
  * daemon omits `config.set` from `hello.methods` the way it omits the other four.
+ *
+ * The plan surface (#169): the nine reads `plans.list`, `plan.get`,
+ * `items.list`, `schedule.get`, `schedule.explain`, `dependencies.list`, `risks.list`,
+ * `decisions.list` and `journal.list`; the writes `dependencies.waive`, `decisions.decide`,
+ * `decisions.reopen`, `risks.update` and `claims.release` (#88); and the `plan.changed`
+ * notification. Every one of them is new - no message that was sent before is sent
+ * differently - so a minor by this file's rule. A 1.6 client's `parseNotification` drops
+ * `plan.changed` as a method it has never heard of, which is what it will go on doing, and a
+ * 1.6 client reading `hello.methods` simply sees fourteen names it does not call.
  */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 7 };
 

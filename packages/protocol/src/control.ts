@@ -19,7 +19,9 @@
  *   own option ids and guess that `allow_always` means allow: those ids are the agent's, a
  *   standing permission grant is the last place to guess, and the result says exactly what
  *   was written so a button can promise it honestly.
- * - **`runs.start` writes no documents.** See its schema.
+ * - **`runs.start` writes no documents.** Not because it cannot any more - the store became
+ *   multi-process safe in #196 - but because submitting a request is a different method,
+ *   still to be designed. See its schema.
  */
 import { z } from "zod";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
@@ -147,14 +149,15 @@ export type RunsCancelResult = z.infer<typeof RunsCancelResultSchema>;
 /**
  * `runs.start` - a workflow and its vars, and deliberately nothing else.
  *
- * Submitting a *request* and decomposing it into *work items* is `orca submit`'s job, and it
- * is a job this method must not grow, because starting a run from the app would then write
- * request and work-item documents into a store a CLI beside it is also writing. Those two
- * collections live in `JsonFileDocumentStore`, which holds the whole collection in memory
- * for the life of the process and rewrites it whole: a daemon and a CLI would each keep
- * serving the documents they first read and each clobber the other's on the next write
- * (#196). Run logs are not affected - the event store re-reads them - which is exactly why
- * this method may append `run.created` and may not put a document anywhere.
+ * The reason this shape was chosen has since been fixed: `JsonFileDocumentStore` re-reads a
+ * collection under a lock before every write (#196), so a daemon and a CLI writing documents
+ * beside each other no longer clobber one another and the store is multi-process safe.
+ *
+ * The narrow method is kept anyway, by decision rather than by constraint. Submitting a
+ * *request* and decomposing it into *work items* is `orca submit`'s job - a workflow, an
+ * agent and an artifact, not a record insert - and growing this method into it would settle
+ * that design by accident, in the schema of a method whose job is "run this workflow". When
+ * a `requests.submit` method is designed it goes beside this one, with its own shape.
  *
  * So `requestId` and `workItemId` are accepted and passed through: they are recorded on
  * `run.created` and travel out on the `run.changed` notification, so a client that already
@@ -162,10 +165,6 @@ export type RunsCancelResult = z.infer<typeof RunsCancelResultSchema>;
  * back from a document store and neither document is created. A run naming itself after a
  * work item the daemon has not got simply falls back to the workflow id, which is the
  * fallback chain `ReadModel` has always had.
- *
- * When #196 is closed - a store watcher, or single-ownership of the document stores - a
- * `requests.submit` method can be added beside this one. Until then, the honest surface is
- * this one.
  */
 export const RunsStartParamsSchema = z.object({
   workflowId: z.string().min(1),
@@ -173,7 +172,8 @@ export const RunsStartParamsSchema = z.object({
   vars: z.record(z.string(), z.unknown()).default({}),
   /**
    * Recorded on `run.created` and carried into the `run.changed` notification, so a client
-   * that started the run can find it. **No request document is written or read** (#196).
+   * that started the run can find it. **No request document is written or read** - see the
+   * block above for why that is still true now that the store is multi-process safe (#196).
    */
   requestId: z.string().min(1).optional(),
   /** The same, for a work item. No work-item document is written or read. */
