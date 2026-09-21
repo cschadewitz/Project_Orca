@@ -30,6 +30,8 @@ export type OrcaErrorCode =
   | "PLAN_INVALID"
   | "DEPENDENCY_CYCLE"
   | "STORE_LOCK_TIMEOUT"
+  /** An append the step depended on failed: a torn log, a full disk, a store directory that went away. */
+  | "STORE_WRITE"
   | "INTERNAL";
 
 export class OrcaError extends Error {
