@@ -109,6 +109,8 @@ permission policy and `workspace.repo` are the four things worth deciding up fro
 
 ### 1.3 Start it
 
+On Linux and macOS:
+
 ```bash
 docker run -d --name orca-daemon \
   --user "$(id -u):$(id -g)" \
@@ -129,7 +131,35 @@ ORCA_WORKSPACE_DIR=~/orca ORCA_UID=$(id -u) ORCA_GID=$(id -g) docker compose up 
 (`ORCA_UID` rather than `UID`, because `UID` is readonly in bash and the assignment would
 fail before compose ever ran.)
 
-Three details in that command are load-bearing:
+On Windows, in PowerShell — and this is not the same command with different slashes:
+
+```powershell
+docker run -d --name orca-daemon --publish 127.0.0.1:6722:6722 --volume "${HOME}\orca:/workspace" --volume orca-claude-home:/home/node/.claude --volume orca-codex-home:/home/node/.codex orca:0.5.0 serve --host 0.0.0.0 --port 6722
+```
+
+```powershell
+cd deploy\docker
+$env:ORCA_WORKSPACE_DIR = "$HOME\orca"
+docker compose up -d --build
+```
+
+Three things differ, and the first two are what makes the bash version fail rather than
+misbehave:
+
+- **No `--user`.** `id` is a Unix command PowerShell does not have, and there is nothing for
+  it to report: a Docker Desktop bind mount is not a Linux filesystem carrying your uid, so
+  the image's own `node` user writes the workspace and Windows shows the files as yours.
+  Leave `ORCA_UID` and `ORCA_GID` unset with compose, which is what the defaults are for.
+- **`` ` `` is the line continuation, not `\`.** A bash command pasted whole collapses onto
+  one line and PowerShell reads each `\` as an argument. Everything above is deliberately one
+  line so there is nothing to get wrong.
+- **`${HOME}\orca`, quoted.** `~` is the shell's notion, not Docker's, and it does not
+  survive into the argument: `-v ~/orca:/workspace` is refused with `"~/orca" includes
+  invalid characters for a local volume name … If you intended to pass a host directory, use
+  absolute path`. `$HOME` is expanded by PowerShell before Docker sees it, which is the
+  point.
+
+Three details in the command are load-bearing on every platform:
 
 - **`--host 0.0.0.0` binds the container's interface, not the network.** What keeps the
   daemon private is the `127.0.0.1:` on the host side of `--publish`. Bound to loopback
@@ -165,6 +195,8 @@ to draw a write as *absent* rather than as disabled.
 
 ```bash
 curl -s http://127.0.0.1:6722/health                     # {"ok":true} — what a supervisor watches
+                                                         # PowerShell: curl.exe, or Invoke-RestMethod;
+                                                         # bare `curl` there is Invoke-WebRequest and has no -s
 docker exec orca-daemon orca agents                      # hosts, agents, roles
 docker exec orca-daemon orca validate                    # OK ai-sdlc (16 nodes, 18 edges), …
 curl -s -X POST http://127.0.0.1:6722/rpc \
@@ -633,6 +665,9 @@ piece is a transport, not a network. Roadmap item 2.
 | The `.orca` store is owned by uid 1000 on the host | Start the container with `--user "$(id -u):$(id -g)"` |
 | `failed to bind host port 127.0.0.1:6722: address already in use` | Something already serves that port — on a machine that also runs a daemon from a checkout, it is that. `ORCA_PORT=16722 docker compose up`, and point `ORCA_DAEMON_URL` at the same number |
 | `bash: UID: readonly variable` | `UID=$(id -u) docker compose …`. Use `ORCA_UID` |
+| PowerShell: `The term 'id' is not recognized` | A bash command run on Windows. Drop `--user` entirely — there is no uid to pass and none is needed — and remember `` ` `` is the line continuation, not `\` (§1.3) |
+| PowerShell: `A parameter cannot be found that matches parameter name 's'` | `curl` there is an alias for `Invoke-WebRequest`. Use `curl.exe` or `Invoke-RestMethod` |
+| `"~/orca" includes invalid characters for a local volume name` | Docker does not expand `~`. Give the volume an absolute path — `"${HOME}\orca:/workspace"`, `"$HOME/orca:/workspace"` |
 
 ## What v0.5.0 will not do
 
