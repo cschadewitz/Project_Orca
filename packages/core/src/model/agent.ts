@@ -70,20 +70,83 @@ export const PermissionRuleSchema = z.object({
     path: z.string().optional(),
     /** Glob-ish prefix tested against any tool call location path. Hand-written only. */
     pathPrefix: z.string().optional(),
+    /**
+     * Where the tool call's locations are, relative to the run's workspace — the one match
+     * that needs no path written down, because the path it is about is the run's own.
+     *
+     * - `workspace`: the call has at least one location and *every* location resolves
+     *   inside `Run.workspace.cwd`. A move out of the workspace is therefore not "in" it.
+     * - `outside-workspace`: at least one location does not. An absolute path when the
+     *   workspace is unknown counts as outside — the safe reading of "cannot tell".
+     *
+     * A call with no locations at all (`execute`, mostly: its command text is the title and
+     * its location is only the directory it runs in) matches neither, and falls through to
+     * the policy `default`. That is deliberate: a shell command is not a place.
+     */
+    scope: z.enum(["workspace", "outside-workspace"]).optional(),
   }),
   decision: PermissionDecisionSchema,
 });
 export type PermissionRule = z.infer<typeof PermissionRuleSchema>;
 
 /**
+ * What an agent may do when nobody said — the policy for an agent with no `permissions:`
+ * block, or one that leaves `default:` unset (#140).
+ *
+ * It is `ask` for everything except reading, searching and changing files inside the run's
+ * own workspace. In particular `execute` is `ask`: ORCA sees a shell command only as the
+ * permission title (the agents that matter run commands in their own process rather than
+ * through ACP's `terminal`), so there is nothing to scope it by, and an unattended agent
+ * that may run any command may do anything at all. Reads outside the workspace are `ask`
+ * for the reason #140 was filed: a planning agent handed a thin work item went looking in a
+ * sibling checkout and found one, and nothing in a `default: allow` policy could tell that
+ * read from a read of a file it was sent to edit.
+ *
+ * **This applies to every agent that declares no policy, not only to unattended runs.** A
+ * policy that depended on how the run was launched would mean the same config behaved two
+ * ways, and the interesting cases (what may this agent touch) would be the ones you could
+ * not reason about from the config alone. The opt-out is one line and it is explicit:
+ * `permissions: { default: allow }` in `orca.config.yaml` restores the old behaviour for
+ * that agent, and is the right thing for a sandbox.
+ *
+ * These are *rules*, not a special case in the evaluator, so ADR 0009's layering is
+ * untouched: configured rules are still matched first, these sit behind them, and the
+ * `orca.permissions.json` sidecar still comes last. A configured `deny` therefore beats
+ * this, and so does a configured `allow`.
+ */
+export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
+  default: "ask",
+  rules: [
+    { match: { kind: "read", scope: "workspace" }, decision: "allow" },
+    { match: { kind: "search", scope: "workspace" }, decision: "allow" },
+    { match: { kind: "edit", scope: "workspace" }, decision: "allow" },
+    { match: { kind: "delete", scope: "workspace" }, decision: "allow" },
+    { match: { kind: "move", scope: "workspace" }, decision: "allow" },
+    // Thinking touches nothing and asking about it teaches people to click through prompts.
+    { match: { kind: "think" }, decision: "allow" },
+  ],
+};
+
+/**
  * Governs `session/request_permission` calls from an agent. "ask" is routed to
  * the HumanInputPort (or, in ACP-facade mode, forwarded to the upstream client).
+ *
+ * Leaving `default:` out opts in to `DEFAULT_PERMISSION_POLICY`: the default decision
+ * becomes `ask` and its rules are appended *after* whatever rules were configured, so a
+ * hand-written rule still wins the first match. Writing `default:` — including
+ * `default: allow` — says the author has thought about it, and nothing is appended.
  */
-export const PermissionPolicySchema = z.object({
-  default: PermissionDecisionSchema.default("allow"),
-  rules: z.array(PermissionRuleSchema).default([]),
-});
-export type PermissionPolicy = z.infer<typeof PermissionPolicySchema>;
+export const PermissionPolicySchema = z
+  .object({
+    default: PermissionDecisionSchema.optional(),
+    rules: z.array(PermissionRuleSchema).default([]),
+  })
+  .transform(({ default: decision, rules }) =>
+    decision === undefined
+      ? { default: DEFAULT_PERMISSION_POLICY.default, rules: [...rules, ...DEFAULT_PERMISSION_POLICY.rules] }
+      : { default: decision, rules },
+  );
+export type PermissionPolicy = { default: PermissionDecision; rules: PermissionRule[] };
 
 /* -------------------------------------------------------------------------- *
  * The written half of a permission policy
@@ -160,7 +223,8 @@ export function samePermissionRule(a: PermissionRule, b: PermissionRule): boolea
     a.match.kind === b.match.kind &&
     a.match.titlePattern === b.match.titlePattern &&
     a.match.path === b.match.path &&
-    a.match.pathPrefix === b.match.pathPrefix
+    a.match.pathPrefix === b.match.pathPrefix &&
+    a.match.scope === b.match.scope
   );
 }
 
@@ -360,7 +424,11 @@ export const AgentSpecSchema = z.object({
   hostId: z.string().default(LOCAL_HOST_ID),
   /** Roles this agent can fill (e.g. "planner", "builder", "reviewer"). */
   roles: z.array(z.string()).default([]),
-  permissions: PermissionPolicySchema.default({ default: "allow", rules: [] }),
+  /** Absent means `DEFAULT_PERMISSION_POLICY`: ask for `execute` and for anything outside the workspace. */
+  permissions: PermissionPolicySchema.default(() => ({
+    default: DEFAULT_PERMISSION_POLICY.default,
+    rules: DEFAULT_PERMISSION_POLICY.rules.map((r) => ({ match: { ...r.match }, decision: r.decision })),
+  })),
   /** MCP servers passed in `session/new`. */
   mcpServers: z.array(McpServerConfigSchema).default([]),
   /** Reuse one ACP session for a whole run, or open a fresh one per step. */
