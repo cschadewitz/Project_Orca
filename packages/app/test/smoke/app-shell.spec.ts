@@ -28,6 +28,15 @@
  * against them, and this one does not. If you are looking at one of the two and think the
  * other is a mistake, it is not — see `docs/DEVELOPMENT.md`, "Screenshot baselines".
  *
+ * **Every screenshot here is the viewport and not `fullPage`, and that is not a loss.**
+ * `app.css` makes `body` `overflow: hidden` at `height: 100%` and the shell is a fixed
+ * three-row grid inside it (#275), so the document *is* the window — a full-page capture
+ * asks Chromium for exactly the same pixels through `captureBeyondViewport`, which resizes
+ * the compositing surface and, on a runner under xvfb, intermittently answers `Unable to
+ * capture screenshot` and fails a test over its evidence rather than over its subject. A
+ * surface that scrolls scrolls its own region, and no capture of the window would have
+ * shown what is below that fold either way.
+ *
  * Prerequisite: `pnpm run build`. The app under test is `dist/`, not the sources.
  */
 import {
@@ -226,7 +235,7 @@ test("both themes render, and the shortcut is what switches them", async () => {
     // Attached to the report rather than committed: see the file header. A screenshot of
     // the app is evidence when this fails, not a fixture to diff against.
     await testInfo.attach(`${theme}.png`, {
-      body: await page.screenshot({ path: testInfo.outputPath(`${theme}.png`), fullPage: true }),
+      body: await page.screenshot({ path: testInfo.outputPath(`${theme}.png`) }),
       contentType: "image/png",
     });
   }
@@ -551,7 +560,7 @@ for (const theme of THEMES) {
 
     const shoot = async (name: string): Promise<void> => {
       await testInfo.attach(`greyscale-${name}-${theme}.png`, {
-        body: await page.screenshot({ path: testInfo.outputPath(`greyscale-${name}-${theme}.png`), fullPage: true }),
+        body: await page.screenshot({ path: testInfo.outputPath(`greyscale-${name}-${theme}.png`) }),
         contentType: "image/png",
       });
     };
