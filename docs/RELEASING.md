@@ -99,9 +99,14 @@ that it has a plain test. On launch the app picks a daemon in this order:
    a fresh one; a daemon that dies or never answers surfaces as an error carrying its own
    output rather than as a hung window.
 3. **`http://127.0.0.1:6722`**, the default `orca serve`. This is the development case, and
-   it is also where a packaged app lands when its bundled daemon refuses to start: the
-   window still opens, on a status bar that reads disconnected, because a desktop app that
-   will not open is a worse failure than one that shows you it has no daemon.
+   it is also where a packaged app lands when its bundled daemon refuses to start *on
+   launch*: the window still opens, on a status bar that reads disconnected, because a
+   desktop app that will not open is a worse failure than one that shows you it has no
+   daemon. **This step is for the launch only (#269).** A daemon that will not start over a
+   store somebody chose in **File ▸ Open a store…** is a failed open, and nothing is fallen
+   back to: any daemon answering on the default port is serving a different store, and
+   showing its runs under a banner naming the chosen path as read-only is worse than showing
+   nothing. The app stays disconnected, with the path and the reason on the console.
 
 The daemon is stopped on `will-quit` — `SIGTERM`, then `SIGKILL` if that is ignored — so it
 cannot outlive the window that started it.

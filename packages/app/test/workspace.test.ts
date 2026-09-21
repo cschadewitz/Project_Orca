@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import type { DaemonClient } from "../src/client/daemon-client.js";
 import type { DaemonSubscription } from "../src/client/subscription.js";
+import { ConnectionMachine } from "../src/main/connection-state.js";
 import type { BundledDaemon } from "../src/main/daemon-process.js";
 import { NoBundledDaemonError, Workspace, storeRoot, type WorkspaceDeps } from "../src/main/workspace.js";
 
@@ -19,15 +20,22 @@ type Step = string;
 interface Rig {
   workspace: Workspace;
   steps: Step[];
+  /** Make every later `start` reject, so a switch can be failed after a connection exists. */
+  failStarts: () => void;
 }
 
-function rig(options: { bundled?: boolean; explicitUrl?: string } = {}): Rig {
+function rig(options: { bundled?: boolean; explicitUrl?: string; startFails?: boolean } = {}): Rig {
   const steps: Step[] = [];
   let port = 0;
+  let startFails = options.startFails === true;
 
   const deps: WorkspaceDeps = {
     findEntry: () => (options.bundled === false ? undefined : "/resources/daemon/orca-daemon.mjs"),
     start: ({ cwd, readOnly }) => {
+      if (startFails) {
+        steps.push(`start ${cwd}${readOnly ? " --read-only" : ""} (fails)`);
+        return Promise.reject(new Error("port in use"));
+      }
       port += 1;
       const url = `http://127.0.0.1:${6000 + port}`;
       steps.push(`start ${cwd}${readOnly ? " --read-only" : ""}`);
@@ -51,12 +59,20 @@ function rig(options: { bundled?: boolean; explicitUrl?: string } = {}): Rig {
     },
     onSwitch: (fileMode) => steps.push(`reset ${fileMode ? "file" : "live"}`),
     onSnapshot: (snapshot) => steps.push(`snapshot ${snapshot.path} ${snapshot.readOnly ? "ro" : "rw"}`),
+    onDaemonGone: (reason) => steps.push(`disconnected ${reason}`),
+    onError: (message) => steps.push(`error ${message}`),
     ...(options.explicitUrl !== undefined ? { explicitUrl: options.explicitUrl } : {}),
     defaultUrl: "http://127.0.0.1:6722",
     defaultPath: () => "/home/casey",
   };
 
-  return { workspace: new Workspace(deps), steps };
+  return {
+    workspace: new Workspace(deps),
+    steps,
+    failStarts: () => {
+      startFails = true;
+    },
+  };
 }
 
 describe("Workspace", () => {
@@ -142,25 +158,77 @@ describe("Workspace", () => {
   });
 
   it("stays open on a daemon that would not start, and says so", async () => {
-    const steps: string[] = [];
+    const { workspace, steps } = rig({ startFails: true });
+
+    await workspace.connect();
+
+    // It falls back to looking for a daemon on the default port rather than rejecting: a
+    // window that opens disconnected beats a window that never opens. The daemon that would
+    // not start was a placeholder over the home directory, so the one on the default port is
+    // the daemon this launch expected anyway (#269).
+    expect(steps).toEqual([
+      "client http://127.0.0.1:6722",
+      "reset live",
+      "start /home/casey (fails)",
+      "error the bundled daemon did not start; the app will look for one on http://127.0.0.1:6722",
+      "client http://127.0.0.1:6722",
+      "subscribe http://127.0.0.1:6722",
+      "snapshot /home/casey rw",
+    ]);
+    expect(workspace.client.url).toBe("http://127.0.0.1:6722");
+    expect(steps.some((step) => step.startsWith("disconnected"))).toBe(false);
+  });
+
+  it("does not fall back to the live daemon when a chosen store will not open", async () => {
+    const { workspace, steps, failStarts } = rig();
+    await workspace.connect();
+    steps.length = 0;
+    failStarts();
+
+    await workspace.open("/media/usb/store");
+
+    // No `client` and no `subscribe`: falling back here would attach to whatever daemon is
+    // on the default port — some other store — under a banner naming this path as read-only
+    // (#269). The previous daemon was stopped on the way in and stays stopped.
+    expect(steps).toEqual([
+      "unsubscribe http://127.0.0.1:6001",
+      "reset file",
+      "stop http://127.0.0.1:6001",
+      "start /media/usb/store --read-only (fails)",
+      "error the store at /media/usb/store could not be opened: the bundled daemon did not start",
+      "disconnected the store at /media/usb/store could not be opened: the bundled daemon did not start",
+      // The banner still has to name the store that failed, which is what this snapshot is.
+      "snapshot /media/usb/store ro",
+    ]);
+    expect(steps.filter((step) => step.startsWith("error"))).toHaveLength(1);
+    expect(workspace.client.url).toBe("http://127.0.0.1:6001");
+    expect(workspace.subscription).toBeUndefined();
+  });
+
+  it("reads disconnected on the connection machine after a chosen store will not open", async () => {
+    const connection = new ConnectionMachine({
+      hello: () => Promise.reject(new Error("no daemon")),
+      onChange: () => {},
+    });
     const workspace = new Workspace({
       findEntry: () => "/resources/daemon/orca-daemon.mjs",
-      start: () => Promise.reject(new Error("port in use")),
+      start: () => Promise.reject(new Error("the lock file is not writable")),
       client: (url) => ({ url }) as DaemonClient,
       subscribe: () => ({ close: () => {} }) as unknown as DaemonSubscription,
-      onSwitch: () => {},
+      onSwitch: (fileMode) => connection.reset(fileMode),
       onSnapshot: () => {},
-      onError: (message) => steps.push(message),
+      onDaemonGone: () => connection.daemonExited(),
       defaultUrl: "http://127.0.0.1:6722",
       defaultPath: () => "/home/casey",
     });
 
-    await workspace.connect();
+    await workspace.open("/media/usb/store");
 
-    expect(steps).toHaveLength(1);
-    // It falls back to looking for a daemon on the default port rather than rejecting: a
-    // window that opens disconnected beats a window that never opens.
-    expect(workspace.client.url).toBe("http://127.0.0.1:6722");
+    // The word the renderer already understands, through the machine's own "no daemon"
+    // input — not `file`, which would claim a replay the app cannot read.
+    expect(connection.current.state).toBe("disconnected");
+    expect(workspace.snapshot).toEqual({ path: "/media/usb/store", readOnly: true, source: "chosen" });
+    connection.close();
   });
 
   it("stops the daemon it started when the app goes", async () => {

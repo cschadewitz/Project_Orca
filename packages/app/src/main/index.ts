@@ -188,6 +188,11 @@ const workspace = new Workspace({
     }),
   onSwitch: (fileMode) => connection.reset(fileMode),
   onSnapshot: (snapshot) => send("orca:workspace", snapshot),
+  // A chosen store whose daemon would not start is not connected to anything (#269). The
+  // machine's own input for "there is no daemon" is the one to use, so the status bar reads
+  // `disconnected` through the same path as a daemon that exited, and the reason is on the
+  // console beside it rather than in a field the renderer has no rendering for.
+  onDaemonGone: () => connection.daemonExited(),
   onError: (message, cause) => {
     // The window still opens, on a status bar that reads disconnected. A desktop app that
     // refuses to start because its daemon would not is a worse failure than one that shows
