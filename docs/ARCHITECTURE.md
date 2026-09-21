@@ -43,63 +43,73 @@ transports, so tests use in‑memory stores and a scripted ACP agent.
 `hello` handshake, and the display read models the read methods answer with, including the
 one fold from the engine's statuses to the eight the design system draws
 (`packages/protocol/README.md`). `daemon` serves it over the network in front of the engine:
-it depends on `engine` and `store` to project them, and `cli` starts one with `orca serve`.
+it depends on `engine`, `store` and `agents` to project them — `store` for the stores it
+reads and for the file lock the config write takes, `agents` for the sidecar writer — and
+`cli` starts one with `orca serve`.
+
 Since v0.4.0 that daemon is a **writer**, not a reader: it drives runs under a single‑writer
 lease of its own (`orca-serve@<host>:<pid>`), advertises the `runs.control` capability, and
-answers `inputs.answer`, `runs.resume`, `runs.cancel` and `runs.start` as well as the read
-methods (`runs.list`, `runs.get`, `runs.events`, `inputs.list`, `claims.list`,
-`artifacts.list`, `artifacts.get`, `config.get`) and the agent methods (`agents.list`,
-`agents.ping`). Since v0.5.0 it also serves the workspace's **configuration**: `config.get`
-returns both documents — `orca.config.yaml` and the ADR 0009 permission sidecar
-`orca.permissions.json` — each with its own path, raw text and content-hash revision, plus a
-description of the config schema a form can render and the effective permission policy the
-two layer up to; `config.set` writes exactly one of them, refusing a stale revision with
-`CONFIG_STALE`, editing the YAML through the comment-preserving `yaml` `Document` rather than
-re-serialising it, and routing a sidecar write through `@orca/agents`' `link()` lock so an
-operator's edit and a run answering "always" both land (#174, #266). Writing the config
-reloads nothing: the orchestrator goes on serving the configuration it booted with, and a
-`config.set` while a run is in flight takes no lease and appends no event. `config.changed`
-is pushed to store-wide subscribers by both writers. Since v0.5.0 it also serves the **plan** (#169): `plans.list`, `plan.get`,
-`items.list`, `schedule.get`, `schedule.explain`, `dependencies.list`, `risks.list`,
-`decisions.list` and `journal.list` under `plan.read`, and `dependencies.waive`,
-`decisions.decide`, `decisions.reopen`, `risks.update` and `claims.release` under
-`plan.write`. Those reads are one projection of `PlanService` (`daemon/src/plan-model.ts`):
-one snapshot and one `computeSchedule` per call, which is where an item's classification, its
-priority reasons, its risk exposure and the live state of every dependency all come from at
-once — and `schedule.explain` returns `core`'s own `explainWorkItem` lines verbatim, the same
-ones `orca plan explain` prints, so the popover and the terminal cannot drift. A plan write is
-not a run write: it takes no lease, drives no interpreter, and journals through
-`PlanService`'s per‑plan lock with `PlanOrigin { kind: "human", actor: "daemon" }`.
-`orca serve --read-only` opts back out of all ten writes, and then those methods are *absent* from
-`hello.methods` rather than present and refusing — which is what makes "can this client
-write" a question about the handshake rather than about a failed call. The lease is the
-guard against a second writer; it is not access control, and any local process can reach the
-control methods on the loopback port (ADR 0008). Since protocol 1.7 the read half also
-answers `workflows.list` and `workflows.get` (#174): the workflow files as a display graph —
-nodes with the per‑type fields the viewer shows, edges with their conditions, and the graphs
-written inline inside a `loop` or a `parallel` under the `parent::node` ids the engine
-addresses them by — plus a `traversal` on `runs.get`, the nodes a run took in order with
-their attempts and the edges between them, so the viewer (#177) can overlay a run on its
-graph. Both are reads, so `--read-only` answers them. The one thing they cannot do is serve
-an *old* version: ORCA records `workflowVersion` on `run.created` but keeps no copy of that
-definition, so `WorkflowView.versions` is which versions have run and `workflows.get` still
-answers only the one on disk. `workflows.changed` is on the wire with nothing emitting it —
-there is no workflow reload path yet — so a client may subscribe before the editor (#181) can
-send one. It has two transports on one port. `socket.ts`
-upgrades `/socket` in `ws`'s `noServer` mode, so `/health` and `/rpc` still reach the HTTP
-handler untouched; a connection carries the ordinary method table plus `subscribe` /
-`unsubscribe`, whose state is the connection's. `subscriptions.ts` owns one client's stream
-— replay, fan-out and agent batching — over a narrow `SubscriptionSource` seam
-(`subscribe(listener, filter)` + `events(runId)`) that `Orchestrator` satisfies structurally,
-and `notifications.ts` is the pure event→notification fold. `plan.changed` is one of the
-pushes with no `runId` (beside `agent.changed`, `workflows.changed` and `config.changed`): it
-is folded from the plan journal's own listener seam and says only which *kinds* of thing
-moved, never reading the store to enrich itself. The socket fans out this process's event
-store and this process's plan journal, so a run or a plan change written by a separate CLI
-process still lands only on the next read — which is an in-memory listener list, not a stale
-store: the stores are safe for two processes now that documents are written under a lock and
-re-read (#196), but nothing pushes another process's write, so a push is this process's and a
-read is everyone's.
+answers `inputs.answer`, `runs.resume`, `runs.cancel` and `runs.start`. At protocol 1.7 the
+read half is ten methods — `runs.list`, `runs.get`, `runs.events`, `inputs.list`,
+`claims.list`, `artifacts.list`, `artifacts.get`, `workflows.list`, `workflows.get` and
+`config.get` — beside the agent methods (`agents.list`, `agents.ping`), the nine plan reads
+under `plan.read`, and ten writes in all. `orca serve --read-only` opts back out of every one
+of those writes, and then they are *absent* from `hello.methods` rather than present and
+refusing, which is what makes "can this client write" a question about the handshake rather
+than about a failed call. The lease is the guard against a second writer; it is not access
+control, and any local process can reach the control methods on the loopback port (ADR 0008).
+
+Three things v0.5.0 added to that inventory are worth reading together. The **workflow
+files** come over as a display graph (#174): nodes with the per‑type fields the viewer shows,
+edges with their conditions, and the graphs written inline inside a `loop` or a `parallel`
+under the `parent::node` ids the engine addresses them by, plus a `traversal` on `runs.get` —
+the nodes a run took in order with their attempts and the edges between them — so the viewer
+(#177) can overlay a run on its graph. Both are reads, so `--read-only` answers them. What
+they cannot do is serve an *old* version: ORCA records `workflowVersion` on `run.created` but
+keeps no copy of that definition, so `WorkflowView.versions` is which versions have run and
+`workflows.get` still answers only the one on disk. `workflows.changed` is on the wire with
+nothing emitting it — there is no workflow reload path yet — so a client may subscribe before
+the editor (#181) can send one.
+
+The **configuration** is two documents (#174, #266). `config.get` returns `orca.config.yaml`
+and the ADR 0009 permission sidecar `orca.permissions.json`, each with its own path, raw text
+and content-hash revision, plus a description of the config schema a form can render and the
+effective permission policy the two — and the built‑in defaults under them (#140) — layer up
+to. `config.set` writes exactly one of them: it refuses a stale revision with `CONFIG_STALE`,
+decided *under* the write lock rather than before it; it edits the YAML through the
+comment-preserving `yaml` `Document` rather than re-serialising it, so no schema default is
+materialised into the file; and it routes a sidecar write through `@orca/agents`' `link()`
+lock so an operator's edit and a run answering "always" both land. Writing the config reloads
+nothing: the orchestrator goes on serving the configuration it booted with until the next
+`orca serve`, and a `config.set` while a run is in flight takes no lease and appends no event.
+
+The **plan** is served over `PlanService` (#169): `plans.list`, `plan.get`, `items.list`,
+`schedule.get`, `schedule.explain`, `dependencies.list`, `risks.list`, `decisions.list` and
+`journal.list` under `plan.read`, and `dependencies.waive`, `decisions.decide`,
+`decisions.reopen`, `risks.update` and `claims.release` under `plan.write`. The reads are one
+projection (`daemon/src/plan-model.ts`): one snapshot and one `computeSchedule` per call,
+which is where an item's classification, its priority reasons, its risk exposure and the live
+state of every dependency all come from at once — and `schedule.explain` returns `core`'s own
+`explainWorkItem` lines verbatim, the same ones `orca plan explain` prints, so the popover and
+the terminal cannot drift. A plan write is not a run write: it takes no lease, drives no
+interpreter, and journals through `PlanService`'s per‑plan lock with
+`PlanOrigin { kind: "human", actor: "daemon" }`.
+
+The daemon has **two transports on one port**. `socket.ts` upgrades `/socket` in `ws`'s
+`noServer` mode, so `/health` and `/rpc` still reach the HTTP handler untouched; a connection
+carries the ordinary method table plus `subscribe` / `unsubscribe`, whose state is the
+connection's. `subscriptions.ts` owns one client's stream — replay, fan-out and agent
+batching — over a narrow `SubscriptionSource` seam (`subscribe(listener, filter)` +
+`events(runId)`) that `Orchestrator` satisfies structurally, and `notifications.ts` is the
+pure event→notification fold. Four of the ten notifications carry no `runId`:
+`agent.changed`, `workflows.changed`, `config.changed` — pushed by *both* config writers, so
+a screen watching the policy sees a grant a run just recorded — and `plan.changed`, folded
+from the plan journal's own listener seam, saying only which *kinds* of thing moved and never
+reading the store to enrich itself. The socket fans out this process's event store and this
+process's plan journal, so a run or a plan change written by a separate CLI process still
+lands only on the next read. That is an in-memory listener list, not a stale store: the
+stores are safe for two processes now that documents are written under a file lock and
+re-read before every write (#196). A push is this process's; a read is everyone's.
 
 `app` depends on `protocol` and `design` and nothing
 else in the workspace, enforced by the lint config: the desktop app can only see what a
@@ -322,4 +332,5 @@ Recorded as ADRs in `docs/adr/`:
 - 0006 The plan as a persistent cross‑request dependency graph, scheduled live
 - 0007 Risks and decisions as plan entities fed by artifacts, computed by ORCA
 - 0008 Daemon, protocol package and desktop app in one workspace; the app sees only the protocol
-- 0009 "Allow always" writes to a workspace sidecar, layered under the configured rules
+- 0009 "Allow always" writes to a workspace sidecar, layered under the configured rules —
+  and, since #140, over the built‑in default rules, which are the last layer of the three

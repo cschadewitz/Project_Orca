@@ -29,11 +29,19 @@ nothing else about the layout changes per platform.
 
 | Surface | Glyph | What it answers | Phase |
 | --- | :---: | --- | --- |
-| **Attention** | ◆ | What needs me right now | 1 |
-| **Runs** | ☰ | What is happening and what happened | 1 |
-| **Plan** | ⬡ | What is coming, why it is not moving, what it depends on | 2 |
+| **Attention** | ◆ | What needs me right now | 1 — shipped |
+| **Runs** | ☰ | What is happening and what happened | 1 — shipped |
+| **Plan** | ⬡ | What is coming, why it is not moving, what it depends on | 2 — shipped in v0.5.0 (#170); the graph, risk and decision modes are v0.6.0 |
 | **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write — both shipped |
-| **Config** | ❋ | How the system is wired, and what the workflows are | 2 |
+| **Config** | ❋ | How the system is wired, and what the workflows are | 2 — shipped in v0.5.0 (#175, #266, #177) |
+
+Phase 2 is the configuration and monitoring wave, and as of v0.5.0 all five surfaces have
+content. Plan is the schedule table, the scheduler's explanations, a requests sidebar and the
+journal; its dependency graph (#171), risk matrix (#172) and decision matrix (#173) are
+deferred to v0.6.0 and are *absent* from the object header's mode control rather than
+disabled. Config is `orca.config.yaml` as a form over the schema the daemon describes, beside
+the raw file, with the permission sidecar as its second document, and the workflow viewer
+(#177) is where `orca://workflow/…` lands.
 
 The glyph column is `semantics.json`'s `surface` map, bundled in the symbol face like every
 other glyph the app draws — it is never the OS's. It sits beside the label in the sidebar and
@@ -102,9 +110,10 @@ one is worth keeping in mind before a new form is added:
   leaves the table as it is and says which id it was holding, because a link is never
   dropped and never answered with something that was not asked for.
   **`orca://workflow/…` is built as of #177** and lands on the viewer, on the Config surface,
-  with `?run=` overlaying that run's path over the graph. Config's own screen is still
-  ahead of it, so `⌘5` with no workflow named still says the surface is unbuilt; a workflow is
-  reached by link, from the palette, or from the run header's "the workflow it executes".
+  with `?run=` overlaying that run's path over the graph. Config's own screen shipped beside
+  it in v0.5.0 (#175, #266), so `⌘5` with no workflow named lands on the configuration form
+  and the raw file rather than on an unbuilt notice; a workflow is reached by link, from the
+  palette, or from the run header's "the workflow it executes".
   Workflow *editing* remains v0.6.0.
 - **`orca://agent/…` was missing.** The Agents surface shipped in v0.4.0 and the palette lists
   agents, and every palette entry has to hand back a canonical URL.

@@ -330,6 +330,25 @@ Four things are worth knowing before reading them:
   only *which kinds* of thing moved, so a schedule table repaints without a refetch of
   anything it did not ask for.
 
+## On screen
+
+The desktop app's **Plan** surface (#170, v0.5.0) is those reads drawn. The schedule table
+lists every work item in the order the scheduler put it, with its classification, slug, title,
+the request it was decomposed from, its own status — which is not the classification beside
+it; an item is routinely `pending` *and* `ready` — its priority score, its risk exposure and
+the run holding its claim; the badge's **why** opens `schedule.explain`'s lines verbatim in a
+popover. The sidebar is requests and filters rather than sub‑screens: classification, status
+and request are `items.list` parameters the daemon applies to the whole plan, and the count
+says what is held. Selecting a row opens the work‑item inspector in the docked panel — the
+priority reasons, the dependencies with *both* the status stored on the document and the
+scheduler's live evaluation of it, the risks that name the item, and the claim as a link to
+the run. A Journal mode pages the plan journal backwards, newest first. The surface repaints
+from `plan.changed` in place and never polls. Every write is the command palette's — waive a
+dependency, decide, reopen, update a risk, release a claim (#178) — and nothing was added to
+the screen's chrome. **Waiting for v0.6.0:** the dependency graph (#171), the risk matrix
+(#172) and the decision matrix (#173). They are absent from the header's mode control rather
+than disabled, so a person is never offered a segment that does nothing.
+
 ## Known limitations
 
 Reviewed when the layer was rebased onto main; tracked as issues #77 and #81–#84 (label

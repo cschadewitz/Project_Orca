@@ -21,7 +21,7 @@ has not got — the daemon speaking first, in `notification` envelopes.
 ```
 
 `code` is an `OrcaErrorCode` from `core`, one of `PROTOCOL_VERSION`, `PROTOCOL_METHOD`,
-`PROTOCOL_MESSAGE`, or one of the four the control methods add (`CONTROL_ERROR_CODES`):
+`PROTOCOL_MESSAGE`, or one of the five the control methods add (`CONTROL_ERROR_CODES`):
 
 | code | means | `details` |
 | --- | --- | --- |
@@ -29,9 +29,10 @@ has not got — the daemon speaking first, in `notification` envelopes.
 | `INPUT_OPTION_UNKNOWN` | not an option this question offers | `requestId`, `options` |
 | `RUN_NOT_WAITING` | the run is not parked on anything, or has finished | `runId`, `status` |
 | `RUN_LEASED_ELSEWHERE` | another **live** process is interpreting it | `runId`, `holder`, `pid`, `host`, `renewedAt` |
+| `CONFIG_STALE` | the file moved under the edit; a refusal, never a merge | `document`, `expectedRevision`, `actualRevision` |
 
-They exist because a screen has to tell those four apart, and the engine says `RUN_STATE` to
-all of them — the right shape for a CLI that prints a message, the wrong one for a client
+They exist because a screen has to tell them apart, and the engine says `RUN_STATE` to
+the first four — the right shape for a CLI that prints a message, the wrong one for a client
 that branches. Invalid params are `PROTOCOL_MESSAGE` with the Zod issues in `details`.
 
 `PROTOCOL_VERSION` is `{ major, minor }`: `major` changes when a message changes shape or
@@ -93,9 +94,9 @@ result: { protocol, orcaVersion, storeDir?, capabilities: DaemonCapability[], me
 `capabilities` is coarse (`runs.read`, `runs.subscribe`, `runs.control`, `plan.read`,
 `plan.write`); `methods` (protocol 1.1) is exactly what this daemon answers, so a newer
 client can light up one screen against an older daemon. A daemon serving no store answers
-`hello` and nothing else. `READ_METHODS` is the seven run reads below, `PLAN_READ_METHODS`
-the nine plan reads, `CONTROL_METHODS` the nine that write and `AGENT_METHODS` the two about
-agents.
+`hello` and nothing else. `READ_METHODS` is the ten reads below — the seven run reads,
+`workflows.list` / `workflows.get` and `config.get` — `PLAN_READ_METHODS` the nine plan
+reads, `CONTROL_METHODS` the ten that write and `AGENT_METHODS` the two about agents.
 
 **`methods` is the check that matters, not `capabilities`.** `orca serve --read-only` leaves
 the control methods out of the dispatch table *and* out of `methods`, and drops
@@ -330,10 +331,12 @@ path, the discriminators merged into one `enum`, and a field only some branches 
 not required. A node the walker cannot describe is `type: "unknown"`, never guessed at.
 
 `effective` is each configured agent's policy **as it is actually evaluated**: the configured
-rules first, then the sidecar's, first match wins, each labelled `source: "config" | "permissions"`
-and carrying the sidecar's `addedAt` / `grantedFor`. `default` comes from configuration
-alone, because the sidecar carries none. It is computed here so a renderer never
-re-implements evaluation order.
+rules first, then the sidecar's, then the built-in defaults (#140), first match wins, each
+labelled `source: "config" | "permissions" | "default"` and carrying the sidecar's `addedAt` /
+`grantedFor` where it has them. `default` — the fallthrough for a call no rule matched — comes
+from configuration alone, because neither the sidecar nor the default layer carries one. It is
+computed here so a renderer never re-implements evaluation order (ADR 0009, as corrected by
+#140).
 
 ### `config.set` — write one of them
 
@@ -372,7 +375,7 @@ Nine reads under `plan.read` (#169). They project `PlanService`, and every one o
 an explicit `planId`: a daemon serves a store rather than a person, so it has no default plan
 and `plans.list` is how a client finds one.
 
-**Nothing here carries a date estimate** (#174). `criticalPathLength` is in the plan's own
+**Nothing here carries a date estimate** (#169). `criticalPathLength` is in the plan's own
 estimate units and is not a duration; `dueBy` on a decision is something a person wrote down.
 
 ### `plans.list` / `plan.get` — the plan, and what is in it
@@ -623,8 +626,9 @@ is one `schedule.get` away.
 
 ## The control methods
 
-Behind the `runs.control` capability, and absent entirely from a `--read-only` daemon. Nine
-of them: the four that drive runs, the four that write to the plan, and `claims.release`.
+Behind the `runs.control` capability, and absent entirely from a `--read-only` daemon. Ten
+of them: the four that drive runs, `config.set` (documented above, with the read it pairs
+with), the four that write to the plan, and `claims.release`.
 
 ### `inputs.answer` — settle an open gate or permission ask
 

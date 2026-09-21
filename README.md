@@ -59,8 +59,25 @@ list your hosts/agents/roles, then `orca ping <agent>` to verify the ACP
 handshake (works over SSH too) and `orca submit "Add SSO" --body-file req.md`.
 An agent with no `permissions:` block may read, search and change files **inside
 its run's workspace**; running a shell command, and anything outside the
-workspace, is `ask`. `permissions: { default: allow }` opts a sandbox out — see
-"Permissions" in `docs/WORKFLOWS.md`.
+workspace, is `ask` (#140). Those default rules are the **last** layer — the
+agent's own `rules:` are matched first, then the grants `orca.permissions.json`
+recorded when somebody answered "always" — and writing `default:` at all opts
+out of them: `permissions: { default: allow }` is the sandbox, and
+`permissions: { default: ask }` with no rules now asks about everything,
+in‑workspace reads included. See "Permissions" in `docs/WORKFLOWS.md`.
+
+The **desktop app** is `pnpm run orca serve` with `pnpm --filter @orca/app dev`
+beside it (or `ORCA_DAEMON_URL` at a daemon elsewhere; `File ▸ Open a store…`
+re‑points it at a workspace with a read‑only daemon behind it). All five
+surfaces have content: **Attention** (answer a gate or a permission ask),
+**Runs** (run tree, event timeline, step detail, artifacts), **Plan** (the
+schedule with the scheduler's own explanations, a requests sidebar and the
+journal), **Agents** (health cards, and each agent's permission policy edited
+where the grants live) and **Config** (`orca.config.yaml` as a form over the
+schema the daemon describes, beside the raw file, with the permission sidecar as
+its second document). Every write the daemon serves is in the command palette —
+answer, cancel, resume, start a run, waive, decide, reopen, update a risk,
+release a claim. A saved config takes effect on the **next** `orca serve`.
 
 To run **inside Kepler / Zed / any ACP client**, register `orca acp` as an agent
 command; prompts sent to it become Requests and progress streams back as ACP
@@ -86,7 +103,7 @@ crash is picked up with `orca resume <runId>`.
 | `packages/integrations` | ORCA as an ACP agent (proxy mode), Kepler task awareness, T3 Code adapter (groundwork). |
 | `packages/cli` | `orca` command line and config bootstrap. |
 | `packages/protocol` | The wire contract between the daemon and its clients: message envelope, handshake, error codes, protocol version. Zod schemas; depends on `core` only. |
-| `packages/daemon` | `orca serve`: the long‑lived process that exposes the orchestrator over `protocol` (HTTP today, WebSocket for the event stream next). |
+| `packages/daemon` | `orca serve`: the long‑lived process that exposes the orchestrator, the workspace's configuration and the plan over `protocol` — `POST /rpc` plus `WS /socket` for the push channel. |
 | `packages/app` | The Electron desktop app: `tsc`-built main and preload, a React renderer bundled by Vite. Imports only `protocol` and `design`; everything it knows about ORCA comes over the wire from a daemon. |
 | `packages/design` | The design system as code: token sources (`tokens.json`, `semantics.json`), the generator, the generated `css/tokens.css` and `src/tokens.ts`, the CSS component layer, and the contrast tests. |
 | `packages/testing` | A deterministic scripted ACP agent used by tests and the demo. |
@@ -104,14 +121,19 @@ Start reading at `docs/ARCHITECTURE.md`, then `workflows/ai-sdlc.yaml` next to
 
 [![CI](https://github.com/cschadewitz/Project_Orca/actions/workflows/ci.yml/badge.svg)](https://github.com/cschadewitz/Project_Orca/actions/workflows/ci.yml)
 
-Groundwork release: the data model, event‑sourced engine, ACP transport (local +
-SSH), workflow language, SDLC templates, the long‑term planning layer
-(dependencies across requests, risk matrix, decision matrices, explainable
-scheduling) and CLI are implemented and tested end‑to‑end against a real ACP
-subprocess. The daemon (`orca serve`), its wire protocol and the Electron desktop app
-exist as scaffolding: the handshake works end to end, no run or plan methods are served
-yet (ADR 0008). The app's design system — tokens, both themes, the CSS component layer
-and the surface specs — is in place (`packages/design`, `docs/design/`); the React layer
-over it is not. See
-`docs/ROADMAP.md` for what is deliberately left open (T3 Code WebSocket transport,
-daemon methods and the event stream, capacity‑aware scheduling).
+The data model, event‑sourced engine, ACP transport (local + SSH), workflow language, SDLC
+templates, the long‑term planning layer (dependencies across requests, risk matrix, decision
+matrices, explainable scheduling) and the CLI are implemented and tested end‑to‑end against a
+real ACP subprocess.
+
+`orca serve` (protocol 1.7) is a writer, not a reader: it answers the run, workflow, config
+and plan reads, drives runs, edits the configuration and the permission sidecar, and pushes
+ten notifications over `WS /socket`; `--read-only` leaves every write out of the handshake so
+a client hides a control rather than pressing one that would fail (ADR 0008). The Electron
+app is the configuration and monitoring surface over it — five surfaces, all with content,
+and the write actions in the command palette. The document stores are multi‑process safe
+(#196), so a daemon and a CLI command over one store no longer lose each other's documents.
+
+See `docs/ROADMAP.md` for what is deliberately left open: no daemon config reload, the Plan
+surface's graph, risk and decision modes (v0.6.0), client‑surfaced model and agent selection,
+workflow editing, T3 Code's WebSocket transport, and capacity‑aware scheduling.

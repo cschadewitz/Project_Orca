@@ -417,9 +417,21 @@ is exactly what an ESM preload broke (#198) — that `hello` reached the daemon,
 themes render and resolve different tokens, that axe finds no violations on **Attention,
 Runs, Agents or Config** in either theme, and that every status on the attention list, the
 run tree and the status bar still carries its glyph and its word with the colour taken away
-(#167). Plan is asserted to be the unbuilt `StateView` it still is, rather than audited — a
-screen that says "not built yet" passes an axe run and means nothing by it, so the day it
-grows content that assertion fails and says so. Config made that trip in #175.
+(#167). Each audited surface names a node that only its *real content* produces, so the audit
+is never run over a loading spinner; the demo store plus `test/smoke/daemon.ts` is what
+guarantees there is content to find. Config made the trip from `UNBUILT` to `AUDITED` in
+#175, which is the intended path: a surface that says "not built yet" passes an axe run and
+means nothing by it, so the assertion that it is still a `StateView` is what fails the day it
+grows content. **Plan is the one entry now overdue for that move.** #170 built the surface,
+the spec's `UNBUILT` list was not updated with it, and `Plan is unbuilt, and is not being
+passed off as audited` is exactly the failure the design intends — move Plan into `AUDITED`
+with a `ready` selector off the schedule table.
+
+The type‑proof baselines are the other thing to expect red: #261 replaced the app's
+placeholder surface glyphs with five designed ones in the symbol face, and `#type` draws the
+declared glyphs, so the committed pictures no longer match. They cannot be regenerated on one
+machine — see "Screenshot baselines" below; CI has to produce all four on **Linux, macOS and
+Windows** and the new set is committed together.
 
 Run it with `pnpm run build && pnpm run app:smoke`; on a headless box,
 `xvfb-run -a pnpm run app:smoke`, and in a container without unprivileged user namespaces
