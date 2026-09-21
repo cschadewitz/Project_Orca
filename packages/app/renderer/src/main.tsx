@@ -24,6 +24,8 @@ import { LayerStackProvider } from "./layers-context.js";
 import { createNotificationStream } from "./notifications.js";
 import { NotificationProvider } from "./notifications-context.js";
 import { PaletteSourceRegistry, PaletteSourceProvider } from "./palette/sources.js";
+import { createAnnouncements } from "./a11y/announce.js";
+import { AnnouncementsProvider } from "./a11y/announce-context.js";
 import { Routes } from "./routes.js";
 
 const keyboard = new KeyboardMap(window.orca.platform);
@@ -35,6 +37,9 @@ const appearance = installAppearance(window, window.orca.preferences, keyboard);
 const layers = new LayerStack();
 const paletteSources = new PaletteSourceRegistry();
 const notifications = createNotificationStream(window.orca.notifications);
+/* The fourth: what a surface says in the one live region about a write of its own, which
+   no notification describes (`a11y/announce.ts`). */
+const announcements = createAnnouncements();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("renderer/index.html is missing #root");
@@ -46,7 +51,9 @@ createRoot(root).render(
         <PaletteSourceProvider value={paletteSources}>
           <NotificationProvider value={notifications}>
             <AppearanceProvider value={appearance}>
-              <Routes />
+              <AnnouncementsProvider value={announcements}>
+                <Routes />
+              </AnnouncementsProvider>
             </AppearanceProvider>
           </NotificationProvider>
         </PaletteSourceProvider>

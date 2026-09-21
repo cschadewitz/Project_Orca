@@ -24,7 +24,16 @@
  *   `-` and `0` for zoom, which no list has. A canvas inside a surface that also has a list
  *   is the same situation `run-tree` beside `list` is, and it is settled the same way.
  */
-export type ShortcutScope = "global" | "list" | "run-tree" | "stream" | "card" | "panel" | "menu" | "workflow";
+export type ShortcutScope =
+  | "global"
+  | "list"
+  | "run-tree"
+  | "stream"
+  | "card"
+  | "panel"
+  | "config"
+  | "menu"
+  | "workflow";
 
 export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "global",
@@ -33,6 +42,14 @@ export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "stream",
   "card",
   "panel",
+  /**
+   * The config form and the raw editor (#175). It is a scope rather than a `global`
+   * registration because `⌘S` is a word with one obvious meaning inside a form holding a
+   * draft and no meaning at all on the run tree — and because the workflow editor's draft
+   * bar is this same bar (docs/design/70-workflow-editing.md), so the key has to be able to
+   * mean "save *this* draft" on two screens.
+   */
+  "config",
   "menu",
   "workflow",
 ];

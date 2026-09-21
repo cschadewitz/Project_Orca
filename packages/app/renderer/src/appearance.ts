@@ -24,6 +24,19 @@ export interface Appearance {
   refresh: (scope?: ParentNode) => void;
   cycleTheme: () => void;
   toggleDensity: () => void;
+  /**
+   * What is remembered right now. The two shortcuts cycle and toggle blind, which is all a
+   * shortcut can do; the Config surface's preferences section draws the current choice and
+   * has to be able to read it (#175).
+   */
+  preferences: () => Preferences;
+  /**
+   * Choose a theme, or a density for a named surface, outright. Applied first and persisted
+   * after, exactly as the shortcuts are — and through this rather than through
+   * `window.orca.preferences` directly, so that the attribute on the document and the file
+   * on disk keep one owner (`density.ts` is the only code that touches `data-density`).
+   */
+  set: (patch: PreferencesPatch) => void;
   dispose: () => void;
 }
 
@@ -78,10 +91,23 @@ export function installAppearance(win: Window, store: AppearanceStore, keyboard:
     }),
   ];
 
+  const set = (patch: PreferencesPatch) => {
+    current = {
+      ...current,
+      ...(patch.theme === undefined ? {} : { theme: patch.theme }),
+      ...(patch.density === undefined ? {} : { density: { ...current.density, ...patch.density } }),
+    };
+    if (patch.theme !== undefined) applyTheme(doc.documentElement, patch.theme);
+    if (patch.density !== undefined) applyDensities(doc, current.density);
+    persist(patch);
+  };
+
   return {
     refresh: (scope = doc) => applyDensities(scope, current.density),
     cycleTheme,
     toggleDensity: toggle,
+    preferences: () => current,
+    set,
     dispose: () => unregister.forEach((u) => u()),
   };
 }

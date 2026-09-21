@@ -15,7 +15,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import type { ConnectionSnapshot } from "../../../src/bridge.js";
-import { toConnection, writability, type Connection, type Writability } from "../connection.js";
+import { toConnection, writability, writesPresent, type Connection, type Writability } from "../connection.js";
 
 export type { Connection } from "../connection.js";
 
@@ -39,4 +39,14 @@ export function useConnection(): Connection {
 export function useWritability(): Writability {
   const connection = useConnection();
   return useMemo(() => writability(connection), [connection]);
+}
+
+/**
+ * Whether a write control belongs on the screen at all — see `writesPresent`. A control
+ * asks this *and* `useWritability()`: the first decides whether it is drawn, the second
+ * why it is disabled when it is.
+ */
+export function useWritesPresent(): boolean {
+  const connection = useConnection();
+  return writesPresent(connection);
 }

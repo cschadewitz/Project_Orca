@@ -23,6 +23,8 @@ import { LayerStackProvider } from "../src/layers-context.js";
 import { createNotificationStream, type NotificationSource, type NotificationStream } from "../src/notifications.js";
 import { NotificationProvider } from "../src/notifications-context.js";
 import { PaletteSourceProvider, PaletteSourceRegistry } from "../src/palette/sources.js";
+import { createAnnouncements, type Announcements } from "../src/a11y/announce.js";
+import { AnnouncementsProvider } from "../src/a11y/announce-context.js";
 import { ArtifactPanelProvider } from "../src/artifacts/panel-context.js";
 import type { BridgeResult } from "../../src/bridge.js";
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
@@ -91,6 +93,8 @@ export interface Harness {
   paletteSources: PaletteSourceRegistry;
   /** The push channel the surfaces listen on; `FakeBridge.notify` is what feeds it. */
   notifications: NotificationStream;
+  /** What a surface says in the one live region about a write of its own (#175). */
+  announcements: Announcements;
   dispose: () => void;
   /** The providers `main.tsx` wraps the app in, around whatever is being tested. */
   Providers: (props: { children: ReactNode }) => JSX.Element;
@@ -108,12 +112,16 @@ const SILENT: NotificationSource = { subscribe: () => () => {} };
  * rather than throwing — a primitive test that only needs the keyboard map should not have
  * to stand up a daemon.
  */
-export function harness(platform = "darwin"): Harness {
+export function harness(platform = "darwin", store: AppearanceStore = memoryStore()): Harness {
   const keyboard = new KeyboardMap(platform);
   const layers = new LayerStack();
   const paletteSources = new PaletteSourceRegistry();
   const notifications = createNotificationStream((window as Partial<Window>).orca?.notifications ?? SILENT);
-  const appearance = installAppearance(window, memoryStore(), keyboard);
+  /* A memory store by default: a chrome test must not write a preferences file, and the
+     bridge's own store is what a test of the *preferences* asks for by passing it in
+     (`window.orca.preferences`, which the fake bridge implements). */
+  const appearance = installAppearance(window, store, keyboard);
+  const announcements = createAnnouncements();
   const unlisten = keyboard.listen(window);
 
   return {
@@ -121,6 +129,7 @@ export function harness(platform = "darwin"): Harness {
     layers,
     paletteSources,
     notifications,
+    announcements,
     dispose: () => {
       unlisten();
       appearance.dispose();
@@ -131,13 +140,15 @@ export function harness(platform = "darwin"): Harness {
           <PaletteSourceProvider value={paletteSources}>
             <NotificationProvider value={notifications}>
               <AppearanceProvider value={appearance}>
+                <AnnouncementsProvider value={announcements}>
                 {/* `App` wraps every surface in this, so a surface test has to as well: a
                     step's artifact chip asks the context to put an artifact in the docked
                     panel, and the context throws rather than silently doing nothing when
                     nothing is above it. `onOpen` is the chrome's and is omitted here —
                     opening the panel is what a test of the panel asserts, not what a test
                     of a surface does. */}
-                <ArtifactPanelProvider>{children}</ArtifactPanelProvider>
+                  <ArtifactPanelProvider>{children}</ArtifactPanelProvider>
+                </AnnouncementsProvider>
               </AppearanceProvider>
             </NotificationProvider>
           </PaletteSourceProvider>

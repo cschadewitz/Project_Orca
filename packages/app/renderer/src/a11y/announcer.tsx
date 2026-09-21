@@ -25,6 +25,7 @@
  */
 import { useEffect, useRef, useState, type JSX } from "react";
 import { useNotifications } from "../notifications-context.js";
+import { useAnnouncements } from "./announce-context.js";
 import { EMPTY_ANNOUNCER, foldRun, foldStep, type AnnouncerState } from "./announcements.js";
 
 /**
@@ -36,6 +37,7 @@ export const ANNOUNCER_ATTRIBUTE = "data-orca-announcer";
 
 export function Announcer(): JSX.Element {
   const stream = useNotifications();
+  const announcements = useAnnouncements();
   const [message, setMessage] = useState("");
   /* The memory of which step is which, off React state: folding a frame must not re-render
      the chrome when the fold decides there is nothing to say, which is most frames. */
@@ -55,6 +57,12 @@ export function Announcer(): JSX.Element {
     ];
     return () => off.forEach((remove) => remove());
   }, [stream]);
+
+  /* The other half of the fold (#175): what a surface says about a write of its own. A
+     save the daemon took is the person's own action completing and no notification
+     describes it — and nothing at all is pushed when a save is refused. It lands in the
+     same region, replacing whatever was there, because there is one region. */
+  useEffect(() => announcements.subscribe(setMessage), [announcements]);
 
   return (
     <div

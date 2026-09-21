@@ -80,6 +80,26 @@ export const CONTROL_CAPABILITY: DaemonCapability = "runs.control";
  * exactly the same position, and says the same thing, because "it has not said" and "it
  * said no" mean the same to a person holding a button that will not do anything.
  */
+/**
+ * Whether a write control is drawn at all, or is not there to be pressed.
+ *
+ * Two of the five states mean the app is a viewer rather than a client that happens to be
+ * unable to write just now, and docs/design/40-connection-states.md draws them differently
+ * on purpose: "writes are *absent*, not disabled — a screen with no cancel button reads as
+ * a viewer; a screen with a greyed cancel button reads as broken". Those two are file mode,
+ * and a daemon that never offered the control methods at all (`orca serve --read-only`
+ * leaves them out of the dispatch table *and* out of `hello.methods`).
+ *
+ * The other three — reconnecting, disconnected, a version mismatch — are a daemon that
+ * would take the write if it were answering, so the control stays and says why it cannot,
+ * which is what `writability()`'s sentence is for.
+ */
+export function writesPresent(connection: Pick<Connection, "state" | "capabilities">): boolean {
+  if (connection.state === "file") return false;
+  if (connection.state === "live") return connection.capabilities.includes(CONTROL_CAPABILITY);
+  return true;
+}
+
 export function writability(connection: Pick<Connection, "state" | "capabilities" | "versions">): Writability {
   switch (connection.state) {
     case "reconnecting":
