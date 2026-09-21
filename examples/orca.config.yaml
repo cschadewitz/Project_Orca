@@ -23,18 +23,21 @@ agents:
     # ORCA writes into orca.permissions.json when someone answers a prompt with "always" —
     # which is the point of writing them here rather than answering a prompt.
     #
-    # The defaults (#140) are NOT written out here, deliberately: they are appended last, after
-    # the sidecar, so an `always: deny` recorded for a file inside the workspace still wins.
-    # Spell them out and you move them ahead of the sidecar, which is rarely what you want.
+    # Note there is no `default:` here. Leaving it out is what keeps the #140 defaults — read,
+    # search, edit, delete, move and think inside the run's own workspace — as the last layer,
+    # after the sidecar, so an "always: deny" recorded for a file inside the workspace still
+    # wins over them. Writing `default:` at all opts this agent out of that layer entirely:
+    # `default: ask` means ask about everything, in-workspace reads included. The fallthrough
+    # for anything none of the three layers matched is `ask` either way.
     permissions:
-      default: ask # execute, the network, and anything outside the workspace: ask a person
       rules:
         - { match: { kind: execute, titlePattern: "rm -rf|git push --force" }, decision: deny } # never, not even on request
         - { match: { pathPrefix: /etc }, decision: deny } # scope: workspace | outside-workspace
   - id: codex-remote
     # No `permissions:` block at all: the defaults alone — read, search, edit, delete, move
     # and think inside the run's workspace, and `ask` for everything else. Write
-    # `permissions: { default: allow }` instead to opt a sandboxed agent out of being asked.
+    # `permissions: { default: allow }` instead to opt a sandboxed agent out of being asked,
+    # or `{ default: ask }` to be asked about every last one.
     command: codex
     args: [acp]
     hostId: buildbox

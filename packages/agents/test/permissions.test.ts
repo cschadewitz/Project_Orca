@@ -326,10 +326,36 @@ describe("the default policy", () => {
     decidePermission(policy, req(kind, title, ...paths), { workspaceCwd: WS });
 
   it("is what an agent with no permissions block gets, and it is not in the parsed config", () => {
-    // Parsing injects nothing: the configured half of a policy is exactly what the file said.
-    expect(bare.permissions).toEqual({ default: "ask", rules: [] });
+    // Parsing injects nothing: the configured half of a policy is exactly what the file said,
+    // and `default` is *absent* rather than resolved to "ask" - which is what says nobody
+    // chose a fallthrough, and so what opts this agent in to the default rules at all.
+    expect(bare.permissions).toEqual({ rules: [] });
+    expect(bare.permissions.default).toBeUndefined();
     expect(bareEffective).toEqual(DEFAULT_PERMISSION_POLICY);
     expect(bareEffective.default).toBe("ask");
+  });
+
+  /**
+   * The distinction the whole of #140's gating rests on. `permissions:` absent and
+   * `permissions: { default: ask }` used to be the same policy; they are now two, and the
+   * second one is somebody saying "ask me about everything" and meaning it.
+   */
+  it("is opted out of by an explicit `default: ask`, which is not the same as saying nothing", async () => {
+    const asked = AgentSpecSchema.parse({ id: "a", command: "x", permissions: { default: "ask" } });
+    const policy = await loadEffectivePermissionPolicy(asked, []);
+
+    // No rules at all: the default layer is not appended, so there is nothing to match.
+    expect(policy).toEqual({ default: "ask", rules: [] });
+    expect(at(policy, "read", "Read src/a.ts", `${WS}/src/a.ts`)).toBe("ask");
+    expect(at(policy, "edit", "Edit src/a.ts", `${WS}/src/a.ts`)).toBe("ask");
+    expect(at(policy, "think", "Think")).toBe("ask");
+
+    // And the same agent with `default:` left out gets the rules, and is allowed.
+    const silent = AgentSpecSchema.parse({ id: "a", command: "x", permissions: { rules: [] } });
+    const opted = await loadEffectivePermissionPolicy(silent, []);
+    expect(opted.rules).toEqual(DEFAULT_PERMISSION_POLICY.rules);
+    expect(at(opted, "read", "Read src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
+    expect(at(opted, "edit", "Edit src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
   });
 
   it("allows reading, searching and changing files inside the workspace", () => {
@@ -369,14 +395,13 @@ describe("the default policy", () => {
     expect(decidePermission(bareEffective, req("read", "Read", "/srv/x/a.ts"), {})).toBe("ask");
   });
 
-  it("is opted out of, for everything the default rules do not match, by an explicit default", async () => {
+  it("is opted out of, whole, by an explicit default", async () => {
     const sandbox = AgentSpecSchema.parse({ id: "s", command: "x", permissions: { default: "allow" } });
     expect(sandbox.permissions).toEqual({ default: "allow", rules: [] });
     const policy = await loadEffectivePermissionPolicy(sandbox, []);
-    // The default rules are still appended - they only ever *allow*, and only inside the
-    // workspace, so there is nothing for a `default: allow` agent to be protected from. What
-    // the configured default decides is everything they do not match, which is the whole
-    // difference between `ask` and `allow`.
+    // Nothing is appended - the author said what the fallthrough is - and for `allow` that
+    // makes no difference to the outcome, because the default rules only ever allowed.
+    expect(policy.rules).toEqual([]);
     expect(at(policy, "execute", "rm -rf /")).toBe("allow");
     expect(at(policy, "read", "Read", "/etc/hosts")).toBe("allow");
   });
@@ -387,7 +412,7 @@ describe("the default policy", () => {
       command: "x",
       permissions: { rules: [{ match: { kind: "edit", pathPrefix: "vendor" }, decision: "deny" }] },
     });
-    expect(agent.permissions.default).toBe("ask");
+    expect(agent.permissions.default).toBeUndefined();
     // One configured rule means one rule in the parsed config, not one plus the defaults.
     expect(agent.permissions.rules).toEqual([{ match: { kind: "edit", pathPrefix: "vendor" }, decision: "deny" }]);
     const policy = await loadEffectivePermissionPolicy(agent, []);
@@ -480,9 +505,9 @@ describe("the sidecar", () => {
     const file = permissionPolicyPath(dir);
     expect(file).toBe(join(dir, PERMISSION_POLICY_FILENAME));
 
-    // An `execute`, because that is what the default layer leaves at `ask` wherever it runs -
-    // an in-workspace edit is allowed by the defaults before anybody has answered anything.
-    const request = req("execute", "npm test", `${dir}/packages/core`);
+    // This agent writes `default: ask` explicitly, so the #140 default layer does not apply
+    // to it and an in-workspace edit really is asked about until somebody answers "always".
+    const request = req("edit", "Edit packages/core/src/model/agent.ts", `${dir}/packages/core/src/model/agent.ts`);
     const before = await loadEffectivePermissionPolicy(agent, [file]);
     expect(decidePermission(before, request, { workspaceCwd: dir })).toBe("ask");
 
@@ -494,7 +519,9 @@ describe("the sidecar", () => {
       workspaceCwd: dir,
       now: () => new Date("2026-09-20T10:00:00.000Z"),
     });
-    expect(result.added).toEqual([{ match: { kind: "execute", titlePattern: "^npm test$" }, decision: "allow" }]);
+    expect(result.added).toEqual([
+      { match: { kind: "edit", path: "packages/core/src/model/agent.ts" }, decision: "allow" },
+    ]);
     expect(result.refused).toBeUndefined();
 
     const after = await loadEffectivePermissionPolicy(agent, [file]);
@@ -612,10 +639,9 @@ describe("the sidecar", () => {
     );
     const policy = await loadEffectivePermissionPolicy(agent, [file]);
     expect(decidePermission(policy, req("read", "Read", `${dir}/src/a.ts`), { workspaceCwd: dir })).toBe("allow");
-    // A file the sidecar says nothing about falls through to the default layer, which allows
-    // reads inside the workspace and asks outside it.
-    expect(decidePermission(policy, req("read", "Read", `${dir}/src/b.ts`), { workspaceCwd: dir })).toBe("allow");
-    expect(decidePermission(policy, req("read", "Read", "/etc/hosts"), { workspaceCwd: dir })).toBe("ask");
+    // This agent sets `default: ask`, so there is no default layer to fall through to: a file
+    // the sidecar says nothing about is asked about, inside the workspace or not.
+    expect(decidePermission(policy, req("read", "Read", `${dir}/src/b.ts`), { workspaceCwd: dir })).toBe("ask");
   });
 });
 

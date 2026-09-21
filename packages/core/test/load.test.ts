@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { DEFAULT_PERMISSION_POLICY, expandPatterns, loadTemplates, loadWorkflows, parseOrcaConfig } from "@orca/core";
+import { expandPatterns, loadTemplates, loadWorkflows, parseOrcaConfig } from "@orca/core";
 
 const repoRoot = join(new URL(".", import.meta.url).pathname, "..", "..", "..");
 const workflow = (id: string) =>
@@ -45,9 +45,13 @@ describe("glob loaders", () => {
   it("parses the shipped examples/orca.config.yaml, policy and all", async () => {
     const config = parseOrcaConfig(parseYaml(await readFile(join(repoRoot, "examples", "orca.config.yaml"), "utf8")));
     const byId = (id: string) => config.agents.find((a) => a.id === id)!;
-    // No `permissions:` block is no configured rules at all, and `ask` as the fallthrough.
-    expect(byId("codex-remote").permissions).toEqual({ default: DEFAULT_PERMISSION_POLICY.default, rules: [] });
-    expect(byId("claude-local").permissions.default).toBe("ask");
+    // No `permissions:` block is no configured rules and no chosen fallthrough - `default`
+    // absent, which is what opts the agent in to `DEFAULT_PERMISSION_POLICY` at evaluation.
+    expect(byId("codex-remote").permissions).toEqual({ rules: [] });
+    expect(byId("codex-remote").permissions.default).toBeUndefined();
+    // Rules but no `default:`, so the example's own agent keeps the #140 default layer too -
+    // an example that opted itself out of it by accident would teach the wrong thing.
+    expect(byId("claude-local").permissions.default).toBeUndefined();
     expect(byId("claude-local").permissions.rules).toEqual([
       { match: { kind: "execute", titlePattern: "rm -rf|git push --force" }, decision: "deny" },
       { match: { pathPrefix: "/etc" }, decision: "deny" },

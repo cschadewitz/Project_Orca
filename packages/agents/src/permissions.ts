@@ -30,9 +30,8 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
-  DEFAULT_PERMISSION_POLICY,
   derivePermissionRules,
-  layerPermissionPolicies,
+  effectivePermissionPolicy,
   OrcaError,
   PERMISSION_POLICY_FILENAME,
   PermissionPolicyFileSchema,
@@ -42,6 +41,7 @@ import {
   WritablePermissionPolicyFileSchema,
 } from "@orca/core";
 import type {
+  ConfiguredPermissionPolicy,
   PermissionDecision,
   PermissionDeriveRefusal,
   PermissionPolicy,
@@ -183,30 +183,24 @@ export function permissionOverlayFor(doc: PermissionPolicyFile, agentId: string)
 
 /**
  * The policy to evaluate for an agent: its configured rules first, then each sidecar in the
- * order given, then `DEFAULT_PERMISSION_POLICY`'s rules last. Today `files` is one entry —
- * the workspace sidecar. A user-scoped file layers *under* it by being passed after it;
- * nothing else about this has to change.
+ * order given, then `DEFAULT_PERMISSION_POLICY`'s rules last — if they apply. Today `files`
+ * is one entry, the workspace sidecar. A user-scoped file layers *under* it by being passed
+ * after it; nothing else about this has to change.
  *
- * The defaults go **last**, and this is the only place they are added (#140). They used to be
- * folded into the parsed config by `PermissionPolicySchema`, which put them *ahead* of the
- * sidecar: a default `allow` on an in-workspace edit matched first, and a `reject_always`
- * somebody had written into `orca.permissions.json` could never fire. ADR 0009 says
- * configuration first and then the sidecar, and rules nobody configured are neither.
- *
- * They are appended whatever the configured `default` is — they only ever allow inside the
- * workspace, and the configured `default` still decides everything they do not match, which
- * is what `default: allow` is for.
+ * The ordering and the "if they apply" are both `effectivePermissionPolicy`'s in `@orca/core`,
+ * not this function's: `acp-session.ts` evaluates without a sidecar path and has to reach the
+ * same answer, so the rule lives in one place and this only adds the file reading.
  *
  * A file that is missing contributes nothing, so a workspace where nobody has ever answered
  * "always" evaluates exactly as it did before this existed.
  */
 export async function loadEffectivePermissionPolicy(
-  agent: { id: string; permissions: PermissionPolicy },
+  agent: { id: string; permissions: ConfiguredPermissionPolicy },
   files: readonly string[],
 ): Promise<PermissionPolicy> {
   const overlays: PermissionRule[][] = [];
   for (const file of files) overlays.push(permissionOverlayFor(await readPermissionPolicyFile(file), agent.id));
-  return layerPermissionPolicies(agent.permissions, ...overlays, DEFAULT_PERMISSION_POLICY.rules);
+  return effectivePermissionPolicy(agent.permissions, ...overlays);
 }
 
 export interface RecordAlwaysOptions {

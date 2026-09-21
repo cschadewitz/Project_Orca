@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { DEFAULT_PERMISSION_POLICY, parseOrcaConfig } from "@orca/core";
+import { parseOrcaConfig } from "@orca/core";
 import { commands, type CommandContext } from "../src/commands/index.js";
 
 const dirs: string[] = [];
@@ -64,8 +64,11 @@ describe("orca demo", () => {
     // the default rules stay a layer that the sidecar is still matched ahead of.
     expect(raw).toMatch(/^ {4}permissions:$/m);
     expect(raw).not.toMatch(/scope: workspace/);
-    expect(config.agents[0]!.permissions).toEqual({ default: DEFAULT_PERMISSION_POLICY.default, rules: [] });
-    expect(config.agents[0]!.permissions.default).toBe("ask");
+    expect(config.agents[0]!.permissions).toEqual({ rules: [] });
+    // No `default:` in the generated file either, so the demo agent gets the #140 defaults
+    // rather than opting itself out of them by spelling a fallthrough it was never asked for.
+    expect(config.agents[0]!.permissions.default).toBeUndefined();
+    expect(raw).not.toMatch(/^ {6}default:/m);
 
     // Same invocation as the README quick start: needs the config (without one no
     // agent fills the ai-sdlc roles and bootstrap throws WORKFLOW_INVALID).

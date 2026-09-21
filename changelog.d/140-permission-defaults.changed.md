@@ -1,18 +1,22 @@
-- **core:** an agent that declares no `permissions:`, or leaves `default:` unset, no longer
-  gets `default: allow`. The policy it gets instead allows reads, searches, edits, deletes
+- **core:** an agent that declares no `permissions:`, or declares one and leaves `default:`
+  unset, no longer gets `default: allow`. The policy it gets instead allows reads, searches, edits, deletes
   and moves **inside the run's workspace** and asks about everything else — `execute`
   wherever it runs, the network, any path outside the workspace. `execute` is asked about
   because ORCA sees a shell command only as the permission title: the agents that matter run
   commands in their own process rather than through ACP's `terminal`, so there is nothing to
   scope the grant by. This is a property of the agent and not of how the run was launched, so
-  one config behaves one way; `permissions: { default: allow }` is the explicit opt‑out and
-  is the right thing for a sandbox. The defaults are ordinary rules and they are the **last**
-  layer: configured rules are matched first, then `orca.permissions.json`, then these, then
-  the configured `default` decides the rest. So a hand‑written `deny` still wins, and a
+  one config behaves one way. The defaults are ordinary rules and they are the **last** layer:
+  configured rules are matched first, then `orca.permissions.json`, then these, and then
+  `default:` decides whatever none of them matched. So a hand‑written `deny` still wins, and a
   `reject_always` recorded in the sidecar beats the default allow that made the prompt appear
-  (ADR 0009). They are appended whatever `default:` says — they only ever allow inside the
-  run's own workspace, which `default: allow` was going to allow anyway. Spelling them out in
-  your own `rules:` is not a no‑op: it moves them ahead of the sidecar.
+  (ADR 0009). Spelling the default rules out in your own `rules:` is not a no‑op: it moves them
+  ahead of the sidecar, where a recorded `reject_always` can no longer reach them.
+- **core:** **writing `default:` at all opts an agent out of those default rules** — `ask`
+  exactly as much as `allow`. `permissions: { default: ask }` with no rules now means what it
+  says: ask about everything, in‑workspace reads included; it is no longer the same policy as
+  leaving `permissions:` off. `permissions: { default: allow }` is the other end and is the
+  right thing for a sandbox. If you had `default: ask` written down and want the workspace
+  allows back, delete the line.
 - **core:** `orca.config.yaml` parses to exactly what it says. The default rules used to be
   injected into the parsed config, so anything that read it back — `orca demo`'s generated
   config, `config.get`'s per‑rule provenance — reported rules nobody had written as if an

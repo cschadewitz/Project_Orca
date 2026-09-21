@@ -43,9 +43,8 @@ import { dirname, join } from "node:path";
 import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
 import { permissionOverlayFor, replacePermissionPolicyFile } from "@orca/agents";
 import {
-  DEFAULT_PERMISSION_POLICY,
+  effectivePermissionPolicy,
   isOrcaError,
-  layerPermissionPolicies,
   OrcaError,
   OrcaConfigSchema,
   PERMISSION_POLICY_FILENAME,
@@ -344,15 +343,17 @@ export class ConfigModel {
    * The permission policy each configured agent is actually evaluated under, in evaluation
    * order, with each rule labelled by the document it came from.
    *
-   * The order is `layerPermissionPolicies`' and nothing else's - configured rules first, then
-   * the sidecar's, then `DEFAULT_PERMISSION_POLICY`'s, first match wins (ADR 0009 as corrected
-   * by #140). It is computed here rather than left to the app for exactly that reason: a
-   * renderer that concatenated the lists itself would be a second answer to "why was this
-   * allowed", and the two would drift the day a fourth layer lands.
+   * The order is `effectivePermissionPolicy`'s and nothing else's - configured rules first,
+   * then the sidecar's, then `DEFAULT_PERMISSION_POLICY`'s *when they apply*, first match wins
+   * (ADR 0009 as corrected by #140). It is computed there rather than here, and here rather
+   * than in the app, for the same reason each time: a second implementation of the layering is
+   * a second answer to "why was this allowed", and the two drift.
    *
    * The third layer is the reason `source` has a `default` case. Until #140 the defaults were
    * folded into the parsed config, so `configured` counted them and every one of them was
-   * reported as something the operator had written into `orca.config.yaml`.
+   * reported as something the operator had written into `orca.config.yaml`. An agent whose
+   * config sets `default:` has no third layer at all, and `sidecarEnd` is then the end of the
+   * list - which is why this counts rather than assuming.
    */
   private effective(config: ConfigDocumentView, permissions: ConfigDocumentView): ConfigEffectivePolicy {
     const parsed = OrcaConfigSchema.safeParse(config.parsed ?? {});
@@ -364,11 +365,7 @@ export class ConfigModel {
     const agents: ConfigEffectivePolicy["agents"] = {};
     for (const agent of parsed.data.agents) {
       const recorded = doc.agents[agent.id]?.rules ?? [];
-      const layered = layerPermissionPolicies(
-        agent.permissions,
-        permissionOverlayFor(doc, agent.id),
-        DEFAULT_PERMISSION_POLICY.rules,
-      );
+      const layered = effectivePermissionPolicy(agent.permissions, permissionOverlayFor(doc, agent.id));
       const configured = agent.permissions.rules.length;
       const sidecarEnd = configured + recorded.length;
       const rules: EffectivePermissionRule[] = layered.rules.map((rule, i) => {

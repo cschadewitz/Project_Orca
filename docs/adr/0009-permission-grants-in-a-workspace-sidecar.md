@@ -82,12 +82,21 @@ what the file says. A configured `deny` still wins everything; a sidecar `deny` 
 default `allow`, which is what "configuration first, then the sidecar" was always supposed to
 mean for a layer that is neither.
 
-The defaults are appended whatever the configured `default` says, `allow` included. Every one
-of them allows something inside the run's own workspace (or `think`), which a `default: allow`
-agent was going to get anyway; the configured `default` decides everything they do not match,
-and that — `ask` versus `allow` for `execute`, the network, and paths outside the workspace —
-is the whole of the opt‑out. `config.get` labels them `source: "default"` so a surface can
-show them as the floor they are rather than as config.
+**The defaults apply only when the config left `default:` unset**, and that is why `default`
+stays optional all the way through parsing: `permissions:` absent and
+`permissions: { default: ask }` are two different policies now, not one. Writing `default:` at
+all — `ask` exactly as much as `allow` — is an author saying what happens when no rule matched,
+and appending rules that match things on their behalf would be answering a question they did
+not ask. Somebody who wrote `default: ask` with no rules asked to be asked about everything,
+and quietly allowing in‑workspace edits on top of that would be ORCA deciding it knew better.
+So an explicit `default` is the opt‑out, whichever decision it names, and `defaultRulesApply`
+in `@orca/core` is the one place that is decided.
+
+`effectivePermissionPolicy` is the one place the three layers are assembled, and every
+evaluator goes through it: the ACP session that answers `session/request_permission`,
+`loadEffectivePermissionPolicy` (which only adds the sidecar file reading), and `config.get`,
+which labels each rule `config` / `permissions` / `default` so a surface can show the floor as
+a floor rather than as config somebody wrote.
 
 **2026‑09‑21 (#266):** the sidecar is now readable and editable over the protocol.
 `config.get` returns it as a second document beside `orca.config.yaml` — its own path, its

@@ -217,7 +217,8 @@ the call is inside the run's workspace, `outside-workspace` when any of them is 
 are matched both as written and workspace‑relative, so a rule survives the next git worktree.
 The `decision` is `allow`, `deny` or `ask`.
 
-**An agent that declares no `permissions:` gets a conservative policy** (#140): reads,
+**An agent that declares no `permissions:`, or declares one without a `default:`, gets a
+conservative policy** (#140): reads,
 searches, edits, deletes and moves *inside the workspace* are allowed, and everything else —
 `execute` anywhere, the network, any path outside the workspace — is `ask`. `execute` is asked
 about wherever it runs because ORCA sees a shell command only as the permission title: the
@@ -237,22 +238,24 @@ A permission is decided against three rule lists concatenated in this order, fir
 
 1. **your `rules:`**, exactly as `orca.config.yaml` spells them out;
 2. **`orca.permissions.json`**, the sidecar "allow always" and "reject always" write to;
-3. **the defaults** — the in‑workspace allows above, plus `think`.
+3. **the defaults** — the in‑workspace allows above, plus `think` — *only if you left
+   `default:` out*.
 
-Then `default:` (`ask` unless you wrote otherwise) decides anything none of them matched.
+Then `default:` (`ask` when you left it out) decides anything none of them matched.
 
 So a hand‑written `deny` beats everything, a recorded `reject_always` beats the default allow
 that made the prompt appear, and nothing a machine wrote can undo a rule you wrote (ADR 0009).
-The defaults are appended whatever `default:` says, `allow` included: they only ever *allow*,
-and only inside the run's own workspace, so there is nothing for `default: allow` to be
-protected from — what that line buys you is `allow` rather than `ask` for everything the
-default rules do **not** match, which is the whole of `execute`, the network and the world
-outside the workspace.
 
-Spelling the default rules out in your own `rules:` is therefore not a no‑op: it moves them
-*ahead* of the sidecar, where a recorded `reject_always` can no longer reach them. Leave them
-out unless that is what you want. `config.get` labels every effective rule with the layer it
-came from (`config`, `permissions`, `default`), so the Config surface shows which is which.
+**Writing `default:` opts out of the third layer entirely** — `ask` just as much as `allow`.
+`permissions: { default: ask }` with no rules means what it says: ask about everything,
+including reads inside the workspace. That is not the same as leaving `permissions:` off, and
+it is the line to write when you want an agent on a short leash. `default: allow` is the other
+end and is right for a sandbox. Leave `default:` out and you get the table above.
+
+Spelling the default rules out in your own `rules:` is therefore not a way to get them back
+unchanged: it moves them *ahead* of the sidecar, where a recorded `reject_always` can no longer
+reach them. `config.get` labels every effective rule with the layer it came from (`config`,
+`permissions`, `default`), so the Config surface shows which is which.
 
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive

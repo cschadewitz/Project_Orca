@@ -138,16 +138,11 @@ describe("config.get", () => {
     const { effective } = await model.get();
     const claude = effective.agents["claude"];
 
-    // Configured first, sidecar second, the built-in defaults last: `layerPermissionPolicies`'
-    // order, which is the order `decidePermission` matches in (ADR 0009, #140).
-    expect(claude?.rules.map((r) => r.source)).toEqual([
-      "config",
-      "permissions",
-      ...DEFAULT_PERMISSION_POLICY.rules.map(() => "default"),
-    ]);
+    // Configured first, sidecar second: `effectivePermissionPolicy`'s order, which is the
+    // order `decidePermission` matches in (ADR 0009). This agent's config sets `default: ask`,
+    // so it has opted out of the #140 default layer and there is no third group (#140).
+    expect(claude?.rules.map((r) => r.source)).toEqual(["config", "permissions"]);
     expect(claude?.rules[1]).toMatchObject({ grantedFor: "Edit src/index.ts", addedAt: "2026-09-20T10:00:00.000Z" });
-    // A default rule has no provenance to report: nobody wrote it and no file holds it.
-    expect(claude?.rules[2]).toEqual({ ...DEFAULT_PERMISSION_POLICY.rules[0], source: "default" });
     // The default comes from configuration alone and the sidecar cannot supply one.
     expect(claude?.default).toBe("ask");
   });
@@ -163,6 +158,8 @@ describe("config.get", () => {
 
     expect(bare?.rules.map((r) => r.source)).toEqual(DEFAULT_PERMISSION_POLICY.rules.map(() => "default"));
     expect(bare?.rules.some((r) => r.source === "config")).toBe(false);
+    // A default rule has no provenance to report: nobody wrote it and no file holds it.
+    expect(bare?.rules[0]).toEqual({ ...DEFAULT_PERMISSION_POLICY.rules[0], source: "default" });
     expect(bare?.default).toBe("ask");
   });
 });
