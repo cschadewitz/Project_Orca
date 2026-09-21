@@ -12,8 +12,9 @@
   flex-direction: column;
   gap: var(--space-3);
   /* A column of its own beside the cards, wide enough for a rule sentence and no wider.
-     `ch` because it is a column of text: a ratio to the font already chosen. */
-  flex: 0 0 52ch;
+     The width is a token (`panel-w-policy`) rather than a number written here: rule 1, and
+     the `ch` that makes it a ratio to the type is stated where the value is. */
+  flex: 0 0 var(--panel-w-policy);
   min-width: 0;
   padding: var(--space-4);
   border-left: var(--stroke-hairline) solid var(--border-hairline);

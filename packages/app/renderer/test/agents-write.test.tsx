@@ -159,6 +159,31 @@ describe("releasing a claim", () => {
     expect(said.join(" ")).toContain(note);
   });
 
+  it("takes the declared two-line variant for the note, and leaves every other row one line", async () => {
+    /* RULES.md rule 9: a row that needs two lines is a declared variant, not a row that
+       grew. The base row wrapped for everybody, so any claim with a long title could push
+       the list out of the rhythm the density sets; now the second line is asked for. */
+    const note = "wi-3 is still in-progress (run run-vanished); the plan scheduler treats it as running";
+    fake.script({ "claims.release": () => ({ ok: true, result: { claim: CLAIMS[1]!, note, asOf: AS_OF } }) });
+    renderAgents();
+
+    for (const row of await claimRows()) expect(row.className).not.toContain("orca-agents__claim--note");
+
+    const dead = await claimRow("wi-3");
+    fireEvent.click(within(dead).getByRole("button", { name: "Release wi-3" }));
+    fireEvent.click(
+      within(await screen.findByRole("menu", { name: "Release wi-3" })).getByRole("menuitem", {
+        name: /^Release wi-3/,
+      }),
+    );
+
+    await waitFor(async () => expect((await claimRow("wi-3")).className).toContain("orca-agents__claim--note"));
+    // Only the row the note is about; the rest of the list is unchanged.
+    const others = (await claimRows()).filter((row) => !row.textContent?.startsWith("wi-3"));
+    expect(others.length).toBeGreaterThan(0);
+    for (const row of others) expect(row.className).not.toContain("orca-agents__claim--note");
+  });
+
   it("re-reads the claims once after a release, because nothing pushes for one", async () => {
     renderAgents();
     await claimRows();

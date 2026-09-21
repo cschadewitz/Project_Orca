@@ -11,7 +11,10 @@
  *
  * - **each row says which document it came from**, `config` or `sidecar`, because "a
  *   standing permission grant that teammates and code review can see" only works if you can
- *   tell the hand-written ones from the machine-written ones;
+ *   tell the hand-written ones from the machine-written ones — and `default` for the third
+ *   layer, the rules `@orca/agents` appends last (#140), which are not a document at all:
+ *   no file, no path, nothing `config.set` can address. They are drawn as their own
+ *   read-only group so the floor reads as a floor;
  * - **a sidecar row carries its provenance** — when it was written and the tool call that
  *   was answered "always" — which is the audit trail the file exists to keep;
  * - **the `default` is configuration's and is shown as such.** The sidecar cannot carry one
@@ -23,7 +26,7 @@
  */
 import type { JSX } from "react";
 import { Chip, Text, Time, textClass } from "../ui/index.js";
-import type { AgentPolicyView } from "./config-model.js";
+import { POLICY_LAYERS, rowsFrom, type AgentPolicyView } from "./config-model.js";
 
 export interface PermissionsViewProps {
   policies: readonly AgentPolicyView[];
@@ -43,7 +46,8 @@ export function PermissionsView({ policies, live, path, exists }: PermissionsVie
       </Text>
       <Text style="caption">
         What each agent may do, in the order ORCA evaluates it: the rules in the config first, then the ones written to
-        the sidecar by an answer of &quot;allow always&quot;. The first rule that matches decides.
+        the sidecar by an answer of &quot;allow always&quot;, then ORCA&apos;s own defaults. The first rule that matches
+        decides.
       </Text>
       <span className={`orca-config__path ${textClass("mono-id")}`}>{path}</span>
       {!exists && (
@@ -72,23 +76,46 @@ export function PermissionsView({ policies, live, path, exists }: PermissionsVie
                 No rules; every tool call takes the fallthrough above.
               </Text>
             ) : (
-              <ol className="orca-config__rules">
-                {policy.rows.map((row) => (
-                  <li key={`${row.order}`} className="orca-config__rule">
-                    <span className={`orca-config__order ${textClass("mono-id")}`}>{row.order}</span>
-                    <span className={`orca-config__rule-text ${textClass("mono-body")}`}>{row.text}</span>
-                    <Chip>{row.source}</Chip>
-                    {row.addedAt !== undefined && (
-                      <Time at={new Date(row.addedAt)} show={live ? "both" : "absolute"} />
-                    )}
-                    {row.grantedFor !== undefined && (
-                      <Text style="caption" className="orca-config__granted">
-                        {`granted for ${row.grantedFor}`}
+              /* One group per layer, in evaluation order. Grouping reorders nothing: the
+                 layers are concatenated, so a layer's rules are already contiguous, and the
+                 order numbers are the daemon's either way. */
+              POLICY_LAYERS.map((layer) => {
+                const rows = rowsFrom(policy, layer.source);
+                if (rows.length === 0) return null;
+                return (
+                  <div key={layer.source} className="orca-config__layer">
+                    <div className="orca-config__layer-head">
+                      <Text style="label-strong">{layer.title}</Text>
+                      <Chip>{layer.source}</Chip>
+                    </div>
+                    {layer.source === "default" && (
+                      <Text style="caption" className="orca-config__none">
+                        {/* Why this group has no file beside it, said rather than left to be
+                            guessed at: there is nothing to open and nothing to edit. */}
+                        ORCA&apos;s own floor, applied when the config left the fallthrough unset. No file holds
+                        them, so they cannot be edited anywhere.
                       </Text>
                     )}
-                  </li>
-                ))}
-              </ol>
+                    <ol className="orca-config__rules">
+                      {rows.map((row) => (
+                        <li key={`${row.order}`} className="orca-config__rule">
+                          <span className={`orca-config__order ${textClass("mono-id")}`}>{row.order}</span>
+                          <span className={`orca-config__rule-text ${textClass("mono-body")}`}>{row.text}</span>
+                          <Chip>{row.source}</Chip>
+                          {row.addedAt !== undefined && (
+                            <Time at={new Date(row.addedAt)} show={live ? "both" : "absolute"} />
+                          )}
+                          {row.grantedFor !== undefined && (
+                            <Text style="caption" className="orca-config__granted">
+                              {`granted for ${row.grantedFor}`}
+                            </Text>
+                          )}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                );
+              })
             )}
           </div>
         ))

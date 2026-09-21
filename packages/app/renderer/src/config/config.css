@@ -133,6 +133,20 @@
   gap: var(--space-2);
 }
 
+/* One layer of the policy — the config's rules, the sidecar's, ORCA's defaults — as its own
+   group under its own heading. Not a row, so it has no height of its own. */
+.orca-config__layer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.orca-config__layer-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
 .orca-config__rules {
   display: flex;
   flex-direction: column;

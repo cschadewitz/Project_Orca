@@ -11,6 +11,18 @@
   same refusal that never costs a draft — `CONFIG_STALE` shows the conflict, offers
   **Reload**, and what was edited is still there afterwards. Rules nobody touched keep when
   they were added and what for, and a fallthrough is never written into the sidecar.
+- **app:** ORCA's own default rules are drawn as their own read-only group, **ORCA's
+  defaults**, on the policy panel and on the Config surface's read-only view: no file holds
+  them and `config.set` cannot address them, so there is no link out of the group and nothing
+  to edit — writing a fallthrough in the config is what opts out of them (#140).
+- **app:** the sidecar's round trip is lossless or it is refused. A key this app does not
+  recognise rides through a save untouched, so editing one grant cannot delete a field on
+  another; and a document with an unknown `version`, or a rule with no `match` or an unknown
+  decision, shows the "cannot be edited here" state and points at the raw view rather than
+  being rewritten into a shape it guessed at. A sidecar somebody hand-wrote with its keys in
+  another order now counts one edit as one change rather than counting every row.
+- **app:** a read-only daemon's policy panel shows its grants as text throughout. The enum
+  menus already degraded; the path and pattern fields were boxes that quietly refused typing.
 - **app:** a run answering "allow always" reaches the open policy panel through
   `config.changed`, so the rows are the file's rather than the ones that were read.
 - **app:** a claim whose owning run cannot resume gets **Release**, with a confirmation

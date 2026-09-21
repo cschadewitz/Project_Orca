@@ -60,6 +60,66 @@ describe("the sidecar as a document", () => {
     expect(parseSidecar('{"agents":{"claude":{"rules":{}}}}')).toBeUndefined();
   });
 
+  it("refuses a row it could not draw rather than blanking the panel on it", () => {
+    /* Each of these parsed as JSON and then threw in `describeRule` or `serializeSidecar`,
+       which is a blank panel with no explanation. They are documents this app cannot edit,
+       and the documented answer to that is the "cannot be edited here" state. */
+    expect(parseSidecar('{"version":1,"agents":{"claude":{"rules":[null]}}}')).toBeUndefined();
+    expect(parseSidecar('{"version":1,"agents":{"claude":{"rules":["allow"]}}}')).toBeUndefined();
+    // No `match`: `describeRule` reads `rule.match.kind` off it.
+    expect(parseSidecar('{"version":1,"agents":{"claude":{"rules":[{"decision":"allow"}]}}}')).toBeUndefined();
+    // A `match` that is not an object, and a decision outside the vocabulary.
+    expect(
+      parseSidecar('{"version":1,"agents":{"claude":{"rules":[{"match":[],"decision":"allow"}]}}}'),
+    ).toBeUndefined();
+    expect(
+      parseSidecar('{"version":1,"agents":{"claude":{"rules":[{"match":{},"decision":"maybe"}]}}}'),
+    ).toBeUndefined();
+    // And the one that is fine: an empty match is "matches anything", not a broken row.
+    expect(parseSidecar('{"version":1,"agents":{"claude":{"rules":[{"match":{},"decision":"allow"}]}}}')).toBeDefined();
+  });
+
+  it("refuses a version it has not been taught, rather than rewriting it as a 1", () => {
+    // A shape this app does not know is a shape it must not re-serialise: whatever version
+    // 2 added would be dropped on the way out (ADR 0009's round trip).
+    expect(parseSidecar('{"version":2,"agents":{}}')).toBeUndefined();
+    expect(parseSidecar('{"version":"1","agents":{}}')).toBeUndefined();
+    // Absent is 1: the file the daemon writes always has one, and an older hand-written
+    // one without it is the only version there has ever been.
+    expect(parseSidecar('{"agents":{}}')).toEqual(EMPTY_SIDECAR);
+  });
+
+  it("carries a key it does not know through a save untouched", () => {
+    /* ADR 0009's document may grow a field before this panel learns about it. Dropping one
+       would make an edit to row one silent data loss in row two. */
+    const text = `{
+  "version": 1,
+  "agents": {
+    "claude": {
+      "rules": [
+        {
+          "match": { "kind": "read", "unknownNarrowing": "x" },
+          "decision": "allow",
+          "expiresAt": "2027-01-01T00:00:00.000Z"
+        }
+      ]
+    }
+  }
+}
+`;
+    const parsed = parseSidecar(text);
+    expect(parsed).toBeDefined();
+    const written = JSON.parse(serializeSidecar(parsed!)) as {
+      agents: { claude: { rules: Record<string, unknown>[] } };
+    };
+    const rule = written.agents.claude.rules[0]!;
+    expect(rule["expiresAt"]).toBe("2027-01-01T00:00:00.000Z");
+    expect((rule["match"] as Record<string, unknown>)["unknownNarrowing"]).toBe("x");
+    // The known keys keep the daemon's order and the unknown ones come after it.
+    expect(Object.keys(rule)).toEqual(["match", "decision", "expiresAt"]);
+    expect(Object.keys(rule["match"] as object)).toEqual(["kind", "unknownNarrowing"]);
+  });
+
   it("writes the daemon's own key order, and never a default", () => {
     const text = serializeSidecar(doc());
     expect(text.endsWith("\n")).toBe(true);
@@ -94,6 +154,47 @@ describe("the sidecar as a document", () => {
     expect(ruleChanges(before, removed)).toBe(1);
   });
 
+  it("counts one edit as one change over a sidecar somebody wrote by hand", () => {
+    /* The file as a person left it: the same two rules, with the keys in another order.
+       That is the same document — the daemon canonicalises key order on the way in, which
+       is why a client compares revisions rather than bytes — so an edit to one row is one
+       change. Comparing raw JSON against a canonicalised draft made it three. */
+    const byHand = parseSidecar(`{
+  "agents": {
+    "claude": {
+      "rules": [
+        {
+          "decision": "allow",
+          "grantedFor": "Edit src/index.ts",
+          "addedAt": "2026-09-20T10:00:00.000Z",
+          "match": { "pathPrefix": "src", "kind": "edit" }
+        },
+        {
+          "decision": "allow",
+          "match": { "titlePattern": "^git status$", "kind": "execute" },
+          "addedAt": "2026-09-20T11:00:00.000Z",
+          "grantedFor": "Run git status"
+        }
+      ]
+    }
+  },
+  "version": 1
+}
+`);
+    expect(byHand).toBeDefined();
+    // Untouched is untouched, whatever order the keys were in.
+    expect(ruleChanges(byHand!, byHand!)).toBe(0);
+    // And it is the same document the daemon's own bytes are.
+    expect(serializeSidecar(byHand!)).toBe(PERMISSIONS_TEXT);
+
+    const rules = rulesOf(byHand!, "claude");
+    const edited = withRules(byHand!, "claude", [
+      { ...rules[0]!, match: withMatch(rules[0]!.match, "pathPrefix", "packages") },
+      rules[1]!,
+    ]);
+    expect(ruleChanges(byHand!, edited)).toBe(1);
+  });
+
   it("gives a hand-added rule the time and the reason a reader of the diff needs", () => {
     const rule = handRule("2026-09-21T12:00:00.000Z");
     expect(rule.addedAt).toBe("2026-09-21T12:00:00.000Z");
@@ -112,26 +213,31 @@ describe("the sidecar as a document", () => {
 
 /* ------------------------------------------------------------------ screen -- */
 
-function renderPanel(): void {
+function renderPanel(agentId = "claude"): { close: () => void; reopen: () => void } {
   h = harness();
   teardown.push(h.dispose);
   const { Providers } = h;
-  render(
+  /* The draft model `App` mounts above every surface: the panel reads it rather than
+     holding one of its own, so the Config surface and this are never two answers to
+     "what is unsaved" (#175). `open` is what closing the panel does to it — the provider
+     stays mounted, which is the whole point of where the state lives. */
+  const tree = (open: boolean) => (
     <Providers>
-      {/* The draft model `App` mounts above every surface: the panel reads it rather than
-          holding one of its own, so the Config surface and this are never two answers to
-          "what is unsaved" (#175). */}
       <ConfigProvider>
-        <PolicyPanel
-          agentId="claude"
-          live
-          onOpen={() => {}}
-          onClose={() => {}}
-          now={() => "2026-09-21T12:00:00.000Z"}
-        />
+        {open ? (
+          <PolicyPanel
+            agentId={agentId}
+            live
+            onOpen={() => {}}
+            onClose={() => {}}
+            now={() => "2026-09-21T12:00:00.000Z"}
+          />
+        ) : null}
       </ConfigProvider>
-    </Providers>,
+    </Providers>
   );
+  const result = render(tree(true));
+  return { close: () => result.rerender(tree(false)), reopen: () => result.rerender(tree(true)) };
 }
 
 /** The panel, once it has read the configuration. */
@@ -185,6 +291,46 @@ describe("the policy editor", () => {
 
     // The fallthrough is configuration's, and the editor says so.
     expect((await panel()).textContent).toContain("Anything no rule matches: allow — from the config");
+  });
+
+  it("shows ORCA's defaults as their own group, read-only and with nowhere to edit them", async () => {
+    renderPanel();
+    await panel();
+
+    const defaults = await screen.findByRole("region", { name: "ORCA's defaults" });
+    const rows = within(defaults).getAllByRole("listitem");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain("allow read in the workspace");
+    expect(rows[0]!.textContent).toContain("default");
+    // Numbered on from the sidecar: the floor is evaluated last (#140).
+    expect(rows[0]!.textContent).toContain("4");
+    /* No control and no link. A configured rule at least has a file to be edited in; these
+       have none, so offering "edit on the Config surface" would point at nothing. */
+    expect(within(defaults).queryByRole("button")).toBeNull();
+    expect(within(defaults).getByText(/No file holds them/)).toBeTruthy();
+    // And they are not offered as grants: the editable section is the sidecar's alone.
+    expect(await grants()).toHaveLength(2);
+  });
+
+  it("says nothing about the fallthrough for an agent the effective policy does not name", async () => {
+    /* The sidecar is readable and the panel opens, but ORCA has not said what this agent
+       does when no rule matches — and "ask" would be the panel inventing it (rule 12). */
+    renderPanel("ghost");
+    const aside = await screen.findByRole("complementary", { name: "Permissions for ghost" });
+
+    expect(aside.textContent).not.toContain("Anything no rule matches");
+    expect(aside.textContent).toContain("does not name this agent");
+  });
+
+  it("says that a title pattern is used as written, because a hand-typed one is", async () => {
+    /* `decidePermission` runs `new RegExp(pattern).test(title)`: unanchored, so it matches
+       anywhere. The *writer* anchors the ones it derives with ^ and $, and the help that
+       said only "a regular expression" let that read as a promise about this box too. */
+    renderPanel();
+    const written = await grants();
+    const help = within(written[0]!).getByText(/regular expression tested against/);
+    expect(help.textContent).toContain("not anchored for you");
+    expect(help.textContent).toContain("matches anywhere in the title");
   });
 
   it("says that ORCA cannot count auto-approvals rather than showing a number", async () => {
@@ -315,5 +461,44 @@ describe("the policy editor", () => {
     expect(screen.queryByRole("button", { name: "Add a grant" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove grant 2" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+
+  it("degrades a read-only daemon's fields to text rather than to boxes that refuse typing", async () => {
+    fake.script({ hello: () => Promise.resolve({ ok: true, result: HELLO_READ_ONLY }) });
+    fake.connect({ state: "live", since: AS_OF, capabilities: HELLO_READ_ONLY.capabilities });
+    renderPanel();
+    await panel();
+
+    const written = await grants();
+    /* Every control on the row is a reading, not an input: the enum menus already became
+       text and a `readOnly` box beside them was a control that looked writable and was not.
+       There is nothing to write to — the daemon has no `config.set` — so there are no
+       boxes at all. */
+    expect(within(written[0]!).queryAllByRole("textbox")).toHaveLength(0);
+    expect(within(written[0]!).queryAllByRole("button")).toHaveLength(0);
+    // The values are still readable, and an unset narrowing still reads as "Any".
+    expect(written[0]!.textContent).toContain("src");
+    expect(written[0]!.textContent).toContain("Any");
+  });
+
+  it("keeps the grant edits when the panel closes, because the draft is held above it", async () => {
+    /* #175's review moved the draft model above this panel (`ConfigProvider`), and the
+       as-built section says so: closing the panel puts the edits down rather than throwing
+       them away, which is why there is no "discard?" warning on Close. */
+    const panels = renderPanel();
+    const written = await grants();
+    fireEvent.change(field(written[0]!, "Path prefix"), { target: { value: "packages" } });
+    await screen.findByRole("group", { name: "Unsaved configuration changes" });
+
+    panels.close();
+    expect(screen.queryByRole("complementary", { name: "Permissions for claude" })).toBeNull();
+
+    panels.reopen();
+    const reopened = await grants();
+    expect(field(reopened[0]!, "Path prefix").value).toBe("packages");
+    // Still one change, still unsaved, and nothing was written on the way through.
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(bar.textContent).toContain("1 change");
+    expect(fake.calls.filter((call) => call.method === "config.set")).toHaveLength(0);
   });
 });

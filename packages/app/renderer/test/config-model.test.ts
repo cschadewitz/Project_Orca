@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  POLICY_LAYERS,
   agentPolicies,
   buildSections,
   changeLabel,
@@ -19,6 +20,7 @@ import {
   normalizePath,
   patchFrom,
   placeErrors,
+  rowsFrom,
   sentenceCase,
   valueAt,
   type FieldNode,
@@ -178,12 +180,28 @@ describe("the effective permission policy", () => {
       [1, "config"],
       [2, "sidecar"],
       [3, "sidecar"],
+      // The third layer keeps its own word: it is not a document and nothing can edit it.
+      [4, "default"],
     ]);
     // Provenance rides on the sidecar rows only.
     expect(policy!.rows[0]!.addedAt).toBeUndefined();
     expect(policy!.rows[1]!.grantedFor).toBe("Edit src/index.ts");
     // The fallthrough is configuration's; the sidecar cannot carry one.
     expect(policy!.default).toBe("allow");
+  });
+
+  it("keeps ORCA's defaults out of the config's rules, and groups them as their own layer", () => {
+    const [policy] = agentPolicies(CONFIG_GET.effective);
+    // The floor is not the config: a rule nobody wrote must not be reported as one a
+    // person wrote (#140, and the bug ADR 0009's correction names).
+    expect(rowsFrom(policy!, "config").map((row) => row.order)).toEqual([1]);
+    expect(rowsFrom(policy!, "sidecar").map((row) => row.order)).toEqual([2, 3]);
+    expect(rowsFrom(policy!, "default").map((row) => row.order)).toEqual([4]);
+    // A default rule has no file and so no provenance to carry.
+    expect(rowsFrom(policy!, "default")[0]!.grantedFor).toBeUndefined();
+    // The layers are declared in evaluation order, so grouping by them reorders nothing.
+    expect(POLICY_LAYERS.map((layer) => layer.source)).toEqual(["config", "sidecar", "default"]);
+    expect(POLICY_LAYERS.filter((layer) => layer.editable).map((layer) => layer.source)).toEqual(["sidecar"]);
   });
 
   it("says what a rule matches in words, and says so when it narrows nothing", () => {

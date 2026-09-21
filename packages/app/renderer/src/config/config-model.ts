@@ -408,12 +408,51 @@ export function placeErrors(
 
 /* ---------------------------------------------------------- permissions -- */
 
+/** Where a rule came from, in the surface's words rather than the wire's. */
+export type PolicySource = "config" | "sidecar" | "default";
+
+/**
+ * The three layers, in the order `layerPermissionPolicies` assembles them, each with the
+ * heading a surface puts over its rules and a line saying who may edit them.
+ *
+ * It is a constant rather than three headings written twice because two surfaces draw these
+ * rules — the Config surface reads them, the Agents surface's panel writes the middle layer
+ * — and a group titled differently on each would read as two different policies. The order
+ * here is evaluation order, and grouping by it does not reorder anything: a layer's rules
+ * are contiguous because concatenating the layers is what produced the list.
+ */
+export const POLICY_LAYERS = [
+  {
+    source: "config",
+    title: "From the config",
+    /** Hand-curated, so it is edited where it was written (ADR 0009). */
+    editable: false,
+  },
+  {
+    source: "sidecar",
+    title: 'Written by "allow always"',
+    editable: true,
+  },
+  {
+    source: "default",
+    title: "ORCA's defaults",
+    /** No file behind them, so there is nowhere to link to and nothing to edit (#140). */
+    editable: false,
+  },
+] as const satisfies readonly { source: PolicySource; title: string; editable: boolean }[];
+
 /** One row of an agent's effective policy, in evaluation order, with where it came from. */
 export interface PermissionRow {
   /** Its position in the evaluated order, 1-based: first match wins, so the number means something. */
   order: number;
-  /** `config` or `sidecar` — the word on the chip. The sidecar is not the YAML. */
-  source: "config" | "sidecar";
+  /**
+   * `config`, `sidecar` or `default` — the word on the chip. The sidecar is not the YAML,
+   * and `default` is not a document at all: it is the floor `@orca/agents` appends last
+   * (#140), with no file behind it and nothing `config.set` can address. That is the whole
+   * reason the wire grew a third word, and a surface that folded it back into `config`
+   * would be reporting rules nobody wrote as if a person had written them.
+   */
+  source: PolicySource;
   /** The rule as a sentence: "allow edit under src". */
   text: string;
   decision: EffectivePermissionRule["decision"];
@@ -442,6 +481,18 @@ export function describeRule(rule: EffectivePermissionRule): string {
   return `${rule.decision} ${parts.join(" ")}`;
 }
 
+/** The wire's word for where a rule came from, in the surface's vocabulary. */
+function policySource(source: EffectivePermissionRule["source"]): PolicySource {
+  if (source === "permissions") return "sidecar";
+  if (source === "default") return "default";
+  return "config";
+}
+
+/** One agent's rows for one layer, in the order they are evaluated in. */
+export function rowsFrom(policy: AgentPolicyView, source: PolicySource): readonly PermissionRow[] {
+  return policy.rows.filter((row) => row.source === source);
+}
+
 /**
  * The effective policy per agent, in the daemon's evaluation order.
  *
@@ -459,8 +510,9 @@ export function agentPolicies(effective: {
     rows: policy.rules.map((rule, index) => ({
       order: index + 1,
       // The wire says which *document*; the surface says "sidecar" because that is what the
-      // file is called everywhere else in ORCA (ADR 0009).
-      source: rule.source === "permissions" ? "sidecar" : "config",
+      // file is called everywhere else in ORCA (ADR 0009). `default` is not a document and
+      // keeps its own word, so a floor reads as a floor rather than as config (#140).
+      source: policySource(rule.source),
       text: describeRule(rule),
       decision: rule.decision,
       ...(rule.addedAt === undefined ? {} : { addedAt: rule.addedAt }),

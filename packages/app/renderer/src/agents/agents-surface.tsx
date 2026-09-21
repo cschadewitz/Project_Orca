@@ -40,7 +40,7 @@
  * and keeps no total, on the wire or off it — so there is no number to put beside a policy
  * (RULES.md rule 12).
  */
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import type { ConnectionState } from "@orca/design";
 import { CLAIMS_RELEASE_METHOD, type ClaimView } from "@orca/protocol";
 import { useMethodPresent, useWritability } from "../chrome/use-connection.js";
@@ -296,7 +296,14 @@ function Claims({ claims, asOf, live, feed, canRelease }: ClaimsProps): JSX.Elem
       ) : (
         <ul className="orca-agents__claim-list">
           {claims.map((claim) => (
-            <li key={`${claim.workItemId}:${claim.owner.runId}`} className="orca-agents__claim">
+            <li
+              key={`${claim.workItemId}:${claim.owner.runId}`}
+              /* The two-line variant only where there is a second line to draw: a note from
+                 a release. Every other row is the one-line row (RULES.md rule 9). */
+              className={`orca-agents__claim${
+                feed.release?.workItemId === claim.workItemId ? " orca-agents__claim--note" : ""
+              }`}
+            >
               <span className={`orca-id ${textClass("mono-id")}`}>{claim.workItemId}</span>
               <span className={`orca-agents__claim-title ${textClass("label")}`}>{claim.workItem?.title ?? ""}</span>
               {/* `DisplayStatus` and the design's `RunStatus` are the same eight words,
@@ -401,12 +408,18 @@ function usePaletteActions(
   onRelease: (workItemId: string) => void,
 ): void {
   const keyboard = useKeyboard();
-  const agentIds = (agents ?? []).map((agent) => agent.id).join(" ");
-  const releasable = claims.filter((claim) => claim.owner.releasable).map((claim) => claim.workItemId);
-  const claimIds = releasable.join(" ");
+  /* The lists themselves, and not one string the effects split back apart. Joining ids on a
+     separator only holds while no id can contain it — the separator here had to be a NUL
+     byte to be sure of that — and the round trip was only ever there to keep the effects
+     from re-registering on every re-read. `useIds` does that directly: it hands back the
+     same array while the ids in it are the same ones. */
+  const agentIds = useIds(useMemo(() => (agents ?? []).map((agent) => agent.id), [agents]));
+  const claimIds = useIds(
+    useMemo(() => claims.filter((claim) => claim.owner.releasable).map((claim) => claim.workItemId), [claims]),
+  );
 
   useEffect(() => {
-    const off = (agentIds === "" ? [] : agentIds.split(" ")).map((id) =>
+    const off = agentIds.map((id) =>
       keyboard.register({
         scope: "card",
         label: `Edit permissions for ${id}`,
@@ -419,7 +432,7 @@ function usePaletteActions(
 
   useEffect(() => {
     if (!canRelease) return;
-    const off = (claimIds === "" ? [] : claimIds.split(" ")).map((workItemId) =>
+    const off = claimIds.map((workItemId) =>
       keyboard.register({
         scope: "card",
         label: `Release claim on ${workItemId}`,
@@ -429,4 +442,18 @@ function usePaletteActions(
     );
     return () => off.forEach((unregister) => unregister());
   }, [claimIds, keyboard, onRelease, canRelease]);
+}
+
+/**
+ * The same array back while it holds the same ids, so an effect keyed on it does not
+ * re-register a palette row every time the list is re-read.
+ *
+ * A push rebuilds the agents and the claims — that is what `agent.changed` is for — and the
+ * rebuilt arrays are new objects holding the same strings. The commands over them only
+ * change when the *ids* do, which is the comparison this makes.
+ */
+function useIds(ids: readonly string[]): readonly string[] {
+  const held = useRef<readonly string[]>(ids);
+  if (held.current.length !== ids.length || ids.some((id, at) => held.current[at] !== id)) held.current = ids;
+  return held.current;
 }

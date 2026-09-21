@@ -283,6 +283,7 @@
   --sidebar-width: 228px;
   --sidebar-width-collapsed: 48px;
   --panel-width: 420px;
+  --panel-w-policy: 52ch;
   --node-min-width: 132px;
   --node-w: 192px;
   --node-h: 64px;

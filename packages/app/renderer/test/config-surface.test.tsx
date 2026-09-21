@@ -268,8 +268,8 @@ describe("the permission sidecar", () => {
     const permissions = await screen.findByRole("region", { name: "Permissions" });
     const rules = within(permissions).getAllByRole("listitem");
 
-    // One configured, two written (#176's fixture): the whole effective policy, in order.
-    expect(rules).toHaveLength(3);
+    // One configured, two written, one of ORCA's own: the whole effective policy, in order.
+    expect(rules).toHaveLength(4);
     // Configured first, sidecar second — the order ORCA evaluates in, not one this screen chose.
     expect(rules[0]!.textContent).toContain("config");
     expect(rules[0]!.textContent).toContain("allow execute matching ^npm test$");
@@ -278,6 +278,25 @@ describe("the permission sidecar", () => {
     // A sidecar rule carries why it exists; a configured one has nothing to carry.
     expect(rules[1]!.textContent).toContain("granted for Edit src/index.ts");
     expect(within(permissions).getByText(/Anything no rule matches: allow/).textContent).toContain("from the config");
+  });
+
+  it("shows ORCA's defaults as their own group, with no file and nothing to edit", async () => {
+    renderConfig();
+    const permissions = await screen.findByRole("region", { name: "Permissions" });
+
+    /* The floor is drawn as a floor. Before the daemon tagged it (#140) it arrived as
+       `config` and this screen said a rule nobody wrote was one a person wrote. */
+    expect(within(permissions).getByText("ORCA's defaults")).toBeTruthy();
+    expect(within(permissions).getByText(/No file holds them/)).toBeTruthy();
+
+    const rules = within(permissions).getAllByRole("listitem");
+    expect(rules[3]!.textContent).toContain("default");
+    expect(rules[3]!.textContent).toContain("allow read in the workspace");
+    // Last, because the defaults are appended after the sidecar and the order is the policy.
+    expect(rules[3]!.textContent).toContain("4");
+    // Each layer under its own heading, and the two that are documents keep their words.
+    expect(within(permissions).getByText("From the config")).toBeTruthy();
+    expect(within(permissions).getByText('Written by "allow always"')).toBeTruthy();
   });
 
   it("shows the sidecar's own JSON, and offers no way to write it here", async () => {

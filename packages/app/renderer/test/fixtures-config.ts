@@ -143,6 +143,12 @@ export const CONFIG_GET: ConfigGetResult = {
             addedAt: "2026-09-20T11:00:00.000Z",
             grantedFor: "Run git status",
           },
+          /* ORCA's own floor, appended after the sidecar and tagged `default` by the daemon
+             (#140, ADR 0009's 2026-09-21 correction). It is in the fixture because a
+             surface that folded it into `config` would be reporting a rule nobody wrote as
+             one a person wrote, and no fixture without a default-sourced rule could catch
+             that. There is no file behind it, which is why it carries no provenance. */
+          { match: { kind: "read", scope: "workspace" }, decision: "allow", source: "default" },
         ],
       },
     },
