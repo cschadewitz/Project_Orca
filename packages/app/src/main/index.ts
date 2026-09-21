@@ -90,6 +90,12 @@ handle("orca:claims.list", (params: Parameters<DaemonClient["claimsList"]>[0]) =
 handle("orca:artifacts.list", (params: Parameters<DaemonClient["artifactsList"]>[0]) => client().artifactsList(params));
 handle("orca:artifacts.get", (params: Parameters<DaemonClient["artifactsGet"]>[0]) => client().artifactsGet(params));
 handle("orca:agents.list", (params: Parameters<DaemonClient["agentsList"]>[0]) => client().agentsList(params));
+// The workflow viewer's two reads (#174, for #177). Reads like the ones above: a
+// `--read-only` daemon answers both, because a workflow is a file and not a run.
+handle("orca:workflows.list", (params: Parameters<DaemonClient["workflowsList"]>[0]) =>
+  client().workflowsList(params),
+);
+handle("orca:workflows.get", (params: Parameters<DaemonClient["workflowsGet"]>[0]) => client().workflowsGet(params));
 
 // The three that write (#160, #161). They reach the daemon the same way the reads do; what
 // makes them different is on the other two sides - the daemon refuses them without the

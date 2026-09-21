@@ -51,7 +51,18 @@ methods. `orca serve --read-only` opts back out, and then those methods are *abs
 `hello.methods` rather than present and refusing — which is what makes "can this client
 write" a question about the handshake rather than about a failed call. The lease is the
 guard against a second writer; it is not access control, and any local process can reach the
-control methods on the loopback port (ADR 0008). It has two transports on one port. `socket.ts`
+control methods on the loopback port (ADR 0008). Since protocol 1.7 the read half also
+answers `workflows.list` and `workflows.get` (#174): the workflow files as a display graph —
+nodes with the per‑type fields the viewer shows, edges with their conditions, and the graphs
+written inline inside a `loop` or a `parallel` under the `parent::node` ids the engine
+addresses them by — plus a `traversal` on `runs.get`, the nodes a run took in order with
+their attempts and the edges between them, so the viewer (#177) can overlay a run on its
+graph. Both are reads, so `--read-only` answers them. The one thing they cannot do is serve
+an *old* version: ORCA records `workflowVersion` on `run.created` but keeps no copy of that
+definition, so `WorkflowView.versions` is which versions have run and `workflows.get` still
+answers only the one on disk. `workflows.changed` is on the wire with nothing emitting it —
+there is no workflow reload path yet — so a client may subscribe before the editor (#181) can
+send one. It has two transports on one port. `socket.ts`
 upgrades `/socket` in `ws`'s `noServer` mode, so `/health` and `/rpc` still reach the HTTP
 handler untouched; a connection carries the ordinary method table plus `subscribe` /
 `unsubscribe`, whose state is the connection's. `subscriptions.ts` owns one client's stream

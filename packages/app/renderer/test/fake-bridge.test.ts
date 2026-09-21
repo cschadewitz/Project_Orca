@@ -20,6 +20,8 @@ import {
   RunsGetResultSchema,
   RunsListResultSchema,
   RunsResumeResultSchema,
+  WorkflowsGetResultSchema,
+  WorkflowsListResultSchema,
 } from "@orca/protocol";
 import { fakeBridge, type FakeBridge } from "./fake-bridge.js";
 import { DEFAULT_PREFERENCES } from "../../src/preferences/schema.js";
@@ -58,6 +60,10 @@ describe("fixtures", () => {
     RunsCancelResultSchema.parse(await result(b.runs.cancel({ runId: "run-parent" })));
     RunsResumeResultSchema.parse(await result(b.runs.resume({ runId: "run-gate" })));
     ClaimsListResultSchema.parse(await result(b.claims.list()));
+    WorkflowsListResultSchema.parse(await result(b.workflows.list()));
+    WorkflowsGetResultSchema.parse(await result(b.workflows.get({ id: "sdlc" })));
+    // A graph written inline inside `sdlc`'s `parallel`, by the id the engine gives it.
+    WorkflowsGetResultSchema.parse(await result(b.workflows.get({ id: "sdlc::fanout::auth-ui" })));
     AgentsListResultSchema.parse(await result(b.agents.list()));
   });
 

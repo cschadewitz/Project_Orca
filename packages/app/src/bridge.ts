@@ -42,6 +42,10 @@ import type {
   RunsListResult,
   RunsResumeParams,
   RunsResumeResult,
+  WorkflowsGetParams,
+  WorkflowsGetResult,
+  WorkflowsListParams,
+  WorkflowsListResult,
 } from "@orca/protocol";
 import type { Preferences, PreferencesPatch } from "./preferences/schema.js";
 
@@ -198,6 +202,25 @@ export interface OrcaBridge {
      * than as an error — it exists, it is simply not being shown.
      */
     get: (params: Params<ArtifactsGetParams>) => Promise<BridgeResult<ArtifactsGetResult>>;
+  };
+  workflows: {
+    /**
+     * Every workflow the daemon has registered, as rows: the viewer's list and, later, the
+     * run-start picker (#178). A read, answered by a `--read-only` daemon too — a workflow
+     * is a file the daemon has already parsed, and reading it touches no run.
+     */
+    list: (params?: Params<WorkflowsListParams>) => Promise<BridgeResult<WorkflowsListResult>>;
+    /**
+     * One workflow's graph: nodes with their per-type fields, edges, and the graphs written
+     * inline inside a `loop`, a `parallel` or a `subworkflow` — each with the
+     * `parent::node` id the engine addresses it by, so the viewer may draw the nested graph
+     * it was given or fetch the same one again when a collapsed node is expanded.
+     *
+     * `version` may only ever be the version on disk. ORCA records which version a run
+     * started against but keeps no copy of that definition, so asking for an older one
+     * answers `WORKFLOW_NOT_FOUND` rather than a graph that is not the one that ran.
+     */
+    get: (params: WorkflowsGetParams) => Promise<BridgeResult<WorkflowsGetResult>>;
   };
   agents: {
     /**

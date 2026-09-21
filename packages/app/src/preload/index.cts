@@ -60,6 +60,10 @@ const bridge: OrcaBridge = {
     list: (params = {}) => call("orca:artifacts.list", params),
     get: (params) => call("orca:artifacts.get", params),
   },
+  workflows: {
+    list: (params = {}) => call("orca:workflows.list", params),
+    get: (params) => call("orca:workflows.get", params),
+  },
   agents: { list: (params = {}) => call("orca:agents.list", params) },
   notifications: {
     // The one channel the main process pushes on rather than answers on. Each renderer

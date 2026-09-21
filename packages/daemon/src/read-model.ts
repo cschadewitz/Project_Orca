@@ -37,6 +37,7 @@ import {
   type RunState,
   type RunSummary,
   type StepRun,
+  type WorkflowDefinition,
   type WorkItem,
 } from "@orca/core";
 import type { Orchestrator } from "@orca/engine";
@@ -64,10 +65,16 @@ import {
   type RunsListParams,
   type RunsListResult,
   type RunSummaryView,
+  type RunTraversalView,
   type StepView,
   type ViewError,
+  type WorkflowsGetParams,
+  type WorkflowsGetResult,
+  type WorkflowsListParams,
+  type WorkflowsListResult,
   type WorkItemView,
 } from "@orca/protocol";
+import { workflowSummaryView, workflowView } from "./workflow-model.js";
 
 /** The events a listing needs: a summary's, plus the one that says which agent worked the run. */
 const LIST_EVENT_TYPES = [
@@ -213,6 +220,45 @@ function factsFromState(state: RunState, agentByStep: ReadonlyMap<string, string
     if (agentId) facts.agentId = agentId;
   }
   return facts;
+}
+
+/**
+ * The path a run took through its workflow, in the order it took it: one entry per step run,
+ * which is one per *attempt*, so a retried node appears as many times as it was tried.
+ *
+ * `viaEdge` is the whole reason this exists beside `steps`. A step run records which node it
+ * was, never which edge brought the run to it, so the edge has to be recovered by putting
+ * the log beside the definition - the pair (previous node visited, this node) looked up in
+ * the definition's edges. Where that pair is not an edge there is no edge to name: a retry
+ * of the same node, a run resumed into the middle of a graph, a definition this daemon no
+ * longer has. In all three the field is absent rather than guessed, because an overlay that
+ * drew an edge nobody authored would be worse than one that drew none.
+ *
+ * A node visited twice by two different edges is two entries with two `viaEdge`s, which is
+ * the `ai-sdlc` review-to-build loop: `bump-build` is entered from `await-deps` the first
+ * time and from `tests-passed` afterwards.
+ */
+function traversalView(state: RunState, def: WorkflowDefinition | undefined): RunTraversalView[] {
+  const edges = new Set((def?.edges ?? []).map((e) => `${e.from} ${e.to}`));
+  const out: RunTraversalView[] = [];
+  let previous: string | undefined;
+  for (const id of state.stepOrder) {
+    const step = state.steps[id];
+    if (!step) continue;
+    const via = previous !== undefined && edges.has(`${previous} ${step.nodeId}`);
+    out.push({
+      nodeId: step.nodeId,
+      stepRunId: step.id,
+      attempt: step.attempt,
+      status: displayStatusForStep(step),
+      ...(step.startedAt ? { startedAt: step.startedAt } : {}),
+      ...(step.completedAt ? { endedAt: step.completedAt } : {}),
+      ...(via ? { viaEdge: { from: previous!, to: step.nodeId } } : {}),
+      ...(step.childRunIds.length ? { childRunIds: [...step.childRunIds] } : {}),
+    });
+    previous = step.nodeId;
+  }
+  return out;
 }
 
 /**
@@ -384,6 +430,7 @@ export class ReadModel {
       workspace: state.run.workspace,
       vars: state.run.vars,
       steps,
+      traversal: traversalView(state, this.definitionOrUndefined(state.run.workflowId)),
       artifacts: Object.values(state.artifacts)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
         .map(artifactView),
@@ -556,7 +603,74 @@ export class ReadModel {
     return { artifact: view, text: await store.content(artifact.id), asOf };
   }
 
+  /**
+   * Every workflow this daemon has registered, by id. It is the registry and not the disk:
+   * workflows are loaded once at bootstrap from the glob in `orca.config.yaml`, so this is
+   * what the daemon would *run*, which is the honest thing for a viewer to draw.
+   */
+  workflowsList(_params: WorkflowsListParams): WorkflowsListResult {
+    const asOf = this.clock.isoNow();
+    const workflows = this.orc.workflows.list().map(workflowSummaryView);
+    workflows.sort((a, b) => a.id.localeCompare(b.id));
+    return { workflows, asOf };
+  }
+
+  /**
+   * One workflow, whole, with its nested graphs inline. `id` may be a registered workflow's
+   * or an inline graph's `parent::node`; either way the resolution is the engine's own
+   * (`Orchestrator.resolveDefinition`), so the viewer and the interpreter agree about what a
+   * nested id names. An unknown id raises `WORKFLOW_NOT_FOUND`, which is that method's error.
+   *
+   * `version` is checked rather than honoured, and the difference is the point: a workflow is
+   * one file at one version, and the store keeps no copies of the versions its runs recorded
+   * (see `WorkflowView.versions`). So asking for the version on disk answers, and asking for
+   * any other says `WORKFLOW_NOT_FOUND` with both versions in the details - rather than
+   * quietly answering with a graph that is not the one that ran.
+   */
+  async workflowsGet(params: WorkflowsGetParams): Promise<WorkflowsGetResult> {
+    const asOf = this.clock.isoNow();
+    const def = this.orc.resolveDefinition(params.id);
+    if (params.version !== undefined && params.version !== def.version)
+      throw new OrcaError(
+        "WORKFLOW_NOT_FOUND",
+        `workflow '${params.id}' is at version ${def.version}; ORCA keeps no definition for version ${params.version}`,
+        { id: params.id, wanted: params.version, onDisk: def.version },
+      );
+    return { workflow: workflowView(def, await this.recordedVersions(def)), asOf };
+  }
+
   // ------------------------------------------------------------------ pieces
+
+  /**
+   * The versions of this workflow the daemon can see: the one on disk, plus every version
+   * the runs in this store were started against (`run.created` records `workflowVersion`).
+   * Oldest first by string order, which is what a version of `"1"`, `"2"`, `"11"` sorts to
+   * numerically only by accident - the field is free text in the schema, so this sorts it
+   * as text and does not pretend to a numbering scheme workflows do not have.
+   *
+   * A nested graph's id (`parent::node`) never matches a run's `workflowId` unless the engine
+   * spawned a child run for it, which is exactly when it should: a loop body that ran has its
+   * own child runs, recorded under that id.
+   */
+  private async recordedVersions(def: WorkflowDefinition): Promise<string[]> {
+    const versions = new Set<string>([def.version]);
+    const pass = this.pass();
+    for (const id of await this.orc.listRuns()) {
+      const facts = await pass.runFacts(id);
+      if (facts?.summary.workflowId === def.id) versions.add(facts.summary.workflowVersion);
+    }
+    return [...versions].sort((a, b) => a.localeCompare(b));
+  }
+
+  /** The run's definition, or nothing when this daemon no longer has it registered. */
+  private definitionOrUndefined(workflowId: string): WorkflowDefinition | undefined {
+    try {
+      return this.orc.resolveDefinition(workflowId);
+    } catch (e) {
+      if (e instanceof OrcaError && e.code === "WORKFLOW_NOT_FOUND") return undefined;
+      throw e;
+    }
+  }
 
   /** `stepRunId -> agentId`, from the only event that records which agent worked a step. */
   private async agentsByStep(runId: string): Promise<Map<string, string>> {

@@ -50,6 +50,10 @@ import {
   SubscribeParamsSchema,
   UNSUBSCRIBE_METHOD,
   UnsubscribeParamsSchema,
+  WORKFLOWS_GET_METHOD,
+  WORKFLOWS_LIST_METHOD,
+  WorkflowsGetParamsSchema,
+  WorkflowsListParamsSchema,
   formatProtocolVersion,
   isCompatible,
   type AgentsListParams,
@@ -77,6 +81,8 @@ import {
   type SubscribeResult,
   type UnsubscribeParams,
   type UnsubscribeResult,
+  type WorkflowsGetResult,
+  type WorkflowsListResult,
 } from "@orca/protocol";
 import type { ZodType } from "zod";
 import type { AgentModel } from "./agent-model.js";
@@ -206,6 +212,18 @@ export const artifactsGet: Method<Parameters<ReadModel["artifactsGet"]>[0], Arti
   handle: (params, ctx) => reads(ctx).artifactsGet(params),
 };
 
+/** `workflows.list`: every workflow this daemon has registered, as rows. */
+export const workflowsList: Method<Parameters<ReadModel["workflowsList"]>[0], WorkflowsListResult> = {
+  params: WorkflowsListParamsSchema,
+  handle: (params, ctx) => reads(ctx).workflowsList(params),
+};
+
+/** `workflows.get`: one workflow's graph - nodes, their fields, edges, nested graphs. */
+export const workflowsGet: Method<Parameters<ReadModel["workflowsGet"]>[0], WorkflowsGetResult> = {
+  params: WorkflowsGetParamsSchema,
+  handle: (params, ctx) => reads(ctx).workflowsGet(params),
+};
+
 // ----------------------------------------------------------------- the writes
 
 /** `inputs.answer`: record a person's answer to an open gate or permission ask, and continue. */
@@ -281,6 +299,8 @@ export const methods: MethodTable = {
   [CLAIMS_LIST_METHOD]: claimsList,
   [ARTIFACTS_LIST_METHOD]: artifactsList,
   [ARTIFACTS_GET_METHOD]: artifactsGet,
+  [WORKFLOWS_LIST_METHOD]: workflowsList,
+  [WORKFLOWS_GET_METHOD]: workflowsGet,
 };
 
 /** The four writing methods, kept apart so `--read-only` is one omission and not four. */

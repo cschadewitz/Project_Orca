@@ -1,5 +1,5 @@
 /**
- * A `window.orca` for tests: the handshake, the nine read methods, the three control
+ * A `window.orca` for tests: the handshake, the eleven read methods, the three control
  * methods, the OS-alert channel and daemon notifications, answered from `fixtures.ts`.
  *
  * This is the seam every screen test uses. The renderer can reach exactly one thing outside
@@ -55,6 +55,10 @@ import type {
   RunsListResult,
   RunsResumeParams,
   RunsResumeResult,
+  WorkflowsGetParams,
+  WorkflowsGetResult,
+  WorkflowsListParams,
+  WorkflowsListResult,
 } from "@orca/protocol";
 import type {
   AlertActivation,
@@ -67,6 +71,7 @@ import type {
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
 import { AS_OF, CLAIMS, EVENTS, HELLO, INPUTS, RUNS, RUN_DETAILS } from "./fixtures.js";
 import { AGENTS_LIST } from "./fixtures-agents.js";
+import { WORKFLOWS, WORKFLOW_VIEWS } from "./fixtures-workflows.js";
 import { ARTIFACTS, ARTIFACTS_BY_ID } from "./fixtures-artifacts.js";
 
 /** Params as a caller passes them: the schema defaults (`limit`, `offset`) are the daemon's job. */
@@ -83,6 +88,8 @@ export type MethodName =
   | "claims.list"
   | "artifacts.list"
   | "artifacts.get"
+  | "workflows.list"
+  | "workflows.get"
   | "agents.list"
   | "inputs.answer"
   | "runs.cancel"
@@ -100,6 +107,8 @@ export interface Handlers {
   "claims.list": (params: Params<ClaimsListParams>) => Answer<ClaimsListResult>;
   "artifacts.list": (params: Params<ArtifactsListParams>) => Answer<ArtifactsListResult>;
   "artifacts.get": (params: Params<ArtifactsGetParams>) => Answer<ArtifactsGetResult>;
+  "workflows.list": (params: Params<WorkflowsListParams>) => Answer<WorkflowsListResult>;
+  "workflows.get": (params: WorkflowsGetParams) => Answer<WorkflowsGetResult>;
   "agents.list": (params: Params<AgentsListParams>) => Answer<AgentsListResult>;
   "inputs.answer": (
     params: Params<InputsAnswerParams> & { requestId: string; optionId: string },
@@ -311,6 +320,21 @@ const defaults: Handlers = {
     });
   },
 
+  // The registered workflows only. The two graphs written inline inside `sdlc`'s `parallel`
+  // are fetchable by their `parent::node::branch` ids but are not rows: a nested graph is
+  // part of its parent's file and has no life of its own in a picker.
+  "workflows.list": () => ok({ workflows: [...WORKFLOWS], asOf: AS_OF }),
+
+  "workflows.get": ({ id, version }) => {
+    const workflow = WORKFLOW_VIEWS[id];
+    if (!workflow) return err("WORKFLOW_NOT_FOUND", `workflow '${id}' not registered`);
+    // The daemon's rule, not a convenience of this fake: ORCA keeps one definition per
+    // workflow, so a version other than the one on disk is not a graph it can produce.
+    if (version !== undefined && version !== workflow.version)
+      return err("WORKFLOW_NOT_FOUND", `workflow '${id}' is at version ${workflow.version}`);
+    return ok({ workflow, asOf: AS_OF });
+  },
+
   // `agents.list` takes no parameters: every configured agent comes back, contacted or not,
   // and the daemon does no filtering for the surface to mirror here.
   "agents.list": () => ok(AGENTS_LIST),
@@ -422,6 +446,10 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
     artifacts: {
       list: (params = {}) => call("artifacts.list", params) as Promise<BridgeResult<ArtifactsListResult>>,
       get: (params) => call("artifacts.get", params) as Promise<BridgeResult<ArtifactsGetResult>>,
+    },
+    workflows: {
+      list: (params = {}) => call("workflows.list", params) as Promise<BridgeResult<WorkflowsListResult>>,
+      get: (params) => call("workflows.get", params) as Promise<BridgeResult<WorkflowsGetResult>>,
     },
     agents: { list: (params = {}) => call("agents.list", params) as Promise<BridgeResult<AgentsListResult>> },
     notifications: {

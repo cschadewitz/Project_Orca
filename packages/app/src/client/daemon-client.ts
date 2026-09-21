@@ -36,6 +36,10 @@ import {
   RunsGetResultSchema,
   RunsListResultSchema,
   RunsResumeResultSchema,
+  WORKFLOWS_GET_METHOD,
+  WORKFLOWS_LIST_METHOD,
+  WorkflowsGetResultSchema,
+  WorkflowsListResultSchema,
   socketUrlFor,
   type AgentsListParams,
   type AgentsListResult,
@@ -62,6 +66,10 @@ import {
   type RunsListResult,
   type RunsResumeParams,
   type RunsResumeResult,
+  type WorkflowsGetParams,
+  type WorkflowsGetResult,
+  type WorkflowsListParams,
+  type WorkflowsListResult,
 } from "@orca/protocol";
 import type { ZodType } from "zod";
 import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
@@ -145,6 +153,20 @@ export class DaemonClient {
   /** One artifact's body, or the reason it is not being shown. */
   artifactsGet(params: Params<ArtifactsGetParams>): Promise<ArtifactsGetResult> {
     return this.call(ARTIFACTS_GET_METHOD, params, ArtifactsGetResultSchema);
+  }
+
+  /** Every workflow the daemon has registered, as rows for a picker or a viewer list (#174). */
+  workflowsList(params: Params<WorkflowsListParams> = {}): Promise<WorkflowsListResult> {
+    return this.call(WORKFLOWS_LIST_METHOD, params, WorkflowsListResultSchema);
+  }
+
+  /**
+   * One workflow's graph. `id` is a registered workflow's, or `parent::node` for a graph
+   * written inline inside one; `version` may only be the version on disk, because that is
+   * the only definition ORCA keeps.
+   */
+  workflowsGet(params: WorkflowsGetParams): Promise<WorkflowsGetResult> {
+    return this.call(WORKFLOWS_GET_METHOD, params, WorkflowsGetResultSchema);
   }
 
   /* ---------- the control methods: the calls that write ---------- */

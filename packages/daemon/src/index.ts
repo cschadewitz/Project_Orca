@@ -12,6 +12,7 @@
  * --read-only` leaves the whole of it out.
  */
 export * from "./read-model.js";
+export * from "./workflow-model.js";
 export * from "./control.js";
 export * from "./agent-model.js";
 export * from "./methods.js";
