@@ -102,15 +102,12 @@ const AUDITED = [
   /* Config (#175): a field of the form, which only exists once `config.get` has answered
      with a schema — the demo daemon serves its own `orca.config.yaml`, so there is one. */
   { id: "config", shortcut: 5, ready: ".orca-config__form .orca-field" },
+  /* Plan (#170): a row of the schedule table, which only exists once `plans.list` and
+     `items.list` have answered — the demo store's program run registers its work items in a
+     plan, so there is one. The last surface to leave the unbuilt list: as of v0.5.0 every
+     surface is audited, and a new one goes here on the day it grows content. */
+  { id: "plan", shortcut: 3, ready: '.orca-plan [role="listbox"] [role="option"]' },
 ] as const;
-
-/**
- * Plan, which is a `StateView` in v0.5.0 and is asserted as such below rather than audited.
- * A surface that says "this has not been built yet" would pass an axe run and mean nothing
- * by it; when it grows content, the assertion fails and whoever built it moves the entry up
- * into `AUDITED` — which is what happened to Config in #175.
- */
-const UNBUILT = [{ id: "plan", shortcut: 3, label: "Plan" }] as const;
 
 let daemon: Daemon;
 let app: ElectronApplication;
@@ -279,16 +276,16 @@ for (const surface of AUDITED) {
   }
 }
 
-test("Plan is unbuilt, and is not being passed off as audited", async () => {
-  for (const surface of UNBUILT) {
+test("no surface is passed off as unbuilt", async () => {
+  /* Through v0.4.0 the surfaces that had no screen yet were asserted to be the empty
+     `StateView` `App.tsx` gives them, so that the day one grew content the assertion failed
+     and its author moved it into `AUDITED`. As of v0.5.0 all five are audited; this keeps
+     the other half of that promise, that none of them still shows the placeholder. */
+  for (const surface of AUDITED) {
     const pane = await gotoSurface(surface.id, surface.shortcut);
-    /* `StateView kind="empty"`, with the surface's own label and the sentence `App.tsx`
-       gives it. Asserted rather than skipped silently, so that the day one of these grows
-       a screen this test fails and says which one — that is when it joins `AUDITED`. */
-    const state = pane.locator(".orca-state.orca-state--empty");
-    await expect(state).toBeVisible();
-    await expect(state).toContainText(surface.label);
-    await expect(state).toContainText("This surface has not been built yet.");
+    await expect(pane.locator(".orca-state.orca-state--empty")).not.toContainText(
+      "This surface has not been built yet.",
+    );
   }
 });
 

@@ -169,8 +169,10 @@ that never started get a fresh child run.
    `fs/write_text_file` from the host file system (scoped to the workspace) and
    answers `session/request_permission` through the agent's permission policy —
    the rules configured on the agent first, then any the workspace sidecar has
-   recorded (ADR 0009), first match winning, so a configured `deny` can never be
-   undone by something a machine wrote. The sidecar is **re‑read per ask**, not
+   recorded (ADR 0009), then — unless the config set `default:` itself — ORCA's
+   own defaults, which allow work inside the workspace and ask for anything else
+   (#140); first match wins, so a configured `deny` can never be undone by
+   something a machine wrote. The sidecar is **re‑read per ask**, not
    per session (#271), so an "allow always" answered while the run is in flight
    decides that run's next tool call rather than only the next session's.
    An `ask` decision becomes its own human‑input request (`human.requested` /
