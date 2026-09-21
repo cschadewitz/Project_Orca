@@ -6,12 +6,9 @@
    groups stack in, the grid the cards sit in, and the two blocks the card grows below its
    roles row.
 
-   One class here is not this surface's and should not be: `.orca-agents__health` is the
-   glyph-and-word the card leads with, and the component layer has no class for it —
-   `.orca-agent--degraded` tints the border but nothing carries the state's own foreground.
-   It is written from the same tokens `AGENT_HEALTH_PRESENTATION` names, so the two cannot
-   drift in value, but it belongs in `components.css` as `.orca-agent__health` next to
-   `.orca-agent__name`. Reported rather than edited (packages/design is not this change's).
+   The glyph-and-word the card leads with used to be `.orca-agents__health`, written here
+   because the component layer had no class for it. It is `.orca-agent__health` in
+   `components.css` now, next to `.orca-agent__name` where the rest of the card is (#278).
 
    Widths are in `ch` where they are columns of text: a ratio to the font already chosen
    rather than a design decision of its own (tools/eslint-config/css-tokens.js). */
@@ -80,28 +77,6 @@
 }
 
 /* ---------- inside a card ---------- */
-
-/* The state, never colour alone (rule 4): the glyph and the word travel together and the
-   card's tinted border is the third channel. See the note at the top of this file.
-   type: caption */
-.orca-agents__health {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-1);
-  white-space: nowrap;
-}
-.orca-agents__health--unknown {
-  color: var(--ink-tertiary);
-}
-.orca-agents__health--ok {
-  color: var(--status-succeeded);
-}
-.orca-agents__health--degraded {
-  color: var(--status-waiting);
-}
-.orca-agents__health--down {
-  color: var(--status-failed);
-}
 
 /* The metric block spans the card, under the roles: `.orca-agent` is a three-column grid and
    these are label/value pairs rather than a fourth column. */

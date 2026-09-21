@@ -220,7 +220,7 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
             label="Failed runs"
             className="orca-attn__failure-list"
             rowId={(run) => `attention-failure-${run.id}`}
-            rowClassName={() => "orca-attn__row orca-attn__row--listed"}
+            rowClassName={() => "orca-attn__row"}
             renderRow={(run) => <FailedRow run={run} live={live} />}
             selectedIndex={failureIndex}
             onSelect={setFailureIndex}
@@ -295,7 +295,7 @@ function Running({
         label="Running runs"
         className="orca-attn__running-list"
         rowId={(run) => `attention-running-${run.id}`}
-        rowClassName={() => "orca-attn__row orca-attn__row--listed"}
+        rowClassName={() => "orca-attn__row"}
         renderRow={(run) => <RunningRow run={run} live={live} />}
         selectedIndex={index}
         onSelect={setIndex}

@@ -57,7 +57,7 @@ export function AgentCard({ agent, live, onEditPermissions }: AgentCardProps): J
          the run rows use (docs/design/50-accessibility-and-keyboard.md). */
       aria-label={`${word}, ${agent.id}`}
     >
-      <span className={`orca-agents__health orca-agents__health--${agent.state} ${textClass("caption")}`}>
+      <span className={`orca-agent__health orca-agent__health--${agent.state} ${textClass("caption")}`}>
         <span aria-hidden="true">{glyph}</span>
         <span>{word}</span>
       </span>
