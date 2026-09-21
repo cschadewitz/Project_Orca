@@ -1,7 +1,7 @@
 /**
- * `subscribe` / `unsubscribe` and the eight notifications a subscription produces: six about
- * a run, and `agent.changed` and `workflows.changed`, which are pushes about the process
- * rather than about a run.
+ * `subscribe` / `unsubscribe` and the nine notifications a subscription produces: six about
+ * a run, plus `agent.changed`, `workflows.changed` and `config.changed`, which are pushes
+ * about the process and about the workspace's files rather than about a run.
  *
  * Everything else in this package is request/response. This is the other direction: the
  * daemon pushes, so a client renders a transition when it happens instead of asking five
@@ -35,6 +35,7 @@ import { z } from "zod";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
 import { AgentUpdateSummarySchema, GateOptionSchema, OrcaEventSchema, RunOutcomeSchema } from "@orca/core/schemas";
 import { AgentViewSchema } from "./agents.js";
+import { ConfigDocumentSchema } from "./config.js";
 import { InputAgentSchema, InputKindSchema } from "./inputs.js";
 import { DisplayStatusSchema } from "./status.js";
 import { ViewErrorSchema } from "./views.js";
@@ -63,6 +64,7 @@ export const NOTIFICATION_METHODS = [
   "event.appended",
   "agent.changed",
   "workflows.changed",
+  "config.changed",
 ] as const;
 export const NotificationMethodSchema = z.enum(NOTIFICATION_METHODS);
 export type NotificationMethod = z.infer<typeof NotificationMethodSchema>;
@@ -75,6 +77,7 @@ export const INPUT_ANSWERED = "input.answered";
 export const EVENT_APPENDED = "event.appended";
 export const AGENT_CHANGED = "agent.changed";
 export const WORKFLOWS_CHANGED = "workflows.changed";
+export const CONFIG_CHANGED = "config.changed";
 
 /**
  * What every *run* notification carries: which subscription asked for it, which run it is
@@ -280,6 +283,37 @@ export const WorkflowsChangedParamsSchema = z.object({
 });
 export type WorkflowsChangedParams = z.infer<typeof WorkflowsChangedParamsSchema>;
 
+/**
+ * `config.changed` - one of the two configuration documents was written. Another method
+ * with neither `runId` nor `seq`, and it follows `agent.changed` above in every respect:
+ * it is in `NOTIFICATION_METHODS` and in `DaemonNotification` so one parser and one
+ * subscription reach it, there is nothing to replay, and a client reconnecting re-reads
+ * `config.get` rather than resuming from a cursor.
+ *
+ * It fires on a successful `config.set` **and** when ORCA writes the sidecar itself - an
+ * `inputs.answer` with `always` appends a standing grant (ADR 0009), and a config screen
+ * that only heard about its own writes would show a stale policy the moment a run answered
+ * a prompt. Both writers announce, which is what makes "the sidecar is machine-written" a
+ * thing a person can watch happen rather than discover.
+ *
+ * It deliberately carries no `text`: a document can be large, the frame is pushed to every
+ * store-wide subscriber, and `revision` is enough to know that what is held is stale. A
+ * client that cares re-reads `config.get`; a client that finds `revision` equal to the one
+ * it already has - its own write, echoed back - does nothing at all.
+ */
+export const ConfigChangedParamsSchema = z.object({
+  subscriptionId: z.string(),
+  /** Which document moved. */
+  document: ConfigDocumentSchema,
+  /** That document's new `revision`; `""` if it was deleted. Compare, then re-read. */
+  revision: z.string(),
+  /** Absolute path of the file that was written. */
+  path: z.string(),
+  /** When the daemon wrote it, by the daemon's clock. Not a cursor. */
+  at: z.string(),
+});
+export type ConfigChangedParams = z.infer<typeof ConfigChangedParamsSchema>;
+
 /** Each notification method's params schema, so a client can validate one it routed by name. */
 export const NOTIFICATION_PARAMS = {
   [RUN_CHANGED]: RunChangedParamsSchema,
@@ -290,6 +324,7 @@ export const NOTIFICATION_PARAMS = {
   [EVENT_APPENDED]: EventAppendedParamsSchema,
   [AGENT_CHANGED]: AgentChangedParamsSchema,
   [WORKFLOWS_CHANGED]: WorkflowsChangedParamsSchema,
+  [CONFIG_CHANGED]: ConfigChangedParamsSchema,
 } as const satisfies Record<NotificationMethod, z.ZodType>;
 
 /** Method name to params type, for a client that switches on the method. */
@@ -302,6 +337,7 @@ export interface NotificationParamsByMethod {
   "event.appended": EventAppendedParams;
   "agent.changed": AgentChangedParams;
   "workflows.changed": WorkflowsChangedParams;
+  "config.changed": ConfigChangedParams;
 }
 
 /** A parsed notification: a discriminated union, so `switch (n.method)` narrows `n.params`. */

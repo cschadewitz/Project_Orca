@@ -37,7 +37,10 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * It is optional on the wire as well as in the rule - a workflow gate is nobody's agent -
  * so a client reads its absence as "no agent is blocked", never as a field that failed.
  *
- * 1.7 (2026-09-21) adds the workflow viewer's wire (#174, for #177): the two read methods
+ * 1.7 (2026-09-21) is the v0.5.0 wave: the configuration methods, the workflow viewer's wire
+ * and the plan methods land together, each an addition by this file's own rule.
+ *
+ * The workflow viewer's wire (#174, for #177): the two read methods
  * `workflows.list` and `workflows.get` with `WorkflowSummaryView` and `WorkflowView` behind
  * them, an optional `traversal` on `RunsGetResult` - the nodes a run took, in order, with
  * their attempts and the edges between them - and the `workflows.changed` notification.
@@ -49,6 +52,19 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * `workflows.changed` is in the list with nothing emitting it, which is stated rather than
  * hidden: there is no workflow reload path in the runtime today (see its schema), so a
  * client may subscribe now and will hear one when v0.6.0's editor can honestly send it.
+ *
+ * The configuration methods - `config.get` in `READ_METHODS`,
+ * `config.set` in `CONTROL_METHODS` - the `config.changed` notification, and the
+ * `CONFIG_STALE` control error code (#174, #266). Additions by this file's own rule: two
+ * methods, one notification method joining the list clients read by name, and one more code
+ * in a list that was always documented as open-ended (`ProtocolErrorSchema.code` is a plain
+ * string so a newer daemon's codes still parse). Nothing sent before is sent differently.
+ *
+ * The one thing worth saying out loud, because it is a capability decision and not a shape:
+ * neither method mints a capability. `config.get` is answered under `runs.read` and
+ * `config.set` under `runs.control`, so a 1.6 client that hid its write buttons on the
+ * absence of `runs.control` goes on hiding exactly the right ones, and a `--read-only`
+ * daemon omits `config.set` from `hello.methods` the way it omits the other four.
  */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 7 };
 

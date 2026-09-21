@@ -302,6 +302,69 @@ Declining is not an error — the panel still shows what the artifact *is*.
 `ARTIFACT_MISSING` when the index has no such artifact, and equally when it has one whose
 blob is gone.
 
+### `config.get` — the workspace's configuration, as two documents
+
+```ts
+params: {}
+result: { config: ConfigDocumentView; permissions: ConfigDocumentView;
+          schema: ConfigFieldDescription[]; effective: { agents: Record<id, EffectiveAgentPolicy> }; asOf }
+```
+
+A read, answered by a `--read-only` daemon (#174, #266). **Two** documents, because ADR 0009
+moved written permission grants out of the YAML: `config` is `orca.config.yaml` and
+`permissions` is `orca.permissions.json` beside it. A `ConfigDocumentView` is
+`{ document, path, exists, revision, text, parsed? }` — `revision` is the sha256 of the bytes
+(`""` when the file is not there), `text` the bytes verbatim, and `parsed` the document as
+YAML/JSON read it, *before* schema defaults, which is what a form binds to.
+
+**Nothing is redacted.** `text` is the file, host entries and command lines included. A form
+that edits a file has to show the file, and a redacted text written back would destroy what
+it hid; the port is loopback and unauthenticated either way, so this grants a reader nothing
+a `cat` did not.
+
+`schema` describes `OrcaConfigSchema`, walked at runtime rather than written out by hand:
+`{ path, type, enum?, required, default?, help? }` per field, with an array's element type
+written once as `hosts[]` and a discriminated union flattened — every branch's fields at one
+path, the discriminators merged into one `enum`, and a field only some branches have marked
+not required. A node the walker cannot describe is `type: "unknown"`, never guessed at.
+
+`effective` is each configured agent's policy **as it is actually evaluated**: the configured
+rules first, then the sidecar's, first match wins, each labelled `source: "config" | "permissions"`
+and carrying the sidecar's `addedAt` / `grantedFor`. `default` comes from configuration
+alone, because the sidecar carries none. It is computed here so a renderer never
+re-implements evaluation order.
+
+### `config.set` — write one of them
+
+```ts
+params: { document; expectedRevision; text? | patch?: { path; value? }[]; validateOnly? }
+result: { document: ConfigDocumentView; written; validation?: { errors: { path; message }[] }; asOf }
+```
+
+A write, so it is in `CONTROL_METHODS` and absent from a `--read-only` daemon; it reuses
+`runs.control` and mints no capability of its own. Exactly one of `text` and `patch` — they
+are different promises. `text` replaces the bytes; `patch` edits the parsed YAML *document*
+in place, so every comment and every piece of formatting survives. The daemon never
+re-serialises the parsed config, which would materialise every schema default into the file
+and delete every comment in it. A patch entry with no `value` deletes the key.
+
+`expectedRevision` is the `revision` the edit was made against (`""` asserts the file did not
+exist). Anything else is **`CONFIG_STALE`**, with `details: { document, expectedRevision,
+actualRevision }` — a refusal rather than a merge, because the daemon cannot know which of two
+edits to a field was meant. A schema failure is `CONFIG_INVALID` with `details.errors` keyed
+by dotted path (`hosts[1].type`), so a form places each message on the field it belongs to;
+`validateOnly` reports the same list instead of throwing and writes nothing.
+
+The sidecar write goes through the writer in `@orca/agents`, under its `link()` lock and in
+its fixed key order, so an operator's save and a run answering "always" both land. It is
+therefore *canonicalised* rather than stored verbatim — the one place `text` does not round
+trip byte for byte. A `permissions` document carrying a `default` is refused: answering one
+prompt must not change the answer to every other one (ADR 0009).
+
+**Nothing reloads.** The daemon goes on serving the configuration it booted with; the new one
+takes effect on the next `orca serve`. `config.set` takes no lease and appends no event, so
+editing the config while a run is in flight disturbs neither.
+
 ## The push channel
 
 ### `subscribe` / `unsubscribe` — socket only
@@ -328,8 +391,9 @@ is old". The capability is `runs.subscribe`.
 Six are about a run. Each carries `subscriptionId` (one connection may hold several),
 `runId`, `seq` — the sequence number, within that run, of the event behind it, and therefore
 **the cursor** — and `at`, the event's own timestamp rather than the moment the frame was
-sent. The other two, `agent.changed` and `workflows.changed`, are about the process and carry
-none of `runId` or `seq`; they have their own sections below.
+sent. The other three, `agent.changed`, `workflows.changed` and `config.changed`, are about
+the process and about the workspace's files; none carries `runId` or `seq`, and each has its
+own section below.
 
 - **`run.changed`** — `status`, the `run.*` `event`, and `outcome?` / `reason?` / `error?`.
 - **`step.changed`** — `stepRunId`, `status`, `event`, plus `nodeId`/`nodeType`/`attempt` on
@@ -424,6 +488,26 @@ is on the wire now so the viewer (#177) can subscribe from the version it ships 
 the editor (#181) — where publishing a draft *is* a write the daemon performs — has a frame
 to send rather than a protocol bump mid-feature. A client that subscribes today never hears
 one, which is what a workflow nobody edited looks like.
+
+### `config.changed` — the third push that is not about a run
+
+```ts
+params: { subscriptionId; document; revision; path; at }
+```
+
+New in **1.7** (#174, #266), and it follows `agent.changed` in every respect: store-wide
+subscriptions only, no `runId`, no `seq`, nothing to replay — a client reconnecting re-reads
+`config.get`.
+
+Both writers announce. A successful `config.set` sends one, and so does ORCA writing the
+sidecar itself when an `inputs.answer` with `always` appends a standing grant, because a
+configuration screen that only heard about its own writes would show a policy that stopped
+being true the moment a run answered a prompt (ADR 0009: the sidecar is meant to be read).
+An `always` that added nothing — the rule was already recorded — sends nothing.
+
+It carries no `text`: a document can be large and the frame goes to every store-wide
+subscriber. `revision` is enough to know that what is held is stale, and a client that finds
+it equal to the revision it already has — its own write, echoed back — re-reads nothing.
 
 ## The control methods
 

@@ -198,6 +198,27 @@ export const PermissionPolicyFileSchema = z.object({
 export type PermissionPolicyFile = z.infer<typeof PermissionPolicyFileSchema>;
 
 /**
+ * The same document, for a writer rather than a reader: it *refuses* a `default` instead of
+ * ignoring one.
+ *
+ * `PermissionPolicyFileSchema` above has no `default` field, and zod strips keys it does not
+ * know, so reading a sidecar that somehow grew one is silently tolerant - which is the right
+ * reading behaviour, because a stripped key changes nothing about how the policy evaluates.
+ * Writing is the other case. `config.set` on the `permissions` document (#266) takes a whole
+ * document from a client, and a client that sent a `default` meant it: accepting the write
+ * and dropping the field would report success for an edit that did nothing. Naming the key
+ * and rejecting it says what ADR 0009 decided, at the moment somebody tries the opposite.
+ */
+export const WritablePermissionPolicyFileSchema = PermissionPolicyFileSchema.extend({
+  default: z
+    .undefined({
+      error:
+        "the permission sidecar carries no `default`: answering one prompt must not change the answer to every other one (ADR 0009). Set the default in `agents[].permissions` in the config instead.",
+    })
+    .optional(),
+});
+
+/**
  * The policy `decidePermission` should be handed: the agent's configured rules first, then
  * each overlay in the order given. First match wins, so "first" is the precedence the
  * milestone settled on — configuration outranks anything a machine wrote, and a later

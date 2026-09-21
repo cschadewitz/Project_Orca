@@ -9,6 +9,7 @@ import { ProtocolVersionSchema } from "./version.js";
 import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD } from "./claims.js";
+import { CONFIG_GET_METHOD, CONFIG_SET_METHOD } from "./config.js";
 import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import { RUNS_EVENTS_METHOD, RUNS_GET_METHOD, RUNS_LIST_METHOD } from "./runs.js";
@@ -36,22 +37,35 @@ export const READ_METHODS = [
   // answers them like any other read.
   WORKFLOWS_LIST_METHOD,
   WORKFLOWS_GET_METHOD,
+  /**
+   * `config.get` reads two files and mints nothing, so it sits under `runs.read` alongside
+   * the rest and a `--read-only` daemon answers it (#174, #266). No new capability: a
+   * capability names a class of functionality, and "reading what this daemon is configured
+   * with" is not a different class from reading what it has run.
+   */
+  CONFIG_GET_METHOD,
 ] as const;
 
 /**
- * The methods behind the `runs.control` capability - the four that write.
+ * The methods behind the `runs.control` capability - the five that write.
  *
  * `orca serve --read-only` leaves every one of them out of the dispatch table *and* out of
  * `HelloResult.methods`, and drops `runs.control` from `capabilities`. That is the whole of
  * the difference: a read-only daemon answers "unknown method", it does not answer a control
  * call and then refuse it, because a client should be able to hide a button rather than
  * discover at the moment of pressing it that there is nothing behind it.
+ *
+ * `config.set` joins them (#174). It writes no run and takes no lease, but it writes a file
+ * this daemon is serving, and "read-only" that edited the configuration would be a read-only
+ * daemon in name only. It reuses `runs.control` rather than minting a capability of its own,
+ * for the same reason `config.get` reuses `runs.read`.
  */
 export const CONTROL_METHODS = [
   INPUTS_ANSWER_METHOD,
   RUNS_RESUME_METHOD,
   RUNS_CANCEL_METHOD,
   RUNS_START_METHOD,
+  CONFIG_SET_METHOD,
 ] as const;
 
 /**
