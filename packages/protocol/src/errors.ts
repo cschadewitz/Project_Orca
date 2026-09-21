@@ -31,6 +31,16 @@ export const CONTROL_ERROR_CODES = [
    * if the client can say where there is.
    */
   "RUN_LEASED_ELSEWHERE",
+  /**
+   * A `config.set` was made against a revision the file no longer has: somebody - a person
+   * in an editor, another client, or ORCA itself answering "always" - wrote it in between.
+   * `details` carries `document`, `expectedRevision` and `actualRevision`, so a form can say
+   * "this changed underneath you" and offer the current text rather than silently winning.
+   *
+   * It is a refusal and not a merge on purpose. The daemon cannot know which of two edits to
+   * the same field was meant, and a configuration file is the wrong place to guess (#174).
+   */
+  "CONFIG_STALE",
 ] as const;
 
 export type ProtocolOnlyErrorCode = (typeof PROTOCOL_ERROR_CODES)[number] | (typeof CONTROL_ERROR_CODES)[number];

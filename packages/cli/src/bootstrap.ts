@@ -6,7 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { AgentRegistry } from "@orca/agents";
+import { AgentRegistry, openAcpSession, permissionPolicyPath, type OpenSessionOptions } from "@orca/agents";
 import {
   consoleLogger,
   loadTemplates,
@@ -32,6 +32,7 @@ import {
   type OrcaPlugin,
   type PluginApi,
   type RunLeaseOptions,
+  type SessionFactory,
   type WorkspaceProvider,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
@@ -63,6 +64,16 @@ export interface BootstrapOptions {
 export interface OrcaApp {
   config: OrcaConfig;
   configDir: string;
+  /**
+   * The file `config` was read from, when it was read from one. Absent means discovery found
+   * nothing and the schema's defaults are the whole configuration - which is a real state
+   * (`orca serve` in a bare directory), not a failure.
+   *
+   * It is kept rather than discarded because the daemon serves the *file* as well as what it
+   * parsed to: `config.get` returns its bytes and its path, and `config.set` writes it
+   * (#174). Nothing else needs it, and nothing should read it in place of `config`.
+   */
+  configFile?: string | undefined;
   orchestrator: Orchestrator;
   program: ProgramService;
   plan: PlanService;
@@ -91,13 +102,18 @@ export async function findConfig(cwd: string): Promise<string | undefined> {
   }
 }
 
-export async function loadConfig(cwd: string, configPath?: string): Promise<{ config: OrcaConfig; configDir: string }> {
+export async function loadConfig(
+  cwd: string,
+  configPath?: string,
+): Promise<{ config: OrcaConfig; configDir: string; configFile?: string }> {
   const file = configPath ?? (await findConfig(cwd));
   if (!file) return { config: parseOrcaConfig({}), configDir: resolve(cwd) };
   const text = await readFile(file, "utf8");
   const raw = file.endsWith(".json") ? JSON.parse(text) : parseYaml(text);
   try {
-    return { config: parseOrcaConfig(raw), configDir: dirname(resolve(file)) };
+    // The path travels with the parsed config: `config.get`/`config.set` serve the file
+    // itself, and rediscovering it in the daemon could find a different one (#174).
+    return { config: parseOrcaConfig(raw), configDir: dirname(resolve(file)), configFile: resolve(file) };
   } catch (e) {
     throw new OrcaError("CONFIG_INVALID", `${file}: ${(e as Error).message}`, {}, { cause: e });
   }
@@ -126,6 +142,26 @@ export function makeWorkspaceProvider(config: OrcaConfig, configDir: string, age
   }
 }
 
+/**
+ * `openAcpSession` with the workspace permission sidecar bound to it (#271).
+ *
+ * This is the whole of the plumbing ADR 0009 was missing: the file the daemon's
+ * `ControlModel` appends an "always" answer to is `permissionPolicyPath(configDir)`, and it
+ * has to be the *same* path the session evaluating the next ask reads, or a recorded grant
+ * never applies. Binding it here rather than on `OrchestratorOptions` keeps the knowledge in
+ * one place — the engine has no config directory and should not learn about one — and it
+ * covers every caller of `bootstrap` at once: `orca run`, `orca resume`, `orca serve` and
+ * the ACP facade all get their sessions through the orchestrator this returns, including the
+ * daemon's `agents.ping`, which goes through `Orchestrator.sessionFactory` too.
+ *
+ * `open` exists so a test can read the options this builds without spawning an agent; it is
+ * `openAcpSession` everywhere else.
+ */
+export function makeSessionFactory(configDir: string, open: SessionFactory = openAcpSession): SessionFactory {
+  const permissionFiles = [permissionPolicyPath(configDir)];
+  return (options: OpenSessionOptions) => open({ ...options, permissionFiles });
+}
+
 export function makeHumanInput(config: OrcaConfig): HumanInputPort {
   switch (config.humanInput.mode) {
     case "auto":
@@ -139,8 +175,8 @@ export function makeHumanInput(config: OrcaConfig): HumanInputPort {
 
 export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const cwd = opts.cwd ?? process.cwd();
-  const { config, configDir } = opts.config
-    ? { config: opts.config, configDir: opts.configDir ?? cwd }
+  const { config, configDir, configFile } = opts.config
+    ? { config: opts.config, configDir: opts.configDir ?? cwd, configFile: undefined }
     : await loadConfig(cwd, opts.configPath);
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
@@ -208,11 +244,16 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     workspaceProvider,
     plan,
     logger,
+    // An ephemeral bootstrap deliberately gets none: it is a one-shot over in-memory stores
+    // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
+    // durable workspace state of exactly the kind `ephemeral` means to leave alone.
+    ...(opts.ephemeral ? {} : { sessionFactory: makeSessionFactory(configDir) }),
     ...(opts.lease ? { lease: opts.lease } : {}),
   });
   return {
     config,
     configDir,
+    ...(configFile ? { configFile } : {}),
     orchestrator,
     program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow),
     plan,

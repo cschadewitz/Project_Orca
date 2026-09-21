@@ -113,14 +113,43 @@ describe("deep links", () => {
     await waitFor(() => expect(landing()).toBeUndefined());
   });
 
-  it("lands an item link on Plan, whose surface is not built yet", async () => {
+  it("lands a config link on the document it names", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+
+    fake.link("orca://config/permissions");
+
+    await waitFor(() => expect(activeSurface()).toContain("Config"));
+    // The sidecar has the keyboard: landing on a document means being in it, and a person
+    // who followed that link did not ask for the YAML.
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("orca.permissions.json"));
+    expect(landing()?.textContent).toContain("orca.permissions.json");
+  });
+
+  it("lands the bare config link in the YAML, which is the document it names", async () => {
+    const { fake } = mount();
+    await screen.findByRole("button", { name: "Attention" });
+
+    // `orca://config` is the configuration, and the configuration is `orca.config.yaml`
+    // (`route-table.ts`). Landing on a document means being in it, so the bytes take the
+    // keyboard rather than the form the person did not ask for.
+    fake.link("orca://config");
+
+    await waitFor(() => expect(activeSurface()).toContain("Config"));
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("orca.config.yaml"));
+  });
+
+  it("lands an item link on Plan, and says which item it is holding", async () => {
     const { fake } = mount();
     await screen.findByRole("button", { name: "Attention" });
 
     fake.link("orca://item/wi-1");
 
     await waitFor(() => expect(activeSurface()).toContain("Plan"));
-    expect(screen.getByText("This surface has not been built yet.")).toBeTruthy();
+    // The surface is built as of #170, so the link lands on the schedule itself. `wi-1` is
+    // not in this store's plan, which leaves the table as it is and the landing naming the
+    // id — a link is never dropped because the object behind it is not there.
+    await screen.findByRole("grid", { name: "Schedule" });
     expect(landing()?.textContent).toContain("wi-1");
   });
 });

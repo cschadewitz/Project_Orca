@@ -1,6 +1,6 @@
 /**
- * The control model: the four methods that write, and the one function the CLI and the
- * daemon both answer a gate through.
+ * The control model: the methods that write without needing a plan, and the one function the
+ * CLI and the daemon both answer a gate through.
  *
  * **One implementation of "answer a gate", not two.** `orca answer <requestId> <option>` has
  * always been `Orchestrator.answer()` followed by `Orchestrator.resume()`, in that order,
@@ -27,6 +27,10 @@ import { recordAlwaysDecision, type RecordAlwaysResult } from "@orca/agents";
 import type { Orchestrator } from "@orca/engine";
 import {
   ProtocolFault,
+  type ClaimsReleaseParams,
+  type ClaimsReleaseResult,
+  type ClaimView,
+  type ConfigDocument,
   type InputsAnswerParams,
   type InputsAnswerResult,
   type RunsCancelParams,
@@ -56,11 +60,14 @@ export interface AnswerAndResumeOptions {
   /** Re-drive afterwards and return once the run is parked again or finished. Default true. */
   resume?: boolean | undefined;
   /**
-   * How to continue. Defaults to `Orchestrator.resume`, which is all the daemon may do: a
-   * `ProgramService.resume` additionally mirrors a finished program run onto its Request
-   * *document*, and a daemon writing documents beside a CLI is exactly #196. `orca answer`
-   * passes `ProgramService.resume`, because in a one-shot CLI process there is no second
-   * writer to lose the write to.
+   * How to continue. Defaults to `Orchestrator.resume`; `orca answer` passes
+   * `ProgramService.resume`, which additionally mirrors a finished program run onto its
+   * Request *document*.
+   *
+   * That difference used to be a safety rule - a daemon writing documents beside a CLI was
+   * exactly #196 - and is now a scope one: the document store re-reads under a lock, so the
+   * write would be safe, but mirroring a program run onto a Request is `ProgramService`'s
+   * job and the daemon is not running a program. It stays a caller's choice either way.
    */
   resumeWith?: ((runId: string) => Promise<RunState>) | undefined;
 }
@@ -164,6 +171,27 @@ async function refuseIfLeasedElsewhere(orc: Orchestrator, runId: string): Promis
   );
 }
 
+/**
+ * Run something that drives `runId`, translating the engine's `RUN_LEASED` into the wire's
+ * `RUN_LEASED_ELSEWHERE`.
+ *
+ * `refuseIfLeasedElsewhere` above is a check, and every check of a lease has a race after it:
+ * another process can take the lease in the window before the engine takes it, and an operator
+ * can take it *away* mid-run (#267). The engine raises `RUN_LEASED` for both, and without this
+ * it surfaces as an unclassified INTERNAL fault - the one refusal a client most needs to tell
+ * apart, arriving as the one it cannot. `runs.cancel` had this from the start; `runs.start`
+ * and `runs.resume` did not, which is the bug this closes.
+ */
+async function leased<T>(runId: string, drive: () => Promise<T>): Promise<T> {
+  try {
+    return await drive();
+  } catch (e) {
+    if (isOrcaError(e, "RUN_LEASED"))
+      throw new ProtocolFault("RUN_LEASED_ELSEWHERE", e.message, { runId, ...(e.details ?? {}) });
+    throw e;
+  }
+}
+
 export interface ControlModelOptions {
   orchestrator: Orchestrator;
   /** The projection the results are rendered from; control answers in the read model's shapes. */
@@ -174,21 +202,38 @@ export interface ControlModelOptions {
    * rather than honouring the answer once and quietly recording no rule.
    */
   permissionsFile?: string | undefined;
+  /**
+   * Where an "always" answer's sidecar write is announced (#266). `recordAlwaysDecision`
+   * knows nothing about subscriptions, so the push is made here: a config screen watching
+   * the sidecar has to see ORCA's own writes and not only the operator's, or it shows a
+   * policy that was true a moment ago. `ConfigModel` is what satisfies this.
+   */
+  config?: ConfigAnnouncer | undefined;
   /** Defaults to the orchestrator's own clock, so a test can pin every `asOf`. */
   clock?: Clock | undefined;
 }
 
-/** The four writing methods, over one orchestrator holding one lease per run. */
+/** The half of `ConfigModel` the control model needs: "that document moved, tell the clients". */
+export interface ConfigAnnouncer {
+  announce(document: ConfigDocument): Promise<void>;
+}
+
+/**
+ * The five writing methods that need no plan, over one orchestrator holding one lease per run.
+ * Four drive a run; `claims.release` takes a work item back from one.
+ */
 export class ControlModel {
   private readonly orc: Orchestrator;
   private readonly reads: ReadModel;
   private readonly permissionsFile: string | undefined;
+  private readonly config: ConfigAnnouncer | undefined;
   private readonly clock: Clock;
 
   constructor(opts: ControlModelOptions) {
     this.orc = opts.orchestrator;
     this.reads = opts.reads;
     this.permissionsFile = opts.permissionsFile;
+    this.config = opts.config;
     this.clock = opts.clock ?? opts.orchestrator.clock;
   }
 
@@ -203,6 +248,10 @@ export class ControlModel {
    */
   async answerInput(params: InputsAnswerParams): Promise<InputsAnswerResult> {
     const permission = params.always ? await this.recordAlways(params) : undefined;
+    // Only when the file actually changed: `alreadyPresent` rewrote nothing, and a frame
+    // announcing a revision nobody moved is the kind of noise `agent.changed` refuses to
+    // send on `lastSeenAt`.
+    if (permission && permission.added.length > 0) await this.config?.announce("permissions");
     const { request, state } = await answerAndResume(this.orc, {
       requestId: params.requestId,
       answer: params.optionId,
@@ -220,7 +269,14 @@ export class ControlModel {
     };
   }
 
-  /** `runs.resume`: re-drive a parked run here, under this daemon's lease, until it stops again. */
+  /**
+   * `runs.resume`: re-drive a parked run here, under this daemon's lease, until it stops again.
+   *
+   * `refuseIfLeasedElsewhere` is the fast refusal with a pid in it; `leased()` is the one that
+   * catches the race it cannot close. The lease can be taken between that check and the
+   * engine's own, and it can be taken *away* while the run is being driven, and both come back
+   * as an engine `RUN_LEASED` that a screen cannot branch on until it is a `ProtocolFault`.
+   */
   async resumeRun(params: RunsResumeParams): Promise<RunsResumeResult> {
     const state = await this.orc.getState(params.runId);
     if (isFinished(state))
@@ -229,7 +285,7 @@ export class ControlModel {
         status: state.run.status,
       });
     await refuseIfLeasedElsewhere(this.orc, params.runId);
-    await this.orc.resume(params.runId);
+    await leased(params.runId, () => this.orc.resume(params.runId));
     return { run: await this.runView(params.runId), asOf: this.clock.isoNow() };
   }
 
@@ -243,20 +299,16 @@ export class ControlModel {
    */
   async cancelRun(params: RunsCancelParams): Promise<RunsCancelResult> {
     await refuseIfLeasedElsewhere(this.orc, params.runId);
-    try {
-      await this.orc.cancel(params.runId, params.reason);
-    } catch (e) {
-      if (isOrcaError(e, "RUN_LEASED"))
-        throw new ProtocolFault("RUN_LEASED_ELSEWHERE", e.message, { runId: params.runId, ...(e.details ?? {}) });
-      throw e;
-    }
+    await leased(params.runId, () => this.orc.cancel(params.runId, params.reason));
     return { run: await this.runView(params.runId), asOf: this.clock.isoNow() };
   }
 
   /**
    * `runs.start`: create a run and drive it here until it parks or finishes.
    *
-   * A workflow and its vars, and no documents (`RunsStartParamsSchema` says why, #196).
+   * A workflow and its vars, and no documents - not because the store could not take them
+   * (#196 made it multi-process safe) but because submitting a request is a method still to
+   * be designed. `RunsStartParamsSchema` says the rest.
    * `requestId` and `workItemId` travel onto `run.created` and out on the `run.changed`
    * notification; neither is read back from a document store.
    */
@@ -267,8 +319,49 @@ export class ControlModel {
       ...(params.requestId ? { requestId: params.requestId } : {}),
       ...(params.workItemId ? { workItemId: params.workItemId } : {}),
     });
-    await this.orc.run(runId);
+    // A run this daemon has just created cannot be leased by anyone else *yet*, but it can be
+    // by the time `run` reaches `execute`, and the lease can be taken away mid-run (#267).
+    // Either way the engine raises `RUN_LEASED`, and an unmapped one reaches the client as an
+    // INTERNAL fault with no run id on it.
+    await leased(runId, () => this.orc.run(runId));
     return { runId, run: await this.runView(runId), asOf: this.clock.isoNow() };
+  }
+
+  /**
+   * `claims.release`: take a work item away from the run that claimed it (#88).
+   *
+   * It lives with the run controls rather than with the plan writes, because `handshake.ts`
+   * puts it in `CONTROL_METHODS` and because it needs nothing from `PlanService`: it is
+   * `Orchestrator.releaseClaim`, a compare-and-delete against the claim store, plus the run
+   * projection's `ClaimView`. A control daemon over a store with no plan in it answers it,
+   * which is what advertising `runs.control` promises.
+   *
+   * `Orchestrator.releaseClaim` is the whole of the rule - it refuses while the owner could
+   * still resume unless `force`, and it compares and deletes against the incumbent it
+   * inspected, so a claim another run took in the meantime survives. What is added here is
+   * the `ClaimView` the wire speaks and the note `orca claims release` prints: the claim
+   * decides who may *launch* the item, and an item left `in-progress` by a dead run's log is
+   * still treated as running by the scheduler until that status changes.
+   */
+  async releaseClaim(params: ClaimsReleaseParams): Promise<ClaimsReleaseResult> {
+    const asOf = this.clock.isoNow();
+    // The claim as `claims.list` would have shown it, taken before the release, because
+    // afterwards there is no claim to project.
+    const before = await this.reads.claimsList({ workItemId: params.workItemId });
+    const released = await this.orc.releaseClaim(params.workItemId, { force: params.force });
+    const claim: ClaimView = before.claims[0] ?? {
+      workItemId: released.workItemId,
+      branch: released.branch,
+      claimedAt: released.at,
+      owner: { runId: released.runId, status: "stale", missing: true, releasable: true },
+      ...(released.stepRunId ? { stepRunId: released.stepRunId } : {}),
+    };
+    const item = await this.orc.stores.workItems.get(params.workItemId);
+    const note =
+      item?.status === "in-progress"
+        ? `${params.workItemId} is still in-progress${item.runId ? ` (run ${item.runId})` : ""}; the plan scheduler treats it as running until that status changes`
+        : undefined;
+    return { claim, ...(note ? { note } : {}), asOf };
   }
 
   // ------------------------------------------------------------------ pieces

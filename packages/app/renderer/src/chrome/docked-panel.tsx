@@ -13,7 +13,7 @@
  * The registrations themselves are `ArtifactPanel`'s — they are about an artifact, and
  * there is nothing to step when none is open.
  */
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 import { ArtifactPanel } from "../artifacts/artifact-panel.js";
 import { useArtifactPanel } from "../artifacts/panel-context.js";
 import { scopeProps } from "../keyboard-map.js";
@@ -21,16 +21,27 @@ import { Button, StateView, Text, textClass } from "../ui/index.js";
 
 export interface DockedPanelProps {
   onClose: () => void;
+  /**
+   * What the surface on screen has put in the dock, when it is not an artifact: the Plan
+   * inspector (#170, and #171's relationship inspector after it). The dock is "a Plan
+   * surface as well as a Runs surface" as of option B
+   * (docs/design/80-dependency-graph-options.md), and a surface hands its panel up the
+   * same way it hands up its crumbs — the panel is the chrome's, on every screen.
+   *
+   * It wins over the artifact when both exist: it is about what is selected *now*, and an
+   * artifact opened on Runs is not what a person switching to Plan is looking at.
+   */
+  content?: { label: string; body: ReactNode } | undefined;
 }
 
-export function DockedPanel({ onClose }: DockedPanelProps): JSX.Element {
+export function DockedPanel({ onClose, content }: DockedPanelProps): JSX.Element {
   const { target } = useArtifactPanel();
 
   return (
     <div className="orca-panel" {...scopeProps("panel")}>
       <div className={`orca-pane__head ${textClass("label-strong")}`}>
-        <span>Panel</span>
-        {target !== undefined && (
+        <span>{content?.label ?? "Panel"}</span>
+        {content === undefined && target !== undefined && (
           <Text style="caption" className="orca-faint">
             {`${target.name}@v${target.version}`}
           </Text>
@@ -42,7 +53,9 @@ export function DockedPanel({ onClose }: DockedPanelProps): JSX.Element {
           </span>
         </Button>
       </div>
-      {target === undefined ? (
+      {content !== undefined ? (
+        content.body
+      ) : target === undefined ? (
         <StateView kind="empty" title="Nothing pinned" body="Artifacts open here — click one on a step." />
       ) : (
         <ArtifactPanel target={target} />

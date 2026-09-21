@@ -7,16 +7,24 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { parseOrcaConfig, silentLogger, toGateOption, type OrcaConfig } from "@orca/core";
+import { AgentSpecSchema, parseOrcaConfig, silentLogger, toGateOption, type OrcaConfig } from "@orca/core";
 import { GitWorktreeProvider, LocalWorkspaceProvider, PausingHumanInput } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
-import { AgentRegistry, LocalHost } from "@orca/agents";
+import {
+  AgentRegistry,
+  LocalHost,
+  openAcpSession,
+  permissionPolicyPath,
+  type AgentSession,
+  type OpenSessionOptions,
+} from "@orca/agents";
 import {
   bootstrap,
   CONFIG_FILENAMES,
   findConfig,
   loadConfig,
   makeHumanInput,
+  makeSessionFactory,
   makeWorkspaceProvider,
 } from "../src/bootstrap.js";
 
@@ -222,6 +230,37 @@ describe("bootstrap", () => {
       code: "CONFIG_INVALID",
       message: expect.stringContaining("no default OrcaPlugin export"),
     });
+  });
+
+  /**
+   * #271: the sidecar a run's session evaluates has to be the file the daemon's
+   * `inputs.answer` appends to - `permissionPolicyPath(app.configDir)` - or an "allow
+   * always" the person was told was recorded never decides anything.
+   */
+  it("binds the permission sidecar the daemon writes to every session it opens", async () => {
+    const dir = await temp();
+    let opened: OpenSessionOptions | undefined;
+    const factory = makeSessionFactory(dir, async (options) => {
+      opened = options;
+      return undefined as unknown as AgentSession;
+    });
+    await factory({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: AgentSpecSchema.parse({ id: "a", command: "x" }),
+      cwd: dir,
+    });
+    // The workspace sidecar, first and alone: a user-scoped file layers under it later (ADR 0009).
+    expect(opened?.permissionFiles).toEqual([permissionPolicyPath(dir)]);
+    expect(permissionPolicyPath(dir)).toBe(join(dir, "orca.permissions.json"));
+
+    // And an app over a real config directory gets that factory rather than the bare
+    // `openAcpSession` an Orchestrator falls back to.
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+    const app = await bootstrap({ cwd: dir, logger: silentLogger });
+    expect(app.orchestrator.sessionFactory).not.toBe(openAcpSession);
+    // Ephemeral is the one-shot (`orca agent ping`): no durable workspace state, no sidecar.
+    const throwaway = await bootstrap({ cwd: dir, ephemeral: true, logger: silentLogger });
+    expect(throwaway.orchestrator.sessionFactory).toBe(openAcpSession);
   });
 
   it("refuses to start when a workflow does not validate, listing every problem", async () => {

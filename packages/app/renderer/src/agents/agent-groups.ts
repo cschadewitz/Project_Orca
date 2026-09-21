@@ -19,7 +19,7 @@
  * unlike `run.changed`, which carries a status and a cursor and so needs a `runs.get` to
  * become a row, this notification *is* the row.
  */
-import type { AgentHostType, AgentView } from "@orca/protocol";
+import type { AgentHostType, AgentView, ClaimView } from "@orca/protocol";
 
 /** Every agent spawned on one host, with that host's transport when it has one. */
 export interface HostGroup {
@@ -81,4 +81,39 @@ export function countLabel(agents: number, hosts: number): string {
 export function transportLabel(hostType: AgentHostType | undefined): string | undefined {
   if (hostType === undefined) return undefined;
   return hostType === "local" ? "local" : "ssh";
+}
+
+/* ------------------------------------------------------------------ claims -- */
+
+/**
+ * Why **Release** will not fire, when `owner.releasable` says it will not (#88, #176).
+ *
+ * The daemon refuses a release while the owning run could still resume, and
+ * `ClaimView.owner.releasable` predicts exactly that refusal — which is what lets a client
+ * disable the control with a reason instead of calling and being told. The sentence is the
+ * daemon's own reading of the situation, in its own terms (`claims.ts` in `@orca/protocol`,
+ * `orca claims release`), not a second rule invented here: this function decides nothing, it
+ * only puts the run's status into words.
+ *
+ * `--force` is deliberately not offered as a way round it. Taking an item away from a run
+ * that is merely paused-and-forgotten is a decision with no undo, and the reason names the
+ * two ordinary ways out before it names the CLI.
+ */
+export function releaseRefusal(claim: ClaimView): string | undefined {
+  if (claim.owner.releasable) return undefined;
+  const run = claim.owner.name ?? claim.owner.runId;
+  return `The run could still resume: ${run} is ${claim.owner.status}. Resume or cancel it first, or force the release from the command line.`;
+}
+
+/**
+ * What releasing this claim does, in the words the confirmation shows: the work item, the
+ * run it is taken from, and the consequence. Every clause is a fact off the `ClaimView` —
+ * nothing here predicts what the scheduler will then do, which is what the result's own
+ * `note` is for.
+ */
+export function releaseConsequence(claim: ClaimView): string {
+  const run = claim.owner.name ?? claim.owner.runId;
+  const title = claim.workItem?.title;
+  const subject = title === undefined || title === "" ? claim.workItemId : `${claim.workItemId} — ${title}`;
+  return `Take ${subject} back from ${run}. The item goes back to the scheduler and another run may claim it.`;
 }

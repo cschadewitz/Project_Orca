@@ -27,6 +27,15 @@ suppressed. It holds 3:1 on every surface and every status tint in both themes. 
 always visible for keyboard interaction; `:focus-visible` governs whether it is drawn after a
 mouse click, but it is never removed from the stylesheet.
 
+There is one ring and one rule that draws it, and nothing turns it off. The command palette
+was the exception until #260: its field suppressed the ring against a compensating ring on
+the overlay that was never drawn, so ⌘K led somewhere with no focus indicator at all. The
+field draws the ordinary ring now, and the palette draws none of its own — a `:focus-within`
+ring on the overlay would be a second look, drawn after a mouse click as well, to be kept in
+step with the first by hand. The field's only difference is that its ring is inset by its own
+width rather than offset outwards: the overlay clips its content and the field spans its full
+width, so an outward ring would lose three of its four sides. Same token, same 2px.
+
 Selection and focus are separate and look different: selection is `surface-selected` plus a
 2px `accent` left rail, focus is the ring. A row can be selected without being focused (the
 list has selection, the palette has focus), and the design must keep both legible at once.
@@ -48,8 +57,21 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Streams | `G` / `⇧G` | Top / bottom, `⇧G` re-enters following |
 | Streams | `/` | Search within the stream, `N` / `⇧N` to cycle matches |
 | Cards | `1`–`9`, `Enter`, `⇧Enter`, `G` | Select option, submit, submit with a note, go to the run |
+| Workflow canvas | `↑` / `↓` | Move the selection within a layer |
+| Workflow canvas | `→` / `←` | Move the selection to the next / previous layer |
+| Workflow canvas | `Enter` | Expand or collapse the selected `subworkflow` or `parallel` |
+| Workflow canvas | `+` / `-` / `0` | Zoom in, zoom out, back to rest |
+| Workflow canvas | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
+| Schedule table | `Enter` | Explain the selected work item |
+| Plan journal | `J` / `K`, `↑` / `↓` | Move selection |
 | Panel | `[` / `]` | Previous / next artifact version |
+| Config | `⌘S` | Save the configuration draft |
 | Anywhere | `Esc` | Close the topmost transient layer, never lose an unsent draft |
+
+The two Plan rows are one screen with two lists on it (#170), and the second list is why
+there is a `plan-journal` scope beside `list`: the substrate registers the movement keys in
+whichever scope a list names, one list per scope, so `J` means "next" in whichever of the
+two the focus is in. The schedule table is `list`, like every other primary list.
 
 Every action in this map is also in the command palette, with its key shown beside it. The
 converse does not hold, and deliberately: a command may register with **no key at all** and be
@@ -60,6 +82,10 @@ letters left stays discoverable. Nothing is reachable by keyboard alone or by mo
 
 - The run tree is a `tree` with `treeitem` rows carrying `aria-level`, `aria-expanded` and
   `aria-selected`. The status is in the accessible name, first: "failed, build, attempt 2 of 3".
+- A list whose rows hold **controls** is a `grid` of `row`s with `gridcell` cells, not a
+  `listbox` of `option`s: an `option` is a leaf, so the button inside one — the schedule
+  badge's **why**, the claim's run — is a control nothing can reach, and that is what axe
+  calls `nested-interactive`. The plan's schedule table is the one such list today.
 - Streaming output is **not** a live region. An agent producing 40 lines a second would make
   the app unusable with a screen reader. Instead, a polite live region announces step
   transitions and terminal states only ("build step failed, 3 attempts"), and the output pane
@@ -79,8 +105,11 @@ follows `prefers-color-scheme` unless the person has chosen one explicitly.
 
 The layout holds from 960px to 2560px. Below 1100px the docked panel becomes an overlay over
 the primary pane; below 960px the sidebar collapses to icons. There is no phone layout and
-none is planned. The five glyphs that rail collapses to were never designed — `surfaces.ts`
-invented them, and #261 is the decision to make about that.
+none is planned. The five glyphs that rail collapses to are designed and declared — they are
+`semantics.json`'s `surface` map, bundled in the symbol face and listed in
+`10-information-architecture.md` beside the surfaces they name (#261). Each button keeps its
+label as its accessible name and its `⌘1`–`⌘5` address at every width, so the rail loses the
+word on screen and nothing else.
 
 ## How this is enforced
 

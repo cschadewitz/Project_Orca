@@ -73,10 +73,15 @@ and writes the record, so two processes over one store extend one journal.
 | `version` | increments each time a step produces an artifact with the same name (re‑runs, loops) |
 | `path` | where it was materialised on the host (absolute) |
 | `mediaType` | taken from the deliverable's `mediaType`, default `text/markdown` |
-| `contentHash` / `size` | content‑addressed blob in the ArtifactStore |
+| `contentHash` / `size` | content‑addressed blob in the ArtifactStore: sha‑256 over the body's **bytes**, and its length in bytes |
 | `data` | structured part: YAML front matter (or the JSON body for `.json`) |
 | `producedBy` | run, step, node, agent session, agent id, host id |
 | `parents` | ids of the input artifacts the producing step saw |
+
+A body is bytes in the store (#226): `ArtifactStore.put` takes a `string` or a `Uint8Array`,
+`content(id)` decodes UTF‑8 for the text callers that are all of ORCA today, and `bytes(id)`
+returns the blob untouched, so a PNG or a PDF round‑trips. `mediaType` is what says which of
+the two views is meaningful — the index records nothing else about it.
 
 `ArtifactSpec` (on a node's `produces:`) says what to expect: kind, name, `path` template,
 `required`, and `validate` (`requiredFields`, `fieldValues`, `minBodyLength`).

@@ -59,11 +59,34 @@ export const SAME_GUTTER = " ";
  */
 export const MAX_CELLS = 4_000_000;
 
-/** Split a body into lines the way a diff reads it: a trailing newline terminates, it does not add. */
+/**
+ * Split a body into lines the way a diff reads it: a trailing newline terminates, it does
+ * not add.
+ *
+ * `toLines("")` is `[""]` and stays that way, deliberately: a one-line file whose line is
+ * empty is not the same object as a file with nothing in it, and the split is the wrong
+ * place to lose that. What is *diffed* is decided in {@link bodyLines} below.
+ */
 export function toLines(text: string): string[] {
   const lines = text.split("\n");
   if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
   return lines;
+}
+
+/**
+ * The lines a *body* contributes to a diff: an empty body contributes none (#250).
+ *
+ * `"".split("\n")` is `[""]`, so without this a version compared against an empty one —
+ * v1 of an artifact, or a body a tool recorded as the empty string — diffs as a file of one
+ * blank line, and the panel's sentence reads "1 added, 1 removed" for what is a pure
+ * creation. The gutters and the bodies were always right; only the count lied.
+ *
+ * It is here rather than in {@link toLines} because the distinction is about counting a
+ * *change*, not about splitting a string: `diffLines([""], [])` is still one removed empty
+ * line, because a caller that passes an array has already said the line exists.
+ */
+function bodyLines(text: string): string[] {
+  return text === "" ? [] : toLines(text);
 }
 
 /** The gutter a line takes. Exported so the renderer never restates the three glyphs. */
@@ -75,7 +98,7 @@ export function gutterFor(op: DiffOp): string {
 
 /** Diff two bodies. `a` is the older version, `b` the newer. */
 export function diffText(a: string, b: string): Diff {
-  return diffLines(toLines(a), toLines(b));
+  return diffLines(bodyLines(a), bodyLines(b));
 }
 
 export function diffLines(a: readonly string[], b: readonly string[]): Diff {

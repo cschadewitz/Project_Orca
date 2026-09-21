@@ -53,9 +53,22 @@ describe("orca demo", () => {
     expect(await commands.demo!.run(ctx(dir, [], { dir }))).toBe(0);
 
     const configPath = join(dir, "orca.config.yaml");
-    const config = parseOrcaConfig(parseYaml(await readFile(configPath, "utf8")));
+    const raw = await readFile(configPath, "utf8");
+    const config = parseOrcaConfig(parseYaml(raw));
     expect(config.agents.map((a) => a.id)).toEqual(["scripted"]);
     expect(config.storeDir).toBe(join(dir, ".orca"));
+
+    // The demo serialises the *parsed* AgentSpec, so whatever parsing injects it claims as
+    // configured. Since #140's defaults moved out of the schema and into evaluation, there is
+    // nothing to inject: the file says `default: ask` and no rules, which is the truth, and
+    // the default rules stay a layer that the sidecar is still matched ahead of.
+    expect(raw).toMatch(/^ {4}permissions:$/m);
+    expect(raw).not.toMatch(/scope: workspace/);
+    expect(config.agents[0]!.permissions).toEqual({ rules: [] });
+    // No `default:` in the generated file either, so the demo agent gets the #140 defaults
+    // rather than opting itself out of them by spelling a fallthrough it was never asked for.
+    expect(config.agents[0]!.permissions.default).toBeUndefined();
+    expect(raw).not.toMatch(/^ {6}default:/m);
 
     // Same invocation as the README quick start: needs the config (without one no
     // agent fills the ai-sdlc roles and bootstrap throws WORKFLOW_INVALID).

@@ -65,6 +65,16 @@ export interface MenuItem {
  */
 export type MenuMeasurer = (trigger: Element, menu: Element) => MenuMeasurement;
 
+/**
+ * What may be put on the trigger from outside: the wiring a form field owns, and nothing
+ * that would change what the menu is. `ConfigFieldControl` is exactly this shape.
+ */
+export interface MenuTriggerProps {
+  id?: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: true;
+}
+
 export interface MenuProps {
   /** The accessible name of both the trigger and the list it opens. */
   label: string;
@@ -74,7 +84,43 @@ export interface MenuProps {
   children: ReactNode;
   /** The trigger's class, so a surface keeps its own disclosure styling. */
   triggerClassName?: string;
+  /**
+   * Ids a field wants on the control it wraps — `ConfigField`'s `control`, spread onto the
+   * trigger button.
+   *
+   * A `Menu` *is* the control when it renders an enum field, so the field's `htmlFor`, its
+   * `aria-describedby` and its `aria-invalid` have to land on the button. Without this they
+   * dangled: the label pointed at an id nothing carried, and the help and the error under
+   * the field were written for a screen reader that never reached them. The trigger keeps
+   * its own `aria-label` — an `id` names nothing.
+   */
+  triggerProps?: MenuTriggerProps;
   measure?: MenuMeasurer;
+  /**
+   * Controlled disclosure, for the one case a surface cannot press the trigger itself:
+   * `orca://item/<slug>` lands on Plan **with the explanation open** (#165, #170), and a
+   * link that arrives is not a click.
+   *
+   * Pass both or neither. Everything else stays the primitive's — focus in on open and
+   * back to the trigger on close, `Esc` through the layer stack, the roving keys, the
+   * placement — so a controlled menu is the same menu with its open state held one level
+   * up, not a second implementation. Omitted, the menu owns its own state, which is what
+   * every other caller wants.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /**
+   * Something the popover has to *say* rather than offer: an error where a list of choices
+   * was expected, and nothing else. It is rendered above the items, is not a `menuitem`,
+   * is never focused, never typed to and never chosen — so it cannot be mistaken for, or
+   * copied as, one of them.
+   *
+   * It is here rather than as a disabled item because a disabled item is still an item: it
+   * is counted, named and read as one of the choices, and a menu whose only row is a
+   * disabled error is a popover focus cannot enter. A note keeps the menu openable with no
+   * items at all, and focus goes to the list itself so `Esc` still returns to the trigger.
+   */
+  note?: ReactNode;
 }
 
 /** The marker `menu`-scope shortcuts use to find the open menu around the focused item. */
@@ -213,9 +259,26 @@ export function Menu({
   onChoose,
   children,
   triggerClassName,
+  triggerProps,
   measure = measureInDocument,
+  open: controlled,
+  onOpenChange,
+  note,
 }: MenuProps): JSX.Element | null {
-  const [open, setOpen] = useState(false);
+  const [uncontrolled, setUncontrolled] = useState(false);
+  const open = controlled ?? uncontrolled;
+  /* One setter, whichever half owns the state: an uncontrolled menu writes its own, a
+     controlled one reports and lets its owner write. Both tell the owner, so a surface
+     that opened a menu hears it close. */
+  const report = useRef(onOpenChange);
+  report.current = onOpenChange;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (controlled === undefined) setUncontrolled(next);
+      report.current?.(next);
+    },
+    [controlled],
+  );
   const [placement, setPlacement] = useState<MenuPlacement>(DEFAULT_PLACEMENT);
   const anchor = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -227,16 +290,22 @@ export function Menu({
     setOpen(false);
     const element = trigger.current;
     if (element?.isConnected) element.focus();
-  }, []);
+  }, [setOpen]);
 
   useTransientLayer(open, { name: "menu", close });
   useMenuKeys(open);
 
-  // Focus moves into the menu on open: the first item, so ↓ and Enter work immediately.
+  /* Focus moves into the menu on open: the first item, so ↓ and Enter work immediately.
+     A menu that is only a note has no item to land on, so focus goes to the list itself —
+     which is what keeps the layer something focus is *inside*, so `Esc` returns it to the
+     trigger rather than stranding it. */
   useEffect(() => {
     if (!open) return;
     const menu = list.current;
-    if (menu) itemsOf(menu)[0]?.focus();
+    if (!menu) return;
+    const first = itemsOf(menu)[0];
+    if (first) first.focus();
+    else menu.focus();
   }, [open]);
 
   /* Measured after layout and again on resize, so a menu opened near an edge flips on the
@@ -264,7 +333,7 @@ export function Menu({
     };
     document.addEventListener("mousedown", onPointer);
     return () => document.removeEventListener("mousedown", onPointer);
-  }, [open]);
+  }, [open, setOpen]);
 
   // Typeahead: the next item whose label starts with the letter, wrapping, from the one
   // after the focused item — so pressing the same letter twice cycles the matches.
@@ -281,11 +350,13 @@ export function Menu({
   };
 
   // A trigger for an empty menu is a control that does nothing; the surface draws neither.
-  if (items.length === 0) return null;
+  // A note is something to say, so a menu that has one is not empty.
+  if (items.length === 0 && note === undefined) return null;
 
   return (
     <span className="orca-menu-anchor" ref={anchor}>
       <button
+        {...triggerProps}
         type="button"
         ref={trigger}
         className={triggerClassName}
@@ -303,9 +374,17 @@ export function Menu({
           aria-label={label}
           ref={list}
           onKeyDown={onTypeahead}
+          /* Focusable only as a fallback: with items, focus lives on them and the list is
+             never the active element. */
+          tabIndex={-1}
           {...{ [MENU_ATTRIBUTE]: "" }}
           {...scopeProps("menu")}
         >
+          {note === undefined ? null : (
+            <li className="orca-menu__note" role="none">
+              {note}
+            </li>
+          )}
           {items.map((item) => (
             <li key={item.id} role="none">
               <button

@@ -47,9 +47,26 @@ export function humanInputCancelled(signal?: AbortSignal): OrcaError {
   return new OrcaError("CANCELLED", String(signal?.reason ?? "cancelled"));
 }
 
-/** Always answers with `option` (or the first option's id). */
+/**
+ * Always answers with `option` (or the first option's id).
+ *
+ * With one exception, and it is the point of #140: a **permission** ask is not answered by
+ * taking the first option. The options on a permission request are the agent's own, in the
+ * agent's order, and the first of them is conventionally "allow once" — so picking it would
+ * turn every `ask` in an unattended run back into an `allow`, silently, which is exactly
+ * what the conservative default exists to stop. An unattended run has nobody to ask, so the
+ * ask is refused (`undefined` → a `cancelled` outcome → the tool call fails, the run does
+ * not). A sandbox that really does want blanket approval names the option it means
+ * (`humanInput: { mode: auto, option: allow }`) and gets it when the agent offers that id —
+ * or, better, says `permissions: { default: allow }` and is never asked in the first place.
+ */
 export function autoHumanInput(option?: string): HumanInputPort {
-  return { ask: async (q) => option ?? q.options[0]?.id };
+  return {
+    ask: async (q) => {
+      if (q.kind !== "permission") return option ?? q.options[0]?.id;
+      return option !== undefined && q.options.some((o) => o.id === option) ? option : undefined;
+    },
+  };
 }
 
 /**

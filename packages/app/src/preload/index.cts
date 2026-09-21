@@ -50,17 +50,44 @@ const bridge: OrcaBridge = {
     events: (params) => call("orca:runs.events", params),
     cancel: (params) => call("orca:runs.cancel", params),
     resume: (params) => call("orca:runs.resume", params),
+    start: (params) => call("orca:runs.start", params),
   },
   inputs: {
     list: (params = {}) => call("orca:inputs.list", params),
     answer: (params) => call("orca:inputs.answer", params),
   },
-  claims: { list: (params = {}) => call("orca:claims.list", params) },
+  claims: {
+    list: (params = {}) => call("orca:claims.list", params),
+    release: (params) => call("orca:claims.release", params),
+  },
+  plan: {
+    list: (params = {}) => call("orca:plans.list", params),
+    get: (params) => call("orca:plan.get", params),
+    items: (params) => call("orca:items.list", params),
+    schedule: (params) => call("orca:schedule.get", params),
+    explain: (params) => call("orca:schedule.explain", params),
+    dependencies: (params) => call("orca:dependencies.list", params),
+    risks: (params) => call("orca:risks.list", params),
+    decisions: (params) => call("orca:decisions.list", params),
+    journal: (params) => call("orca:journal.list", params),
+    waive: (params) => call("orca:dependencies.waive", params),
+    decide: (params) => call("orca:decisions.decide", params),
+    reopen: (params) => call("orca:decisions.reopen", params),
+    updateRisk: (params) => call("orca:risks.update", params),
+  },
   artifacts: {
     list: (params = {}) => call("orca:artifacts.list", params),
     get: (params) => call("orca:artifacts.get", params),
   },
+  workflows: {
+    list: (params = {}) => call("orca:workflows.list", params),
+    get: (params) => call("orca:workflows.get", params),
+  },
   agents: { list: (params = {}) => call("orca:agents.list", params) },
+  config: {
+    get: (params = {}) => call("orca:config.get", params),
+    set: (params) => call("orca:config.set", params),
+  },
   notifications: {
     // The one channel the main process pushes on rather than answers on. Each renderer
     // listener gets its own `ipcRenderer` listener so that unsubscribing one cannot silence

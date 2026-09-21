@@ -21,8 +21,14 @@
  * line stays readable. The next append, holding the lock, truncates the torn tail before it
  * writes: the append that produced it never completed, so nothing observed that record as
  * durable, and the sequence continues from the last complete one.
+ *
+ * A caller that wants a slice rather than the whole log scans it: `scanLines` walks forward
+ * from the start and `scanLinesBackward` walks backward from the end, both a chunk at a time
+ * and both stopping the moment the callback says it has enough. Neither holds the file in
+ * memory - only the chunk and the line being assembled across its boundary - which is what
+ * lets a page of a multi-megabyte `agent.update` log cost a page's worth of reading.
  */
-import { mkdir, readdir, readFile, stat, truncate } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, stat, truncate, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import {
   anyJson,
@@ -50,6 +56,9 @@ interface Tail {
 }
 
 const NEWLINE = 0x0a;
+/** How much of a log a scan reads at once. Big enough that a page is one or two reads, small enough to be nothing. */
+const SCAN_CHUNK = 64 * 1024;
+const EMPTY = Buffer.alloc(0);
 
 export class JsonlLogDir {
   private readonly tails = new Map<string, Tail>();
@@ -173,6 +182,97 @@ export class JsonlLogDir {
   async lines(key: string): Promise<string[]> {
     await this.init();
     return readJsonlLines(this.file(key));
+  }
+
+  /**
+   * The raw lines of `key`'s log in file order, a chunk at a time. `onLine` returns `false`
+   * to stop the scan, and the file is read no further - so a caller that wants the first
+   * `n` records of a large log pays for `n` records plus one chunk.
+   *
+   * Blank lines are skipped and a trailing `\r` trimmed, exactly as {@link lines} does, so a
+   * scan and a whole-file read see the same lines. A torn tail is left alone here: it is a
+   * line like any other and `parseLine` is what declines it, which is how {@link read}
+   * treats it too.
+   */
+  async scanLines(key: string, onLine: (line: string) => boolean): Promise<void> {
+    await this.init();
+    const handle = await this.openForScan(key);
+    if (!handle) return;
+    try {
+      let rest = EMPTY;
+      let pos = 0;
+      for (;;) {
+        const buf = Buffer.allocUnsafe(SCAN_CHUNK);
+        const { bytesRead } = await handle.read(buf, 0, SCAN_CHUNK, pos);
+        if (bytesRead === 0) break;
+        pos += bytesRead;
+        const chunk = rest.length ? Buffer.concat([rest, buf.subarray(0, bytesRead)]) : buf.subarray(0, bytesRead);
+        let start = 0;
+        for (;;) {
+          const nl = chunk.indexOf(NEWLINE, start);
+          if (nl < 0) break;
+          const line = chunk.toString("utf8", start, nl).trim();
+          start = nl + 1;
+          if (line.length > 0 && !onLine(line)) return;
+        }
+        rest = Buffer.from(chunk.subarray(start));
+      }
+      const last = rest.toString("utf8").trim();
+      if (last.length > 0) onLine(last);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /**
+   * The same lines as {@link scanLines}, newest first, read backwards from the end of the
+   * file a chunk at a time. This is how a backward page is taken: the client's first "load
+   * earlier" asks for the events before a sequence number at or past the end of the log, and
+   * a backward scan finds them without touching the rest of it.
+   *
+   * The cost is the distance from the *end* of the log, not the size of the log: paging
+   * back to the very first events of a long run walks all of it. That is the trade this
+   * makes against a byte-offset index, which the store does not have and which the live
+   * event stream (#150) may yet say it needs.
+   */
+  async scanLinesBackward(key: string, onLine: (line: string) => boolean): Promise<void> {
+    await this.init();
+    const handle = await this.openForScan(key);
+    if (!handle) return;
+    try {
+      let pos = (await handle.stat()).size;
+      let rest = EMPTY;
+      while (pos > 0) {
+        const len = Math.min(SCAN_CHUNK, pos);
+        pos -= len;
+        const buf = Buffer.allocUnsafe(len);
+        await handle.read(buf, 0, len, pos);
+        const chunk = rest.length ? Buffer.concat([buf, rest]) : buf;
+        let end = chunk.length;
+        while (end > 0) {
+          const nl = chunk.lastIndexOf(NEWLINE, end - 1);
+          if (nl < 0) break;
+          const line = chunk.toString("utf8", nl + 1, end).trim();
+          end = nl;
+          if (line.length > 0 && !onLine(line)) return;
+        }
+        rest = Buffer.from(chunk.subarray(0, end));
+      }
+      const first = rest.toString("utf8").trim();
+      if (first.length > 0) onLine(first);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** The log's file open for reading, or `undefined` when there is no log: a missing log scans as empty. */
+  private async openForScan(key: string): Promise<FileHandle | undefined> {
+    try {
+      return await open(this.file(key), "r");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw e;
+    }
   }
 
   /** Parse one line from {@link lines}; `undefined` for a line that is not JSON. */

@@ -21,8 +21,12 @@
  * - **The filter is a filter, not a search.** The status half is a `runs.list` parameter,
  *   so the daemon applies it across the whole store; the text half narrows what is already
  *   held. The timeline's kind filter is local for the same reason.
- * - **Nothing here writes.** No control method is called and `useWritability()` is not
- *   consulted: this surface reads.
+ * - **It writes two things, and only from the palette (#178).** **Cancel run** and **Resume
+ *   run** on the selected run, keyless, through the same `useControls` the Attention
+ *   surface's cards use. Nothing is added to the chrome: "the palette is the only place a
+ *   phase-2 write action needs to be discoverable, which keeps the chrome of the screens
+ *   empty" (docs/design/10-information-architecture.md). Neither row exists where the
+ *   daemon has no run control.
  * - **No progress bar, no ETA, no cost.** A running run draws an indeterminate meter and
  *   that is all ORCA can honestly say (rule 12).
  */
@@ -30,6 +34,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "rea
 import { CHROME_GLYPHS, STATUS_PRESENTATION, type ConnectionState } from "@orca/design";
 import { DISPLAY_STATUSES, type RunSummaryView, type StepView } from "@orca/protocol";
 import type { VirtualListHandle } from "../list/index.js";
+import { useAnnounce } from "../a11y/announce-context.js";
+import { useControls } from "../attention/use-controls.js";
+import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
 import { Menu, StateView, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
 import { StepDetail } from "../step/index.js";
 import { matchesText } from "./run-rows.js";
@@ -166,7 +173,25 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
     if (selectedRun.workItem) {
       trail.push({ type: "item", id: selectedRun.workItem.id, label: selectedRun.workItem.title });
     }
-    trail.push({ type: "run", id: selectedRun.id, label: selectedRun.name });
+    /* The workflow this run executes is a counterpart rather than a crumb — the trail is
+       request ▸ work item ▸ run ▸ step and a workflow is not on it — so the id travels on
+       the crumb and `counterpartUrl` turns it into `orca://workflow/<id>?run=<run>`. That
+       menu item is the run header's link to the viewer with this run overlaid (#177).
+
+       The *version* is printed on the crumb, because a run records the version it started
+       against and 70-workflow-editing.md asks for it wherever a run's workflow is named.
+       The `◷ pinned` chip that goes beside it there is not drawn here: "pinned" is
+       `run.workflowVersion !== the version on disk`, and this surface has never read the
+       definition — it would take a `workflows.get` per run in the tree to know. The version
+       alone is a fact; the chip would be a guess (rule 12). The viewer draws the chip, and
+       the crumb's own menu is the way to it. */
+    trail.push({
+      type: "run",
+      id: selectedRun.id,
+      label: selectedRun.name,
+      counterpartIds: { workflow: selectedRun.workflowId },
+      version: `${selectedRun.workflowId} v${selectedRun.workflowVersion}`,
+    });
     if (selectedStepRunId !== undefined && currentStep !== undefined) {
       trail.push({ type: "step", id: selectedStepRunId, label: currentStep });
     }
@@ -196,6 +221,7 @@ export function RunsSurface({ connection, onCrumbs, open }: RunsSurfaceProps): J
 
   const live = connection === "live";
   const filtered = status !== "all" || text.trim() !== "";
+  useRunWrites(selectedRunId, selectedRun?.name);
 
   return (
     <div className="orca-runs">
@@ -360,4 +386,62 @@ function TreeBody(props: TreeBodyProps): JSX.Element {
       live={live}
     />
   );
+}
+
+/** Nothing on this surface answers an input; the hook's callback is the Attention list's. */
+const NOTHING_ANSWERED = (): void => {};
+
+/**
+ * **Cancel run** and **Resume run** on the selected run, in the palette and nowhere else
+ * (#178). The same selection the tree, the timeline and the step detail are about, so the
+ * rows are the actions on the object in focus whichever of the three the keyboard is in.
+ *
+ * `useControls` rather than a second pair of calls: it holds "one call in flight per run",
+ * it phrases the outcome, and the Attention surface's cards already answer to it — two
+ * copies of `runs.cancel` would be two answers to what a refused write says.
+ *
+ * Cancelling is destructive and irreversible, so its row is armed before it is run and
+ * carries the run's id in the confirmation: the palette is reached by typing, and the run
+ * a person meant is not always the run the palette had selected.
+ */
+function useRunWrites(runId: string | undefined, runName: string | undefined): void {
+  const announce = useAnnounce();
+  const controls = useControls({ onAnswered: NOTHING_ANSWERED });
+  const current = useRef(controls);
+  current.current = controls;
+
+  /* The result goes in the app's one live region: there is no card here to put it on, and
+     a cancel that landed is the person's own act completing. */
+  const report = controls.report;
+  useEffect(() => {
+    if (report) announce(report.message);
+  }, [report, announce]);
+
+  const rows = useMemo((): readonly PaletteWrite[] => {
+    if (runId === undefined) return [];
+    const named = runName ?? runId;
+    return [
+      {
+        scope: "run-tree",
+        method: "runs.cancel",
+        label: `Cancel ${named}`,
+        // The id is ORCA's, so it is set in mono wherever it is drawn (rule 8) — in the
+        // confirmation here, which is the state of the row that names the run by id.
+        labelMachine: runId,
+        detail: "Stops the run where it is; what has already happened stays in the log",
+        tone: "danger",
+        confirm: `Cancel ${runId} — confirm`,
+        action: () => current.current.cancel(runId),
+      },
+      {
+        scope: "run-tree",
+        method: "runs.resume",
+        label: `Resume ${named}`,
+        detail: "Re-drives a parked run; it returns when the run parks again or finishes",
+        action: () => current.current.resume(runId),
+      },
+    ];
+  }, [runId, runName]);
+
+  usePaletteWrites(rows);
 }

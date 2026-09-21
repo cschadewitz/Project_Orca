@@ -17,10 +17,11 @@
  * leases. One `runs.list` over a hundred runs sharing one work item reads that work item
  * once, and no cache outlives the call, so nothing here serves a name it cached earlier.
  *
- * The store underneath is another matter: `JsonFileDocumentStore` holds a collection in
- * memory for the life of the process, so a long-lived daemon will keep showing the work
- * items and requests it first read while a CLI writes new ones beside it (#196). Run logs
- * are not affected - the event store re-reads them - so statuses and trees stay current.
+ * The store underneath re-reads too, as of #196: `JsonFileDocumentStore` trusts its cached
+ * collection only while the file's `{ino, size, mtimeMs}` is unchanged, so a long-lived
+ * daemon shows the work items and requests a CLI wrote beside it rather than the ones it
+ * first read. Run logs were never affected - the event store re-reads them - so statuses
+ * and trees stay current the same way.
  */
 import {
   OrcaError,
@@ -36,9 +37,10 @@ import {
   type RunState,
   type RunSummary,
   type StepRun,
+  type WorkflowDefinition,
   type WorkItem,
 } from "@orca/core";
-import type { Orchestrator } from "@orca/engine";
+import type { Orchestrator, PlanService } from "@orca/engine";
 import type { WorkItemClaim } from "@orca/store";
 import {
   displayStatusForRun,
@@ -63,10 +65,17 @@ import {
   type RunsListParams,
   type RunsListResult,
   type RunSummaryView,
+  type RunTraversalView,
   type StepView,
   type ViewError,
+  type WorkflowsGetParams,
+  type WorkflowsGetResult,
+  type WorkflowsListParams,
+  type WorkflowsListResult,
   type WorkItemView,
 } from "@orca/protocol";
+import { PlanModel } from "./plan-model.js";
+import { workflowSummaryView, workflowView } from "./workflow-model.js";
 
 /** The events a listing needs: a summary's, plus the one that says which agent worked the run. */
 const LIST_EVENT_TYPES = [
@@ -215,6 +224,45 @@ function factsFromState(state: RunState, agentByStep: ReadonlyMap<string, string
 }
 
 /**
+ * The path a run took through its workflow, in the order it took it: one entry per step run,
+ * which is one per *attempt*, so a retried node appears as many times as it was tried.
+ *
+ * `viaEdge` is the whole reason this exists beside `steps`. A step run records which node it
+ * was, never which edge brought the run to it, so the edge has to be recovered by putting
+ * the log beside the definition - the pair (previous node visited, this node) looked up in
+ * the definition's edges. Where that pair is not an edge there is no edge to name: a retry
+ * of the same node, a run resumed into the middle of a graph, a definition this daemon no
+ * longer has. In all three the field is absent rather than guessed, because an overlay that
+ * drew an edge nobody authored would be worse than one that drew none.
+ *
+ * A node visited twice by two different edges is two entries with two `viaEdge`s, which is
+ * the `ai-sdlc` review-to-build loop: `bump-build` is entered from `await-deps` the first
+ * time and from `tests-passed` afterwards.
+ */
+function traversalView(state: RunState, def: WorkflowDefinition | undefined): RunTraversalView[] {
+  const edges = new Set((def?.edges ?? []).map((e) => `${e.from} ${e.to}`));
+  const out: RunTraversalView[] = [];
+  let previous: string | undefined;
+  for (const id of state.stepOrder) {
+    const step = state.steps[id];
+    if (!step) continue;
+    const via = previous !== undefined && edges.has(`${previous} ${step.nodeId}`);
+    out.push({
+      nodeId: step.nodeId,
+      stepRunId: step.id,
+      attempt: step.attempt,
+      status: displayStatusForStep(step),
+      ...(step.startedAt ? { startedAt: step.startedAt } : {}),
+      ...(step.completedAt ? { endedAt: step.completedAt } : {}),
+      ...(via ? { viaEdge: { from: previous!, to: step.nodeId } } : {}),
+      ...(step.childRunIds.length ? { childRunIds: [...step.childRunIds] } : {}),
+    });
+    previous = step.nodeId;
+  }
+  return out;
+}
+
+/**
  * One call's caches. Names come from documents that several runs share, and liveness from a
  * lease listing that costs one directory read however many runs are in it.
  */
@@ -324,6 +372,13 @@ class Pass {
 
 export interface ReadModelOptions {
   orchestrator: Orchestrator;
+  /**
+   * The long-term plan, when this daemon serves one (#169). Present means the nine plan read
+   * methods are answered and advertised; absent means they are not in the table at all, the
+   * same promise `--read-only` makes about the writes. `bootstrap()` always builds one, so in
+   * practice a daemon over a real store has it and an embedder projecting runs alone does not.
+   */
+  plan?: PlanService | undefined;
   /** Defaults to the orchestrator's own clock, so a test can pin every `asOf` and duration. */
   clock?: Clock | undefined;
 }
@@ -331,10 +386,19 @@ export interface ReadModelOptions {
 export class ReadModel {
   private readonly orc: Orchestrator;
   private readonly clock: Clock;
+  /** The plan projection, or `undefined` when this daemon was given no plan service. */
+  readonly plans: PlanModel | undefined;
 
   constructor(opts: ReadModelOptions) {
     this.orc = opts.orchestrator;
     this.clock = opts.clock ?? opts.orchestrator.clock;
+    this.plans = opts.plan
+      ? new PlanModel({
+          plan: opts.plan,
+          orchestrator: opts.orchestrator,
+          ...(opts.clock ? { clock: opts.clock } : {}),
+        })
+      : undefined;
   }
 
   private pass(): Pass {
@@ -383,6 +447,7 @@ export class ReadModel {
       workspace: state.run.workspace,
       vars: state.run.vars,
       steps,
+      traversal: traversalView(state, this.definitionOrUndefined(state.run.workflowId)),
       artifacts: Object.values(state.artifacts)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
         .map(artifactView),
@@ -396,41 +461,39 @@ export class ReadModel {
    * to the `limit` events immediately preceding one; either way the page reads oldest first,
    * so the timeline renders the same code path in both directions.
    *
-   * The run's log is read whole and cut in memory. That is deliberate for now: the store has
-   * no index by sequence number, and inventing one before the event stream (the WebSocket
-   * that will push these same events) knows what it needs would be guesswork.
+   * The page is a ranged read, not a slice of the whole log (#208): the store scans to the
+   * page and stops, so scrolling up through a run whose log is tens of thousands of
+   * `agent.update` lines costs a page rather than the log. `lastSeq` comes from the store
+   * for the same reason - it is the end of the log, which no page has to contain.
+   *
+   * `hasMore` is one event's worth of over-asking: the page is requested one longer than the
+   * client asked for, and the extra - which is the *oldest* of a backward page and the
+   * newest of a forward one - is dropped after it has answered the question.
    */
   async runsEvents(params: RunsEventsParams): Promise<RunsEventsResult> {
     const asOf = this.clock.isoNow();
-    const all = await this.orc.events(params.runId);
-    if (!all.length) throw new OrcaError("RUN_NOT_FOUND", `run ${params.runId} not found`, { runId: params.runId });
-    const lastSeq = all[all.length - 1]!.seq;
+    const lastSeq = await this.orc.lastSeq(params.runId);
+    if (lastSeq === undefined)
+      throw new OrcaError("RUN_NOT_FOUND", `run ${params.runId} not found`, { runId: params.runId });
     const types = params.types;
     const stepRunId = params.stepRunId;
     // An unknown type matches nothing rather than failing: a newer client may ask for an
-    // event type this daemon's engine does not emit. The two filters are an AND, and both
-    // cut the log *before* it is paged, so the cursors below are cursors into the filtered
-    // sequence while staying the run's own sequence numbers.
-    const matching =
-      types?.length || stepRunId
-        ? all.filter(
-            (e) =>
-              (!types?.length || types.includes(e.type)) && (stepRunId === undefined || stepRunIdOf(e) === stepRunId),
-          )
-        : all;
-
-    let page: OrcaEvent[];
-    let hasMore: boolean;
-    if (params.before !== undefined) {
-      const earlier = matching.filter((e) => e.seq < params.before!);
-      page = earlier.slice(Math.max(0, earlier.length - params.limit));
-      hasMore = earlier.length > page.length;
-    } else {
-      const after = params.after;
-      const later = after === undefined ? matching : matching.filter((e) => e.seq > after);
-      page = later.slice(0, params.limit);
-      hasMore = later.length > page.length;
-    }
+    // event type this daemon's engine does not emit. The two filters are an AND, and the
+    // store applies both *before* it counts against the limit, so the cursors below are
+    // cursors into the filtered sequence while staying the run's own sequence numbers.
+    const got = await this.orc.eventsRange(params.runId, {
+      ...(params.after !== undefined ? { after: params.after } : {}),
+      ...(params.before !== undefined ? { before: params.before } : {}),
+      limit: params.limit + 1,
+      ...(types?.length ? { types } : {}),
+      ...(stepRunId !== undefined ? { match: (e: OrcaEvent) => stepRunIdOf(e) === stepRunId } : {}),
+    });
+    const hasMore = got.length > params.limit;
+    const page = !hasMore
+      ? got
+      : params.before !== undefined
+        ? got.slice(got.length - params.limit)
+        : got.slice(0, params.limit);
     const first = page[0];
     const last = page[page.length - 1];
     return {
@@ -502,6 +565,12 @@ export class ReadModel {
    * One artifact, by id or by the (`runId`, `name`, `version?`) address a deep link carries,
    * with its body when the body is text of a sane size. Declining is not an error: the panel
    * still shows what the artifact *is*, and says why it is not showing what it says.
+   *
+   * It still declines a binary body, and that is now a choice rather than a limitation: the
+   * store round-trips bytes since #226, so what stops a 200 MB PNG here is the JSON-RPC wire
+   * it would have to travel on, not the store it came from. What did change is that the
+   * reason is true - `size` is bytes, so the number it quotes is the number of bytes a
+   * download would be.
    */
   async artifactsGet(params: ArtifactsGetParams): Promise<ArtifactsGetResult> {
     const asOf = this.clock.isoNow();
@@ -538,7 +607,10 @@ export class ReadModel {
     if (!isTextMediaType(artifact.mediaType))
       return {
         artifact: view,
-        omitted: { reason: "binary", detail: `${artifact.mediaType} is not text; ${artifact.size} bytes in the store` },
+        omitted: {
+          reason: "binary",
+          detail: `${artifact.mediaType} is not text; ${artifact.size} bytes in the store, which this call does not carry`,
+        },
         asOf,
       };
     if (artifact.size > params.maxBytes)
@@ -555,7 +627,74 @@ export class ReadModel {
     return { artifact: view, text: await store.content(artifact.id), asOf };
   }
 
+  /**
+   * Every workflow this daemon has registered, by id. It is the registry and not the disk:
+   * workflows are loaded once at bootstrap from the glob in `orca.config.yaml`, so this is
+   * what the daemon would *run*, which is the honest thing for a viewer to draw.
+   */
+  workflowsList(_params: WorkflowsListParams): WorkflowsListResult {
+    const asOf = this.clock.isoNow();
+    const workflows = this.orc.workflows.list().map(workflowSummaryView);
+    workflows.sort((a, b) => a.id.localeCompare(b.id));
+    return { workflows, asOf };
+  }
+
+  /**
+   * One workflow, whole, with its nested graphs inline. `id` may be a registered workflow's
+   * or an inline graph's `parent::node`; either way the resolution is the engine's own
+   * (`Orchestrator.resolveDefinition`), so the viewer and the interpreter agree about what a
+   * nested id names. An unknown id raises `WORKFLOW_NOT_FOUND`, which is that method's error.
+   *
+   * `version` is checked rather than honoured, and the difference is the point: a workflow is
+   * one file at one version, and the store keeps no copies of the versions its runs recorded
+   * (see `WorkflowView.versions`). So asking for the version on disk answers, and asking for
+   * any other says `WORKFLOW_NOT_FOUND` with both versions in the details - rather than
+   * quietly answering with a graph that is not the one that ran.
+   */
+  async workflowsGet(params: WorkflowsGetParams): Promise<WorkflowsGetResult> {
+    const asOf = this.clock.isoNow();
+    const def = this.orc.resolveDefinition(params.id);
+    if (params.version !== undefined && params.version !== def.version)
+      throw new OrcaError(
+        "WORKFLOW_NOT_FOUND",
+        `workflow '${params.id}' is at version ${def.version}; ORCA keeps no definition for version ${params.version}`,
+        { id: params.id, wanted: params.version, onDisk: def.version },
+      );
+    return { workflow: workflowView(def, await this.recordedVersions(def)), asOf };
+  }
+
   // ------------------------------------------------------------------ pieces
+
+  /**
+   * The versions of this workflow the daemon can see: the one on disk, plus every version
+   * the runs in this store were started against (`run.created` records `workflowVersion`).
+   * Oldest first by string order, which is what a version of `"1"`, `"2"`, `"11"` sorts to
+   * numerically only by accident - the field is free text in the schema, so this sorts it
+   * as text and does not pretend to a numbering scheme workflows do not have.
+   *
+   * A nested graph's id (`parent::node`) never matches a run's `workflowId` unless the engine
+   * spawned a child run for it, which is exactly when it should: a loop body that ran has its
+   * own child runs, recorded under that id.
+   */
+  private async recordedVersions(def: WorkflowDefinition): Promise<string[]> {
+    const versions = new Set<string>([def.version]);
+    const pass = this.pass();
+    for (const id of await this.orc.listRuns()) {
+      const facts = await pass.runFacts(id);
+      if (facts?.summary.workflowId === def.id) versions.add(facts.summary.workflowVersion);
+    }
+    return [...versions].sort((a, b) => a.localeCompare(b));
+  }
+
+  /** The run's definition, or nothing when this daemon no longer has it registered. */
+  private definitionOrUndefined(workflowId: string): WorkflowDefinition | undefined {
+    try {
+      return this.orc.resolveDefinition(workflowId);
+    } catch (e) {
+      if (e instanceof OrcaError && e.code === "WORKFLOW_NOT_FOUND") return undefined;
+      throw e;
+    }
+  }
 
   /** `stepRunId -> agentId`, from the only event that records which agent worked a step. */
   private async agentsByStep(runId: string): Promise<Map<string, string>> {

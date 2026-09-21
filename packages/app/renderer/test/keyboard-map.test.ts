@@ -51,6 +51,34 @@ describe("key notation", () => {
     expect(keyOfEvent(event, "win32")).toBe("Shift+L");
   });
 
+  it("drops the Shift a punctuation key was typed with, and keeps the one that modifies a named key", () => {
+    /* `+` is Shift and Equal on every layout that has it, so the press a keyboard produces
+       carries `shiftKey: true` — and spelled `Shift++`, which matched the canvas's `+`
+       registration not at all (#177). The shift is spelling the character here, not
+       modifying it. */
+    const plus = new KeyboardEvent("keydown", { key: "+", code: "Equal", shiftKey: true });
+    expect(keyOfEvent(plus, "win32")).toBe("+");
+    expect(normalizeKey("+")).toBe("+");
+
+    // Same for the other punctuation a shifted row key produces.
+    for (const [key, code] of [
+      ["?", "Slash"],
+      ["_", "Minus"],
+      [":", "Semicolon"],
+    ] as const) {
+      expect(keyOfEvent(new KeyboardEvent("keydown", { key, code, shiftKey: true }), "win32")).toBe(key);
+    }
+
+    // A named key is not one character, so the shift there is a modifier and stays.
+    const up = new KeyboardEvent("keydown", { key: "ArrowUp", code: "ArrowUp", shiftKey: true });
+    expect(keyOfEvent(up, "win32")).toBe("Shift+ArrowUp");
+    const enter = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", shiftKey: true });
+    expect(keyOfEvent(enter, "win32")).toBe("Shift+Enter");
+    // And a digit still reads off `code`, so `Shift+0` is not the `)` it printed.
+    const zero = new KeyboardEvent("keydown", { key: ")", code: "Digit0", shiftKey: true });
+    expect(keyOfEvent(zero, "win32")).toBe("Shift+0");
+  });
+
   it("has no key for a bare modifier", () => {
     expect(keyOfEvent(new KeyboardEvent("keydown", { key: "Meta", code: "MetaLeft" }), "darwin")).toBeUndefined();
   });

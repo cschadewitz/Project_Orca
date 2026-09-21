@@ -53,6 +53,13 @@ export interface RunContextDeps {
 export class RunContext {
   readonly abort = new AbortController();
   /**
+   * Set when this interpreter's run lease was taken away (#267). The abort that follows is
+   * *not* an operator's cancel: the log belongs to whoever holds the lease now, so the
+   * interpreter stops without appending anything to it - no `step.cancelled`, no
+   * `run.cancelled`. Only the orchestrator's lease heartbeat sets this.
+   */
+  leaseLost = false;
+  /**
    * Artifact bodies by content hash. Blobs are content-addressed and therefore immutable, and
    * `evalContext()` runs for every render, condition, route and input resolution - without this
    * each of those re-read every visible artifact from disk.
@@ -160,11 +167,31 @@ export class RunContext {
     return out;
   }
 
-  /** Artifact body, read once per content hash for the lifetime of this context. */
+  /**
+   * Artifact body, read once per content hash for the lifetime of this context.
+   *
+   * A read that fails raises `ARTIFACT_MISSING` rather than standing in an empty string
+   * (#270): an artifact that is in the index but whose blob is gone, unreadable or
+   * truncated would otherwise render as a blank spec in a prompt and be decided on as
+   * `undefined`, and the run would "succeed" against nothing. Only successes are cached -
+   * the blob may come back (a restored store, a remounted disk), so the next render tries
+   * again instead of inheriting one bad read for the lifetime of the context.
+   */
   private content(a: Artifact): Promise<string> {
     let body = this.contentByHash.get(a.contentHash);
     if (!body) {
-      body = this.deps.stores.artifacts.content(a.id).catch(() => "");
+      const read: Promise<string> = this.deps.stores.artifacts.content(a.id).catch((cause: unknown) => {
+        if (this.contentByHash.get(a.contentHash) === read) this.contentByHash.delete(a.contentHash);
+        throw new OrcaError(
+          "ARTIFACT_MISSING",
+          `artifact '${a.name}' v${a.version} (${a.id}) is in the index but its body could not be read: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+          { artifactId: a.id, name: a.name, version: a.version, contentHash: a.contentHash },
+          { cause },
+        );
+      });
+      body = read;
       this.contentByHash.set(a.contentHash, body);
     }
     return body;

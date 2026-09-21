@@ -128,6 +128,8 @@ export class ConnectionMachine {
   private orcaVersion: string | undefined;
   private daemonProtocol: string | undefined;
   private capabilities: readonly DaemonCapability[] | undefined;
+  /** `hello.methods`: what this daemon answers, which is finer than what it can do. */
+  private methods: readonly string[] | undefined;
   private cursor: number | undefined;
   /** Guards a slow `hello` answering after a newer one was asked for. */
   private handshake = 0;
@@ -199,6 +201,7 @@ export class ConnectionMachine {
     this.orcaVersion = undefined;
     this.daemonProtocol = undefined;
     this.capabilities = undefined;
+    this.methods = undefined;
     this.cursor = undefined;
     /* No quiet window: leaving `live` is held back because a blip is not news, and a
        person who just asked for another store is not reading a blip. */
@@ -243,6 +246,9 @@ export class ConnectionMachine {
     this.orcaVersion = result.orcaVersion;
     this.daemonProtocol = formatProtocolVersion(result.protocol);
     this.capabilities = result.capabilities;
+    /* Folded here because this is where the handshake is: the renderer never sees a
+       `HelloResult`, so "is `config.set` served" can only be asked of the snapshot. */
+    this.methods = result.methods;
     this.compatible = isCompatible(PROTOCOL_VERSION, result.protocol);
     this.settle();
   }
@@ -320,6 +326,7 @@ export class ConnectionMachine {
         : {}),
       ...(this.orcaVersion !== undefined ? { orcaVersion: this.orcaVersion } : {}),
       ...(this.capabilities !== undefined ? { capabilities: this.capabilities } : {}),
+      ...(this.methods !== undefined ? { methods: this.methods } : {}),
     };
   }
 }

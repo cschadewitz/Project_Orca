@@ -266,6 +266,13 @@
   --col-label-narrow: 116px;
   --col-node-kind: 74px;
   --col-matrix-axis: 108px;
+  --col-classification: 168px;
+  --col-slug: 148px;
+  --col-request: 128px;
+  --col-status: 120px;
+  --col-score: 64px;
+  --col-risk: 96px;
+  --col-claim: 132px;
   --control-xs: 22px;
   --control-sm: 24px;
   --control-sm-5: 26px;
@@ -276,7 +283,12 @@
   --sidebar-width: 228px;
   --sidebar-width-collapsed: 48px;
   --panel-width: 420px;
+  --panel-w-policy: 52ch;
   --node-min-width: 132px;
+  --node-w: 192px;
+  --node-h: 64px;
+  --layer-gap: 64px;
+  --rank-gap: 32px;
   --risk-cell-width: 92px;
   --risk-cell-height: 62px;
   --measure-prose: 68ch;
@@ -285,6 +297,7 @@
   --palette-width: 560px;
   --palette-max-height: 440px;
   --palette-offset-top: 96px;
+  --editor-min-height: 360px;
   /* z */
   --z-sticky: 2;
   --z-menu: 3;
@@ -299,6 +312,9 @@
   --stroke-focus: 2px;
   --stroke-edge-active: 2px;
   --stroke-double: 3px;
+  --stroke-dash-untaken: 3px 3px;
+  --stroke-dash-back: 1px 5px;
+  --stroke-dash-draft: 5px 3px;
   /* duration */
   --duration-instant: 0ms;
   --duration-fast: 120ms;

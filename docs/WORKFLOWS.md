@@ -191,8 +191,78 @@ before options had fields keeps working unchanged and needs no migration. A `gat
   recorded answer up. `orca answer` with no arguments lists open questions; `orca status <runId>`
   shows them too. Agent `ask` permissions cannot be parked and are cancelled in this mode.
 - `cli`: prompt on the terminal running ORCA.
-- `auto`: pick the first option (or `option:`) — demos and tests.
+- `auto`: pick the first option (or `option:`) — demos and tests. An agent `ask` permission is
+  *refused* in this mode rather than auto‑allowed, unless `option:` happens to name one of the
+  ids the agent offered: a permission request's options are the agent's own and the first of
+  them is conventionally "allow once", so taking it would undo the policy that asked.
 - Inside an ACP host (`orca acp`) gates are forwarded as `session/request_permission`.
+
+## Permissions
+
+Every `session/request_permission` an agent raises is decided by that agent's policy in
+`orca.config.yaml` — `default`, plus an ordered list of `rules`, first match wins:
+
+```yaml
+    permissions:
+      default: ask
+      rules:
+        - { match: { kind: execute, titlePattern: "rm -rf|git push --force" }, decision: deny }
+        - { match: { kind: edit, scope: workspace }, decision: allow }
+        - { match: { kind: read, path: config/keys.env }, decision: deny }
+```
+
+A `match` may name a tool `kind`, a `titlePattern` (a regular expression over the tool call
+title), an exact `path`, a `pathPrefix`, and a `scope` — `workspace` when every location of
+the call is inside the run's workspace, `outside-workspace` when any of them is not. Paths
+are matched both as written and workspace‑relative, so a rule survives the next git worktree.
+The `decision` is `allow`, `deny` or `ask`.
+
+**An agent that declares no `permissions:`, or declares one without a `default:`, gets a
+conservative policy** (#140): reads,
+searches, edits, deletes and moves *inside the workspace* are allowed, and everything else —
+`execute` anywhere, the network, any path outside the workspace — is `ask`. `execute` is asked
+about wherever it runs because ORCA sees a shell command only as the permission title: the
+agents that matter run commands in their own process rather than through ACP's `terminal`, so
+there is nothing to scope by, and an agent that may run any command may do anything at all.
+
+This is a property of the agent, not of how the run was launched — the same config behaves
+the same way attended or not. Opt out in one explicit line, which is right for a sandbox:
+
+```yaml
+    permissions: { default: allow }
+```
+
+### The three layers
+
+A permission is decided against three rule lists concatenated in this order, first match wins:
+
+1. **your `rules:`**, exactly as `orca.config.yaml` spells them out;
+2. **`orca.permissions.json`**, the sidecar "allow always" and "reject always" write to;
+3. **the defaults** — the in‑workspace allows above, plus `think` — *only if you left
+   `default:` out*.
+
+Then `default:` (`ask` when you left it out) decides anything none of them matched.
+
+So a hand‑written `deny` beats everything, a recorded `reject_always` beats the default allow
+that made the prompt appear, and nothing a machine wrote can undo a rule you wrote (ADR 0009).
+
+**Writing `default:` opts out of the third layer entirely** — `ask` just as much as `allow`.
+`permissions: { default: ask }` with no rules means what it says: ask about everything,
+including reads inside the workspace. That is not the same as leaving `permissions:` off, and
+it is the line to write when you want an agent on a short leash. `default: allow` is the other
+end and is right for a sandbox. Leave `default:` out and you get the table above.
+
+Spelling the default rules out in your own `rules:` is therefore not a way to get them back
+unchanged: it moves them *ahead* of the sidecar, where a recorded `reject_always` can no longer
+reach them. `config.get` labels every effective rule with the layer it came from (`config`,
+`permissions`, `default`), so the Config surface shows which is which.
+
+An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
+agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
+the agent session that raised it, so `pause` cancels it, `auto` refuses it, and either way
+the agent is told `cancelled` and the *tool call* fails while the run carries on. The
+`agent.permission` event records which it was (`ask:allow`, `ask:deny`, `ask:cancelled`,
+`ask:no-answerer`).
 
 ## Completion policies (agent steps)
 

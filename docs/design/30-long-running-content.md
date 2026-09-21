@@ -59,6 +59,18 @@ fallen through to the OS in exactly the way #194 exists to catch. Bundling U+22E
 a legitimate alternative; it is not a thing to reach for without adding it to
 `tools/font-build/build-fonts.js` first.
 
+## Artifact bodies are raw
+
+An artifact body is shown as the text ORCA stored, in `mono-log`, with no rendered view and
+no toggle (#245, decided in v0.5.0). Three reasons, any one of which would do: the body is
+machine output (rule 8), so a rendered page of prose would misstate what it is; agents write
+the bodies, so a renderer would be rendering untrusted input inside the app's own process
+and would need a sanitiser that `packages/app` has chosen not to depend on; and a body that
+is never turned into markup can never fetch the remote link or image it mentions. The front
+matter is parsed and shown as fields above the body; everything below it is verbatim. If a
+rendered view is ever wanted, that is a new issue naming the sanitising renderer, not a
+toggle added to this panel.
+
 ## Rules and guides are borders, not glyphs
 
 `mono-log` stays at **12px/18px**. The tight line height is the reason a screen of log is

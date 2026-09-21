@@ -7,10 +7,14 @@
  * lease and reach the same terminal state a CLI would, so the fixture is an orchestrator
  * with `PausingHumanInput` and a workflow, driven until it parks.
  */
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost, SshHost, type AgentSession } from "@orca/agents";
 import {
   AgentSpecSchema,
+  OrcaError,
   SshHostSchema,
   FakeClock,
   TemplateRegistry,
@@ -22,9 +26,17 @@ import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, runLeaseResour
 import {
   AgentsListResultSchema,
   AgentsPingResultSchema,
+  CLAIMS_RELEASE_METHOD,
   CONTROL_METHODS,
+  DEPENDENCIES_WAIVE_METHOD,
   HelloResultSchema,
+  INPUTS_ANSWER_METHOD,
   InputsAnswerResultSchema,
+  PLAN_READ_METHODS,
+  RISKS_UPDATE_METHOD,
+  RUNS_CANCEL_METHOD,
+  RUNS_RESUME_METHOD,
+  RUNS_START_METHOD,
   RunsStartResultSchema,
   SubscribeParamsSchema,
   parseNotification,
@@ -32,6 +44,7 @@ import {
 import { memoryStores } from "@orca/store";
 import {
   AgentModel,
+  ConfigModel,
   ControlModel,
   ReadModel,
   Subscription,
@@ -126,12 +139,17 @@ function harness() {
   const reads = new ReadModel({ orchestrator });
   const agentModel = new AgentModel({ orchestrator, reads });
   const control = new ControlModel({ orchestrator, reads });
+  // `orca serve` always builds one of these - a daemon serving a store is serving it out of
+  // a config directory - so a harness without one would advertise a `hello.methods` no real
+  // daemon has. It reads lazily, so an empty directory is a workspace with no config yet.
+  const config = new ConfigModel({ configDir: tmpdir() });
   const ctx: MethodContext = {
     orcaVersion: "0.4.0-test",
     capabilities: ["runs.read", "runs.subscribe", "runs.control"],
     reads,
     control,
     agents: agentModel,
+    config,
   };
   return { clock, stores, orchestrator, agents, agentModel, ctx };
 }
@@ -225,6 +243,98 @@ describe("inputs.answer", () => {
   });
 });
 
+describe("config.set beside a run (#174, #266)", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  it("writes the config while a run is parked mid-flight and disturbs neither", async () => {
+    const h = harness();
+    const { runId, requestId } = await parked(h);
+    const dir = await mkdtemp(join(tmpdir(), "orca-serve-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nstoreDir: .orca\n", "utf8");
+    const config = new ConfigModel({ configDir: dir, configFile: join(dir, "orca.config.yaml") });
+    const ctx: MethodContext = { ...h.ctx, config };
+
+    const before = await h.orchestrator.events(runId);
+    const read = (await call(ctx, "config.get")).result as { config: { revision: string } };
+    const written = await call(ctx, "config.set", {
+      document: "config",
+      expectedRevision: read.config.revision,
+      patch: [{ path: "storeDir", value: ".elsewhere" }],
+    });
+    expect(written.ok, JSON.stringify(written.error)).toBe(true);
+
+    // `config.set` takes no lease, appends no event and touches no run: editing the config
+    // while a run is in flight is a safe thing to do rather than a race (#160's lease story
+    // is about who may *interpret* a run).
+    expect(await h.orchestrator.events(runId)).toHaveLength(before.length);
+    expect((await h.orchestrator.getState(runId)).run.status).toBe("paused");
+    expect(await h.orchestrator.pendingInputs(runId)).toHaveLength(1);
+
+    // And the run still answers and finishes afterwards, under the config it booted with -
+    // nothing here reloads the orchestrator, by design.
+    const answered = await call(ctx, "inputs.answer", { requestId, optionId: "ship" });
+    expect(answered.ok, JSON.stringify(answered.error)).toBe(true);
+    expect((await h.orchestrator.getState(runId)).run.status).toBe("completed");
+  });
+});
+
+/**
+ * The engine raises `RUN_LEASED` from inside `run`/`resume`, not only from the check the
+ * daemon makes first: another process can take the lease in the window after that check, and
+ * an operator can take it *away* mid-run (#267). `runs.cancel` has mapped it to the wire's
+ * `RUN_LEASED_ELSEWHERE` from the start; `runs.start` and `runs.resume` did not, so the one
+ * refusal a client most needs to tell apart arrived as an unclassified INTERNAL fault.
+ *
+ * An orchestrator that refuses to drive is the honest stand-in for that window: the race
+ * cannot be scheduled from a test, and what is under test is the translation, not the race.
+ */
+function refusesToDrive(orc: Orchestrator): Orchestrator {
+  const boom = (runId: string): never => {
+    throw new OrcaError("RUN_LEASED", `the lease on run ${runId} was taken away while it was being interpreted here`, {
+      runId,
+      holder: "some-other-process",
+    });
+  };
+  return new Proxy(orc, {
+    get(target, prop) {
+      if (prop === "run" || prop === "resume") return (runId: string) => boom(runId);
+      const value: unknown = Reflect.get(target, prop);
+      // Bound to the target: these are class instances with private state, and an unbound
+      // method called on the proxy would read it through the trap and lose `this`.
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+describe("a lease lost while the daemon drives", () => {
+  it("maps the engine's RUN_LEASED onto runs.start and runs.resume, as runs.cancel already did", async () => {
+    const h = harness();
+    const { runId } = await parked(h);
+    const orchestrator = refusesToDrive(h.orchestrator);
+    const ctx: MethodContext = {
+      ...h.ctx,
+      control: new ControlModel({ orchestrator, reads: h.ctx.reads! }),
+    };
+
+    for (const [method, params] of [
+      ["runs.resume", { runId }],
+      ["runs.start", { workflowId: "talky" }],
+    ] as const) {
+      const res = await call(ctx, method, params);
+      expect(res.ok, `${method} should have been refused`).toBe(false);
+      // Not INTERNAL: a screen branches on this code to say "another process is driving it".
+      expect(res.error?.code, method).toBe("RUN_LEASED_ELSEWHERE");
+      expect(res.error?.details).toMatchObject({ holder: "some-other-process" });
+      // And the run id is on it either way, including for the run `runs.start` had just made.
+      expect((res.error?.details as { runId?: unknown }).runId).toEqual(expect.any(String));
+    }
+  });
+});
+
 describe("runs.start", () => {
   it("starts a workflow with vars and writes no request or work-item document (#196)", async () => {
     const h = harness();
@@ -252,8 +362,51 @@ describe("hello", () => {
     const res = await call(h.ctx, "hello", { client: "test/1", protocol: { major: 1, minor: 4 } });
     const hello = HelloResultSchema.parse(res.result);
     expect(hello.capabilities).toContain("runs.control");
-    for (const m of CONTROL_METHODS) expect(hello.methods).toContain(m);
+    // The four that drive runs. `CONTROL_METHODS` also holds the plan writes as of #169, and
+    // this harness has no plan service - a method this daemon will not answer is a method it
+    // does not advertise, which is the whole rule.
+    for (const m of [RUNS_RESUME_METHOD, RUNS_CANCEL_METHOD, RUNS_START_METHOD, INPUTS_ANSWER_METHOD])
+      expect(hello.methods).toContain(m);
     expect(hello.methods).toContain("agents.ping");
+  });
+
+  /**
+   * `claims.release` is in `CONTROL_METHODS` on the wire, so a daemon advertising
+   * `runs.control` promises it. It used to be gated on `planControl`, which this harness -
+   * a store with runs and no plan in it, exactly what `orca serve` builds over one - does not
+   * have, so `hello` promised a method the table would answer "unknown method" to (#169).
+   */
+  it("serves claims.release without a plan, because runs.control is what it is behind", async () => {
+    const h = harness();
+    const hello = HelloResultSchema.parse(
+      (await call(h.ctx, "hello", { client: "t", protocol: { major: 1, minor: 7 } })).result,
+    );
+    expect(h.ctx.planControl).toBeUndefined();
+    expect(hello.methods).toContain(CLAIMS_RELEASE_METHOD);
+    // The plan writes stay behind the plan, and are absent here.
+    for (const m of [DEPENDENCIES_WAIVE_METHOD, RISKS_UPDATE_METHOD]) expect(hello.methods).not.toContain(m);
+
+    // Reached, not refused as unknown: no such claim in this store is the right complaint.
+    const res = await call(h.ctx, CLAIMS_RELEASE_METHOD, { workItemId: "wi_nope", force: false });
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("CLAIM_NOT_FOUND");
+  });
+
+  /**
+   * `hello.capabilities` and `hello.methods` are two answers to one question, and the CLI used
+   * to derive one and hardcode the other: `orca serve` advertised `plan.read`/`plan.write`
+   * whatever the store held. Whatever builds a context, the two have to agree.
+   */
+  it("advertises no plan capability when the daemon has no plan behind it", async () => {
+    const h = harness();
+    const hello = HelloResultSchema.parse(
+      (await call(h.ctx, "hello", { client: "t", protocol: { major: 1, minor: 7 } })).result,
+    );
+    const table = Object.keys(methodsFor(h.ctx));
+    expect((hello.methods ?? []).slice().sort()).toEqual(table.slice().sort());
+    for (const m of PLAN_READ_METHODS) expect(hello.methods).not.toContain(m);
+    expect(hello.capabilities).not.toContain("plan.read");
+    expect(hello.capabilities).not.toContain("plan.write");
   });
 
   it("read-only: no control methods in the table, and no runs.control", async () => {

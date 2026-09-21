@@ -4,13 +4,14 @@
  * Lifecycle: spawn process on host -> initialize -> session/new -> N prompt
  * turns -> close. ORCA serves the agent's `fs/*` requests from the host file
  * system (scoped to the session cwd) and answers `session/request_permission`
- * through the agent's PermissionPolicy.
+ * through the agent's PermissionPolicy — configured rules, then whatever the
+ * permission sidecars say at that moment, then the defaults (ADR 0009, #271).
  */
 import { isAbsolute, relative } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
-import { newId, OrcaError, silentLogger, type AgentSpec, type Clock, type Logger, systemClock } from "@orca/core";
+import { newId, OrcaError, silentLogger, systemClock, type AgentSpec, type Clock, type Logger } from "@orca/core";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
-import { resolvePermission } from "./permissions.js";
+import { loadEffectivePermissionPolicy, resolvePermission } from "./permissions.js";
 import {
   summarizeUpdate,
   type AgentSession,
@@ -29,6 +30,13 @@ export interface OpenSessionOptions {
   clock?: Clock;
   /** Human/upstream escalation for `ask` permissions. */
   askPermission?: (req: acp.RequestPermissionRequest) => Promise<string | undefined>;
+  /**
+   * Permission sidecars to layer under the agent's configured rules (ADR 0009), in
+   * precedence order: the workspace `orca.permissions.json` first, a user-scoped one after
+   * it. Omitted — an in-memory or test wiring with no config directory — evaluates the
+   * configured rules and the defaults alone, which is what this did before #271.
+   */
+  permissionFiles?: readonly string[];
   onPermission?: (info: { toolCallId?: string; title: string; decision: string }) => void;
   handshakeTimeoutMs?: number;
   /**
@@ -54,6 +62,33 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const roots = [opts.cwd, ...(opts.additionalDirectories ?? [])];
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   let acpSessionId = "";
+  /** Sidecars already reported as unreadable; one warn per file per session, not per ask. */
+  const warnedSidecars = new Set<string>();
+
+  /**
+   * The *evaluated* policy, not `opts.agent.permissions`, which is only what the config says:
+   * configured rules, then each sidecar, then `DEFAULT_PERMISSION_POLICY`'s rules when they
+   * apply (#140). Read fresh on every ask rather than once per session (#271), because
+   * "allow always" is answered *while a session is open*: the daemon appends the rule to the
+   * sidecar and the next tool call is the one that has to stop asking. A policy captured at
+   * `session/new` would go on asking until the run ended, which is the bug #271 names.
+   *
+   * A sidecar that is missing contributes nothing. A sidecar that is there and corrupt is
+   * logged once and skipped, not thrown: failing the ask would fail the tool call and take
+   * the turn with it, and an agent blocked by a file it cannot see or fix is a worse answer
+   * than an agent that falls back to its configured rules. The fallback is the conservative
+   * direction anyway — an overlay only ever *adds* rules after the configured ones — so what
+   * is lost is a grant, never a restriction.
+   */
+  const policyForAsk = () =>
+    loadEffectivePermissionPolicy(opts.agent, opts.permissionFiles ?? [], (file, e) => {
+      if (warnedSidecars.has(file)) return;
+      warnedSidecars.add(file);
+      logger.warn("permission sidecar unreadable; evaluating configured rules alone", {
+        file,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    });
 
   const proc: AgentProcessHandle = await opts.host.spawnAgent(opts.agent, {
     cwd: opts.cwd,
@@ -74,9 +109,13 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       for (const l of listeners) l(e);
     })
     .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
-      const { response, decision } = await resolvePermission(opts.agent.permissions, {
+      const { response, decision } = await resolvePermission(await policyForAsk(), {
         request: ctx.params,
         ...(opts.askPermission ? { ask: opts.askPermission } : {}),
+        // Rules ORCA writes are workspace-relative, so that a grant made in one git worktree
+        // still fires in the next one; without the workspace to resolve them against, none
+        // of them could ever match the absolute paths an agent reports (ADR 0009).
+        scope: { workspaceCwd: opts.cwd },
       });
       opts.onPermission?.({
         ...(ctx.params.toolCall.toolCallId ? { toolCallId: ctx.params.toolCall.toolCallId } : {}),

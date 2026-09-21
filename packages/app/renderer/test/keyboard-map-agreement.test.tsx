@@ -90,8 +90,26 @@ const KEYBOARD_MAP: readonly { scope: ShortcutScope; key: string; action: string
   { scope: "card", key: "Enter", action: "Submit" },
   { scope: "card", key: "Shift+Enter", action: "Submit with a note" },
   { scope: "card", key: "G", action: "Go to the run" },
+  { scope: "list", key: "Enter", action: "Explain the selected work item" },
+  { scope: "plan-journal", key: "J", action: "Move selection down" },
+  { scope: "plan-journal", key: "K", action: "Move selection up" },
+  { scope: "plan-journal", key: "ArrowDown", action: "Move selection down" },
+  { scope: "plan-journal", key: "ArrowUp", action: "Move selection up" },
   { scope: "panel", key: "[", action: "Previous artifact version" },
   { scope: "panel", key: "]", action: "Next artifact version" },
+  { scope: "workflow", key: "ArrowDown", action: "Next node in this layer" },
+  { scope: "workflow", key: "ArrowUp", action: "Previous node in this layer" },
+  { scope: "workflow", key: "ArrowRight", action: "Next layer" },
+  { scope: "workflow", key: "ArrowLeft", action: "Previous layer" },
+  { scope: "workflow", key: "Enter", action: "Expand or collapse the selected node" },
+  { scope: "workflow", key: "+", action: "Zoom in" },
+  { scope: "workflow", key: "-", action: "Zoom out" },
+  { scope: "workflow", key: "0", action: "Reset the zoom and the pan" },
+  { scope: "workflow", key: "Shift+ArrowRight", action: "Pan right" },
+  { scope: "workflow", key: "Shift+ArrowLeft", action: "Pan left" },
+  { scope: "workflow", key: "Shift+ArrowDown", action: "Pan down" },
+  { scope: "workflow", key: "Shift+ArrowUp", action: "Pan up" },
+  { scope: "config", key: "Mod+S", action: "Save the configuration draft" },
 ];
 
 const slotsOf = (shortcuts: readonly RegisteredShortcut[]): Set<string> =>
@@ -144,6 +162,44 @@ async function chromeOnAStep(): Promise<Harness> {
   return h;
 }
 
+/**
+ * The chrome on a workflow, reached the way every arrival at one is: an `orca://workflow/…`
+ * URL through the route table. The canvas is the whole of the `workflow` scope, and it holds
+ * the scope alone — a nested graph draws through the same component with no registrations of
+ * its own, because two `↑`s in one scope is an error by design.
+ */
+async function chromeOnAWorkflow(): Promise<Harness> {
+  fake = installBridge({ deepLink: "orca://workflow/ai-sdlc" });
+  teardown.push(fake.install());
+  const h = harness();
+  renderChrome(h);
+  await screen.findByRole("listbox", { name: /graph$/ });
+  return h;
+}
+
+/**
+ * The chrome on Plan, in each of its two modes (#170). Two mountings rather than one
+ * because the surface has two lists and shows one at a time: the schedule table holds
+ * `list` — and the `Enter` that explains a row — while it is on screen, and the journal
+ * holds `plan-journal` while it is. What is in the map is what the person can reach right
+ * now, which is the property that makes the palette honest.
+ */
+function chromeOnThePlan(mode: "schedule" | "journal"): () => Promise<Harness> {
+  return async () => {
+    fake = installBridge();
+    teardown.push(fake.install());
+    const h = harness();
+    renderChrome(h);
+    fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+    await screen.findByRole("grid", { name: "Schedule" });
+    if (mode === "journal") {
+      fireEvent.click(screen.getByRole("button", { name: "Journal" }));
+      await screen.findByRole("listbox", { name: "Plan journal" });
+    }
+    return h;
+  };
+}
+
 /** The docked panel on an artifact with three versions: `panel`. */
 async function panelOnAnArtifact(): Promise<Harness> {
   fake.script({
@@ -167,6 +223,21 @@ async function panelOnAnArtifact(): Promise<Harness> {
   return h;
 }
 
+/**
+ * The Config surface with an unsaved edit: `config`. The key is registered only while
+ * there is a draft to save — a `⌘S` offered over a form nobody has touched would be a
+ * command in the palette that does nothing — so the mounting has to type something.
+ */
+async function chromeOnConfig(): Promise<Harness> {
+  const h = harness();
+  renderChrome(h);
+  fireEvent.click(await screen.findByRole("button", { name: "Config" }));
+  const command = await screen.findByLabelText(/^Command/);
+  fireEvent.change(command, { target: { value: "claude-code-next" } });
+  await screen.findByRole("group", { name: "Unsaved configuration changes" });
+  return h;
+}
+
 function Opener({ target }: { target: ArtifactTarget }): null {
   const panel = useArtifactPanel();
   useEffect(() => panel.open(target), []);
@@ -175,12 +246,21 @@ function Opener({ target }: { target: ArtifactTarget }): null {
 
 describe("every action in the map is registered", () => {
   it("covers the whole table, in the scope the table files it under", async () => {
-    /* Three mountings rather than one, because the table spans three screens: no single
-       screen has a card, a run tree, a stream and an open artifact panel at once, and a
-       fourth list on one screen is not a missing scope (AGENTS.md). The union is what the
-       app offers across the surfaces that exist. */
+    /* Seven mountings rather than one, because the table spans six screens: no single
+       screen has a card, a run tree, a stream, an open artifact panel, a graph canvas, a
+       config draft and a plan on it at once, and a fourth list on one screen is not a
+       missing scope (AGENTS.md). The union is what the app offers across the surfaces that
+       exist. */
     const found = new Set<string>();
-    for (const mount of [chromeOnAttention, chromeOnAStep, panelOnAnArtifact]) {
+    for (const mount of [
+      chromeOnAttention,
+      chromeOnAStep,
+      panelOnAnArtifact,
+      chromeOnAWorkflow,
+      chromeOnConfig,
+      chromeOnThePlan("schedule"),
+      chromeOnThePlan("journal"),
+    ]) {
       for (const slot of slotsOf(await registered(mount))) found.add(slot);
     }
 
@@ -214,6 +294,16 @@ describe("every registered shortcut is in the palette", () => {
       // The key is rendered for the platform, and absent entirely when there is none.
       expect(entry!.shortcut).toBe(shortcut.key === undefined ? undefined : shortcutLabel(shortcut.key, "darwin"));
     }
+  });
+
+  it("lists the config save with its key, from the scope the Config surface owns", async () => {
+    // The palette is how a shortcut is discovered, and `⌘S` over a form is exactly the kind
+    // of shortcut a person expects to exist without being told (#175).
+    const shortcuts = await registered(chromeOnConfig);
+    const entries = commandEntries(shortcuts, "darwin", ["config", "global"]);
+    const save = entries.find((entry) => entry.label === "Save the configuration");
+    expect(save).toBeDefined();
+    expect(save!.shortcut).toBe(shortcutLabel("Mod+S", "darwin"));
   });
 
   it("lists a keyless command with no chip rather than leaving it out", async () => {

@@ -61,6 +61,14 @@ export interface WorkspaceDeps {
   onSwitch: (fileMode: boolean) => void;
   /** Push the new workspace to every window. */
   onSnapshot: (snapshot: WorkspaceSnapshot) => void;
+  /**
+   * There is no daemon on the other end and none is coming: the file-mode daemon would not
+   * start, so nothing was connected to instead (#269). The connection machine is told the
+   * daemon is gone — `ConnectionMachine.daemonExited`, the one input that already means
+   * exactly this — so the status bar reads `disconnected` rather than describing a daemon
+   * the app never reached. The reason is the same sentence `onError` puts on the console.
+   */
+  onDaemonGone: (reason: string) => void;
   /** A daemon that would not start, for the console. */
   onError?: (message: string, cause: unknown) => void;
   /**
@@ -193,6 +201,14 @@ export class Workspace {
    * bar that reads disconnected, because an app that refuses to run because its daemon did
    * is a worse failure than one that shows you it has none. `open()` checks the one case a
    * person can act on — no bundled daemon at all — before it gets here.
+   *
+   * **What "stays open" means depends on the mode (#269).** In the *launch* case the daemon
+   * that would not start was a placeholder over the default workspace, so looking for one on
+   * `explicitUrl ?? defaultUrl` is looking for the daemon the app expected anyway. In *file
+   * mode* it is not: the person named a store, and any daemon answering on the default port
+   * is serving some other one. Falling back there would show that store's runs under a
+   * banner naming the chosen path as read-only, so a failed start is a failed open — no
+   * client, no stream, and the connection left down with the reason.
    */
   private switchTo(target: WorkspaceTarget): Promise<void> {
     const run = this.performSwitch(target);
@@ -224,6 +240,17 @@ export class Workspace {
         });
         url = this.daemon.url;
       } catch (e) {
+        if (target.readOnly) {
+          const reason = `the store at ${target.path} could not be opened: the bundled daemon did not start`;
+          this.deps.onError?.(reason, e);
+          if (this.closed) return;
+          // No client and no subscription: the previous connection was already stopped above
+          // and stays stopped, so there is nothing attached to any store. The workspace
+          // snapshot still goes out, because the banner has to name the store that failed.
+          this.deps.onDaemonGone(reason);
+          this.deps.onSnapshot(this.snapshot);
+          return;
+        }
         this.deps.onError?.(`the bundled daemon did not start; the app will look for one on ${url}`, e);
       }
     }

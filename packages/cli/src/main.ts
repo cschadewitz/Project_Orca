@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** `orca` command line. */
 import { parseArgs } from "node:util";
-import { isOrcaError } from "@orca/core";
+import { consoleLogger, describeError, isOrcaError, type Logger } from "@orca/core";
 import { commands, ORCA_VERSION } from "./commands/index.js";
 
 const USAGE = `orca - Orchestration Runtime for Coding Agents
@@ -92,5 +92,34 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 }
 
+/**
+ * Catch what escapes a command: a rejection nobody observed, or a throw off a callback.
+ * Node's default for either is to kill the process, which for `orca serve` means one run's
+ * failed append lapses the lease of every other run it drives (#268). So the daemon logs and
+ * keeps serving, while a one-shot command logs and exits non-zero, its result no longer
+ * being something to trust. Installed once, by the entry point, for every command alike.
+ */
+export function installProcessErrorHandlers(options: {
+  /** True for `orca serve`: log and carry on rather than exiting. */
+  keepRunning: boolean;
+  logger?: Logger;
+  exit?: (code: number) => void;
+}): void {
+  const logger = options.logger ?? consoleLogger("info", { component: "cli" });
+  const exit = options.exit ?? ((code: number) => process.exit(code));
+  const report = (what: string, e: unknown): void => {
+    logger.error(what, { error: describeError(e), ...(options.keepRunning ? { serving: true } : {}) });
+    if (!options.keepRunning) exit(1);
+  };
+  process.on("unhandledRejection", (reason: unknown) => report("unhandled rejection", reason));
+  process.on("uncaughtException", (e: unknown) => report("uncaught exception", e));
+}
+
 const invokedDirectly = process.argv[1] && /main\.(ts|js)$/.test(process.argv[1]);
-if (invokedDirectly) void main().then((code) => process.exit(code));
+if (invokedDirectly) {
+  // Before the parse, because a handler installed after the thing it would have caught is
+  // no handler at all. `serve` anywhere in the arguments is the daemon: mistaking a flag's
+  // value for it only means logging and carrying on, which is the safer way to be wrong.
+  installProcessErrorHandlers({ keepRunning: process.argv.slice(2).includes("serve") });
+  void main().then((code) => process.exit(code));
+}

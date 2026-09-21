@@ -10,16 +10,17 @@
    that need a size without the rest of a style reference `--text-*-size`; a glyph sized as a
    glyph references `--icon-*`.
 
-   There are no `orca-allow-literal` notes left. #211 removed 140 literals and left 38 of
-   these notes, #240 took five more, and #244 took the last 32 — because they were never 32
+   There is one `orca-allow-literal` note left, on `.orca-visually-hidden` (#262), and it is
+   the permanent kind this paragraph asks for rather than a finding waiting on a token.
+   #211 removed 140 literals and left 38 of these
+   notes, #240 took five more, and #244 took the last 32 — because they were never 32
    numbers. They were five families tokens.json did not have (`bar-*`, `badge-*`, `mark-*`,
    `col-*` and the spacing half rungs), two rungs that extend `control-*`, four boxes that
    simply needed naming, and two values that were arithmetic somebody had written out as a
-   number. The note was always described here as a finding waiting on a token rather than a
-   permanent exemption, and those findings are now closed. Adding one back is a claim nobody
-   has made yet: that a value exists which no token could sensibly name. Make that argument
-   in the note itself — say why it is permanent, not which issue it is waiting on — or add
-   the token, which is almost always the right fix. */
+   number. Each of those notes was a finding waiting on a token, and those findings are
+   closed. A note added now is the other claim: that a value exists which no token could
+   sensibly name. Make that argument in the note itself — say why it is permanent, not which
+   issue it is waiting on — or add the token, which is almost always the right fix. */
 
 /* ---------- roots ---------- */
 
@@ -122,6 +123,35 @@
   outline: var(--stroke-focus) solid var(--border-focus);
   outline-offset: var(--stroke-hairline);
   border-radius: var(--radius-xs);
+}
+
+/* ---------- utilities ---------- */
+
+/* Read, never seen: an element that stays in the accessibility tree and takes no space on
+   screen — a live region, a heading a sighted reader gets from the layout, the word a glyph
+   already says. It is here rather than in an app stylesheet because nothing about it is
+   app-specific, and every stylesheet that needed it would otherwise rewrite the clip (#262).
+
+   The alternatives are all worse and that is the whole reason for the shape: `display: none`,
+   `visibility: hidden` and a zero-sized box each drop the element *out* of the accessibility
+   tree in at least one screen reader, which for a live region is not "hidden" but "off".
+   `clip-path` does the hiding; the 1px box is only what keeps the element rendered at all.
+   It is absolutely positioned, so it is already out of flow and moves nothing — the
+   `margin: -1px` the snippet is usually copied with compensates for an in-flow variant this
+   rule does not have, and is left out rather than carried along unexamined.
+
+   The one exemption below is the only `orca-allow-literal` in this file, and it is the
+   permanent kind the header describes: no token could sensibly name 1px-of-nothing. */
+.orca-visually-hidden {
+  position: absolute;
+  /* The note covers this line and the next, which is the whole of the exemption. */
+  width: 1px; /* orca-allow-literal: the smallest rendered box, which is not a size — no token could sensibly name it, and a rung that did would name a family with one invisible member. Callers take the class, never these two numbers. */
+  height: 1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* ---------- status chip ---------- */
@@ -897,6 +927,12 @@
   border-color: var(--status-cancelled);
   border-style: dashed;
 }
+/* The classification's glyph: a badge says its class in shape and word, never in tint
+   alone (RULES.md rule 4), exactly as `.orca-chip__glyph` does for a run status. */
+.orca-badge__glyph {
+  font-size: var(--icon-sm);
+  line-height: 1;
+}
 /* type: caption */
 .orca-badge__why {
   margin-left: var(--space-1);
@@ -1070,8 +1106,21 @@
   font-family: var(--font-mono);
   font-weight: 500;
 }
+/* The node type's icon: inline SVG on the 16px grid, drawn in the eyebrow's ink. Shapes
+   rather than characters, so there is no bundled face for them and no glyph token. */
+.orca-node__icon {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
+  stroke-width: var(--stroke-hairline);
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
 /* type: caption */
 .orca-node__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--ink-secondary);
 }
 .orca-node--start,
@@ -1135,7 +1184,7 @@
 .orca-edge--untaken {
   stroke: var(--graph-edge);
   opacity: var(--opacity-untaken);
-  stroke-dasharray: 3 3;
+  stroke-dasharray: var(--stroke-dash-untaken);
 }
 /* type: mono-id */
 .orca-edge__label {
@@ -1575,6 +1624,10 @@
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
+/* type: mono-id — the run's workflow and the version it is pinned to, `ai-sdlc v11` (#177) */
+.orca-crumb__version {
+  color: var(--ink-secondary);
+}
 /* type: caption */
 .orca-crumb__sep {
   color: var(--ink-tertiary);
@@ -1676,6 +1729,20 @@
   margin-left: auto;
   text-transform: uppercase;
   color: var(--ink-tertiary);
+}
+/* A note the popover makes rather than a choice it offers: no hover, no pointer, no
+   height rung, and it wraps, because what it says is a sentence and not a row. */
+/* type: caption */
+.orca-menu__note {
+  /* The width the menu already sets as its floor: a note widens nothing. */
+  max-width: var(--panel-width);
+  padding: var(--space-2);
+  color: var(--ink-secondary);
+  white-space: normal;
+}
+/* type: caption */
+.orca-menu__error {
+  color: var(--status-failed);
 }
 
 /* connection indicator */
@@ -1824,10 +1891,23 @@
 .orca-palette__input::placeholder {
   color: var(--ink-tertiary);
 }
-/* The ring belongs to the palette, not to the field inside it: the field is the only
-   focusable thing in the layer, so a second ring around it is noise. */
-.orca-palette__input:focus {
-  outline: none;
+/* The field draws the system's ring, like everything else (#260).
+
+   This rule used to be `outline: none`, on the argument that "the ring belongs to the
+   palette, not to the field inside it" — but `.orca-palette` never drew one, so ⌘K put
+   focus somewhere with no focus indicator at all. Rule 10 allows suppressing the ring only
+   against a compensating affordance, and the way to make that true again was to draw the
+   compensating ring on the container or to stop suppressing this one. Stopping is the
+   smaller and the truer fix: the ring then stays one look, keyed on `:focus-visible` as the
+   spec keys it, rather than a second ring on `:focus-within` that would draw itself after a
+   mouse click too and would have to be kept in step with the first by hand.
+
+   The only palette-specific part is the offset. `.orca-palette` clips its content, and this
+   field spans the overlay's full width, so a ring offset *outwards* would have three of its
+   four sides clipped away. Inset by its own width it sits wholly inside the field: the same
+   token, the same 2px, and visible the whole way round. */
+.orca-palette__input:focus-visible {
+  outline-offset: calc(-1 * var(--stroke-focus));
 }
 .orca-palette__list {
   max-height: var(--palette-max-height);
@@ -1863,6 +1943,40 @@
 .orca-palette__row[aria-disabled="true"] {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
+}
+/* A destructive command (#178). The tone is on the label rather than on the whole row: the
+   row is still a row, and a filled red band in a list of commands would read as an error
+   that has already happened rather than as an act that has not. */
+.orca-palette__row--danger .orca-palette__label {
+  color: var(--status-failed);
+}
+/* The word *and* the glyph, never the colour alone (docs/design/RULES.md rule 4): the same
+   ✕ the failed run carries, at the chip's glyph size, leading the label it belongs to. */
+.orca-palette__row--danger .orca-palette__glyph {
+  flex: none;
+  font-size: var(--icon-sm);
+  line-height: 1;
+  color: var(--status-failed);
+}
+/* Chosen once, asking. The rail says it as well as the colour does, because the rail is
+   what the eye is already on — it is what marks the selected row — and because colour is
+   never the only carrier of a state (docs/design/RULES.md rule 4). */
+.orca-palette__row--armed {
+  background: var(--surface-selected);
+  border-left-color: var(--status-failed);
+}
+.orca-palette__picker {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+/* type: label */
+.orca-palette__picker-trigger {
+  display: flex;
+  align-items: center;
+  height: var(--control-md);
+  color: var(--ink-primary);
+  text-align: left;
 }
 .orca-palette__label {
   overflow: hidden;
@@ -2099,9 +2213,14 @@
   cursor: grab;
 }
 
+/* Selection, not focus (rule 10): `--surface-selected` and an accent rail, the same two
+   marks a selected row takes. It used to be an accent outline at the focus ring's width and
+   offset, which on a canvas whose one tab stop is the viewport meant the ring appeared to be
+   on a node that could not have it — two different facts drawn as one. The rail is an inset
+   shadow rather than a border so a selected node does not change size. */
 .orca-node--selected {
-  outline: var(--stroke-focus) solid var(--accent);
-  outline-offset: var(--space-0-5);
+  background: var(--surface-selected);
+  box-shadow: inset var(--stroke-rail) 0 0 0 var(--accent);
 }
 .orca-node--added {
   border-color: var(--status-succeeded);
@@ -2153,7 +2272,7 @@
 .orca-edge--draft {
   stroke: var(--accent);
   stroke-width: var(--stroke-edge-active);
-  stroke-dasharray: 5 3;
+  stroke-dasharray: var(--stroke-dash-draft);
 }
 
 /* ---------- inspector ---------- */
@@ -2257,9 +2376,12 @@
   height: var(--badge-md);
   padding: 0 var(--space-2);
   border-radius: var(--radius-xs);
-  background: var(--status-running-bg);
-  color: var(--status-running);
-  border: var(--stroke-hairline) solid var(--status-running);
+  /* A chip tone, not a status tone: a pinned run is not a *running* run, and painting it in
+     `--status-running` made "this run is on an older version of the workflow" look like a
+     state the run is in. The glyph and the word carry it (rule 4). */
+  background: var(--surface-raised);
+  color: var(--ink-secondary);
+  border: var(--stroke-hairline) solid var(--border-control);
   font-weight: 500;
 }
 
@@ -2299,6 +2421,10 @@
 }
 .orca-legend__swatch--soft {
   border-top-style: dashed;
+}
+/* The back edge's own stroke: dotted, never the dash an untaken edge takes (rule 4). */
+.orca-legend__swatch--back {
+  border-top-style: dotted;
 }
 .orca-legend__swatch--informs {
   border-top-style: dotted;

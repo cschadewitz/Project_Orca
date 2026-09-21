@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost, SshHost } from "@orca/agents";
 import { FakeClock, OrcaError, SshHostSchema, TemplateRegistry, WorkflowRegistry, silentLogger } from "@orca/core";
 import { Orchestrator } from "@orca/engine";
-import { memoryStores } from "@orca/store";
+import { memoryStores, type EventRange } from "@orca/store";
 import {
   ArtifactsGetResultSchema,
   ArtifactsListResultSchema,
@@ -15,13 +15,14 @@ import {
   HelloResultSchema,
   InputsListResultSchema,
   PROTOCOL_VERSION,
+  CONFIG_GET_METHOD,
   READ_METHODS,
   RunsEventsResultSchema,
   RunsGetResultSchema,
   RunsListResultSchema,
 } from "@orca/protocol";
 import { ReadModel, dispatch, methods, type MethodContext } from "@orca/daemon";
-import { artifactFixture, emptyFixture, fixture, START, STEP_MS, type Fixture } from "./fixture.js";
+import { artifactFixture, emptyFixture, fixture, PNG_BODY, START, STEP_MS, type Fixture } from "./fixture.js";
 
 let f: Fixture;
 let reads: ReadModel;
@@ -290,6 +291,50 @@ describe("runs.events", () => {
   it("answers RUN_NOT_FOUND for an empty log", async () => {
     await expect(reads.runsEvents({ runId: "run-nope", limit: 10 })).rejects.toThrow(OrcaError);
   });
+
+  /**
+   * #208: a page is a ranged read, so the cost of scrolling a run whose log is tens of
+   * thousands of `agent.update` lines is a page rather than the log. The projection cannot
+   * show that by its answers - they are identical either way - so what is asserted is the
+   * call it makes: the range, once, with the limit the client asked for plus the one event
+   * that answers `hasMore`, and never `events()`.
+   */
+  it("pages through the store's ranged read and never reads the whole log", async () => {
+    const whole: string[] = [];
+    const ranges: EventRange[] = [];
+    const spy = new Proxy(f.orchestrator, {
+      get(target, prop) {
+        if (prop === "events")
+          return (runId: string) => {
+            whole.push(runId);
+            return target.events(runId);
+          };
+        if (prop === "eventsRange")
+          return (runId: string, range: EventRange) => {
+            ranges.push(range);
+            return target.eventsRange(runId, range);
+          };
+        const value: unknown = Reflect.get(target, prop, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const model = new ReadModel({ orchestrator: spy });
+
+    const back = await model.runsEvents({ runId: "run-parent", before: 16, limit: 3 });
+    expect(back.events.map((e) => e.seq)).toEqual([13, 14, 15]);
+    expect(back.hasMore).toBe(true);
+    // The whole log is what the ranged read replaces; `lastSeq` comes from the store too.
+    expect(whole).toEqual([]);
+    expect(ranges).toEqual([{ before: 16, limit: 4 }]);
+    expect(back.lastSeq).toBe((await f.orchestrator.events("run-parent")).at(-1)!.seq);
+
+    ranges.length = 0;
+    const forward = await model.runsEvents({ runId: "run-parent", after: 2, limit: 1, types: ["step.scheduled"] });
+    expect(forward.events.length).toBe(1);
+    expect(forward.hasMore).toBe(true);
+    expect(ranges).toEqual([{ after: 2, limit: 2, types: ["step.scheduled"] }]);
+    expect(whole).toEqual([]);
+  });
 });
 
 describe("inputs.list", () => {
@@ -442,7 +487,13 @@ describe("artifacts.get", () => {
     expect(r.text).toBeUndefined();
     expect(r.omitted?.reason).toBe("binary");
     // The panel can still draw the chip and the header: size travels on the view.
-    expect(r.artifact).toMatchObject({ name: "screenshot", mediaType: "image/png", size: 4096 });
+    expect(r.artifact).toMatchObject({ name: "screenshot", mediaType: "image/png", size: PNG_BODY.length });
+    // The reason is true of the store underneath (#226): the media type is the artifact's
+    // and the size is the number of bytes a download would be, not a character count.
+    expect(r.omitted?.detail).toContain("image/png");
+    expect(r.omitted?.detail).toContain(`${PNG_BODY.length} bytes`);
+    // And the store does hold them - declining is the wire's choice now, not a limitation.
+    expect(Buffer.from(await art.stores.artifacts.bytes("art-shot"))).toEqual(PNG_BODY);
   });
 
   it("declines a body past `maxBytes` the same way", async () => {
@@ -476,7 +527,10 @@ describe("hello", () => {
   it("reports the read methods it serves", async () => {
     const r = HelloResultSchema.parse((await call("hello", { client: "test/1", protocol: PROTOCOL_VERSION })).result);
     expect(r.capabilities).toEqual(["runs.read"]);
-    expect(r.methods).toEqual(["hello", ...READ_METHODS]);
+    // `config.get` is a read, but it needs a config directory rather than a store, and this
+    // fixture is a store alone. A method this daemon will not answer is a method it does not
+    // advertise, which is the whole of `methodsFor` (#174).
+    expect(r.methods).toEqual(["hello", ...READ_METHODS.filter((m) => m !== CONFIG_GET_METHOD)]);
     expect(r.storeDir).toBe("/work/orca/.orca");
   });
 

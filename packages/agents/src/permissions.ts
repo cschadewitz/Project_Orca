@@ -2,34 +2,53 @@
  * Permission policy evaluation for ACP `session/request_permission`, and the sidecar file
  * that "allow always" writes to.
  *
- * ORCA is usually unattended, so the default is to allow and to log. Rules can
- * deny or route specific tool kinds/paths to a human (or, in ACP-facade mode,
- * to the upstream client that launched ORCA).
+ * ORCA is usually unattended, so an agent that declares no policy gets the conservative one
+ * (`DEFAULT_PERMISSION_POLICY` in `@orca/core`): reads, searches and edits inside the run's
+ * workspace are allowed and logged, and everything else — `execute`, the network, a path in
+ * a sibling checkout — is `ask`. Rules can deny, allow or route specific tool kinds/paths to
+ * a human (or, in ACP-facade mode, to the upstream client that launched ORCA).
  *
- * A policy has two halves. The configured half is `agents[].permissions` in
+ * An `ask` nobody can answer is refused, not parked: `resolvePermission` with no `ask`
+ * callback, and a `PausingHumanInput` that declines to persist a permission question,
+ * both come back `cancelled`, which ends the tool call rather than the run.
+ *
+ * A policy has two halves and a floor. The configured half is `agents[].permissions` in
  * `orca.config.yaml`: hand-curated, and no place for a machine to append. The written half
  * is `orca.permissions.json` beside it — the workspace sidecar, added to whenever someone
  * answers a prompt with "always", and layered *under* the configured rules so configuration
  * always outranks it. The file is plain JSON with provenance on every rule because a
- * standing permission grant ought to be something a teammate can read in a diff.
+ * standing permission grant ought to be something a teammate can read in a diff. The floor
+ * is `DEFAULT_PERMISSION_POLICY`, appended last by `loadEffectivePermissionPolicy`, so that
+ * a `deny` from either half outranks it (#140).
+ *
+ * The sidecar is read *per ask*, not per session (#271): `openAcpSession` calls
+ * `loadEffectivePermissionPolicy` from its `session/request_permission` handler, so a rule
+ * recorded while a run is in flight — somebody answering "always" in the app — decides the
+ * very next tool call rather than only the next session. The file is two levels of nesting
+ * deep and an ask is already a round trip to an agent, so re-reading it costs nothing worth
+ * caching against.
  *
  * The schemas, the layering and the derivation are in `@orca/core`
  * (`model/agent.ts`), which is node-free; the reading, writing and locking are here.
  */
+import { createHash } from "node:crypto";
 import { link, mkdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   derivePermissionRules,
-  layerPermissionPolicies,
+  effectivePermissionPolicy,
   OrcaError,
   PERMISSION_POLICY_FILENAME,
   PermissionPolicyFileSchema,
   permissionPathForms,
   samePermissionRule,
+  workspaceRelativePath,
+  WritablePermissionPolicyFileSchema,
 } from "@orca/core";
 import type {
+  ConfiguredPermissionPolicy,
   PermissionDecision,
   PermissionDeriveRefusal,
   PermissionPolicy,
@@ -65,10 +84,16 @@ export function decidePermission(
   const title = tc.title ?? "";
   const kind = tc.kind ?? "other";
   const cwd = ctx?.workspaceCwd;
-  const paths = (tc.locations ?? []).flatMap((l) => permissionPathForms(l.path, cwd));
+  const locations = (tc.locations ?? []).map((l) => l.path);
+  const paths = locations.flatMap((p) => permissionPathForms(p, cwd));
+  // Both are false for a call with no locations, so `scope` never matches one (#140).
+  const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
+  const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
   for (const rule of policy.rules) {
     const m = rule.match;
     if (m.kind && m.kind !== kind) continue;
+    if (m.scope === "workspace" && !allInside) continue;
+    if (m.scope === "outside-workspace" && !anyOutside) continue;
     if (m.titlePattern && !new RegExp(m.titlePattern).test(title)) continue;
     if (m.path !== undefined) {
       const wanted = permissionPathForms(m.path, cwd);
@@ -107,7 +132,11 @@ export async function resolvePermission(
     case "deny":
       return select(pick(options, ["reject_once", "reject_always"]), "deny");
     case "ask": {
-      const chosen = ctx.ask ? await ctx.ask(ctx.request) : undefined;
+      // Nothing to ask through: the run has no human-input channel at all. Say so in the
+      // decision rather than logging a bare "cancelled", because "the policy wanted a person
+      // and there was none" is the one a person reading the log has to act on (#140).
+      if (!ctx.ask) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:no-answerer" };
+      const chosen = await ctx.ask(ctx.request);
       const o = chosen ? options.find((x) => x.optionId === chosen) : undefined;
       return o
         ? { response: { outcome: { outcome: "selected", optionId: o.optionId } }, decision: `ask:${o.kind}` }
@@ -161,19 +190,44 @@ export function permissionOverlayFor(doc: PermissionPolicyFile, agentId: string)
 
 /**
  * The policy to evaluate for an agent: its configured rules first, then each sidecar in the
- * order given. Today `files` is one entry — the workspace sidecar. A user-scoped file layers
- * *under* it by being passed after it; nothing else about this has to change.
+ * order given, then `DEFAULT_PERMISSION_POLICY`'s rules last — if they apply. Today `files`
+ * is one entry, the workspace sidecar. A user-scoped file layers *under* it by being passed
+ * after it; nothing else about this has to change.
+ *
+ * The ordering and the "if they apply" are both `effectivePermissionPolicy`'s in `@orca/core`,
+ * not this function's, which only adds the file reading. This is the one production path to
+ * an evaluated policy: `acp-session.ts` calls it per ask (#271), with no files when nothing
+ * wired a sidecar, so "no sidecar" is the same code reaching the same answer rather than a
+ * second evaluation that has to be kept in step with this one.
  *
  * A file that is missing contributes nothing, so a workspace where nobody has ever answered
  * "always" evaluates exactly as it did before this existed.
+ *
+ * `onUnreadable` decides what a *corrupt* sidecar means to the caller, and the two answers
+ * are both right in their place. Omit it and the `CONFIG_INVALID` propagates, which is what
+ * a caller reading the file to show or edit it wants. Pass one — `openAcpSession` does — and
+ * the file is skipped and reported instead: a live agent asking for permission must not be
+ * taken down by a sidecar somebody hand-edited badly, and skipping is the *conservative*
+ * direction here rather than the permissive one, because an overlay can only ever add rules
+ * after the configured ones. Dropping it can turn an `allow` back into an `ask`; it can
+ * never turn an `ask` into an `allow`. It is reported at warn either way, so the grant that
+ * silently stopped applying is on the record.
  */
 export async function loadEffectivePermissionPolicy(
-  agent: { id: string; permissions: PermissionPolicy },
+  agent: { id: string; permissions: ConfiguredPermissionPolicy },
   files: readonly string[],
+  onUnreadable?: (file: string, error: unknown) => void,
 ): Promise<PermissionPolicy> {
   const overlays: PermissionRule[][] = [];
-  for (const file of files) overlays.push(permissionOverlayFor(await readPermissionPolicyFile(file), agent.id));
-  return layerPermissionPolicies(agent.permissions, ...overlays);
+  for (const file of files) {
+    try {
+      overlays.push(permissionOverlayFor(await readPermissionPolicyFile(file), agent.id));
+    } catch (e) {
+      if (!onUnreadable) throw e;
+      onUnreadable(file, e);
+    }
+  }
+  return effectivePermissionPolicy(agent.permissions, ...overlays);
 }
 
 export interface RecordAlwaysOptions {
@@ -260,13 +314,95 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
   });
 }
 
+/**
+ * Replace a sidecar wholesale, under the same lock `recordAlwaysDecision` takes.
+ *
+ * This is the operator's half of ADR 0009: `config.set` on the `permissions` document
+ * (#266) edits or removes a grant a machine wrote. It goes through here rather than through
+ * a second writer in the daemon for one reason worth being blunt about - a `link()` lock is
+ * only a lock if *every* writer takes it. A daemon that opened the file itself would be a
+ * second path with its own tmp name and its own idea of atomicity, and the case it would
+ * lose is exactly the one #266 asks to be tested: a run answering "always" at the moment an
+ * operator saves an edit.
+ *
+ * The document is validated with `WritablePermissionPolicyFileSchema`, which refuses a
+ * `default`, and serialised with the same fixed key order a machine write uses, so an
+ * operator's save and ORCA's own append produce the same shape of diff.
+ *
+ * It is a replace and not a merge. The caller read a revision, edited it and sends the whole
+ * document back; deciding here which of two concurrent versions of a rule list was meant is
+ * a guess, and refusing it as stale is the honest answer.
+ *
+ * Which is why `expectedRevision` is checked **here**, inside the lock, and not by the
+ * caller. A daemon that compared revisions and then called this had a window between the two
+ * exactly wide enough for a run answering "always" to append a grant, and the replace then
+ * dropped it - the one case #266 names and the one this lock exists to prevent. It is the
+ * sha256 hex of the file's current bytes, `""` for a file that is not there; omit it and the
+ * replace is unconditional, which is what a caller with no revision to quote should do
+ * deliberately rather than by default.
+ */
+export async function replacePermissionPolicyFile(
+  file: string,
+  doc: unknown,
+  opts?: {
+    lock?: { timeoutMs?: number; staleMs?: number } | undefined;
+    /** sha256 hex of the bytes the caller's edit was based on; `""` for "there was no file". */
+    expectedRevision?: string | undefined;
+  },
+): Promise<PermissionPolicyFile> {
+  const parsed = parsePermissionPolicyDocument(doc);
+  const expected = opts?.expectedRevision;
+  await withPolicyLock(file, opts?.lock, async () => {
+    if (expected !== undefined) {
+      const actual = await revisionOf(file);
+      if (actual !== expected)
+        throw new OrcaError(
+          "CONFIG_STALE",
+          `${file} has changed since you read it: write again against the current revision`,
+          { file, expectedRevision: expected, actualRevision: actual },
+        );
+    }
+    await writePolicyFile(file, parsed);
+  });
+  return parsed;
+}
+
+/**
+ * The content hash of a file as it is right now, `""` when it is not there - the same
+ * "revision" `config.get` reports, computed the same way, so the two can be compared at all.
+ */
+async function revisionOf(file: string): Promise<string> {
+  try {
+    return createHash("sha256")
+      .update(await readFile(file))
+      .digest("hex");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw e;
+  }
+}
+
+/**
+ * Validate a sidecar document a client sent, refusing a `default`. Exported beside the
+ * writer so a `validateOnly` call can ask the same question without taking the lock.
+ */
+export function parsePermissionPolicyDocument(doc: unknown): PermissionPolicyFile {
+  const parsed = WritablePermissionPolicyFileSchema.safeParse(doc ?? {});
+  if (!parsed.success)
+    throw new OrcaError("CONFIG_INVALID", parsed.error.issues[0]?.message ?? "invalid permission document", {
+      issues: parsed.error.issues,
+    });
+  const { default: _refused, ...rest } = parsed.data;
+  return rest;
+}
+
 /* ----------------------------- file mechanics ----------------------------- */
 
 /** Keys in a fixed order and `undefined` omitted, so a rewrite produces a minimal diff. */
 function serialize(doc: PermissionPolicyFile): string {
   const rule = (r: RecordedPermissionRule): Record<string, unknown> => {
     const match: Record<string, unknown> = {};
-    for (const key of ["kind", "titlePattern", "path", "pathPrefix"] as const)
+    for (const key of ["kind", "titlePattern", "path", "pathPrefix", "scope"] as const)
       if (r.match[key] !== undefined) match[key] = r.match[key];
     const out: Record<string, unknown> = { match, decision: r.decision };
     if (r.addedAt !== undefined) out["addedAt"] = r.addedAt;

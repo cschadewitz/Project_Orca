@@ -3,8 +3,8 @@
 Groundwork is complete and tested end‑to‑end. Deliberately left for follow‑up:
 
 1. **Daemon mode** — `orca serve` exists (`packages/daemon`) with the transport, the
-   `hello` handshake over HTTP and the seven read methods over `Orchestrator` — `runs.list`,
-   `runs.get`, `runs.events`, `inputs.list`, `claims.list` (#150), `artifacts.list`,
+   `hello` handshake over HTTP and the seven read methods it started with over `Orchestrator`
+   — `runs.list`, `runs.get`, `runs.events`, `inputs.list`, `claims.list` (#150), `artifacts.list`,
    `artifacts.get` (#159), answering the display read
    models in `packages/protocol` (its README is the method reference). A step's output is
    `runs.events` filtered by `stepRunId` rather than a method of its own (#158). The desktop app
@@ -23,23 +23,41 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    workflow's options may be written as `{ id, label, consequence?, destructive? }` and bare
    strings still parse (#247), an open ask names the agent whose turn it is holding and the
    host it runs on (#248), and the note a person writes beside an answer is recorded on
-   `human.answered` rather than in the operator's log (#238, `orca answer --note`). Still to
-   do: the plan methods over `PlanService`.
+   `human.answered` rather than in the operator's log (#238, `orca answer --note`).
+   **v0.5.0 finished the method inventory at protocol 1.7.** The reads are ten —
+   `workflows.list` and `workflows.get` draw the workflow files as a display graph and
+   `runs.get` gained a `traversal` of the nodes a run took (#174), and `config.get` answers
+   with the workspace's two configuration documents (#174, #266). The **plan methods** over
+   `PlanService` landed (#169): nine reads under `plan.read` and five writes under
+   `plan.write`, `claims.release` among them (#88), with a `plan.changed` push. `config.set`
+   writes one of the two documents (#174, #266). That makes ten methods behind
+   `runs.control`, all ten absent from a `--read-only` daemon's `hello.methods`. Two things
+   are declared and not done: `config.set` **reloads nothing** — the daemon serves the
+   configuration it booted with until the next `orca serve` — and `workflows.changed` is on
+   the wire with nothing emitting it, because there is no workflow reload path yet. Making a
+   running agent session read the permission sidecar as it stands rather than as it booted is
+   #271, in flight for this wave.
    Human input survives process boundaries: `pause` mode parks the run in its event log and
    `orca answer <requestId> <option>` resumes it, through the same shared function
    `inputs.answer` calls. What the daemon does **not** do is keep an agent session alive
    across the wait — a gate parks the run to the log, the interpreter lets go, and the step
    that resumes afterwards opens a **fresh** session, so the agent loses the conversation it
-   was in the middle of (#237, split out of #160). `runs.start` takes a workflow and vars
-   only: it records `requestId` / `workItemId` on `run.created` and writes no request or
-   work‑item document, for the reason below.
-   Two processes over one store are
-   safe to the extent the run log is concerned: every interpreter holds a single‑writer
-   lease per run (#101). The document stores are not — `JsonFileDocumentStore` caches the
-   whole collection and rewrites it, so a daemon and a CLI command would lose each other's
-   requests, work items and plan records (#196). The same boundary limits the push channel:
-   the socket fans out *this process's* event store, so a run a separate CLI process appends
-   is not pushed and only appears on the next read. A store watcher, or #196, closes that.
+   was in the middle of (#237, split out of #160; unmilestoned). `runs.start` takes a
+   workflow and vars only: it records `requestId` / `workItemId` on `run.created` and writes
+   no request or work‑item document, for the reason below.
+   Two processes over one store are safe now. Every interpreter holds a single‑writer lease
+   per run (#101), and since v0.5.0 the document stores are safe too: `JsonFileDocumentStore`
+   re‑reads a collection under a file lock before every write and renames a uniquely named,
+   flushed temp file over it, so a daemon and a CLI command no longer lose each other's
+   requests, work items and plan records (#196). What is *not* closed is the push channel:
+   the socket fans out *this process's* event store and plan journal, so a run a separate CLI
+   process appends is not pushed and only appears on the next read. That is an in‑memory
+   listener list rather than a stale store, and a store watcher is what would close it.
+   **Open decision for Casey:** `runs.start` stays narrow **by decision**, not because of the
+   store. Submitting a request and decomposing it is a workflow with an agent and an artifact
+   in it, not a record insert, and growing `runs.start` into it would settle that design
+   inside the schema of a method whose job is "run this workflow". A `requests.submit` method
+   goes beside it when somebody designs one; until then the daemon cannot create a request.
 2. **T3 Code WebSocket transport** — implement `T3CodeRpc` over T3's Effect‑RPC envelope and
    depend on `@t3tools/contracts`; map `thread.meta-updated.worktreePath` into the workspace.
 3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore`/`ClaimStore` over
@@ -62,7 +80,10 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    record for role→agent, model and item workflow that replays faithfully and children
    inherit (#186), the model has to reach the turn (#187), the CLI needs the same flags so
    it is not ACP‑only (#190), and prompt templates become selectable packs (#191). `/run`
-   and `/status` become advertised slash commands in the same pass (#192).
+   and `/status` become advertised slash commands in the same pass (#192). **Moved out of
+   v0.5.0:** #185–#192, with #126 and #127 beside them, are the milestone **"Model and agent
+   selection"** rather than part of the configuration and monitoring wave — picking a model
+   is a different question from seeing what the system is wired to.
 9. **Desktop app** — the foundation is complete (milestone v0.3.0). The design system is
    done: tokens in both themes, the CSS component layer, the typed status maps
    (`packages/design`) and the brand book, rules and surface specs (`docs/design/`), with
@@ -105,13 +126,30 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
    axe runs over every built surface in both themes, and the bundled type faces are checked by
    machine on Linux, macOS and Windows against committed baselines. What those checks do *not*
    reach is written down beside them in `docs/design/50-accessibility-and-keyboard.md`, which
-   now names the check that enforces each of its paragraphs. Phase 2 makes it the
-   first‑class configuration and monitoring surface (config, agents, plan); the dependency
-   graph goes in as a mode of Plan with a docked inspector unless use shows it is a
-   starting point (`docs/design/80-dependency-graph-options.md`). Workflow editing
-   (`docs/design/70-workflow-editing.md`) comes after the viewer and needs the runtime to
-   execute a run against the workflow version it started with, not only the newest; a run
-   already records its workflow version.
+   now names the check that enforces each of its paragraphs. **Phase 2 shipped in v0.5.0**,
+   "configuration and monitoring": all five surfaces have content. Config is
+   `orca.config.yaml` as a form over the schema the daemon describes, beside the raw file,
+   with the ADR 0009 permission sidecar as its second document (#175, #266); Agents grew the
+   write half — each agent's policy edited where the grants actually live, and `claims.release`
+   (#176); the workflow viewer draws a workflow as a derived graph with a run overlaid on it
+   (#177); Plan is the schedule table, the scheduler's own explanations, a requests sidebar
+   and the journal (#170); and every write the daemon serves is a keyless action in the
+   command palette — answer, cancel, resume, start a run, waive, decide, reopen, risk,
+   release — with nothing added to any screen's chrome (#178). The sidebar's five surfaces
+   have designed glyphs (#261), and #245 is decided: the artifact panel stays raw.
+   **Deferred to v0.6.0:** the dependency graph (#171), the risk matrix (#172) and the
+   decision matrix (#173) — the three remaining modes of Plan. They are *absent* from the
+   object header's mode control rather than disabled, because a segment that never does
+   anything is a dead end; the docked-inspector shape they go in as is
+   `docs/design/80-dependency-graph-options.md`. **Still not done anywhere:** notification
+   tiers (#162), auto‑approval counts (ORCA does not collect that data, and the policy panel
+   says so where a count would have gone), a handshake retry from an agent card, and vars on
+   `runs.start` — nothing in the protocol says what a workflow's inputs are called, so the
+   palette's picker starts a workflow with the workflow's own vars rather than inventing a
+   form. Workflow editing (`docs/design/70-workflow-editing.md`, #181) comes after the viewer
+   and needs the runtime to execute a run against the workflow version it started with, not
+   only the newest; a run already records its workflow version, and `workflows.changed` is on
+   the wire waiting for it.
 10. **Planning: capacity and milestones** — the scheduler orders by dependencies, risk and
     priority but has no notion of agent capacity per host, calendar milestones or due dates
     beyond `Decision.dueBy`; add `Milestone` records and a capacity model per host/agent.
@@ -137,14 +175,21 @@ Groundwork is complete and tested end‑to‑end. Deliberately left for follow�
     that is heartbeated while an interpreter is attached, so a second one is refused rather
     than interleaved, and `orca leases` lists and breaks them (#101); `custom:decision-matrix`
     no longer re-decides a decision the artifact intake already made (#79); `orca claims`
-    lists and releases a dead run's work‑item claims (#88; the released item still reads
-    `in-progress` to the dispatcher, #123). The rest are smaller:
+    lists and releases a dead run's work‑item claims (#88, over the wire as `claims.release`
+    since v0.5.0; the released item still reads `in-progress` to the dispatcher, #123); and
+    the document stores write under a file lock and re‑read the collection first, so the
+    lease's guarantee no longer stops at the run log and two processes over one store keep
+    each other's documents (#196). The rest are smaller:
     #77, #81, #82, #84, #104 (a
     `decided` decision is re-decided by a different choice without reopening it, so the
     decide loop can undo a human's pick), #105 (intake reconciles on unchanged signals), and
     the #97 follow‑ups still open: the artifact index appended without the lock (#102), and
     lock liveness across pid namespaces (#103) — the lease's heartbeat answers that question
-    for runs, the lock file still decides on pid and age alone. #101 left two of its own:
-    the document stores rewrite whole collections from a cache that is never invalidated, so
-    the lease's guarantee stops at the run log (#196), and breaking a live lease leaves a
-    one‑heartbeat window in which the old interpreter can still append (#197).
+    for runs, the lock file still decides on pid and age alone. Of the two #101 left of its
+    own, #196 is fixed above; breaking a live lease still leaves a one‑heartbeat window in
+    which the old interpreter can append (#197). Carried over and fixed in v0.5.0 besides: a
+    lease lost while the context loads refuses the run rather than writing (#267), a streamed
+    agent append that fails fails the step (#268), a failed file‑mode daemon start is a failed
+    open (#269), an unreadable artifact body fails the step instead of rendering as `""`
+    (#270), and an empty artifact version has no lines to remove (#250). #237 and #255 are
+    unmilestoned.

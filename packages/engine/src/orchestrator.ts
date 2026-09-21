@@ -51,6 +51,7 @@ import {
   ownsLease,
   type EventFilter,
   type EventListener,
+  type EventRange,
   type HeldLease,
   type Lease,
   type Stores,
@@ -115,6 +116,13 @@ export interface RunLeaseOptions {
 
 /** A lease together with whether it may be taken over without an operator saying so. */
 export type HeldRunLease = Lease & { runId: string; lapsed: boolean };
+
+/**
+ * The keeper of an attached run's lease, plus whether a heartbeat has already found the lease
+ * gone. `held` answers the same question, but `lost` is latched by `onLost` and so survives
+ * whatever the keeper does next; an interpreter reads it once it has a context to stop (#267).
+ */
+type AttachedLease = HeldLease & { readonly lost: boolean };
 
 /** A work-item claim together with the state of the run that holds it. */
 export type HeldClaim = WorkItemClaim & { owner: RunSummary["status"] | "missing" };
@@ -302,6 +310,14 @@ export class Orchestrator {
 
   events(runId: string): Promise<OrcaEvent[]> {
     return this.stores.events.read(runId);
+  }
+  /** One page of a run's log. A reader that pages - the timeline, a resuming subscription - takes this, not `events`. */
+  eventsRange(runId: string, range?: EventRange): Promise<OrcaEvent[]> {
+    return this.stores.events.readRange(runId, range);
+  }
+  /** The run's highest `seq`, or `undefined` when the store has no such run. */
+  lastSeq(runId: string): Promise<number | undefined> {
+    return this.stores.events.lastSeq(runId);
   }
   subscribe(listener: EventListener, filter?: EventFilter): () => void {
     return this.stores.events.subscribe(listener, filter);
@@ -617,11 +633,36 @@ export class Orchestrator {
    * reader cannot corrupt anyone's story.
    */
   private async executeLeased(runId: string): Promise<RunState> {
-    const rc = await this.loadContext(runId);
-    // A finished run is not driven at all, so it needs no lease.
-    if (isTerminal(rc.state)) return rc.state;
-    const held = await this.takeRunLease(runId, rc);
+    // The summary comes first because it is cheap - it never replays the step events - and it
+    // answers both questions that have to be answered before the log is reduced: what to write
+    // on the lease, and whether this run is finished. A finished run is not driven at all, so
+    // it needs no lease and must never be left holding one.
+    const summary = await this.getSummary(runId);
+    if (isTerminalStatus(summary.status)) return this.getState(runId);
+    // Then the lease, *before* `loadContext` (#267): loading caches a RunContext in `this.live`,
+    // and an interpreter that is about to be refused must leave nothing behind there for the
+    // next attach - or for a `getState` or `cancel` in this process - to reuse.
+    let rc: RunContext | undefined;
+    const held = await this.takeRunLease(runId, summary.workflowId, () => rc);
     try {
+      rc = await this.loadContext(runId);
+      // The window between taking the lease and having a context to stop is the one place
+      // `onLost` cannot act on (#267): it fires, finds no `rc`, and returns. Reading the flag
+      // here closes it - an interpreter whose lease went away while the log was being reduced
+      // must refuse, not execute, because `execute` writes. `held.held` is the same answer from
+      // the keeper's side, and either being false is enough.
+      if (held.lost || !held.held) {
+        // Mark the cached context too: a `cancel` in this process must not write to a log we
+        // no longer own either, and `this.live` now has this `rc` in it.
+        rc.leaseLost = true;
+        throw new OrcaError(
+          "RUN_LEASED",
+          `the lease on run ${runId} was taken away while its log was being loaded here; this interpreter stopped without writing. The run is now whoever holds the lease's to drive.`,
+          { runId },
+        );
+      }
+      // Terminal again only if it finished between the summary and here; releasing is enough.
+      if (isTerminal(rc.state)) return rc.state;
       return await this.execute(rc);
     } finally {
       await held.release();
@@ -632,15 +673,23 @@ export class Orchestrator {
    * Claim the right to interpret `runId`, and keep claiming it: an attached interpreter
    * heartbeats for as long as it is attached, so a second one can tell "still working, mostly
    * waiting on an agent" from "died an hour ago" without a human deciding. Losing the lease
-   * mid-run (only an operator can take a live one away) cancels the run rather than letting
-   * two interpreters append to one log.
+   * mid-run (only an operator can take a live one away) stops this interpreter where it
+   * stands, without a further write, rather than letting two interpreters append to one log.
+   *
+   * `attached` is read at heartbeat time rather than taken as a value because the lease is
+   * taken before the context exists; a lease lost in that window has nothing to stop yet, so
+   * it is remembered in `lost` instead and `executeLeased` reads it once there is a context.
    */
-  private async takeRunLease(runId: string, rc: RunContext): Promise<HeldLease> {
+  private async takeRunLease(
+    runId: string,
+    note: string,
+    attached: () => RunContext | undefined,
+  ): Promise<AttachedLease> {
     const lease = await this.stores.leases.acquire({
       resource: runLeaseResource(runId),
       holder: this.leaseHolder,
       ttlMs: this.leaseTtlMs,
-      note: rc.definition.id,
+      note,
     });
     if (!ownsLease(lease, this.leaseHolder))
       throw new OrcaError(
@@ -648,13 +697,36 @@ export class Orchestrator {
         `run ${runId} is already being interpreted by pid ${lease.pid} on ${lease.host} (last heartbeat ${lease.renewedAt}): wait for it, or take the lease with 'orca leases break ${runId} --force'`,
         { runId, ...describeLease(lease) },
       );
-    return keepLease(this.stores.leases, lease, {
+    let lost = false;
+    const keeper = keepLease(this.stores.leases, lease, {
       ...(this.leaseRenewMs !== undefined ? { renewMs: this.leaseRenewMs } : {}),
       onLost: () => {
-        rc.logger.error("run lease lost; stopping this interpreter", { resource: lease.resource });
+        lost = true;
+        const rc = attached();
+        (rc?.logger ?? this.logger).error("run lease lost; stopping this interpreter", {
+          resource: lease.resource,
+          runId,
+        });
+        if (!rc) return;
+        // The flag, not the abort reason, is what tells the interpreter apart from an operator's
+        // cancel: a cancel we own still writes `run.cancelled`, a lost lease writes nothing.
+        rc.leaseLost = true;
         rc.abort.abort(`lease on run ${runId} was taken away; another process may now be driving it`);
       },
     });
+    return {
+      ...keeper,
+      get lease() {
+        return keeper.lease;
+      },
+      get held() {
+        return keeper.held;
+      },
+      get lost() {
+        return lost;
+      },
+      release: () => keeper.release(),
+    };
   }
 
   private async execute(rc: RunContext): Promise<RunState> {
@@ -759,6 +831,18 @@ export class Orchestrator {
       }
     } catch (e) {
       const err = describeError(e);
+      if (rc.leaseLost) {
+        // The lease was taken away mid-run (#267). Another interpreter may already be reducing
+        // and extending this log, so there is nothing safe to say here: a `step.cancelled` or
+        // `run.cancelled` from this process would cancel *their* run. Stop, say why in the log
+        // of this process (not of the run), and let the caller know the run is not ours.
+        log.error("run lease lost; stopping without writing to the run's log", { stoppedAt: err.code });
+        throw new OrcaError(
+          "RUN_LEASED",
+          `the lease on run ${runId} was taken away while it was being interpreted here; this interpreter stopped without writing. The run is now whoever holds the lease's to drive.`,
+          { runId },
+        );
+      }
       if (err.code === "CANCELLED" || rc.abort.signal.aborted) {
         // A step interrupted mid-flight (an agent turn, a parked human question) never reports back; close it here.
         for (const s of openSteps(rc.state)) await rc.emit({ type: "step.cancelled", payload: { stepRunId: s.id } });
@@ -778,6 +862,10 @@ export class Orchestrator {
   private async route(rc: RunContext, nodeId: string, result: StepResult): Promise<Edge | undefined> {
     const edges = outgoing(rc.definition, nodeId);
     if (edges.length === 0) return undefined;
+    // Only build the eval context when something asks a question of it. Since #270 an
+    // unreadable artifact body fails the context instead of reading as "", and a graph
+    // whose edges are all unconditional has no reason to touch a blob to pick one.
+    if (!edges.some((e) => e.when)) return edges.find((e) => !e.when);
     const ctx = await rc.evalContext({ choice: result.choice ?? rc.lastChoice(), result });
     for (const e of edges) if (e.when && evaluateCondition(e.when, ctx)) return e;
     return edges.find((e) => !e.when);
@@ -986,7 +1074,10 @@ export class Orchestrator {
       name,
       mediaType,
       contentHash: sha256(content),
-      size: content.length,
+      // Bytes, not characters (#226): `size` is what `artifacts.get` quotes when it declines
+      // a body, and what a store's blob actually occupies. The two differ on any artifact
+      // that is not pure ASCII, which is most prose with a dash in it.
+      size: Buffer.byteLength(content, "utf8"),
       version: await rc.nextArtifactVersion(name),
       producedBy: {
         runId: rc.id,
@@ -1135,7 +1226,12 @@ export function runLeaseResource(runId: string): string {
 }
 
 export function isTerminal(state: RunState): boolean {
-  return state.run.status === "completed" || state.run.status === "failed" || state.run.status === "cancelled";
+  return isTerminalStatus(state.run.status);
+}
+
+/** The same question of a status alone, for the summary a run is leased against. */
+function isTerminalStatus(status: RunSummary["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 /** Steps that have been scheduled but not yet settled (scheduled, running or waiting). */

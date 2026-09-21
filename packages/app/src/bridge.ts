@@ -24,14 +24,42 @@ import type {
   ArtifactsListResult,
   ClaimsListParams,
   ClaimsListResult,
+  ClaimsReleaseParams,
+  ClaimsReleaseResult,
+  ConfigGetParams,
+  ConfigGetResult,
+  ConfigSetParams,
+  ConfigSetResult,
   DaemonCapability,
+  DecisionsDecideParams,
+  DecisionsDecideResult,
+  DecisionsListParams,
+  DecisionsListResult,
+  DecisionsReopenParams,
+  DecisionsReopenResult,
+  DependenciesListParams,
+  DependenciesListResult,
+  DependenciesWaiveParams,
+  DependenciesWaiveResult,
   HelloResult,
   InputsAnswerParams,
   InputsAnswerResult,
   InputsListParams,
   InputsListResult,
+  ItemsListParams,
+  ItemsListResult,
+  JournalListParams,
+  JournalListResult,
   NotificationMessage,
+  PlanGetParams,
+  PlanGetResult,
+  PlansListParams,
+  PlansListResult,
   ProtocolError,
+  RisksListParams,
+  RisksListResult,
+  RisksUpdateParams,
+  RisksUpdateResult,
   RunsCancelParams,
   RunsCancelResult,
   RunsEventsParams,
@@ -42,6 +70,16 @@ import type {
   RunsListResult,
   RunsResumeParams,
   RunsResumeResult,
+  RunsStartParams,
+  RunsStartResult,
+  ScheduleExplainParams,
+  ScheduleExplainResult,
+  ScheduleGetParams,
+  ScheduleGetResult,
+  WorkflowsGetParams,
+  WorkflowsGetResult,
+  WorkflowsListParams,
+  WorkflowsListResult,
 } from "@orca/protocol";
 import type { Preferences, PreferencesPatch } from "./preferences/schema.js";
 
@@ -77,6 +115,19 @@ export interface ConnectionSnapshot {
   orcaVersion?: string;
   /** What the daemon said it can do. Absent means it has not said, which is not an error. */
   capabilities?: readonly DaemonCapability[];
+  /**
+   * The methods this daemon answers — `hello.methods`, which is `Object.keys` of its own
+   * dispatch table (ADR 0008): "a method this daemon will not answer is a method it does
+   * not advertise".
+   *
+   * It is carried beside `capabilities` because the two are different grains and a screen
+   * needs the fine one. `runs.control` says the daemon drives runs; it does not say whether
+   * *this* daemon serves `config.set` (it needs a `ConfigModel` as well) or
+   * `claims.release` (it needs a plan). A control asks for the method it is about to call.
+   * Absent means the daemon has not answered `hello` yet, or is too old to list them, and
+   * the capability is then the coarse fallback (`renderer/src/connection.ts`).
+   */
+  methods?: readonly string[];
 }
 
 /** How the app arrived at the store it is showing. */
@@ -149,14 +200,19 @@ export interface OrcaBridge {
     get: (params: RunsGetParams) => Promise<BridgeResult<RunsGetResult>>;
     /** One page of a run's log, by sequence number, forwards or backwards. */
     events: (params: Params<RunsEventsParams> & { runId: string }) => Promise<BridgeResult<RunsEventsResult>>;
-    /**
-     * Stop a run, with the reason recorded on `run.cancelled`. A write.
-     *
-     * `runs.start` is deliberately **not** here: starting a run needs a workflow picker and
-     * a vars form that nothing in this app has yet (#178, v0.5.0), and a bridge entry with
-     * no caller is a promise the app cannot keep.
-     */
+    /** Stop a run, with the reason recorded on `run.cancelled`. A write. */
     cancel: (params: RunsCancelParams) => Promise<BridgeResult<RunsCancelResult>>;
+    /**
+     * Start a run of a registered workflow (#178). A write, and the app's caller is the
+     * palette's **Start a run**: a picker of `workflows.list` and no vars at all, because
+     * the vars form the design asks for is not specified yet and a form that guessed at a
+     * workflow's inputs would invent them (RULES.md rule 12). A run started from here runs
+     * on the workflow's own `vars`.
+     *
+     * It answers when the run exists rather than when it finishes, so the caller can
+     * navigate to `orca://run/<id>` and watch the rest arrive on the stream.
+     */
+    start: (params: Params<RunsStartParams> & { workflowId: string }) => Promise<BridgeResult<RunsStartResult>>;
     /**
      * Re-drive a parked run under this daemon's lease. It answers when the run parks again
      * or finishes, not when it starts moving, so a caller that wants the steps in between
@@ -184,6 +240,43 @@ export interface OrcaBridge {
   claims: {
     /** Who owns which work item, and whether that run is still alive. */
     list: (params?: Params<ClaimsListParams>) => Promise<BridgeResult<ClaimsListResult>>;
+    /**
+     * Take a work item away from the run that claimed it (#88). A write, and a destructive
+     * one: it is refused while the owner could still resume unless `force`, and
+     * `ClaimView.owner.releasable` says which it will be *before* the call, so the
+     * confirmation can be honest rather than the error being the first news.
+     */
+    release: (
+      params: Params<ClaimsReleaseParams> & { workItemId: string },
+    ) => Promise<BridgeResult<ClaimsReleaseResult>>;
+  };
+  /**
+   * The plan (#169) — what is coming, why it is not moving, and what it waits for.
+   *
+   * Every call names a `planId`: the daemon serves a store, not a person, so it has no
+   * default plan and `plan.list()` is how a surface finds one. `schedule.explain` is the one
+   * that returns prose, and the prose is `core`'s own — render it, do not re-phrase it.
+   */
+  plan: {
+    list: (params?: Params<PlansListParams>) => Promise<BridgeResult<PlansListResult>>;
+    get: (params: PlanGetParams) => Promise<BridgeResult<PlanGetResult>>;
+    items: (params: Params<ItemsListParams> & { planId: string }) => Promise<BridgeResult<ItemsListResult>>;
+    schedule: (params: ScheduleGetParams) => Promise<BridgeResult<ScheduleGetResult>>;
+    explain: (params: ScheduleExplainParams) => Promise<BridgeResult<ScheduleExplainResult>>;
+    dependencies: (
+      params: Params<DependenciesListParams> & { planId: string },
+    ) => Promise<BridgeResult<DependenciesListResult>>;
+    risks: (params: Params<RisksListParams> & { planId: string }) => Promise<BridgeResult<RisksListResult>>;
+    decisions: (params: Params<DecisionsListParams> & { planId: string }) => Promise<BridgeResult<DecisionsListResult>>;
+    journal: (params: Params<JournalListParams> & { planId: string }) => Promise<BridgeResult<JournalListResult>>;
+    /** Waive a dependency. A write. */
+    waive: (params: DependenciesWaiveParams) => Promise<BridgeResult<DependenciesWaiveResult>>;
+    /** Record a choice; `recommended` comes back beside it when there is a matrix. A write. */
+    decide: (params: DecisionsDecideParams) => Promise<BridgeResult<DecisionsDecideResult>>;
+    /** Clear a choice and the dependencies it satisfied (#104). A write. */
+    reopen: (params: DecisionsReopenParams) => Promise<BridgeResult<DecisionsReopenResult>>;
+    /** Move a risk along its lifecycle. A write. */
+    updateRisk: (params: RisksUpdateParams) => Promise<BridgeResult<RisksUpdateResult>>;
   };
   artifacts: {
     /**
@@ -199,6 +292,25 @@ export interface OrcaBridge {
      */
     get: (params: Params<ArtifactsGetParams>) => Promise<BridgeResult<ArtifactsGetResult>>;
   };
+  workflows: {
+    /**
+     * Every workflow the daemon has registered, as rows: the viewer's list and, later, the
+     * run-start picker (#178). A read, answered by a `--read-only` daemon too — a workflow
+     * is a file the daemon has already parsed, and reading it touches no run.
+     */
+    list: (params?: Params<WorkflowsListParams>) => Promise<BridgeResult<WorkflowsListResult>>;
+    /**
+     * One workflow's graph: nodes with their per-type fields, edges, and the graphs written
+     * inline inside a `loop`, a `parallel` or a `subworkflow` — each with the
+     * `parent::node` id the engine addresses it by, so the viewer may draw the nested graph
+     * it was given or fetch the same one again when a collapsed node is expanded.
+     *
+     * `version` may only ever be the version on disk. ORCA records which version a run
+     * started against but keeps no copy of that definition, so asking for an older one
+     * answers `WORKFLOW_NOT_FOUND` rather than a graph that is not the one that ran.
+     */
+    get: (params: WorkflowsGetParams) => Promise<BridgeResult<WorkflowsGetResult>>;
+  };
   agents: {
     /**
      * Every configured agent with its handshake health, and what is claimed right now.
@@ -207,6 +319,33 @@ export interface OrcaBridge {
      * read too, but it is a button (#176) and is not on the bridge yet.
      */
     list: (params?: Params<AgentsListParams>) => Promise<BridgeResult<AgentsListResult>>;
+  };
+  /**
+   * The workspace's configuration, as two documents: `orca.config.yaml` and the ADR 0009
+   * permission sidecar `orca.permissions.json` (#174, #266). Plumbing only today — the
+   * Configuration and Agents surfaces (#175, #176) are what call it.
+   */
+  config: {
+    /**
+     * Both documents, each with its own path, its own `revision` and its raw `text`; the
+     * schema description a form draws its fields from; and the effective permission policy
+     * per agent, in evaluation order, with each rule labelled by the document it came from.
+     *
+     * A read, so a `--read-only` daemon answers it. **Nothing is redacted**: `text` is the
+     * bytes of the config file. A form that edits a file has to show the file, and a
+     * redacted text written back would destroy what it hid.
+     */
+    get: (params?: Params<ConfigGetParams>) => Promise<BridgeResult<ConfigGetResult>>;
+    /**
+     * Write one of them. `expectedRevision` is what was read; a stale one is refused with
+     * `CONFIG_STALE` rather than overwritten. Send `patch` from a form — it edits the YAML
+     * document in place and keeps its comments — and `text` from an editor pane.
+     * `validateOnly` asks the same questions and writes nothing.
+     *
+     * A write: absent from a daemon started `--read-only`, so a caller asks
+     * `useWritability()` first rather than finding out by failing.
+     */
+    set: (params: ConfigSetParams) => Promise<BridgeResult<ConfigSetResult>>;
   };
   notifications: {
     /**

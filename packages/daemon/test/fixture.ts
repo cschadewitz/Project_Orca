@@ -12,6 +12,7 @@ import {
   FakeClock,
   TemplateRegistry,
   WorkflowRegistry,
+  sha256,
   silentLogger,
   type Artifact,
   type OrcaEventInput,
@@ -23,6 +24,13 @@ import { memoryStores, type Stores } from "@orca/store";
 export const START = Date.UTC(2026, 2, 1, 9, 0, 0);
 /** Every appended event is a second after the one before it: durations are then exact. */
 export const STEP_MS = 1000;
+
+/**
+ * A genuinely binary body: the PNG signature, then bytes that are not valid UTF-8. A store
+ * that decoded a blob on the way in or out would turn `0xff 0xfe` into U+FFFD and be caught
+ * doing it (#226), and `artifacts.get` quotes its length as the size it is declining.
+ */
+export const PNG_BODY = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x01, 0x7f]);
 
 const workspace: Workspace = { hostId: "local", cwd: "/work/orca", repo: "orca", branch: "main" };
 
@@ -96,9 +104,10 @@ export async function artifactFixture(): Promise<Fixture> {
     name: "screenshot",
     mediaType: "image/png",
     path: "/work/orca/.orca/artifacts/art-shot.png",
-    size: 4096,
+    contentHash: sha256(PNG_BODY),
+    size: PNG_BODY.length,
   };
-  await stores.artifacts.put(shot, "PNG binary bytes, in a store that keeps blobs as strings");
+  await stores.artifacts.put(shot, PNG_BODY);
   await append({ type: "artifact.recorded", runId: "run-art", payload: { stepRunId: "s-spec-3", artifact: shot } });
 
   return { clock, stores, orchestrator: orc, asOf: clock.isoNow() };

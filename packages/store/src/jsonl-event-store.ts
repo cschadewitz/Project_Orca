@@ -8,7 +8,7 @@
  */
 import { join } from "node:path";
 import { OrcaEventSchema, type Clock, type Logger, type OrcaEvent } from "@orca/core";
-import { BaseEventStore } from "./event-store.js";
+import { BaseEventStore, matchesRange, type EventRange } from "./event-store.js";
 import { JsonlLogDir } from "./jsonl-log.js";
 
 export class JsonlEventStore extends BaseEventStore {
@@ -42,6 +42,57 @@ export class JsonlEventStore extends BaseEventStore {
     }
     return out;
   }
+  /**
+   * A page without the log: `after` scans forward from the start and `before` scans backward
+   * from the end, and either stops as soon as it has `limit` matching events. The same
+   * pre-parse substring test as `readTypes` throws away the `agent.update` bulk before zod
+   * sees it, so the events skipped on the way to the page cost a `String.includes` each.
+   *
+   * The cost is the distance from whichever end the scan starts at - documented on
+   * `JsonlLogDir.scanLinesBackward`, and the reason a backward page is the cheap one: the
+   * timeline pages back from the live tail. Reading a torn tail is `read()`'s problem
+   * exactly, because it is the same `parseLine`: the torn line is not JSON, it is skipped
+   * with a warning, and it is never part of a page.
+   */
+  override async readRange(runId: string, range: EventRange = {}): Promise<OrcaEvent[]> {
+    const { after, before, limit } = range;
+    const needles = range.types?.length ? range.types.map((t) => `"type":"${t}"`) : undefined;
+    const accept = (line: string): OrcaEvent | undefined => {
+      if (needles && !needles.some((n) => line.includes(n))) return undefined;
+      const event = this.logs.parseLine(runId, line, OrcaEventSchema);
+      return event && matchesRange(event, range) ? event : undefined;
+    };
+    const out: OrcaEvent[] = [];
+    const enough = () => limit !== undefined && out.length >= limit;
+    if (before !== undefined) {
+      await this.logs.scanLinesBackward(runId, (line) => {
+        const event = accept(line);
+        if (event && event.seq < before) out.push(event);
+        return !enough();
+      });
+      out.reverse();
+    } else {
+      await this.logs.scanLines(runId, (line) => {
+        const event = accept(line);
+        if (event && (after === undefined || event.seq > after)) out.push(event);
+        return !enough();
+      });
+    }
+    return out;
+  }
+
+  /** The last record's `seq`, from the end of the file: one chunk, whatever the log's size. */
+  override async lastSeq(runId: string): Promise<number | undefined> {
+    let seq: number | undefined;
+    await this.logs.scanLinesBackward(runId, (line) => {
+      const event = this.logs.parseLine(runId, line, OrcaEventSchema);
+      if (!event) return true;
+      seq = event.seq;
+      return false;
+    });
+    return seq;
+  }
+
   listRuns(): Promise<string[]> {
     return this.logs.keys();
   }

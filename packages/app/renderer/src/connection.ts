@@ -30,6 +30,11 @@ export interface Connection {
   orcaVersion?: string;
   /** What the daemon said it can do; empty until it has said, which is not an error. */
   capabilities: readonly DaemonCapability[];
+  /**
+   * What the daemon said it *answers* — `hello.methods`. Empty until it has said, or from a
+   * daemon too old to list them; either way the capability below is the coarse answer.
+   */
+  methods: readonly string[];
 }
 
 export function toConnection(snapshot: ConnectionSnapshot): Connection {
@@ -37,6 +42,7 @@ export function toConnection(snapshot: ConnectionSnapshot): Connection {
     state: snapshot.state,
     since: new Date(snapshot.since),
     capabilities: snapshot.capabilities ?? [],
+    methods: snapshot.methods ?? [],
     ...(snapshot.eventCursor !== undefined ? { eventCursor: snapshot.eventCursor } : {}),
     ...(snapshot.versions !== undefined ? { versions: snapshot.versions } : {}),
     ...(snapshot.orcaVersion !== undefined ? { orcaVersion: snapshot.orcaVersion } : {}),
@@ -80,6 +86,50 @@ export const CONTROL_CAPABILITY: DaemonCapability = "runs.control";
  * exactly the same position, and says the same thing, because "it has not said" and "it
  * said no" mean the same to a person holding a button that will not do anything.
  */
+/**
+ * Whether a write control is drawn at all, or is not there to be pressed.
+ *
+ * Two of the five states mean the app is a viewer rather than a client that happens to be
+ * unable to write just now, and docs/design/40-connection-states.md draws them differently
+ * on purpose: "writes are *absent*, not disabled — a screen with no cancel button reads as
+ * a viewer; a screen with a greyed cancel button reads as broken". Those two are file mode,
+ * and a daemon that never offered the control methods at all (`orca serve --read-only`
+ * leaves them out of the dispatch table *and* out of `hello.methods`).
+ *
+ * The other three — reconnecting, disconnected, a version mismatch — are a daemon that
+ * would take the write if it were answering, so the control stays and says why it cannot,
+ * which is what `writability()`'s sentence is for.
+ */
+export function writesPresent(connection: Pick<Connection, "state" | "capabilities">): boolean {
+  if (connection.state === "file") return false;
+  if (connection.state === "live") return connection.capabilities.includes(CONTROL_CAPABILITY);
+  return true;
+}
+
+/**
+ * Whether *this* call is one the daemon serves — the fine-grained half of `writesPresent`.
+ *
+ * `capabilities` is a coarse word: `runs.control` says the daemon drives runs, and says
+ * nothing about whether it was given a `ConfigModel` (`config.set`) or a plan
+ * (`claims.release`). `hello.methods` is `Object.keys` of the dispatch table itself (ADR
+ * 0008: "a method this daemon will not answer is a method it does not advertise"), so it is
+ * the honest thing to ask before drawing a control that calls one.
+ *
+ * The order is the same one `writesPresent` states. File mode has nothing to send to at
+ * all. Then the list, when there is one — including while disconnected, where it is what
+ * the last handshake said and a read-only daemon that stopped answering is still read-only.
+ * A daemon that has not answered `hello`, or one too old to list its methods, falls back to
+ * the capability: coarse, and better than hiding a control that would have worked.
+ */
+export function methodPresent(
+  connection: Pick<Connection, "state" | "capabilities" | "methods">,
+  method: string,
+): boolean {
+  if (connection.state === "file") return false;
+  if (connection.methods.length > 0) return connection.methods.includes(method);
+  return writesPresent(connection);
+}
+
 export function writability(connection: Pick<Connection, "state" | "capabilities" | "versions">): Writability {
   switch (connection.state) {
     case "reconnecting":

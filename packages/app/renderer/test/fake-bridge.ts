@@ -1,6 +1,7 @@
 /**
- * A `window.orca` for tests: the handshake, the nine read methods, the three control
- * methods, the OS-alert channel and daemon notifications, answered from `fixtures.ts`.
+ * A `window.orca` for tests: the handshake, the run, workflow, config and plan reads, the
+ * writes, the OS-alert channel and daemon notifications, answered from `fixtures.ts`,
+ * `fixtures-workflows.ts`, `fixtures-config.ts` and `fixtures-plan.ts`.
  *
  * This is the seam every screen test uses. The renderer can reach exactly one thing outside
  * itself — the preload bridge — so a fake bridge is the whole of "the daemon" as far as a
@@ -38,13 +39,45 @@ import type {
   ArtifactsListResult,
   ClaimsListParams,
   ClaimsListResult,
+  ConfigGetParams,
+  ConfigGetResult,
+  ConfigSetParams,
+  ConfigSetResult,
+  ClaimsReleaseParams,
+  ClaimsReleaseResult,
+  DecisionsDecideParams,
+  DecisionsDecideResult,
+  DecisionsListParams,
+  DecisionsListResult,
+  DecisionsReopenParams,
+  DecisionsReopenResult,
+  DependenciesListParams,
+  DependenciesListResult,
+  DependenciesWaiveParams,
+  DependenciesWaiveResult,
   HelloResult,
   InputsAnswerParams,
   InputsAnswerResult,
   InputsListParams,
   InputsListResult,
+  ItemsListParams,
+  ItemsListResult,
+  JournalListParams,
+  JournalListResult,
   NotificationMessage,
+  PlanGetParams,
+  PlanGetResult,
+  PlansListParams,
+  PlansListResult,
   ProtocolError,
+  RisksListParams,
+  RisksListResult,
+  RisksUpdateParams,
+  RisksUpdateResult,
+  ScheduleExplainParams,
+  ScheduleExplainResult,
+  ScheduleGetParams,
+  ScheduleGetResult,
   RunsEventsParams,
   RunsEventsResult,
   RunsCancelParams,
@@ -55,6 +88,12 @@ import type {
   RunsListResult,
   RunsResumeParams,
   RunsResumeResult,
+  RunsStartParams,
+  RunsStartResult,
+  WorkflowsGetParams,
+  WorkflowsGetResult,
+  WorkflowsListParams,
+  WorkflowsListResult,
 } from "@orca/protocol";
 import type {
   AlertActivation,
@@ -67,7 +106,21 @@ import type {
 import { DEFAULT_PREFERENCES, mergePreferences, type Preferences } from "../../src/preferences/schema.js";
 import { AS_OF, CLAIMS, EVENTS, HELLO, INPUTS, RUNS, RUN_DETAILS } from "./fixtures.js";
 import { AGENTS_LIST } from "./fixtures-agents.js";
+import { WORKFLOWS, WORKFLOW_VIEWS } from "./fixtures-workflows.js";
 import { ARTIFACTS, ARTIFACTS_BY_ID } from "./fixtures-artifacts.js";
+import { CONFIG_GET } from "./fixtures-config.js";
+import {
+  DECISIONS,
+  DEPENDENCIES,
+  EXPLANATIONS,
+  JOURNAL,
+  PLAN,
+  PLANS,
+  PLAN_ID,
+  PLAN_ITEMS,
+  RISKS,
+  SCHEDULE,
+} from "./fixtures-plan.js";
 
 /** Params as a caller passes them: the schema defaults (`limit`, `offset`) are the daemon's job. */
 type Params<T> = Partial<T>;
@@ -83,10 +136,29 @@ export type MethodName =
   | "claims.list"
   | "artifacts.list"
   | "artifacts.get"
+  | "workflows.list"
+  | "workflows.get"
   | "agents.list"
   | "inputs.answer"
   | "runs.cancel"
-  | "runs.resume";
+  | "runs.resume"
+  | "runs.start"
+  | "config.get"
+  | "config.set"
+  | "plans.list"
+  | "plan.get"
+  | "items.list"
+  | "schedule.get"
+  | "schedule.explain"
+  | "dependencies.list"
+  | "risks.list"
+  | "decisions.list"
+  | "journal.list"
+  | "dependencies.waive"
+  | "decisions.decide"
+  | "decisions.reopen"
+  | "risks.update"
+  | "claims.release";
 
 type Answer<T> = BridgeResult<T> | Promise<BridgeResult<T>>;
 
@@ -100,12 +172,31 @@ export interface Handlers {
   "claims.list": (params: Params<ClaimsListParams>) => Answer<ClaimsListResult>;
   "artifacts.list": (params: Params<ArtifactsListParams>) => Answer<ArtifactsListResult>;
   "artifacts.get": (params: Params<ArtifactsGetParams>) => Answer<ArtifactsGetResult>;
+  "workflows.list": (params: Params<WorkflowsListParams>) => Answer<WorkflowsListResult>;
+  "workflows.get": (params: WorkflowsGetParams) => Answer<WorkflowsGetResult>;
   "agents.list": (params: Params<AgentsListParams>) => Answer<AgentsListResult>;
   "inputs.answer": (
     params: Params<InputsAnswerParams> & { requestId: string; optionId: string },
   ) => Answer<InputsAnswerResult>;
   "runs.cancel": (params: RunsCancelParams) => Answer<RunsCancelResult>;
   "runs.resume": (params: RunsResumeParams) => Answer<RunsResumeResult>;
+  "runs.start": (params: Params<RunsStartParams> & { workflowId: string }) => Answer<RunsStartResult>;
+  "config.get": (params: Params<ConfigGetParams>) => Answer<ConfigGetResult>;
+  "config.set": (params: ConfigSetParams) => Answer<ConfigSetResult>;
+  "plans.list": (params: Params<PlansListParams>) => Answer<PlansListResult>;
+  "plan.get": (params: PlanGetParams) => Answer<PlanGetResult>;
+  "items.list": (params: Params<ItemsListParams> & { planId: string }) => Answer<ItemsListResult>;
+  "schedule.get": (params: ScheduleGetParams) => Answer<ScheduleGetResult>;
+  "schedule.explain": (params: ScheduleExplainParams) => Answer<ScheduleExplainResult>;
+  "dependencies.list": (params: Params<DependenciesListParams> & { planId: string }) => Answer<DependenciesListResult>;
+  "risks.list": (params: Params<RisksListParams> & { planId: string }) => Answer<RisksListResult>;
+  "decisions.list": (params: Params<DecisionsListParams> & { planId: string }) => Answer<DecisionsListResult>;
+  "journal.list": (params: Params<JournalListParams> & { planId: string }) => Answer<JournalListResult>;
+  "dependencies.waive": (params: DependenciesWaiveParams) => Answer<DependenciesWaiveResult>;
+  "decisions.decide": (params: DecisionsDecideParams) => Answer<DecisionsDecideResult>;
+  "decisions.reopen": (params: DecisionsReopenParams) => Answer<DecisionsReopenResult>;
+  "risks.update": (params: RisksUpdateParams) => Answer<RisksUpdateResult>;
+  "claims.release": (params: Params<ClaimsReleaseParams> & { workItemId: string }) => Answer<ClaimsReleaseResult>;
 }
 
 export interface BridgeCall {
@@ -171,6 +262,8 @@ const err = (code: string, message: string): BridgeResult<never> => ({ ok: false
 const RUNS_LIST_LIMIT = 100;
 const RUNS_EVENTS_LIMIT = 200;
 const ARTIFACTS_LIST_LIMIT = 200;
+const ITEMS_LIST_LIMIT = 200;
+const JOURNAL_LIST_LIMIT = 200;
 
 /**
  * A live connection, built out of the same `hello` the fake answers, so the state a screen
@@ -178,12 +271,17 @@ const ARTIFACTS_LIST_LIMIT = 200;
  * which now includes `runs.control`: the daemon writes as of #160, so a screen test runs
  * against a daemon that takes commands. A test of what a read-only daemon looks like
  * pushes a connection whose capabilities say otherwise (#164).
+ *
+ * `methods` comes from the same fixture for the same reason: the main process folds
+ * `hello.methods` onto the snapshot, and a control that asks "is `config.set` served"
+ * (`useMethodPresent`) must be asking about the daemon this fake is.
  */
 const LIVE_CONNECTION: ConnectionSnapshot = {
   state: "live",
   since: AS_OF,
   orcaVersion: HELLO.orcaVersion,
   capabilities: HELLO.capabilities,
+  ...(HELLO.methods === undefined ? {} : { methods: HELLO.methods }),
 };
 
 /**
@@ -311,6 +409,21 @@ const defaults: Handlers = {
     });
   },
 
+  // The registered workflows only. The two graphs written inline inside `sdlc`'s `parallel`
+  // are fetchable by their `parent::node::branch` ids but are not rows: a nested graph is
+  // part of its parent's file and has no life of its own in a picker.
+  "workflows.list": () => ok({ workflows: [...WORKFLOWS], asOf: AS_OF }),
+
+  "workflows.get": ({ id, version }) => {
+    const workflow = WORKFLOW_VIEWS[id];
+    if (!workflow) return err("WORKFLOW_NOT_FOUND", `workflow '${id}' not registered`);
+    // The daemon's rule, not a convenience of this fake: ORCA keeps one definition per
+    // workflow, so a version other than the one on disk is not a graph it can produce.
+    if (version !== undefined && version !== workflow.version)
+      return err("WORKFLOW_NOT_FOUND", `workflow '${id}' is at version ${workflow.version}`);
+    return ok({ workflow, asOf: AS_OF });
+  },
+
   // `agents.list` takes no parameters: every configured agent comes back, contacted or not,
   // and the daemon does no filtering for the surface to mirror here.
   "agents.list": () => ok(AGENTS_LIST),
@@ -339,6 +452,232 @@ const defaults: Handlers = {
   "runs.resume": ({ runId }) => {
     const run = RUNS.find((r) => r.id === runId);
     return run ? ok({ run: { ...run, status: "succeeded" }, asOf: AS_OF }) : err("RUN_NOT_FOUND", `no run ${runId}`);
+  },
+
+  /* Answers as the daemon does: the moment the run exists, with its id and a summary that
+     is `running` and has no outcome yet. The id is derived from the workflow so a test can
+     assert where the palette navigated without scripting a handler. */
+  "runs.start": ({ workflowId }) => {
+    const workflow = WORKFLOWS.find((w) => w.id === workflowId);
+    if (!workflow) return err("WORKFLOW_NOT_FOUND", `no workflow ${workflowId}`);
+    return ok({
+      runId: `run-started-${workflow.id}`,
+      run: {
+        id: `run-started-${workflow.id}`,
+        name: workflow.name,
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+        status: "running",
+        createdAt: AS_OF,
+        startedAt: AS_OF,
+      },
+      asOf: AS_OF,
+    });
+  },
+
+  "config.get": () => ok(CONFIG_GET),
+
+  /* `config.set` answers and changes nothing, for the same reason the three above do. What
+     it does model is the one refusal a form has to handle: a revision that is not the one
+     on the fixture is `CONFIG_STALE`, so a screen test can drive "somebody edited this
+     underneath you" without scripting anything. A test that wants the write to land sends
+     the fixture's revision; a test that wants it refused sends anything else. */
+  "config.set": (params) => {
+    const current = params.document === "config" ? CONFIG_GET.config : CONFIG_GET.permissions;
+    if (params.expectedRevision !== current.revision)
+      return err("CONFIG_STALE", `${current.path} has changed since you read it`);
+    const document = params.text === undefined ? current : { ...current, text: params.text };
+    return ok({
+      document,
+      written: params.validateOnly !== true,
+      ...(params.validateOnly ? { validation: { errors: [] } } : {}),
+      asOf: AS_OF,
+    });
+  },
+
+  /* The plan reads (#169). Every one names a `planId`, because the daemon has no default
+     plan — `plans.list` is how a surface finds one — and every one of these refuses an
+     unknown id rather than answering about the only plan there happens to be. */
+
+  "plans.list": () => ok({ plans: [...PLANS], asOf: AS_OF }),
+
+  "plan.get": ({ planId }) =>
+    planId === PLAN_ID ? ok({ plan: PLAN, asOf: AS_OF }) : err("PLAN_NOT_FOUND", `no plan ${planId}`),
+
+  "items.list": (params) => {
+    if (params.planId !== PLAN_ID) return err("PLAN_NOT_FOUND", `no plan ${params.planId}`);
+    const text = params.text?.trim().toLowerCase();
+    const matches = PLAN_ITEMS.filter(
+      (i) =>
+        (!params.status?.length || params.status.includes(i.status as never)) &&
+        (!params.classification?.length || params.classification.includes(i.classification)) &&
+        (params.requestId === undefined || i.requestId === params.requestId) &&
+        (!text || i.slug.toLowerCase().includes(text) || i.title.toLowerCase().includes(text)),
+    );
+    const offset = params.offset ?? 0;
+    const limit = params.limit ?? ITEMS_LIST_LIMIT;
+    // In schedule order, and `total` counts the filter rather than the page — both of which
+    // are the daemon's contract and not conveniences of this fake.
+    return ok({ items: matches.slice(offset, offset + limit), total: matches.length, asOf: AS_OF });
+  },
+
+  "schedule.get": ({ planId }) =>
+    planId === PLAN_ID ? ok({ schedule: SCHEDULE, asOf: AS_OF }) : err("PLAN_NOT_FOUND", `no plan ${planId}`),
+
+  "schedule.explain": ({ planId, workItemId }) => {
+    if (planId !== PLAN_ID) return err("PLAN_NOT_FOUND", `no plan ${planId}`);
+    // The daemon takes an id or a slug, so the fake does too.
+    const slug = PLAN_ITEMS.find((i) => i.id === workItemId || i.slug === workItemId)?.slug;
+    const lines = slug === undefined ? undefined : EXPLANATIONS[slug];
+    return lines ? ok({ lines: [...lines], asOf: AS_OF }) : err("PLAN_INVALID", `no work item ${workItemId}`);
+  },
+
+  "dependencies.list": (params) => {
+    if (params.planId !== PLAN_ID) return err("PLAN_NOT_FOUND", `no plan ${params.planId}`);
+    const from = PLAN_ITEMS.find((i) => i.id === params.workItemId || i.slug === params.workItemId)?.id;
+    return ok({
+      dependencies: DEPENDENCIES.filter(
+        (d) =>
+          (params.workItemId === undefined || d.from === from) &&
+          (!params.status?.length || params.status.includes(d.status)),
+      ),
+      asOf: AS_OF,
+    });
+  },
+
+  "risks.list": (params) => {
+    if (params.planId !== PLAN_ID) return err("PLAN_NOT_FOUND", `no plan ${params.planId}`);
+    const affecting = PLAN_ITEMS.find((i) => i.id === params.workItemId || i.slug === params.workItemId)?.id;
+    return ok({
+      risks: RISKS.filter(
+        (r) =>
+          (!params.status?.length || params.status.includes(r.status)) &&
+          (params.workItemId === undefined || r.affects.some((a) => a.id === affecting)),
+      ),
+      matrix: PLAN.riskMatrix,
+      appetite: PLAN.policy.riskAppetite,
+      asOf: AS_OF,
+    });
+  },
+
+  "decisions.list": (params) =>
+    params.planId === PLAN_ID
+      ? ok({
+          decisions: DECISIONS.filter((d) => !params.status?.length || params.status.includes(d.status)),
+          asOf: AS_OF,
+        })
+      : err("PLAN_NOT_FOUND", `no plan ${params.planId}`),
+
+  "journal.list": (params) => {
+    if (params.planId !== PLAN_ID) return err("PLAN_NOT_FOUND", `no plan ${params.planId}`);
+    if (params.after !== undefined && params.before !== undefined)
+      return err("PROTOCOL_MESSAGE", "give either 'after' or 'before', not both");
+    const typed = params.types?.length ? JOURNAL.filter((e) => params.types!.includes(e.type)) : JOURNAL;
+    const limit = params.limit ?? JOURNAL_LIST_LIMIT;
+    // `before` takes the entries *immediately* before the cursor, so it slices from the end.
+    const window =
+      params.before !== undefined
+        ? typed.filter((e) => e.seq < params.before!).slice(-limit)
+        : typed.filter((e) => params.after === undefined || e.seq > params.after).slice(0, limit);
+    const first = window[0];
+    const last = window[window.length - 1];
+    return ok({
+      entries: window,
+      ...(last ? { nextCursor: last.seq } : {}),
+      ...(first ? { prevCursor: first.seq } : {}),
+      hasMore:
+        params.before !== undefined
+          ? first !== undefined && typed.some((e) => e.seq < first.seq)
+          : last !== undefined && typed.some((e) => e.seq > last.seq),
+      lastSeq: JOURNAL[JOURNAL.length - 1]!.seq,
+      asOf: AS_OF,
+    });
+  },
+
+  /* The plan writes. Like the run controls above, they answer and change nothing: the
+     fixture is a constant, and a fake that quietly re-bucketed an item would hide the thing
+     a screen test is actually about — whether the screen repainted because it was told to. */
+
+  "dependencies.waive": ({ dependencyId, rationale }) => {
+    const dependency = DEPENDENCIES.find((d) => d.id === dependencyId);
+    if (!dependency) return err("PLAN_INVALID", `no dependency ${dependencyId}`);
+    return ok({
+      dependency: {
+        ...dependency,
+        status: "waived",
+        evaluation: { state: "waived", detail: rationale ? `waived: ${rationale}` : "waived" },
+        ...(rationale ? { resolution: rationale } : {}),
+        resolvedAt: AS_OF,
+      },
+      asOf: AS_OF,
+    });
+  },
+
+  "decisions.decide": ({ key, option, rationale }) => {
+    const decision = DECISIONS.find((d) => d.key === key || d.id === key);
+    if (!decision) return err("PLAN_INVALID", `no decision ${key}`);
+    const options = decision.options.map((o) => o.key);
+    if (!options.includes(option))
+      return err("PLAN_INVALID", `'${option}' is not an option of decision '${decision.key}': ${options.join(", ")}`);
+    return ok({
+      decision: {
+        ...decision,
+        status: "decided",
+        chosen: option,
+        decidedBy: "human",
+        decidedAt: AS_OF,
+        ...(rationale ? { rationale } : {}),
+      },
+      choice: option,
+      asOf: AS_OF,
+    });
+  },
+
+  "decisions.reopen": ({ key }) => {
+    const decision = DECISIONS.find((d) => d.key === key || d.id === key);
+    if (!decision) return err("PLAN_INVALID", `no decision ${key}`);
+    return ok({
+      decision: { ...decision, status: "open" },
+      // What reopening costs: the dependencies it had satisfied are open again, so the items
+      // they gate stop being dispatchable.
+      reopenedDependencyIds: DEPENDENCIES.filter(
+        (d) => d.target.kind === "decision" && d.target.decisionId === decision.id,
+      ).map((d) => d.id),
+      asOf: AS_OF,
+    });
+  },
+
+  "risks.update": ({ key, status }) => {
+    const risk = RISKS.find((r) => r.key === key || r.id === key);
+    if (!risk) return err("PLAN_INVALID", `no risk ${key}`);
+    const open = ["open", "mitigating", "realized"].includes(status);
+    return ok({
+      risk: { ...risk, status, open, ...(open ? {} : { closedAt: AS_OF }) },
+      asOf: AS_OF,
+    });
+  },
+
+  // Refused while the owner could still resume unless `force`, exactly as the daemon does —
+  // so a confirmation that trusted `owner.releasable` and a call that did not would disagree
+  // here rather than in front of a person.
+  "claims.release": ({ workItemId, force }) => {
+    const claim = CLAIMS.find((c) => c.workItemId === workItemId);
+    if (!claim) return err("CLAIM_NOT_FOUND", `work item ${workItemId} is not claimed`);
+    if (!claim.owner.releasable && !force)
+      return err(
+        "RUN_STATE",
+        `work item ${workItemId} is claimed by run ${claim.owner.runId}, which is ${claim.owner.status}, not finished: resume or cancel that run, or release with force`,
+      );
+    const item = PLAN_ITEMS.find((i) => i.id === workItemId || i.slug === claim.workItem?.slug);
+    return ok({
+      claim,
+      ...(item?.status === "in-progress"
+        ? {
+            note: `${workItemId} is still in-progress${item.runId ? ` (run ${item.runId})` : ""}; the plan scheduler treats it as running until that status changes`,
+          }
+        : {}),
+      asOf: AS_OF,
+    });
   },
 };
 
@@ -413,17 +752,44 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
       events: (params) => call("runs.events", params) as Promise<BridgeResult<RunsEventsResult>>,
       cancel: (params) => call("runs.cancel", params) as Promise<BridgeResult<RunsCancelResult>>,
       resume: (params) => call("runs.resume", params) as Promise<BridgeResult<RunsResumeResult>>,
+      start: (params) => call("runs.start", params) as Promise<BridgeResult<RunsStartResult>>,
     },
     inputs: {
       list: (params = {}) => call("inputs.list", params) as Promise<BridgeResult<InputsListResult>>,
       answer: (params) => call("inputs.answer", params) as Promise<BridgeResult<InputsAnswerResult>>,
     },
-    claims: { list: (params = {}) => call("claims.list", params) as Promise<BridgeResult<ClaimsListResult>> },
+    claims: {
+      list: (params = {}) => call("claims.list", params) as Promise<BridgeResult<ClaimsListResult>>,
+      release: (params) => call("claims.release", params) as Promise<BridgeResult<ClaimsReleaseResult>>,
+    },
+    plan: {
+      list: (params = {}) => call("plans.list", params) as Promise<BridgeResult<PlansListResult>>,
+      get: (params) => call("plan.get", params) as Promise<BridgeResult<PlanGetResult>>,
+      items: (params) => call("items.list", params) as Promise<BridgeResult<ItemsListResult>>,
+      schedule: (params) => call("schedule.get", params) as Promise<BridgeResult<ScheduleGetResult>>,
+      explain: (params) => call("schedule.explain", params) as Promise<BridgeResult<ScheduleExplainResult>>,
+      dependencies: (params) => call("dependencies.list", params) as Promise<BridgeResult<DependenciesListResult>>,
+      risks: (params) => call("risks.list", params) as Promise<BridgeResult<RisksListResult>>,
+      decisions: (params) => call("decisions.list", params) as Promise<BridgeResult<DecisionsListResult>>,
+      journal: (params) => call("journal.list", params) as Promise<BridgeResult<JournalListResult>>,
+      waive: (params) => call("dependencies.waive", params) as Promise<BridgeResult<DependenciesWaiveResult>>,
+      decide: (params) => call("decisions.decide", params) as Promise<BridgeResult<DecisionsDecideResult>>,
+      reopen: (params) => call("decisions.reopen", params) as Promise<BridgeResult<DecisionsReopenResult>>,
+      updateRisk: (params) => call("risks.update", params) as Promise<BridgeResult<RisksUpdateResult>>,
+    },
     artifacts: {
       list: (params = {}) => call("artifacts.list", params) as Promise<BridgeResult<ArtifactsListResult>>,
       get: (params) => call("artifacts.get", params) as Promise<BridgeResult<ArtifactsGetResult>>,
     },
+    workflows: {
+      list: (params = {}) => call("workflows.list", params) as Promise<BridgeResult<WorkflowsListResult>>,
+      get: (params) => call("workflows.get", params) as Promise<BridgeResult<WorkflowsGetResult>>,
+    },
     agents: { list: (params = {}) => call("agents.list", params) as Promise<BridgeResult<AgentsListResult>> },
+    config: {
+      get: (params = {}) => call("config.get", params) as Promise<BridgeResult<ConfigGetResult>>,
+      set: (params) => call("config.set", params) as Promise<BridgeResult<ConfigSetResult>>,
+    },
     notifications: {
       subscribe: (listener) => {
         listeners.add(listener);

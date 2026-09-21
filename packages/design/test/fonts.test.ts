@@ -93,6 +93,32 @@ describe("tokens.css", () => {
   });
 });
 
+describe("the five surfaces", () => {
+  const semantics = JSON.parse(read("semantics.json")) as {
+    surface?: Record<string, { word?: string; glyph?: string }>;
+  };
+
+  /* The order is the sidebar's and the ⌘<n> shortcuts are read off it, so it is part of the
+     declaration rather than an accident of JSON key order. */
+  test("semantics.json declares all five, in sidebar order, each with a word and a glyph", () => {
+    const surface = semantics.surface;
+    assert.ok(surface, "semantics.json has no `surface` map: the collapsed rail has nothing to draw");
+    assert.deepEqual(Object.keys(surface), ["attention", "runs", "plan", "agents", "config"]);
+    for (const [id, presentation] of Object.entries(surface)) {
+      assert.ok(presentation.word, `surface ${id} has no word — it is the button's accessible name`);
+      assert.ok(presentation.glyph, `surface ${id} has no glyph — below 960px it would draw nothing`);
+      assert.equal([...presentation.glyph].length, 1, `surface ${id}'s glyph must be one character`);
+    }
+  });
+
+  /* Five destinations told apart by shape alone, once the labels are hidden. Two surfaces
+     sharing a glyph would make the rail ambiguous in exactly the way #261 was filed about. */
+  test("no two surfaces share a glyph", () => {
+    const glyphs = Object.values(semantics.surface ?? {}).map((s) => s.glyph);
+    assert.equal(new Set(glyphs).size, glyphs.length, `the rail repeats a glyph: ${glyphs.join(" ")}`);
+  });
+});
+
 describe("status glyphs", () => {
   const semantics = JSON.parse(read("semantics.json")) as Record<string, unknown>;
 

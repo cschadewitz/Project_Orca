@@ -58,10 +58,10 @@ const WI = {
  * *variant* of this rather than the default of it (#164).
  */
 export const HELLO: HelloResult = {
-  protocol: { major: 1, minor: 5 },
+  protocol: { major: 1, minor: 7 },
   orcaVersion: "0.2.0-test",
   storeDir: "/work/orca/.orca",
-  capabilities: ["runs.read", "runs.control"],
+  capabilities: ["runs.read", "runs.control", "plan.read", "plan.write"],
   methods: [
     "hello",
     "runs.list",
@@ -71,13 +71,36 @@ export const HELLO: HelloResult = {
     "claims.list",
     "artifacts.list",
     "artifacts.get",
+    // The workflow viewer's reads (#174): reads, so a `--read-only` daemon has them too.
+    "workflows.list",
+    "workflows.get",
     "agents.list",
     "inputs.answer",
     "runs.resume",
     "runs.cancel",
-    // Answered by a daemon with `runs.control`, and called by nothing in the app: the app
-    // has no workflow picker to start a run from (#178).
+    // Answered by a daemon with `runs.control`, and called by the palette's **Start a run**
+    // since #178: a picker of `workflows.list` and the workflow's own vars.
     "runs.start",
+    // The plan surface (#169). Nine reads, and five writes that ride the same `--read-only`
+    // switch as the four above.
+    "plans.list",
+    "plan.get",
+    "items.list",
+    "schedule.get",
+    "schedule.explain",
+    "dependencies.list",
+    "risks.list",
+    "decisions.list",
+    "journal.list",
+    "dependencies.waive",
+    "decisions.decide",
+    "decisions.reopen",
+    "risks.update",
+    "claims.release",
+    // The Config surface's two (#175, #266). `config.set` needs a control model as well as
+    // a `ConfigModel`, which is why a control asks for the method and not the capability.
+    "config.get",
+    "config.set",
   ],
 };
 
@@ -94,7 +117,9 @@ export const HELLO_READ_ONLY: HelloResult = {
   orcaVersion: "0.2.0-test",
   storeDir: "/work/other/.orca",
   capabilities: ["runs.read"],
-  methods: ["hello", "runs.list", "runs.get", "runs.events", "inputs.list", "claims.list"],
+  /* `config.get` is a read and is here; `config.set` is a write and is not, which is the
+     whole of what a read-only daemon's configuration screen is. */
+  methods: ["hello", "runs.list", "runs.get", "runs.events", "inputs.list", "claims.list", "config.get"],
 };
 
 /** `runs.list` with no filter: newest first, which is how the daemon orders it. */
@@ -268,6 +293,23 @@ export const RUN_DETAILS: Readonly<Record<string, RunsGetResult>> = {
         skippedBranches: [{ branch: "auth-perf", reason: "dependency" }],
       },
     ],
+    /* The overlay the workflow viewer draws over `sdlc` (#174, #177). One entry per
+       *attempt*, so the retried `build` is here twice; `viaEdge` names the edge of the
+       definition the run arrived on, and is absent on the first node and on the retry —
+       `build` → `build` is not an edge anyone authored. */
+    traversal: [
+      { nodeId: "build", stepRunId: "s-build-1", attempt: 1, status: "failed", startedAt: at(4), endedAt: at(6) },
+      { nodeId: "build", stepRunId: "s-build-2", attempt: 2, status: "succeeded", startedAt: at(8), endedAt: at(11) },
+      {
+        nodeId: "fanout",
+        stepRunId: "s-fan",
+        attempt: 1,
+        status: "running",
+        startedAt: at(13),
+        viaEdge: { from: "build", to: "fanout" },
+        childRunIds: ["run-child-ok", "run-child-gone"],
+      },
+    ],
     artifacts: [ART_SPEC],
     lastSeq: 16,
     asOf: AS_OF,
@@ -308,6 +350,17 @@ export const RUN_DETAILS: Readonly<Record<string, RunsGetResult>> = {
         outputArtifactIds: [],
         children: [],
         skippedBranches: [],
+      },
+    ],
+    traversal: [
+      { nodeId: "write", stepRunId: "s-write", attempt: 1, status: "succeeded", startedAt: at(27), endedAt: at(29) },
+      {
+        nodeId: "approve",
+        stepRunId: "s-gate",
+        attempt: 1,
+        status: "waiting",
+        startedAt: at(31),
+        viaEdge: { from: "write", to: "approve" },
       },
     ],
     artifacts: [ART_REVIEW],

@@ -27,16 +27,25 @@
 import type { JSX } from "react";
 import { AGENT_HEALTH_PRESENTATION } from "@orca/design";
 import type { AgentView } from "@orca/protocol";
-import { Chip, Text, Time, textClass } from "../ui/index.js";
+import { Button, Chip, Text, Time, textClass } from "../ui/index.js";
 import { transportLabel } from "./agent-groups.js";
 
 export interface AgentCardProps {
   agent: AgentView;
   /** False when the daemon is not answering: the timestamps stop reading as relative. */
   live: boolean;
+  /**
+   * Open this agent's permission policy (#176). A read, not a write — the policy is
+   * `config.get`'s and a `--read-only` daemon answers it — so the action is present
+   * whatever the connection says, and it is the *editor* inside that goes read-only.
+   *
+   * Absent means there is nowhere to open it: the card is mounted somewhere with no panel
+   * to put it in, and a button that did nothing would be worse than no button.
+   */
+  onEditPermissions?: () => void;
 }
 
-export function AgentCard({ agent, live }: AgentCardProps): JSX.Element {
+export function AgentCard({ agent, live, onEditPermissions }: AgentCardProps): JSX.Element {
   const { word, glyph } = AGENT_HEALTH_PRESENTATION[agent.state];
   const transport = transportLabel(agent.hostType);
   const show = live ? "both" : "absolute";
@@ -109,6 +118,17 @@ export function AgentCard({ agent, live }: AgentCardProps): JSX.Element {
         <div className={`orca-agents__error ${textClass("mono-log")}`}>
           <span className="orca-agents__error-code">{agent.lastError.code}</span>
           <span>{agent.lastError.message}</span>
+        </div>
+      )}
+
+      {/* The one action on the card. It names the agent so that the accessible name is
+          unambiguous with four cards on screen, and so the palette's keyless entry and this
+          button read as the same command. */}
+      {onEditPermissions !== undefined && (
+        <div className="orca-agents__actions">
+          <Button size="sm" tone="ghost" onClick={onEditPermissions} aria-label={`Permissions for ${agent.id}`}>
+            Permissions
+          </Button>
         </div>
       )}
     </article>

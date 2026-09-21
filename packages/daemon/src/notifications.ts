@@ -26,6 +26,7 @@ import {
   displayStatusForStep,
   type DaemonNotification,
   type NotificationMethod,
+  type PlanChangeKind,
 } from "@orca/protocol";
 
 /** The engine run status each `run.*` event puts the run into. */
@@ -148,6 +149,64 @@ export function notificationsFor(event: OrcaEvent, subscriptionId: string): Daem
 
   out.push({ method: EVENT_APPENDED, params: { ...at, event } });
   return out;
+}
+
+/**
+ * Which areas of the plan surface one journal entry made stale.
+ *
+ * A fold of the entry's `type` and nothing else - the same purity rule as `notificationsFor`,
+ * and for a stronger reason here: the schedule is a projection of the whole plan, so a push
+ * that computed one would make every plan write pay for every subscriber. A client is told
+ * *what kind of thing* moved and re-reads the one list it is showing.
+ *
+ * It is deliberately coarse. Almost everything touches `schedule`, because almost everything
+ * does: a work item's status, a dependency resolving, a risk being accepted and a decision
+ * being made each change what may run now. `journal` is on every entry, since every entry is
+ * one. An entry type this daemon does not know still yields `["journal"]` rather than nothing,
+ * so a newer engine's event still wakes a timeline.
+ */
+export function planChangeKindsFor(type: string): PlanChangeKind[] {
+  const kinds: PlanChangeKind[] = [];
+  const add = (k: PlanChangeKind) => void (kinds.includes(k) || kinds.push(k));
+  switch (type) {
+    case "work-item.added":
+    case "work-item.updated":
+      add("items");
+      add("schedule");
+      break;
+    case "dependency.added":
+    case "dependency.resolved":
+    case "dependency.bound":
+      add("dependencies");
+      add("schedule");
+      break;
+    case "risk.raised":
+    case "risk.updated":
+      add("risks");
+      add("schedule");
+      break;
+    case "decision.opened":
+    case "decision.updated":
+    case "decision.resolved":
+      add("decisions");
+      add("schedule");
+      break;
+    case "schedule.computed":
+      add("schedule");
+      break;
+    case "dispatch.started":
+    case "dispatch.finished":
+    case "dispatch.deferred":
+      add("items");
+      add("schedule");
+      break;
+    default:
+      // `plan.created`, `plan.updated`, `request.linked`, `signals.rejected`, and anything a
+      // newer engine writes: the journal moved and nothing else is claimed.
+      break;
+  }
+  add("journal");
+  return kinds;
 }
 
 /** Whether a subscription that asked for `methods` wants this one. Empty or absent: all of them. */

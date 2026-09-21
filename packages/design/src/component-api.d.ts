@@ -108,6 +108,23 @@ export interface TextProps {
 }
 
 /**
+ * `.orca-visually-hidden` (built, in the CSS layer only — #262): in the accessibility tree
+ * and nowhere on screen. The app's polite announcer is what it was written for; a word a
+ * glyph already carries, or a heading the layout gives a sighted reader, is the same shape.
+ *
+ * **It is a class and gets no component**, deliberately, which is why this entry is a class
+ * name rather than a props interface. A `<VisuallyHidden>` wrapper would have to choose an
+ * element, and the callers do not agree: the announcer is a `div` with `role="status"`, a
+ * hidden heading is an `h2`, a hidden label is a `label` bound to an input. Wrapping them in
+ * a `div` would break two of the three, and an `as` prop would be `className` with extra
+ * steps. Rule 14 the short way: reach for the class.
+ *
+ * Nothing composes with it that would fight it — it sets position, box and clipping, so a
+ * caller adding its own layout to the same element is the one mistake to look for.
+ */
+export type VisuallyHiddenClass = "orca-visually-hidden";
+
+/**
  * An elapsed span (built), to two units at most. Exactly one of `ms` (finished) or
  * `since` (accruing) — `since` ticks at 1Hz off one clock shared by the whole renderer.
  */
@@ -163,7 +180,17 @@ export interface RunTreeRowProps {
   onSelect?(id: string): void;
 }
 
-/** An event timeline row (built: `app/renderer/src/runs/timeline/`). */
+/**
+ * An event timeline row (built: `app/renderer/src/runs/timeline/`).
+ *
+ * It was **not** promoted to a shared `ui/` component for the plan journal (#170), which
+ * is drawn on the same `.orca-timeline-entry` class. The two rows are about different
+ * things: an event row carries a run status, an event kind, a sequence range and a copy
+ * menu for an event id, and a plan journal entry has none of those — it has an origin (who
+ * did it) where an event has a status (what happened). Sharing the component would have
+ * made four props optional to serve one caller each, which is two rows in one file. What
+ * is shared is the class, which is where the grid, the row height and the truncation live.
+ */
 export interface TimelineEntryProps {
   /**
    * Event id; shown in mono-id at the end of the row and copied from the row's `Menu`.
@@ -282,9 +309,12 @@ export interface ToolCallRowProps {
  * panel's open state are one controller held above every surface
  * (`renderer/src/artifacts/panel-context.tsx`), not a callback a parent has to hold.
  *
- * There is **no rendered/raw toggle**. Markdown renders raw; a renderer is a dependency
- * decision `packages/app` has not taken, and the control is absent rather than disabled so
- * that nothing on screen promises a feature nobody has decided on.
+ * There is **no rendered/raw toggle**, and that is decided (#245, v0.5.0), not pending:
+ * an artifact body is machine output (rule 8, mono means ORCA produced it) written by an
+ * agent, so it is untrusted input, and rendering it would mean a sanitising markdown
+ * dependency `packages/app` has chosen not to take. The body stays raw in `mono-log`; a
+ * remote link or image in it is never fetched, because it is never turned into markup.
+ * Reopening this means a new issue with the dependency named, not a toggle.
  */
 export interface ArtifactPanelProps {
   target: {
@@ -446,11 +476,31 @@ export interface PermissionCardProps {
   goToRun?: () => void;
 }
 
-/** Built. */
+/**
+ * Built, and corrected here against what the Plan surface met (#170). Three changes:
+ *
+ * - **Glyph and word, not word alone.** `SCHEDULE_PRESENTATION` now carries a glyph for
+ *   each of the five, the way `STATUS_PRESENTATION` does: a classification is never
+ *   carried by its tint (rule 4). The glyphs are reused from the run statuses whose colour
+ *   each classification already borrows — ◐ running, ▣ waiting on deps, ⏸ held, ⊘
+ *   unschedulable — with ▸ for `ready`, which means "next" rather than a state.
+ * - **The wire has seven classifications and this draws five.** `ItemClassification`
+ *   (`@orca/protocol`) adds `done` and `failed`, which are item *outcomes* rather than
+ *   places in the schedule — a settled item is not in the ordering at all. A surface draws
+ *   those two with `StatusChip`'s `succeeded` and `failed`, and never invents a sixth
+ *   badge (`renderer/src/plan/plan-model.ts` holds the mapping).
+ * - **`onExplain` is no longer the only disclosure.** The explanation is the app's one
+ *   `Menu`, and a `Menu` owns its own trigger — so a caller may pass the whole disclosure
+ *   as `explanation` instead, which replaces the built-in **why** button and takes the
+ *   same `.orca-badge__why` class. Neither given draws no disclosure at all, which is the
+ *   badge as a *label* (the inspector, the preview gallery).
+ */
 export interface ScheduleBadgeProps {
   classification: ScheduleClass;
   /** Opens the explanation popover. Every classification can explain itself. */
-  onExplain(): void;
+  onExplain?(): void;
+  /** The disclosure itself, when the caller owns it: a `Menu` whose trigger is the why. */
+  explanation?: unknown;
 }
 
 export interface DependencyNodeProps {
@@ -505,10 +555,16 @@ export interface DecisionMatrixProps {
  *   then talks for an hour, so one `lastAt` would have to choose between them. Both are
  *   absent until first contact.
  * - **There is no `policy`.** Nothing in ORCA counts auto-approvals: permission decisions
- *   are evaluated per tool call against the rules in config (`PermissionRule`) and no
- *   running total is kept anywhere, on the wire or off it. Rule 12 forbids inventing one,
- *   so the field is gone rather than approximated. A permission *policy* surface is its own
- *   screen; it is not a line on this card.
+ *   are evaluated per tool call, first-match-wins, against the agent's configured rules and
+ *   then the `orca.permissions.json` sidecar layered after them (ADR 0009, `PermissionRule`)
+ *   — and no running total is kept anywhere, on the wire or off it. Rule 12 forbids
+ *   inventing one, so the field is gone rather than approximated.
+ *
+ *   A permission *policy* surface is its own screen and not a line on this card, and as of
+ *   #176 it is built: the card carries one action, **Permissions**, which opens that agent's
+ *   policy as an inspector beside the cards. The configured rules are read-only there — they
+ *   are the YAML's, and nothing machine-written rewrites a hand-curated array — and the
+ *   sidecar's grants are editable through the `permissions` document of `config.set`.
  * - **And there is no `claim` either, for the same reason.** A `ClaimView` names the work
  *   item and the *run* that owns it; it names no agent, and an `AgentView` names no run. So
  *   "what is this agent on" cannot be answered from `agents.list`, however much the card
@@ -534,41 +590,136 @@ export interface AgentHealthCardProps {
   lastError?: { code: string; message: string };
   /** False when the daemon is not answering: the timestamps stop reading as relative. */
   live?: boolean;
+  /**
+   * Open this agent's permission policy (#176). A *read* — `config.get` is answered by a
+   * read-only daemon too — so the action is present whatever the connection says, and it is
+   * the editor inside that goes read-only. Absent means there is nowhere to open it, and a
+   * card with nowhere to send you draws no button rather than one that does nothing.
+   */
+  onEditPermissions?(): void;
 }
 
 /**
- * Built. `children` is a render function, not a node: the field owns no control, but it
- * does own the ids that tie the label, the help and the error to whatever control the
- * caller puts inside it, and it has to hand them over to do that.
+ * Built, and corrected twice by building it (#175, #266).
+ *
+ * `children` is a render function, not a node: the field owns no control, but it does own
+ * the ids that tie the label, the help and the error to whatever control the caller puts
+ * inside it, and it has to hand them over to do that.
+ *
+ * - **The path is into a *document*, not into "the YAML".** Config shows two: the YAML and
+ *   the ADR 0009 permission sidecar, which is JSON and has keys of its own. `document` says
+ *   which, and it is what makes **raw** open the right file; it defaults to `config`,
+ *   because most of the form is about the YAML.
+ * - **`onShowRaw` is optional.** One section of the Config surface is fields of a document
+ *   ORCA does not own — the app's own preferences (theme, per-surface density) — which have
+ *   a key and no raw view anywhere in the app to show it in. Those fields still show their
+ *   path, because it is what gets written, and draw no **raw** button rather than a button
+ *   that does nothing.
  */
+export type ConfigFieldDocument = "config" | "permissions";
+
 export interface ConfigFieldProps {
   label: string;
-  /** Dotted path into the YAML — always shown, it is how the form maps to the file. */
+  /** Dotted path into `document` — always shown, it is how the form maps to the file. */
   path: string;
+  /** Which of the workspace's two configuration documents that path is in. Defaults to `config`. */
+  document?: ConfigFieldDocument;
   children(control: { id: string; "aria-describedby"?: string; "aria-invalid"?: true }): unknown;
   help?: string;
   error?: string;
-  /** Opens the raw YAML view scrolled to and highlighting this path. */
-  onShowRaw(path: string): void;
+  /** Opens that document's raw view, scrolled to and highlighting this path. */
+  onShowRaw?(path: string, document: ConfigFieldDocument): void;
 }
 
+/**
+ * Built (#175). The config surface's save bar, over `.orca-draftbar` — and the bar the
+ * workflow editor reuses rather than redraws: "the draft bar is the config editor's save
+ * bar with two more actions" (docs/design/70-workflow-editing.md), those two being
+ * **Validate all** and **Publish**.
+ *
+ * `changes` counts what would be *written*, not what was typed: a field edited back to the
+ * file's own value is not a change. The bar is **absent** rather than disabled where there
+ * is no `config.set` to call at all — file mode, and a `--read-only` daemon — which is the
+ * caller's decision; `disabledReason` is for the states where the daemon would take the
+ * write if it were answering, and it comes from `useWritability()`.
+ */
+export interface DraftBarProps {
+  changes: number;
+  /** A call is out; the buttons wait rather than sending a second write. */
+  busy: boolean;
+  /** The `CONFIG_STALE` message. Turns the bar `--blocked` and offers **Reload**; the draft is kept. */
+  conflict?: string;
+  /** What the last Validate or Save said, in words. */
+  message?: string;
+  /** Why the daemon cannot take a write right now. Never composed by the bar itself. */
+  disabledReason?: string;
+  /** Which of the form and the raw editor holds the live draft: the last edited wins. */
+  note?: string;
+  onValidate(): void;
+  onSave(): void;
+  onDiscard(): void;
+  onReload(): void;
+}
+
+/**
+ * Built (#177), in `renderer/src/ui/workflow-node.tsx`. Four corrections the implementation
+ * forced, each of them a thing the draft could not express:
+ *
+ * - **`type` may be undefined and `typeLabel` is separate.** `WorkflowNodeView.type` is the
+ *   node type verbatim and may be a `custom:<name>` a plugin registered; the protocol says a
+ *   client that does not know a type draws the generic node rather than dropping it. So the
+ *   icon takes one of the nine or nothing, and the eyebrow prints the type as written.
+ * - **`id` is required, and `onOpen` takes it.** Selection on the canvas is
+ *   `aria-activedescendant` over one tab stop, which needs a DOM id — and a node's *name* is
+ *   not unique (two nodes may share one) while its id is.
+ * - **`collapsed`** — a collapsed `subworkflow` or `parallel` says how many graphs it is
+ *   hiding, which is the whole of what a person gets back for the ones they cannot see.
+ * - **`untaken` draws at `--opacity-untaken`, not `--opacity-stale`.** The component layer
+ *   already bound `.orca-node--untaken` to the token named for it; `opacity-stale` is the
+ *   one a disconnected surface uses, and they are different states.
+ *
+ * `onOpen` is optional: a node drawn inside an expanded group box in a read-only viewer is
+ * a picture of a node, and a click target that does nothing is worse than none.
+ */
 export interface WorkflowNodeProps {
-  type: WorkflowNodeType;
+  id: string;
+  /** One of the nine, or undefined for a `custom:*` with no icon of its own. */
+  type?: WorkflowNodeType;
+  /** The type as written, which is what the kind eyebrow prints. */
+  typeLabel: string;
   name: string;
   /** Present only when a run is overlaid. Absent means 'definition view'. */
   runState?: { status: RunStatus; attempts?: number; current?: boolean };
   /** True when a run is overlaid and this node was not traversed. */
   untaken?: boolean;
-  onOpen(name: string): void;
+  selected?: boolean;
+  /** What a collapsed container is hiding, counted: `2 nested graphs`. */
+  collapsed?: string;
+  onOpen?(id: string): void;
 }
 
-export type CrumbType = "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
+/** `plan` is the root of the Plan surface's trail (#170): plan ▸ work item. */
+export type CrumbType = "plan" | "request" | "item" | "run" | "step" | "workflow" | "agent" | "config";
 
 export interface Crumb {
   type: CrumbType;
   id: string;
   label: string;
   current?: boolean;
+  /**
+   * The ids this crumb's counterparts name, where the surface that built it knows them:
+   * `{ workflow: "ai-sdlc" }` on a run crumb (#177). Most counterparts are queries over data
+   * no breadcrumb holds; this is how the one that is not says so.
+   */
+  counterpartIds?: Readonly<Record<string, string>>;
+  /**
+   * Added in #177. The workflow this object runs and the version it is pinned to, as one
+   * string: `ai-sdlc v11`. 70-workflow-editing.md asks for the version wherever a run's
+   * workflow is named, and the run header is a crumb — the header could not carry it
+   * without this. The `◷ pinned` chip is deliberately not here: it is a comparison against
+   * the definition on disk, which is a second read the runs surface does not make.
+   */
+  version?: string;
 }
 
 /**
@@ -589,6 +740,25 @@ export interface Counterpart {
  */
 export interface ObjectHeaderProps {
   crumbs: ReadonlyArray<Crumb>;
+  /**
+   * The **mode variant** (#170). `docs/design/80-dependency-graph-options.md` ships option
+   * B, and its second concrete change to the rest of the system is this one: "the object
+   * header gains a mode segmented control, which is a new `ObjectHeader` variant". It
+   * draws `.orca-seg` to the right of the trail, before `actions`.
+   *
+   * The modes are the object's views, not destinations — Plan's Schedule and Journal — and
+   * a mode this build does not have is **absent** rather than disabled: the dependency
+   * graph (#171), the risk matrix (#172) and the decision matrix (#173) are v0.6.0, and a
+   * segment that never does anything is a dead end. `aria-pressed` on buttons in a named
+   * group, not a tablist: one pane, two views, and no arrow-key contract to promise.
+   */
+  mode?: {
+    options: ReadonlyArray<{ id: string; label: string }>;
+    active: string;
+    onChange(id: string): void;
+    /** The group's accessible name. Defaults to "View". */
+    label?: string;
+  };
   actions?: unknown;
   onOpen?(crumb: Crumb): void;
   onOpenCounterpart?(crumb: Crumb, counterpart: Counterpart): void;
@@ -639,6 +809,26 @@ export interface MenuProps {
     menu: { width: number; height: number };
     viewport: { width: number; height: number };
   };
+  /**
+   * Controlled disclosure (#170). Pass both or neither. It exists for the one case a
+   * surface cannot press the trigger itself: `orca://item/<slug>` lands on Plan **with the
+   * explanation open**, and a link that arrives is not a click. Everything else stays the
+   * primitive's, so a controlled menu is the same menu with its open state one level up.
+   */
+  open?: boolean;
+  onOpenChange?(open: boolean): void;
+  /**
+   * Something the popover has to *say* rather than offer (#170): an error where a list of
+   * choices was expected. Rendered above the items, never a `menuitem`, never focused,
+   * typed to or chosen — so it cannot be copied as though it were one of them. A menu with
+   * a note and no items still renders its trigger and still opens; focus lands on the list
+   * itself, so `Esc` returns it to the trigger.
+   *
+   * It is deliberately not a disabled item: a disabled item is still counted and read as
+   * one of the choices, and a menu whose only row is a disabled error is a popover focus
+   * cannot enter.
+   */
+  note?: unknown;
 }
 
 /** Built — rendering only; the state machine that decides which state is live is #163. */
@@ -716,7 +906,8 @@ export interface MinimapTickProps {
  * **Selection and focus are different things** (docs/design/RULES.md rule 10). One tab
  * stop, on the container; `aria-activedescendant` carries the selection; the ring is the
  * container's and the accent rail is the row's. The container is a `listbox` of `option`s
- * by default and a `tree` of `treeitem`s when `role` says so — see `role` and `rowProps`.
+ * by default, a `tree` of `treeitem`s or a `grid` of `row`s when `role` says so — see
+ * `role` and `rowProps`.
  *
  * **The keys are registered, not listened for.** `J`/`K`, `↑`/`↓`, `Home`/`End` and the
  * page keys go on the `KeyboardMap` in the scope `scope` names, so the command palette
@@ -761,15 +952,22 @@ export interface VirtualListProps<T> {
   scope?: "list" | "run-tree" | "stream";
   /**
    * What the rows are, as ARIA sees them: a `listbox` of `option`s (the default, a flat
-   * list of choices) or a `tree` of `treeitem`s (rows with depth — the run tree, #156).
+   * list of choices), a `tree` of `treeitem`s (rows with depth — the run tree, #156) or a
+   * `grid` of `row`s (rows that hold controls — the plan's schedule table, #170).
+   *
+   * The third is not a preference. An `option` is a leaf, so a button inside one is a
+   * button nothing can reach — the row is one stop and the control inside it is not
+   * another — and axe reports it as `nested-interactive`. A `grid` is the role that
+   * carries cells which may themselves be interactive, so a surface whose rows hold a
+   * control asks for it and gives each cell `role="gridcell"` in `renderRow`.
    *
    * It is the substrate's because the substrate owns the row element. A surface cannot fix
    * this from `renderRow`, which returns only the row's *children*: `aria-level` on a span
    * inside a row, or a `treeitem` nested in an `option`, is invalid ARIA and reads as a
-   * flat list either way. Everything else is identical for both roles — one tab stop,
+   * flat list either way. Everything else is identical for all three — one tab stop,
    * `aria-activedescendant`, `aria-selected`.
    */
-  role?: "listbox" | "tree";
+  role?: "listbox" | "tree" | "grid";
   /**
    * Per-row ARIA only the surface can know — `aria-level` and `aria-expanded` on a tree
    * row — merged onto the row element. Applied *before* the attributes the substrate owns,

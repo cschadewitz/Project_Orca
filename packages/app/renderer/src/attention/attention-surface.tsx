@@ -7,6 +7,13 @@
  * - **Two regions, in the tier table's order.** Permission asks and gates are cards, tier 1
  *   above tier 2; failed runs are rows below them and out of the count. A failure is
  *   something to go and read, not something a person is being asked.
+ * - **At zero it says what is running, not that there is nothing (#256).** With nothing
+ *   waiting and nothing failed the surface lists the running runs in place of the empty
+ *   state — not beside the waits, and not as a fourth tier, because a running run is
+ *   explicitly not asking for anybody's attention. It is the landing screen, and "your work
+ *   is all moving, here it is" is the answer a person came for; "nothing needs you" with a
+ *   blank page under it is not. Nothing is running either, and the empty state is the truth
+ *   again.
  * - **Cards are not rows, so they are not virtualised.** The list substrate is for
  *   fixed-height rows read off `--row-h` (rule 9); a card carries a question, its
  *   consequences and its controls and is as tall as it needs to be. What is bounded is the
@@ -24,13 +31,15 @@
  *   `Enter`, `⇧Enter`, `G` — is registered by whichever card has focus, which is what lets
  *   the same card be mounted inline in a run and bring its keys with it.
  */
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import type { ConnectionState } from "@orca/design";
 import type { OpenInputView, RunSummaryView } from "@orca/protocol";
 import { useWritability } from "../chrome/use-connection.js";
 import { useKeyboard } from "../keyboard-context.js";
+import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
+import { bindOptions, isFreeText } from "./card-model.js";
 import { VirtualList } from "../list/index.js";
-import { StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
+import { Duration, StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
 import type { AnswerRequest } from "./answer-card.js";
 import { GateCard } from "./gate-card.js";
 import { PermissionCard } from "./permission-card.js";
@@ -65,7 +74,8 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
   const live = connection === "live";
 
   const waits = state.phase === "ready" ? state.waits : EMPTY_WAITS;
-  const failures = state.phase === "ready" ? state.failures : EMPTY_FAILURES;
+  const failures = state.phase === "ready" ? state.failures : EMPTY_RUNS;
+  const running = state.phase === "ready" ? state.running : EMPTY_RUNS;
 
   const [focusIndex, setFocusIndex] = useState(0);
   const [failureIndex, setFailureIndex] = useState<number | undefined>(undefined);
@@ -100,16 +110,10 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
        be pulled back to the list every time a person clicked a card's option. */
   }, [ids, waits.length]);
 
-  useSurfaceKeys(waits.length, focusIndex, focusCard, {
-    cancel: () => {
-      const run = waits[focusIndex]?.runId;
-      if (run) controls.cancel(run);
-    },
-    resume: () => {
-      const run = waits[focusIndex]?.runId;
-      if (run) controls.resume(run);
-    },
-  });
+  useSurfaceKeys(waits.length, focusIndex, focusCard);
+  /* The palette's rows are about the card the person is on, which is what "actions on the
+     current object" means when the object is one of five cards (#178). */
+  useCardWrites(waits[focusIndex], controls);
 
   const cannotWrite = writability.can ? undefined : writability.reason;
   const report = controls.report;
@@ -162,11 +166,19 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
       )}
 
       {waits.length === 0 ? (
-        <StateView
-          kind="empty"
-          title="Nothing needs you"
-          body="Gates and permission asks appear here the moment a run raises one."
-        />
+        /* Nothing is waiting and nothing has failed: the landing screen says what is in
+           flight rather than that there is nothing (#256). With failures below, the screen
+           already has something on it and the empty state stands — the shape only changes
+           where it would otherwise be blank. */
+        failures.length === 0 && running.length > 0 ? (
+          <Running runs={running} live={live} {...(onOpenRun ? { onOpenRun } : {})} />
+        ) : (
+          <StateView
+            kind="empty"
+            title="Nothing needs you"
+            body="Gates and permission asks appear here the moment a run raises one."
+          />
+        )
       ) : (
         <section
           className="orca-attn__section"
@@ -222,7 +234,95 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
 }
 
 const EMPTY_WAITS: readonly OpenInputView[] = [];
-const EMPTY_FAILURES: readonly RunSummaryView[] = [];
+const EMPTY_RUNS: readonly RunSummaryView[] = [];
+
+/**
+ * What is in flight, where the empty state would otherwise be (#256).
+ *
+ * A component of its own rather than a branch inline, because it owns two things that have
+ * to go away with it: a selection, and `Enter`. One list per scope is the substrate's rule
+ * (AGENTS.md), and this list and the failures list are both in `list` — which is safe here
+ * and only here, because this one is drawn *only* when there are no failures, so the two
+ * are never mounted at once.
+ *
+ * A running run is not a tier and is not counted: it asks nothing of anybody. It is here so
+ * that the app's landing screen answers "what is happening" for a person whose work is all
+ * moving, instead of telling them there is nothing.
+ */
+function Running({
+  runs,
+  live,
+  onOpenRun,
+}: {
+  runs: readonly RunSummaryView[];
+  live: boolean;
+  onOpenRun?: (runId: string) => void;
+}): JSX.Element {
+  const [index, setIndex] = useState<number | undefined>(undefined);
+  const keyboard = useKeyboard();
+  /* Through a ref for the reason `useSurfaceKeys` uses one: the list changes on every push
+     and the shortcut must not be unregistered and re-registered under a keypress. */
+  const open = useRef<(() => void) | undefined>(undefined);
+  open.current =
+    onOpenRun === undefined
+      ? undefined
+      : () => {
+          const run = index === undefined ? undefined : runs[index];
+          if (run) onOpenRun(run.id);
+        };
+
+  /* Registered only when there is somewhere to go, the same condition `G` on a card takes:
+     a shortcut that navigates nowhere is worse than one that is not there. */
+  const navigable = onOpenRun !== undefined;
+  useEffect(() => {
+    if (!navigable) return;
+    return keyboard.register({
+      scope: "list",
+      key: "Enter",
+      label: "Open the selected run",
+      action: () => open.current?.(),
+    });
+  }, [keyboard, navigable]);
+
+  return (
+    <section className="orca-attn__section orca-attn__running" aria-label="Running runs">
+      <Text style="eyebrow" as="h2">
+        Running
+      </Text>
+      <Text style="caption">Nothing is waiting on you.</Text>
+      <VirtualList
+        items={runs}
+        label="Running runs"
+        className="orca-attn__running-list"
+        rowId={(run) => `attention-running-${run.id}`}
+        rowClassName={() => "orca-attn__row orca-attn__row--listed"}
+        renderRow={(run) => <RunningRow run={run} live={live} />}
+        selectedIndex={index}
+        onSelect={setIndex}
+        noun="running run"
+        ticks={[]}
+      />
+      {navigable && <Text style="caption">Enter opens the selected run.</Text>}
+    </section>
+  );
+}
+
+/** A running run, as a row: what it is, and how long it has been going. */
+function RunningRow({ run, live }: { run: RunSummaryView; live: boolean }): JSX.Element {
+  return (
+    <>
+      <StatusChip status={run.status} />
+      <span className={`orca-attn__run-name ${textClass("label")}`}>{run.name}</span>
+      {/* Accruing while the daemon is answering; frozen at what it last said when it is
+          not, because a duration that kept ticking off a dead socket would be invented. */}
+      {live && run.startedAt !== undefined ? (
+        <Duration since={new Date(run.startedAt)} />
+      ) : (
+        <Duration ms={run.durationMs ?? 0} />
+      )}
+    </>
+  );
+}
 
 /**
  * One waiting item. The tier decides which card it is and **nothing else differs** — same
@@ -258,7 +358,7 @@ function FailedRow({ run, live }: { run: RunSummaryView; live: boolean }): JSX.E
       {/* The glyph and the word are `StatusChip`'s (rule 4); nothing here says "failed" in
           colour alone or in a second voice. */}
       <StatusChip status={run.status} />
-      <span className={`orca-attn__failed-name ${textClass("label")}`}>{run.name}</span>
+      <span className={`orca-attn__run-name ${textClass("label")}`}>{run.name}</span>
       {run.error && <Text style="caption">{run.error.message}</Text>}
       <Time at={new Date(run.finishedAt ?? run.createdAt)} show={live ? "both" : "absolute"} />
     </>
@@ -266,26 +366,15 @@ function FailedRow({ run, live }: { run: RunSummaryView; live: boolean }): JSX.E
 }
 
 /**
- * The keys that belong to the *list* of cards rather than to a card: `J`/`K`, and the two
- * keyless commands (#205).
- *
- * Cancel and resume have no key on purpose. The design's keyboard table is short and every
- * letter in it is spoken for; these two are real write actions all the same, and #205's
- * whole point is that a command with no key is still a command as long as the palette can
- * find it. They are registered while there is something to act on, so what is in the
- * registry is what a person can actually do right now.
+ * The keys that belong to the *list* of cards rather than to a card: `J`/`K`, and nothing
+ * else. The writes moved to `useCardWrites` below when #178 gave every write in the app the
+ * same two gates.
  */
-function useSurfaceKeys(
-  count: number,
-  focusIndex: number,
-  focusCard: (index: number) => void,
-  actions: { cancel: () => void; resume: () => void },
-): void {
+function useSurfaceKeys(count: number, focusIndex: number, focusCard: (index: number) => void): void {
   const keyboard = useKeyboard();
-  const current = useRef({ count, focusIndex, focusCard, actions });
-  current.current = { count, focusIndex, focusCard, actions };
-  // Registered while there is something to act on, so the palette lists what can be done
-  // now rather than four commands that would do nothing.
+  const current = useRef({ count, focusIndex, focusCard });
+  current.current = { count, focusIndex, focusCard };
+  // Registered while there is something to move between.
   const anything = count > 0;
 
   useEffect(() => {
@@ -298,19 +387,95 @@ function useSurfaceKeys(
     const off = [
       keyboard.register({ scope: "card", key: "J", label: "Next card", action: () => move(1) }),
       keyboard.register({ scope: "card", key: "K", label: "Previous card", action: () => move(-1) }),
-      keyboard.register({
-        scope: "card",
-        label: "Cancel the run this is waiting on",
-        detail: "Stops the run; the answer is not given",
-        action: () => current.current.actions.cancel(),
-      }),
-      keyboard.register({
-        scope: "card",
-        label: "Resume the run this is waiting on",
-        detail: "Re-drives the run without answering; it returns when the run parks again",
-        action: () => current.current.actions.resume(),
-      }),
     ];
     return () => off.forEach((remove) => remove());
   }, [keyboard, anything]);
+}
+
+/**
+ * The card's three writes in the palette (#178): answer it with each option it offers,
+ * cancel the run it is waiting on, resume that run.
+ *
+ * **The options are the card's options, in the card's order.** `bindOptions` is what puts
+ * the destructive ones last and gives the rest `1`–`9` on the card itself
+ * (docs/design/20-attention-and-gates.md: the destructive option is never bound to `1` and
+ * never focused by default), and a second ordering here would be a second answer to a
+ * safety rule. A destructive option carries the danger tone, which sinks it below every
+ * other row in the palette as well.
+ *
+ * **The rows call the card's own path.** `useControls().answer` — the same hook, the same
+ * one-call-in-flight, the same reading of what an "always" actually wrote. What the rows do
+ * *not* offer is "always": that is a standing rule written into the workspace sidecar and
+ * its two buttons say what they will promise before they are pressed (`alwaysOutcome`); a
+ * palette row that wrote one from a single word would be promising on the daemon's behalf.
+ *
+ * **A free-text ask gets no rows at all.** `options` empty is the protocol's way of saying
+ * "type an answer", and there is nothing to type into in a list of commands. The card is
+ * where that one is answered, and it says so by being the only place it can be.
+ */
+function useCardWrites(
+  input: OpenInputView | undefined,
+  actions: {
+    answer: (input: OpenInputView, request: AnswerRequest) => void;
+    cancel: (runId: string) => void;
+    resume: (runId: string) => void;
+  },
+): void {
+  /* Through a ref: `useControls` rebuilds its callbacks whenever a call goes in flight, and
+     the rows must not be unregistered and re-registered underneath a keypress. The input is
+     held the same way and for the same reason — a push rebuilds the whole list. */
+  const current = useRef({ input, actions });
+  current.current = { input, actions };
+
+  /* What the rows are *about*, as one string. The options are part of it because a gate
+     re-asked with different options is a different set of rows. */
+  const signature =
+    input === undefined ? "" : [input.id, input.runId, input.question, ...input.options.map((o) => o.id)].join("|");
+
+  const rows = useMemo((): readonly PaletteWrite[] => {
+    const held = current.current.input;
+    if (held === undefined || signature === "") return [];
+    const answers = isFreeText(held.options)
+      ? []
+      : bindOptions(held.options).map(({ option }) => ({
+          scope: "card" as const,
+          method: "inputs.answer",
+          label: `Answer ${held.question}: ${option.label}`,
+          detail: option.consequence ?? `Answers ${held.runName} the way the card's option does`,
+          ...(option.destructive ? { tone: "danger" as const } : {}),
+          action: () => {
+            const { input: now, actions: act } = current.current;
+            if (now) act.answer(now, { optionId: option.id });
+          },
+        }));
+    return [
+      ...answers,
+      {
+        scope: "card",
+        method: "runs.cancel",
+        label: "Cancel the run this is waiting on",
+        // The run id is ORCA's and is set in mono where the confirmation names it (rule 8).
+        labelMachine: held.runId,
+        detail: "Stops the run; the answer is not given",
+        tone: "danger",
+        confirm: `Cancel ${held.runId} — confirm`,
+        action: () => {
+          const { input: now, actions: act } = current.current;
+          if (now) act.cancel(now.runId);
+        },
+      },
+      {
+        scope: "card",
+        method: "runs.resume",
+        label: "Resume the run this is waiting on",
+        detail: "Re-drives the run without answering; it returns when the run parks again",
+        action: () => {
+          const { input: now, actions: act } = current.current;
+          if (now) act.resume(now.runId);
+        },
+      },
+    ];
+  }, [signature]);
+
+  usePaletteWrites(rows);
 }

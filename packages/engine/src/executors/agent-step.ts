@@ -11,11 +11,13 @@
 import { isAbsolute } from "node:path";
 import type { AgentSession, HostFileSystem, SessionUpdateEvent } from "@orca/agents";
 import {
+  describeError,
   evaluateVars,
   OrcaError,
   renderDeliverablesBlock,
   sha256,
   type AgentNode,
+  type AgentUpdateSummary,
   type AgentSelector,
   type Artifact,
   type ArtifactRef,
@@ -144,10 +146,21 @@ async function collect(
   return { artifacts, problems };
 }
 
-/** Coalesce streamed text so the event log holds readable messages, not thousands of chunks. */
+/**
+ * Coalesce streamed text so the event log holds readable messages, not thousands of chunks.
+ *
+ * `handle` is an ACP callback: it cannot await, and it must not leave a rejected promise
+ * behind - an unobserved append failure would take the whole process down (#268). So every
+ * append goes onto one chain (`tail`), which keeps them in order and in which the first
+ * failure is captured rather than thrown. The turn asks for it with `drain()` when it ends,
+ * and fails the step with it.
+ */
 class UpdateRecorder {
   private buffer = "";
   private bufferKind = "";
+  /** The serialised append chain; never rejects, because `append` captures instead. */
+  private tail: Promise<void> = Promise.resolve();
+  private failure: unknown;
   constructor(
     private readonly ctx: StepContext,
     private readonly sessionId: string,
@@ -168,22 +181,39 @@ class UpdateRecorder {
       return;
     }
     void this.flush();
-    void this.ctx.emit({
-      type: "agent.update",
-      payload: { stepRunId: this.ctx.step.id, sessionId: this.sessionId, update: s },
-    });
+    this.append(s);
   };
-  async flush(): Promise<void> {
-    if (!this.buffer.trim()) {
-      this.buffer = "";
-      return;
-    }
+  /** Queue the buffered text, if any; resolves when everything queued so far has settled. */
+  flush(): Promise<void> {
     const text = this.buffer;
     const kind = this.bufferKind;
     this.buffer = "";
-    await this.ctx.emit({
-      type: "agent.update",
-      payload: { stepRunId: this.ctx.step.id, sessionId: this.sessionId, update: { kind, text } },
+    if (text.trim()) this.append({ kind, text });
+    return this.tail;
+  }
+  /** Await every queued append and hand back the first one that failed, if one did. */
+  async drain(): Promise<unknown> {
+    await this.flush();
+    return this.failure;
+  }
+  private append(update: AgentUpdateSummary): void {
+    this.tail = this.tail.then(async () => {
+      // Once one append has failed the step is finished either way; queueing more writes
+      // against a store that is already refusing them only multiplies the log lines.
+      if (this.failure !== undefined) return;
+      try {
+        await this.ctx.emit({
+          type: "agent.update",
+          payload: { stepRunId: this.ctx.step.id, sessionId: this.sessionId, update },
+        });
+      } catch (e) {
+        this.failure = e;
+        this.ctx.logger.error("agent.update append failed", {
+          stepRunId: this.ctx.step.id,
+          sessionId: this.sessionId,
+          error: describeError(e),
+        });
+      }
     });
   }
 }
@@ -303,6 +333,21 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
       } finally {
         stopWatching?.();
         await recorder.flush();
+      }
+      // The streamed appends run off an ACP callback, so a store that refused one says so
+      // here rather than as an unhandled rejection (#268). The turn's own output is part of
+      // the run's record: if it did not land, the step failed, retryably.
+      const appendFailure = await recorder.drain();
+      if (appendFailure !== undefined) {
+        const described = describeError(appendFailure);
+        return {
+          kind: "failed",
+          error: {
+            code: "STORE_WRITE",
+            message: `could not record agent output for step ${ctx.step.id} (${ctx.nodeId}): ${described.message}`,
+            details: { stepRunId: ctx.step.id, nodeId: ctx.nodeId, sessionId: session.id, cause: described },
+          },
+        };
       }
       if (ctx.signal.aborted) throw new OrcaError("CANCELLED", "cancelled");
 

@@ -110,6 +110,18 @@ describe("checkCss", () => {
       );
     }
   });
+
+  /* `ch` is an intrinsic unit, so `checkCss` lets it through — it is a ratio to the type
+     rather than a measurement. Rule 1 is still about it when it is a *box*: a column of a
+     fixed width is a size the design system names, and a number in a stylesheet is one it
+     does not. The lint cannot tell the two apart; this says which one the policy panel is. */
+  test("the policy inspector's column is a named size, not a number in a stylesheet", () => {
+    const sheet = readFileSync(join(repoRoot, "packages/app/renderer/src/config/policy.css"), "utf8");
+    assert.match(sheet, /flex:\s*0 0 var\(--panel-w-policy\)/);
+    assert.doesNotMatch(sheet, /flex:\s*0 0 \d/);
+    const tokens = readFileSync(join(repoRoot, "packages/design/css/tokens.css"), "utf8");
+    assert.match(tokens, /--panel-w-policy:/);
+  });
 });
 
 /**

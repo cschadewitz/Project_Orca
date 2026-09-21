@@ -39,7 +39,11 @@ export const HumanInputConfigSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("pause") }),
   /** Interactive prompt on the terminal (CLI). */
   z.object({ mode: z.literal("cli") }),
-  /** Always pick the first option / allow every permission. For unattended demos and tests. */
+  /**
+   * Pick the first option (or `option`) for gates and questions. For unattended demos and
+   * tests. An agent `ask` permission is *refused* rather than auto-allowed unless `option`
+   * names one of the ids the agent offered — there is nobody here to approve it (#140).
+   */
   z.object({ mode: z.literal("auto"), option: z.string().optional() }),
 ]);
 export type HumanInputConfig = z.infer<typeof HumanInputConfigSchema>;

@@ -23,12 +23,17 @@ import { CommandPalette } from "./palette/command-palette.js";
 import { useCommandPalette } from "./palette/use-command-palette.js";
 import { RunsSurface } from "./runs/runs-surface.js";
 import { AgentsSurface } from "./agents/agents-surface.js";
+import { ConfigProvider } from "./config/config-context.js";
+import { ConfigSurface } from "./config/config-surface.js";
 import { AttentionSurface } from "./attention/attention-surface.js";
+import { WorkflowSurface } from "./workflow/workflow-surface.js";
+import { PlanSurface, type PlanHeader } from "./plan/index.js";
 import { useAttention } from "./attention/use-attention.js";
 import { InlineAsksProvider } from "./attention/inline-asks.js";
 import { useAlertActivation } from "./attention/use-alert-activation.js";
 import type { AlertActivation } from "../../src/bridge.js";
 import { PaletteObjectSources } from "./palette/object-sources.js";
+import { PaletteStartRun } from "./palette/start-run.js";
 import {
   describeRoute,
   gateUrl,
@@ -46,6 +51,9 @@ import { Button, ObjectHeader, StateView, Text, textClass, type Crumb } from "./
 // space with runs nobody has to look at.
 const DEFAULT_SURFACE: SurfaceId = "attention";
 
+/** One empty trail, so a surface with no object does not remount the header every render. */
+const NO_CRUMBS: readonly Crumb[] = [];
+
 export function App(): JSX.Element {
   const [active, setActive] = useState<SurfaceId>(DEFAULT_SURFACE);
   /* Where a URL led. The route table resolves every `orca://` URL — a cold start's, an
@@ -62,7 +70,59 @@ export function App(): JSX.Element {
      place. A surface hands up the crumbs for whatever it has selected and the chrome draws
      them into `PrimaryPane`'s header slot — Runs is the first surface with an object to put
      there. */
-  const [crumbs, setCrumbs] = useState<readonly Crumb[]>([]);
+  /* …and the controls for it: the workflow viewer's version text, its `◷ pinned` chip and
+     its overlay picker are the header's actions (#177).
+
+     The surface that reported them is held with them, and the header is drawn only while
+     that is the surface on screen. Clearing on the way to a new surface does not work and
+     the reason is React's: a surface reports from an effect, and a child's effects run
+     before its parent's — so a `setCrumbs([])` in the navigation would run *after* the
+     surface it was switching to had already said what it had, and throw it away. */
+  const [header, setHeader] = useState<{
+    surface: SurfaceId;
+    crumbs: readonly Crumb[];
+    actions: ReactNode;
+    /* Plan's segmented mode control (#170): a variant of the header rather than a control
+       in the surface, because a mode switch keeps the object and the header is what says
+       which object is on screen. */
+    mode?: PlanHeader["mode"];
+  }>({
+    surface: DEFAULT_SURFACE,
+    crumbs: [],
+    actions: null,
+  });
+  const crumbs = header.surface === active ? header.crumbs : NO_CRUMBS;
+  const setCrumbs = useCallback(
+    (next: readonly Crumb[]) => setHeader({ surface: "runs", crumbs: next, actions: null }),
+    [],
+  );
+  const onWorkflowHeader = useCallback(
+    (reported: { crumbs: readonly Crumb[]; actions: ReactNode }) =>
+      setHeader({ surface: "config", crumbs: reported.crumbs, actions: reported.actions }),
+    [],
+  );
+  const onPlanHeader = useCallback(
+    (reported: PlanHeader) =>
+      setHeader({ surface: "plan", crumbs: reported.crumbs, actions: reported.actions, mode: reported.mode }),
+    [],
+  );
+  /* What Plan has put in the dock. Held here because the docked panel is above every
+     surface, exactly as the artifact it otherwise shows is. */
+  const [planInspector, setPlanInspector] = useState<ReactNode>(null);
+  /* Selecting a row opens the inspector, which means opening the dock it is drawn in —
+     the same act the artifact panel's `onOpen` performs for a chip on a step. Closing it
+     again is `⌘\`; selecting another row opens it once more, because that press is a
+     person asking to see what the row waits for.
+
+     A *selection* is what opens it, never a change of content. The inspector re-renders
+     when the dependencies and risks behind it land, a tick after the click, and when a
+     `plan.changed` frame moves them again later — and a dock that reopened on each of
+     those would take back the `⌘\` a person had just pressed. The surface says which kind
+     of report this is; the dock only has to believe it. */
+  const showInspector = useCallback((content: ReactNode, options: { open: boolean }) => {
+    setPlanInspector(content);
+    if (content !== null && options.open) setPanelOpen(true);
+  }, []);
 
   const connection = useConnection();
   /* What needs a person, read *here* rather than inside the Attention surface, because the
@@ -97,6 +157,11 @@ export function App(): JSX.Element {
     setRoute(next);
     setActive(next.surface);
   }, []);
+
+  /* Held rather than written inline: Plan memoises its inspector on the callbacks it was
+     handed, and a fresh arrow on every render of the chrome would be a fresh inspector on
+     every render, which is a fresh `onInspector` call, which is another render. */
+  const openRun = useCallback((runId: string) => navigate(runUrl(runId)), [navigate]);
 
   useDeepLinks(navigate);
   const togglePanel = useCallback(() => setPanelOpen((open) => !open), []);
@@ -170,7 +235,7 @@ export function App(): JSX.Element {
           key={activeSurface.id}
           surface={activeSurface.id}
           header={
-            activeSurface.id === "runs" && crumbs.length > 0 ? (
+            crumbs.length > 0 ? (
               /* Both openers go through the route table rather than through a second
                  navigation path: a crumb, a counterpart, a palette row and a pasted URL
                  are four ways of naming the same object and there is one resolver (#165).
@@ -178,6 +243,8 @@ export function App(): JSX.Element {
                  answering undefined means. */
               <ObjectHeader
                 crumbs={crumbs}
+                {...(header.surface === active && header.mode ? { mode: header.mode } : {})}
+                actions={header.actions}
                 onOpen={(crumb) => {
                   const url = urlForCrumb(crumbs, crumb);
                   if (url) navigate(url);
@@ -221,13 +288,55 @@ export function App(): JSX.Element {
                     : undefined
               }
             />
+          ) : activeSurface.id === "plan" ? (
+            /* `orca://item/<slug-or-id>` lands here with the item selected and its
+               explanation open, which is the information architecture's promise for that
+               URL and was the one line in it that named an unbuilt surface. */
+            <PlanSurface
+              connection={connection.state}
+              capabilities={connection.capabilities}
+              open={route?.kind === "item" ? route.itemId : undefined}
+              onHeader={onPlanHeader}
+              onInspector={showInspector}
+              onOpenRun={openRun}
+            />
           ) : activeSurface.id === "agents" ? (
-            <AgentsSurface connection={connection.state} />
+            /* `onOpen` is the route table's, as everywhere else: the policy panel's link to
+               the Config form is a link to another object and there is one resolver (#165). */
+            <AgentsSurface connection={connection.state} onOpen={navigate} />
+          ) : activeSurface.id === "config" && route?.kind === "workflow" ? (
+            /* The workflow viewer lands on Config, which is where the route table has always
+               put `orca://workflow/…` — "how the system is wired, and what the workflows
+               are" (docs/design/10-information-architecture.md). A person reaches a workflow
+               by link, by the run header's "the workflow it executes", or from the palette;
+               with no workflow named, Config shows its own two documents (#175). */
+            <WorkflowSurface
+              workflowId={route.workflowId}
+              runId={route.runId}
+              connection={connection.state}
+              onHeader={onWorkflowHeader}
+            />
+          ) : activeSurface.id === "config" ? (
+            /* Its own header rather than the chrome's: the two documents Config shows are
+               its objects, and the segmented control that switches between the form and the
+               raw text is an action on the one in view (#175). A workflow route lands on the
+               viewer above (#177) rather than on a config document. */
+            <ConfigSurface
+              connection={connection.state}
+              {...(route?.kind === "config" ? { open: route.document } : {})}
+            />
           ) : (
             <StateView kind="empty" title={activeSurface.label} body="This surface has not been built yet." />
           )}
         </PrimaryPane>
-        {panelOpen ? <DockedPanel onClose={togglePanel} /> : null}
+        {panelOpen ? (
+          <DockedPanel
+            onClose={togglePanel}
+            content={
+              active === "plan" && planInspector !== null ? { label: "Work item", body: planInspector } : undefined
+            }
+          />
+        ) : null}
       </div>
       <StatusBar connection={connection} />
       {/* The app's one polite live region (#167). Here, and only here: a region per surface
@@ -239,6 +348,9 @@ export function App(): JSX.Element {
           can be asked for. Registered here rather than inside a surface because they are
           reads of the store rather than views of a surface's state (#206). */}
       <PaletteObjectSources onOpen={navigate} />
+      {/* And the one write that belongs to no surface: start a run of any registered
+          workflow, from wherever a person is standing (#178). */}
+      <PaletteStartRun onOpen={navigate} />
       {/* Last, so it is over the panel in paint order as well as in z-index. */}
       <CommandPalette controller={palette} onJump={(target) => navigate(target.url)} />
       {/* Blocking, once per detection, and last of all: a version mismatch is the one
@@ -253,9 +365,17 @@ export function App(): JSX.Element {
      itself stays the chrome's, which is what `onOpen` hands over. And the waiting feed, so
      that a step parked on a gate renders the *same* card the Attention list does without a
      second `inputs.list` and a second opinion about the one count (#161). */
+  /* And a third, for a reason of its own: the configuration draft. `ConfigSurface` is
+     unmounted by the surface switch above like every other screen, and a draft that
+     disappeared because somebody looked at a run would be the app throwing away what a
+     person typed. It is held here, outside the switch, and both of its consumers — the
+     Config surface and the Agents surface's policy panel — read the one model
+     (`config/config-context.tsx`). */
   return (
     <ArtifactPanelProvider onOpen={() => setPanelOpen(true)}>
-      <InlineAsksProvider feed={attention}>{chrome}</InlineAsksProvider>
+      <ConfigProvider>
+        <InlineAsksProvider feed={attention}>{chrome}</InlineAsksProvider>
+      </ConfigProvider>
     </ArtifactPanelProvider>
   );
 }

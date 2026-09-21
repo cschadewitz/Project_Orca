@@ -99,17 +99,14 @@ const AUDITED = [
   },
   { id: "runs", shortcut: 2, ready: ".orca-runs__tree .orca-tree-row" },
   { id: "agents", shortcut: 4, ready: ".orca-agents__host .orca-agent" },
-] as const;
-
-/**
- * Plan and Config, which are `StateView`s in v0.4.0 and are asserted as such below rather
- * than audited. A surface that says "this has not been built yet" would pass an axe run
- * and mean nothing by it; when one of them grows content, the assertion fails and whoever
- * built it moves the entry up into `AUDITED`.
- */
-const UNBUILT = [
-  { id: "plan", shortcut: 3, label: "Plan" },
-  { id: "config", shortcut: 5, label: "Config" },
+  /* Config (#175): a field of the form, which only exists once `config.get` has answered
+     with a schema — the demo daemon serves its own `orca.config.yaml`, so there is one. */
+  { id: "config", shortcut: 5, ready: ".orca-config__form .orca-field" },
+  /* Plan (#170): a row of the schedule table, which only exists once `plans.list` and
+     `items.list` have answered — the demo store's program run registers its work items in a
+     plan, so there is one. The last surface to leave the unbuilt list: as of v0.5.0 every
+     surface is audited, and a new one goes here on the day it grows content. */
+  { id: "plan", shortcut: 3, ready: '.orca-plan [role="grid"] [role="row"]' },
 ] as const;
 
 let daemon: Daemon;
@@ -167,14 +164,20 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "alerts",
     "artifacts",
     "claims",
+    // `config`, `plan` and `workflows` are v0.5.0's: the Config surface's two documents
+    // (#174, #266), the plan's reads and writes (#169, #170, #178) and the workflow the
+    // viewer draws (#177). Written down here, in the PR that widened `src/bridge.ts`.
+    "config",
     "connection",
     "deepLink",
     "hello",
     "inputs",
     "notifications",
+    "plan",
     "platform",
     "preferences",
     "runs",
+    "workflows",
     "workspace",
   ]);
 
@@ -279,16 +282,18 @@ for (const surface of AUDITED) {
   }
 }
 
-test("Plan and Config are unbuilt, and are not being passed off as audited", async () => {
-  for (const surface of UNBUILT) {
+test("no surface is passed off as unbuilt", async () => {
+  /* Through v0.4.0 the surfaces that had no screen yet were asserted to be the empty
+     `StateView` `App.tsx` gives them, so that the day one grew content the assertion failed
+     and its author moved it into `AUDITED`. As of v0.5.0 all five are audited; this keeps
+     the other half of that promise, that none of them still shows the placeholder. */
+  for (const surface of AUDITED) {
     const pane = await gotoSurface(surface.id, surface.shortcut);
-    /* `StateView kind="empty"`, with the surface's own label and the sentence `App.tsx`
-       gives it. Asserted rather than skipped silently, so that the day one of these grows
-       a screen this test fails and says which one — that is when it joins `AUDITED`. */
-    const state = pane.locator(".orca-state.orca-state--empty");
-    await expect(state).toBeVisible();
-    await expect(state).toContainText(surface.label);
-    await expect(state).toContainText("This surface has not been built yet.");
+    /* A count rather than `not.toContainText`: a surface that has been built has no
+       `.orca-state--empty` at all, and a negated text assertion against an element that is
+       not there fails on "element(s) not found" rather than passing. What is being claimed
+       is that the placeholder is nowhere on the pane. */
+    await expect(pane.getByText("This surface has not been built yet.")).toHaveCount(0);
   }
 });
 

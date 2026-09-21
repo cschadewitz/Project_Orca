@@ -13,12 +13,24 @@
  */
 
 /**
- * The scopes in docs/design/50-accessibility-and-keyboard.md's table, plus `menu`: an open
- * popover is a place focus can be, and its roving keys have to out-rank the `↑`/`↓` of the
- * list underneath it. Scope resolution is innermost first, so marking the open list with
- * `scopeProps("menu")` is all that takes.
+ * The scopes in docs/design/50-accessibility-and-keyboard.md's table, plus three the table
+ * gained as the surfaces that need them landed:
+ *
+ * - `menu` — an open popover is a place focus can be, and its roving keys have to out-rank
+ *   the `↑`/`↓` of the list underneath it. Scope resolution is innermost first, so marking
+ *   the open list with `scopeProps("menu")` is all that takes.
+ * - `workflow` (#177) — the graph canvas is not a list: its `↑`/`↓` move between *nodes* in
+ *   a layer rather than between rows, its `←`/`→` move between layers, and it binds `+`,
+ *   `-` and `0` for zoom, which no list has. A canvas inside a surface that also has a list
+ *   is the same situation `run-tree` beside `list` is, and it is settled the same way.
+ * - `plan-journal` (#170) — the Plan surface holds two lists: the schedule table in `list`
+ *   and the plan journal below it. One scope holds one `VirtualList`, so the second list
+ *   needs a scope of its own or the substrate's `J` would be registered twice and the map
+ *   would throw. It is the same situation `run-tree` beside `list` is, named for the list
+ *   rather than for the surface because that is what a person's `J` is moving through.
  */
-export type ShortcutScope = "global" | "list" | "run-tree" | "stream" | "card" | "panel" | "menu";
+export type ShortcutScope =
+  "global" | "list" | "run-tree" | "stream" | "card" | "panel" | "config" | "menu" | "workflow" | "plan-journal";
 
 export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "global",
@@ -27,11 +39,50 @@ export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "stream",
   "card",
   "panel",
+  /**
+   * The config form and the raw editor (#175). It is a scope rather than a `global`
+   * registration because `⌘S` is a word with one obvious meaning inside a form holding a
+   * draft and no meaning at all on the run tree — and because the workflow editor's draft
+   * bar is this same bar (docs/design/70-workflow-editing.md), so the key has to be able to
+   * mean "save *this* draft" on two screens.
+   */
+  "config",
   "menu",
+  "workflow",
+  "plan-journal",
 ];
 
 /** Which of the palette's three sections a shortcut belongs in. Search is not a command. */
 export type ShortcutSection = "actions" | "navigation";
+
+/**
+ * One choice in a palette picker. Structurally a `Menu`'s `MenuItem` — the palette renders
+ * these *as* menu items — written out here rather than imported so the keyboard map keeps
+ * knowing nothing about the UI primitives.
+ */
+export interface PaletteChoice {
+  id: string;
+  label: string;
+  /** A trailing note: a workflow's version and node count, a decision option's rationale. */
+  hint?: string;
+}
+
+/**
+ * A command that asks which one before it acts (#178): **Start a run** needs a workflow,
+ * **Decide** needs an option. Choosing the row replaces the palette's list with a `Menu`
+ * of these — the app's one popover primitive, so the palette grows no second one.
+ *
+ * `load` runs when the row is chosen and never before: a palette that read `workflows.list`
+ * to draw its rows would read it on every ⌘K, whether or not anybody wanted a workflow.
+ */
+export interface ShortcutPicker {
+  /** The accessible name of the menu, and the line above it. */
+  label: string;
+  load: () => Promise<readonly PaletteChoice[]>;
+  choose: (id: string) => void;
+  /** What the palette says when `load` answers nothing at all. A sentence, not a shrug. */
+  empty: string;
+}
 
 export interface Shortcut {
   scope: ShortcutScope;
@@ -46,11 +97,43 @@ export interface Shortcut {
    */
   key?: string;
   label: string;
+  /**
+   * The part of `label` (and of `confirm`) that is machine text — a run id, a work item
+   * id, a decision key. The palette draws that substring in mono and the rest in sans,
+   * because "mono means ORCA produced it" is load-bearing (docs/design/RULES.md rule 8)
+   * and "Cancel run-gate — confirm" is two voices in one sentence.
+   *
+   * It is a substring rather than a second label so that the label stays one string: it is
+   * what the palette matches a query against, what `aria-activedescendant` names, and what
+   * a person reads back. A value that does not occur in the text draws nothing special.
+   */
+  labelMachine?: string;
   action: () => void;
   /** Where the palette files it. Defaults to `actions` — most shortcuts act on the current object. */
   section?: ShortcutSection;
   /** A second line for the palette: what the action is for, when the label cannot say it. */
   detail?: string;
+  /**
+   * Why this command cannot be run right now — `useWritability()`'s sentence, verbatim
+   * (#178). The palette draws the row disabled with this beside it, which is the same
+   * contract `Button`'s `disabledReason` has: a control that is dead and silent reads as
+   * broken. A command that is not merely unavailable but *absent* — a method this daemon
+   * does not serve — does not register at all.
+   */
+  unavailable?: string;
+  /**
+   * A destructive command's second row state (#178): choosing the row swaps its label for
+   * this one and a second `Enter` commits. `tone: "danger"` goes with it.
+   *
+   * It is in the registry rather than in the palette because the confirmation is a property
+   * of the *command* — "cancelling run-42 cannot be undone" is true wherever the command is
+   * offered from — and because the palette must not have to know which labels are dangerous.
+   */
+  confirm?: string;
+  /** `danger` draws the row in the status colour for a destructive act. */
+  tone?: "danger";
+  /** A command that asks which one first — see `ShortcutPicker`. Never with `confirm`. */
+  picker?: ShortcutPicker;
 }
 
 /**
@@ -123,6 +206,13 @@ const MODIFIERS = ["Mod", "Shift", "Alt"] as const;
 /** `mod+shift+l` → `Mod+Shift+L`; the same shortcut always produces the same string. */
 export function normalizeKey(key: string): string {
   const parts = key.split("+").map((p) => p.trim());
+  /* `+` is both this notation's separator and a key a person presses — the workflow
+     canvas's zoom in (#177). Splitting leaves it as two empty tails (`"+"` → `["", ""]`,
+     `"Shift++"` → `["Shift", "", ""]`), which is unambiguous, so it is folded back into the
+     one key it was rather than rejected as naming none. */
+  if (parts.length > 1 && parts[parts.length - 1] === "" && parts[parts.length - 2] === "") {
+    parts.splice(-2, 2, "+");
+  }
   const main = parts.pop();
   if (!main) throw new Error(`shortcut ${JSON.stringify(key)} names no key`);
   const mods = new Set(parts.map((p) => p.toLowerCase()));
@@ -133,6 +223,15 @@ export function normalizeKey(key: string): string {
   return [...ordered, main.length === 1 ? main.toUpperCase() : main].join("+");
 }
 
+/**
+ * A key `event.key` reports as a printable character that is neither a letter nor a digit:
+ * `+`, `?`, `_`, `:`, `~`. On every layout that has them, Shift is how they are typed — `+`
+ * *is* Shift and Equal — so the shift is spelling the character rather than modifying it, and
+ * a registration of `+` has no `Shift+` to name. `ArrowUp` and `Enter` are not one character,
+ * so `Shift+ArrowUp` and `Shift+Enter` are untouched by this.
+ */
+const shiftSpellsTheCharacter = (key: string): boolean => key.length === 1 && !/[a-zA-Z0-9]/.test(key);
+
 /** The key a `keydown` event spells in the map's notation, or `undefined` for a bare modifier. */
 export function keyOfEvent(event: KeyboardEvent, platform: string): string | undefined {
   const mod = platform === "darwin" ? event.metaKey : event.ctrlKey;
@@ -141,7 +240,12 @@ export function keyOfEvent(event: KeyboardEvent, platform: string): string | und
   const letter = /^Key([A-Z])$/.exec(event.code)?.[1] ?? /^Digit([0-9])$/.exec(event.code)?.[1];
   const main = letter ?? event.key;
   if (["Meta", "Control", "Shift", "Alt"].includes(main)) return undefined;
-  return [mod ? "Mod" : "", event.shiftKey ? "Shift" : "", event.altKey ? "Alt" : "", main].filter(Boolean).join("+");
+  /* A punctuation key produced *by* Shift drops it (#177): the workflow canvas registers `+`
+     for zoom in, and a real keyboard sends `{ key: "+", code: "Equal", shiftKey: true }` —
+     which spelled `Shift++` and matched nothing. `code` is no help here, because which
+     character `Equal` shifts to is exactly what a layout decides. */
+  const shift = event.shiftKey && !(letter === undefined && shiftSpellsTheCharacter(main));
+  return [mod ? "Mod" : "", shift ? "Shift" : "", event.altKey ? "Alt" : "", main].filter(Boolean).join("+");
 }
 
 /** How the palette shows a key: `⌘⇧L` on macOS, `Ctrl+Shift+L` elsewhere. */

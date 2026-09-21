@@ -1,0 +1,194 @@
+/* What the Config surface adds on top of the design system's component layer, and no more.
+
+   The field row, the input, the YAML block and its highlight, the segmented control and the
+   save bar are all `components.css` classes (`.orca-field*`, `.orca-input`, `.orca-yaml*`,
+   `.orca-seg*`, `.orca-draftbar`), so nothing here restates a colour, a radius or a
+   spacing. What is left is this surface's own geometry: the column the sections stack in,
+   the two-document scroll area above the bar, and the rows the effective permission rules
+   sit on.
+
+   One thing is worth knowing about the editor: `.orca-yaml` is a block with `white-space:
+   pre`, and a `textarea` taking that class needs a height and a resize rule of its own
+   because a textarea does not grow to its content the way a `<pre>` does. That is geometry,
+   not colour, and it is here rather than in the component layer for that reason. */
+
+.orca-config {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The scroll is here and not on the root, so the save bar stays against the bottom of the
+   pane while the form under it moves. */
+.orca-config__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-4);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.orca-config__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.orca-config__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* type: mono-id */
+.orca-config__path {
+  font-family: var(--font-mono);
+  color: var(--ink-tertiary);
+}
+
+/* type: caption */
+.orca-config__none {
+  color: var(--ink-secondary);
+}
+
+/* type: mono-body */
+.orca-config__value {
+  font-family: var(--font-mono);
+  color: var(--ink-primary);
+}
+
+/* ---------- a node the schema could not describe ---------- */
+
+.orca-config__raw-node {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+
+/* ---------- errors that belong to no field ---------- */
+
+.orca-config__unplaced {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--status-failed-bg);
+  border: var(--stroke-hairline) solid var(--status-failed);
+}
+.orca-config__unplaced ul {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--ink-primary);
+}
+
+/* ---------- the raw view ---------- */
+
+.orca-config__rawview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.orca-config__rawhead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.orca-config__locator {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* A textarea does not size itself to its content. The height is stated in `rem` rather than
+   in lines because the block's line height is the type scale's and this is a pane size. */
+.orca-config__editor {
+  min-height: var(--editor-min-height);
+  resize: vertical;
+  border: var(--stroke-hairline) solid var(--border-control);
+}
+.orca-config__editor:hover {
+  border-color: var(--border-strong);
+}
+
+/* ---------- the effective permission policy ---------- */
+
+.orca-config__policy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.orca-config__policy-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* One layer of the policy — the config's rules, the sidecar's, ORCA's defaults — as its own
+   group under its own heading. Not a row, so it has no height of its own. */
+.orca-config__layer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.orca-config__layer-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.orca-config__rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A row, so it is `--row-h` tall and it does not wrap (RULES.md rule 9): a rule whose text
+   is long grows the row it is in, which pushes every rule below it out of the rhythm the
+   density sets. The text truncates instead, and the whole rule is in the raw sidecar. */
+.orca-config__rule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--row-h);
+  padding: 0 var(--space-2);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* type: mono-id */
+.orca-config__order {
+  font-family: var(--font-mono);
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* type: mono-body */
+/* The one part of a permission row that can be long, so it is the part that truncates: the
+   order number and the source chip beside it keep their width (rule 9). */
+.orca-config__rule-text {
+  font-family: var(--font-mono);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* type: caption */
+.orca-config__granted {
+  color: var(--ink-secondary);
+}

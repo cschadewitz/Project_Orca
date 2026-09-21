@@ -19,9 +19,18 @@
  * `claims` is the other half of the same result and is *not* updated by `agent.changed` —
  * a claim moves when a run takes or releases one, which is not a change in agent health.
  * It is as fresh as the last read says it is, and the surface says which read that was.
+ *
+ * **Nothing pushes when a claim is released (#176), so the list is re-read once.** A release
+ * is `ClaimStore.release` — a file under `<store>/claims/` being deleted — and it appends no
+ * event to any run's log, so `notificationsFor` has nothing to fold and no notification
+ * exists to listen for. `planChangeKindsFor` is about journal entries and a release writes
+ * none either. So `releaseClaim` below does the one thing that can be done honestly: it
+ * calls, and on success re-reads `claims.list` and replaces the claims with what came back.
+ * That is one read per release and not a poll.
  */
 import { useCallback, useEffect, useState } from "react";
 import type { AgentView, ClaimView, ProtocolError } from "@orca/protocol";
+import { useAnnounce } from "../a11y/announce-context.js";
 import { useNotifications } from "../notifications-context.js";
 import { applyAgentChanged } from "./agent-groups.js";
 
@@ -37,16 +46,38 @@ export type AgentsState =
       asOf: string;
     };
 
+/** What the last release said, against the work item it was about. */
+export interface ReleaseReport {
+  workItemId: string;
+  message: string;
+  failed: boolean;
+}
+
 export interface AgentsFeed {
   state: AgentsState;
   /** Re-read the list: the error state's retry, and what a person reaches for after a blip. */
   reload: () => void;
+  /** Work item ids with a release in flight: one call per claim, never two. */
+  releasing: ReadonlySet<string>;
+  /** What the last release said, shown on the row it was about. */
+  release: ReleaseReport | undefined;
+  /**
+   * Take a work item back from the run that claimed it. Never `force`: forcing a release
+   * out of a run that could still resume is a CLI act (`orca claims release --force`), and
+   * a keyless palette entry for it here would be a destructive command with no undo behind
+   * one keystroke. A claim the daemon will refuse is disabled with the reason instead
+   * (`releaseRefusal`).
+   */
+  releaseClaim: (workItemId: string) => void;
 }
 
 export function useAgents(): AgentsFeed {
   const stream = useNotifications();
+  const announce = useAnnounce();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<AgentsState>({ phase: "loading" });
+  const [releasing, setReleasing] = useState<ReadonlySet<string>>(new Set());
+  const [release, setRelease] = useState<ReleaseReport | undefined>(undefined);
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
@@ -77,5 +108,46 @@ export function useAgents(): AgentsFeed {
     return off;
   }, [stream]);
 
-  return { state, reload };
+  const releaseClaim = useCallback(
+    (workItemId: string) => {
+      if (releasing.has(workItemId)) return;
+      setReleasing((current) => new Set([...current, workItemId]));
+      void window.orca.claims
+        .release({ workItemId })
+        .then(async (result) => {
+          if (!result.ok) {
+            const message = `${result.error.code}: ${result.error.message}`;
+            setRelease({ workItemId, failed: true, message });
+            announce(`Claim not released: ${result.error.message}`);
+            return;
+          }
+          /* The note is what releasing did *not* fix, in the daemon's words — a dead run's
+             log never moves on, so the item can still read in-progress and the scheduler
+             still treats it as running (#123). It is said out loud and left on the row,
+             because a person who released a claim and saw nothing change would otherwise
+             have no way to learn why. */
+          const note = result.result.note;
+          const message = note ?? `${workItemId} is released and back with the scheduler.`;
+          setRelease({ workItemId, failed: false, message });
+          announce(message);
+          // Nothing pushes for a release — see the file header. One read, on purpose.
+          const claims = await window.orca.claims.list();
+          if (claims.ok) {
+            setState((prev) =>
+              prev.phase === "ready" ? { ...prev, claims: claims.result.claims, asOf: claims.result.asOf } : prev,
+            );
+          }
+        })
+        .finally(() =>
+          setReleasing((current) => {
+            const next = new Set(current);
+            next.delete(workItemId);
+            return next;
+          }),
+        );
+    },
+    [announce, releasing],
+  );
+
+  return { state, reload, releasing, release, releaseClaim };
 }

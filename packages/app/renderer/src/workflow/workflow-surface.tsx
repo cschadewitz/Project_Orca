@@ -1,0 +1,273 @@
+/**
+ * The workflow viewer (#177): a read-only graph of a workflow, and the same graph with a run
+ * overlaid so the path it took is visible.
+ *
+ * The shape is `renderer/src/runs/`'s — the arithmetic in a plain module with a plain test
+ * (`layout.ts`), the data in one hook (`use-workflow.ts`), the markup composed from `ui/`.
+ * What is particular to this one:
+ *
+ * - **Nothing here writes.** The editor is #181; this surface asks nothing of
+ *   `useWritability()` and offers no control that changes a file, which is why the overlay
+ *   picker is the only `Menu` on it.
+ * - **The version is said twice when it has to be.** A run is pinned to the workflow version
+ *   it started with, and ORCA keeps no copy of that definition — so when the overlaid run's
+ *   version is not the one on disk the header carries the `◷ pinned` chip *and* a caption
+ *   saying the graph drawn is the current definition rather than the run's. Drawing an older
+ *   graph is not an option the runtime offers (docs/design/70-workflow-editing.md:93-99), and
+ *   a chip on its own would leave a person believing they were looking at what ran.
+ * - **The overlay picker lists runs of this workflow, filtered here.** `runs.list` has no
+ *   `workflowId` parameter (`RunsListParams` — status, request, work item, parent, roots),
+ *   so this is a filter over the page the daemon answered and the count says so. It is not a
+ *   parameter this surface invented.
+ */
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import type { ConnectionState } from "@orca/design";
+import type { RunSummaryView, WorkflowNodeView } from "@orca/protocol";
+import { Chip, Menu, StateView, StatusChip, Text, textClass, type Crumb, type MenuItem } from "../ui/index.js";
+import { findNode } from "./layout.js";
+import { WorkflowCanvas } from "./workflow-canvas.js";
+import { indexTraversal, useWorkflow } from "./use-workflow.js";
+import "./workflow.css";
+
+export interface WorkflowSurfaceProps {
+  workflowId: string;
+  /** The run to overlay, from `orca://workflow/<name>?run=<id>` or from the picker. */
+  runId?: string | undefined;
+  connection: ConnectionState;
+  /** The crumbs and the header controls, handed up for the chrome to draw (as Runs does). */
+  onHeader?: (header: { crumbs: readonly Crumb[]; actions: ReactNode }) => void;
+}
+
+export function WorkflowSurface({ workflowId, runId, connection, onHeader }: WorkflowSurfaceProps): JSX.Element {
+  /* The run being overlaid: the URL's until a person picks another, and then theirs. A URL
+     that arrives afterwards wins again, which is what the effect's dependency says. */
+  const [picked, setPicked] = useState<string | undefined>(runId);
+  useEffect(() => setPicked(runId), [runId]);
+
+  const { state, overlay, overlayError, reload } = useWorkflow(workflowId, picked);
+  const [selected, setSelected] = useState<string | undefined>(undefined);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const runs = useWorkflowRuns(workflowId);
+
+  const toggleExpanded = useCallback((nodeId: string) => {
+    setExpanded((open) => {
+      const next = new Set(open);
+      if (!next.delete(nodeId)) next.add(nodeId);
+      return next;
+    });
+  }, []);
+
+  const workflow = state.phase === "ready" ? state.workflow : undefined;
+  const index = useMemo(() => (overlay ? indexTraversal(overlay.traversal) : undefined), [overlay]);
+
+  /* Pinned is a comparison of two facts the daemon sent: the version the run recorded, and
+     the version of the definition on disk. Neither is derived and neither is guessed. */
+  const pinned = overlay !== undefined && workflow !== undefined && overlay.run.workflowVersion !== workflow.version;
+
+  const crumbs = useMemo<readonly Crumb[]>(
+    () => (workflow ? [{ type: "workflow" as const, id: workflow.id, label: workflow.name, current: true }] : []),
+    [workflow],
+  );
+
+  /* Memoised, because it is handed up into the chrome's state: a fresh element on every
+     render would be a fresh `onHeader` call on every render, which is a loop. */
+  const actions = useMemo(
+    () =>
+      workflow ? (
+        <div className="orca-wf__actions">
+          {/* `ai-sdlc v11` — the version shown wherever a run's workflow is named. */}
+          <span className={`orca-id ${textClass("mono-id")}`}>{`${workflow.id} v${workflow.version}`}</span>
+          {pinned && (
+            <span className={`orca-pinned ${textClass("caption")}`}>
+              <span aria-hidden="true">◷</span> pinned
+            </span>
+          )}
+          <Menu
+            label="Overlay a run"
+            items={runOptions(runs, picked)}
+            onChoose={(item) => setPicked(item.id === NO_RUN ? undefined : item.id)}
+            triggerClassName={`orca-button orca-button--ghost orca-button--sm ${textClass("label")}`}
+          >
+            {picked === undefined ? "No run overlaid" : "Change the run"}
+          </Menu>
+        </div>
+      ) : null,
+    [workflow, pinned, runs, picked],
+  );
+
+  /* Handed up rather than drawn here: the object header is the chrome's, on every screen
+     that has an object, and there is one breadcrumb in the app. Through a ref, so a chrome
+     that rebuilds its callback does not re-report on every frame. */
+  const report = useRef(onHeader);
+  report.current = onHeader;
+  useEffect(() => report.current?.({ crumbs, actions }), [crumbs, actions]);
+
+  if (state.phase === "loading") return <StateView kind="loading" title="Loading the workflow" />;
+  if (state.phase === "error" || workflow === undefined) {
+    const error = state.phase === "error" ? state.error : undefined;
+    return connection === "live" ? (
+      <StateView
+        kind="error"
+        title="Could not load the workflow"
+        body={error ? `${error.code}: ${error.message}` : workflowId}
+        action={{ label: "Try again", onClick: reload }}
+      />
+    ) : (
+      <StateView
+        kind="disconnected"
+        title="No daemon to read this workflow from"
+        body="Start one with orca serve, then try again."
+        action={{ label: "Try again", onClick: reload }}
+      />
+    );
+  }
+
+  /* Across the nested graphs too (#177): clicking a node inside an expanded `parallel` branch
+     selects it, and a lookup over `workflow.nodes` alone would leave the inspector saying
+     "select a node" about the node just selected. One selection, wherever the node lives. */
+  const node = findNode(workflow, selected);
+
+  return (
+    <div className="orca-wf">
+      {connection !== "live" && (
+        <div className={`orca-banner ${textClass("caption")} orca-banner--stale`} role="status">
+          <Text style="caption">Not connected — this is the last the daemon said about this workflow.</Text>
+        </div>
+      )}
+
+      {/* The control rail: what is overlaid, and the legend for the strokes below it. */}
+      <div className={`orca-graphctl ${textClass("caption")}`}>
+        <span className="orca-graphctl__set">
+          <Text style="caption">
+            {overlay ? `Run ${overlay.run.name} overlaid` : "No run overlaid — this is the definition"}
+          </Text>
+          {overlay && <StatusChip status={overlay.run.status} />}
+        </span>
+        {pinned && overlay && (
+          /* Both facts, in words. The chip says the run is on an older version; this says
+             what is on screen instead, because ORCA cannot execute or produce an older
+             definition and a viewer that implied otherwise would be inventing one. */
+          <Text style="caption">
+            {`This run is pinned to v${overlay.run.workflowVersion}. The graph drawn is v${workflow.version}, the definition on disk — ORCA keeps no copy of the one that ran.`}
+          </Text>
+        )}
+        {overlay?.unavailable === true && (
+          <Text style="caption">This daemon does not send a run&rsquo;s path, so nothing is overlaid.</Text>
+        )}
+        {overlayError && <Text style="caption">{`That run could not be read: ${overlayError.code}.`}</Text>}
+        <span className="orca-legend">
+          <span className="orca-legend__swatch orca-legend__swatch--active" aria-hidden="true" />
+          <Text style="caption">taken</Text>
+        </span>
+        <span className="orca-legend">
+          <span className="orca-legend__swatch orca-legend__swatch--soft" aria-hidden="true" />
+          <Text style="caption">not taken</Text>
+        </span>
+        {/* The third stroke on the canvas, and it was the one with no word beside it: a back
+            edge is dotted where an untaken edge is dashed, and two dashed strokes meaning
+            two different things is what rule 4 forbids. */}
+        <span className="orca-legend">
+          <span className="orca-legend__swatch orca-legend__swatch--back" aria-hidden="true" />
+          <Text style="caption">loops back</Text>
+        </span>
+      </div>
+
+      <div className="orca-wf__body">
+        <WorkflowCanvas
+          workflow={workflow}
+          overlay={index}
+          selected={selected}
+          onSelect={setSelected}
+          expanded={expanded}
+          onToggleExpanded={toggleExpanded}
+          label={`${workflow.name} graph`}
+        />
+        <Inspector node={node} />
+      </div>
+    </div>
+  );
+}
+
+/** The menu row for "no run at all", which is a choice and not an empty list. */
+const NO_RUN = " none";
+
+function runOptions(runs: readonly RunSummaryView[], picked: string | undefined): readonly MenuItem[] {
+  const rows: MenuItem[] = [
+    { id: NO_RUN, label: "No run — the definition only", ...(picked === undefined ? { hint: "shown" } : {}) },
+  ];
+  for (const run of runs) {
+    rows.push({
+      id: run.id,
+      label: run.name,
+      // The status word and the version the run is pinned to: the two facts that decide
+      // which of a dozen runs a person meant.
+      hint: `${run.status} · v${run.workflowVersion}`,
+    });
+  }
+  return rows;
+}
+
+/**
+ * The runs of this workflow, for the overlay picker.
+ *
+ * One `runs.list` and a local filter, because the wire has no `workflowId` parameter. No
+ * subscription: a run appearing while the menu is shut is not something this surface has to
+ * notice, and the overlaid run's own changes are `use-workflow.ts`'s.
+ */
+function useWorkflowRuns(workflowId: string): readonly RunSummaryView[] {
+  const [runs, setRuns] = useState<readonly RunSummaryView[]>([]);
+  useEffect(() => {
+    let live = true;
+    void window.orca.runs.list().then((result) => {
+      if (!live) return;
+      setRuns(result.ok ? result.result.runs.filter((run) => run.workflowId === workflowId) : []);
+    });
+    return () => {
+      live = false;
+    };
+  }, [workflowId]);
+  return runs;
+}
+
+/**
+ * The selected node's configuration, as the daemon flattened it for display.
+ *
+ * `fields` is `unknown`-valued on purpose — "a `custom:<name>` node is a plugin's, and the
+ * protocol has nothing true to say about its shape" — so a value that is not a string is
+ * printed as JSON rather than coerced into a sentence the node never said.
+ */
+function Inspector({ node }: { node: WorkflowNodeView | undefined }): JSX.Element {
+  if (!node) {
+    return (
+      <aside className="orca-wf__inspector" aria-label="Node detail">
+        <Text style="caption">Select a node to see what it is configured with.</Text>
+      </aside>
+    );
+  }
+  const entries = Object.entries(node.fields);
+  return (
+    <aside className="orca-wf__inspector" aria-label={`Node detail: ${node.name ?? node.id}`}>
+      <h2 className={`orca-wf__inspector-name ${textClass("mono-strong")}`}>{node.name ?? node.id}</h2>
+      <div className="orca-wf__inspector-meta">
+        <Chip>{node.type}</Chip>
+        {node.maxAttempts !== undefined && <Chip>{`up to ${node.maxAttempts} attempts`}</Chip>}
+      </div>
+      {node.description !== undefined && <Text style="caption">{node.description}</Text>}
+      {entries.length === 0 ? (
+        <Text style="caption">This node type carries no configuration.</Text>
+      ) : (
+        <dl className="orca-wf__fields">
+          {entries.map(([key, value]) => (
+            <div key={key} className="orca-wf__field">
+              <dt className={textClass("label-strong")}>{key}</dt>
+              <dd className={`orca-wf__value ${textClass("mono-body")}`}>{show(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </aside>
+  );
+}
+
+/** A field value as ORCA sent it. A string is itself; anything else is its JSON. */
+const show = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value));

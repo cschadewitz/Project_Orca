@@ -13,6 +13,16 @@ wrong.**
 | **File mode** | `◷ file mode · read-only` in `status-stale` | persistent bar naming the store being replayed | whatever the event log and artifact files contain, replayed | disabled, and the buttons are absent rather than disabled |
 | **Version mismatch** | `▣ daemon 0.11 · app 0.9` in `status-blocked` | blocking dialog on first detection, then a persistent bar | last-known | disabled |
 
+Per screen, where "writes" needs more than a word. A control asks for the *method* it calls
+(`hello.methods`) and not for the capability above it, because `runs.control` is one word
+over four dispatch tables: a daemon serving a store outside a workspace drives runs and
+answers no `config.set` at all.
+
+| Surface | Control | Absent when | Present and disabled when |
+| --- | --- | --- | --- |
+| **Config** | the save bar (Validate, Save, Discard) | file mode, a `--read-only` daemon, or a daemon whose `hello.methods` has no `config.set` — and the form goes read-only with it | reconnecting, disconnected, version mismatch: the bar stays, the change count stays, and both buttons carry `writability()`'s reason |
+| **Agents** | Release, on a claim | file mode, or no `claims.release` in `hello.methods` | — (a claim the daemon would refuse is disabled with that refusal on it) |
+
 ## Reconnecting
 
 Silent for five seconds, because a WebSocket blip that resolves in 400ms should not flash a

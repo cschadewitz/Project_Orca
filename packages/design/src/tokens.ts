@@ -6,8 +6,8 @@ export type ColorToken = 'surface-canvas' | 'surface-base' | 'surface-raised' | 
 
 export type SpacingToken = 'space-0-5' | 'space-1' | 'space-1-5' | 'space-2' | 'space-2-5' | 'space-3' | 'space-4' | 'space-5' | 'space-6' | 'space-8' | 'space-12' | 'space-16';
 export type RadiusToken = 'radius-none' | 'radius-xs' | 'radius-sm' | 'radius-md' | 'radius-lg' | 'radius-full';
-export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'node-min-width' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top';
-export type BorderToken = 'stroke-hairline' | 'stroke-rail' | 'stroke-focus' | 'stroke-edge-active' | 'stroke-double';
+export type SizeToken = 'row-comfortable' | 'row-compact' | 'row-log' | 'hit-min' | 'mark-sm' | 'mark-md' | 'mark-port' | 'mark-skeleton' | 'mark-swatch' | 'hatch-period' | 'bar-status' | 'bar-pane' | 'bar-title' | 'bar-object' | 'badge-sm' | 'badge-md' | 'col-time' | 'col-lineno' | 'col-label' | 'col-label-narrow' | 'col-node-kind' | 'col-matrix-axis' | 'col-classification' | 'col-slug' | 'col-request' | 'col-status' | 'col-score' | 'col-risk' | 'col-claim' | 'control-xs' | 'control-sm' | 'control-sm-5' | 'control-md' | 'control-lg' | 'icon-sm' | 'icon-md' | 'sidebar-width' | 'sidebar-width-collapsed' | 'panel-width' | 'panel-w-policy' | 'node-min-width' | 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap' | 'risk-cell-width' | 'risk-cell-height' | 'measure-prose' | 'titlebar-inset-traffic-lights' | 'titlebar-inset-caption-buttons' | 'palette-width' | 'palette-max-height' | 'palette-offset-top' | 'editor-min-height';
+export type BorderToken = 'stroke-hairline' | 'stroke-rail' | 'stroke-focus' | 'stroke-edge-active' | 'stroke-double' | 'stroke-dash-untaken' | 'stroke-dash-back' | 'stroke-dash-draft';
 export type ShadowToken = 'shadow-none' | 'shadow-popover' | 'shadow-modal' | 'shadow-sticky';
 export type DurationToken = 'duration-instant' | 'duration-fast' | 'duration-medium' | 'duration-pulse';
 export type EasingToken = 'ease-standard' | 'ease-entrance' | 'ease-linear';
@@ -140,6 +140,21 @@ export const BREAKPOINTS: Record<BreakpointToken, number> = {
   'bp-panel-overlay': 1100,
 };
 
+export type GraphGeometryToken = 'node-w' | 'node-h' | 'layer-gap' | 'rank-gap';
+
+/**
+ * The workflow canvas's box and gaps in px, for the same reason `BREAKPOINTS` is here: an
+ * SVG path's `d` attribute and a node's `x`/`y` are arithmetic, and no `var()` can be
+ * written inside either. The layout module takes these as an argument rather than reaching
+ * for them, so the algorithm stays a plain module with a plain test.
+ */
+export const GRAPH_GEOMETRY: Record<GraphGeometryToken, number> = {
+  'node-w': 192,
+  'node-h': 64,
+  'layer-gap': 64,
+  'rank-gap': 32,
+};
+
 export type RunStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'blocked' | 'held' | 'stale';
 export const RUN_STATUSES: readonly RunStatus[] = ['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'blocked', 'held', 'stale'] as const;
 
@@ -159,14 +174,40 @@ export const STATUS_PRESENTATION: Record<RunStatus, {
 
 export type ScheduleClass = 'unschedulable' | 'waiting' | 'held' | 'ready' | 'running';
 export const SCHEDULE_CLASSES: readonly ScheduleClass[] = ['unschedulable', 'waiting', 'held', 'ready', 'running'] as const;
+/** Word and glyph, like a run status: a classification is never carried by colour alone (rule 4). */
 export const SCHEDULE_PRESENTATION: Record<ScheduleClass, {
-  word: string; fg: string; fgToken: ColorToken; bg: string; bgToken: ColorToken;
+  word: string; glyph: string; fg: string; fgToken: ColorToken; bg: string; bgToken: ColorToken;
 }> = {
-  unschedulable: { word: 'unschedulable', fg: 'var(--status-cancelled)', fgToken: 'status-cancelled', bg: 'var(--status-cancelled-bg)', bgToken: 'status-cancelled-bg' },
-  waiting: { word: 'waiting on deps', fg: 'var(--status-blocked)', fgToken: 'status-blocked', bg: 'var(--status-blocked-bg)', bgToken: 'status-blocked-bg' },
-  held: { word: 'held', fg: 'var(--status-held)', fgToken: 'status-held', bg: 'var(--status-held-bg)', bgToken: 'status-held-bg' },
-  ready: { word: 'ready', fg: 'var(--status-succeeded)', fgToken: 'status-succeeded', bg: 'var(--status-succeeded-bg)', bgToken: 'status-succeeded-bg' },
-  running: { word: 'running', fg: 'var(--status-running)', fgToken: 'status-running', bg: 'var(--status-running-bg)', bgToken: 'status-running-bg' },
+  unschedulable: { word: 'unschedulable', glyph: '⊘', fg: 'var(--status-cancelled)', fgToken: 'status-cancelled', bg: 'var(--status-cancelled-bg)', bgToken: 'status-cancelled-bg' },
+  waiting: { word: 'waiting on deps', glyph: '▣', fg: 'var(--status-blocked)', fgToken: 'status-blocked', bg: 'var(--status-blocked-bg)', bgToken: 'status-blocked-bg' },
+  held: { word: 'held', glyph: '⏸', fg: 'var(--status-held)', fgToken: 'status-held', bg: 'var(--status-held-bg)', bgToken: 'status-held-bg' },
+  ready: { word: 'ready', glyph: '▸', fg: 'var(--status-succeeded)', fgToken: 'status-succeeded', bg: 'var(--status-succeeded-bg)', bgToken: 'status-succeeded-bg' },
+  running: { word: 'running', glyph: '◐', fg: 'var(--status-running)', fgToken: 'status-running', bg: 'var(--status-running-bg)', bgToken: 'status-running-bg' },
+};
+
+export type WorkItemStatus = 'pending' | 'ready' | 'in-progress' | 'blocked' | 'done' | 'failed' | 'cancelled';
+export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = ['pending', 'ready', 'in-progress', 'blocked', 'done', 'failed', 'cancelled'] as const;
+/**
+ * A plan work item's own stored status — not a run status and not a schedule
+ * classification. The classification is where the scheduler *put* the item; this is what
+ * the item says about itself, and the schedule table draws both because they answer
+ * different questions.
+ *
+ * Word and glyph, and deliberately no `fg` or `bg`: the eight tinted chips mean a run
+ * status and nothing else, so this is drawn as a plain `Chip` and colour is not one of its
+ * channels at all. The glyphs are reused from the run statuses and schedule classes that
+ * mean the same thing, so nothing new goes into the symbol faces.
+ */
+export const WORK_ITEM_STATUS_PRESENTATION: Record<WorkItemStatus, {
+  word: string; glyph: string;
+}> = {
+  pending: { word: 'pending', glyph: '◌' },
+  ready: { word: 'ready', glyph: '▸' },
+  'in-progress': { word: 'in progress', glyph: '◐' },
+  blocked: { word: 'blocked', glyph: '▣' },
+  done: { word: 'done', glyph: '✓' },
+  failed: { word: 'failed', glyph: '✕' },
+  cancelled: { word: 'cancelled', glyph: '⊘' },
 };
 
 export type ConnectionState = 'live' | 'reconnecting' | 'disconnected' | 'file' | 'mismatch';
@@ -210,11 +251,27 @@ export const STATE_VIEW_PRESENTATION: Record<StateViewKind, {
   'no-results': { word: 'no results', glyph: '◌', fg: 'var(--ink-tertiary)', fgToken: 'ink-tertiary' },
 };
 
+export type SurfaceId = 'attention' | 'runs' | 'plan' | 'agents' | 'config';
+export const SURFACE_IDS: readonly SurfaceId[] = ['attention', 'runs', 'plan', 'agents', 'config'] as const;
+/**
+ * The five top-level surfaces, in sidebar order (docs/design/10-information-architecture.md).
+ * Word and glyph are not optional: below the sidebar breakpoint the label is hidden and the
+ * glyph is the whole of the navigation, so the word stays on as the accessible name (#261).
+ */
+export const SURFACE_PRESENTATION: Record<SurfaceId, { word: string; glyph: string }> = {
+  attention: { word: 'Attention', glyph: '◆' },
+  runs: { word: 'Runs', glyph: '☰' },
+  plan: { word: 'Plan', glyph: '⬡' },
+  agents: { word: 'Agents', glyph: '◉' },
+  config: { word: 'Config', glyph: '❋' },
+};
+
 /** Glyphs the chrome renders that are not a state: the crumb separator and the command key. */
-export type ChromeGlyph = 'crumbSeparator' | 'commandKey';
+export type ChromeGlyph = 'crumbSeparator' | 'commandKey' | 'danger';
 export const CHROME_GLYPHS: Record<ChromeGlyph, string> = {
   crumbSeparator: '▸',
   commandKey: '⌘',
+  danger: '✕',
 };
 
 export type DependencyKind = 'blocks' | 'soft' | 'informs';

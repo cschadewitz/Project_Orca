@@ -73,7 +73,8 @@ command worth doing but not worth one of the letters left registers without a ke
 slot of its own, nothing can dispatch to it, and the palette draws its row with no chip. The
 palette is then the only way to it, which is a decision about how prominent the command is
 rather than an admission that it is unreachable. **Cancel the run this is waiting on** and
-**Resume the run this is waiting on** are the first two.
+**Resume the run this is waiting on** were the first two; as of #178 every write action in
+the app is one of these (see "Palette write actions" below).
 
 Three rules fall out of it:
 
@@ -102,6 +103,92 @@ route table, which is what keeps one resolver for links, crumbs and palette rows
 Focus stays in the query field for as long as the palette is open. The highlighted row is
 *selection* — `aria-activedescendant` on the field, the accent rail on the row — which is
 why it does not draw the focus ring.
+
+### Palette write actions (as built, v0.5.0)
+
+Every phase-2 object write the daemon serves is a keyless row on the object in focus (#178):
+answer a gate
+or an ask with each option it offers, cancel or resume a run, start a run, waive a
+dependency, decide or reopen a decision, move a risk along its lifecycle, release a claim,
+and the Agents surface's two from #176. Nothing was added to the chrome of any screen,
+which is the point of "the palette is the only place a phase-2 write action needs to be
+discoverable".
+
+**Two writes are deliberately not rows.** `config.set` is the save bar (`.orca-draftbar`):
+it does not write an object, it writes a *file* against a draft that is sitting on the
+screen, and a command that saved a form from somewhere else would save edits nobody was
+looking at. And a permission ask's "always" answer stays on the card, because only the card
+can read back what the daemon actually wrote — `alwaysOutcome` (`attention/card-model.ts`)
+has to see `permission.refused`, `permission.added` or neither before it says "ORCA will
+not ask again", and a palette row that had closed the palette would have nowhere to say it.
+
+**Absent, or disabled with the reason — never silently dead.** One hook asks both questions
+(`palette/use-write-actions.ts`). Where the daemon does not serve the method the row is *not
+registered*, and a screen with no cancel row reads as a viewer rather than as something
+broken. Where the daemon is simply not answering the row stays, `aria-disabled`, with
+`useWritability()`'s own sentence in `.orca-palette__why` — the same sentence `Button`'s
+`disabledReason` shows. A disabled row keeps its place in the roving order and is only
+skipped by `Enter`: the reason is *on* the row, so an order that stepped over it would put
+the reason out of reach of the keyboard.
+
+**The question is asked per method, not per capability.** Every row names the wire method it
+calls — `runs.cancel`, `decisions.decide`, `claims.release` — and `methodPresent` answers it
+from the connection snapshot's `methods`, which is `hello.methods`, which is `Object.keys` of
+the daemon's own dispatch table. `runs.control` is one word over four of those tables, so the
+capability alone is wrong in both directions: it would draw a waive row at a daemon serving a
+store with no plan in it, and hide a release row at a daemon that answers `claims.release`
+without claiming the capability. A daemon too old to list its methods falls back to the
+capability, inside `methodPresent` and nowhere else.
+
+**A destructive row confirms inline, as a second state of the same row.** `Shortcut.confirm`
+and `tone: "danger"` say so, and the palette arms the row on the first `Enter`: the label
+becomes the confirmation ("Cancel run-42 — confirm"), the row takes the danger tone — the
+colour *and* the `✕` it leads with, since colour is never the only channel (rule 4) — and a
+second `Enter` commits. Typing or moving the selection disarms it; `Esc` closes the palette,
+which unarms with it, since the armed row does not outlive the list it is in. Nothing has
+been sent in the meantime. There is no dialog, deliberately — a modal over this modal would
+move focus out of the query field, put a second layer on the stack for `Esc` to unwind, and
+ask the question somewhere other than where the person is looking. Cancel, waive and release
+carry one; resume, decide and reopen do not, because re-driving a parked run, deciding a
+decision and reopening one are all acts with a way back.
+
+**A destructive row is never first.** It sorts below every other command, whatever scope it
+is in, for the reason a gate's destructive option is never bound to `1`: the first row is
+where `Enter` lands and where a held key repeats. It holds for the list as it is offered;
+typing re-sorts by match score, so a query of "cancel" can put the cancel row at the top —
+which is the query asking for it, and all `Enter` does there is arm the row.
+
+**A command that needs an argument opens a picker.** `Shortcut.picker` replaces the palette's
+list with a `Menu` of the choices — the app's one popover primitive, controlled the way a
+deep link controls one, so the roving keys, the placement, `Esc` and the focus contract are
+every other popover's. The choices are read when the row is chosen and never on open, so
+`⌘K` costs nothing extra for the person who wanted something else. Three use it: **Start a
+run** (the workflows), **Decide** (the decision's options) and **Update risk** (the statuses
+the risk is not already in).
+
+**Start a run asks for a workflow and for nothing else.** The picker lists `workflows.list`
+— name, id, version and node count — and the choice calls `runs.start { workflowId }` with
+no vars, so the run takes the workflow's own; the row says "starts with the workflow's
+default vars" rather than leaving that to be discovered. **A vars form is specified
+nowhere**, and `WorkflowSummaryView` does not carry a workflow's `inputs`, so a form here
+would be inventing its own fields (rule 12). The run is opened through the route table like
+every other link.
+
+**Two things #178 asked for and did not get, on purpose.** *Start a run for this request or
+work item, with its vars* is not built: `runs.start` takes a `workflowId` and vars on the
+wire and takes no work item at all, so the row would have to guess which workflow a work
+item means and which vars carry it there — inventing both (rule 12). The plain **Start a
+run** above is what is left when the guessing is taken out. *Config: show in YAML* is not
+built either: the config surface renders a form over a schema, the raw document is a read
+the daemon already serves, and a palette row that opened a viewer over it would be a second
+way to look at the same file rather than a write. Both stay open as their own work.
+
+**A palette label sets its ids in mono.** `Shortcut.labelMachine` names the substring of the
+label (and of the confirmation) that ORCA produced — a run id, a work item id, a decision
+key — and the row draws that span in `mono-id` and the rest in sans, because mono means ORCA
+produced it and "Release claim on `wi-metrics`" is two voices in one sentence (rule 8). It
+is a substring rather than a second string so that the label stays the one thing the query
+matches and the one thing that names the option.
 
 ## Popovers are one primitive
 
@@ -272,6 +359,145 @@ it. There is no "show the window" call on the port at all — that is how "a per
 take attention only inside a window that already has focus, and nothing raises a window at
 anybody" is guaranteed rather than remembered. A click comes back with the item it was about
 and is resolved through the route table, like every other way of arriving at an object.
+
+## Config surface (as built, v0.5.0)
+
+**Two documents, one screen** (#175, #266). `config.get` answers with `orca.config.yaml` and
+the ADR 0009 permission sidecar beside it, each with its own path, its own content-hash
+`revision` and its raw `text`, plus a flat schema description and the effective permission
+policy per agent. The YAML is drawn twice — as a form over the schema and as the bytes in a
+`textarea` styled by `.orca-yaml` — switched by a segmented control in the object header. The
+sidecar is drawn as the effective rules in evaluation order and as its own raw JSON, and is
+**read-only here**: grants are edited from the Agents surface's policy panel (below).
+
+**The draft is edits, not a copy, and it is one of two kinds.** A form draft is a map of
+dotted path to value and is sent as `patch`, which edits the YAML document in place and keeps
+its comments; a raw draft is the bytes and is sent as `text`. There is no merge of the two
+that is not a guess, so editing in one view drops the other's draft — **last edited wins**,
+and the bar says so before it happens. An edit back to the file's own value is not a change,
+which is what makes "N changes" a count of what would be written. Clearing an optional field
+sends a patch entry with no `value`, which deletes the key so its default comes back.
+
+**Staleness is a refusal, and a refusal never costs a draft.** `expectedRevision` is the
+revision the draft was made against; a daemon whose bytes have moved answers `CONFIG_STALE`,
+and the bar turns `--blocked`, says the file changed and offers **Reload**. The draft is
+still there afterwards, to be sent against the new revision.
+
+**Nothing polls.** One `config.get` on mount, then `config.changed`; a push whose revision is
+one the screen already holds is its own write coming back and is dropped. A write that lands
+is followed by one read, because the effective policy is computed over both files and
+`config.set` answers with neither.
+
+**The draft model is mounted above the surface switch** (`config/config-context.tsx`).
+`App` unmounts Config like every other screen, so a draft held inside it disappeared the
+moment somebody looked at a run; the hook now runs once in a `ConfigProvider` and both
+consumers — this surface and the Agents surface's policy panel — read the one model. That
+is one `config.get` for the app rather than one per mounting, it is one answer to "what is
+unsaved", and closing the policy panel no longer discards the grant edits it was holding.
+
+**The save bar is `.orca-draftbar`, and it is the one the workflow editor reuses** — the
+editor adds **Validate all** and **Publish** to it rather than drawing a second bar
+(70-workflow-editing.md). `⌘S` saves, registered in the `config` scope so the palette lists
+it. The bar is **absent** where there is no `config.set` to call — file mode, a `--read-only`
+daemon, or any daemon whose `hello.methods` does not list it — and the form goes read-only
+with it. The gate is the method rather than the `runs.control` capability: the capability is
+one word over four dispatch tables, and a daemon serving a store outside a workspace drives
+runs and has no configuration to write (`methodsFor`). `ConnectionSnapshot` carries
+`methods` from the handshake for exactly this, since a `HelloResult` never crosses the
+bridge. **Disconnected and reconnecting keep the bar**, dimmed values and all, with the
+change count still on it and `writability()`'s reason on Validate and Save — those are a
+daemon that would take the write if it were answering, and 40-connection-states.md asks for
+the reason on the control rather than for a control that vanishes with the draft.
+
+**Nothing on the screen speaks.** A field's error is `aria-describedby` text, not an alert:
+it is on the control the person is editing, and rule 11 keeps interruption for what a person
+is not already looking at. What is announced, once, into the app's one live region is the
+*result* — "Config saved", or the first error's sentence after a Validate or a Save that
+came back with one.
+
+**A saved configuration takes effect on the next `orca serve`.** The daemon reads the
+configuration when it boots and keeps what it read, so a save changes the file and not the
+process answering it. The surface says so in one line beside the bar rather than leaving it
+to be discovered.
+
+**Three deviations from what #175 asked for, recorded rather than quietly shipped.** The raw
+view is *editable*, although the issue described it as read-only: a form over a schema
+cannot express every key a person may need to write, and a read-only view of the bytes would
+send them to an editor outside the app. The notification tiers (#162) are in the preferences
+file and are not on this screen, because their surface is the Attention side of the app and
+a tier list here would be the second place they are set. And there is no stub section for
+#140: a section that names a feature and does nothing is a promise the screen cannot keep
+(rule 12).
+
+**What the surface cannot soften.** Nothing in either document is redacted: `config.get`
+hands over the bytes, ssh hosts and command lines included, because a form that edits a file
+has to show the file and a redacted `text` written back would destroy what it hid. The raw
+view says so in one line rather than leaving a person to discover it.
+
+## Agents write (as built, v0.5.0)
+
+**A grant is edited in the sidecar, never in the YAML** (#176, ADR 0009). The Agents
+surface's cards carry one action, **Permissions**, which opens that agent's policy as an
+inspector beside them. It shows the whole effective policy in evaluation order: the
+configured rules first, **read-only** — they are `orca.config.yaml`'s, a person curated them,
+and nothing machine-written rewrites a hand-curated array, so the panel links to the Config
+form instead — then the sidecar's written grants, which are editable, and last **ORCA's
+defaults**, the floor `@orca/agents` appends when the config left `default:` unset (#140).
+The defaults are a read-only group of their own with no link out of it: they are not a
+document, there is no file behind them and `config.set` cannot address them, so the way to
+change them is to write a fallthrough in the config, which opts out of them entirely. The
+Config surface's read-only view groups the same three layers the same way. A grant can be
+removed, narrowed or widened (kind, path, path prefix, scope, title pattern), or added by
+hand, in which case it is stamped with the time and with `grantedFor: "added by hand in the
+app"` so a reader of the diff can tell it from one a run wrote.
+
+**It is the Config surface's draft model, mounted elsewhere.** The panel lives in
+`renderer/src/config/` and reads the app's one feed through `ConfigProvider`: the same
+`expectedRevision`, the same `CONFIG_STALE` conflict with **Reload**, the same rule that a
+refused write keeps the draft — and, since the model is above both screens, closing the
+panel keeps the grant edits rather than discarding them. There is no "discard these?" warning
+on **Close** because there is nothing to discard: the draft outlives the panel, and
+`policy-editor.test.tsx` closes it and reopens it to keep that true.
+A save sends the whole sidecar as `config.set { document: "permissions", text }` — `patch`
+edits a YAML document in place and this one is JSON — and the daemon canonicalises the key
+order, so a client compares **revisions, not bytes**. The panel never writes a `default`: the
+sidecar has no fallthrough, because answering one prompt must not change the answer to every
+other one, and a document carrying one is refused rather than stripped.
+
+**The round trip is lossless or it is refused.** A key this app does not recognise — on a
+rule or inside a match — is written back after the ones it does, so an edit to one row
+cannot quietly delete a field a newer daemon put on another. A document whose `version` is
+not 1, a rule that is not an object, one with no `match`, or one naming a decision outside
+`PERMISSION_DECISIONS`, is a file the panel says it **cannot edit here** and points at the
+Config surface's raw view — the same state unparseable text gets, because guessing at a
+repair and writing it back is the one thing a file this security-relevant must not do.
+
+**Allow-always lands here without a second path.** When a run answers "always", the daemon
+writes the sidecar and pushes `config.changed`; the panel is on the same hook every Config
+screen is, so the rows re-read themselves. A card's "always" that the daemon *refused* to
+derive a rule from says so on the Attention surface rather than promising anything
+(`alwaysOutcome`, #221) — the panel then simply has nothing new to show, which is correct.
+
+**Releasing a claim** (#88) is the surface's other write. Each claim whose
+`owner.releasable` is true gets a danger-toned **Release** with a confirmation `Menu` naming
+the work item, the run it is taken from and what happens next; one the daemon would refuse is
+disabled with the reason on the control. There is no **Force release** here — `--force` takes
+an item from a run that could still resume, which has no undo and stays a CLI act. Nothing
+pushes for a release (it journals no event), so the claims are re-read once after the call,
+and the result's `note` — what releasing did *not* fix, since a dead run's log never moves on
+— is announced into the app's one live region and left on the row.
+
+**And one control that is not there: retrying a handshake from the card.** No method drives
+the daemon's handshake retry — `agents.ping` probes an agent and records a result, it does
+not reschedule anything — and `AgentView` carries the last attempt, the round trip and the
+consecutive failure count but no next-attempt time, so a card could offer neither the retry
+nor the countdown beside it without inventing both (RULES.md rule 12).
+
+**And one number that does not exist.** #176 asked for "the auto-approval count explained".
+Nothing in ORCA counts auto-approvals: `decidePermission` is evaluated per tool call and no
+running total is kept, on the wire or off it. The panel says so in words rather than tallying
+anything client-side (RULES.md rule 12), which is also why `AgentHealthCardProps` has no
+`policy` field.
 
 ## What the design assumes ORCA can provide
 

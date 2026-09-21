@@ -10,11 +10,12 @@
  *
  * Four decisions written down because each of them is a thing not to re-open casually:
  *
- * - **Markdown is raw, and the rendered toggle is *absent* rather than disabled.** A
- *   markdown renderer is a dependency decision — `packages/app` takes `react`, `zod` and
- *   the two `@orca/*` workspaces and nothing else — so it is not a thing to slip in behind
- *   a toggle. A disabled control would promise a feature that has not been decided on; the
- *   absence is honest, and the decision is filed as its own issue.
+ * - **Markdown is raw, permanently for now, and there is no toggle (#245).** A markdown
+ *   renderer is a dependency decision — `packages/app` takes `react`, `zod` and the two
+ *   `@orca/*` workspaces and nothing else — and the input is untrusted: agents write the
+ *   bodies. Rule 8 settles it as well: an artifact is machine output and stays in mono.
+ *   Reopening this means naming the sanitising renderer in a new issue, not adding a
+ *   toggle.
  * - **An omitted body shows its reason where the body would be.** `artifacts.get` declines
  *   a binary or oversized blob with `omitted: { reason, detail }`, and `detail` is written
  *   in words for exactly this spot. It is not an error state: nothing failed, and a retry

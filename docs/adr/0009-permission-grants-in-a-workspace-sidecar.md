@@ -65,6 +65,70 @@ a run id, ULID, digest, timestamp or temp directory, which would be a rule that 
 match again. A refusal is reported to the caller, which honours the answer once and does not
 pretend to have recorded it.
 
+**2026‑09‑21 (#140):** the configured `default` is no longer `allow`. An agent that leaves
+`default:` unset gets `ask`, and every agent gets `DEFAULT_PERMISSION_POLICY`'s rules —
+allowing reads, searches and file changes inside the run's own workspace, and `think`.
+
+**Corrected 2026‑09‑21 (#140):** those rules are a **third layer, appended last**, after the
+sidecar. The first cut of #140 folded them into the parsed config, inside
+`PermissionPolicySchema`'s transform, which put them *ahead* of the sidecar and so contradicted
+this ADR's central rule twice over. A default `allow` on an in‑workspace edit was matched
+before the sidecar got a turn, so a `reject_always` an operator had recorded could never fire;
+and anything that read the parsed config back — `orca demo`'s generated `orca.config.yaml`,
+`config.get`'s per‑rule provenance — reported rules nobody had written as if a person had
+written them. The layering is now **configuration → sidecar → defaults**, assembled in one
+place (`loadEffectivePermissionPolicy` in `@orca/agents`), and the parsed config is exactly
+what the file says. A configured `deny` still wins everything; a sidecar `deny` now beats a
+default `allow`, which is what "configuration first, then the sidecar" was always supposed to
+mean for a layer that is neither.
+
+**The defaults apply only when the config left `default:` unset**, and that is why `default`
+stays optional all the way through parsing: `permissions:` absent and
+`permissions: { default: ask }` are two different policies now, not one. Writing `default:` at
+all — `ask` exactly as much as `allow` — is an author saying what happens when no rule matched,
+and appending rules that match things on their behalf would be answering a question they did
+not ask. Somebody who wrote `default: ask` with no rules asked to be asked about everything,
+and quietly allowing in‑workspace edits on top of that would be ORCA deciding it knew better.
+So an explicit `default` is the opt‑out, whichever decision it names, and `defaultRulesApply`
+in `@orca/core` is the one place that is decided.
+
+`effectivePermissionPolicy` is the one place the three layers are assembled, and every
+evaluator goes through it: the ACP session that answers `session/request_permission`,
+`loadEffectivePermissionPolicy` (which only adds the sidecar file reading), and `config.get`,
+which labels each rule `config` / `permissions` / `default` so a surface can show the floor as
+a floor rather than as config somebody wrote.
+
+**2026‑09‑21 (#266):** the sidecar is now readable and editable over the protocol.
+`config.get` returns it as a second document beside `orca.config.yaml` — its own path, its
+own content‑hash revision, its raw text — together with the effective policy per agent, in
+`layerPermissionPolicies`' evaluation order, each rule labelled with the document it came
+from; `config.set` writes it through `replacePermissionPolicyFile` in `@orca/agents`, under
+the same `link()` lock and in the same fixed key order a machine write uses, so an
+operator's edit and a run answering "always" both land. A document carrying a `default` is
+refused rather than stripped, which is this ADR's central rule stated at the moment somebody
+tries the opposite. Nothing above changes: the file, the layering and the writer are the
+ones decided here, and what is new is only that a client can see them.
+
+**2026‑09‑21 (#271):** the reading half landed. Everything above was decided in v0.4.0 and
+the writer shipped with it, but nothing ever evaluated the file: `openAcpSession` answered
+`session/request_permission` against the agent's configured policy, the engine's session
+factory passed no sidecar path, and `loadEffectivePermissionPolicy` had no production caller
+at all. So a person who answered "always" was told the grant was recorded — it was — and was
+then asked the same question on the next tool call, in that run and in every later one.
+
+`openAcpSession` now takes `permissionFiles` and evaluates through
+`loadEffectivePermissionPolicy` **on every ask**, not once per session: "always" is answered
+*while a session is open*, so a policy captured at `session/new` would still be the old one
+when the next tool call arrived. The path is bound in `makeSessionFactory`
+(`packages/cli/src/bootstrap.ts`) to `permissionPolicyPath(app.configDir)` — the same value
+the daemon's `ControlModel` receives — so the file that is written and the file that is read
+are the same file by construction, for `orca run`, `orca resume`, `orca serve` and the ACP
+facade alike. Two smaller corrections travel with it: the session now passes the run's
+workspace as the evaluation scope, without which the workspace‑relative paths this ADR
+insists on could never match anything; and a sidecar that is corrupt is logged once at warn
+and skipped for the ask rather than failing it, because an unreadable file must not be able
+to block an agent — and skipping only ever loses a grant, never a restriction.
+
 ## Consequences
 + The hand‑written half of the config stays hand‑written. Nothing appends to the Nth element
   of a curated `agents:` array, so a machine write can never collide with a human edit.

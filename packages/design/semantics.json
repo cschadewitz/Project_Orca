@@ -53,11 +53,20 @@
     }
   },
   "scheduleClass": {
-    "unschedulable": { "word": "unschedulable", "fg": "status-cancelled", "bg": "status-cancelled-bg" },
-    "waiting": { "word": "waiting on deps", "fg": "status-blocked", "bg": "status-blocked-bg" },
-    "held": { "word": "held", "fg": "status-held", "bg": "status-held-bg" },
-    "ready": { "word": "ready", "fg": "status-succeeded", "bg": "status-succeeded-bg" },
-    "running": { "word": "running", "fg": "status-running", "bg": "status-running-bg" }
+    "unschedulable": { "word": "unschedulable", "glyph": "⊘", "fg": "status-cancelled", "bg": "status-cancelled-bg" },
+    "waiting": { "word": "waiting on deps", "glyph": "▣", "fg": "status-blocked", "bg": "status-blocked-bg" },
+    "held": { "word": "held", "glyph": "⏸", "fg": "status-held", "bg": "status-held-bg" },
+    "ready": { "word": "ready", "glyph": "▸", "fg": "status-succeeded", "bg": "status-succeeded-bg" },
+    "running": { "word": "running", "glyph": "◐", "fg": "status-running", "bg": "status-running-bg" }
+  },
+  "workItemStatus": {
+    "pending": { "word": "pending", "glyph": "◌" },
+    "ready": { "word": "ready", "glyph": "▸" },
+    "in-progress": { "word": "in progress", "glyph": "◐" },
+    "blocked": { "word": "blocked", "glyph": "▣" },
+    "done": { "word": "done", "glyph": "✓" },
+    "failed": { "word": "failed", "glyph": "✕" },
+    "cancelled": { "word": "cancelled", "glyph": "⊘" }
   },
   "connectionState": {
     "live": { "word": "connected", "glyph": "●", "fg": "status-succeeded", "writes": "enabled" },
@@ -103,9 +112,40 @@
       "note": "Things exist, this filter matched none. The action clears the filter, never the data."
     }
   },
+  "surface": {
+    "attention": {
+      "word": "Attention",
+      "glyph": "◆",
+      "note": "The waiting glyph, on purpose: the surface for the things waiting on a person carries the same shape the waiting status does. Nothing else in the rail is a diamond."
+    },
+    "runs": {
+      "word": "Runs",
+      "glyph": "☰",
+      "note": "Three stacked bars — a list of runs. Not a play triangle: the surface is what is happening and what happened, never a control that starts one."
+    },
+    "plan": {
+      "word": "Plan",
+      "glyph": "⬡",
+      "note": "An outlined hexagon — a node in the dependency graph the surface draws."
+    },
+    "agents": {
+      "word": "Agents",
+      "glyph": "◉",
+      "note": "A ring around a filled centre: one who is doing the work. Solid ring, so it never reads as the half-filled running glyph."
+    },
+    "config": {
+      "word": "Config",
+      "glyph": "❋",
+      "note": "Radial, in the place a cog would sit: U+2699 is in no OFL face ORCA bundles, so a cog here would be the OS's drawing on every platform."
+    }
+  },
   "chrome": {
     "crumbSeparator": { "glyph": "▸", "note": "Between object-header crumbs. Decorative: aria-hidden." },
-    "commandKey": { "glyph": "⌘", "note": "In keyboard hints, the command palette and menus." }
+    "commandKey": { "glyph": "⌘", "note": "In keyboard hints, the command palette and menus." },
+    "danger": {
+      "glyph": "✕",
+      "note": "A destructive command in the palette, so the danger is a glyph as well as a colour (rule 4). The failed run's shape, because what it leads to is a run that stops."
+    }
   },
   "dependencyKind": { "blocks": "solid", "soft": "dashed", "informs": "dotted" },
   "dependencyState": {

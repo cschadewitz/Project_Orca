@@ -246,29 +246,33 @@ carried ~190 literal type sizes and box heights; #211 removed them. No rule ther
 size any more — an element takes an `.orca-text-*` class, and each rule carries a
 `/* type: <style> */` note naming the class it expects.
 
-**Nothing remains: the count is 0.** #211 left 38 of those notes, #240 took five, and #244
-took the last 32 (`grep -c orca-allow-literal components.css` returns 1, and that one is the
-paragraph at the top of the file explaining the rule). They were never 32 numbers. They were
+**One remains, and it is the permanent kind.** #211 left 38 of those notes, #240 took five,
+and #244 took the last 32 — the count was 0 until #262 moved the visually-hidden clip in
+(`grep -c orca-allow-literal components.css` returns 2: the note itself, and the paragraph at
+the top of the file explaining the rule). Those 32 were never 32 numbers. They were
 five families `tokens.json` did not have — `bar-*` for a band of chrome, `badge-*` for a mark
 that carries a word, `mark-*` for decorative geometry, `col-*` for a fixed track sized to what
 it holds, and the spacing half rungs `space-1-5` and `space-2-5` — plus `control-xs` and
 `control-sm-5` extending the control scale, four boxes that simply needed naming, and two
 values that turned out to be arithmetic written out as a number.
 
-**Three remain app-side, in `packages/app/renderer/src/app.css`**, and they are the shape the
-rule expects an exemption to have. `.orca-announcer` — the one polite live region — needs the
-standard visually-hidden clip, whose `1px` measurements are not a size the design system could
-name: the box exists to be in the accessibility tree and nowhere else, and `display: none`, a
-zero box and `visibility: hidden` each drop it out of that tree in some screen reader, which
-would silently turn the region off. They are not waiting on a token. They *are* waiting on a
-`.orca-visually-hidden` in the component layer, which would take the class and all three
-escapes with it — that is #262.
+**None remain app-side.** The three that did — `.orca-announcer`'s visually-hidden clip in
+`packages/app/renderer/src/app.css` — were never waiting on a token; they were waiting on a
+`.orca-visually-hidden` in the component layer, and #262 wrote it. The class now lives in
+`packages/design/css/components.css`, the announcer wears it, and the exemption it carries is
+the **one** note in the tree: a single `orca-allow-literal` on that rule's `1px`, covering the
+two measurements that keep the box rendered. It is the permanent kind — the box exists to be
+in the accessibility tree and nowhere else, `display: none`, a zero box and
+`visibility: hidden` each drop it out of that tree in some screen reader, and no token could
+sensibly name 1px-of-nothing — so the note argues that case in its own text rather than naming
+an issue to wait on.
 
 The rule that produced that work is unchanged and is the reason to keep counting: **reaching
-for one of those literals a ninth time is the signal to add the family, not another note.** At
-zero, a new note is a stronger claim than it used to be — not "no token names this yet" but "no
-token could sensibly name this" — so it argues for itself in its own text, with a reason rather
-than an issue number, and a reviewer is entitled to ask for the token instead.
+for one of those literals a ninth time is the signal to add the family, not another note.**
+At this count, a new note is a stronger claim than it used to be — not "no token names this
+yet" but "no token could sensibly name this", which is the claim the one surviving note makes
+— so it argues for itself in its own text, with a reason rather than an issue number, and a
+reviewer is entitled to ask for the token instead.
 
 Prettier runs at `printWidth: 120` and skips `*.md` and `templates/` (see
 `.prettierignore`): prose is wrapped by hand, and a prompt template's whitespace is
@@ -341,6 +345,10 @@ where re-running the whole matrix would not be.
   plain Node, owned by the main process as `preferences.json` under the Electron user-data
   directory, reached from the renderer through `window.orca.preferences` and shared with it
   as types only. They are about the person, not about ORCA, so they never go in the YAML.
+  They are edited on the **Config surface**, in a section labelled as stored by the app, and
+  they save the moment they are chosen: `Appearance.set` applies the attribute and persists
+  the patch, so `data-theme`, `data-density` and the file keep one owner
+  (`renderer/src/appearance.ts`) rather than the surface writing the bridge behind its back.
 - Renderer tests run in `happy-dom` against the real `tokens.css` and `components.css` (see
   `packages/app/test/appearance.test.ts`). Build one `Window` per scenario: happy-dom caches
   computed style per document and does not invalidate it when the device settings (colour
@@ -406,12 +414,21 @@ test uses all three.
 that launches the real thing: Playwright's Electron driver against the *built* app and a
 daemon on an `orca demo` store. It asserts the window comes up with a bridge in it — which
 is exactly what an ESM preload broke (#198) — that `hello` reached the daemon, that both
-themes render and resolve different tokens, that axe finds no violations on **Attention,
-Runs or Agents** in either theme, and that every status on the attention list, the run tree
-and the status bar still carries its glyph and its word with the colour taken away (#167).
-Plan and Config are asserted to be the unbuilt `StateView`s they are in v0.4.0, rather than
-audited — a screen that says "not built yet" passes an axe run and means nothing by it, so
-the day one of them grows content that assertion fails and says which.
+themes render and resolve different tokens, that axe finds no violations on **any of the five
+surfaces** in either theme, and that every status on the attention list, the run tree and the
+status bar still carries its glyph and its word with the colour taken away (#167). Each
+audited surface names a node that only its *real content* produces, so the audit is never run
+over a loading spinner; the demo store plus `test/smoke/daemon.ts` is what guarantees there
+is content to find. Through v0.4.0 a surface with no screen yet was asserted to be the empty
+`StateView` instead, so that the day it grew content the assertion failed and its author
+moved it into `AUDITED` — the trip Config made in #175 and Plan in #170. As of v0.5.0 the
+list is full; a new surface starts in that unbuilt assertion again.
+
+The type‑proof baselines are the other thing to expect red: #261 replaced the app's
+placeholder surface glyphs with five designed ones in the symbol face, and `#type` draws the
+declared glyphs, so the committed pictures no longer match. They cannot be regenerated on one
+machine — see "Screenshot baselines" below; CI has to produce all four on **Linux, macOS and
+Windows** and the new set is committed together.
 
 Run it with `pnpm run build && pnpm run app:smoke`; on a headless box,
 `xvfb-run -a pnpm run app:smoke`, and in a container without unprivileged user namespaces

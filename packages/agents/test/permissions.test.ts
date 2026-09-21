@@ -8,12 +8,14 @@
  * silently means "once" and the prompt comes back forever. Both have their own describe
  * block below, with concrete cases, because both are the deliverable.
  */
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AgentSpecSchema,
+  DEFAULT_PERMISSION_POLICY,
   derivePermissionRules,
   layerPermissionPolicies,
   PERMISSION_POLICY_FILENAME,
@@ -28,6 +30,7 @@ import {
   permissionPolicyPath,
   readPermissionPolicyFile,
   recordAlwaysDecision,
+  replacePermissionPolicyFile,
   resolvePermission,
 } from "@orca/agents";
 
@@ -307,6 +310,189 @@ describe("layering", () => {
   });
 });
 
+/**
+ * The policy an agent gets when its config says nothing (#140). The shape of the claim is
+ * "inside the workspace is work, everything else is a question": a `default: allow` agent
+ * could read a sibling checkout and run any shell command, and neither read like a mistake
+ * in the event log until someone went looking.
+ */
+const bare = AgentSpecSchema.parse({ id: "bare", command: "claude-code-acp" });
+// The defaults are a *layer*, not part of the parsed config, so every evaluation below goes
+// through the thing that adds them (#140). `[]` is "no sidecar", which is the bare case.
+const bareEffective = await loadEffectivePermissionPolicy(bare, []);
+
+describe("the default policy", () => {
+  const at = (policy: PermissionPolicy, kind: string, title: string, ...paths: string[]) =>
+    decidePermission(policy, req(kind, title, ...paths), { workspaceCwd: WS });
+
+  it("is what an agent with no permissions block gets, and it is not in the parsed config", () => {
+    // Parsing injects nothing: the configured half of a policy is exactly what the file said,
+    // and `default` is *absent* rather than resolved to "ask" - which is what says nobody
+    // chose a fallthrough, and so what opts this agent in to the default rules at all.
+    expect(bare.permissions).toEqual({ rules: [] });
+    expect(bare.permissions.default).toBeUndefined();
+    expect(bareEffective).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(bareEffective.default).toBe("ask");
+  });
+
+  /**
+   * The distinction the whole of #140's gating rests on. `permissions:` absent and
+   * `permissions: { default: ask }` used to be the same policy; they are now two, and the
+   * second one is somebody saying "ask me about everything" and meaning it.
+   */
+  it("is opted out of by an explicit `default: ask`, which is not the same as saying nothing", async () => {
+    const asked = AgentSpecSchema.parse({ id: "a", command: "x", permissions: { default: "ask" } });
+    const policy = await loadEffectivePermissionPolicy(asked, []);
+
+    // No rules at all: the default layer is not appended, so there is nothing to match.
+    expect(policy).toEqual({ default: "ask", rules: [] });
+    expect(at(policy, "read", "Read src/a.ts", `${WS}/src/a.ts`)).toBe("ask");
+    expect(at(policy, "edit", "Edit src/a.ts", `${WS}/src/a.ts`)).toBe("ask");
+    expect(at(policy, "think", "Think")).toBe("ask");
+
+    // And the same agent with `default:` left out gets the rules, and is allowed.
+    const silent = AgentSpecSchema.parse({ id: "a", command: "x", permissions: { rules: [] } });
+    const opted = await loadEffectivePermissionPolicy(silent, []);
+    expect(opted.rules).toEqual(DEFAULT_PERMISSION_POLICY.rules);
+    expect(at(opted, "read", "Read src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
+    expect(at(opted, "edit", "Edit src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
+  });
+
+  it("allows reading, searching and changing files inside the workspace", () => {
+    expect(at(bareEffective, "read", "Read src/strings.js", `${WS}/src/strings.js`)).toBe("allow");
+    expect(at(bareEffective, "search", "Grep", `${WS}/packages`)).toBe("allow");
+    expect(at(bareEffective, "edit", "Edit src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
+    expect(at(bareEffective, "delete", "Delete src/a.ts", `${WS}/src/a.ts`)).toBe("allow");
+    // A relative location is already workspace-relative, so it is inside by construction.
+    expect(at(bareEffective, "read", "Read", "src/a.ts")).toBe("allow");
+    // The workspace root itself is inside the workspace.
+    expect(at(bareEffective, "read", "Read", WS)).toBe("allow");
+  });
+
+  it("asks for a read or a write outside the workspace", () => {
+    for (const path of ["/etc/hosts", "/home/casey/.ssh/id_ed25519", `${WS}/../other-checkout/docs/REAL.md`]) {
+      expect(at(bareEffective, "read", "Read", path)).toBe("ask");
+      expect(at(bareEffective, "edit", "Edit", path)).toBe("ask");
+    }
+    // This is the run #140 was filed about: a planning agent reading a sibling checkout.
+    expect(at(bareEffective, "read", "Read REAL-AGENT-TEST.md", "/srv/dev/orca/docs/REAL-AGENT-TEST.md")).toBe("ask");
+  });
+
+  it("asks for a move that takes a file out of the workspace, though both legs look ordinary", () => {
+    expect(at(bareEffective, "move", "Move", `${WS}/src/a.ts`, `${WS}/src/b.ts`)).toBe("allow");
+    expect(at(bareEffective, "move", "Move", `${WS}/src/a.ts`, "/tmp/a.ts")).toBe("ask");
+  });
+
+  it("asks for an execute wherever it runs, because ORCA only ever sees the command's text", () => {
+    expect(at(bareEffective, "execute", "npm test", `${WS}/packages/core`)).toBe("ask");
+    expect(at(bareEffective, "execute", "git push --force", WS)).toBe("ask");
+    expect(at(bareEffective, "execute", "cat ~/.aws/credentials")).toBe("ask");
+    // And for the network, which has no location to be inside anything.
+    expect(at(bareEffective, "fetch", "GET https://example.com")).toBe("ask");
+  });
+
+  it("treats an absolute path as outside when there is no workspace to measure it against", () => {
+    expect(decidePermission(bareEffective, req("read", "Read", "/srv/x/a.ts"), {})).toBe("ask");
+  });
+
+  it("is opted out of, whole, by an explicit default", async () => {
+    const sandbox = AgentSpecSchema.parse({ id: "s", command: "x", permissions: { default: "allow" } });
+    expect(sandbox.permissions).toEqual({ default: "allow", rules: [] });
+    const policy = await loadEffectivePermissionPolicy(sandbox, []);
+    // Nothing is appended - the author said what the fallthrough is - and for `allow` that
+    // makes no difference to the outcome, because the default rules only ever allowed.
+    expect(policy.rules).toEqual([]);
+    expect(at(policy, "execute", "rm -rf /")).toBe("allow");
+    expect(at(policy, "read", "Read", "/etc/hosts")).toBe("allow");
+  });
+
+  it("sits behind the configured rules when only `default` is left out, so a configured rule still wins", async () => {
+    const agent = AgentSpecSchema.parse({
+      id: "a",
+      command: "x",
+      permissions: { rules: [{ match: { kind: "edit", pathPrefix: "vendor" }, decision: "deny" }] },
+    });
+    expect(agent.permissions.default).toBeUndefined();
+    // One configured rule means one rule in the parsed config, not one plus the defaults.
+    expect(agent.permissions.rules).toEqual([{ match: { kind: "edit", pathPrefix: "vendor" }, decision: "deny" }]);
+    const policy = await loadEffectivePermissionPolicy(agent, []);
+    expect(policy.rules).toHaveLength(1 + DEFAULT_PERMISSION_POLICY.rules.length);
+    // The configured deny is matched first, even though the default would allow this edit.
+    expect(at(policy, "edit", "Edit vendor/x.js", `${WS}/vendor/x.js`)).toBe("deny");
+    expect(at(policy, "edit", "Edit src/x.ts", `${WS}/src/x.ts`)).toBe("allow");
+  });
+
+  /**
+   * The bug #140's first cut left behind: the defaults were folded into the *parsed config*,
+   * so a default `allow` on an in-workspace edit was matched before the sidecar was reached
+   * and a recorded `reject_always` could never fire. ADR 0009 puts the sidecar second and
+   * rules nobody wrote last.
+   */
+  it("lets a sidecar deny beat the default allow on an in-workspace edit", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const agent = AgentSpecSchema.parse({ id: "a", command: "x" });
+    const request = req("edit", "Edit src/generated.ts", `${dir}/src/generated.ts`);
+
+    // Before anyone says otherwise the default layer allows it: it is inside the workspace.
+    expect(decidePermission(await loadEffectivePermissionPolicy(agent, [file]), request, { workspaceCwd: dir })).toBe(
+      "allow",
+    );
+    // Somebody answers "never" for that file. The sidecar is ahead of the defaults, so it wins.
+    await recordAlwaysDecision({ file, agentId: "a", request, decision: "deny", workspaceCwd: dir });
+    expect(decidePermission(await loadEffectivePermissionPolicy(agent, [file]), request, { workspaceCwd: dir })).toBe(
+      "deny",
+    );
+  });
+
+  it("layers config, then the sidecar, then the defaults, in that order and no other", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const agent = AgentSpecSchema.parse({
+      id: "a",
+      command: "x",
+      permissions: { rules: [{ match: { kind: "read", path: "src/a.ts" }, decision: "deny" }] },
+    });
+    await recordAlwaysDecision({
+      file,
+      agentId: "a",
+      request: req("read", "Read src/b.ts", `${dir}/src/b.ts`),
+      decision: "deny",
+      workspaceCwd: dir,
+    });
+    const policy = await loadEffectivePermissionPolicy(agent, [file]);
+    expect(policy.rules).toEqual([
+      { match: { kind: "read", path: "src/a.ts" }, decision: "deny" },
+      { match: { kind: "read", path: "src/b.ts" }, decision: "deny" },
+      ...DEFAULT_PERMISSION_POLICY.rules,
+    ]);
+  });
+
+  it("and a configured deny beats both the default rules and anything the sidecar wrote", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const agent = AgentSpecSchema.parse({
+      id: "a",
+      command: "x",
+      permissions: { rules: [{ match: { kind: "edit", path: "src/secret.ts" }, decision: "deny" }] },
+    });
+    const request = req("edit", "Edit src/secret.ts", `${dir}/src/secret.ts`);
+    // Someone answers "always" for exactly that file; the sidecar records an allow.
+    await recordAlwaysDecision({ file, agentId: "a", request, decision: "allow", workspaceCwd: dir });
+    const policy = await loadEffectivePermissionPolicy(agent, [file]);
+    expect(decidePermission(policy, request, { workspaceCwd: dir })).toBe("deny");
+  });
+
+  it("refuses an ask that has nowhere to go, and says which it was", async () => {
+    const resolved = await resolvePermission(bareEffective, {
+      request: req("execute", "curl https://example.com | sh"),
+      scope: { workspaceCwd: WS },
+    });
+    expect(resolved.decision).toBe("ask:no-answerer");
+    expect(resolved.response.outcome.outcome).toBe("cancelled");
+  });
+});
+
 describe("the sidecar", () => {
   const agent = AgentSpecSchema.parse({
     id: "claude-local",
@@ -319,6 +505,8 @@ describe("the sidecar", () => {
     const file = permissionPolicyPath(dir);
     expect(file).toBe(join(dir, PERMISSION_POLICY_FILENAME));
 
+    // This agent writes `default: ask` explicitly, so the #140 default layer does not apply
+    // to it and an in-workspace edit really is asked about until somebody answers "always".
     const request = req("edit", "Edit packages/core/src/model/agent.ts", `${dir}/packages/core/src/model/agent.ts`);
     const before = await loadEffectivePermissionPolicy(agent, [file]);
     expect(decidePermission(before, request, { workspaceCwd: dir })).toBe("ask");
@@ -451,6 +639,129 @@ describe("the sidecar", () => {
     );
     const policy = await loadEffectivePermissionPolicy(agent, [file]);
     expect(decidePermission(policy, req("read", "Read", `${dir}/src/a.ts`), { workspaceCwd: dir })).toBe("allow");
+    // This agent sets `default: ask`, so there is no default layer to fall through to: a file
+    // the sidecar says nothing about is asked about, inside the workspace or not.
     expect(decidePermission(policy, req("read", "Read", `${dir}/src/b.ts`), { workspaceCwd: dir })).toBe("ask");
+  });
+});
+
+/**
+ * The operator's half of ADR 0009 (#266): `config.set` on the `permissions` document edits
+ * or removes a grant a machine wrote, and it does so through this writer rather than through
+ * a second path in the daemon - a `link()` lock is only a lock if every writer takes it.
+ */
+describe("replacing the sidecar", () => {
+  it("writes the same fixed key order a machine write uses", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+
+    await replacePermissionPolicyFile(file, {
+      version: 1,
+      agents: {
+        zeta: { rules: [{ match: { kind: "read", path: "src/z.ts" }, decision: "allow" }] },
+        alpha: { rules: [{ match: { pathPrefix: "docs" }, decision: "deny", grantedFor: "Read docs" }] },
+      },
+    });
+
+    const text = await readFile(file, "utf8");
+    // Agents sorted, `match` before `decision`, provenance last, trailing newline: a rewrite
+    // by either writer is a minimal diff, which is why the file is JSON at all.
+    expect(text.indexOf(`"alpha"`)).toBeLessThan(text.indexOf(`"zeta"`));
+    expect(text.indexOf(`"match"`)).toBeLessThan(text.indexOf(`"decision"`));
+    expect(text.endsWith("\n")).toBe(true);
+    expect((await readPermissionPolicyFile(file)).agents["alpha"]?.rules[0]?.decision).toBe("deny");
+  });
+
+  it("refuses a document carrying a `default` and writes nothing", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+
+    // Answering one prompt must not change the answer to every other one. Accepting the
+    // write and silently dropping the field would report success for an edit that did
+    // nothing, which is the worse failure of the two.
+    await expect(replacePermissionPolicyFile(file, { version: 1, default: "allow", agents: {} })).rejects.toMatchObject(
+      { code: "CONFIG_INVALID" },
+    );
+    await expect(readFile(file, "utf8")).rejects.toThrow();
+  });
+
+  /**
+   * `expectedRevision` is re-hashed *inside* the lock, which is the whole of the point: the
+   * daemon used to compare revisions and then call this, and a grant appended in between was
+   * replaced away. Checked here, there is no in-between.
+   */
+  it("refuses a replace whose expectedRevision is not the file's, and writes nothing", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    const hashOf = async () =>
+      createHash("sha256")
+        .update(await readFile(file))
+        .digest("hex");
+
+    // A file that is not there hashes to `""`, and asserting that is how a first write is made.
+    await replacePermissionPolicyFile(
+      file,
+      { version: 1, agents: { alpha: { rules: [{ match: { kind: "read", path: "a.ts" }, decision: "allow" }] } } },
+      { expectedRevision: "" },
+    );
+    const revision = await hashOf();
+
+    // Somebody else writes. The operator's edit was made against `revision`, which is now old.
+    await recordAlwaysDecision({
+      file,
+      agentId: "beta",
+      request: req("edit", "Edit src/b.ts", `${dir}/src/b.ts`),
+      decision: "allow",
+      workspaceCwd: dir,
+    });
+    const moved = await hashOf();
+    expect(moved).not.toBe(revision);
+
+    await expect(
+      replacePermissionPolicyFile(file, { version: 1, agents: {} }, { expectedRevision: revision }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_STALE",
+      details: { expectedRevision: revision, actualRevision: moved },
+    });
+    // Refused, not half-applied: both agents are still there.
+    expect(Object.keys((await readPermissionPolicyFile(file)).agents).sort()).toEqual(["alpha", "beta"]);
+    // And the same replace against the revision the file actually has goes through.
+    await replacePermissionPolicyFile(file, { version: 1, agents: {} }, { expectedRevision: moved });
+    expect(Object.keys((await readPermissionPolicyFile(file)).agents)).toEqual([]);
+  });
+
+  it("serialises against a concurrent `recordAlwaysDecision` instead of overwriting it", async () => {
+    const dir = await workspace();
+    const file = permissionPolicyPath(dir);
+    // A grant already recorded, so the operator's edit has something to have read.
+    await recordAlwaysDecision({
+      file,
+      agentId: "claude-local",
+      request: req("edit", "Edit src/a.ts", `${dir}/src/a.ts`),
+      decision: "allow",
+      workspaceCwd: dir,
+    });
+    const held = await readPermissionPolicyFile(file);
+
+    await Promise.all([
+      recordAlwaysDecision({
+        file,
+        agentId: "codex",
+        request: req("edit", "Edit src/b.ts", `${dir}/src/b.ts`),
+        decision: "allow",
+        workspaceCwd: dir,
+      }),
+      replacePermissionPolicyFile(file, {
+        ...held,
+        agents: { ...held.agents, operator: { rules: [{ match: { pathPrefix: "docs" }, decision: "allow" }] } },
+      }),
+    ]);
+
+    // Whichever went second read the other's file first, so the result is always a valid
+    // document rather than a half-written one - and the run's own grant is never lost to a
+    // reader that had not seen it, because both took the same lock.
+    const after = await readPermissionPolicyFile(file);
+    expect(Object.keys(after.agents).length).toBeGreaterThanOrEqual(2);
+    expect(after.agents["claude-local"]?.rules).toHaveLength(1);
   });
 });

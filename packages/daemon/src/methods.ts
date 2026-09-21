@@ -26,30 +26,66 @@ import {
   ArtifactsGetParamsSchema,
   ArtifactsListParamsSchema,
   CLAIMS_LIST_METHOD,
+  CLAIMS_RELEASE_METHOD,
+  CONFIG_GET_METHOD,
+  CONFIG_SET_METHOD,
   ClaimsListParamsSchema,
+  ClaimsReleaseParamsSchema,
+  ConfigGetParamsSchema,
+  ConfigSetParamsSchema,
+  DECISIONS_DECIDE_METHOD,
+  DECISIONS_LIST_METHOD,
+  DECISIONS_REOPEN_METHOD,
+  DEPENDENCIES_LIST_METHOD,
+  DEPENDENCIES_WAIVE_METHOD,
+  DecisionsDecideParamsSchema,
+  DecisionsListParamsSchema,
+  DecisionsReopenParamsSchema,
+  DependenciesListParamsSchema,
+  DependenciesWaiveParamsSchema,
   HELLO_METHOD,
   HelloParamsSchema,
   INPUTS_ANSWER_METHOD,
   INPUTS_LIST_METHOD,
+  ITEMS_LIST_METHOD,
   InputsAnswerParamsSchema,
   InputsListParamsSchema,
+  ItemsListParamsSchema,
+  JOURNAL_LIST_METHOD,
+  JournalListParamsSchema,
+  PLANS_LIST_METHOD,
+  PLAN_GET_METHOD,
   PROTOCOL_VERSION,
+  PlanGetParamsSchema,
+  PlansListParamsSchema,
+  RISKS_LIST_METHOD,
+  RISKS_UPDATE_METHOD,
   RUNS_CANCEL_METHOD,
   RUNS_EVENTS_METHOD,
   RUNS_GET_METHOD,
   RUNS_LIST_METHOD,
   RUNS_RESUME_METHOD,
   RUNS_START_METHOD,
+  RisksListParamsSchema,
+  RisksUpdateParamsSchema,
   RunsCancelParamsSchema,
   RunsEventsParamsSchema,
   RunsGetParamsSchema,
   RunsListParamsSchema,
   RunsResumeParamsSchema,
   RunsStartParamsSchema,
+  SCHEDULE_EXPLAIN_METHOD,
+  SCHEDULE_GET_METHOD,
   SUBSCRIBE_METHOD,
+  ScheduleExplainParamsSchema,
+  ScheduleGetParamsSchema,
   SubscribeParamsSchema,
   UNSUBSCRIBE_METHOD,
   UnsubscribeParamsSchema,
+  WORKFLOWS_GET_METHOD,
+  WORKFLOWS_LIST_METHOD,
+  WorkflowsGetParamsSchema,
+  WorkflowsListParamsSchema,
   formatProtocolVersion,
   isCompatible,
   type AgentsListParams,
@@ -59,11 +95,33 @@ import {
   type ArtifactsGetResult,
   type ArtifactsListResult,
   type ClaimsListResult,
+  type ClaimsReleaseParams,
+  type ClaimsReleaseResult,
+  type ConfigGetParams,
+  type ConfigGetResult,
+  type ConfigSetParams,
+  type ConfigSetResult,
   type DaemonCapability,
+  type DecisionsDecideParams,
+  type DecisionsDecideResult,
+  type DecisionsListResult,
+  type DecisionsReopenParams,
+  type DecisionsReopenResult,
+  type DependenciesListResult,
+  type DependenciesWaiveParams,
+  type DependenciesWaiveResult,
   type HelloResult,
   type InputsAnswerParams,
   type InputsAnswerResult,
   type InputsListResult,
+  type ItemsListResult,
+  type JournalListResult,
+  type PlanGetResult,
+  type PlansListParams,
+  type PlansListResult,
+  type RisksListResult,
+  type RisksUpdateParams,
+  type RisksUpdateResult,
   type RunsCancelParams,
   type RunsCancelResult,
   type RunsEventsResult,
@@ -73,16 +131,23 @@ import {
   type RunsResumeResult,
   type RunsStartParams,
   type RunsStartResult,
+  type ScheduleExplainResult,
+  type ScheduleGetResult,
   type SubscribeParams,
   type SubscribeResult,
   type UnsubscribeParams,
   type UnsubscribeResult,
+  type WorkflowsGetResult,
+  type WorkflowsListResult,
 } from "@orca/protocol";
 import type { ZodType } from "zod";
 import type { AgentModel } from "./agent-model.js";
+import type { ConfigModel } from "./config-model.js";
 import type { ControlModel } from "./control.js";
+import type { PlanControlModel } from "./plan-control.js";
+import type { PlanModel } from "./plan-model.js";
 import type { ReadModel } from "./read-model.js";
-import type { SubscriptionSource } from "./subscriptions.js";
+import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 
 export interface MethodContext {
   /** ORCA's own version, reported in `hello`. */
@@ -97,16 +162,36 @@ export interface MethodContext {
    */
   source?: SubscriptionSource | undefined;
   /**
+   * The plan journal a `plan.changed` push is folded from - the store's own listener seam.
+   * Present means store-wide subscriptions are woken when this process changes a plan;
+   * absent means they are not, and a plan screen re-reads on its own.
+   */
+  planSource?: PlanChangeSource | undefined;
+  /**
    * The writing half. Present means this daemon drives runs - it advertises `runs.control`,
    * answers the four control methods, and holds a lease on every run it touches. Absent is
    * `orca serve --read-only`: the methods are not in the table and not in `hello.methods`.
    */
   control?: ControlModel | undefined;
   /**
+   * The plan's writing half (#169, #88). Present exactly when `control` is - `--read-only` is
+   * one switch, and a daemon that will not drive a run will not waive a dependency either -
+   * but it is its own field because a plan write is not a run write: it takes no lease and
+   * drives no interpreter, it journals under `PlanService`'s per-plan lock.
+   */
+  planControl?: PlanControlModel | undefined;
+  /**
    * Handshake health and the ping that produces it. Present whenever the daemon has a
    * configured agent registry, `--read-only` or not: neither method touches a run.
    */
   agents?: AgentModel | undefined;
+  /**
+   * The workspace's two configuration documents (#174, #266). Present whenever the daemon
+   * was started over a config directory, `--read-only` or not: `config.get` is a read, and a
+   * read-only daemon answers it. `config.set` additionally needs `control` - it is in
+   * `controlMethods`, so a read-only daemon does not have it at all.
+   */
+  config?: ConfigModel | undefined;
 }
 
 export interface Method<P, R> {
@@ -133,6 +218,32 @@ function control(ctx: MethodContext): ControlModel {
       capabilities: [...ctx.capabilities],
     });
   return ctx.control;
+}
+
+function config(ctx: MethodContext): ConfigModel {
+  if (!ctx.config)
+    throw new OrcaError("NOT_SUPPORTED", "this daemon serves no workspace configuration", {
+      capabilities: [...ctx.capabilities],
+    });
+  return ctx.config;
+}
+
+/** The plan projection, or the reason there is none. Absent from the table when absent here. */
+function plans(ctx: MethodContext): PlanModel {
+  const model = reads(ctx).plans;
+  if (!model)
+    throw new OrcaError("NOT_SUPPORTED", "this daemon serves no plan: it answers the run methods only", {
+      capabilities: [...ctx.capabilities],
+    });
+  return model;
+}
+
+function planControl(ctx: MethodContext): PlanControlModel {
+  if (!ctx.planControl)
+    throw new OrcaError("NOT_SUPPORTED", "this daemon is read-only: it does not write to the plan", {
+      capabilities: [...ctx.capabilities],
+    });
+  return ctx.planControl;
 }
 
 function agents(ctx: MethodContext): AgentModel {
@@ -206,6 +317,88 @@ export const artifactsGet: Method<Parameters<ReadModel["artifactsGet"]>[0], Arti
   handle: (params, ctx) => reads(ctx).artifactsGet(params),
 };
 
+/** `workflows.list`: every workflow this daemon has registered, as rows. */
+export const workflowsList: Method<Parameters<ReadModel["workflowsList"]>[0], WorkflowsListResult> = {
+  params: WorkflowsListParamsSchema,
+  handle: (params, ctx) => reads(ctx).workflowsList(params),
+};
+
+/** `workflows.get`: one workflow's graph - nodes, their fields, edges, nested graphs. */
+export const workflowsGet: Method<Parameters<ReadModel["workflowsGet"]>[0], WorkflowsGetResult> = {
+  params: WorkflowsGetParamsSchema,
+  handle: (params, ctx) => reads(ctx).workflowsGet(params),
+};
+
+/**
+ * `config.get`: both configuration documents, the schema a form renders, and the effective
+ * permission policy the two of them add up to (#174, #266).
+ *
+ * A read, so a `--read-only` daemon answers it. **It redacts nothing**: `config.text` is the
+ * bytes of `orca.config.yaml`, ssh hosts, command lines and environment names included. A
+ * form that edits a file has to show the file, and a redacted text written back would
+ * destroy what it hid. The port is loopback and unauthenticated either way.
+ */
+export const configGet: Method<ConfigGetParams, ConfigGetResult> = {
+  params: ConfigGetParamsSchema,
+  handle: (_params, ctx) => config(ctx).get(),
+};
+
+// ------------------------------------------------------------- the plan reads
+
+/** `plans.list`: every plan in the store, with its item counts per classification. */
+export const plansList: Method<PlansListParams, PlansListResult> = {
+  params: PlansListParamsSchema,
+  handle: (_params, ctx) => plans(ctx).plansList(),
+};
+
+/** `plan.get`: one plan's header - requests, counts, matrix and policy. */
+export const planGet: Method<Parameters<PlanModel["planGet"]>[0], PlanGetResult> = {
+  params: PlanGetParamsSchema,
+  handle: (params, ctx) => plans(ctx).planGet(params),
+};
+
+/** `items.list`: the schedule table, in schedule order, filtered and paged. */
+export const itemsList: Method<Parameters<PlanModel["itemsList"]>[0], ItemsListResult> = {
+  params: ItemsListParamsSchema,
+  handle: (params, ctx) => plans(ctx).itemsList(params),
+};
+
+/** `schedule.get`: what may run now, what waits and why, the waves and the critical path. */
+export const scheduleGet: Method<Parameters<PlanModel["scheduleGet"]>[0], ScheduleGetResult> = {
+  params: ScheduleGetParamsSchema,
+  handle: (params, ctx) => plans(ctx).scheduleGet(params),
+};
+
+/** `schedule.explain`: one item's place in the schedule, in `core`'s own words. */
+export const scheduleExplain: Method<Parameters<PlanModel["scheduleExplain"]>[0], ScheduleExplainResult> = {
+  params: ScheduleExplainParamsSchema,
+  handle: (params, ctx) => plans(ctx).scheduleExplain(params),
+};
+
+/** `dependencies.list`: the edges, with the scheduler's live evaluation of each. */
+export const dependenciesList: Method<Parameters<PlanModel["dependenciesList"]>[0], DependenciesListResult> = {
+  params: DependenciesListParamsSchema,
+  handle: (params, ctx) => plans(ctx).dependenciesList(params),
+};
+
+/** `risks.list`: the register with scores and levels, plus the matrix and the appetite. */
+export const risksList: Method<Parameters<PlanModel["risksList"]>[0], RisksListResult> = {
+  params: RisksListParamsSchema,
+  handle: (params, ctx) => plans(ctx).risksList(params),
+};
+
+/** `decisions.list`: the decisions, their matrices, and the items each one gates. */
+export const decisionsList: Method<Parameters<PlanModel["decisionsList"]>[0], DecisionsListResult> = {
+  params: DecisionsListParamsSchema,
+  handle: (params, ctx) => plans(ctx).decisionsList(params),
+};
+
+/** `journal.list`: one page of the plan's audit trail, forwards or backwards. */
+export const journalList: Method<Parameters<PlanModel["journalList"]>[0], JournalListResult> = {
+  params: JournalListParamsSchema,
+  handle: (params, ctx) => plans(ctx).journalList(params),
+};
+
 // ----------------------------------------------------------------- the writes
 
 /** `inputs.answer`: record a person's answer to an open gate or permission ask, and continue. */
@@ -226,10 +419,66 @@ export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
   handle: (params, ctx) => control(ctx).cancelRun(params),
 };
 
-/** `runs.start`: a workflow and its vars. No request, no work item, no documents (#196). */
+/** `runs.start`: a workflow and its vars. No request, no work item, no documents - by decision. */
 export const runsStart: Method<RunsStartParams, RunsStartResult> = {
   params: RunsStartParamsSchema,
   handle: (params, ctx) => control(ctx).startRun(params),
+};
+
+/**
+ * `config.set`: write `orca.config.yaml` or the ADR 0009 permission sidecar (#174, #266).
+ *
+ * A write, so a `--read-only` daemon does not have it. It takes no run lease and appends no
+ * event: a configuration file is not a run, and a `config.set` while a run is in flight
+ * disturbs nothing.
+ *
+ * **The daemon goes on serving the configuration it booted with.** Agents, hosts, workflows
+ * and the store were wired at `bootstrap`; nothing here rewires them, so a run started a
+ * moment after a successful write still uses the old config, and the new one takes effect on
+ * the next `orca serve`. Reloading a live orchestrator is its own piece of work and not a
+ * side effect of a form being saved.
+ */
+export const configSet: Method<ConfigSetParams, ConfigSetResult> = {
+  params: ConfigSetParamsSchema,
+  handle: (params, ctx) => config(ctx).set(params),
+};
+
+// ------------------------------------------------------------ the plan writes
+
+/** `dependencies.waive`: a person saying this edge no longer has to hold. */
+export const dependenciesWaive: Method<DependenciesWaiveParams, DependenciesWaiveResult> = {
+  params: DependenciesWaiveParamsSchema,
+  handle: (params, ctx) => planControl(ctx).waiveDependency(params),
+};
+
+/** `decisions.decide`: record a human choice and reconcile what it unblocks. */
+export const decisionsDecide: Method<DecisionsDecideParams, DecisionsDecideResult> = {
+  params: DecisionsDecideParamsSchema,
+  handle: (params, ctx) => planControl(ctx).decide(params),
+};
+
+/** `decisions.reopen`: clear a choice, and with it the dependencies it satisfied (#104). */
+export const decisionsReopen: Method<DecisionsReopenParams, DecisionsReopenResult> = {
+  params: DecisionsReopenParamsSchema,
+  handle: (params, ctx) => planControl(ctx).reopen(params),
+};
+
+/** `risks.update`: move a risk along its lifecycle; accepting one releases what it held. */
+export const risksUpdate: Method<RisksUpdateParams, RisksUpdateResult> = {
+  params: RisksUpdateParamsSchema,
+  handle: (params, ctx) => planControl(ctx).updateRisk(params),
+};
+
+/**
+ * `claims.release`: take a work item away from the run that claimed it (#88).
+ *
+ * Answered by `ControlModel`, not `PlanControlModel`: it is in `CONTROL_METHODS` on the wire
+ * and it touches no plan, so gating it on one made a control daemon over a plan-less store
+ * refuse a method its own `hello` had promised (#169).
+ */
+export const claimsRelease: Method<ClaimsReleaseParams, ClaimsReleaseResult> = {
+  params: ClaimsReleaseParamsSchema,
+  handle: (params, ctx) => control(ctx).releaseClaim(params),
 };
 
 // ---------------------------------------------------------------- the agents
@@ -281,14 +530,58 @@ export const methods: MethodTable = {
   [CLAIMS_LIST_METHOD]: claimsList,
   [ARTIFACTS_LIST_METHOD]: artifactsList,
   [ARTIFACTS_GET_METHOD]: artifactsGet,
+  [WORKFLOWS_LIST_METHOD]: workflowsList,
+  [WORKFLOWS_GET_METHOD]: workflowsGet,
 };
 
-/** The four writing methods, kept apart so `--read-only` is one omission and not four. */
+/**
+ * The configuration methods, kept apart from both tables above because they turn on a
+ * different fact: a `ConfigModel`, which a daemon serving a store outside a workspace has
+ * not got. `config.get` needs only that; `config.set` needs a control model too, so it is
+ * absent from a `--read-only` daemon exactly like the other writes.
+ */
+export const configMethods: MethodTable = { [CONFIG_GET_METHOD]: configGet };
+export const configControlMethods: MethodTable = { [CONFIG_SET_METHOD]: configSet };
+
+/**
+ * The nine plan reads, kept apart so a daemon projecting runs alone leaves them out whole.
+ * `ReadModel.plans` is what decides, and `hello.methods` says which way it went.
+ */
+export const planMethods: MethodTable = {
+  [PLANS_LIST_METHOD]: plansList,
+  [PLAN_GET_METHOD]: planGet,
+  [ITEMS_LIST_METHOD]: itemsList,
+  [SCHEDULE_GET_METHOD]: scheduleGet,
+  [SCHEDULE_EXPLAIN_METHOD]: scheduleExplain,
+  [DEPENDENCIES_LIST_METHOD]: dependenciesList,
+  [RISKS_LIST_METHOD]: risksList,
+  [DECISIONS_LIST_METHOD]: decisionsList,
+  [JOURNAL_LIST_METHOD]: journalList,
+};
+
+/**
+ * The five writing methods that need no plan, kept apart so `--read-only` is one omission and
+ * not five.
+ *
+ * `claims.release` is one of them (#169): `handshake.ts` has always listed it in
+ * `CONTROL_METHODS`, it needs only `Orchestrator.releaseClaim` and the run projection, and a
+ * control daemon over a store with no plan in it must answer every method the `runs.control`
+ * capability it advertises names.
+ */
 export const controlMethods: MethodTable = {
   [INPUTS_ANSWER_METHOD]: inputsAnswer,
   [RUNS_RESUME_METHOD]: runsResume,
   [RUNS_CANCEL_METHOD]: runsCancel,
   [RUNS_START_METHOD]: runsStart,
+  [CLAIMS_RELEASE_METHOD]: claimsRelease,
+};
+
+/** The four plan-writing methods, omitted by `--read-only` alongside the five above. */
+export const planControlMethods: MethodTable = {
+  [DEPENDENCIES_WAIVE_METHOD]: dependenciesWaive,
+  [DECISIONS_DECIDE_METHOD]: decisionsDecide,
+  [DECISIONS_REOPEN_METHOD]: decisionsReopen,
+  [RISKS_UPDATE_METHOD]: risksUpdate,
 };
 
 export const agentMethods: MethodTable = {
@@ -298,20 +591,28 @@ export const agentMethods: MethodTable = {
 
 /**
  * What a daemon in this context actually answers - `hello` alone when it serves no store,
- * the subscription methods only when it was given an engine feed to fan out, the control
- * methods only when it was given a control model, and the agent methods only when it has a
- * registry.
+ * the plan reads only when the read model was given a plan service, the subscription methods
+ * only when it was given an engine feed to fan out, the control and plan-control methods only
+ * when it was given the models that write, and the agent methods only when it has a registry.
  *
- * `hello.methods` is `Object.keys` of this, so the four facts stay one fact: a method this
+ * `hello.methods` is `Object.keys` of this, so the six facts stay one fact: a method this
  * daemon will not answer is a method it does not advertise.
  */
 export function methodsFor(ctx: MethodContext): MethodTable {
   const table: MethodTable = ctx.reads ? { ...methods } : { [HELLO_METHOD]: hello };
+  if (ctx.reads?.plans) Object.assign(table, planMethods);
   if (ctx.source) {
     table[SUBSCRIBE_METHOD] = subscribe;
     table[UNSUBSCRIBE_METHOD] = unsubscribe;
   }
   if (ctx.control) Object.assign(table, controlMethods);
+  if (ctx.planControl) Object.assign(table, planControlMethods);
   if (ctx.agents) Object.assign(table, agentMethods);
+  if (ctx.config) {
+    Object.assign(table, configMethods);
+    // Reading the configuration is a read; writing it is a write, and a read-only daemon
+    // has no `control`. Two facts, one `if`, so the two can never drift apart.
+    if (ctx.control) Object.assign(table, configControlMethods);
+  }
   return table;
 }

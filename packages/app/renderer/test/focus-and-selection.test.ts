@@ -27,8 +27,9 @@
  *   pseudo-class is the browser's own judgement about whether the focus was a keyboard's.
  * - **selection is a different set of properties entirely**, so a row that is both selected
  *   and focused shows both and neither hides the other.
- * - **nothing suppresses the ring**, anywhere — and the one rule that does today is named
- *   here as the open finding it is, so that a *second* one cannot arrive quietly.
+ * - **nothing suppresses the ring**, anywhere. One rule did when this file was written — the
+ *   palette's field, against a compensating ring that was never drawn — and #260 deleted it,
+ *   so the allowlist below is empty and a new suppression cannot arrive quietly.
  *
  * Scope is the component layer plus every stylesheet this app adds on top of it. `tokens.css`
  * is generated custom properties and declares no `outline` at all.
@@ -174,26 +175,19 @@ describe("selection is a different visual from focus", () => {
 
 /**
  * The rules that switch the ring off. The spec says the ring is "never suppressed", so the
- * honest shape of this test is an allowlist of nil — except that it is not nil today, and a
- * test that failed on a known finding would just be a red build nobody could fix from here.
+ * honest shape of this test is an allowlist of nil — and as of #260 it *is* nil.
  *
- * So the one that exists is named, with what is wrong with it, and the assertion is that
- * *this* is the list. A second suppression added anywhere fails here.
+ * It held one entry until then: `.orca-palette__input:focus { outline: none }`, suppressed
+ * against a ring on `.orca-palette` that the whole component layer never drew. #260 deleted
+ * the suppression rather than inventing the compensating ring, so the palette's field takes
+ * the same `:focus-visible` ring as everything else (`themes.test.tsx` measures it on a
+ * focused field, which is the half of the claim text cannot make).
+ *
+ * The list stays, empty, because it is what makes a *new* suppression fail: adding one
+ * anywhere in the component layer or in this app's stylesheets fails here until somebody
+ * writes down the compensating affordance rule 10 asks for.
  */
-const KNOWN_SUPPRESSIONS: readonly { selector: string; why: string }[] = [
-  {
-    selector: ".orca-palette__input:focus",
-    /* An open finding, not an accepted exemption. Rule 10 allows suppressing the ring only
-       against a compensating one, and the comment above this rule claims exactly that —
-       "the ring belongs to the palette, not to the field inside it". But `.orca-palette`
-       has no `:focus-within` rule and the whole component layer references `--border-focus`
-       precisely once, in the `:focus-visible` rule above. The compensating ring does not
-       exist, so opening the palette with ⌘K puts focus somewhere with no focus indicator
-       at all. Reported to the integrator with wave 4; `components.css` is unit T's file,
-       not this one's. When it is fixed, delete this entry. */
-    why: "suppressed against a palette ring that does not exist (open finding, components.css)",
-  },
-];
+const KNOWN_SUPPRESSIONS: readonly { selector: string; why: string }[] = [];
 
 describe("the ring is never suppressed", () => {
   it("is switched off in exactly the places written down here, and nowhere else", () => {

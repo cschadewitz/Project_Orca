@@ -1,0 +1,192 @@
+/**
+ * The Plan surface's layout (#170). Tokens only, like every other surface stylesheet — the
+ * marks themselves (`.orca-badge`, `.orca-chip`, `.orca-seg`, `.orca-timeline-entry`) are
+ * the component layer's and are not restated here.
+ *
+ * The schedule table is a grid of rows rather than a `<table>`. It is virtualised, and the
+ * substrate renders one row element per row with the cells inside it — a `<tr>` cannot be
+ * that element, and a table with two spacer heights in it is not a table. The columns are
+ * fixed `col-*` tracks so the rows line up anyway, which is the whole of what a table was
+ * giving this list.
+ */
+
+.orca-plan {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.orca-plan__body {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+/* ---------- the sidebar: requests, then filters ---------- */
+
+.orca-plan__rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  overflow-y: auto;
+  border-right: var(--stroke-hairline) solid var(--border-hairline);
+}
+.orca-plan__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.orca-plan__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+/* A filter is a control, so it is a button: pressed is the state, accent is the ground. */
+.orca-plan__filter {
+  border: var(--stroke-hairline) solid var(--border-control);
+  border-radius: var(--radius-full);
+  background: var(--surface-base);
+  color: var(--ink-secondary);
+  padding: 0 var(--space-2);
+  height: var(--control-sm);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.orca-plan__filter:hover {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+.orca-plan__filter[aria-pressed="true"] {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.orca-plan__count {
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- the primary pane ---------- */
+
+.orca-plan__pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.orca-plan__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+/* The same measure the run list's text filter takes: wide enough for a slug and a title. */
+.orca-plan__text {
+  flex: 1;
+  min-width: 0;
+  max-width: 44ch;
+}
+
+/* ---------- the schedule table ---------- */
+
+.orca-plan__table {
+  flex: 1;
+  min-height: 0;
+}
+.orca-plan__row,
+.orca-plan__head {
+  display: grid;
+  grid-template-columns:
+    var(--col-classification) var(--col-slug) minmax(0, 1fr)
+    var(--col-request) var(--col-status) var(--col-score) var(--col-risk) var(--col-claim);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+}
+.orca-plan__row {
+  height: var(--row-h);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  border-left: var(--stroke-rail) solid transparent;
+}
+.orca-plan__head {
+  width: 100%;
+  color: var(--ink-secondary);
+  border-bottom: var(--stroke-hairline) solid var(--border-control);
+}
+.orca-plan__row:hover {
+  background: var(--surface-hover);
+}
+/* Selection is a ground and an accent rail; focus is the ring, and they are different
+   things that must both stay legible (rule 10). */
+.orca-plan__row--selected {
+  background: var(--surface-selected);
+  border-left-color: var(--accent);
+}
+/* Rows never wrap: what does not fit truncates and is read in the inspector (rule 9). */
+.orca-plan__cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orca-plan__id {
+  font-family: var(--font-mono);
+  color: var(--ink-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orca-plan__score {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ---------- the journal ---------- */
+
+.orca-plan__journal {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.orca-plan__journal-list {
+  flex: 1;
+  min-height: 0;
+}
+/* The origin, at the end of the row: which actor wrote the entry. */
+.orca-plan__origin {
+  justify-self: end;
+}
+
+/* ---------- the inspector, in the docked panel ---------- */
+
+.orca-plan__inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  overflow-y: auto;
+}
+.orca-plan__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.orca-plan__lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-4);
+}
+.orca-plan__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}

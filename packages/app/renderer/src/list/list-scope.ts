@@ -7,12 +7,15 @@
  * are not lists — a menu's `↑`/`↓` are the `Menu` primitive's and out-rank a list's by
  * being nearer the focus, which only works while the two stay different scopes.
  *
- * One list per scope, three scopes, so a screen can hold three lists: the run tree
- * (`run-tree`), the event timeline (`list`) and the stream of agent output (`stream`). A
- * fourth list on one screen is not a missing scope, it is a screen with too much on it.
+ * One list per scope, so a screen can hold as many lists as it has scopes: the run tree
+ * (`run-tree`), the event timeline (`list`) and the stream of agent output (`stream`) on
+ * Runs, and the schedule table (`list`) above the plan journal (`plan-journal`) on Plan
+ * (#170). A *fourth* list on the Runs screen is still not a missing scope — a scope is
+ * added when a surface has a second list whose `J` means something else, which is what the
+ * journal is, and not to let one screen grow another pane.
  */
 import type { ShortcutScope } from "../keyboard-map.js";
 
-export type ListScope = Extract<ShortcutScope, "list" | "run-tree" | "stream">;
+export type ListScope = Extract<ShortcutScope, "list" | "run-tree" | "stream" | "plan-journal">;
 
-export const LIST_SCOPES: readonly ListScope[] = ["list", "run-tree", "stream"];
+export const LIST_SCOPES: readonly ListScope[] = ["list", "run-tree", "stream", "plan-journal"];

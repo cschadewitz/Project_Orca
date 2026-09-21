@@ -134,6 +134,42 @@ export const StepViewSchema = z.object({
 });
 export type StepView = z.infer<typeof StepViewSchema>;
 
+/**
+ * One node of the workflow as this run actually took it - the overlay the workflow viewer
+ * draws over the graph (#177), in the order the run visited the nodes.
+ *
+ * It is a projection of `steps` and not a second source: one entry per step run, so a node
+ * retried three times is three entries with the same `nodeId` and ascending `attempt`, and a
+ * node the run never reached has no entry at all (which is what lets the viewer grey the
+ * untaken nodes). Its reason for existing beside `steps` is `viaEdge`: which edge of the
+ * *definition* the run came in on, which no step run records and which a client could only
+ * recover by holding the workflow and the run side by side and re-deriving it.
+ */
+export const RunTraversalViewSchema = z.object({
+  nodeId: z.string(),
+  /** The step run this visit is - the id `runs.events({ stepRunId })` pages the output of. */
+  stepRunId: z.string(),
+  attempt: z.number().int().positive(),
+  status: DisplayStatusSchema,
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+  /**
+   * The definition's edge the run arrived on: the edge from the previously visited node to
+   * this one. Absent for the first node, for a visit no edge explains (a retry of the same
+   * node, a run resumed into the middle of a graph), and for a run whose workflow this
+   * daemon no longer has - the edge is read off the definition, and a definition that is not
+   * registered yields no edge rather than an invented one.
+   */
+  viaEdge: z.object({ from: z.string(), to: z.string() }).optional(),
+  /**
+   * The child runs this visit spawned, when it is a container node (`loop`, `parallel`,
+   * `subworkflow`): `child.spawned` records them, so expanding a subworkflow on the canvas
+   * is a link and not a search. Absent when the visit spawned none.
+   */
+  childRunIds: z.array(z.string()).optional(),
+});
+export type RunTraversalView = z.infer<typeof RunTraversalViewSchema>;
+
 export const RunsGetParamsSchema = z.object({ runId: z.string().min(1) });
 export type RunsGetParams = z.infer<typeof RunsGetParamsSchema>;
 
@@ -144,6 +180,12 @@ export const RunsGetResultSchema = z.object({
   vars: z.record(z.string(), z.unknown()),
   /** Every step run, in scheduling order. */
   steps: z.array(StepViewSchema),
+  /**
+   * The path this run took through its workflow, in node order (protocol 1.7, #174).
+   * Optional on the wire: a daemon older than 1.7 does not send it, and a viewer that has
+   * not got it draws the graph without an overlay rather than failing.
+   */
+  traversal: z.array(RunTraversalViewSchema).optional(),
   /** Every artifact the run recorded, newest last. */
   artifacts: z.array(ArtifactViewSchema),
   /** The sequence number this projection is current as of - the timeline's cursor. */

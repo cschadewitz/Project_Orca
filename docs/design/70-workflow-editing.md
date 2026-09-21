@@ -22,7 +22,8 @@ hand-written in an editor are the same file, a diff shows only semantic change, 
 never owns state the daemon does not know about.
 
 What it costs: you cannot express intent through arrangement. That is acceptable here,
-because these graphs are small (the shipped `ai-sdlc` is eleven nodes) and their shape is
+because these graphs are small (the shipped `ai-sdlc` is sixteen nodes — eleven working ones,
+plus `start`, two `set`s and three `end`s) and their shape is
 already meaningful — layers are dependency depth, not taste.
 
 **Editing operations.**
@@ -100,6 +101,53 @@ draft bar states this in numbers — `3 runs pinned to v11` — and each is a li
 Version is shown wherever a run's workflow is named — the run header, the workflow viewer's
 overlay control, the step detail's node line — as `ai-sdlc v11`, and a run pinned to a version
 that is no longer the newest says so with a `◷ pinned` chip rather than looking current.
+
+## As built (v0.5.0)
+
+The viewer shipped in #177; everything above about editing is still ahead of it. What exists,
+and the two things a reader of this file would otherwise get wrong:
+
+- **The layout engine is `packages/app/renderer/src/workflow/layout.ts`** — thirty lines of
+  arithmetic, no dagre and no ELK. Layers are longest-path depth from `start` over the
+  forward edges; a cycle is cut by depth-first search (an edge into a node still open on the
+  stack) and drawn as a **back edge**, routed out of the source's top, level through a gutter
+  above the graph and down into the target's top. Order within a layer is the barycentre of a
+  node's predecessors with a stable tie-break on node id, and every box lands on a whole
+  number of 16px grid steps from `node-w`, `node-h`, `layer-gap` and `rank-gap`. An
+  unreachable node is laid out in a layer after the last one rather than beside `start`.
+- **A collapsed `subworkflow` or `parallel` is one box with a count on it** — `2 nested
+  graphs` in the node's meta line — and is collapsed by default. Expanded, each nested graph
+  is drawn in a dashed group box below the canvas, named by the `parent::node::branch` id the
+  daemon addresses it by, and laid out by the same function. It is not inlined: a nested
+  graph has its own `start` and its own layers, and drawing it inside its container would
+  move every node around it.
+- **A run pinned to an older version says so twice.** The `◷ pinned` chip is in the object
+  header, and a caption on the control rail names the version the run recorded *and* the
+  version on screen: "This run is pinned to v2. The graph drawn is v3, the definition on
+  disk — ORCA keeps no copy of the one that ran." The warning-only fallback this section
+  contemplates is not what shipped, but neither is the pinned model: ORCA records the version
+  and cannot execute an older one, so the viewer states both facts rather than implying it is
+  showing what ran.
+- **The run header carries the version, and not the chip.** `Crumb.version` (#177) prints
+  `ai-sdlc v11` on the run crumb, from the `workflowVersion` the run recorded — that is the
+  "shown wherever a run's workflow is named" above, on the run header. The `◷ pinned` chip is
+  *not* drawn there: pinned is `run.workflowVersion` against the version on disk, and the runs
+  surface has never read the definition — knowing it would mean a `workflows.get` per run in
+  the tree. So the run header says the version, the viewer says whether it is pinned, and the
+  crumb's counterpart menu is the way from one to the other.
+- **Three strokes on the canvas, three words in the legend.** A taken edge is solid and heavy,
+  an untaken one is dashed and faint, and a **back edge is dotted** — `--stroke-dash-untaken`
+  and `--stroke-dash-back`, which are tokens and not two hand-written dash arrays. Rule 4:
+  "runs backwards" and "was not taken" are different facts and an edge can be either, both or
+  neither, so they cannot be the same stroke.
+- **Every node is an `option` inside a `listbox`.** The viewport is the listbox and the one
+  tab stop; the scene, the plane and each positioned box between it and the nodes are
+  `role="presentation"`, because a div a reader has to walk past is a div that should say it
+  is scenery. An expanded group box sits *outside* the viewport, so its plane is a `listbox`
+  of its own with its own name — and it is that listbox, not the viewport, that carries
+  `aria-activedescendant` when the selected node is one of its. There is still one selection:
+  the surface holds one id and resolves it across the nested graphs (`findNode`), so selecting
+  a node inside an expanded branch opens it in the inspector like any other.
 
 ## What the editor reuses
 

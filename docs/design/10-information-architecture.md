@@ -27,18 +27,39 @@ nothing else about the layout changes per platform.
 
 ## Five surfaces
 
-| Surface | What it answers | Phase |
-| --- | --- | --- |
-| **Attention** | What needs me right now | 1 |
-| **Runs** | What is happening and what happened | 1 |
-| **Plan** | What is coming, why it is not moving, what it depends on | 2 |
-| **Agents** | Who is doing the work and are they healthy | 1 read, 2 write |
-| **Config** | How the system is wired, and what the workflows are | 2 |
+| Surface | Glyph | What it answers | Phase |
+| --- | :---: | --- | --- |
+| **Attention** | ◆ | What needs me right now | 1 — shipped |
+| **Runs** | ☰ | What is happening and what happened | 1 — shipped |
+| **Plan** | ⬡ | What is coming, why it is not moving, what it depends on | 2 — shipped in v0.5.0 (#170); the graph, risk and decision modes are v0.6.0 |
+| **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write — both shipped |
+| **Config** | ❋ | How the system is wired, and what the workflows are | 2 — shipped in v0.5.0 (#175, #266, #177) |
+
+Phase 2 is the configuration and monitoring wave, and as of v0.5.0 all five surfaces have
+content. Plan is the schedule table, the scheduler's explanations, a requests sidebar and the
+journal; its dependency graph (#171), risk matrix (#172) and decision matrix (#173) are
+deferred to v0.6.0 and are *absent* from the object header's mode control rather than
+disabled. Config is `orca.config.yaml` as a form over the schema the daemon describes, beside
+the raw file, with the permission sidecar as its second document, and the workflow viewer
+(#177) is where `orca://workflow/…` lands.
+
+The glyph column is `semantics.json`'s `surface` map, bundled in the symbol face like every
+other glyph the app draws — it is never the OS's. It sits beside the label in the sidebar and
+becomes the whole of it below 960px, where the rail collapses (`50-accessibility-and-keyboard.md`),
+so the five are chosen to be told apart in greyscale at `--icon-md`: a solid diamond, three
+bars, a hollow hexagon, a ring round a dot, a radial burst. Attention carries the same ◆ the
+waiting status does, deliberately — the surface for what is waiting on a person is the one
+place that shape means the same thing twice. Config is radial rather than a cog because no
+OFL face ORCA bundles draws one (U+2699 is in neither Noto subset), and an OS cog would be a
+different drawing on each platform.
 
 Attention is a surface, not a notification tray: it is first in the sidebar, it has a
 permanent keyboard address (`⌘1`), and it is the app's landing screen. When nothing is waiting
-it says so and the runs that failed are still listed below, so the top item in the sidebar is
-never a dead end.
+it says so and the runs that failed are still listed below; when nothing has failed either, it
+lists the runs that are in flight, and `Enter` opens the selected one. So the top item in the
+sidebar is never a dead end: it answers "what needs me" first and "what is happening" when the
+answer to the first is nothing. Only a workspace with nothing waiting, nothing failed and
+nothing running is an empty screen, and then the screen is honest.
 
 ## Dual spine
 
@@ -83,10 +104,17 @@ one is worth keeping in mind before a new form is added:
   so `orca://artifact/spec.md@v3` alone names as many artifacts as there are runs with a
   `spec.md`. The `?run=` form is canonical and is what **Copy link** emits; a bare name is a
   palette *search*, not a link.
-- **`orca://item/…` and `orca://workflow/…` name surfaces that do not exist yet** — Plan is
-  v0.5.0 and the workflow viewer v0.6.0. They resolve all the same: the surface is selected
-  and the id is shown on its unbuilt state. A link is never dropped because the screen behind
-  it has not been built.
+- **`orca://item/…` named a surface that did not exist yet** — Plan (#170) shipped in
+  v0.5.0, and the link now lands on the schedule with that work item selected and its
+  explanation open, exactly as the table above promises. An id this plan does not have
+  leaves the table as it is and says which id it was holding, because a link is never
+  dropped and never answered with something that was not asked for.
+  **`orca://workflow/…` is built as of #177** and lands on the viewer, on the Config surface,
+  with `?run=` overlaying that run's path over the graph. Config's own screen shipped beside
+  it in v0.5.0 (#175, #266), so `⌘5` with no workflow named lands on the configuration form
+  and the raw file rather than on an unbuilt notice; a workflow is reached by link, from the
+  palette, or from the run header's "the workflow it executes".
+  Workflow *editing* remains v0.6.0.
 - **`orca://agent/…` was missing.** The Agents surface shipped in v0.4.0 and the palette lists
   agents, and every palette entry has to hand back a canonical URL.
 
@@ -104,7 +132,9 @@ rather than opening a second one onto the same store.
 ## Command palette
 
 `⌘K` / `Ctrl+K`. Three kinds of entry, in this order: **actions** on the current object
-(answer gate, cancel run, resume run, waive dependency, toggle density), **navigation**
+(answer a gate with each option it offers, cancel or resume a run, start a run, waive a
+dependency, decide or reopen a decision, update a risk, release a claim, toggle density —
+every write the daemon serves, as of #178), **navigation**
 (recent runs, work items, agents, config files, workflows), and **search** (step and artifact
 names). Typing a bare run id or an `orca://` URL jumps straight to it. The
 palette is the only place a phase-2 write action needs to be discoverable, which keeps the
@@ -126,4 +156,13 @@ is a denial of service against your own daemon.
 - **No global search screen.** Search lives in the palette and in per-surface filter fields.
 - **No settings screen separate from Config.** Application preferences (theme, density,
   notifications) are a section of the Config surface, stored separately from the ORCA YAML and
-  labelled as such, so there is one place to look.
+  labelled as such, so there is one place to look. They save immediately and have no draft:
+  they are the person's own window, not the workspace's configuration, and a Save button
+  would imply a choice had not taken effect while it plainly had.
+
+  **Config shows two documents, and the second is not YAML (#266).** The ADR 0009 permission
+  sidecar — `orca.permissions.json`, where an answer of "allow always" is written — is the
+  other document `config.get` returns, and Config renders it beside the YAML: each agent's
+  effective policy in evaluation order, every rule chipped `config` or `sidecar`, and the
+  sidecar's own JSON in a second raw view. So the surface holds three things stored in three
+  places, and each one says where it lives.
