@@ -165,6 +165,7 @@ describe("ORCA as an ACP agent", () => {
 
     const permissionRequests: acp.RequestPermissionRequest[] = [];
     const textBySession = new Map<string, string>();
+    const plansBySession = new Map<string, Extract<acp.SessionUpdate, { sessionUpdate: "plan" }>[]>();
     const sessions: { a?: string; b?: string } = {};
     const results = await acp
       .client({ name: "fake-kepler" })
@@ -172,6 +173,11 @@ describe("ORCA as an ACP agent", () => {
         const u = ctx.params.update;
         if (u.sessionUpdate === "agent_message_chunk" && u.content.type === "text")
           textBySession.set(ctx.params.sessionId, (textBySession.get(ctx.params.sessionId) ?? "") + u.content.text);
+        if (u.sessionUpdate === "plan") {
+          const plans = plansBySession.get(ctx.params.sessionId) ?? [];
+          plans.push(u);
+          plansBySession.set(ctx.params.sessionId, plans);
+        }
       })
       .onRequest(acp.methods.client.session.requestPermission, (ctx) => {
         permissionRequests.push(ctx.params);
@@ -212,5 +218,17 @@ describe("ORCA as an ACP agent", () => {
     expect(textBySession.get(sessions.a!)).not.toContain("Nested");
     expect(textBySession.get(sessions.b!)).toMatch(/Starting Nested[\s\S]*completed \(success\)/);
     expect(textBySession.get(sessions.b!)).not.toContain("Mini");
+    expect(
+      plansBySession
+        .get(sessions.b!)
+        ?.at(-1)
+        ?.entries.map((e) => `${e.content}:${e.status}`),
+    ).toEqual(["sub:completed", "[nested-child] gate → ship:completed"]);
+    expect(
+      plansBySession
+        .get(sessions.a!)
+        ?.at(-1)
+        ?.entries.some((e) => e.content.includes("nested-child")),
+    ).toBe(false);
   }, 60_000);
 });

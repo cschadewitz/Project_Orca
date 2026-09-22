@@ -174,6 +174,10 @@ async function chromeOnAWorkflow(): Promise<Harness> {
   const h = harness();
   renderChrome(h);
   await screen.findByRole("listbox", { name: /graph$/ });
+  // The canvas exists before its effect registers the scope. Wait on the registry itself:
+  // under full-suite load, reading it immediately after the role appeared raced all twelve
+  // workflow bindings and made the agreement check report the entire scope as missing.
+  await waitFor(() => expect(h.keyboard.list().filter((shortcut) => shortcut.scope === "workflow")).toHaveLength(12));
   return h;
 }
 
