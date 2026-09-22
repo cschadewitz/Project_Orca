@@ -53,7 +53,8 @@ describe("jsonl", () => {
   });
   it("still surfaces read errors other than a missing file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-jsonl-"));
-    await writeFile(join(dir, "f"), "");
-    await expect(readJsonl(join(dir, "f", "child.jsonl"), Row)).rejects.toMatchObject({ code: "ENOTDIR" });
+    // A directory read is a real I/O failure on supported platforms. A child under a
+    // regular file reports ENOENT on Windows, so that path tests missing-file handling.
+    await expect(readJsonl(dir, Row)).rejects.toMatchObject({ code: "EISDIR" });
   });
 });

@@ -3,7 +3,7 @@
  * run's next tool call.
  *
  * A real scripted agent (`@orca/testing`) over a real ACP session asks twice for the same
- * tool call - the same path, from two steps sharing one `per-run` session. The first ask
+ * tool call - the same source path, from two steps sharing one `per-run` session. The first ask
  * reaches the answerer, which answers it *and* records the rule the answer justifies, the
  * way the daemon's `inputs.answer` with `always` does. The second ask must be decided
  * `allow` by the policy: no second `human.requested`, nobody asked.
@@ -51,7 +51,7 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
-/** Two steps, one path: the second step's tool call is the one the grant has to cover. */
+/** Two steps ask about the same source file, while reports have private attempt paths. */
 const WORKFLOW = `
 id: sidecar
 name: Sidecar grants
@@ -112,7 +112,7 @@ describe("a grant recorded mid-run", () => {
     const agent = scriptedAgentSpec({
       id: "scripted",
       // Both occurrences ask; whether the second one *reaches* the port is the test.
-      playbookJson: { kinds: { note: [{ askPermission: true }, { askPermission: true }] } },
+      playbookJson: { kinds: { note: [{ askPermission: true, permissionPath: join(dir, "source.ts") }] } },
       stateFile: join(dir, ".orca-test", "state.json"),
       roles: ["builder"],
       // One session for the whole run, so the second ask is evaluated by a session that was
@@ -154,7 +154,7 @@ describe("a grant recorded mid-run", () => {
       agents: Record<string, { rules: { match: { path?: string; kind?: string }; decision: string }[] }>;
     };
     expect(doc.agents["scripted"]?.rules).toMatchObject([
-      { match: { kind: "edit", path: "note.md" }, decision: "allow" },
+      { match: { kind: "edit", path: "source.ts" }, decision: "allow" },
     ]);
   });
 });

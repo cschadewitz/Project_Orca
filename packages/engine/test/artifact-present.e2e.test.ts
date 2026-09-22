@@ -51,7 +51,9 @@ describe("artifact-present completion (e2e with scripted ACP agent)", () => {
     expect(work.result?.data).toMatchObject({ stopReason: "end_turn" });
     const arts = Object.values(state.artifacts);
     expect(arts.map((a) => a.kind)).toEqual(["plan"]);
-    expect(arts[0]?.path).toBe(`${h.dir}/.orca/plan.md`);
+    expect(arts[0]?.path?.replaceAll("\\", "/")).toBe(
+      `${h.dir.replaceAll("\\", "/")}/.orca/.orca-attempts/${state.run.id}/${work.id}/plan.md`,
+    );
   }, 60_000);
 
   it("cancels the turn once every required deliverable exists, ignoring optional ones", async () => {

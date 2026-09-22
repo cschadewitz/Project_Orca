@@ -1,109 +1,105 @@
-/**
- * A lock file: the cross-process mutual exclusion the JSONL logs append under.
- *
- * Holding the lock means owning `path`. It is taken the way `FileClaimStore` takes a claim -
- * the contents are written under a private name and `link()`ed into place - so the kernel
- * elects exactly one holder and a reader only ever sees a complete file. The contents name
- * the holder (`pid`, `at`) so a lock a dead process left behind can be recognised and
- * broken instead of blocking every later writer forever.
- *
- * A lock is stale when its holder's pid is gone, or when it is older than `staleMs`. The
- * age rule is the fallback for holders this process cannot probe (another pid namespace)
- * and for a live process that is wedged; it is deliberately generous, because breaking a
- * live holder's lock is the one thing that can put two writers on one file. Breaking is a
- * rename followed by an inode check, so two waiters that both find the same stale lock
- * cannot each remove a lock the other has just taken.
- *
- * Assumes one host, or a filesystem where `link()` is atomic - the same assumption the
- * claim store makes.
- */
-import { link, open, rename, stat, unlink, writeFile } from "node:fs/promises";
+/** Cross-process mutex directories. Only the remover of an exact owner token may rmdir. */
+import { link, mkdir, open, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
+import { join } from "node:path";
 import { OrcaError } from "@orca/core";
 
 export interface FileLockOptions {
-  /** A lock older than this is broken even if its holder still seems alive. Default 30 s. */
+  /** Retained for compatibility; a live or unknown owner is never broken by age. */
   staleMs?: number;
-  /** Give up, with `STORE_LOCK_TIMEOUT`, after waiting this long. Default 60 s. */
+  /** Give up, with STORE_LOCK_TIMEOUT, after this long. Default 60 s. */
   timeoutMs?: number;
-  /** Told about every stale lock this waiter broke. */
   onBroken?: (holder: LockHolder) => void;
 }
-
 export interface LockHolder {
   pid: number;
-  /** Epoch ms at which the holder took (or last tried to take) the lock. */
   at: number;
 }
-
-const DEFAULT_STALE_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_BACKOFF_MS = 32;
-
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-const tag = () => `${process.pid}.${Math.random().toString(36).slice(2)}`;
+const tag = () => `${process.pid}.${randomUUID()}`;
+const codeOf = (error: unknown) => (error as NodeJS.ErrnoException).code;
+const sharing = (error: unknown) => process.platform === "win32" && ["EPERM", "EACCES"].includes(codeOf(error) ?? "");
 
-/** Run `fn` while holding the lock at `path`; the parent directory must exist. */
+/** Legacy files, empty directories and unknown owners fail closed until explicitly recovered. */
 export async function withFileLock<T>(path: string, fn: () => Promise<T>, options: FileLockOptions = {}): Promise<T> {
-  const ino = await acquire(path, options);
+  const token = `owner.${tag()}.json`;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let backoff = 1;
+  for (;;) {
+    let created = false;
+    try {
+      await mkdir(path);
+      created = true;
+    } catch (error) {
+      if (codeOf(error) !== "EEXIST" && !sharing(error)) throw error;
+    }
+    if (created) {
+      // No callback runs before publication. A crash here leaves an empty directory,
+      // which is deliberately not automatically removed by another contender.
+      await writeFile(join(path, token), JSON.stringify({ pid: process.pid, at: Date.now(), host: hostname() }), {
+        flag: "wx",
+      });
+      break;
+    }
+    if (await removeDeadOwner(path, options)) continue;
+    if (Date.now() >= deadline)
+      throw new OrcaError("STORE_LOCK_TIMEOUT", `lock ${path} still held after ${timeoutMs}ms`, { path, timeoutMs });
+    await sleep(backoff + Math.random() * backoff);
+    backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+  }
   try {
     return await fn();
   } finally {
-    await release(path, ino);
+    await removeToken(path, token);
   }
 }
 
-/** Returns the inode of the lock file we now own, so release can tell it apart from a successor's. */
-async function acquire(path: string, options: FileLockOptions): Promise<number> {
-  const staleMs = options.staleMs ?? DEFAULT_STALE_MS;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const tmp = `${path}.${tag()}.tmp`;
-  const deadline = Date.now() + timeoutMs;
-  let backoff = 1;
+async function removeToken(path: string, token: string): Promise<boolean> {
   try {
-    for (;;) {
-      // Rewritten on every attempt so a long wait does not age our own lock before we hold it.
-      await writeFile(tmp, JSON.stringify({ pid: process.pid, at: Date.now() } satisfies LockHolder), "utf8");
-      try {
-        await link(tmp, path);
-        return (await stat(tmp)).ino;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      }
-      let broken: LockHolder | undefined;
-      const verdict = await breakIfStale(path, (text, mtimeMs) => {
-        broken = parseLockHolder(text);
-        const age = Date.now() - (broken?.at ?? mtimeMs);
-        return (broken !== undefined && !processAlive(broken.pid)) || age >= staleMs;
-      });
-      if (verdict !== "live") {
-        if (verdict === "broken" && broken) options.onBroken?.(broken);
-        continue;
-      }
-      if (Date.now() >= deadline)
-        throw new OrcaError("STORE_LOCK_TIMEOUT", `lock ${path} still held after ${timeoutMs}ms`, { path, timeoutMs });
-      await sleep(backoff + Math.random() * backoff);
-      backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
-    }
-  } finally {
-    await unlink(tmp).catch(() => undefined);
+    await unlink(join(path, token));
+  } catch (error) {
+    if (codeOf(error) === "ENOENT") return false;
+    throw error;
   }
+  // Crucially, only the successful unlink winner gets here. A delayed contender
+  // cannot remove a successor's directory after its old token disappeared.
+  await rmdir(path);
+  return true;
 }
 
-async function release(path: string, ino: number): Promise<void> {
+async function removeDeadOwner(path: string, options: FileLockOptions): Promise<boolean> {
   try {
-    // If the lock at `path` is no longer ours, a waiter broke ours as stale and took its own; leave it.
-    if ((await stat(path)).ino !== ino) return;
-    await unlink(path);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    const names = await readdir(path);
+    if (names.length !== 1 || !/^owner\.\d+\.[a-f0-9-]+\.json$/.test(names[0]!)) return false;
+    const token = names[0]!;
+    const raw = JSON.parse(await readFile(join(path, token), "utf8")) as Partial<LockHolder> & { host?: string };
+    if (
+      raw.host !== hostname() ||
+      !Number.isInteger(raw.pid) ||
+      raw.pid! <= 0 ||
+      !Number.isFinite(raw.at) ||
+      processAlive(raw.pid!)
+    )
+      return false;
+    const removed = await removeToken(path, token);
+    if (removed) options.onBroken?.({ pid: raw.pid!, at: raw.at! });
+    return removed;
+  } catch (error) {
+    if (codeOf(error) === "ENOENT") return true;
+    if (["ENOTDIR", "EISDIR"].includes(codeOf(error) ?? "") || sharing(error) || error instanceof SyntaxError)
+      return false;
+    throw error;
   }
 }
 
 /**
  * Remove the holder file at `path` when `stale(contents, mtimeMs)` says its holder is gone.
- * Shared with the lease store, which owns a longer-lived file with the same shape: a holder
- * record linked into place, broken only by a rename followed by an inode check so two waiters
- * that both find it stale cannot each remove a file the other has just taken.
+ * Lease-record helper only: callers MUST serialize every mutation with withFileLock.
+ * The rename/inode check alone does not exclude a delayed competing remover.
  *
  * `"broken"` - it was stale and is now gone; `"gone"` - there was nothing to break (or the
  * file we moved turned out to belong to a live successor and was put back); `"live"` - the
@@ -126,7 +122,12 @@ export async function breakIfStale(
       await fh.close();
     }
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "gone";
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return "gone";
+    // Windows can deny an open while another handle's delete is still pending.
+    // An unreadable lock is not evidence of a dead owner: keep waiting under
+    // acquire's existing bounded backoff instead of failing a healthy contender.
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) return "live";
     throw e;
   }
   if (!stale(text, mtimeMs)) return "live";

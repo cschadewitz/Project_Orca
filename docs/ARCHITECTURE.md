@@ -164,6 +164,12 @@ that never started get a fresh child run.
    context, then append the **deliverables block** — a human list *and* an
    HTML‑comment YAML block listing every artifact the step must produce with its
    absolute path and validation rules (`renderDeliverablesBlock`).
+   The declared directory and filename select the output location, with
+   `.orca-attempts/<runId>/<stepRunId>/` inserted before the filename. A back-edge
+   or retry has a new step id, so an old passing report cannot be credited to a
+   new attempt. Agents must use the exact deliverable paths, and only the supplied
+   artifact inputs as prior workflow context. Earlier reports remain in the
+   content-addressed store as explicit inputs, including after an interrupted turn.
 3. Open (or reuse, `sessionMode: per-run`) an **ACP session** on the agent's
    host. ORCA is the ACP *client*: it serves `fs/read_text_file`,
    `fs/write_text_file` from the host file system (scoped to the workspace) and
@@ -273,6 +279,14 @@ now and a cancellation written into it would cancel the run the operator was tak
 It logs why and raises `RUN_LEASED` to whoever called `run()`; the run itself is left
 exactly as the last write found it, still running, its interrupted step still open, for the
 new holder to re-attempt.
+
+Ownership validation and execution writes now share the lease mutation mutex. A
+broken holder's next write is refused immediately, even before its heartbeat notices.
+The keeper also stops local execution at the last successful heartbeat's deadline
+when renewals error or hang. Parked input acceptance and cancellation use this same
+ownership boundary and reread the durable log under it. The backward-readable lease
+fence and legacy-writer refusals are documented in
+[ownership compatibility](v0.5.2-ownership-compatibility.md).
 
 Claims and leases answer different questions and neither replaces the other: a claim says
 who *owns a work item*, outlives the process that took it, and is never released on its

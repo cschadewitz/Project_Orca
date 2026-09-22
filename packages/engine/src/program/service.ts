@@ -3,7 +3,7 @@
  * Creates the Request record and starts the program workflow, which
  * decomposes it and drives each work item through the SDLC workflow.
  */
-import { newId, RequestSchema, type Request, type RequestSource, type RunState } from "@orca/core";
+import { newId, RequestSchema, succeeded, type Request, type RequestSource, type RunState } from "@orca/core";
 import { isTerminal, type Orchestrator } from "../orchestrator.js";
 
 export interface SubmitRequestInput {
@@ -64,9 +64,9 @@ export class ProgramService {
     if (!state.run.requestId) return undefined;
     const cur = await this.orchestrator.stores.requests.get(state.run.requestId);
     if (!cur || cur.programRunId !== state.run.id || !isTerminal(state)) return cur;
-    const status =
-      state.run.status === "completed" ? "completed" : state.run.status === "cancelled" ? "cancelled" : "failed";
-    await this.orchestrator.stores.requests.put({ ...cur, status, updatedAt: this.orchestrator.clock.isoNow() });
-    return cur;
+    const status = succeeded(state) ? "completed" : state.run.status === "cancelled" ? "cancelled" : "failed";
+    const updated: Request = { ...cur, status, updatedAt: this.orchestrator.clock.isoNow() };
+    await this.orchestrator.stores.requests.put(updated);
+    return updated;
   }
 }

@@ -29,6 +29,34 @@ describe("claim stores", () => {
     ["memory", async (): Promise<ClaimStore> => new InMemoryClaimStore()],
     ["file", async (): Promise<ClaimStore> => (await fileStore()).store],
   ] as const) {
+    it(`${name}: a successor cannot acquire while release repairs the projection`, async () => {
+      const store = await make();
+      await store.claim(claim("wi_1", "run_a"));
+      let enter!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      let finish!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const releasing = store.release("wi_1", "run_a", async () => {
+        enter();
+        await barrier;
+      });
+      await entered;
+      const successor = store.claim(claim("wi_1", "run_b"));
+      expect((await store.get("wi_1"))?.runId).toBe("run_a");
+      finish();
+      await releasing;
+      expect((await successor).runId).toBe("run_b");
+      let staleCallback = false;
+      await store.release("wi_1", "run_a", async () => {
+        staleCallback = true;
+      });
+      expect(staleCallback).toBe(false);
+      expect((await store.get("wi_1"))?.runId).toBe("run_b");
+    });
     it(`${name}: the first claim wins and later ones see the incumbent`, async () => {
       const store = await make();
       expect(await store.get("wi_1")).toBeUndefined();

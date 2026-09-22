@@ -22,7 +22,8 @@
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ArtifactSchema, OrcaError, appendJsonl, readJsonl, type Artifact } from "@orca/core";
+import { ArtifactSchema, OrcaError, type Artifact, type Logger } from "@orca/core";
+import { JsonlLogDir } from "./jsonl-log.js";
 
 export interface ArtifactQuery {
   runId?: string;
@@ -83,28 +84,27 @@ export class InMemoryArtifactStore implements ArtifactStore {
 
 /** `<dir>/artifacts/blobs/<sha256>` + `<dir>/artifacts/index.jsonl`. */
 export class FileArtifactStore implements ArtifactStore {
-  private cache: Map<string, Artifact> | undefined;
-  constructor(private readonly dir: string) {}
+  private readonly log: JsonlLogDir;
+  constructor(
+    private readonly dir: string,
+    logger?: Logger,
+  ) {
+    this.log = new JsonlLogDir(join(dir, "artifacts"), logger ? { logger } : {});
+  }
 
   private get base(): string {
     return join(this.dir, "artifacts");
   }
-  private get index(): string {
-    return join(this.base, "index.jsonl");
-  }
   private async load(): Promise<Map<string, Artifact>> {
-    if (this.cache) return this.cache;
     await mkdir(join(this.base, "blobs"), { recursive: true });
     const map = new Map<string, Artifact>();
-    for (const a of await readJsonl(this.index, ArtifactSchema)) map.set(a.id, a);
-    this.cache = map;
+    for (const a of await this.log.readCommitted("index", ArtifactSchema)) map.set(a.id, a);
     return map;
   }
   async put(artifact: Artifact, content: ArtifactContent): Promise<void> {
-    const map = await this.load();
+    await mkdir(join(this.base, "blobs"), { recursive: true });
     await writeFile(join(this.base, "blobs", artifact.contentHash), toBytes(content));
-    await appendJsonl(this.index, artifact);
-    map.set(artifact.id, artifact);
+    await this.log.append("index", () => artifact);
   }
   async get(id: string): Promise<Artifact | undefined> {
     return (await this.load()).get(id);

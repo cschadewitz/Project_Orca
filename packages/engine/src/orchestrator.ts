@@ -16,6 +16,7 @@ import {
   pendingHumanInputs,
   reduceRunSummary,
   renderTemplate,
+  RiskMatrixConfigSchema,
   retryBudget,
   RUN_SUMMARY_EVENT_TYPES,
   runSummary,
@@ -73,6 +74,7 @@ import {
   type HumanInputPort,
 } from "./human-input.js";
 import { PlanService } from "./plan/service.js";
+import { recoverReleasedWorkItem } from "./program/work-items.js";
 import { RunContext } from "./run-context.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
@@ -265,22 +267,27 @@ export class Orchestrator {
       // Closing a run we are not driving is still writing to its log, so it goes through the
       // same lease: cancelling a run another process is interpreting has to be refused there,
       // not raced into the log (that process would keep appending afterwards).
+      const holder = newId("orc", this.clock.now());
       const lease = await this.stores.leases.acquire({
         resource: runLeaseResource(runId),
-        holder: this.leaseHolder,
+        holder,
         ttlMs: this.leaseTtlMs,
         note: "cancel",
       });
-      if (!ownsLease(lease, this.leaseHolder))
+      if (!ownsLease(lease, holder))
         throw new OrcaError(
           "RUN_LEASED",
           `run ${runId} is being interpreted by pid ${lease.pid} on ${lease.host}: cancel it there, or take the lease with 'orca leases break ${runId} --force'`,
           { runId, ...describeLease(lease) },
         );
       try {
-        for (const s of openSteps(state))
-          await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
-        await this.stores.events.append({ type: "run.cancelled", runId, payload: reason ? { reason } : {} });
+        await this.stores.leases.withOwnership(lease, async () => {
+          const fresh = reduceRun(await this.stores.events.read(runId));
+          if (isTerminal(fresh)) return;
+          for (const s of openSteps(fresh))
+            await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
+          await this.stores.events.append({ type: "run.cancelled", runId, payload: reason ? { reason } : {} });
+        });
       } finally {
         await this.stores.leases.release(lease);
       }
@@ -383,11 +390,34 @@ export class Orchestrator {
    * `answerFromPreviousAttempt` picks up the answer alone when the run resumes.
    */
   async answer(requestId: string, answer: string, runId?: string, note?: string): Promise<HumanInputRequest> {
-    const request = (runId ? pendingHumanInputs(await this.getState(runId)) : await this.pendingInputs()).find(
+    const candidate = (runId ? pendingHumanInputs(await this.getState(runId)) : await this.pendingInputs()).find(
       (h) => h.id === requestId,
     );
+    if (!candidate) throw new OrcaError("RUN_STATE", `no pending human input '${requestId}'`, { requestId });
+    // Each mutation has its own holder, including concurrent calls on this instance.
+    const holder = newId("orc", this.clock.now());
+    const lease = await this.stores.leases.acquire({ resource: runLeaseResource(candidate.runId), holder });
+    if (!ownsLease(lease, holder)) throw new OrcaError("RUN_LEASED", `run ${candidate.runId} is being modified`);
+    try {
+      return await this.stores.leases.withOwnership(lease, () =>
+        this.answerOwned(requestId, answer, candidate.runId, note),
+      );
+    } finally {
+      await this.stores.leases.release(lease);
+    }
+  }
+
+  private async answerOwned(
+    requestId: string,
+    answer: string,
+    runId: string,
+    note?: string,
+  ): Promise<HumanInputRequest> {
+    // Read the durable log under ownership; a cached paused context may precede another answer.
+    const fresh = reduceRun(await this.stores.events.read(runId));
+    const request = pendingHumanInputs(fresh).find((h) => h.id === requestId);
     if (!request) throw new OrcaError("RUN_STATE", `no pending human input '${requestId}'`, { requestId });
-    const state = await this.getState(request.runId);
+    const state = fresh;
     if (state.run.status !== "paused")
       throw new OrcaError(
         "RUN_STATE",
@@ -461,8 +491,35 @@ export class Orchestrator {
         `work item ${workItemId} is claimed by run ${claim.runId}, which is ${owner}, not finished: resume or cancel that run, or release with force`,
         { workItemId, runId: claim.runId, status: owner },
       );
+    // Cancel stale child execution before taking the claim mutex: execution takes
+    // lease -> claim, so the inverse order would deadlock a concurrent dispatcher.
+    let retryCancelledRunId: string | undefined;
+    if (dead) {
+      const item = await this.stores.workItems.get(workItemId);
+      if (item?.status === "in-progress" && item.runId && (await this.cancelAbandonedChild(item.runId, claim.runId)))
+        retryCancelledRunId = item.runId;
+    }
     // Compare-and-delete against the incumbent we inspected: a claim another run took in the meantime survives.
-    await this.stores.claims.release(workItemId, claim.runId);
+    await this.stores.claims.release(workItemId, claim.runId, async () => {
+      const item = await this.stores.workItems.get(workItemId);
+      let child;
+      if (item?.runId) {
+        try {
+          const childEvents = await this.stores.events.read(item.runId);
+          child = childEvents.length ? reduceRun(childEvents).run : undefined;
+        } catch (error) {
+          if (!(error instanceof OrcaError) || error.code !== "RUN_NOT_FOUND") throw error;
+        }
+      }
+      const changes = await recoverReleasedWorkItem(
+        this.stores,
+        workItemId,
+        child,
+        this.clock.isoNow(),
+        retryCancelledRunId,
+      );
+      await this.plan.onWorkItemsProjected(changes, claim.runId);
+    });
     this.logger.info("work item claim released", {
       workItemId,
       runId: claim.runId,
@@ -471,6 +528,63 @@ export class Orchestrator {
       forced: !dead,
     });
     return { ...claim, owner };
+  }
+
+  /** Close only unowned, unparked abandoned execution, checking state under its lease. */
+  private async cancelAbandonedChild(runId: string, parentRunId: string): Promise<boolean> {
+    const events = await this.stores.events.read(runId);
+    if (!events.length) return false;
+    const snapshot = reduceRun(events);
+    if (snapshot.run.parentRunId !== parentRunId) return false;
+    if (snapshot.run.status !== "running" && snapshot.run.status !== "created") return false;
+    const holder = newId("orc", this.clock.now());
+    const lease = await this.stores.leases.acquire({
+      resource: runLeaseResource(runId),
+      holder,
+      note: "recover abandoned claim",
+    });
+    if (!ownsLease(lease, holder)) return false;
+    try {
+      return await this.stores.leases.withOwnership(lease, async () => {
+        const state = reduceRun(await this.stores.events.read(runId));
+        if (state.run.parentRunId !== parentRunId) return false;
+        if (state.run.status !== "running" && state.run.status !== "created") return false;
+        const lastId = state.stepOrder.at(-1);
+        const last = lastId ? state.steps[lastId] : undefined;
+        if (last?.status === "completed" && last.result?.outcome) {
+          await this.stores.events.append({
+            type: "run.completed",
+            runId,
+            payload: {
+              outcome: last.result.outcome,
+              ...(last.result.message ? { message: last.result.message } : {}),
+            },
+          });
+          return false; // Recover the terminal outcome; it is not work to redispatch.
+        }
+        // A live or parked descendant still owns work: do not redispatch its ancestor.
+        for (const step of Object.values(state.steps))
+          for (const childId of step.childRunIds) {
+            const childEvents = await this.stores.events.read(childId);
+            if (
+              childEvents.length &&
+              !isTerminal(reduceRun(childEvents)) &&
+              !(await this.cancelAbandonedChild(childId, runId))
+            )
+              return false;
+          }
+        for (const step of openSteps(state))
+          await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: step.id } });
+        await this.stores.events.append({
+          type: "run.cancelled",
+          runId,
+          payload: { reason: "abandoned work-item claim released for redispatch" },
+        });
+        return true;
+      });
+    } finally {
+      await this.stores.leases.release(lease);
+    }
   }
 
   private async ownerStatus(runId: string): Promise<HeldClaim["owner"]> {
@@ -505,12 +619,10 @@ export class Orchestrator {
    * over a parent and leaves a child leased has taken over nothing - the resume stops at the
    * first `runChild`. Pass `descendants: false` for exactly one run.
    *
-   * Refused while any of them is live unless `force`. A live lease means some process is
-   * heartbeating for that run this second, and breaking it is precisely what puts two writers
-   * on one log; the broken holder finds out at its next heartbeat and cancels itself, so
-   * `force` accepts a window of one heartbeat in which it may still append. It is there for
-   * what the TTL cannot see - a holder in another pid namespace or on another host that the
-   * operator knows is gone (#103) - and is the same operator act as `releaseClaim`.
+   * Refused while any of them is live unless `force`. Breaking and every execution write
+   * share the ownership mutex, so an obsolete holder's next append is refused immediately.
+   * The heartbeat also stops local execution, including while no events are being emitted.
+   * Legacy records require quiesced recovery; `force` cannot make old unfenced writers safe.
    *
    * Returns what was broken, the named run first.
    */
@@ -646,6 +758,7 @@ export class Orchestrator {
     const held = await this.takeRunLease(runId, summary.workflowId, () => rc);
     try {
       rc = await this.loadContext(runId);
+      rc.lease = held.lease;
       // The window between taking the lease and having a context to stop is the one place
       // `onLost` cannot act on (#267): it fires, finds no `rc`, and returns. Reading the flag
       // here closes it - an interpreter whose lease went away while the log was being reduced
@@ -748,6 +861,16 @@ export class Orchestrator {
       const last = lastId ? rc.state.steps[lastId] : undefined;
       if (last) {
         if (last.status === "completed") {
+          if (last.result?.outcome) {
+            await rc.emit({
+              type: "run.completed",
+              payload: {
+                outcome: last.result.outcome,
+                ...(last.result.message ? { message: last.result.message } : {}),
+              },
+            });
+            return rc.state;
+          }
           const next = await this.route(rc, last.nodeId, last.result ?? { artifactIds: [], data: {} });
           if (!next) throw new OrcaError("RUN_STATE", `resume: no route from completed step ${last.nodeId}`);
           nodeId = next.to;
@@ -854,7 +977,8 @@ export class Orchestrator {
       return rc.state;
     } finally {
       await this.closeRunSessions(runId);
-      if (rc.state.run.workItemId && isTerminal(rc.state)) await this.plan.onRunFinished(rc.state.run);
+      if (rc.state.run.workItemId && isTerminal(rc.state))
+        await rc.withOwnership(() => this.plan.onRunFinished(rc.state.run));
     }
   }
 
@@ -913,7 +1037,18 @@ export class Orchestrator {
       async emit(event) {
         await rc.emit(event);
       },
-      evalContext: (extra) => rc.evalContext({ step, ...(extra ?? {}) }),
+      async evalContext(extra) {
+        const vars = rc.state.run.vars;
+        const selected =
+          typeof vars.planId === "string"
+            ? vars.planId
+            : typeof vars.plan === "string"
+              ? vars.plan
+              : self.plan.defaults.planKey;
+        const plan = (await self.plan.planForRun(rc.state.run)) ?? (await self.plan.getPlan(selected));
+        const riskMatrix = plan?.riskMatrix ?? RiskMatrixConfigSchema.parse(self.plan.defaults.riskMatrix);
+        return rc.evalContext({ step, riskMatrix, ...(extra ?? {}) });
+      },
       async evaluate(expr, extra) {
         return evaluateExpression(expr, await ctx.evalContext(extra));
       },
@@ -937,21 +1072,23 @@ export class Orchestrator {
         const resumedId = self.interruptedChild(rc, step, options.branch);
         const childId =
           resumedId ??
-          (await self.startRun({
-            ...("workflow" in target
-              ? { workflowId: target.workflow }
-              : { inline: { graph: target.graph, id: target.inlineId, version: rc.definition.version } }),
-            parentRunId: rc.id,
-            parentStepRunId: step.id,
-            ...(options.vars ? { vars: { ...rc.state.run.vars, ...options.vars } } : { vars: rc.state.run.vars }),
-            ...(options.workspace
-              ? { workspace: options.workspace }
-              : options.workItemId
-                ? {}
-                : { workspace: rc.workspace }),
-            ...(options.workItemId ? { workItemId: options.workItemId } : {}),
-            ...(rc.state.run.requestId ? { requestId: rc.state.run.requestId } : {}),
-          }));
+          (await rc.withOwnership(() =>
+            self.startRun({
+              ...("workflow" in target
+                ? { workflowId: target.workflow }
+                : { inline: { graph: target.graph, id: target.inlineId, version: rc.definition.version } }),
+              parentRunId: rc.id,
+              parentStepRunId: step.id,
+              ...(options.vars ? { vars: { ...rc.state.run.vars, ...options.vars } } : { vars: rc.state.run.vars }),
+              ...(options.workspace
+                ? { workspace: options.workspace }
+                : options.workItemId
+                  ? {}
+                  : { workspace: rc.workspace }),
+              ...(options.workItemId ? { workItemId: options.workItemId } : {}),
+              ...(rc.state.run.requestId ? { requestId: rc.state.run.requestId } : {}),
+            }),
+          ));
         if (resumedId)
           rc.logger.info("child re-attached", {
             step: step.nodeId,
@@ -1092,10 +1229,11 @@ export class Orchestrator {
       createdAt: this.clock.isoNow(),
       ...(extra.path ? { path: extra.path } : {}),
     };
-    await this.stores.artifacts.put(artifact, content);
-    await rc.emit({ type: "artifact.recorded", payload: { stepRunId: step.id, artifact } });
+    await rc.emit({ type: "artifact.recorded", payload: { stepRunId: step.id, artifact } }, () =>
+      this.stores.artifacts.put(artifact, content),
+    );
     // Planning intake happens inline so the next node sees risks/decisions/dependencies this artifact carried.
-    const rejected = await this.plan.onArtifactRecorded(rc.state.run, artifact);
+    const rejected = await rc.withOwnership(() => this.plan.onArtifactRecorded(rc.state.run, artifact));
     if (rejected.length)
       await rc.emit({
         type: "plan.signals.rejected",

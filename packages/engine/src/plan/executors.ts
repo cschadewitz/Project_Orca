@@ -524,6 +524,13 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
     const itemWorkflowVar = ctx.run.state.run.vars.itemWorkflow;
     const defaultWorkflow =
       n.workflow ?? (typeof itemWorkflowVar === "string" && itemWorkflowVar ? itemWorkflowVar : undefined);
+    const itemWorkflowSource = n.workflow !== undefined ? "node" : "var";
+    if (n.workflow && typeof itemWorkflowVar === "string" && itemWorkflowVar && n.workflow !== itemWorkflowVar)
+      ctx.logger.warn("plan-dispatch node workflow overrides configured itemWorkflow", {
+        node: ctx.nodeId,
+        workflow: n.workflow,
+        itemWorkflow: itemWorkflowVar,
+      });
     if (!defaultWorkflow)
       return failed(
         "WORKFLOW_INVALID",
@@ -585,13 +592,15 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
         // The scheduler offered this item, but `in-progress` only lands once `child.spawned` is
         // projected - asynchronously, after the ready set was computed. Two dispatchers over one
         // plan therefore both see it ready; the claim is what makes exactly one of them launch it.
-        const holder = await ctx.stores.claims.claim({
-          workItemId: item.id,
-          runId: ctx.run.id,
-          branch: item.slug,
-          stepRunId: ctx.step.id,
-          at: ctx.clock.isoNow(),
-        });
+        const holder = await ctx.run.withOwnership(() =>
+          ctx.stores.claims.claim({
+            workItemId: item.id,
+            runId: ctx.run.id,
+            branch: item.slug,
+            stepRunId: ctx.step.id,
+            at: ctx.clock.isoNow(),
+          }),
+        );
         if (!ownsClaim(holder, ctx.run.id, item.slug)) {
           claimed.set(item.id, holder.runId);
           ctx.logger.warn("work item already claimed", { workItem: item.slug, owner: holder.runId });
@@ -779,9 +788,9 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
       return failed(
         "RUN_STATE",
         `${counts.failed + counts.blocked} of ${summary.length} work items did not complete (${counts.failed} failed, ${counts.blocked} blocked${counts.cancelled ? `, ${counts.cancelled} cancelled by failFast` : ""})`,
-        { summary, counts },
+        { summary, counts, itemWorkflowSource, itemWorkflow: defaultWorkflow },
       );
-    return completed({ data: { summary, counts, outcome } });
+    return completed({ data: { summary, counts, outcome, itemWorkflowSource, itemWorkflow: defaultWorkflow } });
   },
 };
 

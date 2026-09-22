@@ -42,8 +42,8 @@ risks:                              # what could go wrong across the breakdown
   - key: kebab-case
     title: Short statement
     category: technical | schedule | security | dependency | operational | product | compliance
-    likelihood: 1-5
-    impact: 1-5
+    likelihood: 1-{{ riskMatrix.scale }}
+    impact: 1-{{ riskMatrix.scale }}
     mitigation: What reduces it
     affects: [slugs]
     mitigatedBy: [slugs]            # items whose delivery reduces the risk

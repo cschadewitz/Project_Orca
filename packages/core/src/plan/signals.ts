@@ -79,7 +79,8 @@ function decisionFrom(raw: unknown, i: number, issues: string[]): DecisionInput 
 function dependencyFrom(raw: unknown, i: number, issues: string[]): DependencyRef | undefined {
   const parsed = DependencyRefSchema.safeParse(raw);
   if (!parsed.success) {
-    issues.push(`dependencies[${i}]: not a dependency reference`);
+    const grammar = parsed.error.issues.find((issue) => issue.code === "custom");
+    issues.push(`dependencies[${i}]: ${grammar?.message ?? "not a dependency reference"}`);
     return undefined;
   }
   try {

@@ -178,6 +178,29 @@ export class JsonlLogDir {
     return readJsonl(file, parser, this.readOptions(file));
   }
 
+  /** Only newline-terminated records: an interrupted final append is not committed. */
+  async readCommitted<T>(key: string, parser: JsonlParser<T>): Promise<T[]> {
+    await this.init();
+    const file = this.file(key);
+    let contents: string;
+    try {
+      contents = await readFile(file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const end = contents.lastIndexOf("\n") + 1;
+    if (end < contents.length) {
+      this.logger.warn("jsonl log: skipping uncommitted trailing record", { file });
+    }
+    const records: T[] = [];
+    for (const line of splitJsonlLines(contents.slice(0, end))) {
+      const record = parseJsonlLine(line, parser, this.readOptions(file));
+      if (record !== undefined) records.push(record);
+    }
+    return records;
+  }
+
   /** The raw lines of `key`'s log, for callers that want to pre-select before parsing. */
   async lines(key: string): Promise<string[]> {
     await this.init();
