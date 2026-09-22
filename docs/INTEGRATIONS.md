@@ -127,3 +127,10 @@ does not sync code). Verify with `orca ping claude-remote`.
 Anything that can launch an ACP agent can launch `orca acp`. The facade advertises
 `loadSession: false` and prompt capabilities `embeddedContext: true` (so file context can be
 attached to requests).
+
+Plain-text submissions settle their Request from the final program outcome, just as CLI
+submissions do: a failure outcome is failed even when interpretation completed, cancellation
+is cancelled, and a paused run leaves the Request decomposing. Direct `/run` commands do not
+create a Request. Plan updates suppress identical snapshots and label failed, cancelled and
+skipped steps explicitly (ACP has no separate failed plan-entry status). The plan remains a
+root-workflow view; descendant progress is streamed as message chunks, not nested plan entries.

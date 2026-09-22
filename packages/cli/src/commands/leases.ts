@@ -53,10 +53,10 @@ export async function leasesCommand(ctx: CommandContext): Promise<number> {
       for (const l of broken)
         ctx.out(`freed ${l.runId} (was held by pid ${l.pid} on ${l.host}, ${l.lapsed ? "lapsed" : "live"})`);
       // Breaking a live lease does not stop the other interpreter; it notices at its next
-      // heartbeat and cancels itself, and until then it may still append.
+      // heartbeat and cancels itself; obsolete writes are refused immediately.
       if (broken.some((l) => !l.lapsed))
         ctx.err(
-          "note: a lease that was still live was broken; give its holder one heartbeat to notice before resuming the run",
+          "note: a lease that was still live was broken; obsolete writes are refused immediately and the holder stops when it detects ownership loss",
         );
       return 0;
     }

@@ -47,7 +47,7 @@ ready-made one — scripted agents, no LLM — in its workspace, so single workf
 runs can be driven from there:
 
 ```bash
-pnpm run orca --config /tmp/orca-demo/orca.config.yaml run ai-sdlc --var 'workItem={"slug":"x","title":"X"}'
+pnpm run orca --config /tmp/orca-demo/orca.config.yaml run ai-sdlc --var 'workItem={"slug":"x","title":"X","description":"Implement X"}'
 pnpm run orca --config /tmp/orca-demo/orca.config.yaml runs        # runs, status <runId>, events <runId>
 pnpm run orca answer <requestId> approve   # when a run pauses at a human gate (default humanInput mode)
 pnpm run orca claims                       # who owns which work item; `claims release <id>` frees a dead run's
