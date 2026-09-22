@@ -1,1 +1,0 @@
-- **app:** Reconcile missed run, input, agent and selected-run state after subscription reattachment, including outages too short to show a connection banner.

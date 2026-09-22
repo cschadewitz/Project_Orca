@@ -1,1 +1,0 @@
-- **app:** Keep pending run-detail reads alive across ordinary rerenders and make renderer test synchronization deterministic; reduce redundant queries in the ten-thousand-event paging regression.

@@ -1,1 +1,0 @@
-- **app:** Announce pane restoration through the shared accessibility channel, including the count restored by the palette command.

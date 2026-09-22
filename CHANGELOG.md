@@ -29,6 +29,100 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.5.2 - 2026-09-22
+
+### Store format
+
+Event logs, artifact indexes and claim records retain their existing schemas.
+Lease records add backward-readable `guardedTtlMs`, `guardedHost` and `guardedId`
+coordination metadata. Existing on-disk TTL and host fields contain sentinels that
+prevent older automatic TTL/PID takeover; upgraded readers restore the actual values.
+All legacy or unreadable leases require quiesced recovery, even after a legacy PID
+has died. Mutexes use transient directories with unique owner tokens, preventing a
+delayed stale remover from deleting a successor. Abandoned legacy lock files and
+empty/unknown mutex directories also fail closed. Stop old writers and use upgraded
+administration tools; see `docs/v0.5.2-ownership-compatibility.md` for recovery and
+downgrade limits.
+
+### Changed
+
+#### tools
+
+- Gate release publication on Electron smoke and all three platform type proofs of the release merge commit, without automatically updating baselines.
+
+### Fixed
+
+#### agents
+
+- Resolve Windows drive and UNC paths against the workspace when evaluating and
+  recording permission rules, preserving configured rule precedence.
+- Reject silent initialize and session/new handshakes at their configured timeout
+  and clean up the failed transport.
+
+#### app
+
+- Keep pending run-detail reads alive across ordinary rerenders and make renderer test synchronization deterministic; reduce redundant queries in the ten-thousand-event paging regression.
+- Announce pane restoration through the shared accessibility channel, including the count restored by the palette command.
+- Reconcile missed run, input, agent and selected-run state after subscription reattachment, including outages too short to show a connection banner.
+- Preserve newer notifications across delayed initial snapshots and resolving reads; a stale read no longer rolls back completion or reopens an answered input.
+
+#### cli
+
+- Reject unknown flags and values on boolean flags. Command help now describes the
+  selected command, including the plan subcommands (#113).
+- Decode the demo's repository file URL correctly on Windows, so its generated
+  configuration locates the shipped workflows and templates.
+
+#### core
+
+- Reject malformed dependency references at decomposition and artifact-signal input boundaries with a field path, while keeping previously stored raw references readable.
+
+#### design
+
+- Ignore CSS comments when checking declaration literals, preserving accurate locations for real violations.
+
+#### engine
+
+- Preserve decided choices and their rationale during automated matrix evaluation; explicit human overrides and reopening remain available.
+- Render decomposition, risk assessment and design prompts with the current plan risk scale instead of a hard-coded 1–5 range.
+- Clear stale decision rankings when matrix inputs change or a decision is reopened, recording the invalidation in the plan journal.
+- Repair abandoned work-item projections before releasing claims: missing children become pending, unowned interrupted children are durably cancelled before redispatch, and recorded terminal outcomes are preserved. Live or parked children remain in progress.
+- Reopen failed as well as satisfied dependencies when their decision is reopened, keeping persisted state and the journal consistent with scheduling.
+- Warn when a plan-dispatch node pin shadows the configured item workflow, and record the selected default and its source in the step result.
+- Resolve a declared work-item input from the stored item or validated
+  `vars.workItem`. Missing or malformed task context fails before an agent opens,
+  rather than rendering an unspecified task and collapsed artifact paths.
+- The shipped SDLC workflow checks the deployment report before reporting
+  delivery success. A blocked or unrecognized status produces a failure outcome;
+  the deploy report remains the evidence for PR and CI status.
+- Collect agent deliverables from a fresh directory for each run and
+  step visit, including retries and back-edges. Old reports remain explicit stored
+  inputs and cannot satisfy a new output contract in either completion mode.
+- Fence execution writes, artifact recording and work-item projection
+  under the same ownership guard as lease mutation. Expired heartbeats stop local
+  execution even when renewals fail or hang; obsolete holders cannot replace a
+  successor's lease or append after a forced takeover.
+- Accept one answer to a parked human-input request under concurrent
+  callers. Validation rereads the durable log under ownership, shared with resume
+  and cancellation, so a later answer cannot replace the accepted choice.
+- Recover a persisted terminal step's outcome and message after a crash
+  before run completion, without rerunning its executor or side effects.
+- Settle Requests using the program's actual outcome and return the updated
+  persisted Request. ACP submissions now use the same settlement as CLI submissions (#292).
+
+#### integrations
+
+- Show child-run workflow nodes in ACP plans beneath their owning container,
+  prefixed with the workflow chain.
+- Suppress identical ACP plan snapshots, preserve update order, and label
+  failed, cancelled and skipped steps explicitly instead of showing them as pending.
+
+#### store
+
+- Serialize artifact-index appends across processes, recover torn trailing
+  writes, warn on corrupt JSON, and refresh readers after another writer appends.
+- Retry transient Windows sharing violations while waiting for a mutation lock, preserving the current holder and the existing bounded wait.
+
 ## 0.5.1 - 2026-09-21
 
 ### Store format

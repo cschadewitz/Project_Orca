@@ -1,1 +1,0 @@
-- **engine:** Preserve decided choices and their rationale during automated matrix evaluation; explicit human overrides and reopening remain available.
