@@ -229,7 +229,7 @@ describe("the Runs surface", () => {
     const running = STATUS_PRESENTATION.running.word;
     expect(within(rows()[4]!).getByText(running)).toBeTruthy();
 
-    act(() => fake.notify(runChanged("run-parent", "succeeded")));
+    await act(async () => fake.notify(runChanged("run-parent", "succeeded")));
 
     await waitFor(() => expect(within(rows()[4]!).getByText(STATUS_PRESENTATION.succeeded.word)).toBeTruthy());
     // The whole point: no second `runs.list`.
@@ -248,7 +248,7 @@ describe("the Runs surface", () => {
     await screen.findByRole("tree", { name: "Run tree" });
     expect(rows()).toHaveLength(page.length);
 
-    act(() => fake.notify(runChanged("run-gate", "waiting")));
+    await act(async () => fake.notify(runChanged("run-gate", "waiting")));
 
     await waitFor(() => expect(rows()).toHaveLength(RUNS.length));
     // Third row: it was created after `run-child-ok` and before `run-lost`.
@@ -266,7 +266,7 @@ describe("the Runs surface", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: STATUS_PRESENTATION.waiting.word }));
     await waitFor(() => expect(rows()).toHaveLength(1));
 
-    act(() => fake.notify(runChanged("run-gate", "succeeded")));
+    await act(async () => fake.notify(runChanged("run-gate", "succeeded")));
 
     await waitFor(() => expect(screen.getByText("No runs match the filter")).toBeTruthy());
   });

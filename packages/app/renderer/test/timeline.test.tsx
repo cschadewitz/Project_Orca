@@ -98,9 +98,11 @@ describe("the event timeline", () => {
     await openTimeline();
     const onScreen = entries().map((row) => row.id);
 
+    // This button persists until the last page. Re-running the document-wide accessible
+    // name query twice per page dominated this 50-page test under parallel load (#228).
+    const button = earlierButton()!;
     let pages = 1;
-    while (earlierButton()) {
-      const button = earlierButton()!;
+    while (button.isConnected) {
       const held = count();
       await act(async () => {
         fireEvent.click(button);

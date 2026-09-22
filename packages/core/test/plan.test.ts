@@ -11,6 +11,8 @@ import {
   describeRiskMatrix,
   dropCycleClosingEdges,
   DEFAULT_RISK_MATRIX,
+  DependencyRefSchema,
+  DecompositionSchema,
   evaluateDecisionMatrix,
   explainWorkItem,
   extractPlanSignals,
@@ -30,6 +32,7 @@ import {
   topologicalWaves,
   transitiveDownstream,
   validateDecisionMatrix,
+  WorkItemSchema,
   type Decision,
   type Dependency,
   type Risk,
@@ -39,6 +42,21 @@ import {
 const T = "2026-01-01T00:00:00.000Z";
 const plan = PlanSchema.parse({ id: "plan_1", key: "p", name: "P", createdAt: T, updatedAt: T });
 const origin = { kind: "system" as const };
+
+describe("dependency input boundary", () => {
+  it("keeps legacy work items readable when their raw references were previously accepted", () => {
+    expect(WorkItemSchema.parse(item("legacy", { dependsOn: ["@spec"] })).dependsOn).toEqual(["@spec"]);
+  });
+  it.each(["@spec", "decision:", "a@b@c", { on: "soft:x", type: "blocks" }])(
+    "rejects malformed %j with a decomposition path",
+    (ref) => {
+      expect(DependencyRefSchema.safeParse(ref).success).toBe(false);
+      const parsed = DecompositionSchema.safeParse({ items: [{ slug: "api", title: "API", dependsOn: [ref] }] });
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) expect(parsed.error.issues[0]?.path).toEqual(["items", 0, "dependsOn", 0]);
+    },
+  );
+});
 
 function item(slug: string, extra: Partial<WorkItem> = {}): WorkItem {
   return {

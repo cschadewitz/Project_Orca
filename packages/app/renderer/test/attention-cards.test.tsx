@@ -240,10 +240,11 @@ describe("what the surface is looking at", () => {
 });
 
 describe("runs that fail while the surface is open", () => {
+  let sequence = 100;
   const changed = (runId: string, status: string): NotificationMessage => ({
     kind: "notification",
     method: "run.changed",
-    params: { subscriptionId: "sub-1", runId, seq: 9, at: AS_OF, status, event: `run.${status}` },
+    params: { subscriptionId: "sub-1", runId, seq: sequence++, at: AS_OF, status, event: `run.${status}` },
   });
 
   it("resolves a newly failed run to a row, and drops it when it is re-driven", async () => {

@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { expandPatterns, loadTemplates, loadWorkflows, parseOrcaConfig } from "@orca/core";
 
-const repoRoot = join(new URL(".", import.meta.url).pathname, "..", "..", "..");
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const workflow = (id: string) =>
   `id: ${id}\nname: ${id}\nstart: s\nnodes:\n  s: { type: start, next: e }\n  e: { type: end }\n`;
 

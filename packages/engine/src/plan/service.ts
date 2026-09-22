@@ -919,18 +919,30 @@ export class PlanService {
       if (parsed.title !== dec.title && parsed.title !== parsed.key) changes.title = parsed.title;
       if (parsed.question && parsed.question !== dec.question) changes.question = parsed.question;
       if (parsed.context && parsed.context !== dec.context) changes.context = parsed.context;
-      if (parsed.criteria.length) changes.criteria = parsed.criteria;
-      if (parsed.options.length) changes.options = parsed.options;
+      if (parsed.criteria.length && JSON.stringify(parsed.criteria) !== JSON.stringify(dec.criteria))
+        changes.criteria = parsed.criteria;
+      if (parsed.options.length && JSON.stringify(parsed.options) !== JSON.stringify(dec.options))
+        changes.options = parsed.options;
       if (parsed.consequences.length) changes.consequences = parsed.consequences;
       if (parsed.scale !== dec.scale && input.scale !== undefined) changes.scale = parsed.scale;
       if (Object.keys(changes).length) {
+        const invalidated =
+          dec.result !== undefined &&
+          (changes.criteria !== undefined || changes.options !== undefined || changes.scale !== undefined);
         dec = { ...dec, ...changes, updatedAt: now };
+        if (invalidated) delete dec.result;
         await this.stores.plan.decisions.put(dec);
         await this.journal({
           type: "decision.updated",
           planId,
           origin,
-          payload: { decisionId: dec.id, changes: changes },
+          payload: {
+            decisionId: dec.id,
+            changes: {
+              ...changes,
+              ...(invalidated ? { result: null, resultInvalidated: "matrix inputs changed" } : {}),
+            },
+          },
         });
       }
     }
@@ -969,7 +981,8 @@ export class PlanService {
    *
    * Idempotent for a decision already `decided` the same way: nothing is
    * journalled or reconciled again (a new `rationale` is still recorded). A
-   * *different* choice re-decides, e.g. a human overriding via `orca plan decide`.
+   * Only an explicit human action can re-decide. Automated evaluation preserves
+   * an existing resolution until a human reopens it.
    */
   async evaluateDecision(
     planId: string,
@@ -991,6 +1004,8 @@ export class PlanService {
       (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === keyOrId))[0];
     if (!cur || cur.planId !== planId)
       throw new OrcaError("PLAN_INVALID", `decision '${keyOrId}' not found in plan ${planId}`);
+    if (cur.status === "decided" && cur.chosen && origin.kind !== "human")
+      return { decision: cur, choice: cur.chosen, ...(cur.result ? { result: cur.result } : {}) };
     const now = this.clock.isoNow();
     let result: DecisionMatrixResult | undefined;
     if (cur.criteria.length && cur.options.length)
@@ -1063,19 +1078,23 @@ export class PlanService {
     delete next.chosen;
     delete next.decidedAt;
     delete next.decidedBy;
+    delete next.result;
     await this.stores.plan.decisions.put(next);
     await this.journal({
       type: "decision.updated",
       planId,
       origin,
-      payload: { decisionId: cur.id, changes: { status: "open" } },
+      payload: {
+        decisionId: cur.id,
+        changes: { status: "open", result: null, resultInvalidated: "decision reopened" },
+      },
     });
     for (const d of await this.stores.plan.dependencies.list(
       (d) =>
         d.planId === planId &&
         d.target.kind === "decision" &&
         d.target.decisionId === cur.id &&
-        d.status === "satisfied",
+        (d.status === "satisfied" || d.status === "failed"),
     ))
       await this.resolveDependency(d.id, "open", undefined, origin);
     return next;

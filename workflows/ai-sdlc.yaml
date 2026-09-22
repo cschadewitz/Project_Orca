@@ -130,7 +130,15 @@ nodes:
         path: ".orca/work/{{ workItem.slug }}/deploy-report.md"
         validate: { requiredFields: [status] }
 
+  delivery-status:
+    type: decision
+    name: "Was delivery completed?"
+    source: { kind: artifact, artifact: deployReport, field: status }
+    options: [done, blocked]
+    defaultOption: blocked
+
   done: { type: end, outcome: success, message: "Work item delivered." }
+  delivery-blocked: { type: end, outcome: failure, message: "Delivery was not completed; see the deploy report." }
   rejected: { type: end, outcome: failure, message: "Spec rejected at gate." }
   exhausted: { type: end, outcome: failure, message: "Build/review budget exhausted." }
 
@@ -162,4 +170,6 @@ edges:
       label: "changes requested",
     }
   - { from: review-verdict, to: exhausted, label: "give up" }
-  - { from: deploy, to: done }
+  - { from: deploy, to: delivery-status }
+  - { from: delivery-status, to: done, when: "choice == 'done'" }
+  - { from: delivery-status, to: delivery-blocked }

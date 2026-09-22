@@ -19,6 +19,8 @@ export const PlaybookEntrySchema = z.object({
   say: z.string().optional(),
   /** Ask the client for permission before writing (exercises the permission path). */
   askPermission: z.boolean().default(false),
+  /** Stable source path to ask about independently of the attempt-specific report path. */
+  permissionPath: z.string().optional(),
   /** Return this stop reason instead of end_turn. */
   stopReason: z.enum(["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"]).optional(),
   delayMs: z.number().int().nonnegative().optional(),

@@ -59,7 +59,7 @@ function declarations(source) {
   let i = 0;
 
   const flush = (end) => {
-    const text = source.slice(start, end);
+    const text = source.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length));
     const colon = text.indexOf(":");
     // No colon: a selector, an at-rule prelude, or whitespace between blocks.
     if (colon !== -1 && !text.trimStart().startsWith("@")) {

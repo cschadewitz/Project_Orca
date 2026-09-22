@@ -22,9 +22,10 @@ A Kepler session then drives ORCA like any agent:
   run a single workflow in the session's cwd, or `/status` to list the session's runs;
 - ORCA decomposes it and launches the real agents (from `orca.config.yaml`) on the task's
   worktrees, locally or over SSH;
-- progress streams back as ACP updates: the workflow appears as a **plan** (one entry per
-  node, live status), agent output as message chunks (child runs' output is prefixed with
-  the workflow chain, e.g. `[program › ai-sdlc]`, and each node start as a `▶ <node>` line),
+- progress streams back as ACP updates: the root workflow and child runs appear as a flat
+  **plan** (one entry per node, live status; child entries are prefixed with the workflow
+  chain, e.g. `[program › ai-sdlc]`), agent output as message chunks (with the same prefix,
+  and each child node start as a `▶ <node>` line),
   every recorded artifact as a completed **tool call** with the file location;
 - gates and `ask` permissions are forwarded upstream as `session/request_permission`, so
   Kepler's normal approval UI is the human gate. Questions are routed by the run that raised
@@ -127,3 +128,10 @@ does not sync code). Verify with `orca ping claude-remote`.
 Anything that can launch an ACP agent can launch `orca acp`. The facade advertises
 `loadSession: false` and prompt capabilities `embeddedContext: true` (so file context can be
 attached to requests).
+
+Plain-text submissions settle their Request from the final program outcome, just as CLI
+submissions do: a failure outcome is failed even when interpretation completed, cancellation
+is cancelled, and a paused run leaves the Request decomposing. Direct `/run` commands do not
+create a Request. Plan updates suppress identical snapshots and label failed, cancelled and
+skipped steps explicitly (ACP has no separate failed plan-entry status). Child-run nodes are
+flattened beneath their owning container entry and carry their workflow-chain prefix.

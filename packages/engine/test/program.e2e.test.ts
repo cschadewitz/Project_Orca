@@ -96,9 +96,14 @@ describe("program workflow (e2e)", () => {
 
     // Each child run produced its own artifacts under its slug and the summary prompt saw dispatch results.
     const artifacts = await h.orchestrator.stores.artifacts.list({ kind: "deploy-report" });
-    expect(artifacts.map((a) => a.path).sort()).toEqual(
-      ["auth-api", "db-schema", "docs"].map((s) => `${h.dir}/.orca/work/${s}/deploy-report.md`),
-    );
+    expect(artifacts).toHaveLength(3);
+    for (const artifact of artifacts) {
+      const child = children.find((c) => c.run.id === artifact.producedBy.runId)!;
+      const item = items.find((item) => item.id === child.run.workItemId)!;
+      expect(artifact.path?.replaceAll("\\", "/")).toBe(
+        `${h.dir.replaceAll("\\", "/")}/.orca/work/${item.slug}/.orca-attempts/${child.run.id}/${artifact.producedBy.stepRunId}/deploy-report.md`,
+      );
+    }
     const summaryPrompt = (await h.prompts()).find((p) => p.text.includes("Summarise the program"))!;
     expect(summaryPrompt.text).toContain("`auth-api`: done");
     expect(summaryPrompt.text).toContain("vertical slices");

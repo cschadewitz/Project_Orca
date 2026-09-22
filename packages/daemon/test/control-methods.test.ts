@@ -10,11 +10,13 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentRegistry, LocalHost, SshHost, type AgentSession } from "@orca/agents";
 import {
   AgentSpecSchema,
   OrcaError,
+  RequestSchema,
+  WorkItemSchema,
   SshHostSchema,
   FakeClock,
   TemplateRegistry,
@@ -135,6 +137,9 @@ function harness() {
     sessionFactory: fakeSessions(clock),
     logger: silentLogger,
     clock,
+    // The fake session jumps the logical clock by a minute to test health timestamps.
+    // This fixture does not advance the real heartbeat scheduler, so keep its lease valid.
+    lease: { ttlMs: 120_000 },
   });
   const reads = new ReadModel({ orchestrator });
   const agentModel = new AgentModel({ orchestrator, reads });
@@ -169,6 +174,50 @@ async function parked(h: ReturnType<typeof harness>) {
 }
 
 describe("inputs.answer", () => {
+  it("accepts one conflicting concurrent RPC answer and resumes only that choice", async () => {
+    const h = harness();
+    const { runId, requestId } = await parked(h);
+    // Both RPCs must reach the atomic acceptance boundary after observing the same open
+    // request. No timers: release them only after both have passed daemon validation.
+    const accept = h.orchestrator.answer.bind(h.orchestrator);
+    let arrivals = 0;
+    let release!: () => void;
+    const together = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(h.orchestrator, "answer").mockImplementation(async (...args) => {
+      arrivals += 1;
+      if (arrivals === 2) release();
+      await together;
+      return accept(...args);
+    });
+    try {
+      const replies = await Promise.all([
+        call(h.ctx, "inputs.answer", { requestId, optionId: "hold" }),
+        call(h.ctx, "inputs.answer", { requestId, optionId: "ship" }),
+      ]);
+      expect(arrivals).toBe(2);
+      expect(replies.filter((reply) => reply.ok)).toHaveLength(1);
+      expect(replies.filter((reply) => !reply.ok)).toHaveLength(1);
+      const accepted = InputsAnswerResultSchema.parse(replies.find((reply) => reply.ok)!.result);
+      const events = await h.orchestrator.events(runId);
+      const answers = events.filter((event) => event.type === "human.answered");
+      expect(answers).toHaveLength(1);
+      expect(answers[0]!.payload.answer).toBe(accepted.answer);
+      const completed = events.filter((event) => event.type === "run.completed");
+      expect(completed).toHaveLength(1);
+      const state = await h.orchestrator.getState(runId);
+      expect(state.run.outcome).toBe(accepted.answer === "ship" ? "success" : "failure");
+      const terminalNodes = Object.values(state.steps).filter(
+        (step) => step.nodeId === "held" || step.nodeId === "shipped",
+      );
+      expect(terminalNodes.map((step) => step.nodeId)).toEqual([accepted.answer === "ship" ? "shipped" : "held"]);
+      expect(await h.orchestrator.pendingInputs(runId)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("answers a parked gate and the run runs on to its end", async () => {
     const h = harness();
     const { runId, requestId } = await parked(h);
@@ -338,21 +387,39 @@ describe("a lease lost while the daemon drives", () => {
 describe("runs.start", () => {
   it("starts a workflow with vars and writes no request or work-item document (#196)", async () => {
     const h = harness();
+    const at = new Date(h.clock.now()).toISOString();
+    const request = RequestSchema.parse({
+      id: "req-existing",
+      title: "An existing request",
+      body: "",
+      createdAt: at,
+      updatedAt: at,
+    });
+    const item = WorkItemSchema.parse({
+      id: "wi-existing",
+      requestId: request.id,
+      slug: "say-something",
+      title: "Say something",
+      createdAt: at,
+      updatedAt: at,
+    });
+    await h.stores.requests.put(request);
+    await h.stores.workItems.put(item);
     const res = await call(h.ctx, "runs.start", {
       workflowId: "talky",
       vars: { who: "nobody" },
-      requestId: "req-not-in-this-store",
-      workItemId: "wi-not-in-this-store",
+      requestId: request.id,
+      workItemId: item.id,
     });
     expect(res.ok, JSON.stringify(res.error)).toBe(true);
     const started = RunsStartResultSchema.parse(res.result);
     expect(started.run.status).toBe("succeeded");
-    expect(started.run.requestId).toBe("req-not-in-this-store");
-    // The ids travelled onto the log and nothing was created for them. A run named after a
-    // work item the daemon has not got falls back to the workflow id, as it always has.
-    expect(await h.stores.requests.list()).toEqual([]);
-    expect(await h.stores.workItems.list()).toEqual([]);
-    expect(started.run.name).toBe("talky");
+    expect(started.run.requestId).toBe(request.id);
+    // A raw workflow may reference existing context, but creates no Request/WorkItem.
+    // Missing work-item context is refused rather than silently becoming an unspecified task.
+    expect(await h.stores.requests.list()).toEqual([request]);
+    expect(await h.stores.workItems.list()).toEqual([item]);
+    expect(started.run.name).toBe(item.title);
   });
 });
 

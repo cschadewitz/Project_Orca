@@ -23,7 +23,7 @@ status: ready
 risk: low|medium|high     # high risk routes to a human approval gate
 touches: [list, of, modules]
 risks:                    # optional: specific risks ORCA should track in the plan
-  - { key: kebab-case, title: "...", likelihood: 1-5, impact: 1-5, mitigation: "..." }
+  - { key: kebab-case, title: "...", likelihood: 1-{{ riskMatrix.scale }}, impact: 1-{{ riskMatrix.scale }}, mitigation: "..." }
 dependencies:             # optional: work discovered while designing that this item needs
   - other-slug#build      # e.g. wait for other-slug before building
   - external:vendor-api   # e.g. something outside the codebase

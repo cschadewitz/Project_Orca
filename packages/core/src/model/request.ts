@@ -6,7 +6,13 @@
  * driven through an SDLC workflow run.
  */
 import { z } from "zod";
-import { DecisionInputSchema, DependencyRefSchema, RiskInputSchema, WorkItemPrioritySchema } from "./plan.js";
+import {
+  DecisionInputSchema,
+  DependencyRefSchema,
+  StoredDependencyRefSchema,
+  RiskInputSchema,
+  WorkItemPrioritySchema,
+} from "./plan.js";
 
 export const RequestSourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("manual") }),
@@ -71,7 +77,7 @@ export const WorkItemSchema = z.object({
    * Dependency references as written in the decomposition (see `parseDependencyRef`).
    * Once the item is registered in a Plan, `Dependency` records are the source of truth.
    */
-  dependsOn: z.array(DependencyRefSchema).default([]),
+  dependsOn: z.array(StoredDependencyRefSchema).default([]),
   /** Workflow to run for this item; defaults to the program's `itemWorkflow`. */
   workflowId: z.string().optional(),
   /** Repository / workspace hints for the workspace provider. */

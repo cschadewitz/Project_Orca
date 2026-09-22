@@ -141,8 +141,12 @@ describe("ORCA as an ACP agent", () => {
     // The recorded artifact surfaced as a completed tool call pointing at the file.
     const artifactCalls = updates.filter((u) => u.sessionUpdate === "tool_call" && u.title.startsWith("artifact spec"));
     expect(artifactCalls).toHaveLength(1);
-    expect((artifactCalls[0] as { locations?: { path: string }[] }).locations?.[0]?.path).toBe(
-      join(dir, ".orca", "spec.md"),
+    const [summary] = await orchestrator.listRunSummaries();
+    const state = await orchestrator.getState(summary!.id);
+    const artifact = Object.values(state.artifacts).find((a) => a.kind === "spec")!;
+    expect((artifactCalls[0] as { locations?: { path: string }[] }).locations?.[0]?.path).toBe(artifact.path);
+    expect(artifact.path?.replaceAll("\\", "/")).toContain(
+      `/.orca-attempts/${state.run.id}/${artifact.producedBy.stepRunId}/spec.md`,
     );
     // Agent chatter was relayed as message chunks.
     const text = updates
@@ -161,6 +165,7 @@ describe("ORCA as an ACP agent", () => {
 
     const permissionRequests: acp.RequestPermissionRequest[] = [];
     const textBySession = new Map<string, string>();
+    const plansBySession = new Map<string, Extract<acp.SessionUpdate, { sessionUpdate: "plan" }>[]>();
     const sessions: { a?: string; b?: string } = {};
     const results = await acp
       .client({ name: "fake-kepler" })
@@ -168,6 +173,11 @@ describe("ORCA as an ACP agent", () => {
         const u = ctx.params.update;
         if (u.sessionUpdate === "agent_message_chunk" && u.content.type === "text")
           textBySession.set(ctx.params.sessionId, (textBySession.get(ctx.params.sessionId) ?? "") + u.content.text);
+        if (u.sessionUpdate === "plan") {
+          const plans = plansBySession.get(ctx.params.sessionId) ?? [];
+          plans.push(u);
+          plansBySession.set(ctx.params.sessionId, plans);
+        }
       })
       .onRequest(acp.methods.client.session.requestPermission, (ctx) => {
         permissionRequests.push(ctx.params);
@@ -208,5 +218,17 @@ describe("ORCA as an ACP agent", () => {
     expect(textBySession.get(sessions.a!)).not.toContain("Nested");
     expect(textBySession.get(sessions.b!)).toMatch(/Starting Nested[\s\S]*completed \(success\)/);
     expect(textBySession.get(sessions.b!)).not.toContain("Mini");
+    expect(
+      plansBySession
+        .get(sessions.b!)
+        ?.at(-1)
+        ?.entries.map((e) => `${e.content}:${e.status}`),
+    ).toEqual(["sub:completed", "[nested-child] gate → ship:completed"]);
+    expect(
+      plansBySession
+        .get(sessions.a!)
+        ?.at(-1)
+        ?.entries.some((e) => e.content.includes("nested-child")),
+    ).toBe(false);
   }, 60_000);
 });

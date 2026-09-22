@@ -9,14 +9,8 @@
 # installs without the flag and only on the pull requests that could break the app: the
 # app itself, the design system it renders, and the daemon and protocol it talks to.
 #
-# ## Pull requests only, and that is a decision
-#
-# There is no `push` trigger and no `workflow_call`, so `release-publish.yml` does not run
-# this and the faces are not re-checked at release time. That gap is **#254**, filed and
-# deliberately deferred: every path that can change a glyph — a token, a subset, a
-# stylesheet, a renderer, a dependency — goes through the app or design package or the
-# lockfile, so a PR-gated check covers the realistic cases. If you came here
-# looking for the release-time run, read #254 rather than adding a trigger.
+# Pull requests classify their paths below so daemon/protocol-only changes can skip the
+# type proof. Release calls run every job against the exact merge commit before publication.
 #
 # ## The paths filter covers the screenshot baselines
 #
@@ -26,6 +20,11 @@
 name: App smoke
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
   pull_request:
     branches: [main]
     paths:
@@ -40,7 +39,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: app-smoke-${{ github.ref }}
+  group: app-smoke-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -51,6 +50,7 @@ jobs:
       type_proof: ${{ steps.classify.outputs.type_proof }}
     steps:
       - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
         with:
           # The three-dot diff below needs the pull request's merge base.
           fetch-depth: 0
@@ -65,6 +65,11 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_call" ]; then
+            echo "release verification; running the type proof matrix"
+            echo "type_proof=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           type_paths=$(git diff --name-only "$BASE...$HEAD" \
             | awk '/^packages\/app\// || /^packages\/design\// || /^pnpm-lock\.yaml$/ || /^\.github\/workflows\/app-smoke\.yml$/')
           if [ -n "$type_paths" ]; then
@@ -80,6 +85,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
@@ -172,6 +179,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - uses: pnpm/action-setup@v6
 

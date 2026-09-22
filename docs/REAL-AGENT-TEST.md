@@ -164,15 +164,10 @@ orca demo --dir /srv/dev/orca-live/demo
 
 ## 6. Issue #98 step 2 — one `ai-sdlc` run with a real agent
 
-> **Known bug, found by this test (2026-09-18, filed as #135).** `--var workItem={…}` does *not*
-> reach the prompt. `evalContext` (`packages/engine/src/run-context.ts`) builds `workItem` only from
-> `run.workItemId` — a stored `WorkItem` record — so with a plain `orca run` the context block
-> renders empty and `{{ workItem.slug }}` in every deliverable path collapses
-> (`.orca/work//intent.md` → `.orca/work/intent.md`). The agent is handed "turn the work item
-> below into intent.md" with nothing below. The README quick start documents exactly this
-> command, and the scripted e2e tests pass a work item the same way without noticing, because a
-> scripted agent never reads its prompt. Until it is fixed, drive real single-item runs through
-> `orca submit` (§7), which creates real `WorkItem` records and binds each child run to one.
+The missing-context bug discovered here (#135) is corrected: a workflow declaring a
+`workItem` input can use the explicit `--var workItem={…}` value when there is no stored
+work-item binding. It must contain a safe slug, a title and a description. Missing or invalid
+context fails before starting the agent; a stored binding remains authoritative.
 
 ```bash
 orca run ai-sdlc --var 'workItem={"slug":"slugify","title":"Add a slugify helper",
@@ -184,8 +179,9 @@ What to expect: `plan` → `design` → `spec-gate` (auto-approves unless the sp
 `risk: high`) → `await-deps` (pass-through, the item is not in a plan) → `build` → `test` →
 `review` → `deploy`, each stage a fresh ACP session (`sessionMode: per-step`) prompted from
 `templates/sdlc/*.md` and ending with a file ORCA reads back:
-`.orca/work/slugify/intent.md`, `spec.md`, `plan.md`, `implementation.md`, `test-report.md`,
-`review.md`, `deploy-report.md` — inside the sandbox repo, since that is the workspace.
+`intent.md`, `spec.md`, `plan.md`, `implementation.md`, `test-report.md`, `review.md`, and
+`deploy-report.md` under the attempt-specific output directory named in the prompt's
+Deliverables block. A previous run or earlier attempt's report cannot satisfy that contract.
 
 Front matter is the contract. ORCA appends a **Deliverables** block to every prompt (path,
 required front-matter fields, allowed values) and validates what comes back; a missing or

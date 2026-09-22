@@ -74,7 +74,7 @@ edges:
     const forced = ctx(dir, ["break", runId], { force: true });
     expect(await commands.leases!.run(forced)).toBe(0);
     expect(forced.lines[0]).toMatch(new RegExp(`^freed ${runId} `));
-    expect(forced.errors.join("\n")).toContain("one heartbeat");
+    expect(forced.errors.join("\n")).toContain("obsolete writes are refused immediately");
     expect(await leases.get(`run:${runId}`)).toBeUndefined();
 
     // A holder that stopped heartbeating is `lapsed`, and breaking it needs no force.

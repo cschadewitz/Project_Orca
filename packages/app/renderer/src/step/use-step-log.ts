@@ -18,18 +18,20 @@
  * backwards with `before`, which is the same cursor the in-memory buffer's own trim
  * produces, so the marker row means one thing however it arrived.
  *
- * **Nothing here polls, and nothing re-reads.** A notification is folded into what is held.
- * The one thing that is re-read is a step the person asked to see earlier output of.
+ * **Nothing here polls.** A notification is folded into what is held. Reattachment reads
+ * a fresh page; earlier output is read only when the person asks for it.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConnectionState } from "@orca/design";
 import type { ProtocolError } from "@orca/protocol";
+import { useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import {
   OutputBuffer,
   updatesOf,
   updatesOfNotification,
   type BufferOptions,
+  type BufferedUpdate,
   type LogEvent,
   type OutputRow,
 } from "./line-buffer.js";
@@ -75,6 +77,11 @@ export interface StepLogOptions {
 export function useStepLog(runId: string, stepRunId: string, options: StepLogOptions): StepLog {
   const { connection, openHeld = false, onPrepend, buffer: bufferOptions } = options;
   const stream = useNotifications();
+  const generation = useSubscriptionGeneration();
+  const pendingUpdates = useRef<BufferedUpdate[]>([]);
+  const pendingEvents = useRef<LogEvent[]>([]);
+  const reading = useRef(false);
+  const readEpoch = useRef(0);
 
   const [phase, setPhase] = useState<LogPhase>("loading");
   const [error, setError] = useState<ProtocolError | undefined>(undefined);
@@ -91,7 +98,7 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
      once, through a ref, so a caller passing them inline does not get a new buffer (and a
      blank pane) on every render. */
   const settings = useRef(bufferOptions);
-  const buffer = useMemo(() => new OutputBuffer(settings.current ?? {}), [runId, stepRunId]);
+  const buffer = useMemo(() => new OutputBuffer(settings.current ?? {}), [runId, stepRunId, generation]);
   const prepend = useRef(onPrepend);
   prepend.current = onPrepend;
   /* Whether to open held is a property of the step at the moment it is opened. Read through
@@ -116,6 +123,11 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
   /* The first page. `live` guards the two awaits against a step the person has left. */
   useEffect(() => {
     let live = true;
+    readEpoch.current += 1;
+    setLoadingEarlier(false);
+    reading.current = true;
+    pendingUpdates.current = [];
+    pendingEvents.current = [];
     const openAtTop = held.current;
     setPhase("loading");
     setError(undefined);
@@ -150,14 +162,20 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
         }
         page = tail.result;
       }
-      setEvents(page.events);
-      buffer.load(updatesOf(page.events));
+      reading.current = false;
+      const merged = new Map(page.events.map((event) => [event.seq, event]));
+      for (const event of pendingEvents.current) merged.set(event.seq, event);
+      setEvents([...merged.values()].sort((a, b) => a.seq - b.seq));
+      buffer.load([...updatesOf(page.events), ...pendingUpdates.current].sort((a, b) => a.seq - b.seq));
+      pendingEvents.current = [];
+      pendingUpdates.current = [];
       setEarlierBefore(page.hasMore ? page.prevCursor : undefined);
       setPhase("ready");
     })();
 
     return () => {
       live = false;
+      readEpoch.current += 1;
     };
   }, [runId, stepRunId, buffer]);
 
@@ -168,7 +186,9 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
       "agent.update",
       (params) => {
         if (params.stepRunId !== stepRunId) return;
-        buffer.push(updatesOfNotification(params));
+        const updates = updatesOfNotification(params);
+        if (reading.current) pendingUpdates.current.push(...updates);
+        else buffer.push(updates);
       },
       { runId },
     );
@@ -181,7 +201,8 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
         const event = params.event;
         const payload: Record<string, unknown> = event.payload;
         if (payload["stepRunId"] !== stepRunId) return;
-        setEvents((current) => [...current, event]);
+        if (reading.current) pendingEvents.current.push(event);
+        else setEvents((current) => [...current, event]);
       },
       { runId },
     );
@@ -214,8 +235,10 @@ export function useStepLog(runId: string, stepRunId: string, options: StepLogOpt
   const loadEarlier = useCallback(() => {
     const before = earlierBefore;
     if (before === undefined || loadingEarlier) return;
+    const epoch = readEpoch.current;
     setLoadingEarlier(true);
     void window.orca.runs.events({ runId, stepRunId, before, limit: PAGE_SIZE }).then((answer) => {
+      if (epoch !== readEpoch.current) return;
       setLoadingEarlier(false);
       if (!answer.ok) {
         setError(answer.error);

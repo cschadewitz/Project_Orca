@@ -93,7 +93,8 @@ describe("acp session cancellation", () => {
     await expect(session.prompt("go", { timeoutMs: 20 })).rejects.toMatchObject({ code: "AGENT_TRANSPORT" });
     const exit = await settled(proc.exited, 5000);
     expect(exit).not.toBe(pending);
-    expect((exit as { signal: string | null }).signal).toBe("SIGKILL");
+    // Windows SIGTERM is unconditional termination, even with an installed listener.
+    expect((exit as { signal: string | null }).signal).toBe(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
   });
 
   it("rejects a prompt whose signal is already aborted without sending it", async () => {

@@ -1,0 +1,1 @@
+- **core:** Reject malformed dependency references at decomposition and artifact-signal input boundaries with a field path, while keeping previously stored raw references readable.

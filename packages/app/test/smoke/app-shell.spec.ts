@@ -39,6 +39,7 @@
  *
  * Prerequisite: `pnpm run build`. The app under test is `dist/`, not the sources.
  */
+import { fileURLToPath } from "node:url";
 import {
   test,
   expect,
@@ -52,7 +53,7 @@ import {
 import { AxeBuilder } from "@axe-core/playwright";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 // The design system's own presentation maps, so the greyscale check compares the screen
 // against the source of truth rather than against a second list of glyphs written here
 // (RULES.md rule 3). This resolves to the built `dist`, which `pnpm run build` produces.
@@ -73,7 +74,7 @@ interface SmokeWindow {
 }
 
 /** The app directory Electron is pointed at; its `main` field is `dist/main/index.js`. */
-const appDir = new URL("../../", import.meta.url).pathname;
+const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
 /**
  * The OS-level Chromium sandbox needs unprivileged user namespaces, which a plain container

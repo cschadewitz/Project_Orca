@@ -80,6 +80,7 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
       "review",
       "review-verdict", // approved
       "deploy",
+      "delivery-status",
       "done",
     ]);
     expect(state.run.vars).toMatchObject({ buildAttempt: 3, reviewRound: 2 });
@@ -90,7 +91,10 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
     expect(byName("review").map((a) => a.data.verdict)).toEqual(["changes-requested", "approve"]);
     expect(byName("implementation").map((a) => a.version)).toEqual([1, 2, 3]);
     expect(byName("deployReport")).toHaveLength(1);
-    expect(byName("spec")[0]?.path).toBe(`${h.dir}/.orca/work/auth-api/spec.md`);
+    const spec = byName("spec")[0]!;
+    expect(spec.path?.replaceAll("\\", "/")).toBe(
+      `${h.dir.replaceAll("\\", "/")}/.orca/work/auth-api/.orca-attempts/${state.run.id}/${spec.producedBy.stepRunId}/spec.md`,
+    );
 
     // The prompt for the second build contained the failing test report; the third contained the review.
     const prompts = await h.prompts();

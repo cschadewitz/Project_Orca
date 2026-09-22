@@ -1,0 +1,1 @@
+- **store:** Retry transient Windows sharing violations while waiting for a mutation lock, preserving the current holder and the existing bounded wait.

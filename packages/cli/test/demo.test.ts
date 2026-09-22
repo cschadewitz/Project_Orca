@@ -45,7 +45,9 @@ const exists = (p: string) =>
     () => false,
   );
 
-describe("orca demo", () => {
+// The program spawns many scripted ACP processes; measured 25–27s per test locally
+// and 35s on CI (#228). Keep this allowance local to the subprocess integration test.
+describe("orca demo", { timeout: 60_000 }, () => {
   it("writes an orca.config.yaml that later commands can run workflows with", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-demo-test-"));
     dirs.push(dir);
@@ -72,8 +74,14 @@ describe("orca demo", () => {
 
     // Same invocation as the README quick start: needs the config (without one no
     // agent fills the ai-sdlc roles and bootstrap throws WORKFLOW_INVALID).
-    const run = ctx(dir, ["ai-sdlc"], { var: ['workItem={"slug":"x","title":"X"}'] }, configPath);
-    expect(await commands.run!.run(run)).toBe(0);
+    const run = ctx(
+      dir,
+      ["ai-sdlc"],
+      { var: ['workItem={"slug":"x","title":"X","description":"Implement X"}'] },
+      configPath,
+    );
+    const exit = await commands.run!.run(run);
+    expect(exit, run.lines.join("\n")).toBe(0);
     expect(run.lines.join("\n")).toMatch(/workflow=ai-sdlc@1 +status=completed\/success/);
   });
 

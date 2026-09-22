@@ -68,6 +68,14 @@ placeholder and **bound automatically** when a later request registers that
 slug. That is how one request can depend on work that another request will
 deliver.
 
+This resolution is the contract of `custom:plan-register`, used by the shipped
+program workflow. The legacy `custom:materialize-work-items` executor is still
+request-scoped: work-item references must name another item in its decomposition
+batch. It does not create a plan or bind cross-request placeholders. Use the
+`plan-register` / `plan-dispatch` pair for cross-request, decision, external,
+stage or phase dependencies; changing the legacy validator alone would not make
+the plain parallel fan-out enforce those plan dependencies.
+
 ### The risk matrix
 
 `score = likelihood x impact` on a 1..`scale` grid (default 5). Levels come
@@ -80,6 +88,9 @@ when a plan is created or updated: thresholds must be strictly increasing and
 must fit the plan's scale (omitted ratings sit at the midpoint), otherwise the
 risk is refused, or reported as a rejected signal when it arrived in an
 artifact. `orca plan show` and `orca plan risks` print the matrix in force.
+Agent templates receive `riskMatrix` from the run's current plan, or the configured
+planning defaults before registration. The shipped decomposition, risk assessment
+and design prompts use `riskMatrix.scale` for their rating ranges.
 
 An item's **exposure** is the highest level (and the sum of scores) of the
 *open* risks that list it in `affects`. Open means `open`, `mitigating` or
@@ -109,6 +120,38 @@ has no options recorded at all (the agent or human
 overrode the arithmetic, `decidedBy: agent|human`); otherwise the top-ranked
 option is chosen (`decidedBy: matrix`). A gate can route on
 `steps.<node>.result.data.confidence` to send close calls to a human.
+
+An automated matrix evaluation preserves a decision already made, including its
+rationale. A human can explicitly override it with `orca plan decide`, or reopen
+it before the next automated evaluation. Reopening clears the previous ranking
+and restores satisfied or failed decision dependencies to open. Replacing matrix
+criteria, options or scale on an undecided decision also clears its old ranking;
+the journal records the invalidation.
+
+### Item workflow precedence
+
+Dispatch uses the work item's own `workflowId` first, then a `workflow` pin on the
+dispatch node, then `vars.itemWorkflow` seeded from `program.itemWorkflow`.
+A node pin that differs from that variable emits a warning. The dispatch result
+records `itemWorkflowSource` (`node` or `var`) and the selected default
+`itemWorkflow`, so a shadowed configuration is visible in the run record.
+
+### Recovering released claims
+
+`orca claims release` repairs an in-progress item's projection before making its
+claim available to a successor. A missing child becomes pending. An unowned child
+left created/running by a dead parent is durably cancelled before the item becomes
+pending, so it cannot resume alongside the replacement. Live or parked descendants
+prevent this reset. A recorded terminal step is recovered as its original outcome,
+not cancelled. A terminal child
+becomes done, failed or cancelled according to its recorded outcome. A running,
+paused or waiting child is left in progress. Release is not a retry of already successful
+or failed work, and it does not cancel a resumable child.
+
+Claim creation and release share a process-safe mutation lock; projection repair
+runs while that lock is held. Existing claim documents keep their format. Stop
+older ORCA processes before managing claims with this version: older release
+commands do not participate in the new critical section.
 
 ## How agents feed the plan
 

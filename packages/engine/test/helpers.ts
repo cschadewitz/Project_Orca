@@ -1,3 +1,5 @@
+/** Shared temporary scripted-agent harness, resolving file URLs portably. */
+import { fileURLToPath } from "node:url";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +18,7 @@ import { LocalWorkspaceProvider, Orchestrator, type OrchestratorOptions } from "
 import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec, type PlaybookInput } from "@orca/testing";
 
-export const repoRoot = join(new URL(".", import.meta.url).pathname, "..", "..", "..");
+export const repoRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 
 /** Same glob patterns `orca run` uses by default, so the tests exercise the file set the CLI does. */
 const shipped = parseOrcaConfig({});

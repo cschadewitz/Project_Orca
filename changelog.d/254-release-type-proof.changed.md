@@ -1,0 +1,1 @@
+- **tools:** Gate release publication on Electron smoke and all three platform type proofs of the release merge commit, without automatically updating baselines.

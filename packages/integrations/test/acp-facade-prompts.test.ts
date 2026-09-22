@@ -5,16 +5,29 @@
  * same agent with a real subprocess behind it.
  */
 import { PassThrough } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
 import * as acp from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { AgentRegistry } from "@orca/agents";
 import { parsePromptTemplate, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, ProgramService } from "@orca/engine";
+import { LocalWorkspaceProvider, Orchestrator, ProgramService, builtinExecutors, paused } from "@orca/engine";
 import { OrcaAcpAgent, serveAcpFacade } from "@orca/integrations";
 import { memoryStores } from "@orca/store";
 
 const WORKFLOWS = [
+  `id: parked
+name: Parked
+start: s
+nodes:
+  s: { type: "custom:park" }
+edges: []`,
+  `id: rejected
+name: Rejected
+start: s
+nodes:
+  s: { type: start }
+  done: { type: end, outcome: failure }
+edges: [{ from: s, to: done }]
+`,
   `
 id: mini
 name: Mini
@@ -64,12 +77,15 @@ edges:
 `,
 ];
 
-function setup() {
+function setup(programWorkflow = "program") {
   const workflows = new WorkflowRegistry();
   for (const y of WORKFLOWS) workflows.register(parseWorkflow(y));
   const templates = new TemplateRegistry();
   templates.register(parsePromptTemplate("---\nid: x\n---\nunused"));
+  const executors = builtinExecutors();
+  executors.register({ type: "custom:park", execute: async () => paused("Waiting for external input") });
   const orchestrator = new Orchestrator({
+    executors,
     stores: memoryStores(),
     agents: new AgentRegistry(),
     workflows,
@@ -77,15 +93,20 @@ function setup() {
     workspaceProvider: new LocalWorkspaceProvider(process.cwd()),
     logger: silentLogger,
   });
-  return { orchestrator, program: new ProgramService(orchestrator, "program") };
+  return { orchestrator, program: new ProgramService(orchestrator, programWorkflow) };
 }
 
 /** Drive the facade as an ACP client, collecting the updates it pushes back. */
 async function withClient<T>(
-  opts: { useClientCwd?: boolean; answerGates?: boolean } = {},
+  opts: {
+    useClientCwd?: boolean;
+    answerGates?: boolean;
+    programWorkflow?: string;
+    gateSeen?: () => void;
+  } = {},
   body: (ctx: ClientCtx, updates: acp.SessionUpdate[]) => Promise<T>,
 ): Promise<{ result: T; updates: acp.SessionUpdate[]; orchestrator: Orchestrator }> {
-  const { orchestrator, program } = setup();
+  const { orchestrator, program } = setup(opts.programWorkflow);
   const agentApp = new OrcaAcpAgent({
     orchestrator,
     program,
@@ -98,11 +119,12 @@ async function withClient<T>(
       updates.push(ctx.params.update);
     })
     // answerGates: false stands in for a human who has not replied yet - the request stays open.
-    .onRequest(acp.methods.client.session.requestPermission, () =>
-      opts.answerGates === false
+    .onRequest(acp.methods.client.session.requestPermission, () => {
+      opts.gateSeen?.();
+      return opts.answerGates === false
         ? new Promise<never>(() => {})
-        : Promise.resolve({ outcome: { outcome: "selected" as const, optionId: "ship" } }),
-    )
+        : Promise.resolve({ outcome: { outcome: "selected" as const, optionId: "ship" } });
+    })
     .connectWith(agentApp, (ctx) => body(ctx as never, updates));
   return { result, updates, orchestrator };
 }
@@ -124,6 +146,49 @@ const said = (updates: acp.SessionUpdate[]) =>
     .join("");
 
 describe("the facade's prompt grammar", () => {
+  it.each([
+    ["program", "completed"],
+    ["rejected", "failed"],
+    ["doomed", "failed"],
+    ["parked", "decomposing"],
+  ])("settles request-backed %s as %s", async (programWorkflow, expected) => {
+    const { orchestrator } = await withClient({ programWorkflow }, async (ctx) =>
+      prompt(ctx, await newSession(ctx), "Requested task"),
+    );
+    const [request] = await orchestrator.stores.requests.list(() => true);
+    expect(request?.status).toBe(expected);
+    const state = await orchestrator.getState(request!.programRunId!);
+    expect(state.run.status).toBe(
+      expected === "decomposing" ? "paused" : programWorkflow === "doomed" ? "failed" : "completed",
+    );
+  });
+
+  it("settles a cancelled request after the client cancels at a confirmed open gate", async () => {
+    let reached!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const { orchestrator } = await withClient(
+      { programWorkflow: "gated", answerGates: false, gateSeen: reached },
+      async (ctx) => {
+        const sessionId = await newSession(ctx);
+        const running = prompt(ctx, sessionId, "Requested task");
+        await gate;
+        await ctx.notify(acp.methods.agent.session.cancel, { sessionId });
+        return running;
+      },
+    );
+    expect((await orchestrator.stores.requests.list(() => true))[0]?.status).toBe("cancelled");
+  });
+
+  it("deduplicates plans and labels a failed step explicitly", async () => {
+    const { updates } = await withClient({}, async (ctx) => prompt(ctx, await newSession(ctx), "/run doomed"));
+    const plans = updates.filter((u) => u.sessionUpdate === "plan");
+    expect(plans.at(-1)?.entries).toContainEqual(
+      expect.objectContaining({ content: "boom → failed", status: "completed" }),
+    );
+    for (let i = 1; i < plans.length; i++) expect(plans[i]?.entries).not.toEqual(plans[i - 1]?.entries);
+  });
   it("answers /status with nothing before the session has run anything, and with each run afterwards", async () => {
     const { updates } = await withClient({}, async (ctx) => {
       const sessionId = await newSession(ctx);
@@ -191,11 +256,15 @@ describe("the facade's prompt grammar", () => {
   });
 
   it("cancels the session's active run when the client says so", async () => {
-    const { orchestrator, updates } = await withClient({ answerGates: false }, async (ctx) => {
+    let reached!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const { orchestrator, updates } = await withClient({ answerGates: false, gateSeen: reached }, async (ctx) => {
       const sessionId = await newSession(ctx);
       const running = prompt(ctx, sessionId, "/run gated");
       // Let the run reach the gate (nothing answers it) before cancelling.
-      await delay(50);
+      await gate;
       await ctx.notify(acp.methods.agent.session.cancel, { sessionId });
       return running;
     });

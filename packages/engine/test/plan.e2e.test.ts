@@ -6,6 +6,7 @@
  * (deferred, then picked up by `plan-resume`).
  */
 import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseWorkflow } from "@orca/core";
 import { PausingHumanInput, ProgramService } from "@orca/engine";
@@ -136,7 +137,20 @@ describe("planning layer (e2e)", () => {
       "resolve",
       "done",
     ]);
-    expect(Object.values(decideRun.artifacts)[0]?.path).toBe(`${h.dir}/.orca/program/${request.id}/decisions/store.md`);
+    const matrixStep = Object.values(decideRun.steps).find((s) => s.nodeId === "matrix")!;
+    expect(Object.values(decideRun.artifacts)[0]?.path).toBe(
+      join(
+        h.dir,
+        ".orca",
+        "program",
+        request.id,
+        "decisions",
+        ".orca-attempts",
+        decideRun.run.id,
+        matrixStep.id,
+        "store.md",
+      ),
+    );
     const decidePrompt = (await h.prompts()).find((p) => p.text.includes("You are the **architect**"))!;
     expect(decidePrompt.text).toContain("Work items waiting on this decision: api");
 
@@ -169,7 +183,8 @@ describe("planning layer (e2e)", () => {
       .find((p) => p.text.includes("(`ui`)"))!;
     expect(uiBuild.text).toContain("Upstream work this item depends on");
     expect(uiBuild.text).toMatch(/`api` \(done; blocks, required by build\)/);
-    expect(uiBuild.text).toContain(`${h.dir}/.orca/work/api/implementation.md`);
+    const apiImplementation = await h.orchestrator.stores.artifacts.get(bySlug.api!.produced.implementation!);
+    expect(uiBuild.text).toContain(apiImplementation!.path!);
 
     // Schedule artifact + gate + journal.
     expect(Object.values(state.artifacts).some((a) => a.kind === "schedule")).toBe(true);

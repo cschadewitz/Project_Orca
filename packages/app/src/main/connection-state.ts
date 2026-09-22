@@ -133,6 +133,7 @@ export class ConnectionMachine {
   private cursor: number | undefined;
   /** Guards a slow `hello` answering after a newer one was asked for. */
   private handshake = 0;
+  private generation = 0;
 
   /* -- the true state, and the one the screen has -- */
   private state: ConnectionState = "reconnecting";
@@ -166,7 +167,10 @@ export class ConnectionMachine {
     this.failuresAtCap = retries.atCap;
     // A socket that has just become a stream is a daemon that has just answered a
     // `subscribe`, and not necessarily the daemon that answered the last one.
-    if (link === "live" && arrived) void this.shakeHands();
+    if (link === "live" && arrived) {
+      this.generation += 1;
+      void this.shakeHands();
+    }
     this.settle();
   }
 
@@ -319,6 +323,7 @@ export class ConnectionMachine {
   private snapshot(): ConnectionSnapshot {
     return {
       state: this.state,
+      generation: this.generation,
       since: new Date(this.since).toISOString(),
       ...(this.cursor !== undefined ? { eventCursor: this.cursor } : {}),
       ...(this.daemonProtocol !== undefined

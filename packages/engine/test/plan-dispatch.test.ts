@@ -5,8 +5,9 @@
  * without waiting for the poll, and gives up at `waitTimeoutMs`.
  */
 import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import { FakeClock, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry, type Logger } from "@orca/core";
 import {
   LocalWorkspaceProvider,
   Orchestrator,
@@ -56,7 +57,12 @@ const untilCancelled = (ctx: StepContext, ms = 5_000) =>
     ctx.signal.addEventListener("abort", () => (clearTimeout(timer), resolve("cancelled")), { once: true });
   });
 
-async function setup(options: string, items: ItemInput[], work: (ctx: StepContext) => Promise<StepOutcome>) {
+async function setup(
+  options: string,
+  items: ItemInput[],
+  work: (ctx: StepContext) => Promise<StepOutcome>,
+  logger: Logger = silentLogger,
+) {
   const stores = memoryStores();
   const plan = new PlanService({ stores, defaults: { planKey: "roadmap", planName: "Roadmap" } });
   const p = await plan.ensurePlan({ requestId: "req_1" }, { kind: "human", actor: "test" });
@@ -88,7 +94,7 @@ async function setup(options: string, items: ItemInput[], work: (ctx: StepContex
     plan,
     workspaceProvider: new LocalWorkspaceProvider("/tmp"),
     clock: new FakeClock(),
-    logger: silentLogger,
+    logger,
   });
   const run = () => orchestrator.startAndRun({ workflowId: "plan-dispatch-test", requestId: "req_1" });
   return { stores, plan, planId: p.id, orchestrator, run };
@@ -99,6 +105,215 @@ const dispatched = (state: { run: { vars: Record<string, unknown> } }) =>
 
 const statuses = async (stores: ReturnType<typeof memoryStores>) =>
   Object.fromEntries((await stores.workItems.list()).map((w) => [w.slug, w.status]));
+
+describe("plan dispatch configuration and recovery", () => {
+  it("recovers a released missing child and dispatches it from a fresh run", async () => {
+    const fixture = await setup("", [{ slug: "api", title: "API" }], async () => completed());
+    const wi = (await fixture.stores.workItems.list())[0]!;
+    await fixture.stores.workItems.put({ ...wi, status: "in-progress", runId: "run_missing_child" });
+    await fixture.stores.claims.claim({
+      workItemId: wi.id,
+      runId: "run_missing_parent",
+      branch: wi.slug,
+      at: wi.createdAt,
+    });
+    await fixture.orchestrator.releaseClaim(wi.id);
+    expect(await fixture.stores.workItems.get(wi.id)).toMatchObject({ status: "pending" });
+    expect((await fixture.stores.workItems.get(wi.id))?.runId).toBeUndefined();
+    expect(dispatched(await fixture.run())).toEqual(["api:done"]);
+    expect((await fixture.plan.journalOf(fixture.planId)).filter((e) => e.type === "work-item.updated")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({ changes: { status: "pending", runId: null, from: "in-progress" } }),
+        }),
+      ]),
+    );
+  });
+
+  it.each(["created", "running"])("cancels a stale %s child before resetting its released item", async (status) => {
+    const fixture = await setup("", [{ slug: "api", title: "API" }], async () => completed());
+    const wi = (await fixture.stores.workItems.list())[0]!;
+    const parentId = await fixture.orchestrator.startRun({ workflowId: "item" });
+    await fixture.stores.events.append({ type: "run.cancelled", runId: parentId, payload: {} });
+    const childId = await fixture.orchestrator.startRun({
+      workflowId: "item",
+      workItemId: wi.id,
+      parentRunId: parentId,
+    });
+    if (status === "running") await fixture.stores.events.append({ type: "run.started", runId: childId, payload: {} });
+    await fixture.stores.workItems.put({ ...wi, status: "in-progress", runId: childId });
+    await fixture.stores.claims.claim({
+      workItemId: wi.id,
+      runId: parentId,
+      branch: wi.slug,
+      at: wi.createdAt,
+    });
+    await fixture.orchestrator.releaseClaim(wi.id);
+    expect((await fixture.orchestrator.getState(childId)).run.status).toBe("cancelled");
+    expect((await fixture.stores.workItems.get(wi.id))?.status).toBe("pending");
+    expect((await fixture.stores.workItems.get(wi.id))?.runId).toBeUndefined();
+    expect(dispatched(await fixture.run())).toEqual(["api:done"]);
+    expect((await fixture.orchestrator.run(childId)).run.status).toBe("cancelled");
+  });
+
+  it("preserves a terminal step outcome when claim recovery finds a missing run.completed", async () => {
+    const fixture = await setup("", [{ slug: "api", title: "API" }], async () => completed());
+    const wi = (await fixture.stores.workItems.list())[0]!;
+    const parentId = await fixture.orchestrator.startRun({ workflowId: "item" });
+    await fixture.stores.events.append({ type: "run.cancelled", runId: parentId, payload: {} });
+    const childId = await fixture.orchestrator.startRun({
+      workflowId: "item",
+      workItemId: wi.id,
+      parentRunId: parentId,
+    });
+    await fixture.stores.events.append({ type: "run.started", runId: childId, payload: {} });
+    await fixture.stores.events.append({
+      type: "step.scheduled",
+      runId: childId,
+      payload: { stepRunId: "terminal", nodeId: "e", nodeType: "end", attempt: 1 },
+    });
+    await fixture.stores.events.append({
+      type: "step.completed",
+      runId: childId,
+      payload: { stepRunId: "terminal", result: { artifactIds: [], data: {}, outcome: "success" } },
+    });
+    await fixture.stores.workItems.put({ ...wi, status: "in-progress", runId: childId });
+    await fixture.stores.claims.claim({
+      workItemId: wi.id,
+      runId: parentId,
+      branch: wi.slug,
+      at: wi.createdAt,
+    });
+    await fixture.orchestrator.releaseClaim(wi.id);
+    expect((await fixture.orchestrator.getState(childId)).run).toMatchObject({
+      status: "completed",
+      outcome: "success",
+    });
+    expect((await fixture.stores.workItems.get(wi.id))?.status).toBe("done");
+    expect((await fixture.stores.events.read(childId)).some((event) => event.type === "run.cancelled")).toBe(false);
+  });
+
+  it("does not cancel a child that parks while orphan recovery acquires its lease", async () => {
+    const fixture = await setup("", [{ slug: "api", title: "API" }], async () => completed());
+    const wi = (await fixture.stores.workItems.list())[0]!;
+    const parentId = await fixture.orchestrator.startRun({ workflowId: "item" });
+    await fixture.stores.events.append({ type: "run.cancelled", runId: parentId, payload: {} });
+    const childId = await fixture.orchestrator.startRun({
+      workflowId: "item",
+      workItemId: wi.id,
+      parentRunId: parentId,
+    });
+    await fixture.stores.events.append({ type: "run.started", runId: childId, payload: {} });
+    await fixture.stores.workItems.put({ ...wi, status: "in-progress", runId: childId });
+    await fixture.stores.claims.claim({
+      workItemId: wi.id,
+      runId: parentId,
+      branch: wi.slug,
+      at: wi.createdAt,
+    });
+    const acquire = fixture.stores.leases.acquire.bind(fixture.stores.leases);
+    fixture.stores.leases.acquire = async (request) => {
+      await fixture.stores.events.append({
+        type: "run.paused",
+        runId: childId,
+        payload: { reason: "waiting for person" },
+      });
+      return acquire(request);
+    };
+    await fixture.orchestrator.releaseClaim(wi.id);
+    expect((await fixture.orchestrator.getState(childId)).run.status).toBe("paused");
+    expect((await fixture.stores.workItems.get(wi.id))?.status).toBe("in-progress");
+  });
+
+  it("does not cancel a newly bound child belonging to a different dispatcher", async () => {
+    const fixture = await setup("", [{ slug: "api", title: "API" }], async () => completed());
+    const wi = (await fixture.stores.workItems.list())[0]!;
+    const parentId = await fixture.orchestrator.startRun({ workflowId: "item" });
+    const childId = await fixture.orchestrator.startRun({
+      workflowId: "item",
+      workItemId: wi.id,
+      parentRunId: parentId,
+    });
+    await fixture.stores.workItems.put({ ...wi, status: "in-progress", runId: childId });
+    await fixture.stores.claims.claim({
+      workItemId: wi.id,
+      runId: "old-missing-parent",
+      branch: wi.slug,
+      at: wi.createdAt,
+    });
+    await fixture.orchestrator.releaseClaim(wi.id);
+    expect((await fixture.orchestrator.getState(childId)).run.status).toBe("created");
+    expect(await fixture.stores.workItems.get(wi.id)).toMatchObject({ status: "in-progress", runId: childId });
+  });
+
+  it("renders the shipped risk prompts with the current plan scale", async () => {
+    const rendered: string[] = [];
+    const fixture = await setup("", [{ slug: "api", title: "API" }], async (ctx) => {
+      for (const partial of ["work-item-context", "upstream-context"])
+        ctx.templates.registerSource(await readFile(`templates/partials/${partial}.md`, "utf8"));
+      for (const file of [
+        "templates/program/assess-risks.md",
+        "templates/program/decompose.md",
+        "templates/sdlc/design.md",
+      ])
+        rendered.push(
+          await ctx.render(await readFile(file, "utf8"), {
+            request: { title: "Test" },
+            artifacts: { decomposition: { data: {} } },
+          }),
+        );
+      return completed();
+    });
+    await fixture.plan.updatePlan(fixture.planId, { riskMatrix: { scale: 3 } });
+    expect((await fixture.run()).run.status).toBe("completed");
+    expect(rendered).toHaveLength(3);
+    for (const prompt of rendered) {
+      expect(prompt).toContain("likelihood: 1-3");
+      expect(prompt).toContain("impact: 1-3");
+      expect(prompt).not.toContain("1-5");
+    }
+  });
+
+  it("uses an existing selected plan before the new request has registered", async () => {
+    const scales: string[] = [];
+    const fixture = await setup("", [], async (ctx) => {
+      scales.push(await ctx.render("{{ riskMatrix.scale }}"));
+      return completed();
+    });
+    await fixture.plan.updatePlan(fixture.planId, { riskMatrix: { scale: 3 } });
+    await fixture.plan.ensurePlan({ key: "other", riskMatrix: { scale: 7 } });
+    for (const vars of [{}, { plan: "other" }]) {
+      const state = await fixture.orchestrator.startAndRun({
+        workflowId: "item",
+        requestId: "req_not_registered",
+        vars,
+      });
+      expect(state.run.status).toBe("completed");
+    }
+    expect(scales).toEqual(["3", "7"]);
+  });
+
+  it("records a node pin as the item workflow source", async () => {
+    const warnings: string[] = [];
+    const logger: Logger = {
+      ...silentLogger,
+      warn: (message) => {
+        warnings.push(message);
+      },
+      child: () => logger,
+    };
+    const fixture = await setup("workflow: item", [{ slug: "api", title: "API" }], async () => completed(), logger);
+    const state = await fixture.orchestrator.startAndRun({
+      workflowId: "plan-dispatch-test",
+      requestId: "req_1",
+      vars: { itemWorkflow: "shadowed" },
+    });
+    expect(state.run.status).toBe("completed");
+    const step = Object.values(state.steps).find((s) => s.nodeId === "dispatch");
+    expect(step?.result?.data).toMatchObject({ itemWorkflowSource: "node", itemWorkflow: "item" });
+    expect(warnings).toContain("plan-dispatch node workflow overrides configured itemWorkflow");
+  });
+});
 
 describe("plan-dispatch: failFast", () => {
   it("cancels the items still running when one fails", async () => {

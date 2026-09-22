@@ -9,7 +9,7 @@
  */
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DockedPanel } from "../src/chrome/docked-panel.js";
 import { ArtifactPanelProvider, useArtifactPanel, type ArtifactTarget } from "../src/artifacts/panel-context.js";
 import { RUN_ART } from "./fixtures-artifacts.js";
@@ -112,7 +112,9 @@ describe("the artifact panel", () => {
   });
 
   it("steps versions with [ and ], registered in the panel scope", async () => {
-    renderPanel(SPEC);
+    await act(async () => {
+      renderPanel(SPEC);
+    });
     await waitFor(() => expect(versionButtons()).toHaveLength(3));
 
     expect(
@@ -122,15 +124,23 @@ describe("the artifact panel", () => {
         .map((s) => s.key),
     ).toEqual(["[", "]"]);
 
-    press("[");
+    await act(async () => {
+      press("[");
+    });
     await waitFor(() => expect(versionButtons()[1]!.getAttribute("aria-pressed")).toBe("true"));
-    press("[");
+    await act(async () => {
+      press("[");
+    });
     await waitFor(() => expect(versionButtons()[0]!.getAttribute("aria-pressed")).toBe("true"));
     // At the first version there is nowhere further back: the key does nothing rather
     // than wrapping to the newest.
-    press("[");
+    await act(async () => {
+      press("[");
+    });
     expect(versionButtons()[0]!.getAttribute("aria-pressed")).toBe("true");
-    press("]");
+    await act(async () => {
+      press("]");
+    });
     await waitFor(() => expect(versionButtons()[1]!.getAttribute("aria-pressed")).toBe("true"));
   });
 

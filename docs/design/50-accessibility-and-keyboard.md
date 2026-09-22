@@ -157,3 +157,8 @@ mouse click, the two media queries' output, and the collapsed sidebar below 960p
 checked by eye or not at all. Real screen-reader behaviour is checked by neither — that a
 `log` region with `aria-live="off"` gives navigation without narration is a reading of the
 ARIA specification, asserted here only as attributes.
+
+Pane restores from Config announce the named boundary returning to its default size through
+the shared announcement channel. The palette restore announces the number of sizes restored,
+or that all sizes were already at their defaults. `installAppearance` receives the same
+framework-free announcer created before React mounts; no extra live region is installed.

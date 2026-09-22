@@ -236,7 +236,7 @@ export interface Stores {
 export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores {
   return {
     events: new JsonlEventStore(dir, clock, logger),
-    artifacts: new FileArtifactStore(dir),
+    artifacts: new FileArtifactStore(dir, logger),
     requests: new JsonFileDocumentStore<Request>(join(dir, "requests.json"), RequestSchema),
     workItems: new JsonFileDocumentStore<WorkItem>(join(dir, "work-items.json"), WorkItemSchema),
     claims: new FileClaimStore(dir),

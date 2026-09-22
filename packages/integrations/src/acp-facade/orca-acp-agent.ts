@@ -38,6 +38,7 @@ interface FacadeSession {
   cwd: string;
   runIds: string[];
   active?: { runId: string };
+  lastPlan?: string;
 }
 
 export class OrcaAcpAgent {
@@ -133,6 +134,7 @@ export class OrcaAcpAgent {
     }
     session.runIds.push(runId);
     session.active = { runId };
+    delete session.lastPlan;
     // Bound per run, so concurrent sessions each receive only their own gates and `ask` permissions.
     const unbindHumanInput = this.humanInput.bind(runId, {
       sessionId: session.id,
@@ -142,9 +144,15 @@ export class OrcaAcpAgent {
     const state0 = await orchestrator.getState(runId);
     const def = orchestrator.resolveDefinition(state0.run.workflowId);
     await say(`Starting ${def.name} (run ${runId}) in ${session.cwd}\n`);
-    const unsubscribe = orchestrator.subscribe((e) => void this.forward(ctx, session, def, runId, e));
+    // Preserve event order and drain forwarding before publishing the final snapshot.
+    let forwarding = Promise.resolve();
+    const unsubscribe = orchestrator.subscribe((e) => {
+      forwarding = forwarding.then(() => this.forward(ctx, session, runId, e)).catch(() => undefined);
+    });
     try {
       const final = await orchestrator.run(runId);
+      await this.opts.program.settle(final);
+      await forwarding;
       await this.sendPlan(ctx, session, def, final);
       await say(
         `\nRun ${runId} ${final.run.status}${final.run.outcome ? ` (${final.run.outcome})` : ""}${final.run.error ? `: ${final.run.error.message}` : ""}\n`,
@@ -161,7 +169,6 @@ export class OrcaAcpAgent {
   private async forward(
     ctx: acp.AgentRequestContext<acp.PromptRequest>,
     session: FacadeSession,
-    def: WorkflowDefinition,
     rootRunId: string,
     e: OrcaEvent,
   ): Promise<void> {
@@ -188,14 +195,16 @@ export class OrcaAcpAgent {
     switch (e.type) {
       case "step.scheduled":
       case "step.completed":
-      case "step.failed":
-        if (isRoot) await this.sendPlan(ctx, session, def, await orchestrator.getState(rootRunId));
-        else if (e.type === "step.scheduled")
+      case "step.failed": {
+        const root = await orchestrator.getState(rootRunId);
+        await this.sendPlan(ctx, session, orchestrator.resolveDefinition(root.run.workflowId), root);
+        if (!isRoot && e.type === "step.scheduled")
           await notify({
             sessionUpdate: "agent_message_chunk",
             content: { type: "text", text: `${prefix}▶ ${e.payload.nodeId}\n` },
           });
         break;
+      }
       case "agent.update": {
         const u = e.payload.update;
         if (u.kind === "agent_message_chunk" && u.text)
@@ -260,29 +269,67 @@ export class OrcaAcpAgent {
     def: WorkflowDefinition,
     state: RunState,
   ): Promise<void> {
-    const latest = new Map<string, RunState["steps"][string]>();
-    for (const id of state.stepOrder) latest.set(state.steps[id]!.nodeId, state.steps[id]!);
-    const entries: acp.PlanEntry[] = Object.entries(def.nodes)
-      .filter(([, n]) => n.type !== "start" && n.type !== "end")
-      .map(([id, n]) => {
-        const s = latest.get(id);
-        const status: acp.PlanEntryStatus = !s
-          ? "pending"
-          : s.status === "completed"
-            ? "completed"
-            : s.status === "failed" || s.status === "cancelled" || s.status === "skipped"
-              ? "pending"
-              : "in_progress";
-        return {
-          content: `${n.name ?? id}${s?.result?.choice ? ` → ${s.result.choice}` : ""}`,
-          priority: n.type === "gate" ? "high" : "medium",
-          status,
-        };
-      });
+    const entries = await this.planEntries(def, state);
+    const snapshot = JSON.stringify(entries);
+    if (session.lastPlan === snapshot) return;
     await ctx.client.notify(acp.methods.client.session.update, {
       sessionId: session.id,
       update: { sessionUpdate: "plan", entries },
     });
+    session.lastPlan = snapshot;
+  }
+
+  /** Flatten the run tree under the container node that owns each child run. */
+  private async planEntries(
+    def: WorkflowDefinition,
+    state: RunState,
+    workflowPath: string[] = [],
+    seen = new Set<string>(),
+  ): Promise<acp.PlanEntry[]> {
+    if (seen.has(state.run.id)) return [];
+    seen.add(state.run.id);
+
+    const latest = new Map<string, RunState["steps"][string]>();
+    const visits = new Map<string, RunState["steps"][string][]>();
+    for (const stepRunId of state.stepOrder) {
+      const step = state.steps[stepRunId]!;
+      latest.set(step.nodeId, step);
+      const nodeVisits = visits.get(step.nodeId) ?? [];
+      nodeVisits.push(step);
+      visits.set(step.nodeId, nodeVisits);
+    }
+
+    const entries: acp.PlanEntry[] = [];
+    for (const [id, node] of Object.entries(def.nodes)) {
+      if (node.type === "start" || node.type === "end") continue;
+      const step = latest.get(id);
+      const status: acp.PlanEntryStatus = !step
+        ? "pending"
+        : step.status === "completed" || ["failed", "cancelled", "skipped"].includes(step.status)
+          ? "completed"
+          : "in_progress";
+      const prefix = workflowPath.length ? `[${workflowPath.join(" › ")}] ` : "";
+      entries.push({
+        content: `${prefix}${node.name ?? id}${step?.result?.choice ? ` → ${step.result.choice}` : ""}${step && ["failed", "cancelled", "skipped"].includes(step.status) ? ` → ${step.status}` : ""}`,
+        priority: node.type === "gate" ? "high" : "medium",
+        status,
+      });
+
+      for (const visit of visits.get(id) ?? []) {
+        for (const childRunId of visit.childRunIds) {
+          const child = await this.opts.orchestrator.getState(childRunId);
+          entries.push(
+            ...(await this.planEntries(
+              this.opts.orchestrator.resolveDefinition(child.run.workflowId),
+              child,
+              [...workflowPath, child.run.workflowId],
+              seen,
+            )),
+          );
+        }
+      }
+    }
+    return entries;
   }
 }
 

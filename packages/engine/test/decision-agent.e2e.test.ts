@@ -53,7 +53,9 @@ describe("agent-sourced decision node (e2e with scripted ACP agent)", () => {
     // The decision artifact was planned against the resolved agent's host (absolute path under the workspace).
     const [decision] = Object.values(state.artifacts);
     expect(decision?.kind).toBe("decision");
-    expect(decision?.path).toBe(`${h.dir}/.orca/runs/${state.run.id}/ship-it-decision.md`);
+    expect(decision?.path?.replaceAll("\\", "/")).toBe(
+      `${h.dir.replaceAll("\\", "/")}/.orca/runs/${state.run.id}/.orca-attempts/${state.run.id}/${decision?.producedBy.stepRunId}/ship-it-decision.md`,
+    );
     expect(decision?.producedBy).toMatchObject({ agentId: "scripted", hostId: "local" });
 
     const events = await h.orchestrator.events(state.run.id);
