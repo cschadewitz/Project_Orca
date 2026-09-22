@@ -1,1 +1,0 @@
-- **engine:** Repair abandoned work-item projections before releasing claims: missing children become pending, unowned interrupted children are durably cancelled before redispatch, and recorded terminal outcomes are preserved. Live or parked children remain in progress.
