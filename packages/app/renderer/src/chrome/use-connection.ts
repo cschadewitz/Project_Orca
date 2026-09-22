@@ -70,3 +70,15 @@ export function useMethodPresent(method: string): boolean {
   const connection = useConnection();
   return methodPresent(connection, method);
 }
+
+/** Reconcile on transport attachment even when its outage never showed a banner. */
+export function useSubscriptionGeneration(): number {
+  const [generation, setGeneration] = useState(() => window.orca.connection.read().generation ?? 0);
+  useEffect(() => {
+    const read = () => setGeneration(window.orca.connection.read().generation ?? 0);
+    const off = window.orca.connection.subscribe((snapshot) => setGeneration(snapshot.generation ?? 0));
+    read();
+    return off;
+  }, []);
+  return generation;
+}

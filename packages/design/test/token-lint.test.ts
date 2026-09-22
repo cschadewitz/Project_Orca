@@ -26,6 +26,14 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const css = (source: string) => checkCss(source).map((v) => `${v.property}: ${v.text}`);
 
 describe("checkCss", () => {
+  test("ignores declaration comments while preserving violation offsets", () => {
+    assert.deepEqual(css(".a { /* Why: (#244), 12px, red, 200ms */ color: var(--ink-primary); }"), []);
+    const violations = checkCss(".a { /* Why: (#244) */\n color: /* 12px */ #abc; }");
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0]?.property, "color");
+    assert.equal(violations[0]?.line, 2);
+    assert.equal(violations[0]?.column, 20);
+  });
   test("rejects a hex colour and accepts the token that names it", () => {
     assert.deepEqual(css(".a { color: #a32a24; }"), ["color: #a32a24"]);
     assert.deepEqual(css(".a { color: var(--status-failed); }"), []);

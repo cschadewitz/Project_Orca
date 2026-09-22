@@ -30,6 +30,7 @@
 import { useEffect, useReducer, type JSX } from "react";
 import type { Density } from "@orca/design";
 import { THEME_PREFERENCES, type ThemePreference } from "../../../src/preferences/schema.js";
+import { useAnnounce } from "../a11y/announce-context.js";
 import { useAppearance } from "../appearance-context.js";
 import { PANE_BOUNDARIES, PANE_IDS } from "../panes.js";
 import { Button, ConfigField, Menu, Text } from "../ui/index.js";
@@ -43,6 +44,7 @@ const DENSITIES: readonly Density[] = ["comfortable", "compact"];
 
 export function PreferencesSection({ surfaces }: PreferencesSectionProps): JSX.Element {
   const appearance = useAppearance();
+  const announce = useAnnounce();
   /* Read on every render rather than snapshotted once: `⌘⇧L` and `⌘⇧D` change the same
      preferences from the keyboard map, a splitter changes one from the boundary itself, and
      a copy taken at mount would leave this section showing "light" under a dark window. The
@@ -120,7 +122,10 @@ export function PreferencesSection({ surfaces }: PreferencesSectionProps): JSX.E
               <Button
                 size="sm"
                 aria-label={`Restore the ${PANE_BOUNDARIES[id].label.toLowerCase()}`}
-                onClick={() => choose({ panes: { [id]: null } })}
+                onClick={() => {
+                  choose({ panes: { [id]: null } });
+                  announce(`${PANE_BOUNDARIES[id].label} back to its default size.`);
+                }}
                 {...control}
               >
                 Restore

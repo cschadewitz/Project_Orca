@@ -103,6 +103,8 @@ type Params<T> = Partial<T>;
  * unavailable rather than broken (docs/design/40-connection-states.md).
  */
 export interface ConnectionSnapshot {
+  /** Successful subscription attachments; independent of the visible quiet window. */
+  generation?: number;
   /** One of the design system's five. `file` arrives with workspace selection (#164). */
   state: ConnectionState;
   /** ISO 8601: when the app entered this state — the indicator's elapsed/last-seen reading. */

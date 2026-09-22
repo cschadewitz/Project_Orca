@@ -265,12 +265,14 @@ describe("keyboard map", () => {
        all — a `set` with an empty patch would still be a save of the file. */
     const p = page({}, { panes: { sidebar: 400, "runs-tree": 0.42 } });
     const map = new KeyboardMap("darwin");
-    const appearance = installAppearance(p.win, p.store, map);
+    const said: string[] = [];
+    const appearance = installAppearance(p.win, p.store, map, (sentence) => said.push(sentence));
     const restore = map.list().find((s) => s.label === "Restore the pane widths");
     expect(restore).toBeDefined();
 
     restore!.action();
     expect(appearance.preferences().panes).toEqual({});
+    expect(said).toEqual(["2 pane sizes restored to default."]);
     expect(p.writes.at(-1)).toEqual({ panes: { sidebar: null, "runs-tree": null } });
 
     const before = p.writes.length;

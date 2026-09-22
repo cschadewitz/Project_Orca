@@ -13,8 +13,8 @@
  * never seen. One subscription, one method, no second path and no polling.
  *
  * Health is in the daemon's memory and not in any log (#222), so a reconnect replays
- * nothing: the notification has no cursor and asking for one would be asking for a lie. A
- * person who has been disconnected gets the current answer from `reload`, which is one call.
+ * nothing: the notification has no cursor and asking for one would be asking for a lie. The
+ * subscription generation triggers a fresh snapshot after reattachment; `reload` also reads it.
  *
  * `claims` is the other half of the same result and is *not* updated by `agent.changed` —
  * a claim moves when a run takes or releases one, which is not a change in agent health.
@@ -28,9 +28,10 @@
  * calls, and on success re-reads `claims.list` and replaces the claims with what came back.
  * That is one read per release and not a poll.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentView, ClaimView, ProtocolError } from "@orca/protocol";
 import { useAnnounce } from "../a11y/announce-context.js";
+import { useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import { applyAgentChanged } from "./agent-groups.js";
 
@@ -73,6 +74,8 @@ export interface AgentsFeed {
 
 export function useAgents(): AgentsFeed {
   const stream = useNotifications();
+  const generation = useSubscriptionGeneration();
+  const pending = useRef(new Map<string, AgentView>());
   const announce = useAnnounce();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<AgentsState>({ phase: "loading" });
@@ -82,25 +85,32 @@ export function useAgents(): AgentsFeed {
 
   useEffect(() => {
     let live = true;
+    pending.current.clear();
     setState({ phase: "loading" });
     void window.orca.agents.list().then((result) => {
       if (!live) return;
       setState(
         result.ok
-          ? { phase: "ready", agents: result.result.agents, claims: result.result.claims, asOf: result.result.asOf }
+          ? {
+              phase: "ready",
+              agents: [...pending.current.values()].reduce(applyAgentChanged, result.result.agents),
+              claims: result.result.claims,
+              asOf: result.result.asOf,
+            }
           : { phase: "error", error: result.error },
       );
     });
     return () => {
       live = false;
     };
-  }, [attempt]);
+  }, [attempt, generation]);
 
   useEffect(() => {
     /* No `runId` filter: `agent.changed` is about the process and carries no run, so a
        filtered listener would never be woken (#241). The daemon only sends it to
        store-wide subscriptions, which is the one the main process holds. */
     const off = stream.on("agent.changed", (params) => {
+      pending.current.set(params.agent.id, params.agent);
       setState((prev) =>
         prev.phase === "ready" ? { ...prev, agents: applyAgentChanged(prev.agents, params.agent) } : prev,
       );
@@ -121,11 +131,9 @@ export function useAgents(): AgentsFeed {
             announce(`Claim not released: ${result.error.message}`);
             return;
           }
-          /* The note is what releasing did *not* fix, in the daemon's words — a dead run's
-             log never moves on, so the item can still read in-progress and the scheduler
-             still treats it as running (#123). It is said out loud and left on the row,
-             because a person who released a claim and saw nothing change would otherwise
-             have no way to learn why. */
+          /* The daemon explains any child execution that remains protected after release.
+             Missing or safely cancelled abandoned children are repaired for dispatch;
+             live/parked children and recorded terminal outcomes keep their own state. */
           const note = result.result.note;
           const message = note ?? `${workItemId} is released and back with the scheduler.`;
           setRelease({ workItemId, failed: false, message });

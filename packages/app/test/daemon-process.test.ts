@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import {
@@ -83,16 +84,15 @@ const start = (seams: Partial<BundledDaemonOptions>, extra: Partial<BundledDaemo
   startBundledDaemon({ entry: "/res/daemon/orca-daemon.mjs", cwd: "/home/casey", ...seams, ...extra });
 
 describe("findBundledDaemon", () => {
-  const exists = (path: string) => path.startsWith("/resources/");
+  const expected = join("/resources", "daemon", BUNDLED_DAEMON_FILE);
+  const exists = (path: string) => path === expected;
 
   it("takes the first root that has one, and ignores roots that do not exist", () => {
-    expect(findBundledDaemon(["/nope", "/resources", "/other"], exists)).toBe(
-      `/resources/daemon/${BUNDLED_DAEMON_FILE}`,
-    );
+    expect(findBundledDaemon(["/nope", "/resources", "/other"], exists)).toBe(expected);
   });
 
   it("skips an undefined root, because process.resourcesPath is undefined outside a package", () => {
-    expect(findBundledDaemon([undefined, "/resources"], exists)).toBe(`/resources/daemon/${BUNDLED_DAEMON_FILE}`);
+    expect(findBundledDaemon([undefined, "/resources"], exists)).toBe(expected);
   });
 
   it("answers undefined when nothing is bundled, so the app falls back to a daemon already running", () => {

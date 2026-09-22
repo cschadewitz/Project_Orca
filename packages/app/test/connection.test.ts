@@ -133,7 +133,10 @@ describe("ConnectionMachine", () => {
     machine.linkChanged("live");
     await settle();
     await vi.advanceTimersByTimeAsync(QUIET_MS);
-    // The state on screen never left `live`; only the handshake's own re-answer moved.
+    // Reattachment advances independently of the quiet visual state (#293).
+    expect(machine.current.generation).toBe(2);
+    expect(pushed.some((s) => s.generation === 2)).toBe(true);
+    // The state on screen never left `live`.
     expect(pushed.every((s) => s.state === "live")).toBe(true);
   });
 
@@ -175,7 +178,7 @@ describe("ConnectionMachine", () => {
     await settle();
 
     // Immediate: a mismatch is not a blip, and it is the one state that blocks a person.
-    expect(pushed.map((s) => s.state)).toEqual(["mismatch"]);
+    expect(pushed.map((s) => s.state)).toEqual(["live", "mismatch"]);
     expect(machine.current.versions).toEqual({
       app: formatProtocolVersion(PROTOCOL_VERSION),
       daemon: formatProtocolVersion({ major: PROTOCOL_VERSION.major + 1, minor: 0 }),
@@ -193,7 +196,8 @@ describe("ConnectionMachine", () => {
     await settle();
 
     expect(machine.current.state).toBe("live");
-    expect(pushed).toEqual([]);
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ state: "live", generation: 2 });
   });
 
   it("pushes a moved cursor and nothing else", async () => {

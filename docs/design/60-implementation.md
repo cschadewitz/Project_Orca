@@ -644,3 +644,14 @@ called out on the screen that needs it so nobody implements a placeholder by acc
 3. **Agent cost or token usage.** Not shown. ACP does not necessarily carry it and the model
    does not mention it. If it becomes available it belongs in the step detail header beside
    duration, and the layout leaves room for exactly one more metric there.
+
+### Reconciliation after transport reattachment
+
+The preload connection snapshot includes a monotonic `generation`, advanced for each
+successful store-wide subscription attachment. Data hooks observe it independently of the
+five-second visible connection delay: even a hidden outage can lose a terminal transition or
+an input request. Runs, Attention, Agents, expanded run details, the timeline and step output
+reconcile their snapshots at this boundary. Ordinary notifications still update individual
+objects without polling lists. Pending initial and resolving reads retain newer pushes;
+answered requests are tombstoned until the next read generation so stale reads cannot reopen
+them. This signal is local IPC metadata and changes neither protocol nor store formats.
