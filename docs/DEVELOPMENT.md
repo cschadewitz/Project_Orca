@@ -536,13 +536,17 @@ and is orders of magnitude above it. When a leg goes red:
 A runner image moving under us is the expected cause of an unexplained diff, and the answer
 is still a deliberate update with that written down — never a loosened threshold.
 
-It runs from `.github/workflows/app-smoke.yml`, not `ci.yml`, on pull requests touching
-`packages/app`, `packages/design`, `packages/daemon` or `packages/protocol`. `ci.yml` keeps
+It runs from `.github/workflows/app-smoke.yml`, not `ci.yml`. The functional smoke test runs
+on pull requests touching `packages/app`, `packages/design`, `packages/daemon` or
+`packages/protocol`; the three-platform type proof runs only when the app, design system,
+lockfile or workflow itself changes. A daemon/protocol-only change cannot alter the bundled
+faces or renderer output, so it gets the smoke test alone. `ci.yml` keeps
 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and so has no Electron to launch; the smoke workflow
 installs without it. No browser binaries are involved — the driver uses the workspace's own
-`electron`, so `playwright install` is never needed. The reusable workflow also runs from release publication against the exact merge commit,
-including all three type-proof platforms. A failed proof blocks tagging; baseline review
-uses the same deliberate procedure above.
+`electron`, so `playwright install` is never needed. The reusable workflow also runs from
+release publication against the exact merge commit, including all three type-proof
+platforms. A failed proof blocks tagging; baseline review uses the same deliberate
+procedure above.
 
 ## Tests worth reading first
 

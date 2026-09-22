@@ -1,10 +1,11 @@
-# Grouped daily npm dependency bumps, so routine upgrades arrive as one PR per ecosystem.
+# Grouped weekly npm dependency bumps, so routine upgrades arrive as one PR per dependency
+# without making the expensive lockfile-triggered workflow set run every day.
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: daily
+      interval: weekly
     open-pull-requests-limit: 5
 
     # An npm bump that touches packages/ trips changelog.yml, which wants a fragment or the

@@ -1,5 +1,7 @@
 # Launch the desktop app in a real Electron window: once against a real daemon, and once
-# more on each platform at `#type` to check the bundled faces by machine.
+# more on each platform at `#type` to check the bundled faces by machine. Daemon/protocol-only
+# changes still get the smoke test, but skip the type proof because they cannot change bundled
+# faces or renderer output.
 #
 # Separate from ci.yml on purpose. That workflow sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1` —
 # it typechecks, lints and builds the app but never runs it, and skipping the ~100 MB
@@ -7,7 +9,8 @@
 # installs without the flag and only on the pull requests that could break the app: the
 # app itself, the design system it renders, and the daemon and protocol it talks to.
 #
-# Release calls verify the exact merge commit before publication.
+# Pull requests classify their paths below so daemon/protocol-only changes can skip the
+# type proof. Release calls run every job against the exact merge commit before publication.
 #
 # ## The paths filter covers the screenshot baselines
 #
@@ -40,6 +43,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: classify app checks
+    runs-on: ubuntu-latest
+    outputs:
+      type_proof: ${{ steps.classify.outputs.type_proof }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          # The three-dot diff below needs the pull request's merge base.
+          fetch-depth: 0
+
+      # A daemon or protocol change can break the running app, so it still gets the smoke
+      # job below. It cannot change the bundled faces or their rendering, which are what the
+      # three-platform type proof measures. App, design, dependency and workflow changes can.
+      - name: Classify
+        id: classify
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_call" ]; then
+            echo "release verification; running the type proof matrix"
+            echo "type_proof=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          type_paths=$(git diff --name-only "$BASE...$HEAD" \
+            | awk '/^packages\/app\// || /^packages\/design\// || /^pnpm-lock\.yaml$/ || /^\.github\/workflows\/app-smoke\.yml$/')
+          if [ -n "$type_paths" ]; then
+            echo "changes can affect the type proof:"; printf '  %s\n' $type_paths
+            echo "type_proof=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "daemon/protocol-only change; skipping the type proof matrix"
+            echo "type_proof=false" >> "$GITHUB_OUTPUT"
+          fi
+
   smoke:
     name: electron smoke test
     runs-on: ubuntu-latest
@@ -128,6 +168,8 @@ jobs:
   # (`tsc -b packages/app/tsconfig.preload.json`) and the renderer is served, not built.
   type-proof:
     name: type proof (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.type_proof == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       # Every leg is a different answer to the same question. A Windows failure must not

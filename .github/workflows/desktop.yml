@@ -62,10 +62,20 @@ jobs:
         include:
           - os: ubuntu-latest
             name: linux
+            cache_path: |
+              ~/.cache/electron
+              ~/.cache/electron-builder
           - os: macos-latest
             name: macos
+            cache_path: |
+              ~/Library/Caches/electron
+              ~/Library/Caches/electron-builder
           - os: windows-latest
             name: windows
+            # actions/cache expands ~ on Windows; it does not expand %LOCALAPPDATA%.
+            cache_path: |
+              ~\AppData\Local\electron\Cache
+              ~\AppData\Local\electron-builder\Cache
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,6 +91,17 @@ jobs:
           # `mise.toml` pins 24, so that is what a developer reproduces locally.
           node-version: 24
           cache: pnpm
+
+      # setup-node caches pnpm's store, not the Electron archives or electron-builder's
+      # platform tools. Keep these platform-specific; the package step consumes both x64
+      # and arm64 downloads on the same runner.
+      - name: Restore Electron downloads
+        uses: actions/cache@v6
+        with:
+          path: ${{ matrix.cache_path }}
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-${{ runner.os }}-${{ runner.arch }}-
 
       # Deliberately *without* ELECTRON_SKIP_BINARY_DOWNLOAD, unlike every other workflow
       # here: the Electron binary is what electron-builder packages.
@@ -195,6 +216,8 @@ jobs:
             packages/app/dist/release/*.mjs
           if-no-files-found: error
           retention-days: 14
+          # Installers and archives are already compressed; another pass only burns CPU.
+          compression-level: 0
 
       # Whatever the packaging said, when it failed to say anything useful.
       - name: Upload the packaging log
