@@ -1,0 +1,1 @@
+- **design:** Ignore CSS comments when checking declaration literals, preserving accurate locations for real violations.

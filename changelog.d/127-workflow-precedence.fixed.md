@@ -1,0 +1,1 @@
+- **engine:** Warn when a plan-dispatch node pin shadows the configured item workflow, and record the selected default and its source in the step result.

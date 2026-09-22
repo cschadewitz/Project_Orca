@@ -1,0 +1,1 @@
+- **engine:** Render decomposition, risk assessment and design prompts with the current plan risk scale instead of a hard-coded 1–5 range.

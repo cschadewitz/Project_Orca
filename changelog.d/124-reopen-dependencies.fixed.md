@@ -1,0 +1,1 @@
+- **engine:** Reopen failed as well as satisfied dependencies when their decision is reopened, keeping persisted state and the journal consistent with scheduling.
