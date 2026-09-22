@@ -50,30 +50,38 @@ jobs:
       type_proof: ${{ steps.classify.outputs.type_proof }}
     steps:
       - uses: actions/checkout@v7
-        if: github.event_name == 'pull_request'
         with:
-          # The three-dot diff below needs the pull request's merge base.
+          # Pull requests need the merge base for BASE...HEAD.
+          # Release verification checks out the exact merge commit.
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
 
-      # A daemon or protocol change can break the running app, so it still gets the smoke
-      # job below. It cannot change the bundled faces or their rendering, which are what the
-      # three-platform type proof measures. App, design, dependency and workflow changes can.
       - name: Classify
         id: classify
         env:
+          RELEASE_REF: ${{ inputs.ref }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_call" ]; then
+
+          if [ -n "$RELEASE_REF" ]; then
             echo "release verification; running the type proof matrix"
             echo "type_proof=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          type_paths=$(git diff --name-only "$BASE...$HEAD" \
-            | awk '/^packages\/app\// || /^packages\/design\// || /^pnpm-lock\.yaml$/ || /^\.github\/workflows\/app-smoke\.yml$/')
+
+          type_paths=$(
+            git diff --name-only "$BASE...$HEAD" |
+              awk '/^packages\/app\// ||
+                   /^packages\/design\// ||
+                   /^pnpm-lock\.yaml$/ ||
+                   /^\.github\/workflows\/app-smoke\.yml$/'
+          )
+
           if [ -n "$type_paths" ]; then
-            echo "changes can affect the type proof:"; printf '  %s\n' $type_paths
+            echo "changes can affect the type proof:"
+            printf '  %s\n' $type_paths
             echo "type_proof=true" >> "$GITHUB_OUTPUT"
           else
             echo "daemon/protocol-only change; skipping the type proof matrix"
