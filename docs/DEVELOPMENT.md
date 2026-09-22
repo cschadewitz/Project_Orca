@@ -434,11 +434,10 @@ that takes its height from somewhere unexpected passes the sweep and still hides
 this is what finds it. The window is put back to 1200×800 afterwards, because the specs after
 it are written against the size the main process opens.
 
-The type‑proof baselines are the other thing to expect red: #261 replaced the app's
-placeholder surface glyphs with five designed ones in the symbol face, and `#type` draws the
-declared glyphs, so the committed pictures no longer match. They cannot be regenerated on one
-machine — see "Screenshot baselines" below; CI has to produce all four on **Linux, macOS and
-Windows** and the new set is committed together.
+Type-proof baselines are reviewed across platforms when glyphs change. For example, #261
+replaced the app's placeholder surface glyphs with designed ones, changing `#type`. A local
+Windows proof passes at the v0.5.2 implementation checkout; Linux and macOS still require
+their own runner verdicts. See "Screenshot baselines" below for the review procedure.
 
 Run it with `pnpm run build && pnpm run app:smoke`; on a headless box,
 `xvfb-run -a pnpm run app:smoke`, and in a container without unprivileged user namespaces
@@ -541,9 +540,9 @@ It runs from `.github/workflows/app-smoke.yml`, not `ci.yml`, on pull requests t
 `packages/app`, `packages/design`, `packages/daemon` or `packages/protocol`. `ci.yml` keeps
 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and so has no Electron to launch; the smoke workflow
 installs without it. No browser binaries are involved — the driver uses the workspace's own
-`electron`, so `playwright install` is never needed. The workflow has no `push` trigger and
-no `workflow_call`, so the faces are not re-checked at release time; that is **#254**, filed
-and deliberately deferred rather than overlooked.
+`electron`, so `playwright install` is never needed. The reusable workflow also runs from release publication against the exact merge commit,
+including all three type-proof platforms. A failed proof blocks tagging; baseline review
+uses the same deliberate procedure above.
 
 ## Tests worth reading first
 

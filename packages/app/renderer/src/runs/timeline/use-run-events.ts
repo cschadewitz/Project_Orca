@@ -22,6 +22,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProtocolError, RunsGetResult } from "@orca/protocol";
+import { useSubscriptionGeneration } from "../../chrome/use-connection.js";
 import { useNotifications } from "../../notifications-context.js";
 import {
   agentUpdateEntry,
@@ -86,6 +87,10 @@ export function useRunEvents(
   onPrepend?: (rows: number) => void,
 ): EventsFeed {
   const stream = useNotifications();
+  const generation = useSubscriptionGeneration();
+  const pending = useRef<TimelineEntry[]>([]);
+  const requestEpoch = useRef(0);
+  const reading = useRef(false);
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<EventsState>({ phase: "idle" });
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
@@ -109,6 +114,9 @@ export function useRunEvents(
       return;
     }
     let live = true;
+    requestEpoch.current += 1;
+    pending.current = [];
+    reading.current = true;
     setState({ phase: "loading" });
     void window.orca.runs.events({ runId, before: NEWEST, limit: PAGE }).then((result) => {
       if (!live) return;
@@ -116,21 +124,23 @@ export function useRunEvents(
         setState({ phase: "error", error: result.error });
         return;
       }
+      reading.current = false;
       const { events, hasMore, lastSeq } = result.result;
       // The page's own `step.scheduled` events name steps the projection may not hold yet.
       const known = new Map([...nodeNames(events), ...namesRef.current]);
       setState({
         phase: "ready",
-        entries: toEntries(events, known),
-        lastSeq,
+        entries: mergeEntries(toEntries(events, known), pending.current).entries,
+        lastSeq: Math.max(lastSeq, ...pending.current.map((entry) => entry.seq)),
         hasEarlier: hasMore,
         loadingEarlier: false,
       });
     });
     return () => {
       live = false;
+      requestEpoch.current += 1;
     };
-  }, [runId, attempt]);
+  }, [runId, attempt, generation]);
 
   /* The push half. Both listeners are filtered to this run, so a store with fifty runs in
      it wakes this timeline only for the one on screen. */
@@ -138,6 +148,7 @@ export function useRunEvents(
     if (runId === undefined) return;
 
     const append = (entry: TimelineEntry): void => {
+      if (reading.current) pending.current.push(entry);
       setState((prev) => {
         if (prev.phase !== "ready") return prev;
         const { entries } = mergeEntries(prev.entries, [entry]);
@@ -176,7 +187,9 @@ export function useRunEvents(
     }
 
     setState((prev) => (prev.phase === "ready" ? { ...prev, loadingEarlier: true } : prev));
+    const epoch = requestEpoch.current;
     void window.orca.runs.events({ runId, before, limit: PAGE }).then((result) => {
+      if (epoch !== requestEpoch.current) return;
       const held = stateRef.current;
       if (held.phase !== "ready") return;
       if (!result.ok) {

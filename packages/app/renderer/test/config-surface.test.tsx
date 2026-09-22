@@ -465,6 +465,8 @@ describe("app preferences", () => {
    */
   it("lists a boundary once it has been dragged, and nothing while every one is at its default", async () => {
     renderConfig();
+    const said: string[] = [];
+    teardown.push(h.announcements.subscribe((sentence) => said.push(sentence)));
     const section = await screen.findByRole("region", { name: "App preferences" });
     await act(async () => {});
 
@@ -484,6 +486,7 @@ describe("app preferences", () => {
        chose, so absent is what "default" means and the next change to the token reaches here. */
     await waitFor(() => expect(window.orca.preferences.read().panes.sidebar).toBeUndefined());
     expect(within(section).queryByText("Sidebar size")).toBeNull();
+    expect(said).toContain("Sidebar back to its default size.");
   });
 
   it("says a stacked boundary as the share of its column it is, because that is what is kept", async () => {

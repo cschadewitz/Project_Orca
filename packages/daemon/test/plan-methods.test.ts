@@ -367,7 +367,7 @@ describe("plan writes", () => {
   // `claims.release` is a run control, not a plan write (#169): it is in `CONTROL_METHODS` on
   // the wire and needs no `PlanService`. The plan fixture still exercises it, because a plan
   // is what puts a claim on a work item in the first place.
-  it("claims.release frees an item whose owner is gone, and says what it did not fix", async () => {
+  it("claims.release makes an abandoned item eligible for scheduling again", async () => {
     const f = await planFixture();
     const result = ClaimsReleaseResultSchema.parse(
       await f.runControl.releaseClaim({ workItemId: f.ids["auth-metrics"]!, force: false }),
@@ -375,10 +375,10 @@ describe("plan writes", () => {
     expect(result.claim.workItemId).toBe(f.ids["auth-metrics"]);
     expect(result.claim.owner.runId).toBe("run-metrics");
     expect(result.claim.owner.missing).toBe(true);
-    // The claim is gone, and the note is the one `orca claims release` prints: the item is
-    // still `in-progress`, so the scheduler still treats it as running.
+    // #123: releasing abandoned ownership also repairs the persisted scheduling state.
     expect(await f.stores.claims.get(f.ids["auth-metrics"]!)).toBeUndefined();
-    expect(result.note).toContain("still in-progress");
+    expect(result.note).toBeUndefined();
+    expect(await f.stores.workItems.get(f.ids["auth-metrics"]!)).toMatchObject({ status: "pending" });
 
     await expect(f.runControl.releaseClaim({ workItemId: "wi_nope", force: false })).rejects.toMatchObject({
       code: "CLAIM_NOT_FOUND",

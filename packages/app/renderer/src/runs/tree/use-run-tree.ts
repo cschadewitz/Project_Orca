@@ -9,11 +9,12 @@
  * not draw. Step status is a different, much rarer stream, and it is the only one here.
  *
  * The other rule is the surface's: a screen never re-reads a list because a notification
- * arrived. One `runs.get` per run, when a person opens it, and every later transition is
+ * arrived. One `runs.get` per run when opened or reattached, and every later transition is
  * folded into the projection already held (`tree-rows.ts`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunSummaryView, RunsGetResult } from "@orca/protocol";
+import { useSubscriptionGeneration } from "../../chrome/use-connection.js";
 import { useNotifications } from "../../notifications-context.js";
 import {
   applyRunChangedToDetail,
@@ -48,8 +49,15 @@ export interface RunTree {
   ensure: (runId: string) => void;
 }
 
+interface PendingChange {
+  runId: string;
+  seq: number;
+  apply: (detail: RunsGetResult) => RunsGetResult;
+}
+
 export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
   const stream = useNotifications();
+  const generation = useSubscriptionGeneration();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [details, setDetails] = useState<ReadonlyMap<string, RunsGetResult>>(() => new Map());
   const [attentionOnly, setAttentionOnly] = useState(false);
@@ -58,7 +66,17 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
 
   /* Ids with a `runs.get` in flight, so a row opened, closed and opened again while the
      first answer is still out is read once. */
-  const fetching = useRef<Set<string>>(new Set());
+  const fetching = useRef(new Map<string, PendingChange[]>());
+  const epoch = useRef(0);
+  useEffect(() => {
+    epoch.current += 1;
+    fetching.current.clear();
+    setDetails(new Map());
+    return () => {
+      epoch.current += 1;
+      fetching.current.clear();
+    };
+  }, [generation]);
 
   const all = useMemo(() => buildTree({ roots, details, expanded }), [roots, details, expanded]);
   const rows = useMemo(() => (attentionOnly ? filterAttention(all) : all), [all, attentionOnly]);
@@ -66,44 +84,57 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
   /* One read per open run, and only for the runs a row actually asks for: a step row needs
      nothing, and a closed child run is a row, not a request. */
   useEffect(() => {
-    let live = true;
+    const requestEpoch = epoch.current;
     const open = all.filter((row) => row.expanded && (row.kind === "run" || row.kind === "child-run"));
     for (const runId of [...new Set([...open.map((row) => row.runId), ...wanted])]) {
       if (details.has(runId) || fetching.current.has(runId)) continue;
-      fetching.current.add(runId);
+      const pending: PendingChange[] = [];
+      fetching.current.set(runId, pending);
       void window.orca.runs.get({ runId }).then((result) => {
+        if (requestEpoch !== epoch.current) return;
         fetching.current.delete(runId);
-        if (!live || !result.ok) return;
-        setDetails((prev) => new Map(prev).set(runId, result.result));
+        if (!result.ok) return;
+        const detail = pending.reduce((held, change) => {
+          // The read may already include this transition. Child-run cursors are independent
+          // of the parent's, so only compare a notification against its own run's cursor.
+          if (change.runId === runId && change.seq <= result.result.lastSeq) return held;
+          return change.apply(held);
+        }, result.result);
+        setDetails((prev) => new Map(prev).set(runId, detail));
       });
     }
-    return () => {
-      live = false;
-    };
-  }, [all, details, wanted]);
+  }, [all, details, wanted, generation]);
 
   useEffect(() => {
     /** Fold one notification into whichever projections hold the object it is about. */
-    const patch = (apply: (detail: RunsGetResult) => RunsGetResult): void => {
+    const patch = (apply: (detail: RunsGetResult) => RunsGetResult, runId: string, seq: number): void => {
+      for (const pending of fetching.current.values()) pending.push({ apply, runId, seq });
       setDetails((prev) => {
         let touched = false;
         const next = new Map(prev);
-        for (const [runId, detail] of prev) {
+        for (const [id, detail] of prev) {
+          if (detail.run.id === runId && seq <= detail.lastSeq) continue;
           const applied = apply(detail);
           if (applied === detail) continue;
           touched = true;
-          next.set(runId, applied);
+          next.set(id, applied);
         }
         return touched ? next : prev;
       });
     };
 
     const offStep = stream.on("step.changed", (params) => {
-      patch((detail) => (detail.run.id === params.runId ? applyStepChanged(detail, params) : detail));
+      patch(
+        (detail) => (detail.run.id === params.runId ? applyStepChanged(detail, params) : detail),
+        params.runId,
+        params.seq,
+      );
     });
     /* A run's own row *and* its row as somebody's child: the same run can be a root here
        and a `child-run` under a `parallel` step, and both have to repaint. */
-    const offRun = stream.on("run.changed", (params) => patch((detail) => applyRunChangedToDetail(detail, params)));
+    const offRun = stream.on("run.changed", (params) =>
+      patch((detail) => applyRunChangedToDetail(detail, params), params.runId, params.seq),
+    );
 
     return () => {
       offStep();

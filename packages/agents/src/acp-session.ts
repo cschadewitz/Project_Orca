@@ -158,8 +158,18 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
           reject(new OrcaError("AGENT_TRANSPORT", `${what} timed out after ${ms}ms`, { stderr: proc.stderrTail() })),
         ms,
       );
-      // Adopting `p` forwards its rejection as-is; the `finally` stops the timer either way.
-      resolve(p.finally(() => clearTimeout(t)));
+      // Forward settlement without adopting the still-pending request: adoption would
+      // make the timeout's reject a no-op.
+      void p.then(
+        (value) => {
+          clearTimeout(t);
+          resolve(value);
+        },
+        (error: Error) => {
+          clearTimeout(t);
+          reject(error);
+        },
+      );
     });
 
   try {

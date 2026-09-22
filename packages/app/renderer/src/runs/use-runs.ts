@@ -5,7 +5,7 @@
  * The rule this hook exists to keep is "updates without refetching". A list that re-read
  * `runs.list` on every notification would ask the daemon for the whole store several times a
  * second on a busy run and would still show a row flickering between two answers. So the
- * page is read once per filter and every later transition is folded into the row it is about
+ * page is read once per filter or transport attachment and every later transition is folded into the row it is about
  * (`run-rows.ts`).
  *
  * The one call a notification *does* make is for a run the list has never seen. `run.changed`
@@ -17,8 +17,9 @@
  * The status filter is a `runs.list` parameter and so re-reads; the text filter is applied to
  * what is already held (see `run-rows.ts` for why the two are split).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { DisplayStatus, ProtocolError, RunSummaryView } from "@orca/protocol";
+import { useCallback, useEffect, useState } from "react";
+import type { DisplayStatus, ProtocolError, RunSummaryView, RunChangedParams } from "@orca/protocol";
+import { useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import { applyRunChanged, mergeRun, orderRuns } from "./run-rows.js";
 
@@ -43,84 +44,75 @@ export interface RunsFeed {
 
 export function useRuns(status: StatusFilter): RunsFeed {
   const stream = useNotifications();
+  const generation = useSubscriptionGeneration();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<RunsState>({ phase: "loading" });
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
 
-  /* The ids the list already holds, for the one decision the state updater cannot make: to
-     issue a `runs.get` or not. It trails the state by a commit, which costs at worst one
-     redundant call for a run that just arrived — `mergeRun` replaces rather than duplicates,
-     so a duplicate answer is harmless, where reading state inside the updater would not be. */
-  const known = useRef<ReadonlySet<string>>(new Set());
-  /* Ids with a `runs.get` in flight, so a run that emits four events before the first answer
-     comes back is fetched once. */
-  const fetching = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    known.current = new Set(state.phase === "ready" ? state.runs.map((r) => r.id) : []);
-  }, [state]);
-
   useEffect(() => {
     let live = true;
+    let snapshot: Extract<RunsState, { phase: "ready" }> | undefined;
+    const changes = new Map<string, RunChangedParams>();
+    const resolved = new Map<string, RunSummaryView>();
+    const cursors = new Map<string, number>();
+    const fetching = new Set<string>();
     setState({ phase: "loading" });
+
+    // Overlay pushes on every read, including resolving reads that started before a newer
+    // transition. Keep the overlay until this read generation ends; a list has no cursor.
+    const publish = () => {
+      if (!live || !snapshot) return;
+      let runs = snapshot.runs;
+      let total = snapshot.total;
+      for (const run of resolved.values()) {
+        if (!runs.some((r) => r.id === run.id)) total += 1;
+        runs = mergeRun(runs, run);
+      }
+      for (const params of changes.values()) {
+        const row = runs.find((r) => r.id === params.runId);
+        if (row && params.seq > (cursors.get(row.id) ?? -1)) runs = mergeRun(runs, applyRunChanged(row, params));
+      }
+      if (status !== "all") {
+        const included = runs.filter((r) => r.status === status);
+        total -= runs.length - included.length;
+        runs = included;
+      }
+      setState({ phase: "ready", runs: orderRuns(runs), total: Math.max(0, total) });
+    };
+    const resolve = (runId: string) => {
+      if (fetching.has(runId) || resolved.has(runId)) return;
+      fetching.add(runId);
+      void window.orca.runs.get({ runId }).then((result) => {
+        fetching.delete(runId);
+        if (!live || !result.ok) return;
+        resolved.set(runId, result.result.run);
+        cursors.set(runId, result.result.lastSeq);
+        publish();
+      });
+    };
+    // Subscribe before issuing the read so there is no mount-time delivery gap.
+    const off = stream.on("run.changed", (params) => {
+      const previous = changes.get(params.runId);
+      if (previous && previous.seq >= params.seq) return;
+      changes.set(params.runId, params);
+      if (!snapshot?.runs.some((r) => r.id === params.runId) && (status === "all" || params.status === status)) {
+        resolve(params.runId);
+      }
+      publish();
+    });
     void window.orca.runs.list(status === "all" ? {} : { status: [status] }).then((result) => {
       if (!live) return;
-      setState(
-        result.ok
-          ? { phase: "ready", runs: orderRuns(result.result.runs), total: result.result.total }
-          : { phase: "error", error: result.error },
-      );
-    });
-    return () => {
-      live = false;
-    };
-  }, [status, attempt]);
-
-  useEffect(() => {
-    let live = true;
-
-    /** A run the list has never seen: resolve it to a row, once, and insert it. */
-    const insert = (runId: string): void => {
-      if (fetching.current.has(runId)) return;
-      fetching.current.add(runId);
-      void window.orca.runs.get({ runId }).then((result) => {
-        fetching.current.delete(runId);
-        if (!live || !result.ok) return;
-        const run = result.result.run;
-        // The summary is re-checked against the filter rather than trusted from the
-        // notification: between the two the run may have moved on again.
-        if (status !== "all" && run.status !== status) return;
-        setState((prev) =>
-          prev.phase === "ready" ? { phase: "ready", runs: mergeRun(prev.runs, run), total: prev.total + 1 } : prev,
-        );
-      });
-    };
-
-    const off = stream.on("run.changed", (params) => {
-      if (!known.current.has(params.runId)) {
-        // Nothing to repaint, and nothing worth fetching when the filter excludes it.
-        if (status === "all" || params.status === status) insert(params.runId);
+      if (!result.ok) {
+        setState({ phase: "error", error: result.error });
         return;
       }
-      setState((prev) => {
-        if (prev.phase !== "ready") return prev;
-        const row = prev.runs.find((r) => r.id === params.runId);
-        if (!row) return prev;
-        const next = applyRunChanged(row, params);
-        // A filtered list drops a row that has left the filter, rather than keeping a
-        // "succeeded" row on a screen that says it is showing failures.
-        if (status !== "all" && next.status !== status) {
-          return { phase: "ready", runs: prev.runs.filter((r) => r.id !== next.id), total: prev.total - 1 };
-        }
-        return { phase: "ready", runs: mergeRun(prev.runs, next), total: prev.total };
-      });
+      snapshot = { phase: "ready", runs: result.result.runs, total: result.result.total };
+      publish();
     });
-
     return () => {
       live = false;
       off();
     };
-  }, [stream, status]);
-
+  }, [stream, status, attempt, generation]);
   return { state, reload };
 }

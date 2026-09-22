@@ -312,10 +312,14 @@ export function samePermissionRule(a: PermissionRule, b: PermissionRule): boolea
 /* ----------------------------- path handling ------------------------------ */
 
 /**
- * POSIX path normalisation, without `node:path` — this module is in the node-free barrel.
- * Agents run on POSIX hosts (local or over `ssh … bash -lc`), so `/` is the separator.
+ * Portable path normalisation without `node:path`, including Windows local agents.
+ * Drive and UNC roots stay absolute; separators normalise to slash for policy storage.
  */
 export function normalizePermissionPath(p: string): string {
+  if (/^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\")) p = p.replaceAll("\\", "/");
+  const drive = /^[A-Za-z]:\//.test(p) ? p.slice(0, 2).toUpperCase() : "";
+  if (drive) p = p.slice(2);
+  const unc = p.startsWith("//");
   const absolute = p.startsWith("/");
   const out: string[] = [];
   for (const seg of p.split("/")) {
@@ -328,7 +332,7 @@ export function normalizePermissionPath(p: string): string {
     }
     out.push(seg);
   }
-  return (absolute ? "/" : "") + out.join("/");
+  return drive + (unc ? "//" : absolute ? "/" : "") + out.join("/");
 }
 
 /**
@@ -341,12 +345,12 @@ export function normalizePermissionPath(p: string): string {
  */
 export function workspaceRelativePath(path: string, workspaceCwd: string | undefined): string | undefined {
   const p = normalizePermissionPath(path);
-  if (!p.startsWith("/")) return p.startsWith("..") ? undefined : p;
+  if (!p.startsWith("/") && !/^[A-Za-z]:\//.test(p)) return p.startsWith("..") || /^[A-Za-z]:/.test(p) ? undefined : p;
   if (!workspaceCwd) return undefined;
   const root = normalizePermissionPath(workspaceCwd);
-  if (!root.startsWith("/")) return undefined;
+  if (!root.startsWith("/") && !/^[A-Za-z]:\//.test(root)) return undefined;
   if (p === root) return "";
-  const prefix = root === "/" ? "/" : `${root}/`;
+  const prefix = root.endsWith("/") ? root : `${root}/`;
   return p.startsWith(prefix) ? p.slice(prefix.length) : undefined;
 }
 

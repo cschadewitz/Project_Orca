@@ -16,6 +16,22 @@ function capture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("orca --help", () => {
+  it.each(["run", "demo", "plan"])("prints command-specific help for %s without opening a workspace", async (name) => {
+    const { out } = capture();
+    expect(await main([name, "--help"])).toBe(0);
+    expect(out.join("")).toContain(`usage: orca ${name}`);
+    expect(out.join("")).not.toContain("\ncommands:");
+    if (name === "plan") expect(out.join("")).toContain("decide <decisionKey>");
+  });
+  it.each([
+    ["demo", "--kep"],
+    ["run", "wf", "--vaar", "x=1"],
+    ["demo", "--keep=false"],
+  ])("rejects invalid flags %j", async (...args) => {
+    const { err } = capture();
+    expect(await main(args)).toBe(1);
+    expect(err.join("")).toMatch(/option|argument/i);
+  });
   it("prints usage to stdout and exits 0", async () => {
     const { out, err } = capture();
     expect(await main(["--help"])).toBe(0);

@@ -62,7 +62,12 @@ export interface Appearance {
 export const CYCLE_THEME_KEY = "Mod+Shift+L";
 export const TOGGLE_DENSITY_KEY = "Mod+Shift+D";
 
-export function installAppearance(win: Window, store: AppearanceStore, keyboard: KeyboardMap): Appearance {
+export function installAppearance(
+  win: Window,
+  store: AppearanceStore,
+  keyboard: KeyboardMap,
+  say: (sentence: string) => void = () => {},
+): Appearance {
   const doc = win.document;
   let current = store.read();
   const listeners = new Set<() => void>();
@@ -148,8 +153,12 @@ export function installAppearance(win: Window, store: AppearanceStore, keyboard:
   /** Forget every remembered boundary at once — a deletion each, never a write of a default. */
   const restorePanes = () => {
     const remembered = Object.keys(current.panes);
-    if (remembered.length === 0) return;
+    if (remembered.length === 0) {
+      say("All pane sizes are already at their defaults.");
+      return;
+    }
     set({ panes: Object.fromEntries(remembered.map((id) => [id, null])) });
+    say(`${remembered.length} pane ${remembered.length === 1 ? "size" : "sizes"} restored to default.`);
   };
 
   unregister.push(

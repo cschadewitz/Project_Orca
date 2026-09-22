@@ -21,63 +21,71 @@ global options:
 `;
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  const { values, positionals } = parseArgs({
-    args: argv,
-    allowPositionals: true,
-    strict: false,
-    options: {
-      config: { type: "string" },
-      cwd: { type: "string" },
-      var: { type: "string", multiple: true },
-      body: { type: "string" },
-      "body-file": { type: "string" },
-      dir: { type: "string" },
-      "log-level": { type: "string" },
-      note: { type: "string" },
-      plan: { type: "string" },
-      status: { type: "string" },
-      rationale: { type: "string" },
-      workflow: { type: "string" },
-      run: { type: "string" },
-      host: { type: "string" },
-      port: { type: "string" },
-      json: { type: "boolean" },
-      force: { type: "boolean" },
-      quiet: { type: "boolean" },
-      mermaid: { type: "boolean" },
-      keep: { type: "boolean" },
-      "no-resume": { type: "boolean" },
-      "read-only": { type: "boolean" },
-      help: { type: "boolean" },
-      version: { type: "boolean" },
-    },
-  });
-  const [name, ...rest] = positionals;
-  // Before the command lookup and before `--help`: `orca --version` is a question about the
-  // installation, not about a command, and it was answered with the usage text and exit 1
-  // until now — `strict: false` made an undeclared `--version` a flag nobody read (#229).
-  // Only bare, though: with a command named, the flag is that command's to interpret.
-  if (values.version && !name) {
-    process.stdout.write(ORCA_VERSION + "\n");
-    return 0;
-  }
-  if (values.help) {
-    process.stdout.write(USAGE);
-    return 0;
-  }
-  if (!name) {
-    process.stderr.write(USAGE);
-    return 1;
-  }
-  const command = commands[name];
-  if (!command) {
-    process.stderr.write(`unknown command '${name}'\n\n${USAGE}`);
-    return 1;
-  }
   try {
+    const { values, positionals } = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      strict: true,
+      options: {
+        config: { type: "string" },
+        cwd: { type: "string" },
+        var: { type: "string", multiple: true },
+        body: { type: "string" },
+        "body-file": { type: "string" },
+        dir: { type: "string" },
+        "log-level": { type: "string" },
+        note: { type: "string" },
+        plan: { type: "string" },
+        status: { type: "string" },
+        rationale: { type: "string" },
+        workflow: { type: "string" },
+        run: { type: "string" },
+        host: { type: "string" },
+        port: { type: "string" },
+        json: { type: "boolean" },
+        force: { type: "boolean" },
+        quiet: { type: "boolean" },
+        mermaid: { type: "boolean" },
+        keep: { type: "boolean" },
+        "no-resume": { type: "boolean" },
+        "read-only": { type: "boolean" },
+        help: { type: "boolean" },
+        version: { type: "boolean" },
+      },
+    });
+    const [name, ...rest] = positionals;
+    // Before the command lookup and before `--help`: `orca --version` is a question about the
+    // installation, not about a command, and it was answered with the usage text and exit 1
+    // until now — `strict: false` made an undeclared `--version` a flag nobody read (#229).
+    // Only bare, though: with a command named, the flag is that command's to interpret.
+    if (values.version && !name) {
+      process.stdout.write(ORCA_VERSION + "\n");
+      return 0;
+    }
+    if (values.help) {
+      if (name && !commands[name]) {
+        process.stderr.write(`unknown command '${name}'\n\n${USAGE}`);
+        return 1;
+      }
+      process.stdout.write(
+        name
+          ? `usage: orca ${commands[name]!.help}\n\n${commands[name]!.usage ?? ""}\nGlobal options: --config <file>, --cwd <dir>, --help\n`
+          : USAGE,
+      );
+      return 0;
+    }
+    if (!name) {
+      process.stderr.write(USAGE);
+      return 1;
+    }
+    const command = commands[name];
+    if (!command) {
+      process.stderr.write(`unknown command '${name}'\n\n${USAGE}`);
+      return 1;
+    }
     return await command.run({
-      cwd: (values.cwd as string | undefined) ?? process.cwd(),
-      configPath: values.config as string | undefined,
+      cwd: values.cwd ?? process.cwd(),
+      configPath: values.config,
       flags: values,
       positionals: rest,
       out: (l) => process.stdout.write(l + "\n"),
@@ -87,7 +95,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (isOrcaError(e)) {
       process.stderr.write(`error [${e.code}]: ${e.message}\n`);
       if (e.details) process.stderr.write(JSON.stringify(e.details, null, 2) + "\n");
-    } else process.stderr.write(`error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
+    } else process.stderr.write(`error: ${e instanceof Error ? e.message : String(e)}\n\n${USAGE}`);
     return 1;
   }
 }

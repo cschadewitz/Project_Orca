@@ -141,8 +141,12 @@ describe("ORCA as an ACP agent", () => {
     // The recorded artifact surfaced as a completed tool call pointing at the file.
     const artifactCalls = updates.filter((u) => u.sessionUpdate === "tool_call" && u.title.startsWith("artifact spec"));
     expect(artifactCalls).toHaveLength(1);
-    expect((artifactCalls[0] as { locations?: { path: string }[] }).locations?.[0]?.path).toBe(
-      join(dir, ".orca", "spec.md"),
+    const [summary] = await orchestrator.listRunSummaries();
+    const state = await orchestrator.getState(summary!.id);
+    const artifact = Object.values(state.artifacts).find((a) => a.kind === "spec")!;
+    expect((artifactCalls[0] as { locations?: { path: string }[] }).locations?.[0]?.path).toBe(artifact.path);
+    expect(artifact.path?.replaceAll("\\", "/")).toContain(
+      `/.orca-attempts/${state.run.id}/${artifact.producedBy.stepRunId}/spec.md`,
     );
     // Agent chatter was relayed as message chunks.
     const text = updates

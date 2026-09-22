@@ -28,6 +28,72 @@ const art = (id: string, kind: string, data: Record<string, unknown>, runId = "r
 });
 
 describe("PlanService", () => {
+  it("preserves a human resolution against explicit and recommended agent choices", async () => {
+    const { plan } = make();
+    const p = await plan.ensurePlan({});
+    await plan.upsertDecision(
+      p.id,
+      {
+        key: "store",
+        title: "Store",
+        criteria: [{ key: "cost", name: "Cost" }],
+        options: [
+          { key: "a", name: "A", scores: { cost: 9 } },
+          { key: "b", name: "B", scores: { cost: 2 } },
+        ],
+      },
+      human,
+    );
+    await plan.evaluateDecision(
+      p.id,
+      "store",
+      { chosen: "b", decidedBy: "human", rationale: "operator choice" },
+      human,
+    );
+    for (const opts of [{ chosen: "a", rationale: "agent choice" }, {}]) {
+      expect(await plan.evaluateDecision(p.id, "store", opts, { kind: "agent" })).toMatchObject({
+        choice: "b",
+        decision: { chosen: "b", decidedBy: "human", rationale: "operator choice" },
+      });
+    }
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "decision.resolved")).toHaveLength(1);
+    await plan.reopenDecision(p.id, "store", human);
+    expect((await plan.evaluateDecision(p.id, "store")).choice).toBe("a");
+  });
+
+  it("invalidates a ranking when reopened or when matrix inputs change, and journals why", async () => {
+    const { plan, stores } = make();
+    const p = await plan.ensurePlan({});
+    await plan.upsertDecision(
+      p.id,
+      {
+        key: "store",
+        title: "Store",
+        criteria: [{ key: "cost", name: "Cost" }],
+        options: [{ key: "a", name: "A", scores: { cost: 9 } }],
+      },
+      human,
+    );
+    const { decision } = await plan.evaluateDecision(p.id, "store");
+    expect(decision.result?.recommended).toBe("a");
+    expect((await plan.reopenDecision(p.id, "store", human)).result).toBeUndefined();
+    // Existing stores may contain an undecided decision carrying an old matrix result.
+    await stores.plan.decisions.put({ ...decision, status: "deferred" });
+    const changed = await plan.upsertDecision(
+      p.id,
+      { key: "store", title: "Store", options: [{ key: "b", name: "B", scores: { cost: 4 } }] },
+      human,
+    );
+    expect(changed.result).toBeUndefined();
+    expect(
+      (await plan.journalOf(p.id)).filter((e) => e.type === "decision.updated").map((e) => e.payload.changes),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ result: null, resultInvalidated: "decision reopened" }),
+        expect.objectContaining({ result: null, resultInvalidated: "matrix inputs changed" }),
+      ]),
+    );
+  });
   it("registers work items with dependencies, risks and decisions, resolving refs batch-first", async () => {
     const { plan } = make();
     const p = await plan.ensurePlan({ requestId: "req_1" }, human);
@@ -515,25 +581,33 @@ describe("PlanService", () => {
     expect((await plan.journalOf(p.id)).filter((e) => e.type === "risk.updated")).toHaveLength(1);
   });
 
-  it("refuses a self-dependency and an unparsable reference with a warning, applying the rest", async () => {
+  it("rejects malformed references at intake and warns about valid self-dependencies", async () => {
     const { plan } = make();
     const p = await plan.ensurePlan({ key: "k", requestId: "req_1" });
+    await expect(
+      plan.registerWorkItems(
+        p.id,
+        {
+          requestId: "req_1",
+          items: [{ slug: "a", title: "A", dependsOn: ["@spec"] }],
+        },
+        human,
+      ),
+    ).rejects.toThrow(/invalid dependency reference/);
+    expect((await plan.snapshot(p.id)).items).toEqual([]);
     const reg = await plan.registerWorkItems(
       p.id,
       {
         requestId: "req_1",
         items: [
-          { slug: "a", title: "A", dependsOn: ["a", "@spec", "b"] },
+          { slug: "a", title: "A", dependsOn: ["a", "b"] },
           { slug: "b", title: "B" },
         ],
       },
       { kind: "decomposition" },
     );
     const [a, b] = reg.items;
-    expect(reg.warnings).toEqual([
-      expect.stringMatching(/work item 'a' cannot depend on itself/),
-      "work item 'a': invalid dependency reference '@spec'",
-    ]);
+    expect(reg.warnings).toEqual([expect.stringMatching(/work item 'a' cannot depend on itself/)]);
     expect(reg.dependencies.map((d) => [d.from, d.target])).toEqual([
       [a!.id, { kind: "work-item", workItemId: b!.id }],
     ]);
@@ -632,13 +706,13 @@ describe("PlanService", () => {
     expect(s.openDecisions).toEqual([]);
     expect(await plan.explain(p.id, "api")).toContain("cannot run: decision store was superseded");
 
-    // Reopening resets only satisfied dependencies, but a failed one is evaluated live anyway: api waits again.
+    // Reopening restores both the persisted dependency and the live schedule.
     await plan.reopenDecision(p.id, "store", human);
-    expect(await dep()).toMatchObject({ status: "failed" });
+    expect(await dep()).toMatchObject({ status: "open" });
     s = await plan.schedule(p.id);
     expect(s.unschedulable).toEqual([]);
     expect(s.waiting.map((w) => w.waitingOn.map((o) => o.detail))).toEqual([["waiting for decision store"]]);
-    expect((await plan.journalOf(p.id)).filter((e) => e.type === "dependency.resolved")).toHaveLength(1);
+    expect((await plan.journalOf(p.id)).filter((e) => e.type === "dependency.resolved")).toHaveLength(2);
   });
 
   it("follows the run-log projection: journals what it wrote, and never overwrites a projected status", async () => {

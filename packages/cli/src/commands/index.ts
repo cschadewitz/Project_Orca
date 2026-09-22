@@ -4,6 +4,7 @@
  */
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { openAcpSession, permissionPolicyPath } from "@orca/agents";
@@ -210,7 +211,12 @@ async function pingViaDaemon(
   };
 }
 
-export const commands: Record<string, { help: string; run: (ctx: CommandContext) => Promise<number> }> = {
+interface Command {
+  help: string;
+  usage?: string;
+  run: (ctx: CommandContext) => Promise<number>;
+}
+export const commands: Record<string, Command> = {
   validate: {
     help: "validate [files...]  Validate workflow definitions (defaults to those in orca.config.yaml).",
     async run(ctx) {
@@ -328,6 +334,8 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   run: {
+    usage:
+      "--var key=value may be repeated; values are parsed as JSON when possible.\n--cwd dir selects the run workspace. --quiet suppresses event output.\nExit: 0 success, 2 failure or cancellation, 3 paused for input.\n",
     help: "run <workflowId> [--var k=v]... [--cwd dir] [--quiet]  Start a workflow run and follow it until it completes or pauses at a human gate.",
     async run(ctx) {
       const workflowId = ctx.positionals[0];
@@ -380,6 +388,8 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   plan: {
+    usage:
+      "Subcommands:\n  list\n  show|schedule|graph|risks|decisions|journal [key]\n  explain <slug> [key]\n  depend <slug> <ref> [key]\n  waive|satisfy <dependencyId> [key] [--rationale text]\n  decide <decisionKey> <option> [key] [--rationale text]\n  risk <riskKey> --status <status> [key]\n  dispatch [key] [--workflow id] [--quiet]\n--plan key overrides the positional plan. --json prints structured read results.\n",
     help: "plan [list|show|schedule|explain|graph|risks|decisions|journal|depend|waive|satisfy|decide|risk|dispatch] ...  Inspect and steer the long-term plan (see docs/PLANNING.md).",
     run: planCommand,
   },
@@ -652,6 +662,8 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
   },
 
   demo: {
+    usage:
+      "--dir path retains the chosen workspace. --keep retains an automatically created workspace.\nWithout either option the temporary workspace is removed after the demo. --quiet suppresses events.\n",
     help: "demo [--dir path] [--keep]  Run the program workflow end-to-end with scripted agents (no LLM needed). Without --dir the workspace is a temp dir, removed afterwards unless --keep.",
     async run(ctx) {
       // A --dir workspace belongs to the user and always survives; a temp
@@ -660,7 +672,7 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
       const keep = Boolean(ctx.flags.dir) || Boolean(ctx.flags.keep);
       await mkdir(dir, { recursive: true });
       // commands/ -> (src|dist) -> cli -> packages -> repo root
-      const here = new URL(".", import.meta.url).pathname;
+      const here = fileURLToPath(new URL(".", import.meta.url));
       const repoRoot = join(here, "..", "..", "..", "..");
       const playbook = {
         greeting: "Scripted demo agent reporting for duty.",
@@ -790,8 +802,8 @@ export const commands: Record<string, { help: string; run: (ctx: CommandContext)
           }),
         ],
         roles: {},
-        workflows: [join(repoRoot, "workflows", "*.yaml")],
-        templates: [join(repoRoot, "templates", "**", "*.md")],
+        workflows: [join(repoRoot, "workflows", "*.yaml").replaceAll("\\", "/")],
+        templates: [join(repoRoot, "templates", "**", "*.md").replaceAll("\\", "/")],
         program: { workflow: "program", itemWorkflow: "ai-sdlc" },
         planning: { plan: "demo", planName: "Demo plan", policy: {}, riskMatrix: {} },
         workspace: { provider: "local", root: dir, hostId: "local" },

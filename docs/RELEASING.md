@@ -30,7 +30,8 @@ Closing it proposes the release.
 4. Review that pull request. Its body is the release body verbatim — to change the notes,
    edit `CHANGELOG.md` on the release branch.
 5. **Merge it.** `release-publish.yml` re-runs typecheck, lint, format, tests, build and
-   the compiled-CLI smoke test against the merge commit, builds the desktop and daemon
+   the compiled-CLI smoke test against the merge commit, runs the reusable desktop smoke
+   and three-platform type-proof checks against that same commit, builds the desktop and daemon
    artifacts from that same commit (`desktop.yml`, below), then tags `vX.Y.Z` and publishes
    the release with the changelog section as its body, the artifacts attached, and GitHub's
    generated list of merged pull requests appended underneath.
@@ -265,3 +266,12 @@ merge the result, and `gh release create vX.Y.Z --notes-file <(node tools/releas
 - Signing secrets, when signing lands: the names are in "Signing and notarisation are not
   done" above. `desktop.yml` is called by `release-publish.yml`, so a reusable-workflow
   `secrets:` block is where they will have to be passed through.
+
+### Release type proof
+
+`release-publish.yml` calls `app-smoke.yml` with the release merge SHA. Publication depends
+on both its Linux Electron smoke check and the Linux/macOS/Windows type-proof matrix. A
+missing or changed baseline blocks tagging and leaves the report available for review; the
+release workflow never updates snapshots. Follow the deliberate screenshot review procedure
+in `docs/DEVELOPMENT.md` before retrying. The proof still uses the dev-only `#type` route;
+this does not make that route part of the shipped renderer.

@@ -3,7 +3,7 @@
  * one run id. The log itself cannot arbitrate that - #97 made it well *numbered*, not
  * single-authored - so attaching takes a lease that is heartbeated while the run is driven.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import { OrcaError, parseWorkflow, TemplateRegistry, WorkflowRegistry, type Logger } from "@orca/core";
 import {
@@ -107,6 +107,7 @@ function leaseLostWhileLoading(inner: Stores): Stores {
   // Armed only once the lease has been taken, so a `read` from anywhere else is left alone.
   let armed = false;
   const leases: LeaseStore = {
+    withOwnership: (lease, write) => inner.leases.withOwnership(lease, write),
     acquire: async (request) => {
       const lease = await inner.leases.acquire(request);
       armed = true;
@@ -140,6 +141,7 @@ function leaseLostWhileLoading(inner: Stores): Stores {
 
 const openRun = async (app: App) => app.orchestrator.startRun({ workflowId: "leased" });
 const noWait = async () => {};
+afterEach(() => vi.useRealTimers());
 
 /** Poll rather than sleep a fixed amount: a loaded CI box runs timers late, not never. */
 async function until(what: string, ok: () => boolean): Promise<void> {
@@ -151,6 +153,42 @@ async function until(what: string, ok: () => boolean): Promise<void> {
 }
 
 describe("run leases", () => {
+  it("persistent renewal errors stop execution at TTL without corrupting the successor's log", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const stores = memoryStores();
+    vi.spyOn(stores.leases, "renew").mockRejectedValue(new Error("heartbeat disk error"));
+    const g = gate();
+    const first = make(stores, g.step, { ttlMs: 20, renewMs: 5 });
+    const runId = await openRun(first);
+    const driving = first.orchestrator.run(runId).catch((error: unknown) => error);
+    await g.entered;
+    await vi.advanceTimersByTimeAsync(21);
+    expect(first.logged.filter((line) => line === "run lease lost; stopping this interpreter")).toHaveLength(1);
+    const successor = make(stores, noWait);
+    expect((await successor.orchestrator.run(runId)).run.status).toBe("completed");
+    const events = await stores.events.read(runId);
+    g.release();
+    expect(await driving).toMatchObject({ code: "RUN_LEASED" });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(first.logged.filter((line) => line === "run lease lost; stopping this interpreter")).toHaveLength(1);
+    expect(await stores.events.read(runId)).toEqual(events);
+  });
+
+  it("rejects the old holder's next event before its next heartbeat after takeover", async () => {
+    const stores = memoryStores();
+    const g = gate();
+    const first = make(stores, g.step, { renewMs: 1_000_000 });
+    const runId = await openRun(first);
+    const driving = first.orchestrator.run(runId).catch((error: unknown) => error);
+    await g.entered;
+    const successor = make(stores, noWait);
+    await successor.orchestrator.breakLease(runId, { force: true });
+    await successor.orchestrator.run(runId);
+    const events = await stores.events.read(runId);
+    g.release();
+    expect(await driving).toMatchObject({ code: "RUN_LEASED" });
+    expect(await stores.events.read(runId)).toEqual(events);
+  });
   it("a second interpreter is refused while the first is attached, and let in once it detaches", async () => {
     const g = gate();
     const first = make(memoryStores(), g.step);
@@ -296,7 +334,7 @@ describe("run leases", () => {
     await expect(second.orchestrator.breakLease(runId)).rejects.toMatchObject({ code: "LEASE_NOT_FOUND" });
 
     g.release();
-    await driving;
+    await expect(driving).rejects.toMatchObject({ code: "RUN_LEASED" });
   });
 
   it("listLeases names the run and the workflow behind each lease", async () => {

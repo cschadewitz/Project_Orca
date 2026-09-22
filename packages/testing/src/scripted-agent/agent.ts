@@ -158,9 +158,15 @@ export class ScriptedAgent {
         },
       });
       if (entry.askPermission) {
+        const permissionPath = entry.permissionPath ?? d.path;
         const res = await ctx.client.request(acp.methods.client.session.requestPermission, {
           sessionId,
-          toolCall: { toolCallId, title: `Write ${d.path}`, kind: "edit", locations: [{ path: d.path }] },
+          toolCall: {
+            toolCallId,
+            title: `Write ${permissionPath}`,
+            kind: "edit",
+            locations: [{ path: permissionPath }],
+          },
           options: [
             { optionId: "allow", name: "Allow", kind: "allow_once" },
             { optionId: "deny", name: "Deny", kind: "reject_once" },

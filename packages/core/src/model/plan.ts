@@ -362,7 +362,15 @@ export const DependencyRefObjectSchema = z.object({
   rationale: z.string().optional(),
 });
 export type DependencyRefObject = z.infer<typeof DependencyRefObjectSchema>;
-export const DependencyRefSchema = z.union([z.string().min(1), DependencyRefObjectSchema]);
+/** Stored raw references predate grammar validation; retain their readable shape. */
+export const StoredDependencyRefSchema = z.union([z.string().min(1), DependencyRefObjectSchema]);
+export const DependencyRefSchema = StoredDependencyRefSchema.superRefine((ref, ctx) => {
+  try {
+    parseDependencyRef(ref);
+  } catch (error) {
+    ctx.addIssue({ code: "custom", message: (error as Error).message });
+  }
+});
 export type DependencyRef = z.infer<typeof DependencyRefSchema>;
 
 /** Parsed, normalised form of a DependencyRef. */

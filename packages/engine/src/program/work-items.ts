@@ -37,7 +37,29 @@ export interface ProjectedWorkItem {
   workItem: WorkItem;
   previous: WorkItemStatus;
   /** The fields that changed, as a patch (`deferredReason: null` = cleared). */
-  changes: { status: WorkItemStatus; runId?: string; deferredReason?: null };
+  changes: { status: WorkItemStatus; runId?: string | null; deferredReason?: null };
+}
+
+/** Repair an abandoned projection while claim release still excludes a successor.
+ * Terminal child outcomes remain terminal; a missing child becomes pending.
+ * Running, paused and waiting children are deliberately left alone.
+ */
+export async function recoverReleasedWorkItem(
+  stores: Stores,
+  workItemId: string,
+  run: Pick<Run, "id" | "status" | "outcome"> | undefined,
+  now: string,
+  retryCancelledRunId?: string,
+): Promise<ProjectedWorkItem[]> {
+  const cur = await stores.workItems.get(workItemId);
+  if (!cur || cur.status !== "in-progress" || (run && cur.runId !== run.id)) return [];
+  if (run && !["completed", "failed", "cancelled"].includes(run.status)) return [];
+  if (run && !(run.id === retryCancelledRunId && run.status === "cancelled"))
+    return projectWorkItemForRun(stores, { ...run, workItemId }, now);
+  const next = { ...cur, status: "pending" as const, updatedAt: now };
+  delete next.runId;
+  await stores.workItems.put(next);
+  return [{ workItem: next, previous: cur.status, changes: { status: "pending", runId: null } }];
 }
 
 /**

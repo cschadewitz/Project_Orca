@@ -38,6 +38,7 @@ interface FacadeSession {
   cwd: string;
   runIds: string[];
   active?: { runId: string };
+  lastPlan?: string;
 }
 
 export class OrcaAcpAgent {
@@ -133,6 +134,7 @@ export class OrcaAcpAgent {
     }
     session.runIds.push(runId);
     session.active = { runId };
+    delete session.lastPlan;
     // Bound per run, so concurrent sessions each receive only their own gates and `ask` permissions.
     const unbindHumanInput = this.humanInput.bind(runId, {
       sessionId: session.id,
@@ -142,9 +144,15 @@ export class OrcaAcpAgent {
     const state0 = await orchestrator.getState(runId);
     const def = orchestrator.resolveDefinition(state0.run.workflowId);
     await say(`Starting ${def.name} (run ${runId}) in ${session.cwd}\n`);
-    const unsubscribe = orchestrator.subscribe((e) => void this.forward(ctx, session, def, runId, e));
+    // Preserve event order and drain forwarding before publishing the final snapshot.
+    let forwarding = Promise.resolve();
+    const unsubscribe = orchestrator.subscribe((e) => {
+      forwarding = forwarding.then(() => this.forward(ctx, session, def, runId, e)).catch(() => undefined);
+    });
     try {
       const final = await orchestrator.run(runId);
+      await this.opts.program.settle(final);
+      await forwarding;
       await this.sendPlan(ctx, session, def, final);
       await say(
         `\nRun ${runId} ${final.run.status}${final.run.outcome ? ` (${final.run.outcome})` : ""}${final.run.error ? `: ${final.run.error.message}` : ""}\n`,
@@ -271,18 +279,21 @@ export class OrcaAcpAgent {
           : s.status === "completed"
             ? "completed"
             : s.status === "failed" || s.status === "cancelled" || s.status === "skipped"
-              ? "pending"
+              ? "completed"
               : "in_progress";
         return {
-          content: `${n.name ?? id}${s?.result?.choice ? ` → ${s.result.choice}` : ""}`,
+          content: `${n.name ?? id}${s?.result?.choice ? ` → ${s.result.choice}` : ""}${s && ["failed", "cancelled", "skipped"].includes(s.status) ? ` → ${s.status}` : ""}`,
           priority: n.type === "gate" ? "high" : "medium",
           status,
         };
       });
+    const snapshot = JSON.stringify(entries);
+    if (session.lastPlan === snapshot) return;
     await ctx.client.notify(acp.methods.client.session.update, {
       sessionId: session.id,
       update: { sessionUpdate: "plan", entries },
     });
+    session.lastPlan = snapshot;
   }
 }
 

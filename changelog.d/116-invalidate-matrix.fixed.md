@@ -1,0 +1,1 @@
+- **engine:** Clear stale decision rankings when matrix inputs change or a decision is reopened, recording the invalidation in the plan journal.

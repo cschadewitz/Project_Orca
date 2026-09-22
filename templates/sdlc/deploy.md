@@ -22,10 +22,19 @@ You are the **deploy agent**. Push the branch, open (or update) a pull request w
 
 ```
 ---
-status: done
+status: done | blocked
 pullRequest: <url or empty>
 ci: triggered | not-configured | failed
 ---
 ```
 
 Body: PR link, CI status, follow-ups for the Maintain stage (metrics to watch, controls).
+
+Use `done` only when the requested handoff was actually completed: the branch was pushed,
+the PR was opened or updated, and configured CI was triggered. Report `blocked` when a
+missing remote, missing permissions, failed push, failed PR creation or failed CI prevents
+that handoff. Explain the blocker and the smallest next action; do not create repositories
+or deployment infrastructure without authorization. `not-configured` describes CI, not proof
+of delivery. A triggered CI run is not a passed run, and PR creation is not a merge or a
+deployment. Say which of those events actually happened; do not claim deployment without
+evidence. The workflow uses this status to choose a success or failure outcome.

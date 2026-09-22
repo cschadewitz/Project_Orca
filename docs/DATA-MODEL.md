@@ -159,6 +159,7 @@ Built by `RunContext.evalContext()` (`packages/engine/src/run-context.ts`):
 | `choice` | most recent decision choice in this run |
 | `iteration`, `item`, `index` | loop scope (also present in `vars`) |
 | `request`, `workItem`, `workspace`, `run`, `now` | context records |
+| `riskMatrix` | (step context) current plan's `scale` and `thresholds`, or configured planning defaults before registration |
 | `deliverables` | (agent steps) the planned outputs with absolute paths |
 | `vars.schedule` | (after `custom:plan-schedule`) compact schedule: `ready[]`, `waiting[]`, `held[]`, `unschedulable[]`, `waves`, `criticalPath` + `criticalPathLength` (remaining work only), `risk`, `openDecisions` (each with the items its still-waiting `blocks` dependencies hold back) |
 | `vars.upstream` | (item runs in a plan) upstream items this item depends on, with their artifacts (`slug`, `title`, `status`, `type`, `stage`, `requiredBy`, `artifacts{kind: {id, path, data}}`) |

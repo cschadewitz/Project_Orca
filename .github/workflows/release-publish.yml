@@ -75,9 +75,16 @@ jobs:
       ref: ${{ github.event.pull_request.merge_commit_sha }}
       version: ${{ needs.check.outputs.version }}
 
+  app-verification:
+    name: desktop smoke and type proof
+    needs: check
+    uses: ./.github/workflows/app-smoke.yml
+    with:
+      ref: ${{ github.event.pull_request.merge_commit_sha }}
+
   publish:
     name: tag and publish
-    needs: [check, desktop]
+    needs: [check, desktop, app-verification]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

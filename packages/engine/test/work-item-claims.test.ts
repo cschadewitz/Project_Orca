@@ -17,8 +17,15 @@ import {
 import { memoryStores, type Stores } from "@orca/store";
 
 /** Branch bodies block here until `release()` is called, so both dispatchers are in flight at once. */
+let entered = 0;
+let signalEntered = () => {};
+let bothEntered = Promise.resolve();
 let gate = { wait: Promise.resolve(), release: () => {} };
 const openGate = () => {
+  entered = 0;
+  bothEntered = new Promise<void>((resolve) => {
+    signalEntered = resolve;
+  });
   let release = () => {};
   const wait = new Promise<void>((r) => (release = r));
   gate = { wait, release };
@@ -61,7 +68,14 @@ function make(overrides: Partial<OrchestratorOptions> = {}) {
   void definePlugin({
     name: "test",
     register: (api) => {
-      api.executors.register({ type: "custom:work", execute: async () => (await gate.wait, completed()) });
+      api.executors.register({
+        type: "custom:work",
+        execute: async () => {
+          if (++entered === 2) signalEntered();
+          await gate.wait;
+          return completed();
+        },
+      });
     },
   }).register({
     executors,
@@ -121,7 +135,7 @@ describe("work item claims", () => {
       second.orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } }),
     ];
     // Both fan-outs are past their schedule decision before either child finishes.
-    await new Promise((r) => setTimeout(r, 20));
+    await bothEntered;
     gate.release();
     const [a, b] = await Promise.all(runs);
 
@@ -173,7 +187,7 @@ describe("work item claims", () => {
     openGate();
     const runId = await first.orchestrator.startRun({ workflowId: "dispatch", vars: { items } });
     void first.orchestrator.run(runId).catch(() => undefined);
-    await new Promise((r) => setTimeout(r, 20));
+    await bothEntered;
 
     // The process "dies" mid fan-out; a new one resumes the same run from its log.
     const second = make({ stores: first.stores });
@@ -245,7 +259,14 @@ describe("work item claims: plan-dispatch", () => {
       void definePlugin({
         name: "test",
         register: (api) => {
-          api.executors.register({ type: "custom:work", execute: async () => (await gate.wait, completed()) });
+          api.executors.register({
+            type: "custom:work",
+            execute: async () => {
+              if (++entered === 2) signalEntered();
+              await gate.wait;
+              return completed();
+            },
+          });
         },
       }).register({
         executors,
@@ -354,7 +375,7 @@ describe("work item claims: release", () => {
     openGate();
     const runId = await orchestrator.startRun({ workflowId: "dispatch", vars: { items } });
     const running = orchestrator.run(runId);
-    await new Promise((r) => setTimeout(r, 20));
+    await bothEntered;
 
     expect((await orchestrator.listClaims(runId)).map((c) => `${c.workItemId}:${c.owner}`).sort()).toEqual([
       "wi_api:running",

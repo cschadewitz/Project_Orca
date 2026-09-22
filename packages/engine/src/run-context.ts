@@ -22,7 +22,7 @@ import {
   type WorkflowDefinition,
   type Workspace,
 } from "@orca/core";
-import type { Stores } from "@orca/store";
+import type { Lease, Stores } from "@orca/store";
 import type { ResolvedArtifact } from "./executors/types.js";
 import { projectWorkItems, type ProjectedWorkItem } from "./program/work-items.js";
 
@@ -59,6 +59,8 @@ export class RunContext {
    * `run.cancelled`. Only the orchestrator's lease heartbeat sets this.
    */
   leaseLost = false;
+  /** Installed by the interpreter before any execution write. */
+  lease: Lease | undefined;
   /**
    * Artifact bodies by content hash. Blobs are content-addressed and therefore immutable, and
    * `evalContext()` runs for every render, condition, route and input resolution - without this
@@ -85,11 +87,27 @@ export class RunContext {
     return this.deps.logger;
   }
 
-  async emit(input: Omit<OrcaEventInput, "runId">): Promise<OrcaEvent> {
-    const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
-    applyEvent(this.state, e);
-    if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItems();
-    return e;
+  async withOwnership<T>(write: () => Promise<T>): Promise<T> {
+    if (this.leaseLost) throw new OrcaError("RUN_LEASED", `ownership of run ${this.id} was lost`);
+    try {
+      return this.lease ? await this.deps.stores.leases.withOwnership(this.lease, write) : await write();
+    } catch (error) {
+      if (error instanceof OrcaError && error.code === "RUN_LEASED") {
+        this.leaseLost = true;
+        this.abort.abort(error.message);
+      }
+      throw error;
+    }
+  }
+
+  async emit(input: Omit<OrcaEventInput, "runId">, prepare?: () => Promise<void>): Promise<OrcaEvent> {
+    return this.withOwnership(async () => {
+      await prepare?.();
+      const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
+      applyEvent(this.state, e);
+      if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItemsOwned();
+      return e;
+    });
   }
 
   /**
@@ -98,6 +116,10 @@ export class RunContext {
    * safe - and on resume, necessary - to recompute them from the events alone.
    */
   async syncWorkItems(): Promise<void> {
+    return this.withOwnership(() => this.syncWorkItemsOwned());
+  }
+
+  private async syncWorkItemsOwned(): Promise<void> {
     const changes = await projectWorkItems(this.deps.stores, this.state, this.deps.clock.isoNow());
     if (changes.length && this.deps.plan) await this.deps.plan.onWorkItemsProjected(changes, this.id);
   }
@@ -230,6 +252,32 @@ export class RunContext {
       if (s) steps[nodeId] = s;
     }
     const vars = this.state.run.vars;
+    let contextItem: unknown = workItem;
+    if (!contextItem && vars.workItem !== undefined && "workItem" in this.definition.inputs) {
+      const item = vars.workItem as Record<string, unknown> | null;
+      if (
+        !item ||
+        typeof item !== "object" ||
+        typeof item.slug !== "string" ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(item.slug) ||
+        typeof item.title !== "string" ||
+        !item.title.trim() ||
+        typeof item.description !== "string" ||
+        !item.description.trim() ||
+        (item.acceptanceCriteria !== undefined &&
+          (!Array.isArray(item.acceptanceCriteria) ||
+            !item.acceptanceCriteria.every((criterion) => typeof criterion === "string")))
+      )
+        throw new OrcaError("WORKFLOW_INVALID", "vars.workItem requires a safe slug, title and description");
+      contextItem = item;
+    }
+    if (this.state.run.workItemId && !workItem)
+      throw new OrcaError("WORKFLOW_INVALID", `work item ${this.state.run.workItemId} is missing`);
+    if ("workItem" in this.definition.inputs && !contextItem)
+      throw new OrcaError(
+        "WORKFLOW_INVALID",
+        "workflow requires workItem; use submit or pass --var workItem with slug, title and description",
+      );
     return {
       run: {
         id: this.id,
@@ -241,7 +289,7 @@ export class RunContext {
       vars,
       workspace: this.workspace,
       request,
-      workItem,
+      workItem: contextItem,
       artifacts,
       artifactsByKind: byKind,
       steps,

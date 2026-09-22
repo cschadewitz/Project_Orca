@@ -284,13 +284,15 @@ async function runBranches(
  */
 async function claimWorkItem(ctx: StepContext, b: Branch): Promise<boolean> {
   if (!b.workItemId) return true;
-  const held = await ctx.stores.claims.claim({
-    workItemId: b.workItemId,
-    runId: ctx.run.id,
-    branch: b.key,
-    stepRunId: ctx.step.id,
-    at: ctx.clock.isoNow(),
-  });
+  const held = await ctx.run.withOwnership(() =>
+    ctx.stores.claims.claim({
+      workItemId: b.workItemId!,
+      runId: ctx.run.id,
+      branch: b.key,
+      stepRunId: ctx.step.id,
+      at: ctx.clock.isoNow(),
+    }),
+  );
   if (ownsClaim(held, ctx.run.id, b.key)) return true;
   ctx.logger.warn("work item already claimed", {
     branch: b.key,

@@ -52,6 +52,8 @@ describe("agent node vars", () => {
     expect(prompt.text).not.toContain("=vars.workItem.slug");
 
     const note = Object.values(state.artifacts).find((a) => a.kind === "note")!;
-    expect(note.path).toContain(".orca/login-form/note.md");
+    expect(note.path?.replaceAll("\\", "/")).toContain(
+      `.orca/login-form/.orca-attempts/${state.run.id}/${note.producedBy.stepRunId}/note.md`,
+    );
   });
 });

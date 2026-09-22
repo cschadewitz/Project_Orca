@@ -1,6 +1,6 @@
 /** The on-disk sequencing both JSONL stores append through, and the lock file under it. */
-import { mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -121,20 +121,23 @@ describe("JsonlLogDir", () => {
     expect(lines).toEqual([]);
   });
 
-  it("breaks the lock of a dead process, and an old one, with a warning", async () => {
+  it("recovers a proven dead directory owner and refuses legacy or unreadable locks", async () => {
     const d = await tmp();
     const { logger, lines } = capture();
-    const logs = new JsonlLogDir(d, { logger, lock: { staleMs: 1_000, timeoutMs: 150 } });
-    // No process has this pid; kill(pid, 0) fails with ESRCH.
-    await writeFile(join(d, "k.jsonl.lock"), JSON.stringify({ pid: 2 ** 31 - 1, at: Date.now() }));
+    const logs = new JsonlLogDir(d, { logger, lock: { timeoutMs: 0 } });
+    const lock = join(d, "k.jsonl.lock");
+    await mkdir(lock);
+    await writeFile(
+      join(lock, "owner.2147483647.dead-beef.json"),
+      JSON.stringify({ pid: 2147483647, at: Date.now(), host: hostname() }),
+    );
     expect((await logs.append("k", row(1))).seq).toBe(0);
-    await writeFile(join(d, "k.jsonl.lock"), JSON.stringify({ pid: process.pid, at: Date.now() - 5_000 }));
-    expect((await logs.append("k", row(2))).seq).toBe(1);
-    // Unreadable contents fall back to the file's age.
-    await writeFile(join(d, "k.jsonl.lock"), "");
-    await expect(logs.append("k", row(3))).rejects.toSatisfy((e) => isOrcaError(e, "STORE_LOCK_TIMEOUT"));
-    expect(lines.filter((l) => l.includes("stale lock"))).toHaveLength(2);
-    expect(await readdir(d)).toEqual(["k.jsonl", "k.jsonl.lock"]);
+    await writeFile(lock, JSON.stringify({ pid: 2147483647, at: 0 }));
+    await expect(logs.append("k", row(2))).rejects.toSatisfy((e) => isOrcaError(e, "STORE_LOCK_TIMEOUT"));
+    await unlink(lock);
+    await mkdir(lock);
+    await expect(logs.append("k", row(2))).rejects.toSatisfy((e) => isOrcaError(e, "STORE_LOCK_TIMEOUT"));
+    expect(lines.filter((l) => l.includes("stale lock"))).toHaveLength(1);
   });
 });
 
@@ -158,21 +161,26 @@ describe("withFileLock", () => {
     expect(await readdir(d)).toEqual([]);
   });
 
-  it("does not remove a successor's lock when its own was broken as stale", async () => {
-    const d = await tmp();
-    const lock = join(d, "x.lock");
-    let release: () => void = () => undefined;
-    const held = new Promise<void>((r) => (release = r));
-    const first = withFileLock(lock, () => held, { staleMs: 50 });
-    // Wait until the first holder owns the lock, then let it go stale and take it over.
-    await new Promise((r) => setTimeout(r, 80));
-    const second = withFileLock(lock, () => new Promise<void>((r) => setTimeout(r, 40)), { staleMs: 50 });
-    await new Promise((r) => setTimeout(r, 20));
+  it("never steals a live holder by age", async () => {
+    const lock = join(await tmp(), "x.lock");
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = withFileLock(lock, async () => {
+      entered();
+      await held;
+    });
+    await ready;
+    await expect(withFileLock(lock, async () => undefined, { staleMs: 0, timeoutMs: 0 })).rejects.toMatchObject({
+      code: "STORE_LOCK_TIMEOUT",
+    });
     release();
     await first;
-    // The first holder's release found a lock that was not its own and left it for the second.
-    expect(await readdir(d)).toEqual(["x.lock"]);
-    await second;
-    expect(await readdir(d)).toEqual([]);
+    await withFileLock(lock, async () => undefined);
   });
 });

@@ -69,11 +69,16 @@ async function planDeliverables(
   const out: PlannedDeliverable[] = [];
   for (const spec of produces) {
     const rel = (await ctx.render(spec.path, extra)).trim();
+    // The configured path chooses the directory and filename; every visit gets a private
+    // output slot. Even an identical report must be written by this attempt to count.
+    const parts = rel.replaceAll("\\", "/").split("/");
+    const filename = parts.pop()!;
+    const attemptPath = host.joinPath(parts.join("/"), ".orca-attempts", ctx.run.id, ctx.step.id, filename);
     out.push({
       spec,
       kind: spec.kind,
       ...(spec.name ? { name: spec.name } : {}),
-      path: absolutize(ctx.workspace.cwd, rel, (...p) => host.joinPath(...p)),
+      path: absolutize(ctx.workspace.cwd, attemptPath, (...p) => host.joinPath(...p)),
       required: spec.required,
       ...(spec.mediaType ? { mediaType: spec.mediaType } : {}),
       ...(spec.validate?.requiredFields ? { requiredFields: spec.validate.requiredFields } : {}),
@@ -285,7 +290,11 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
   const deliverables = await planDeliverables(ctx, spec.agent, spec.produces, extra);
   const body = spec.template ? ctx.templates.get(spec.template).body : (spec.prompt ?? "");
   const basePrompt =
-    (await ctx.render(body, { ...extra, deliverables })).trim() + "\n\n" + renderDeliverablesBlock(deliverables);
+    (await ctx.render(body, { ...extra, deliverables })).trim() +
+    "\n\nUse only the explicitly supplied input artifacts as prior workflow context. Files in .orca/work, " +
+    ".orca/program or .orca-attempts from other runs or attempts are not inputs; do not explore or copy them. " +
+    "Write this attempt's outputs only to the exact deliverable paths below.\n\n" +
+    renderDeliverablesBlock(deliverables);
 
   await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "agent-turn" } });
   const { session, release } = await ctx.openSession(spec.agent);

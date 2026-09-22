@@ -122,8 +122,9 @@ export function harness(platform = "darwin", store: AppearanceStore = memoryStor
   /* A memory store by default: a chrome test must not write a preferences file, and the
      bridge's own store is what a test of the *preferences* asks for by passing it in
      (`window.orca.preferences`, which the fake bridge implements). */
-  const appearance = installAppearance(window, store, keyboard);
   const announcements = createAnnouncements();
+  const appearance = installAppearance(window, store, keyboard, announcements.say);
+
   const unlisten = keyboard.listen(window);
 
   return {

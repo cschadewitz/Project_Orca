@@ -1,0 +1,1 @@
+- **app:** Preserve newer notifications across delayed initial snapshots and resolving reads; a stale read no longer rolls back completion or reopens an answered input.

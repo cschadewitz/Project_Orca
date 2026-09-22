@@ -74,8 +74,8 @@ describe("workflows.list", () => {
     expect(sdlc.name).toBe("AI-native SDLC loop");
     expect(sdlc.version).toBe("1");
     expect(sdlc.start).toBe("start");
-    expect(sdlc.nodeCount).toBe(16);
-    expect(sdlc.edgeCount).toBe(18);
+    expect(sdlc.nodeCount).toBe(18);
+    expect(sdlc.edgeCount).toBe(20);
   });
 
   it("says nothing about where a workflow came from", async () => {
@@ -99,11 +99,9 @@ describe("workflows.get", () => {
   it("returns ai-sdlc's nodes and edges whole", async () => {
     const r = WorkflowsGetResultSchema.parse((await call("workflows.get", { id: "ai-sdlc" })).result);
     const w = r.workflow;
-    // #174's done-when says eleven nodes. The file has sixteen: the eleven are the working
-    // nodes, and the count includes `start`, the two `set` nodes that bump the attempt
-    // counters and the three `end` nodes the branches land on. Sixteen is the number the
-    // viewer has to lay out, so sixteen is what is asserted.
-    expect(w.nodes).toHaveLength(16);
+    // #136 adds an explicit delivery verdict and blocked terminal node; both travel to
+    // the viewer rather than implying that reaching deploy means delivery succeeded.
+    expect(w.nodes).toHaveLength(18);
     expect(w.id).toBe("ai-sdlc");
     expect(w.name).toBe("AI-native SDLC loop");
     expect(w.start).toBe("start");
@@ -145,7 +143,8 @@ describe("workflows.get", () => {
 
   it("carries the edges with their conditions and labels, back edges included", async () => {
     const r = WorkflowsGetResultSchema.parse((await call("workflows.get", { id: "ai-sdlc" })).result);
-    expect(r.workflow.edges).toHaveLength(18);
+    expect(r.workflow.edges).toHaveLength(20);
+    expect(r.workflow.edges).toContainEqual({ from: "delivery-status", to: "delivery-blocked" });
     expect(r.workflow.edges).toContainEqual({ from: "start", to: "plan" });
     // The review-to-build loop the viewer draws as a back edge (#177).
     expect(r.workflow.edges).toContainEqual({

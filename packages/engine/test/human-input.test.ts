@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import { FakeClock, parseWorkflow, TemplateRegistry, toGateOption, WorkflowRegistry } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput } from "@orca/engine";
-import { memoryStores } from "@orca/store";
+import { memoryStores, fileStores, type Stores } from "@orca/store";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-function make(yaml: string[]) {
+function make(yaml: string[], stores: Stores = memoryStores()) {
   const workflows = new WorkflowRegistry();
   for (const y of yaml) workflows.register(parseWorkflow(y));
-  const stores = memoryStores();
   const orchestrator = new Orchestrator({
     stores,
     agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })),
@@ -42,6 +44,31 @@ const nodes = (s: {
 }) => s.stepOrder.map((id) => `${s.steps[id]!.nodeId}:${s.steps[id]!.status}`);
 
 describe("pause mode", () => {
+  for (const storage of ["memory", "file"] as const) {
+    it(`${storage}: concurrent conflicting answers from separate interpreters accept exactly one`, async () => {
+      const dir = storage === "file" ? await mkdtemp(join(tmpdir(), "orca-answer-")) : undefined;
+      try {
+        const stores = dir ? fileStores(dir) : memoryStores();
+        const first = make([GATED], stores).orchestrator;
+        const second = make([GATED], dir ? fileStores(dir) : stores).orchestrator;
+        const parked = await first.startAndRun({ workflowId: "gated" });
+        const [pending] = await first.pendingInputs(parked.run.id);
+        const answers = await Promise.allSettled([
+          first.answer(pending!.id, "hold", parked.run.id),
+          second.answer(pending!.id, "ship", parked.run.id),
+        ]);
+        expect(answers.filter((answer) => answer.status === "fulfilled")).toHaveLength(1);
+        const accepted = (await stores.events.read(parked.run.id)).filter((event) => event.type === "human.answered");
+        expect(accepted).toHaveLength(1);
+        const choice = accepted[0]!.payload.answer;
+        const done = await second.resume(parked.run.id);
+        expect(done.run.outcome).toBe(choice === "ship" ? "success" : "failure");
+        await expect(first.answer(pending!.id, choice, parked.run.id)).rejects.toMatchObject({ code: "RUN_STATE" });
+      } finally {
+        if (dir) await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }
   it("parks the run at a gate, records the answer in the log and resumes as a new attempt", async () => {
     const { orchestrator } = make([GATED]);
     const parked = await orchestrator.startAndRun({ workflowId: "gated" });

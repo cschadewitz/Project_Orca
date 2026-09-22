@@ -52,11 +52,13 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import { once } from "node:events";
 
 const run = promisify(execFile);
 
 /** Repo root, from this file: packages/app/test/smoke → up four. */
-const repoRoot = new URL("../../../../", import.meta.url).pathname;
+const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const cli = join(repoRoot, "packages", "cli", "dist", "main.js");
 
 /**
@@ -271,7 +273,7 @@ async function writeSmokeConfig(dir: string): Promise<string> {
         roles: ["reviewer"],
       },
     ],
-    workflows: [...demo.workflows, join(workflowDir, "*.yaml")],
+    workflows: [...demo.workflows, join(workflowDir, "*.yaml").replaceAll("\\", "/")],
   };
 
   const path = join(dir, "orca.smoke.config.json");
@@ -341,7 +343,9 @@ export async function startDemoDaemon(): Promise<Daemon> {
     url,
     dir,
     stop: async () => {
+      const exited = serve.exitCode === null && serve.signalCode === null ? once(serve, "exit") : undefined;
       serve.kill("SIGTERM");
+      await exited;
       await rm(dir, { recursive: true, force: true });
     },
   };

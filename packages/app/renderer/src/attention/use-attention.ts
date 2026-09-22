@@ -8,7 +8,7 @@
  * artifacts the decision is about, and the design forbids offering an answer the app cannot
  * show the basis for. So an ask the list has never seen is resolved with a single
  * `inputs.list({ runId })` — one call, scoped to one run — exactly as an unknown run is
- * resolved with one `runs.get`. Nothing else re-reads.
+ * resolved with one `runs.get`. Transport reattachment reconciles the snapshots once.
  *
  * **The count is the daemon's.** `InputsListResult.waiting` is sent so that a client never
  * recounts, and this hook does not: it holds that number and moves it by the same delta it
@@ -29,9 +29,10 @@
  * running list.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { OpenInputView, ProtocolError, RunSummaryView } from "@orca/protocol";
+import type { OpenInputView, ProtocolError, RunSummaryView, RunChangedParams } from "@orca/protocol";
+import { useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
-import { mergeRun, orderRuns } from "../runs/run-rows.js";
+import { applyRunChanged, mergeRun, orderRuns } from "../runs/run-rows.js";
 import { alertItems, mergeInput, orderWaits } from "./items.js";
 
 export type AttentionState =
@@ -70,39 +71,14 @@ export interface AttentionFeed {
 
 export function useAttention(): AttentionFeed {
   const stream = useNotifications();
+  const generation = useSubscriptionGeneration();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<AttentionState>({ phase: "loading" });
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
 
-  /* Run ids with a resolving call in flight, so a step that opens three asks in a row is
-     resolved once rather than three times. Two sets, because the two calls are about
-     different things about the same run and one must not suppress the other. */
-  const resolvingInputs = useRef<Set<string>>(new Set());
-  const resolvingRuns = useRef<Set<string>>(new Set());
-
-  /* What is held, for the two decisions a state updater must not make: whether to issue a
-     resolving call at all. An updater has to be pure — React may run it twice — so the
-     "have I seen this?" question is asked out here, off a ref that trails the state by a
-     commit. A stale answer costs one redundant call and nothing else, because both merges
-     replace rather than duplicate. The same trick `runs/use-runs.ts` uses. */
-  const held = useRef<{ waits: ReadonlySet<string>; failures: ReadonlySet<string>; running: ReadonlySet<string> }>({
-    waits: new Set(),
-    failures: new Set(),
-    running: new Set(),
-  });
-
-  useEffect(() => {
-    held.current =
-      state.phase === "ready"
-        ? {
-            waits: new Set(state.waits.map((i) => i.id)),
-            failures: new Set(state.failures.map((r) => r.id)),
-            running: new Set(state.running.map((r) => r.id)),
-          }
-        : { waits: new Set(), failures: new Set(), running: new Set() };
-  }, [state]);
-
+  const pendingAnswers = useRef(new Set<string>());
   const answered = useCallback((requestId: string) => {
+    pendingAnswers.current.add(requestId);
     setState((prev) => {
       if (prev.phase !== "ready" || !prev.waits.some((i) => i.id === requestId)) return prev;
       return { ...prev, waits: prev.waits.filter((i) => i.id !== requestId), waiting: Math.max(0, prev.waiting - 1) };
@@ -111,115 +87,121 @@ export function useAttention(): AttentionFeed {
 
   useEffect(() => {
     let live = true;
+    let snapshot: Extract<AttentionState, { phase: "ready" }> | undefined;
+    const changes = new Map<string, RunChangedParams>();
+    const runs = new Map<string, RunSummaryView>();
+    const cursors = new Map<string, number>();
+    const inputs = new Map<string, OpenInputView>();
+    const resolvingInputs = new Set<string>();
+    const resolvingRuns = new Set<string>();
+    const opened = new Map<string, Set<string>>();
+    pendingAnswers.current.clear();
     setState({ phase: "loading" });
+
+    const publish = () => {
+      if (!live || !snapshot) return;
+      let next = snapshot;
+      for (const [id, params] of changes) {
+        const run = runs.get(id) ?? next.failures.find((r) => r.id === id) ?? next.running.find((r) => r.id === id);
+        next = forget(next, id);
+        if (run) {
+          const current = params.seq > (cursors.get(id) ?? -1) ? applyRunChanged(run, params) : run;
+          if (current.status === "failed" || current.status === "running") next = file(next, current, current.status);
+        }
+      }
+      let waits = next.waits;
+      let waiting = next.waiting;
+      for (const input of inputs.values()) {
+        if (!waits.some((i) => i.id === input.id)) waiting += 1;
+        waits = mergeInput(waits, input);
+      }
+      const remaining = waits.filter((i) => !pendingAnswers.current.has(i.id));
+      waiting -= waits.length - remaining.length;
+      setState({ ...next, waits: orderWaits(remaining), waiting: Math.max(0, waiting) });
+    };
+    const resolveInputs = (runId: string) => {
+      if (resolvingInputs.has(runId)) return;
+      resolvingInputs.add(runId);
+      const requested = new Set(opened.get(runId));
+      void window.orca.inputs.list({ runId }).then((result) => {
+        resolvingInputs.delete(runId);
+        if (!live) return;
+        if (result.ok) {
+          for (const input of result.result.inputs) inputs.set(input.id, input);
+          publish();
+        }
+        // An additional ask may have opened after this snapshot was taken. Resolve only
+        // that missed batch, rather than polling the list on ordinary notifications.
+        if (
+          [...(opened.get(runId) ?? [])].some(
+            (id) => !requested.has(id) && !inputs.has(id) && !pendingAnswers.current.has(id),
+          )
+        ) {
+          resolveInputs(runId);
+        }
+      });
+    };
+    const resolveRun = (runId: string) => {
+      if (resolvingRuns.has(runId) || runs.has(runId)) return;
+      resolvingRuns.add(runId);
+      void window.orca.runs.get({ runId }).then((result) => {
+        resolvingRuns.delete(runId);
+        if (!live || !result.ok) return;
+        runs.set(runId, result.result.run);
+        cursors.set(runId, result.result.lastSeq);
+        publish();
+      });
+    };
+    const off = [
+      stream.on("input.opened", (params) => {
+        const ids = opened.get(params.runId) ?? new Set<string>();
+        ids.add(params.requestId);
+        opened.set(params.runId, ids);
+        if (!snapshot?.waits.some((i) => i.id === params.requestId) && !inputs.has(params.requestId))
+          resolveInputs(params.runId);
+      }),
+      stream.on("input.answered", (params) => {
+        answered(params.requestId);
+        publish();
+      }),
+      stream.on("run.changed", (params) => {
+        const previous = changes.get(params.runId);
+        if (previous && previous.seq >= params.seq) return;
+        changes.set(params.runId, params);
+        if (
+          (params.status === "failed" || params.status === "running") &&
+          !snapshot?.failures.some((r) => r.id === params.runId) &&
+          !snapshot?.running.some((r) => r.id === params.runId)
+        )
+          resolveRun(params.runId);
+        publish();
+      }),
+    ];
     void Promise.all([
       window.orca.inputs.list(),
       window.orca.runs.list({ status: ["failed"] }),
       window.orca.runs.list({ status: ["running"] }),
-    ]).then(([inputs, failed, running]) => {
+    ]).then(([inputResult, failed, running]) => {
       if (!live) return;
-      if (!inputs.ok) {
-        setState({ phase: "error", error: inputs.error });
+      if (!inputResult.ok) {
+        setState({ phase: "error", error: inputResult.error });
         return;
       }
-      setState({
+      snapshot = {
         phase: "ready",
-        waits: orderWaits(inputs.result.inputs),
-        waiting: inputs.result.waiting,
-        // Best-effort, see the header: no gates are hidden because the run list did not answer.
+        waits: inputResult.result.inputs,
+        waiting: inputResult.result.waiting,
         failures: failed.ok ? orderRuns(failed.result.runs) : [],
         running: running.ok ? orderRuns(running.result.runs) : [],
-        asOf: inputs.result.asOf,
-      });
+        asOf: inputResult.result.asOf,
+      };
+      publish();
     });
-    return () => {
-      live = false;
-    };
-  }, [attempt]);
-
-  useEffect(() => {
-    let live = true;
-
-    /** An ask this surface has never seen: resolve its run's asks, once, and merge them. */
-    const resolve = (runId: string): void => {
-      if (resolvingInputs.current.has(runId)) return;
-      resolvingInputs.current.add(runId);
-      void window.orca.inputs.list({ runId }).then((result) => {
-        resolvingInputs.current.delete(runId);
-        if (!live || !result.ok) return;
-        setState((prev) => {
-          if (prev.phase !== "ready") return prev;
-          const known = new Set(prev.waits.map((i) => i.id));
-          const fresh = result.result.inputs.filter((i) => !known.has(i.id));
-          if (fresh.length === 0) return prev;
-          return {
-            ...prev,
-            waits: fresh.reduce(mergeInput, prev.waits),
-            waiting: prev.waiting + fresh.length,
-          };
-        });
-      });
-    };
-
-    /**
-     * A run this surface does not hold a row for: one `runs.get` for what the notification
-     * does not carry — a name, a workflow, a duration — then file it in the list the
-     * *notification* named.
-     *
-     * The notification decides which list, not the fetched run: the push is the newer of
-     * the two, and a `runs.get` that answers a moment behind it would file a run that has
-     * just failed under what it was doing before. One call serves both lists, because the
-     * two are views of the same object and a run can only be in one of them — a run that
-     * failed and was re-driven leaves the failures and joins the running in one commit.
-     */
-    const resolveRun = (runId: string, into: RunList): void => {
-      if (resolvingRuns.current.has(runId)) return;
-      resolvingRuns.current.add(runId);
-      void window.orca.runs.get({ runId }).then((result) => {
-        resolvingRuns.current.delete(runId);
-        if (!live || !result.ok) return;
-        setState((prev) => (prev.phase === "ready" ? file(prev, result.result.run, into) : prev));
-      });
-    };
-
-    const off = [
-      // A second `input.opened` for an ask already held changes nothing this surface
-      // draws, so it is not worth a call.
-      stream.on("input.opened", (params) => {
-        if (!held.current.waits.has(params.requestId)) resolve(params.runId);
-      }),
-
-      // Answered here, or in another window, or by `orca answer` in a terminal: the same
-      // frame settles all three, which is why this is not conditional on who answered.
-      stream.on("input.answered", (params) => answered(params.requestId)),
-
-      stream.on("run.changed", (params) => {
-        const heldNow = held.current;
-        const listed = heldNow.failures.has(params.runId) || heldNow.running.has(params.runId);
-        if (params.status === "failed" || params.status === "running") {
-          // A row this surface has never drawn needs a name, a workflow and a duration,
-          // none of which is on the notification — one `runs.get`, the same resolution
-          // `use-runs.ts` makes. A run already in the *other* list is resolved too, because
-          // the row it moves to is a different row.
-          const into: RunList = params.status === "failed" ? "failed" : "running";
-          const already = into === "failed" ? heldNow.failures.has(params.runId) : heldNow.running.has(params.runId);
-          if (!already) resolveRun(params.runId, into);
-          return;
-        }
-        // Succeeded, cancelled, waiting, stale: not a failure and not in flight, so this
-        // screen has nothing to say about it. A failed run that was re-driven leaves here
-        // by the branch above instead.
-        if (listed) {
-          setState((prev) => (prev.phase === "ready" ? forget(prev, params.runId) : prev));
-        }
-      }),
-    ];
-
     return () => {
       live = false;
       off.forEach((remove) => remove());
     };
-  }, [stream, answered]);
+  }, [stream, answered, attempt, generation]);
 
   /* The main process is told what is open, and decides what to post from it (#162). Here
      rather than in the surface because this is the one place that holds both halves, and
@@ -242,7 +224,11 @@ type RunList = "failed" | "running";
  * that failed and was re-driven must not be a row in both of them for the frame between
  * two updates.
  */
-function file(state: Extract<AttentionState, { phase: "ready" }>, run: RunSummaryView, into: RunList): AttentionState {
+function file(
+  state: Extract<AttentionState, { phase: "ready" }>,
+  run: RunSummaryView,
+  into: RunList,
+): Extract<AttentionState, { phase: "ready" }> {
   return {
     ...state,
     failures: into === "failed" ? mergeRun(state.failures, run) : state.failures.filter((r) => r.id !== run.id),
@@ -251,7 +237,10 @@ function file(state: Extract<AttentionState, { phase: "ready" }>, run: RunSummar
 }
 
 /** Drop a run from both lists: it is neither failed nor in flight any more. */
-function forget(state: Extract<AttentionState, { phase: "ready" }>, runId: string): AttentionState {
+function forget(
+  state: Extract<AttentionState, { phase: "ready" }>,
+  runId: string,
+): Extract<AttentionState, { phase: "ready" }> {
   return {
     ...state,
     failures: state.failures.filter((r) => r.id !== runId),

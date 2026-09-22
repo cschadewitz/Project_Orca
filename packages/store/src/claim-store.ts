@@ -21,6 +21,7 @@
 import { link, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
+import { withFileLock } from "./file-lock.js";
 
 export const WorkItemClaimSchema = z.object({
   workItemId: z.string(),
@@ -46,7 +47,7 @@ export interface ClaimStore {
   /** Every claim currently held, in no particular order. */
   list(): Promise<WorkItemClaim[]>;
   /** Drop the claim on `workItemId`, but only while `runId` still holds it. */
-  release(workItemId: string, runId: string): Promise<void>;
+  release(workItemId: string, runId: string, beforeRelease?: () => Promise<void>): Promise<void>;
 }
 
 /** True when `claim` is held by this run's branch, i.e. the caller may launch the item. */
@@ -56,11 +57,19 @@ export function ownsClaim(claim: WorkItemClaim, runId: string, branch: string): 
 
 export class InMemoryClaimStore implements ClaimStore {
   private readonly claims = new Map<string, WorkItemClaim>();
+  private tail: Promise<unknown> = Promise.resolve();
+  private exclusive<T>(action: () => Promise<T>): Promise<T> {
+    const next = this.tail.then(action, action);
+    this.tail = next.catch(() => undefined);
+    return next;
+  }
   async claim(claim: WorkItemClaim): Promise<WorkItemClaim> {
-    const held = this.claims.get(claim.workItemId);
-    if (held) return held;
-    this.claims.set(claim.workItemId, claim);
-    return claim;
+    return this.exclusive(async () => {
+      const held = this.claims.get(claim.workItemId);
+      if (held) return held;
+      this.claims.set(claim.workItemId, claim);
+      return claim;
+    });
   }
   async get(workItemId: string): Promise<WorkItemClaim | undefined> {
     return this.claims.get(workItemId);
@@ -68,8 +77,12 @@ export class InMemoryClaimStore implements ClaimStore {
   async list(): Promise<WorkItemClaim[]> {
     return [...this.claims.values()];
   }
-  async release(workItemId: string, runId: string): Promise<void> {
-    if (this.claims.get(workItemId)?.runId === runId) this.claims.delete(workItemId);
+  async release(workItemId: string, runId: string, beforeRelease?: () => Promise<void>): Promise<void> {
+    return this.exclusive(async () => {
+      if (this.claims.get(workItemId)?.runId !== runId) return;
+      await beforeRelease?.();
+      this.claims.delete(workItemId);
+    });
   }
 }
 
@@ -88,6 +101,11 @@ export class FileClaimStore implements ClaimStore {
   }
 
   async claim(claim: WorkItemClaim): Promise<WorkItemClaim> {
+    await mkdir(dirname(this.file(claim.workItemId)), { recursive: true });
+    return withFileLock(`${this.file(claim.workItemId)}.lock`, () => this.claimLocked(claim), { staleMs: Infinity });
+  }
+
+  private async claimLocked(claim: WorkItemClaim): Promise<WorkItemClaim> {
     const file = this.file(claim.workItemId);
     await mkdir(dirname(file), { recursive: true });
     // Write the claim under a private name first and *link* it into place: linking is the
@@ -134,15 +152,23 @@ export class FileClaimStore implements ClaimStore {
     return out;
   }
 
-  async release(workItemId: string, runId: string): Promise<void> {
-    const file = this.file(workItemId);
-    const held = await this.read(file);
-    if (!held || held.runId !== runId) return;
-    try {
-      await unlink(file);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-    }
+  async release(workItemId: string, runId: string, beforeRelease?: () => Promise<void>): Promise<void> {
+    await mkdir(dirname(this.file(workItemId)), { recursive: true });
+    return withFileLock(
+      `${this.file(workItemId)}.lock`,
+      async () => {
+        const file = this.file(workItemId);
+        const held = await this.read(file);
+        if (!held || held.runId !== runId) return;
+        await beforeRelease?.();
+        try {
+          await unlink(file);
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+        }
+      },
+      { staleMs: Infinity },
+    );
   }
 
   private async read(file: string): Promise<WorkItemClaim | undefined> {
