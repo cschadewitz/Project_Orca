@@ -195,23 +195,25 @@ describe("the facade's prompt grammar", () => {
       await vi.waitFor(() => expect(seen.some((u) => u.sessionUpdate === "available_commands_update")).toBe(true));
     });
     const advert = updates.find((u) => u.sessionUpdate === "available_commands_update") as
-      | { availableCommands: acp.AvailableCommand[] }
-      | undefined;
+      { availableCommands: acp.AvailableCommand[] } | undefined;
     expect(advert?.availableCommands).toEqual([
       expect.objectContaining({ name: "run", input: { hint: "<workflowId> [key=value ...]" } }),
       expect.objectContaining({ name: "status" }),
     ]);
   });
 
-  it.each(["/rnu ai-sdlc", "/run"])("answers %s with the command list instead of submitting a Request", async (text) => {
-    const { orchestrator, updates } = await withClient({}, async (ctx) => prompt(ctx, await newSession(ctx), text));
-    expect(await orchestrator.stores.requests.list(() => true)).toHaveLength(0);
-    expect(await orchestrator.listRunSummaries()).toHaveLength(0);
-    const reply = said(updates);
-    expect(reply).toContain("Available commands:");
-    expect(reply).toContain("/run <workflowId> [key=value ...]");
-    expect(reply).toContain("/status");
-  });
+  it.each(["/rnu ai-sdlc", "/run"])(
+    "answers %s with the command list instead of submitting a Request",
+    async (text) => {
+      const { orchestrator, updates } = await withClient({}, async (ctx) => prompt(ctx, await newSession(ctx), text));
+      expect(await orchestrator.stores.requests.list(() => true)).toHaveLength(0);
+      expect(await orchestrator.listRunSummaries()).toHaveLength(0);
+      const reply = said(updates);
+      expect(reply).toContain("Available commands:");
+      expect(reply).toContain("/run <workflowId> [key=value ...]");
+      expect(reply).toContain("/status");
+    },
+  );
 
   it("answers /status with nothing before the session has run anything, and with each run afterwards", async () => {
     const { updates } = await withClient({}, async (ctx) => {

@@ -67,7 +67,10 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     const args = exists ? ["checkout", branch] : ["checkout", "-b", branch];
     const r = await git(cwd, args);
     if (!r.ok)
-      throw new OrcaError("INTERNAL", `git checkout of ${branch} failed: ${r.err}`, { cwd, cmd: `git ${args.join(" ")}` });
+      throw new OrcaError("INTERNAL", `git checkout of ${branch} failed: ${r.err}`, {
+        cwd,
+        cmd: `git ${args.join(" ")}`,
+      });
     return { ...base, branch, ...(current ? { previousBranch: current } : {}) };
   }
 }
