@@ -105,6 +105,14 @@ function prepare(version) {
   parse(version);
 
   const pkgText = readFileSync(PKG, "utf8");
+  // Already at this version means the bump merged and the publish did not follow: the
+  // fix is to run Release (publish) against main, not to prepare the same release twice.
+  if (currentVersion() === version) {
+    die(
+      `${PKG} already says ${version}; if release-publish.yml failed after the release ` +
+        `pull request merged, dispatch it against main instead (docs/RELEASING.md)`,
+    );
+  }
   const bumped = pkgText.replace(/^(\s*"version":\s*")[^"]+(")/m, `$1${version}$2`);
   if (bumped === pkgText) die(`could not rewrite the version field in ${PKG}`);
 

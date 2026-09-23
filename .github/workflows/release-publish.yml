@@ -12,11 +12,28 @@
 # the desktop artifact and the daemon on the release page are one build; `publish` tags and
 # attaches. A platform runner failing therefore means no tag, which is the right way round —
 # a published release with two of three artifacts is not a thing that can be fixed forward.
+#
+# `workflow_dispatch` is the fix-forward path. When this workflow fails after the release
+# pull request has merged, `main` carries the version bump and the changelog section with
+# no tag against them, and nothing will ever merge a second `release: vX.Y.Z` pull request
+# for the same version. Re-running the failed run does not help either: a re-run uses the
+# workflow files of the commit it first ran on, so a fix to the workflows never reaches it.
+# Dispatching against a ref publishes whatever version that ref's package.json holds, from
+# that ref, through the same three jobs — the only thing that changes is which commit is
+# tagged. The "tag already exists" checks below are what keep a stray dispatch from
+# publishing anything twice.
 name: Release (publish)
 
 on:
   pull_request:
     types: [closed]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "The branch or commit to verify, build and tag. Its package.json names the version."
+        required: true
+        type: string
+        default: main
 
 permissions:
   contents: write
@@ -24,15 +41,25 @@ permissions:
 jobs:
   check:
     name: verify the merge commit
-    if: github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'release')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'release'))
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.sha.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ inputs.ref || github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
+
+      # Resolved once, here, and passed to the jobs below by SHA rather than by name: a
+      # dispatch says `main`, and `main` can move while the desktop runners are still
+      # building. Every job has to check out, build and tag the same commit.
+      - name: The commit being released
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@v6
 
@@ -72,7 +99,7 @@ jobs:
     needs: check
     uses: ./.github/workflows/desktop.yml
     with:
-      ref: ${{ github.event.pull_request.merge_commit_sha }}
+      ref: ${{ needs.check.outputs.sha }}
       version: ${{ needs.check.outputs.version }}
 
   app-verification:
@@ -80,7 +107,7 @@ jobs:
     needs: check
     uses: ./.github/workflows/app-smoke.yml
     with:
-      ref: ${{ github.event.pull_request.merge_commit_sha }}
+      ref: ${{ needs.check.outputs.sha }}
 
   publish:
     name: tag and publish
@@ -89,7 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ needs.check.outputs.sha }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v7
@@ -108,7 +135,7 @@ jobs:
       - name: Tag and release
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          SHA: ${{ needs.check.outputs.sha }}
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           set -euo pipefail
