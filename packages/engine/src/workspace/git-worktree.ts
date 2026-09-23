@@ -5,7 +5,7 @@
  */
 import { type AgentHost, shellQuote } from "@orca/agents";
 import { OrcaError, type Workspace } from "@orca/core";
-import type { ProvisionInput, WorkspaceProvider } from "./provider.js";
+import { type ProvisionInput, WORK_ITEM_BRANCH_PREFIX, type WorkspaceProvider } from "./provider.js";
 
 export interface GitWorktreeProviderOptions {
   host: AgentHost;
@@ -27,7 +27,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     if (!input.workItem)
       return input.parent ?? { hostId: host.id, cwd: this.o.repo, repo: this.o.repo, provider: this.name };
     const slug = input.workItem.slug;
-    const branch = `${this.o.branchPrefix ?? "orca/"}${slug}`;
+    const branch = `${this.o.branchPrefix ?? WORK_ITEM_BRANCH_PREFIX}${slug}`;
     const root =
       this.o.worktreeRoot ??
       host.joinPath(this.o.repo, "..", `${this.o.repo.split(/[\\/]/).filter(Boolean).pop() ?? "repo"}-worktrees`);

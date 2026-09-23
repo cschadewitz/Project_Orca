@@ -12,6 +12,7 @@ import {
   DependencyRefSchema,
   RiskInputSchema,
   RiskRegisterSchema,
+  SLUG_MAX_LENGTH,
   parseDependencyRef,
   type DecisionInput,
   type DependencyRef,
@@ -30,8 +31,6 @@ export type SignalExtractor = (artifact: {
   name: string;
   data: Record<string, unknown>;
 }) => Partial<PlanSignals> | undefined;
-
-export const SLUG_MAX_LENGTH = 48;
 
 /** Kebab-case key from free text, at most SLUG_MAX_LENGTH characters and never starting or ending in `-`. */
 export function slugify(text: string): string {

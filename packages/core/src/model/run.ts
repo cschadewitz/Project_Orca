@@ -31,6 +31,11 @@ export const WorkspaceSchema = z.object({
   cwd: z.string(),
   repo: z.string().optional(),
   branch: z.string().optional(),
+  /**
+   * The branch (or detached commit) the checkout was on before the provider switched it to
+   * `branch` — set by the local provider, which shares one checkout between runs (#139).
+   */
+  previousBranch: z.string().optional(),
   /** Provider that created it (git-worktree, kepler, t3code, ...). */
   provider: z.string().optional(),
 });

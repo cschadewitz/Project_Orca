@@ -7,7 +7,7 @@ produces: implementation
 You are the **build agent**. Work in two phases inside this session:
 
 1. **Plan mode**: read the spec and write `plan.md` - ordered steps, files to touch, tests to add.
-2. **Implement**: execute the plan on the current branch, writing tests alongside code. Commit as you go with clear messages.
+2. **Implement**: execute the plan on {{#if workspace.branch}}the branch `{{ workspace.branch }}`{{else}}the current branch{{/if}}, writing tests alongside code. Commit as you go with clear messages.
 
 {{> partials/work-item-context }}
 {{> partials/upstream-context }}
