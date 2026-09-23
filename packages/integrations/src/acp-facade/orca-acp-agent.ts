@@ -15,6 +15,10 @@
  *   /run <workflowId> [key=value ...]   run a workflow in the session cwd
  *   /status                             summarise runs in this session
  *   anything else                       submit as a Request (first line = title)
+ *
+ * The two commands are advertised as ACP `available_commands_update` after
+ * `session/new`, and an unknown `/word` answers with that list instead of
+ * becoming a Request.
  */
 import type { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
@@ -39,7 +43,26 @@ interface FacadeSession {
   runIds: string[];
   active?: { runId: string };
   lastPlan?: string;
+  /** The workflow `/run` defaults to, once a client has selected one (#188). */
+  workflowId?: string;
 }
+
+/** The facade's slash commands, as ACP advertises them. */
+export function facadeCommands(defaultWorkflowId?: string): acp.AvailableCommand[] {
+  return [
+    {
+      name: "run",
+      description: "Run a workflow directly in this session's working directory",
+      input: { hint: `${defaultWorkflowId ?? "<workflowId>"} [key=value ...]` },
+    },
+    { name: "status", description: "Summarise the runs started in this session" },
+  ];
+}
+
+const commandList = (defaultWorkflowId?: string): string =>
+  facadeCommands(defaultWorkflowId)
+    .map((c) => `- /${c.name}${c.input && "hint" in c.input ? ` ${c.input.hint}` : ""}: ${c.description}`)
+    .join("\n");
 
 export class OrcaAcpAgent {
   private readonly sessions = new Map<string, FacadeSession>();
@@ -74,7 +97,10 @@ export class OrcaAcpAgent {
       .onRequest(acp.methods.agent.authenticate, () => ({}))
       .onRequest(acp.methods.agent.session.new, (ctx) => {
         const id = newId("sess");
-        this.sessions.set(id, { id, cwd: ctx.params.cwd, runIds: [] });
+        const session: FacadeSession = { id, cwd: ctx.params.cwd, runIds: [] };
+        this.sessions.set(id, session);
+        // After the response, so the client knows the session the update names.
+        setImmediate(() => void this.sendCommands(ctx.client, session).catch(() => undefined));
         return { sessionId: id };
       })
       .onNotification(acp.methods.agent.session.cancel, async (ctx) => {
@@ -82,6 +108,14 @@ export class OrcaAcpAgent {
         if (s?.active) await this.opts.orchestrator.cancel(s.active.runId, "cancelled by client");
       })
       .onRequest(acp.methods.agent.session.prompt, (ctx) => this.prompt(ctx));
+  }
+
+  /** Advertise `/run` and `/status`; called after `session/new` and whenever the session's workflow changes. */
+  private async sendCommands(client: acp.AgentContext, session: FacadeSession): Promise<void> {
+    await client.notify(acp.methods.client.session.update, {
+      sessionId: session.id,
+      update: { sessionUpdate: "available_commands_update", availableCommands: facadeCommands(session.workflowId) },
+    });
   }
 
   private async prompt(ctx: acp.AgentRequestContext<acp.PromptRequest>): Promise<acp.PromptResponse> {
@@ -97,7 +131,7 @@ export class OrcaAcpAgent {
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } },
       });
 
-    if (text === "/status") {
+    if (text === "/status" || text.startsWith("/status ")) {
       const states = await Promise.all(session.runIds.map((id) => this.opts.orchestrator.getState(id)));
       await say(
         states.length
@@ -111,18 +145,29 @@ export class OrcaAcpAgent {
       return { stopReason: "end_turn" };
     }
 
+    const command = /^\/(\S+)/.exec(text)?.[1];
+    // `/run k=v` (no id) falls back to the session's selected workflow, when there is one.
+    const runArgs = command === "run" ? text.split(/\s+/).slice(1) : [];
+    const named = runArgs[0] !== undefined && !runArgs[0].includes("=") ? runArgs.shift() : undefined;
+    const runWorkflowId = named ?? session.workflowId;
+    if (command !== undefined && (command !== "run" || !runWorkflowId)) {
+      await say(
+        `${command === "run" ? "/run needs a workflow id." : `Unknown command /${command}.`} Available commands:\n${commandList(session.workflowId)}\n`,
+      );
+      return { stopReason: "end_turn" };
+    }
+
     const orchestrator = this.opts.orchestrator;
     const workspace =
       this.opts.useClientCwd === false ? undefined : { hostId: "local", cwd: session.cwd, provider: "acp-client" };
     let runId: string;
-    if (text.startsWith("/run ")) {
-      const [, workflowId, ...rest] = text.split(/\s+/);
+    if (command === "run" && runWorkflowId) {
       const vars: Record<string, unknown> = {};
-      for (const kv of rest) {
+      for (const kv of runArgs) {
         const [k, ...v] = kv.split("=");
         if (k) vars[k] = v.join("=");
       }
-      runId = await orchestrator.startRun({ workflowId: workflowId!, vars, ...(workspace ? { workspace } : {}) });
+      runId = await orchestrator.startRun({ workflowId: runWorkflowId, vars, ...(workspace ? { workspace } : {}) });
     } else {
       const [title, ...body] = text.split("\n");
       const submitted = await this.opts.program.submit({
