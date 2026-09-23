@@ -27,7 +27,14 @@
 import type { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { stdioAcpStream } from "@orca/agents";
-import { isOrcaError, newId, type OrcaEvent, type RunState, type WorkflowDefinition } from "@orca/core";
+import {
+  isOrcaError,
+  newId,
+  type OrcaEvent,
+  type RunState,
+  type SessionConfigOption,
+  type WorkflowDefinition,
+} from "@orca/core";
 import type { Orchestrator, ProgramService } from "@orca/engine";
 import {
   applyConfigOption,
@@ -56,6 +63,8 @@ interface FacadeSession {
   lastPlan?: string;
   /** The client's config option choices (#188); `selection.workflow` is also `/run`'s default. */
   selection: FacadeSelection;
+  /** Where to push `config_option_update` when an agent's options are discovered (#189). */
+  client: acp.AgentContext;
 }
 
 /** The facade's slash commands, as ACP advertises them. */
@@ -80,6 +89,8 @@ export class OrcaAcpAgent {
   private readonly humanInput: UpstreamHumanInput;
   /** From `initialize`; decides whether boolean config options are offered. */
   private clientCapabilities: acp.ClientCapabilities | undefined;
+  /** Each agent's downstream config options, from its first session (#189). */
+  private readonly discovered = new Map<string, SessionConfigOption[]>();
   constructor(private readonly opts: OrcaAcpAgentOptions) {
     const orchestrator = opts.orchestrator;
     this.humanInput =
@@ -95,6 +106,27 @@ export class OrcaAcpAgent {
         },
       });
     orchestrator.humanInput = this.humanInput;
+    // Lazy model discovery (#189): the first downstream session per agent reveals what it
+    // offers; cached for the facade's life so later sessions do not re-probe.
+    orchestrator.onAgentSessionOpened(({ agentId, session }) => {
+      if (this.discovered.has(agentId)) return;
+      this.discovered.set(agentId, [...session.configOptions]);
+      void this.broadcastConfigOptions();
+    });
+  }
+
+  /** Push the complete option list to every open session, after discovery changed it. */
+  private async broadcastConfigOptions(): Promise<void> {
+    await Promise.all(
+      [...this.sessions.values()].map((s) =>
+        s.client
+          .notify(acp.methods.client.session.update, {
+            sessionId: s.id,
+            update: { sessionUpdate: "config_option_update", configOptions: this.configOptions(s) },
+          })
+          .catch(() => undefined),
+      ),
+    );
   }
 
   register(app: acp.AgentApp): acp.AgentApp {
@@ -106,7 +138,13 @@ export class OrcaAcpAgent {
       .onRequest(acp.methods.agent.authenticate, () => ({}))
       .onRequest(acp.methods.agent.session.new, (ctx) => {
         const id = newId("sess");
-        const session: FacadeSession = { id, cwd: ctx.params.cwd, runIds: [], selection: { roles: {} } };
+        const session: FacadeSession = {
+          id,
+          cwd: ctx.params.cwd,
+          runIds: [],
+          selection: { roles: {} },
+          client: ctx.client,
+        };
         this.sessions.set(id, session);
         // After the response, so the client knows the session the update names.
         setImmediate(() => void this.sendCommands(ctx.client, session).catch(() => undefined));
@@ -153,6 +191,7 @@ export class OrcaAcpAgent {
         templatePacks: [],
         booleans: this.clientCapabilities?.session?.configOptions?.boolean != null,
         useClientCwd: this.opts.useClientCwd !== false,
+        discovered: this.discovered,
       },
       session.selection,
     );

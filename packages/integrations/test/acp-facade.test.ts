@@ -9,7 +9,15 @@ import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { parsePromptTemplate, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import {
+  AgentSpecSchema,
+  parsePromptTemplate,
+  parseWorkflow,
+  silentLogger,
+  TemplateRegistry,
+  WorkflowRegistry,
+  type SessionConfigOption,
+} from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, ProgramService } from "@orca/engine";
 import { buildConfigOptions, OrcaAcpAgent } from "@orca/integrations";
 import { memoryStores } from "@orca/store";
@@ -71,7 +79,10 @@ edges:
 `,
 ];
 
-async function setup(): Promise<{ dir: string; orchestrator: Orchestrator }> {
+async function setup(
+  configOptions?: SessionConfigOption[],
+  promptLog?: string,
+): Promise<{ dir: string; orchestrator: Orchestrator }> {
   const dir = await mkdtemp(join(tmpdir(), "orca-facade-"));
   dirs.push(dir);
   const workflows = new WorkflowRegistry();
@@ -81,7 +92,11 @@ async function setup(): Promise<{ dir: string; orchestrator: Orchestrator }> {
   const orchestrator = new Orchestrator({
     stores: memoryStores(),
     agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })).addAgent({
-      ...scriptedAgentSpec({ playbookJson: { kinds: { spec: [{ data: { status: "ready" }, body: "spec" }] } } }),
+      ...scriptedAgentSpec({
+        playbookJson: { kinds: { spec: [{ data: { status: "ready" }, body: "spec" }] } },
+        ...(configOptions ? { configOptions } : {}),
+        ...(promptLog ? { promptLog } : {}),
+      }),
       roles: ["builder"],
     }),
     workflows,
@@ -237,8 +252,9 @@ describe("session config options (#188)", () => {
   async function drive<T>(
     clientCapabilities: acp.ClientCapabilities,
     body: (ctx: Ctx, updates: acp.SessionUpdate[]) => Promise<T>,
+    agent: { configOptions?: SessionConfigOption[]; promptLog?: string } = {},
   ): Promise<{ result: T; orchestrator: Orchestrator; updates: acp.SessionUpdate[] }> {
-    const { orchestrator } = await setup();
+    const { orchestrator } = await setup(agent.configOptions, agent.promptLog);
     const agentApp = new OrcaAcpAgent({ orchestrator, program: new ProgramService(orchestrator) }).register(
       acp.agent({ name: "orca-under-test" }),
     );
@@ -355,12 +371,92 @@ describe("session config options (#188)", () => {
     expect(state.run.overrides).toBeUndefined();
     expect(state.run.workspace.provider).toBe("acp-client");
   }, 60_000);
+
+  it("discovers an agent's models from its first session and records the chosen one as overrides.model (#189)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-facade-models-"));
+    dirs.push(dir);
+    const downstream: SessionConfigOption[] = [
+      {
+        type: "select",
+        id: "model",
+        name: "Model",
+        category: "model",
+        currentValue: "fast",
+        options: [
+          { value: "fast", name: "Fast" },
+          { value: "deep", name: "Deep" },
+        ],
+      },
+      {
+        type: "select",
+        id: "effort",
+        name: "Effort",
+        category: "thought_level",
+        currentValue: "low",
+        options: [
+          { value: "low", name: "Low" },
+          { value: "high", name: "High" },
+        ],
+      },
+      {
+        type: "select",
+        id: "style",
+        name: "Style",
+        category: "_custom",
+        currentValue: "a",
+        options: [{ value: "a", name: "A" }],
+      },
+    ];
+    const run = (ctx: Ctx, sessionId: string) =>
+      ctx.request(acp.methods.agent.session.prompt, { sessionId, prompt: [{ type: "text", text: "/run mini" }] });
+    const { result, orchestrator } = await drive(
+      {},
+      async (ctx, seen) => {
+        const { sessionId, configOptions } = await open(ctx, dir);
+        const before = configOptions!.find((o) => o.id === "orca/model");
+        await run(ctx, sessionId);
+        await vi.waitFor(() => expect(seen.some((u) => u.sessionUpdate === "config_option_update")).toBe(true));
+        const update = seen.find((u) => u.sessionUpdate === "config_option_update") as {
+          configOptions: acp.SessionConfigOption[];
+        };
+        await set(ctx, sessionId, "orca/model", "scripted/deep");
+        await set(ctx, sessionId, "orca/scripted/effort", "high");
+        await run(ctx, sessionId);
+        return { before, after: update.configOptions };
+      },
+      { configOptions: downstream },
+    );
+    // Nothing declared, nothing run: only the placeholder.
+    expect(result.before?.type === "select" && result.before.options).toEqual([
+      { value: "orca:default", name: "Agent default" },
+    ]);
+    const model = result.after.find((o) => o.id === "orca/model");
+    expect(model?.type === "select" && model.options.map((o) => ("value" in o ? o.value : o.group))).toEqual([
+      "orca:default",
+      "scripted/fast",
+      "scripted/deep",
+    ]);
+    // Reserved categories are proxied under the agent's namespace; custom ones are not.
+    expect(result.after.find((o) => o.id === "orca/scripted/effort")).toMatchObject({
+      category: "thought_level",
+      currentValue: "low",
+    });
+    expect(result.after.some((o) => o.id === "orca/scripted/style")).toBe(false);
+    const runs = await orchestrator.listRunSummaries();
+    const states = await Promise.all(runs.map((r) => orchestrator.getState(r.id)));
+    expect(states.map((s) => s.run.overrides)).toContainEqual({ model: { scripted: "deep" } });
+    expect(states.map((s) => s.run.overrides)).toContainEqual(undefined);
+  }, 60_000);
+
+  // Needs #187 (the engine applying overrides.model to the agent's session) before the chosen
+  // model can show up in the scripted agent's prompt log as a `{sessionId, configId, value}` entry.
+  it.todo("a selected model reaches the agent's session (prompt log) once #187 applies overrides.model");
 });
 
 describe("buildConfigOptions", () => {
   it("groups an agent role's choices by host when the candidates span more than one host", () => {
     const spec = (id: string, hostId: string) =>
-      ({ id, hostId, roles: ["builder"], command: "x" }) as Parameters<typeof buildConfigOptions>[0]["agents"][number];
+      AgentSpecSchema.parse({ id, hostId, roles: ["builder"], command: "x" });
     const options = buildConfigOptions(
       {
         workflows: [],
@@ -377,5 +473,26 @@ describe("buildConfigOptions", () => {
       "local",
       "box",
     ]);
+  });
+
+  it("advertises declared models before discovery, grouped by agent when more than one agent offers any", () => {
+    const spec = (id: string, models?: { id: string; name: string }[]) =>
+      AgentSpecSchema.parse({ id, hostId: "local", command: "x", ...(models ? { models } : {}) });
+    const model = (agents: ReturnType<typeof spec>[]) => {
+      const o = buildConfigOptions(
+        { workflows: [], agents, templatePacks: [], booleans: false, useClientCwd: true },
+        { roles: {} },
+      ).find((x) => x.id === "orca/model");
+      return o?.type === "select" ? o.options : [];
+    };
+    expect(model([spec("a", [{ id: "m1", name: "M1" }]), spec("b")])).toEqual([
+      { value: "orca:default", name: "Agent default" },
+      { value: "a/m1", name: "M1" },
+    ]);
+    expect(
+      model([spec("a", [{ id: "m1", name: "M1" }]), spec("b", [{ id: "m2", name: "M2" }])]).map((g) =>
+        "group" in g ? g.group : g.value,
+      ),
+    ).toEqual(["orca:default", "a", "b"]);
   });
 });
