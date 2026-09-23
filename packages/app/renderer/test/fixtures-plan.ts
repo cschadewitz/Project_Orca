@@ -330,6 +330,44 @@ export const DEPENDENCIES: readonly DependencyView[] = [
   },
 ];
 
+/**
+ * The same plan with a `blocks` cycle in it (#171): `auth-docs` and `auth-ui` each wait for
+ * the other to be done, so neither can ever start. Served by a test that scripts
+ * `dependencies.list` and `schedule.get` with these; the default plan has no cycle, because
+ * every other screen test is about a plan that can move.
+ */
+export const CYCLE: readonly string[] = ["auth-ui", "auth-docs"];
+
+export const CYCLE_DEPENDENCIES: readonly DependencyView[] = [
+  ...DEPENDENCIES,
+  {
+    id: "dep-ui-docs",
+    from: "wi-ui",
+    fromSlug: "auth-ui",
+    target: { kind: "work-item", workItemId: "wi-docs", slug: "auth-docs" },
+    type: "blocks",
+    requiredBy: "start",
+    status: "open",
+    evaluation: { state: "waiting", detail: "waiting for auth-docs to be done (currently pending)" },
+    createdAt: T,
+    updatedAt: T,
+  },
+  {
+    id: "dep-docs-ui",
+    from: "wi-docs",
+    fromSlug: "auth-docs",
+    target: { kind: "work-item", workItemId: "wi-ui", slug: "auth-ui" },
+    type: "blocks",
+    requiredBy: "start",
+    status: "open",
+    evaluation: { state: "waiting", detail: "waiting for auth-ui to be done (currently pending)" },
+    createdAt: T,
+    updatedAt: T,
+  },
+];
+
+export const CYCLE_SCHEDULE: ScheduleView = { ...SCHEDULE, cycles: [[...CYCLE]] };
+
 /** Highest score first, which is the order `risks.list` answers in. */
 export const RISKS: readonly RiskView[] = [
   {

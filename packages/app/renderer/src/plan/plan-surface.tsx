@@ -34,6 +34,18 @@ import { useKeyboard } from "../keyboard-context.js";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StateView, Text, textClass, type Crumb, type HeaderMode } from "../ui/index.js";
 import { DecisionMode } from "./decision-mode.js";
+import { DepsMode } from "./deps-mode.js";
+import {
+  ALL_EDGES,
+  buildGraph,
+  cycleDependencies,
+  relationships,
+  type DepEdge,
+  type DepNode,
+  type GraphFilters,
+} from "./graph-model.js";
+import { RelationshipInspector } from "./relationship-inspector.js";
+import { usePlanDependencies } from "./use-dependencies.js";
 import { decisionsForRail } from "./decision-model.js";
 import { Journal } from "./journal.js";
 import { Inspector } from "./inspector.js";
@@ -57,10 +69,13 @@ export const PLAN_MODES: readonly HeaderMode[] = [
   { id: "schedule", label: "Schedule" },
   { id: "risk", label: "Risks" },
   { id: "decision", label: "Decisions" },
+  { id: "deps", label: "Dependencies" },
   { id: "journal", label: "Journal" },
 ];
 
-export type PlanMode = "schedule" | "risk" | "decision" | "journal";
+export type PlanMode = "schedule" | "risk" | "decision" | "deps" | "journal";
+
+const isPlanMode = (id: string): id is PlanMode => PLAN_MODES.some((mode) => mode.id === id);
 
 /** What the docked panel is showing for Plan: its body, and the word its head says. */
 export interface PlanPanel {
@@ -81,6 +96,8 @@ export interface PlanSurfaceProps {
   capabilities: readonly string[];
   /** `orca://item/<slug-or-id>` — select that item and open its explanation. */
   open?: string | undefined;
+  /** `orca://plan?mode=<mode>&focus=<id>` — land on a mode, with that item or node selected. */
+  focus?: { mode?: string | undefined; id?: string | undefined } | undefined;
   onHeader?: (header: PlanHeader) => void;
   /**
    * The inspector, handed up for the docked panel to draw (the dock is the chrome's).
@@ -116,7 +133,7 @@ export function PlanSurface(props: PlanSurfaceProps): JSX.Element {
   return <PlanBody {...props} />;
 }
 
-function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSurfaceProps): JSX.Element {
+function PlanBody({ connection, open, focus, onHeader, onInspector, onOpenRun }: PlanSurfaceProps): JSX.Element {
   const [filters, setFilters] = useState<PlanFilters>(NO_FILTERS);
   const [mode, setMode] = useState<PlanMode>("schedule");
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
@@ -182,6 +199,47 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
   );
   const selectDecision = useCallback((decision: DecisionView) => setSelectedDecisionId(decision.id), []);
 
+  /* The graph (#171). Its selection *is* the item selection when the node is a work item —
+     the selected row is the focused node and the reverse — and is held apart only for the
+     two kinds of node that are not rows: a decision and an external target. */
+  const [graphFilters, setGraphFilters] = useState<GraphFilters>(ALL_EDGES);
+  const [targetNode, setTargetNode] = useState<string | undefined>(undefined);
+  const {
+    state: depsState,
+    reload: reloadDeps,
+    patch: patchDeps,
+  } = usePlanDependencies(mode === "deps" ? planId : undefined, feed.itemsRevision);
+  const graph = useMemo(
+    () =>
+      depsState.phase === "ready"
+        ? buildGraph(visible, depsState.dependencies, graphFilters)
+        : { nodes: [] as DepNode[], edges: [] as DepEdge[] },
+    [depsState, visible, graphFilters],
+  );
+  const cycle = useMemo(
+    () =>
+      depsState.phase === "ready" ? cycleDependencies(depsState.cycles, depsState.dependencies) : new Set<string>(),
+    [depsState],
+  );
+  const focusedNode = targetNode ?? selectedId;
+  const selectNode = useCallback((nodeId: string) => {
+    if (nodeId.startsWith("decision:") || nodeId.startsWith("external:")) setTargetNode(nodeId);
+    else {
+      setTargetNode(undefined);
+      setSelectedId(nodeId);
+    }
+  }, []);
+  /* `Enter` on a node is a person asking to see its relationships, which may re-open a dock
+     they closed. Counted so the same node asked for twice is two asks. */
+  const [asked, setAsked] = useState(0);
+  const openNode = useCallback(
+    (nodeId: string) => {
+      selectNode(nodeId);
+      setAsked((n) => n + 1);
+    },
+    [selectNode],
+  );
+
   /* A held item named in the risk's detail is opened on the schedule, which is where a work
      item is read. */
   const openItem = useCallback((itemId: string) => {
@@ -212,6 +270,29 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
     setSelectedId(match.id);
     setExplainFor(match.id);
   }, [open, held]);
+
+  /* `orca://plan?mode=deps&focus=<id>`: the mode, and the item (id or slug) or the node it
+     names. Once per link, for the same reason as above. */
+  const focusKey = focus === undefined ? undefined : `${focus.mode ?? ""}|${focus.id ?? ""}`;
+  const focused = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (focus === undefined || focusKey === undefined) {
+      focused.current = undefined;
+      return;
+    }
+    if (focused.current === focusKey) return;
+    if (focus.id !== undefined) {
+      if (focus.id.startsWith("decision:") || focus.id.startsWith("external:")) setTargetNode(focus.id);
+      else {
+        const match = held.find((item) => item.id === focus.id || item.slug === focus.id);
+        if (!match) return;
+        setTargetNode(undefined);
+        setSelectedId(match.id);
+      }
+    }
+    focused.current = focusKey;
+    if (focus.mode !== undefined && isPlanMode(focus.mode)) setMode(focus.mode);
+  }, [focus, focusKey, held]);
 
   /* The explanation is read when it is opened and not before: one `schedule.explain` per
      item a person actually asks about, rather than one per row in the table. */
@@ -321,6 +402,25 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
             body: <RiskDetail risk={selectedRisk} journal={riskJournal} onOpenItem={openItem} live={live} />,
           };
     }
+    if (mode === "deps") {
+      /* The relationship inspector: the edge-shaped panel, about the focused node. */
+      const node = graph.nodes.find((n) => n.id === focusedNode);
+      if (node === undefined || depsState.phase !== "ready" || planId === undefined) return undefined;
+      const { blockedBy, blocks } = relationships(node.id, depsState.dependencies);
+      return {
+        about: `node:${node.id}:${asked}`,
+        label: "Relationships",
+        body: (
+          <RelationshipInspector
+            planId={planId}
+            node={node}
+            blockedBy={blockedBy}
+            blocks={blocks}
+            onWaived={patchDeps}
+          />
+        ),
+      };
+    }
     return selected === undefined
       ? undefined
       : {
@@ -330,7 +430,22 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
             <Inspector item={selected} dependencies={detail.dependencies} risks={detail.risks} onOpenRun={onOpenRun} />
           ),
         };
-  }, [mode, selectedRisk, riskJournal, openItem, live, selected, detail, onOpenRun]);
+  }, [
+    mode,
+    selectedRisk,
+    riskJournal,
+    openItem,
+    live,
+    selected,
+    detail,
+    onOpenRun,
+    graph,
+    focusedNode,
+    depsState,
+    planId,
+    asked,
+    patchDeps,
+  ]);
   const reportInspector = useRef(onInspector);
   reportInspector.current = onInspector;
   /* Whether *this* report is a new selection, which is the only thing that may open the
@@ -448,7 +563,7 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
                 live={live}
                 error={feed.items.phase === "error" ? `${feed.items.error.code}: ${feed.items.error.message}` : ""}
                 selectedId={selectedId}
-                onSelect={(item) => setSelectedId(item.id)}
+                onSelect={(item) => selectNode(item.id)}
                 onExplain={explain}
                 explainFor={explainFor}
                 lines={lines}
@@ -477,6 +592,21 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
               onSelect={selectDecision}
               live={live}
               onRetry={reloadDecisions}
+            />
+          ) : mode === "deps" ? (
+            <DepsMode
+              state={depsState}
+              nodes={graph.nodes}
+              edges={graph.edges}
+              cycle={cycle}
+              filters={graphFilters}
+              onFilters={setGraphFilters}
+              selected={focusedNode}
+              onSelect={selectNode}
+              onOpen={openNode}
+              item={targetNode === undefined ? selected : undefined}
+              live={live}
+              onRetry={reloadDeps}
             />
           ) : (
             <Journal

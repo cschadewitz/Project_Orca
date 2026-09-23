@@ -125,7 +125,11 @@ function DecisionSplit({
 
       <div className="orca-plan__decision-detail">
         {selected === undefined ? (
-          <StateView kind="empty" title="No decision selected" body="Select one to see its matrix." />
+          /* A hint, not a state view: nothing failed or is loading, and a `role="status"`
+             here would be a live region that speaks on every mode switch. */
+          <Text style="caption" className="orca-plan__hint">
+            Select a decision to see its matrix.
+          </Text>
         ) : (
           <DecisionDetail key={selected.id} planId={planId} decision={selected} live={live} onOpenKey={openKey} />
         )}

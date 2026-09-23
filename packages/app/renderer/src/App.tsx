@@ -305,6 +305,7 @@ export function App(): JSX.Element {
               connection={connection.state}
               capabilities={connection.capabilities}
               open={route?.kind === "item" ? route.itemId : undefined}
+              focus={route?.kind === "plan" ? { mode: route.mode, id: route.focus } : undefined}
               onHeader={onPlanHeader}
               onInspector={showInspector}
               onOpenRun={openRun}

@@ -23,6 +23,7 @@ export {
 export { ObjectHeader, type Crumb, type HeaderMode, type ObjectHeaderProps } from "./object-header.js";
 export { ScheduleBadge, type ScheduleBadgeProps } from "./schedule-badge.js";
 export { DecisionMatrix, type DecisionMatrixProps } from "./decision-matrix.js";
+export { DependencyNode, type DependencyNodeProps, type DependencyTarget } from "./dependency-node.js";
 export {
   RiskMatrix,
   RISK_BAND,

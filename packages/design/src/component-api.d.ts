@@ -503,14 +503,30 @@ export interface ScheduleBadgeProps {
   explanation?: unknown;
 }
 
+/**
+ * Dependency node (built, #171: `renderer/src/ui/dependency-node.tsx`). Corrected against
+ * what the graph met:
+ *
+ * - **No `kind`.** A dependency's kind is a fact about an *edge* and is drawn as the edge's
+ *   stroke (`.orca-dep-edge--blocks|soft|informs`); a node can sit on edges of all three.
+ * - **`name` and an optional `title`**, not `itemId`/`title`: a decision or an external target
+ *   has a key and no title, and every node's name is drawn in mono.
+ * - **`state` is folded from the edges around the node** (failed, else open, else waived,
+ *   else satisfied) and said as a word as well as a border colour; `inCycle` says "on a cycle".
+ * - **No `onWaive`.** A waive is about one dependency, not a node, so it lives in the
+ *   relationship inspector in the docked panel, armed with a confirmation naming what it
+ *   unblocks. The node is an `option` on a one-tab-stop canvas and never a control.
+ */
 export interface DependencyNodeProps {
-  itemId: string;
-  title: string;
-  kind: DependencyKind;
-  state: DependencyState;
-  /** 'decision' and 'external' dependencies render a different glyph, same shell. */
+  id: string;
+  name: string;
+  title?: string;
+  /** 'decision' and 'external' targets render a different glyph and word, same shell. */
   target: "item" | "decision" | "external";
-  onWaive?(itemId: string): void;
+  state: DependencyState;
+  inCycle?: boolean;
+  selected?: boolean;
+  onOpen?(): void;
 }
 
 /** The four levels `core` cuts a risk matrix into, lowest first. */

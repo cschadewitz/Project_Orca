@@ -1227,6 +1227,39 @@
   border-style: dashed;
   color: var(--ink-secondary);
 }
+.orca-dep--failed {
+  border-color: var(--status-failed);
+}
+.orca-dep--open {
+  border-color: var(--border-control);
+}
+
+/* Dependency edges on the plan graph (#171). Kind is the stroke (semantics `dependencyKind`:
+   blocks solid, soft dashed, informs dotted) and state is the colour (`dependencyState`), so
+   the two facts never share a channel (rule 4). */
+.orca-dep-edge--soft {
+  stroke-dasharray: var(--stroke-dash-soft);
+}
+.orca-dep-edge--informs {
+  stroke-dasharray: var(--stroke-dash-informs);
+  stroke-linecap: round;
+}
+.orca-dep-edge--open,
+.orca-dep-edge--waived {
+  stroke: var(--graph-edge);
+}
+.orca-dep-edge--satisfied {
+  stroke: var(--graph-edge-active);
+}
+.orca-dep-edge--failed {
+  stroke: var(--status-failed);
+}
+/* A `blocks` edge on a cycle: nothing on it can ever start. Heavier as well as coloured, so
+   it still stands out with the hue gone. */
+.orca-dep-edge--cycle {
+  stroke: var(--status-failed);
+  stroke-width: var(--stroke-edge-active);
+}
 
 /* ---------- agent health card ---------- */
 

@@ -247,6 +247,11 @@
 .orca-plan__decision-row:hover {
   background: var(--surface-hover);
 }
+.orca-plan__hint {
+  display: block;
+  padding: var(--space-3);
+  color: var(--ink-secondary);
+}
 .orca-plan__recommendation {
   display: flex;
   flex-wrap: wrap;
@@ -281,6 +286,46 @@
 .orca-plan__actions {
   display: flex;
   gap: var(--space-2);
+}
+
+/* ---------- the dependency graph (#171) ---------- */
+
+/* The graph-only rail, its boundary, and the canvas over the pinned strip. The rail shares
+   the requests rail's remembered width; the canvas scrolls, the strip is one fixed row. */
+.orca-plan__deps {
+  display: grid;
+  grid-template-columns: var(--pane-plan-rail, var(--sidebar-width)) auto minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.orca-plan__graph-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+}
+.orca-plan__graph {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  min-width: 0;
+}
+.orca-plan__canvas {
+  min-height: 0;
+}
+.orca-plan__strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  height: var(--row-h);
+  border-top: var(--stroke-hairline) solid var(--border-hairline);
+  background: var(--surface-selected);
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 /* ---------- the inspector, in the docked panel ---------- */
