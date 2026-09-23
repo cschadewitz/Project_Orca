@@ -178,7 +178,7 @@ function graphView(id: string, graph: WorkflowGraph, version: string): WorkflowV
 }
 
 /** One workflow, whole, with the versions the daemon can see for it (`WorkflowView.versions`). */
-export function workflowView(def: WorkflowDefinition, versions: readonly string[]): WorkflowView {
+export function workflowView(def: WorkflowDefinition, versions: readonly string[], pinned = false): WorkflowView {
   return {
     ...graphView(def.id, def, def.version),
     name: def.name,
@@ -186,6 +186,7 @@ export function workflowView(def: WorkflowDefinition, versions: readonly string[
     ...(Object.keys(def.inputs).length ? { inputs: def.inputs } : {}),
     ...(Object.keys(def.vars).length ? { vars: def.vars } : {}),
     versions: [...versions],
+    pinned,
   };
 }
 

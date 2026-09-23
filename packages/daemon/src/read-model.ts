@@ -43,6 +43,7 @@ import {
 import type { Orchestrator, PlanService } from "@orca/engine";
 import type { WorkItemClaim } from "@orca/store";
 import {
+  INLINE_WORKFLOW_SEPARATOR,
   displayStatusForRun,
   displayStatusForStep,
   isTextMediaType,
@@ -442,12 +443,17 @@ export class ReadModel {
       const step = state.steps[id];
       if (step) steps.push(await this.stepView(pass, step, agentByStep.get(step.id)));
     }
+    const onDisk = this.versionOnDisk(state.run.workflowId);
     return {
-      run,
+      run: { ...run, workflowPinned: onDisk !== state.run.workflowVersion },
       workspace: state.run.workspace,
       vars: state.run.vars,
       steps,
-      traversal: traversalView(state, this.definitionOrUndefined(state.run.workflowId)),
+      // The graph the run is walking: its pinned definition when the file has moved on (#179).
+      traversal: traversalView(
+        state,
+        await this.definitionOrUndefined(state.run.workflowId, state.run.workflowVersion),
+      ),
       artifacts: Object.values(state.artifacts)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
         .map(artifactView),
@@ -645,22 +651,20 @@ export class ReadModel {
    * (`Orchestrator.resolveDefinition`), so the viewer and the interpreter agree about what a
    * nested id names. An unknown id raises `WORKFLOW_NOT_FOUND`, which is that method's error.
    *
-   * `version` is checked rather than honoured, and the difference is the point: a workflow is
-   * one file at one version, and the store keeps no copies of the versions its runs recorded
-   * (see `WorkflowView.versions`). So asking for the version on disk answers, and asking for
-   * any other says `WORKFLOW_NOT_FOUND` with both versions in the details - rather than
-   * quietly answering with a graph that is not the one that ran.
+   * `version` answers from the file on disk when it is at that version, and otherwise from
+   * the workflow-version store, where `startRun` keeps the definition each run started on
+   * (#179) - so a run pinned to an older version can be shown the graph it is walking. A
+   * version in neither place is `WORKFLOW_VERSION_NOT_FOUND`, naming what exists, rather than
+   * a graph that is not the one that ran. `pinned` says the answer is not the version on disk.
    */
   async workflowsGet(params: WorkflowsGetParams): Promise<WorkflowsGetResult> {
     const asOf = this.clock.isoNow();
-    const def = this.orc.resolveDefinition(params.id);
-    if (params.version !== undefined && params.version !== def.version)
-      throw new OrcaError(
-        "WORKFLOW_NOT_FOUND",
-        `workflow '${params.id}' is at version ${def.version}; ORCA keeps no definition for version ${params.version}`,
-        { id: params.id, wanted: params.version, onDisk: def.version },
-      );
-    return { workflow: workflowView(def, await this.recordedVersions(def)), asOf };
+    const def =
+      params.version === undefined
+        ? this.orc.resolveDefinition(params.id)
+        : await this.orc.definitionFor(params.id, params.version);
+    const pinned = this.versionOnDisk(params.id) !== def.version;
+    return { workflow: workflowView(def, await this.recordedVersions(def), pinned), asOf };
   }
 
   // ------------------------------------------------------------------ pieces
@@ -677,7 +681,13 @@ export class ReadModel {
    * own child runs, recorded under that id.
    */
   private async recordedVersions(def: WorkflowDefinition): Promise<string[]> {
-    const versions = new Set<string>([def.version]);
+    const rootId = def.id.split(INLINE_WORKFLOW_SEPARATOR)[0]!;
+    const onDisk = this.versionOnDisk(rootId);
+    const versions = new Set<string>([
+      def.version,
+      ...(onDisk === undefined ? [] : [onDisk]),
+      ...(await this.orc.stores.workflows.versions(rootId)),
+    ]);
     const pass = this.pass();
     for (const id of await this.orc.listRuns()) {
       const facts = await pass.runFacts(id);
@@ -686,14 +696,25 @@ export class ReadModel {
     return [...versions].sort((a, b) => a.localeCompare(b));
   }
 
-  /** The run's definition, or nothing when this daemon no longer has it registered. */
-  private definitionOrUndefined(workflowId: string): WorkflowDefinition | undefined {
+  /**
+   * The run's definition at the version it recorded, or nothing when neither the file nor the
+   * store has it. A run with no stored copy falls back to the file on disk, as a run that
+   * predates versioning does in the engine.
+   */
+  private async definitionOrUndefined(workflowId: string, version: string): Promise<WorkflowDefinition | undefined> {
     try {
-      return this.orc.resolveDefinition(workflowId);
+      return await this.orc.definitionFor(workflowId, version, false);
     } catch (e) {
-      if (e instanceof OrcaError && e.code === "WORKFLOW_NOT_FOUND") return undefined;
+      if (e instanceof OrcaError && (e.code === "WORKFLOW_NOT_FOUND" || e.code === "WORKFLOW_VERSION_NOT_FOUND"))
+        return undefined;
       throw e;
     }
+  }
+
+  /** The version of the file on disk for this workflow (or the root of a nested id), if it is registered. */
+  private versionOnDisk(workflowId: string): string | undefined {
+    const rootId = workflowId.split(INLINE_WORKFLOW_SEPARATOR)[0]!;
+    return this.orc.workflows.has(rootId) ? this.orc.workflows.get(rootId).version : undefined;
   }
 
   /** `stepRunId -> {agentId, model?}`, from the only event that records which agent worked a step. */

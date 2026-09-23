@@ -216,6 +216,8 @@ export class Orchestrator {
       ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1")
       : this.workflows.get(opts.workflowId!);
     if (opts.overrides) this.validateOverrides(def, opts.overrides);
+    // Before `run.created`, so a run that says its definition is stored always has it (#179).
+    const workflowStored = await this.recordDefinition(def);
     const runId = newId("run", this.clock.now());
     const request = opts.requestId ? await this.stores.requests.get(opts.requestId) : undefined;
     const workItem = opts.workItemId ? await this.stores.workItems.get(opts.workItemId) : undefined;
@@ -241,6 +243,7 @@ export class Orchestrator {
         ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
         ...(opts.parentStepRunId ? { parentStepRunId: opts.parentStepRunId } : {}),
         ...(opts.overrides ? { overrides: opts.overrides } : {}),
+        ...(workflowStored ? { workflowStored: true as const } : {}),
       },
     });
     return runId;
@@ -705,8 +708,54 @@ export class Orchestrator {
   /** Inline graphs get ids like `parent::loopNode` or `parent::parallelNode::branch`. */
   resolveDefinition(workflowId: string): WorkflowDefinition {
     if (!workflowId.includes(INLINE_SEP)) return this.workflows.get(workflowId);
-    const [rootId, ...path] = workflowId.split(INLINE_SEP);
-    const root = this.workflows.get(rootId!);
+    return this.walkInline(this.workflows.get(workflowId.split(INLINE_SEP)[0]!), workflowId);
+  }
+
+  /**
+   * The definition a run recorded as `(workflowId, version)` (#179). The file on disk when it is
+   * still at that version; otherwise the copy `startRun` kept in the workflow-version store. A
+   * run that predates versioning (`stored` false: its `run.created` carries no
+   * `workflowStored`) and has no stored copy runs on whatever file is current, as it always
+   * did. Anything else - a version neither stored nor on disk - is `WORKFLOW_VERSION_NOT_FOUND`,
+   * naming the versions that do exist, rather than silently running the newest.
+   */
+  async definitionFor(workflowId: string, version: string, stored = true): Promise<WorkflowDefinition> {
+    const rootId = workflowId.split(INLINE_SEP)[0]!;
+    const live = this.workflows.has(rootId) ? this.workflows.get(rootId) : undefined;
+    let root: WorkflowDefinition | undefined =
+      live?.version === version ? live : await this.stores.workflows.get(rootId, version);
+    // Predates versioning: whatever is current, and an unknown workflow is the registry's error.
+    if (!root && !stored) root = live ?? this.workflows.get(rootId);
+    if (!root) {
+      const available = [
+        ...new Set([...(await this.stores.workflows.versions(rootId)), ...(live ? [live.version] : [])]),
+      ];
+      throw new OrcaError(
+        "WORKFLOW_VERSION_NOT_FOUND",
+        `workflow '${rootId}' version ${version} is neither stored nor on disk; ${
+          available.length ? `available: ${available.join(", ")}` : "no version of it exists"
+        }`,
+        { id: rootId, version, available },
+      );
+    }
+    return workflowId.includes(INLINE_SEP) ? this.walkInline(root, workflowId) : root;
+  }
+
+  /**
+   * Keep the definition a run is starting on, so it can be resumed after the file changes.
+   * True when the store holds the run's root definition at this version afterwards.
+   */
+  private async recordDefinition(def: WorkflowDefinition): Promise<boolean> {
+    if (def.id.includes(INLINE_SEP)) {
+      // A nested graph is part of its root's file; the root was kept when the parent started.
+      return (await this.stores.workflows.get(def.id.split(INLINE_SEP)[0]!, def.version)) !== undefined;
+    }
+    await this.stores.workflows.put(def);
+    return true;
+  }
+
+  private walkInline(root: WorkflowDefinition, workflowId: string): WorkflowDefinition {
+    const [, ...path] = workflowId.split(INLINE_SEP);
     let graph: WorkflowGraph = root;
     for (let i = 0; i < path.length; i++) {
       const node: NodeDef | undefined = graph.nodes[path[i]!];
@@ -763,7 +812,11 @@ export class Orchestrator {
     const events = await this.stores.events.read(runId);
     const first = events[0];
     if (!first || first.type !== "run.created") throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
-    const def = this.resolveDefinition(first.payload.workflowId);
+    const def = await this.definitionFor(
+      first.payload.workflowId,
+      first.payload.workflowVersion,
+      first.payload.workflowStored === true,
+    );
     const rc = await RunContext.load(runId, def, {
       stores: this.stores,
       clock: this.clock,

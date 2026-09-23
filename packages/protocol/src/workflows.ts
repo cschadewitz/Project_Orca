@@ -114,22 +114,21 @@ export interface WorkflowView {
   nodes: WorkflowNodeView[];
   edges: WorkflowEdgeView[];
   /**
-   * Every version of this workflow the daemon can *see*, oldest first, and it is worth
-   * knowing exactly what that means.
-   *
-   * ORCA records `workflowVersion` on `run.created`, so the daemon knows which versions have
-   * been run; it does not keep the *definitions* those runs used - a workflow is one file on
-   * disk, at whatever version it is at now. So this is the current definition's version
-   * unioned with the versions the runs in this store were started against, and nothing here
-   * promises that `workflows.get({ id, version })` can return any of them but the current
-   * one. It cannot: asking for another answers `WORKFLOW_NOT_FOUND`, because the honest
-   * answer to "show me v9" is that v9 is not on disk. A viewer uses this list to say a run is
-   * pinned to a version that is no longer the newest (`◷ pinned`,
-   * docs/design/70-workflow-editing.md), not to offer a version picker that would 404.
+   * Every version of this workflow the daemon can *see*, oldest first: the version on disk,
+   * every version kept in the store's workflow-version store (#179: `startRun` keeps the
+   * definition each run started on), and every version a run in this store recorded on
+   * `run.created`. A version that only a pre-v0.6.0 run recorded may have no stored
+   * definition, so `workflows.get({ id, version })` answers for the stored ones and the one
+   * on disk, and `WORKFLOW_VERSION_NOT_FOUND` for the rest.
    *
    * Absent on a nested graph.
    */
   versions?: string[];
+  /**
+   * This view is of a version other than the one on disk: a stored definition a run is pinned
+   * to (`◷ pinned`, docs/design/70-workflow-editing.md). Absent on a nested graph.
+   */
+  pinned?: boolean;
 }
 
 export const WorkflowNodeViewSchema: z.ZodType<WorkflowNodeView> = z.lazy(() =>
@@ -156,6 +155,7 @@ export const WorkflowViewSchema: z.ZodType<WorkflowView> = z.lazy(() =>
     nodes: z.array(WorkflowNodeViewSchema),
     edges: z.array(WorkflowEdgeViewSchema),
     versions: z.array(z.string()).optional(),
+    pinned: z.boolean().optional(),
   }),
 ) as unknown as z.ZodType<WorkflowView>;
 
@@ -200,8 +200,9 @@ export const WorkflowsGetParamsSchema = z.object({
    */
   id: z.string().min(1),
   /**
-   * The version to return. Only the version on disk can be returned - see `WorkflowView.versions` -
-   * so anything else answers `WORKFLOW_NOT_FOUND` rather than a graph that is not the one asked for.
+   * The version to return: the one on disk, or one kept in the workflow-version store (#179).
+   * Anything else answers `WORKFLOW_VERSION_NOT_FOUND`, with the versions that exist in the
+   * details, rather than a graph that is not the one asked for.
    */
   version: z.string().min(1).optional(),
 });

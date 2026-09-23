@@ -20,6 +20,11 @@ export type OrcaErrorCode =
    * for an agent that offers none, in its configured `models`. `details.available` lists what is.
    */
   | "AGENT_MODEL_NOT_FOUND"
+  /**
+   * A run's recorded workflow version is neither in the workflow-version store nor the version
+   * on disk. `details` carries `id`, `version` and `available` (what is stored, plus the current).
+   */
+  | "WORKFLOW_VERSION_NOT_FOUND"
   | "RUN_NOT_FOUND"
   | "RUN_STATE"
   /** Another interpreter holds the run's single-writer lease; see store/lease-store.ts. */

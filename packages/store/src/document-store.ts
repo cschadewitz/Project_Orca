@@ -14,6 +14,7 @@ import { FileLeaseStore, InMemoryLeaseStore, type LeaseStore } from "./lease-sto
 import { InMemoryEventStore, type EventStore } from "./event-store.js";
 import { JsonlEventStore } from "./jsonl-event-store.js";
 import { FileArtifactStore, InMemoryArtifactStore, type ArtifactStore } from "./artifact-store.js";
+import { FileWorkflowVersionStore, InMemoryWorkflowVersionStore, type WorkflowVersionStore } from "./workflow-store.js";
 import { filePlanStores, memoryPlanStores, type PlanStores } from "./plan-store.js";
 
 export interface DocumentStore<T extends { id: string }> {
@@ -230,6 +231,8 @@ export interface Stores {
   leases: LeaseStore;
   /** Long-term planning: plans, dependencies, risks, decisions and their journal. */
   plan: PlanStores;
+  /** The workflow definitions runs were started on, by `(id, version)`; see workflow-store.ts. */
+  workflows: WorkflowVersionStore;
 }
 
 /** `logger` receives what the file-backed stores notice and survive: torn log lines, stale locks. */
@@ -242,6 +245,7 @@ export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores 
     claims: new FileClaimStore(dir),
     leases: new FileLeaseStore(dir, clock),
     plan: filePlanStores(dir, clock, logger),
+    workflows: new FileWorkflowVersionStore(dir),
   };
 }
 
@@ -254,5 +258,6 @@ export function memoryStores(clock?: Clock): Stores {
     claims: new InMemoryClaimStore(),
     leases: new InMemoryLeaseStore(clock),
     plan: memoryPlanStores(clock),
+    workflows: new InMemoryWorkflowVersionStore(),
   };
 }
