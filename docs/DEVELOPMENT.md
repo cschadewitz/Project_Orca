@@ -557,6 +557,12 @@ procedure above.
   blocked items on failure.
 - `packages/engine/test/containers.test.ts` — loop / parallel / subworkflow / resume / cancel
   with a plugin‑registered custom node.
+- `packages/engine/test/run-overrides.e2e.test.ts` — the selection record (#186): a
+  `roles` override sends the build step and a subworkflow child's to the chosen agent while
+  the config maps the role elsewhere, the shared registry is untouched, and replaying the
+  log against a registry whose config has since changed resolves the same agent.
+- `packages/engine/test/local-workspace-branch.test.ts` — the `local` provider in a real
+  temp git repo: a work item checks out `orca/<slug>` and records both branches (#139).
 - `packages/integrations/test/acp-facade.test.ts` — ORCA driven *as* an ACP agent by an
   in‑process ACP client (proxy mode), including gate forwarding as a permission request.
 - `packages/core/test/plan.test.ts` — the pure planning layer: dependency grammar, risk
