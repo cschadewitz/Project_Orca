@@ -93,7 +93,9 @@ export class ScriptedAgent {
    * is appended to the prompt log as `{sessionId, configId, value}` so a test can assert it
    * arrived. An unknown option, a value the select does not offer, or a type mismatch is refused.
    */
-  private async setConfigOption(params: acp.SetSessionConfigOptionRequest): Promise<acp.SetSessionConfigOptionResponse> {
+  private async setConfigOption(
+    params: acp.SetSessionConfigOptionRequest,
+  ): Promise<acp.SetSessionConfigOptionResponse> {
     const { sessionId, configId, value } = params;
     const session = this.sessions.get(sessionId);
     if (!session) throw acp.RequestError.invalidParams({ sessionId, reason: "unknown session" });
