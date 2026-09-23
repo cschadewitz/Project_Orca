@@ -4,7 +4,7 @@
  * and the three refusals (unknown role, agent, model) that list the known set. `orca agents`
  * lists declared models and says "not probed" without a daemon.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -34,8 +34,8 @@ name: Two agents
 start: s
 nodes:
   s: { type: start }
-  build: { type: agent, agent: { role: builder }, prompt: "build" }
-  review: { type: agent, agent: { role: reviewer }, prompt: "review" }
+  build: { type: agent, agent: { role: builder }, template: build }
+  review: { type: agent, agent: { role: reviewer }, template: review }
   done: { type: end }
 edges:
   - { from: s, to: done }
@@ -75,12 +75,16 @@ beforeAll(async () => {
   await writeFile(join(dir, "two.yaml"), TWO, "utf8");
   await writeFile(join(dir, "one.yaml"), ONE, "utf8");
   await writeFile(join(dir, "program.yaml"), PROGRAM, "utf8");
+  await mkdir(join(dir, "tpl"), { recursive: true });
+  await writeFile(join(dir, "tpl", "build.md"), "---\nid: build\n---\nBuild it.", "utf8");
+  await writeFile(join(dir, "tpl", "review.md"), "---\nid: review\n---\nReview it.", "utf8");
+  await writeFile(join(dir, "tpl", "terse-build.md"), "---\nid: terse/build\n---\nBuild.", "utf8");
   await writeFile(
     join(dir, "orca.config.yaml"),
     [
       "version: 1",
       "workflows: [two.yaml, one.yaml, program.yaml]",
-      "templates: []",
+      "templates: [tpl/*.md]",
       "program: { workflow: program, itemWorkflow: one }",
       "hosts:",
       "  - { id: local, type: local }",
@@ -133,6 +137,14 @@ describe("orca run selection flags", () => {
   it("--template-pack is recorded", async () => {
     expect(await commands.run!.run(ctx(dir, ["one"], { "template-pack": "terse" }))).toBe(0);
     expect(await lastOverrides()).toEqual({ templatePack: "terse" });
+  });
+
+  it("a --template-pack that overrides nothing is refused with the known packs (#191)", async () => {
+    await expect(commands.run!.run(ctx(dir, ["one"], { "template-pack": "trese" }))).rejects.toMatchObject({
+      code: "TEMPLATE_NOT_FOUND",
+      message: "template pack 'trese' overrides no template",
+      details: { known: ["terse"] },
+    });
   });
 
   it("an unknown role fails with the known roles", async () => {
@@ -191,6 +203,22 @@ describe("orca submit --item-workflow", () => {
     await expect(commands.submit!.run(ctx(dir, ["A request"], { "item-workflow": "nope" }))).rejects.toMatchObject({
       code: "WORKFLOW_NOT_FOUND",
       message: "workflow 'nope' not registered",
+    });
+  });
+});
+
+describe("orca validate --template-pack (#191)", () => {
+  it("reports what a pack overrides and what it inherits", async () => {
+    const c = ctx(dir, [], { "template-pack": "terse" });
+    expect(await commands.validate!.run(c)).toBe(0);
+    expect(c.lines).toContain("template pack terse:");
+    expect(c.lines).toContain("  overrides build");
+    expect(c.lines).toContain("  inherits  review");
+  });
+
+  it("fails on a pack that overrides nothing", async () => {
+    await expect(commands.validate!.run(ctx(dir, [], { "template-pack": "nope" }))).rejects.toMatchObject({
+      code: "TEMPLATE_NOT_FOUND",
     });
   });
 });

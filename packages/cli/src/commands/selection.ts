@@ -5,7 +5,13 @@
  * rather than on the first step that needs it.
  */
 import type { AgentRegistry } from "@orca/agents";
-import { OrcaError, type AgentSelector, type RunOverrides, type WorkflowRegistry } from "@orca/core";
+import {
+  OrcaError,
+  type AgentSelector,
+  type RunOverrides,
+  type TemplateRegistry,
+  type WorkflowRegistry,
+} from "@orca/core";
 import type { CommandContext } from "./index.js";
 
 /** What a selection is checked against: the loaded config's agents and workflows. */
@@ -14,6 +20,28 @@ export interface SelectionScope {
   workflows: WorkflowRegistry;
   /** The workflows the run will start with; their agent nodes decide which agents are in play. */
   workflowIds: string[];
+  /** When given, `--template-pack` must name a pack that overrides at least one template. */
+  templates?: TemplateRegistry;
+}
+
+/** Template packs present in the registry: first path segments that override some base template. */
+export function knownTemplatePacks(templates: TemplateRegistry): string[] {
+  const heads = new Set(templates.list().flatMap((t) => (t.id.includes("/") ? [t.id.split("/")[0]!] : [])));
+  return [...heads].filter((p) => templates.packOverrides(p).length > 0).sort();
+}
+
+/**
+ * Refuse a template pack that overrides nothing - a typo'd pack name would otherwise run every
+ * prompt from the base set and say nothing. `TEMPLATE_NOT_FOUND`, listing the packs there are.
+ */
+export function requireTemplatePack(templates: TemplateRegistry, pack: string): string[] {
+  const overridden = templates.packOverrides(pack);
+  if (!overridden.length)
+    throw new OrcaError("TEMPLATE_NOT_FOUND", `template pack '${pack}' overrides no template`, {
+      pack,
+      known: knownTemplatePacks(templates),
+    });
+  return overridden;
 }
 
 function list(v: string | boolean | string[] | undefined): string[] {
@@ -148,6 +176,7 @@ export function selectionOverrides(
   }
 
   const templatePack = ctx.flags["template-pack"] as string | undefined;
+  if (templatePack !== undefined && scope.templates) requireTemplatePack(scope.templates, templatePack);
   const overrides: RunOverrides = {
     ...(Object.keys(roles).length ? { roles } : {}),
     ...(Object.keys(model).length ? { model } : {}),

@@ -54,7 +54,7 @@ import { formatEvent, formatPaused, formatPendingInput, formatRunState } from ".
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
 import { planCommand } from "./plan.js";
-import { selectionOverrides } from "./selection.js";
+import { requireTemplatePack, selectionOverrides } from "./selection.js";
 
 /**
  * The release version, as `orca --version` and `hello.orcaVersion` report it.
@@ -259,7 +259,7 @@ interface Command {
 }
 export const commands: Record<string, Command> = {
   validate: {
-    help: "validate [files...]  Validate workflow definitions (defaults to those in orca.config.yaml).",
+    help: "validate [files...] [--template-pack name]  Validate workflow definitions (defaults to those in orca.config.yaml); with a template pack, report which templates it overrides and which it inherits.",
     async run(ctx) {
       const { config, configDir } = await loadConfig(ctx.cwd, ctx.configPath);
       const templates = await loadTemplates(config.templates, configDir);
@@ -283,6 +283,24 @@ export const commands: Record<string, Command> = {
         for (const w of r.warnings) ctx.out(`     warning ${w.path}: ${w.message}`);
         if (!r.ok) failed++;
         if (ctx.flags.mermaid) ctx.out("\n" + toMermaid(def, def.name) + "\n");
+      }
+      const pack = ctx.flags["template-pack"] as string | undefined;
+      if (pack !== undefined) {
+        // Throws TEMPLATE_NOT_FOUND for a pack that overrides nothing (#191).
+        const overridden = requireTemplatePack(templates, pack);
+        const used = new Set(
+          workflows
+            .list()
+            .flatMap((def) => Object.values(def.nodes))
+            .flatMap((n) => {
+              const t = (n as { template?: unknown }).template;
+              return typeof t === "string" ? [t] : [];
+            }),
+        );
+        const inherited = [...used].filter((id) => !overridden.includes(id)).sort();
+        ctx.out(`template pack ${pack}:`);
+        ctx.out(`  overrides ${overridden.join(", ")}`);
+        ctx.out(`  inherits  ${inherited.length ? inherited.join(", ") : "nothing the validated workflows use"}`);
       }
       return failed ? 1 : 0;
     },
@@ -400,6 +418,7 @@ export const commands: Record<string, Command> = {
       const overrides = selectionOverrides(ctx, {
         agents: app.agents,
         workflows: app.workflows,
+        templates: app.templates,
         config: app.config,
         workflowIds: [workflowId],
       });
@@ -432,6 +451,7 @@ export const commands: Record<string, Command> = {
       const overrides = selectionOverrides(ctx, {
         agents: app.agents,
         workflows: app.workflows,
+        templates: app.templates,
         config: app.config,
         workflowIds: [app.config.program.workflow, app.config.program.itemWorkflow],
       });

@@ -288,7 +288,9 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
   });
   const extra = { inputs: inputViews, vars: { ...ctx.run.state.run.vars, ...spec.vars } };
   const deliverables = await planDeliverables(ctx, spec.agent, spec.produces, extra);
-  const body = spec.template ? ctx.templates.get(spec.template).body : (spec.prompt ?? "");
+  // The run's template pack (#191), when it chose one: `<pack>/<id>` wins over `<id>`.
+  const pack = ctx.run.state.run.overrides?.templatePack;
+  const body = spec.template ? ctx.templates.get(spec.template, pack ? { pack } : {}).body : (spec.prompt ?? "");
   const basePrompt =
     (await ctx.render(body, { ...extra, deliverables })).trim() +
     "\n\nUse only the explicitly supplied input artifacts as prior workflow context. Files in .orca/work, " +
