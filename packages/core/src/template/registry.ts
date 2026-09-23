@@ -81,6 +81,11 @@ export class TemplateRegistry {
       .map((id) => id.slice(prefix.length))
       .sort();
   }
+  /** Template packs present: first path segments that override some base template, sorted. */
+  packs(): string[] {
+    const heads = new Set([...this.templates.keys()].flatMap((id) => (id.includes("/") ? [id.split("/")[0]!] : [])));
+    return [...heads].filter((p) => this.packOverrides(p).length > 0).sort();
+  }
   find(id: string): PromptTemplate | undefined {
     return this.templates.get(id);
   }

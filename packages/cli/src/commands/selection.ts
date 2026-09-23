@@ -24,10 +24,9 @@ export interface SelectionScope {
   templates?: TemplateRegistry;
 }
 
-/** Template packs present in the registry: first path segments that override some base template. */
+/** Template packs present in the registry (`TemplateRegistry.packs`, shared with the ACP facade). */
 export function knownTemplatePacks(templates: TemplateRegistry): string[] {
-  const heads = new Set(templates.list().flatMap((t) => (t.id.includes("/") ? [t.id.split("/")[0]!] : [])));
-  return [...heads].filter((p) => templates.packOverrides(p).length > 0).sort();
+  return templates.packs();
 }
 
 /**
