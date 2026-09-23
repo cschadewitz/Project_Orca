@@ -80,7 +80,10 @@ async function setup() {
 describe("run overrides (#186)", () => {
   it("sends the build step to the overriding agent, in the run and in its subworkflow child", async () => {
     const { h, opened } = await setup();
-    const state = await h.orchestrator.startAndRun({ workflowId: "parent", overrides: { roles: { builder: "codex" } } });
+    const state = await h.orchestrator.startAndRun({
+      workflowId: "parent",
+      overrides: { roles: { builder: "codex" } },
+    });
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
     expect(state.run.overrides).toEqual({ roles: { builder: "codex" } });
     expect(opened).toEqual(["codex", "codex"]);

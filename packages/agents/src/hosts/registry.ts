@@ -224,8 +224,7 @@ export class AgentRegistry {
   }
 
   private writable(what: string): void {
-    if (this.readOnly)
-      throw new OrcaError("NOT_SUPPORTED", `cannot ${what} on a run-scoped agent registry view`, {});
+    if (this.readOnly) throw new OrcaError("NOT_SUPPORTED", `cannot ${what} on a run-scoped agent registry view`, {});
   }
 
   addHost(host: AgentHost): this {
