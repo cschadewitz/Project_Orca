@@ -21,12 +21,14 @@ import {
   itemRiskExposure,
   longestDownstreamPaths,
   parseDependencyRef,
+  PlanKeySchema,
   PlanSchema,
   planToMermaid,
   renderDecisionMatrix,
   RiskMatrixConfigSchema,
   riskLevel,
   riskRatingIssue,
+  SLUG_MAX_LENGTH,
   slugify,
   summarizeRisks,
   topologicalWaves,
@@ -989,6 +991,15 @@ describe("artifact signals", () => {
     expect(long.length).toBeLessThanOrEqual(48);
     expect(slugify("***")).toBe("item");
   });
+  it("bounds authored plan keys the way slugify bounds generated ones", () => {
+    expect(PlanKeySchema.safeParse("a".repeat(SLUG_MAX_LENGTH)).success).toBe(true);
+    expect(PlanKeySchema.safeParse("a".repeat(SLUG_MAX_LENGTH + 1)).success).toBe(false);
+    expect(PlanKeySchema.safeParse("auth-").success).toBe(false);
+    expect(PlanKeySchema.safeParse("-auth").success).toBe(false);
+    expect(PlanKeySchema.safeParse("auth-flow").success).toBe(true);
+    // Anything slugify produces is a valid key.
+    for (const text of ["  Where do Sessions live?  ", "a".repeat(47) + " bbbbbbbb", "x".repeat(200), "***"])
+      expect(PlanKeySchema.safeParse(slugify(text)).success).toBe(true);  });
   it("lifts risks, decisions and dependencies from generic front matter", () => {
     const s = extractPlanSignals({
       kind: "spec",

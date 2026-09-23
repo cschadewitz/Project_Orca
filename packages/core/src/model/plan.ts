@@ -120,7 +120,15 @@ export type RiskStatus = z.infer<typeof RiskStatusSchema>;
  */
 export const OPEN_RISK_STATUSES: readonly RiskStatus[] = ["open", "mitigating", "realized"];
 
-export const PlanKeySchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "keys are kebab-case");
+/** The longest plan key; `slugify` (plan/signals.ts) truncates to the same bound. */
+export const SLUG_MAX_LENGTH = 48;
+
+/** Kebab-case, at most SLUG_MAX_LENGTH characters, never starting or ending in `-` — what `slugify` produces. */
+export const PlanKeySchema = z
+  .string()
+  .max(SLUG_MAX_LENGTH, `keys are at most ${SLUG_MAX_LENGTH} characters`)
+  .regex(/^[a-z0-9][a-z0-9-]*$/, "keys are kebab-case")
+  .refine((key) => !key.endsWith("-"), "keys do not end in '-'");
 
 export const RiskSchema = z.object({
   id: z.string(),
