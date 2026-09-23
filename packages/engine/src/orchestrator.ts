@@ -28,6 +28,7 @@ import {
   type AgentSelector,
   type Artifact,
   type ArtifactRef,
+  type RunOverrides,
   type ArtifactSpec,
   type Clock,
   type Edge,
@@ -138,6 +139,11 @@ export interface StartRunOptions {
   workItemId?: string;
   parentRunId?: string;
   parentStepRunId?: string;
+  /**
+   * Per-run selection (#186): role -> agent, model, item workflow, template pack. Validated
+   * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
+   */
+  overrides?: RunOverrides;
 }
 
 export const INLINE_SEP = "::";
@@ -204,6 +210,7 @@ export class Orchestrator {
     const def = opts.inline
       ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1")
       : this.workflows.get(opts.workflowId!);
+    if (opts.overrides) this.validateOverrides(def, opts.overrides);
     const runId = newId("run", this.clock.now());
     const request = opts.requestId ? await this.stores.requests.get(opts.requestId) : undefined;
     const workItem = opts.workItemId ? await this.stores.workItems.get(opts.workItemId) : undefined;
@@ -228,6 +235,7 @@ export class Orchestrator {
         ...(opts.workItemId ? { workItemId: opts.workItemId } : {}),
         ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
         ...(opts.parentStepRunId ? { parentStepRunId: opts.parentStepRunId } : {}),
+        ...(opts.overrides ? { overrides: opts.overrides } : {}),
       },
     });
     return runId;
@@ -715,6 +723,21 @@ export class Orchestrator {
     return this.inlineDefinition(workflowId, graph, root.version);
   }
 
+  /**
+   * Refuse a selection record before the run exists (#186): every agent it names must be
+   * configured, and every role the workflow's own nodes ask for must be filled under it -
+   * rather than failing on the first step that needs the agent.
+   */
+  private validateOverrides(def: WorkflowDefinition, overrides: RunOverrides): void {
+    this.agents.validateOverrides(overrides);
+    const scoped = this.agents.withOverrides(overrides);
+    for (const node of Object.values(def.nodes)) {
+      const selector = (node as { agent?: unknown }).agent;
+      if (selector && typeof selector === "object" && "role" in selector)
+        scoped.resolve(selector as AgentSelector);
+    }
+  }
+
   private inlineDefinition(id: string, graph: WorkflowGraph, version: string): WorkflowDefinition {
     return { id, name: id, version, vars: {}, inputs: {}, start: graph.start, nodes: graph.nodes, edges: graph.edges };
   }
@@ -1028,7 +1051,7 @@ export class Orchestrator {
       logger: rc.logger.child({ step: step.nodeId }),
       clock: this.clock,
       stores: this.stores,
-      agents: this.agents,
+      agents: this.agents.withOverrides(rc.state.run.overrides),
       templates: this.templates,
       workflows: this.workflows,
       humanInput: abortableHumanInput(this.humanInput, rc.abort.signal),
@@ -1087,6 +1110,11 @@ export class Orchestrator {
                   : { workspace: rc.workspace }),
               ...(options.workItemId ? { workItemId: options.workItemId } : {}),
               ...(rc.state.run.requestId ? { requestId: rc.state.run.requestId } : {}),
+              ...(options.overrides
+                ? { overrides: options.overrides }
+                : rc.state.run.overrides
+                  ? { overrides: rc.state.run.overrides }
+                  : {}),
             }),
           ));
         if (resumedId)
@@ -1249,7 +1277,7 @@ export class Orchestrator {
     step: StepRun,
     selector: AgentSelector,
   ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
-    const { agent, host } = this.agents.resolve(selector);
+    const { agent, host } = this.agents.withOverrides(rc.state.run.overrides).resolve(selector);
     const key = `${rc.id}:${agent.id}`;
     const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
     if (pooled) {

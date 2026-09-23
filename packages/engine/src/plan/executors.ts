@@ -521,15 +521,20 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
     }
     const requestId = ctx.run.state.run.requestId;
     const scope = n.scope ?? "request";
-    const itemWorkflowVar = ctx.run.state.run.vars.itemWorkflow;
-    const defaultWorkflow =
-      n.workflow ?? (typeof itemWorkflowVar === "string" && itemWorkflowVar ? itemWorkflowVar : undefined);
-    const itemWorkflowSource = n.workflow !== undefined ? "node" : "var";
-    if (n.workflow && typeof itemWorkflowVar === "string" && itemWorkflowVar && n.workflow !== itemWorkflowVar)
+    // Precedence: the node's own pin, then the run's selection record (#186), then the var that
+    // `program.itemWorkflow` seeds - kept so shipped workflows that read `vars.itemWorkflow` still work.
+    const itemWorkflowOverride = ctx.run.state.run.overrides?.itemWorkflow || undefined;
+    const itemWorkflowVarRaw = ctx.run.state.run.vars.itemWorkflow;
+    const itemWorkflowVar =
+      typeof itemWorkflowVarRaw === "string" && itemWorkflowVarRaw ? itemWorkflowVarRaw : undefined;
+    const selectedItemWorkflow = itemWorkflowOverride ?? itemWorkflowVar;
+    const defaultWorkflow = n.workflow ?? selectedItemWorkflow;
+    const itemWorkflowSource = n.workflow !== undefined ? "node" : itemWorkflowOverride ? "override" : "var";
+    if (n.workflow && selectedItemWorkflow && n.workflow !== selectedItemWorkflow)
       ctx.logger.warn("plan-dispatch node workflow overrides configured itemWorkflow", {
         node: ctx.nodeId,
         workflow: n.workflow,
-        itemWorkflow: itemWorkflowVar,
+        itemWorkflow: selectedItemWorkflow,
       });
     if (!defaultWorkflow)
       return failed(

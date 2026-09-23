@@ -534,6 +534,12 @@ export const AgentSpecSchema = z.object({
    * wedged and its process killed.
    */
   cancelGraceMs: z.number().int().positive().default(10_000),
+  /** Models this agent offers, as declared in config (#186); applied per run in #187. */
+  models: z
+    .array(z.object({ id: z.string().min(1), name: z.string(), description: z.string().optional() }))
+    .optional(),
+  /** The model used when a run selects none; one of `models[].id`. */
+  defaultModel: z.string().optional(),
 });
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;
 
