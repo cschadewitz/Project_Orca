@@ -93,6 +93,13 @@ export async function openT3CodeSession(
     hostId: base.host.id,
     cwd: base.cwd,
     acpSessionId: threadId,
+    // A T3 thread's model is chosen by `modelSelection` at turn start, not through ACP config options.
+    configOptions: [],
+    async setConfigOption(configId) {
+      throw new OrcaError("AGENT_PROTOCOL", `T3 Code threads have no session config option '${configId}'`, {
+        configId,
+      });
+    },
     closed,
     async prompt(input, options = {}) {
       if (turnWaiter) throw new OrcaError("RUN_STATE", "a turn is already active on this T3 thread");

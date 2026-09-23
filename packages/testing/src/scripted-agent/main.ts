@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Entry point: `orca-scripted-agent --playbook pb.yaml [--state s.json] [--log prompts.jsonl]`
- * Speaks ACP over stdio. Also honours ORCA_PLAYBOOK / ORCA_PLAYBOOK_JSON env vars.
+ * Speaks ACP over stdio. Also honours ORCA_PLAYBOOK / ORCA_PLAYBOOK_JSON env vars, and
+ * ORCA_CONFIG_OPTIONS_JSON (the playbook's `configOptions`, set by `scriptedAgentSpec`).
  */
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
@@ -24,6 +25,9 @@ async function main(): Promise<void> {
   const file = values.playbook ?? process.env.ORCA_PLAYBOOK;
   if (process.env.ORCA_PLAYBOOK_JSON) raw = JSON.parse(process.env.ORCA_PLAYBOOK_JSON);
   else if (file) raw = parseYaml(await readFile(file, "utf8"));
+  if (process.env.ORCA_CONFIG_OPTIONS_JSON) {
+    raw = { ...(raw ?? {}), configOptions: JSON.parse(process.env.ORCA_CONFIG_OPTIONS_JSON) as unknown };
+  }
   const agent = new ScriptedAgent({
     playbook: parsePlaybook(raw),
     ...(values.state ? { stateFile: values.state } : {}),

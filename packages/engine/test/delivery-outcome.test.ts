@@ -20,6 +20,8 @@ it.each(["done", "blocked", "unknown"])("reports deploy status %s truthfully", a
         hostId: host.id,
         cwd,
         closed: Promise.resolve(),
+        configOptions: [],
+        setConfigOption: async () => [],
         onUpdate: () => () => {},
         cancel: async () => {},
         close: async () => {},

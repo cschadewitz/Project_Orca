@@ -5,7 +5,7 @@
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentSpec } from "@orca/core";
+import type { AgentSpec, SessionConfigOption } from "@orca/core";
 import { AgentSpecSchema } from "@orca/core";
 
 export { ScriptedAgent, type ScriptedAgentOptions } from "./scripted-agent/agent.js";
@@ -33,6 +33,8 @@ export function scriptedAgentSpec(options: {
   stateFile?: string;
   promptLog?: string;
   roles?: string[];
+  /** Session config options the agent advertises (overrides the playbook's `configOptions`). */
+  configOptions?: SessionConfigOption[];
   hostId?: string;
   sessionMode?: "per-step" | "per-run";
   permissions?: AgentSpec["permissions"];
@@ -53,6 +55,7 @@ export function scriptedAgentSpec(options: {
   if (options.promptLog) args.push("--log", options.promptLog);
   const env: Record<string, string> = {};
   if (options.playbookJson !== undefined) env.ORCA_PLAYBOOK_JSON = JSON.stringify(options.playbookJson);
+  if (options.configOptions) env.ORCA_CONFIG_OPTIONS_JSON = JSON.stringify(options.configOptions);
   return AgentSpecSchema.parse({
     id: options.id ?? "scripted",
     name: "Scripted test agent",

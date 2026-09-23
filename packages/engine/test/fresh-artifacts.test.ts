@@ -55,6 +55,8 @@ edges:
         hostId: "local",
         cwd: dir,
         acpSessionId: "fake",
+        configOptions: [],
+        setConfigOption: async () => [],
         closed: new Promise(() => {}),
         onUpdate: () => () => {},
         close: async () => {},

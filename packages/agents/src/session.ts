@@ -5,7 +5,8 @@
  * implement the same contract.
  */
 import type * as acp from "@agentclientprotocol/sdk";
-import { toolCallBody, type AgentUpdateSummary, type ToolCallBody } from "@orca/core";
+import { toolCallBody, type AgentUpdateSummary, type SessionConfigOption, type ToolCallBody } from "@orca/core";
+import { describeConfigOptions } from "./config-options.js";
 
 export interface TurnResult {
   stopReason: acp.StopReason;
@@ -33,6 +34,14 @@ export interface AgentSession {
   readonly closed: Promise<void>;
   prompt(input: string | acp.ContentBlock[], options?: PromptOptions): Promise<TurnResult>;
   onUpdate(listener: (e: SessionUpdateEvent) => void): () => void;
+  /**
+   * The config options the agent advertises (model, mode, …), as last reported: from
+   * `session/new`, a `setConfigOption` reply, or an unsolicited `config_option_update`.
+   * Empty for an agent that advertises none.
+   */
+  readonly configOptions: readonly SessionConfigOption[];
+  /** Send `session/set_config_option`; the cache is replaced by the full list the agent returns. */
+  setConfigOption(configId: string, value: string | boolean): Promise<SessionConfigOption[]>;
   cancel(): Promise<void>;
   close(): Promise<void>;
 }
@@ -72,6 +81,8 @@ export function summarizeUpdate(u: acp.SessionUpdate): AgentUpdateSummary {
         kind: u.sessionUpdate,
         planEntries: u.entries.map((e) => ({ content: e.content, status: e.status, priority: e.priority })),
       };
+    case "config_option_update":
+      return { kind: u.sessionUpdate, text: describeConfigOptions(u.configOptions) };
     default:
       return { kind: (u as { sessionUpdate: string }).sessionUpdate };
   }

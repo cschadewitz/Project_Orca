@@ -3,10 +3,24 @@
  * behind a stalled transport) never answers it, so the session must stop
  * waiting on its own: after `cancelGraceMs` the prompt fails and the process
  * is killed, escalating to SIGKILL when SIGTERM is ignored.
+ *
+ * Session config options (#185): what `session/new` advertises is kept and normalised, a
+ * `session/set_config_option` replaces it with the full list the agent returns, and an
+ * unsolicited `config_option_update` lands in the same cache.
  */
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentSpecSchema, OrcaError } from "@orca/core";
-import { LocalHost, openAcpSession, type AgentProcessHandle, type AgentSession } from "@orca/agents";
+import { AgentSpecSchema, OrcaError, type SessionConfigOption } from "@orca/core";
+import {
+  LocalHost,
+  openAcpSession,
+  type AgentProcessHandle,
+  type AgentSession,
+  type SessionUpdateEvent,
+} from "@orca/agents";
+import { scriptedAgentSpec } from "@orca/testing";
 
 /**
  * A minimal ACP agent over stdio that completes the handshake and then wedges:
@@ -124,5 +138,158 @@ describe("acp session cancellation", () => {
       message: expect.stringMatching(/cancel requested/),
     });
     expect(await settled(proc.exited, 1000)).not.toBe(pending);
+  });
+});
+
+const MODEL_OPTION: SessionConfigOption = {
+  type: "select",
+  id: "model",
+  name: "Model",
+  category: "model",
+  currentValue: "sonnet",
+  options: [
+    { value: "sonnet", name: "Sonnet" },
+    { value: "opus", name: "Opus", description: "Most capable" },
+  ],
+};
+const THINKING_OPTION: SessionConfigOption = {
+  type: "boolean",
+  id: "thinking",
+  name: "Extended thinking",
+  category: "thought_level",
+  currentValue: false,
+};
+
+/**
+ * An agent that advertises what CONFIG / MODES say in `session/new`, and on every prompt sends
+ * an unsolicited `config_option_update` carrying UPDATE before ending the turn.
+ */
+const configAgent = `
+const rl = require("node:readline").createInterface({ input: process.stdin });
+const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...m }) + "\\n");
+rl.on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.method === "initialize") {
+    require("node:fs").writeFileSync(process.env.INIT_LOG, JSON.stringify(m.params));
+    send({ id: m.id, result: { protocolVersion: m.params.protocolVersion, agentCapabilities: {}, agentInfo: { name: "cfg", version: "0" } } });
+  } else if (m.method === "session/new") {
+    const result = { sessionId: "s1" };
+    if (process.env.CONFIG) result.configOptions = JSON.parse(process.env.CONFIG);
+    if (process.env.MODES) result.modes = JSON.parse(process.env.MODES);
+    send({ id: m.id, result });
+  } else if (m.method === "session/prompt") {
+    send({ method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "config_option_update", configOptions: JSON.parse(process.env.UPDATE) } } });
+    send({ id: m.id, result: { stopReason: "end_turn" } });
+  }
+});
+`;
+
+async function openConfigAgent(env: Record<string, string>) {
+  const dir = await mkdtemp(join(tmpdir(), "orca-cfg-"));
+  const host = new LocalHost({ id: "local", type: "local" });
+  const agent = AgentSpecSchema.parse({
+    id: "cfg",
+    command: process.execPath,
+    args: ["-e", configAgent],
+    env: { INIT_LOG: join(dir, "init.json"), UPDATE: "[]", ...env },
+  });
+  const session = await openAcpSession({ host, agent, cwd: process.cwd() });
+  sessions.push(session);
+  return { session, initLog: join(dir, "init.json") };
+}
+
+describe("acp session config options", () => {
+  it("keeps a model select, sets it, and takes the full list the agent returns", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-cfg-"));
+    const promptLog = join(dir, "prompts.jsonl");
+    const agent = scriptedAgentSpec({ promptLog, configOptions: [MODEL_OPTION, THINKING_OPTION] });
+    const host = new LocalHost({ id: "local", type: "local" });
+    const session = await openAcpSession({ host, agent, cwd: dir });
+    sessions.push(session);
+
+    expect(session.configOptions).toEqual([MODEL_OPTION, THINKING_OPTION]);
+    const model = session.configOptions.find((o) => o.category === "model");
+    expect(model).toMatchObject({ type: "select", currentValue: "sonnet" });
+
+    const after = await session.setConfigOption("model", "opus");
+    // The full list comes back, not just the option that changed.
+    expect(after).toEqual([{ ...MODEL_OPTION, currentValue: "opus" }, THINKING_OPTION]);
+    expect(session.configOptions).toEqual(after);
+
+    await session.setConfigOption("thinking", true);
+    expect(session.configOptions.find((o) => o.id === "thinking")?.currentValue).toBe(true);
+
+    const log = (await readFile(promptLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(log).toEqual([
+      { sessionId: session.acpSessionId, configId: "model", value: "opus" },
+      { sessionId: session.acpSessionId, configId: "thinking", value: true },
+    ]);
+
+    // A value the select does not offer is the agent's to refuse, and the cache is left alone.
+    await expect(session.setConfigOption("model", "gpt-9")).rejects.toMatchObject({ code: "AGENT_PROTOCOL" });
+    expect(session.configOptions.find((o) => o.id === "model")?.currentValue).toBe("opus");
+  });
+
+  it("lands an unsolicited config_option_update in the cache and emits it as an update", async () => {
+    const grouped: SessionConfigOption = {
+      type: "select",
+      id: "model",
+      name: "Model",
+      category: "model",
+      currentValue: "opus",
+      options: [{ group: "anthropic", name: "Anthropic", options: [{ value: "opus", name: "Opus" }] }],
+    };
+    const { session, initLog } = await openConfigAgent({
+      CONFIG: JSON.stringify([MODEL_OPTION]),
+      UPDATE: JSON.stringify([grouped]),
+    });
+    expect(session.configOptions).toEqual([MODEL_OPTION]);
+    // ORCA says it can set boolean options too.
+    const init = JSON.parse(await readFile(initLog, "utf8")) as { clientCapabilities: unknown };
+    expect(init.clientCapabilities).toMatchObject({ session: { configOptions: { boolean: {} } } });
+
+    const seen: SessionUpdateEvent[] = [];
+    session.onUpdate((e) => seen.push(e));
+    await session.prompt("go");
+    expect(session.configOptions).toEqual([grouped]);
+    const update = seen.find((e) => e.summary.kind === "config_option_update");
+    expect(update?.summary.text).toBe("config options: model=opus");
+  });
+
+  it("normalises legacy modes into one select, and prefers configOptions when both are sent", async () => {
+    const modes = {
+      currentModeId: "ask",
+      availableModes: [
+        { id: "ask", name: "Ask" },
+        { id: "code", name: "Code", description: "Edits files" },
+      ],
+    };
+    const legacy = await openConfigAgent({ MODES: JSON.stringify(modes) });
+    expect(legacy.session.configOptions).toEqual([
+      {
+        type: "select",
+        id: "mode",
+        name: "Mode",
+        category: "mode",
+        currentValue: "ask",
+        options: [
+          { value: "ask", name: "Ask" },
+          { value: "code", name: "Code", description: "Edits files" },
+        ],
+      },
+    ]);
+    const both = await openConfigAgent({ MODES: JSON.stringify(modes), CONFIG: JSON.stringify([MODEL_OPTION]) });
+    expect(both.session.configOptions).toEqual([MODEL_OPTION]);
+  });
+
+  it("opens an agent that advertises nothing unchanged", async () => {
+    const { session } = await openConfigAgent({});
+    expect(session.configOptions).toEqual([]);
+    await expect(session.prompt("go")).resolves.toMatchObject({ stopReason: "end_turn" });
+    // An empty update keeps the cache empty rather than failing.
+    expect(session.configOptions).toEqual([]);
   });
 });

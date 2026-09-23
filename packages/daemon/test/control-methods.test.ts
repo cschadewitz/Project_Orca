@@ -97,6 +97,8 @@ function fakeSessions(clock: FakeClock) {
       hostId: o.host.id,
       cwd: o.cwd,
       acpSessionId: "acp",
+      configOptions: [],
+      setConfigOption: async () => [],
       closed: new Promise(() => {}),
       prompt: async () => {
         clock.advance(60_000);
