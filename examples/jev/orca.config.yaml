@@ -1,0 +1,45 @@
+# JEV shadow evaluation beside the shipped SDLC loop (docs/INTEGRATIONS.md, "TypeSafe JEV").
+#
+# Run it from the repository root with the plugin loaded from source:
+#
+#   export TYPESAFE_API_KEY=...            # the only credential; it never reaches a store
+#   pnpm run orca --config examples/jev/orca.config.yaml validate
+#   pnpm run orca --config examples/jev/orca.config.yaml run ai-sdlc-jev-shadow --var workItem='{...}'
+#
+# Everything here is the ordinary example config with three differences, each marked JEV.
+version: 1
+storeDir: .orca
+
+hosts:
+  - id: local
+    type: local
+
+agents:
+  - id: claude-local
+    command: claude-code-acp
+    hostId: local
+    roles: [planner, designer, builder, tester, reviewer, deployer, decomposer]
+
+# JEV: the shipped workflows and templates, plus the one workflow in this directory.
+workflows: ["../../workflows/**/*.yaml", "workflows/*.yaml"]
+templates: ["../../templates/**/*.md"]
+
+program:
+  workflow: program
+  # JEV: the per-item loop with the shadow evaluation inserted after `review`.
+  itemWorkflow: ai-sdlc-jev-shadow
+
+workspace:
+  provider: git-worktree
+  repo: ../..
+  baseBranch: main
+  branchPrefix: orca/
+  hostId: local
+
+humanInput:
+  mode: cli
+
+# JEV: the plugin, from source under tsx (`pnpm run orca`). From a built install it is
+# `plugins: ["@orca/integrations/jev-eval"]`. The model is pinned on the node in the workflow;
+# ORCA_JEV_MODEL would be the fallback for nodes that do not say.
+plugins: ["../../packages/integrations/src/jev/plugin.ts"]

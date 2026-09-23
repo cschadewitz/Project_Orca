@@ -1,0 +1,237 @@
+# The shipped `ai-sdlc` loop with one addition: after the review agent has written review.md,
+# a `custom:jev-eval` node asks JEV three narrow questions over the spec, the implementation
+# summary, the test report and the review, and records what it answered as an `evaluation`
+# artifact. It is a *shadow*: the routing below is the same as ai-sdlc's, `review-verdict`
+# still reads the reviewer's verdict, and `onError: record` means a missing key, a rate
+# limit or a malformed answer is written down rather than allowed to fail the run.
+#
+# What the shadow answers is exposed as `vars.jevShadow` (and as
+# `steps.jevShadow.result.data`) for a summary, a dashboard, or a later comparison with what
+# the reviewer and the humans decided. Nothing here routes on it; that is the point of a
+# pilot (issue #286). The two nodes that differ from ai-sdlc are marked JEV.
+id: ai-sdlc-jev-shadow
+name: AI-native SDLC loop with a JEV shadow evaluation
+version: "1"
+description: ai-sdlc, plus a JEV evaluation of the review that is recorded but never routed on.
+inputs:
+  workItem: The work item (title, description, acceptance criteria) this run implements.
+vars:
+  maxBuildAttempts: 3
+  maxReviewRounds: 2
+  buildAttempt: 0
+  reviewRound: 0
+start: start
+nodes:
+  start: { type: start }
+
+  plan:
+    type: agent
+    name: "Plan: capture intent"
+    agent: { role: planner }
+    template: sdlc/plan
+    produces:
+      - kind: intent
+        path: ".orca/work/{{ workItem.slug }}/intent.md"
+        validate: { requiredFields: [status], minBodyLength: 40 }
+
+  design:
+    type: agent
+    name: "Design: requirements + design spec"
+    agent: { role: designer }
+    template: sdlc/design
+    inputs: [{ kind: intent }]
+    produces:
+      - kind: spec
+        path: ".orca/work/{{ workItem.slug }}/spec.md"
+        validate: { requiredFields: [status, risk], fieldValues: { risk: [low, medium, high] }, minBodyLength: 80 }
+
+  spec-gate:
+    type: gate
+    name: "Approve spec"
+    question: "Approve the spec for {{ workItem.title }} (risk: {{ artifacts.spec.data.risk }})?"
+    options: [approve, reject]
+    autoApproveWhen: "artifacts.spec.data.risk != 'high'"
+    autoOption: approve
+
+  await-deps:
+    type: "custom:plan-await"
+    name: "Wait for upstream work this build needs"
+    phase: build
+
+  bump-build:
+    type: set
+    vars: { buildAttempt: "=vars.buildAttempt + 1" }
+
+  build:
+    type: agent
+    name: "Build: plan and implement"
+    agent: { role: builder }
+    template: sdlc/build
+    inputs:
+      - { kind: spec }
+      - { name: testReport, required: false }
+      - { name: review, required: false }
+    produces:
+      - kind: plan
+        path: ".orca/work/{{ workItem.slug }}/plan.md"
+      - kind: implementation
+        path: ".orca/work/{{ workItem.slug }}/implementation.md"
+        validate: { requiredFields: [status, branch] }
+    completion: { mode: turn-end, maxFollowUps: 2, maxAttempts: 2 }
+
+  test:
+    type: agent
+    name: "Test: run and report"
+    agent: { role: tester }
+    template: sdlc/test
+    inputs: [{ kind: spec }, { kind: implementation }]
+    produces:
+      - kind: test-report
+        name: testReport
+        path: ".orca/work/{{ workItem.slug }}/test-report.md"
+        validate: { requiredFields: [status, passed] }
+
+  tests-passed:
+    type: decision
+    name: "Did tests pass?"
+    source: { kind: artifact, artifact: testReport, field: passed }
+    options: ["true", "false"]
+    defaultOption: "false"
+
+  bump-review:
+    type: set
+    vars: { reviewRound: "=vars.reviewRound + 1" }
+
+  review:
+    type: agent
+    name: "Review: agentic PR review"
+    agent: { role: reviewer }
+    template: sdlc/review
+    inputs: [{ kind: spec }, { kind: implementation }, { name: testReport }]
+    produces:
+      - kind: review
+        path: ".orca/work/{{ workItem.slug }}/review.md"
+        validate: { requiredFields: [status, verdict], fieldValues: { verdict: [approve, changes-requested] } }
+
+  # JEV: three narrow judgments over the four artifacts the review stage produced and consumed.
+  # Each question is one dimension with concrete levels or options; the model reads the
+  # instructions literally, so the criteria say what counts rather than how much it matters.
+  # The node id has no hyphen so expressions can write `steps.jevShadow.…`.
+  jevShadow:
+    type: "custom:jev-eval"
+    name: "JEV shadow: criterion coverage and conflicting evidence"
+    onError: record
+    model: jev-1.13.0
+    inputs:
+      - { kind: spec }
+      - { kind: implementation }
+      - { name: testReport }
+      - { kind: review }
+    context:
+      acceptanceCriteria: "{{#each workItem.acceptanceCriteria as c}}- {{ c }}\n{{/each}}"
+    rubric: { id: sdlc/shadow-review, version: 1 }
+    maxStateChars: 96000
+    questions:
+      criteria_addressed:
+        type: score
+        instructions: >-
+          How many of the acceptance criteria listed under context.acceptanceCriteria does the
+          artifacts.implementation summary explicitly address? Count a criterion as addressed only
+          when the summary names the change that satisfies it.
+        criteria:
+          - "None of the acceptance criteria are addressed."
+          - "Some acceptance criteria are addressed; at least one is not mentioned."
+          - "Every acceptance criterion is explicitly addressed."
+      conflicting_evidence:
+        type: choice
+        instructions: >-
+          Do artifacts.implementation, artifacts.testReport and artifacts.review agree about what
+          was built and how it was verified?
+        criteria:
+          consistent: "They describe the same change and the same verification."
+          gaps: "One document mentions work or tests another does not, without contradicting it."
+          contradiction: >-
+            One document claims something another denies: a test named as passing that another says
+            failed, a file changed that another says was untouched, a verdict that contradicts the
+            findings listed under it.
+      review_cites_evidence:
+        type: noul
+        instructions: >-
+          Does artifacts.review support its verdict with specific files, lines or test results it
+          checked, rather than restating the implementation summary?
+        criteria:
+          true: "The review names concrete locations or results it examined."
+          false: "The review only paraphrases the summary, or gives no evidence for its verdict."
+
+  # JEV: lift the answers into vars for whatever summarises the run. `status` is `ok` or
+  # `failed`; when it is `failed` there are no answers and `jevShadow` is the word `unavailable`.
+  recordShadow:
+    type: set
+    vars:
+      jevShadowStatus: "=steps.jevShadow.result.data.status"
+      jevShadow: "=default(steps.jevShadow.result.data.answers, 'unavailable')"
+
+  review-verdict:
+    type: decision
+    name: "Review verdict"
+    source: { kind: artifact, artifact: review, field: verdict }
+    options: [approve, changes-requested]
+
+  deploy:
+    type: agent
+    name: "Deploy: open PR / ship"
+    agent: { role: deployer }
+    template: sdlc/deploy
+    inputs: [{ kind: implementation }, { kind: review }]
+    produces:
+      - kind: deploy-report
+        name: deployReport
+        path: ".orca/work/{{ workItem.slug }}/deploy-report.md"
+        validate: { requiredFields: [status] }
+
+  delivery-status:
+    type: decision
+    name: "Was delivery completed?"
+    source: { kind: artifact, artifact: deployReport, field: status }
+    options: [done, blocked]
+    defaultOption: blocked
+
+  done: { type: end, outcome: success, message: "Work item delivered." }
+  delivery-blocked: { type: end, outcome: failure, message: "Delivery was not completed; see the deploy report." }
+  rejected: { type: end, outcome: failure, message: "Spec rejected at gate." }
+  exhausted: { type: end, outcome: failure, message: "Build/review budget exhausted." }
+
+edges:
+  - { from: start, to: plan }
+  - { from: plan, to: design }
+  - { from: design, to: spec-gate }
+  - { from: spec-gate, to: await-deps, when: "choice == 'approve'" }
+  - { from: spec-gate, to: rejected, when: "choice == 'reject'" }
+  - { from: await-deps, to: bump-build }
+  - { from: bump-build, to: build }
+  - { from: build, to: test }
+  - { from: test, to: tests-passed }
+  - { from: tests-passed, to: bump-review, when: "choice == 'true'", label: "passed" }
+  - {
+      from: tests-passed,
+      to: bump-build,
+      when: "choice == 'false' && vars.buildAttempt < vars.maxBuildAttempts",
+      label: "failed, retry",
+    }
+  - { from: tests-passed, to: exhausted, label: "failed, give up" }
+  - { from: bump-review, to: review }
+  # JEV: the shadow sits between the review and its verdict; the verdict still comes from review.md.
+  - { from: review, to: jevShadow }
+  - { from: jevShadow, to: recordShadow }
+  - { from: recordShadow, to: review-verdict }
+  - { from: review-verdict, to: deploy, when: "choice == 'approve'" }
+  - {
+      from: review-verdict,
+      to: bump-build,
+      when: "choice == 'changes-requested' && vars.reviewRound < vars.maxReviewRounds && vars.buildAttempt < vars.maxBuildAttempts",
+      label: "changes requested",
+    }
+  - { from: review-verdict, to: exhausted, label: "give up" }
+  - { from: deploy, to: delivery-status }
+  - { from: delivery-status, to: done, when: "choice == 'done'" }
+  - { from: delivery-status, to: delivery-blocked }

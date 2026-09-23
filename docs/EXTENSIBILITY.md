@@ -55,6 +55,10 @@ Conventions that keep extensions reviewable:
 - Custom node types are `custom:<kebab-name>`; validation of their fields is the plugin's job:
   parse `ctx.node` with zod at the top of `execute` and return
   `failed("WORKFLOW_INVALID", …, retryable = false)`. There is no plugin validation hook today.
+  `packages/integrations/src/jev/` (`custom:jev-eval`, `docs/INTEGRATIONS.md`) is a worked
+  plugin of this shape: a zod schema for the node, `ctx.resolveInputs` for explicit inputs, an
+  injectable provider port so the tests script the remote, `ctx.recordArtifact` for the durable
+  record, and the routable part in `result.data`.
 - A `HumanInputPort` receives `query.signal`, which fires when the run is cancelled while the
   question is open. Drop the request and reject with `humanInputCancelled(signal)`; the engine
   stops waiting on `cancel()` regardless, but a cooperative port avoids stranded questions.
