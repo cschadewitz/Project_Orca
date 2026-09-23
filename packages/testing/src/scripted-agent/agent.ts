@@ -12,7 +12,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
-import { appendJsonl, parseDeliverablesBlock, serializeFrontMatter } from "@orca/core";
+import {
+  appendJsonl,
+  configOptionValues,
+  parseDeliverablesBlock,
+  serializeFrontMatter,
+  type SessionConfigOption,
+} from "@orca/core";
 import type { Playbook, PlaybookEntry } from "./playbook.js";
 
 export interface ScriptedAgentOptions {
@@ -33,6 +39,8 @@ interface SessionState {
   turns: number;
   /** Set by `session/cancel`; checked before every write so a cancelled turn stops early. */
   cancelled: boolean;
+  /** This session's copy of the playbook's config options. */
+  configOptions: SessionConfigOption[];
   /** Wakes the sleeping turn so cancellation is honoured promptly. */
   wake?: () => void;
 }
@@ -65,9 +73,12 @@ export class ScriptedAgent {
       .onRequest(acp.methods.agent.authenticate, () => ({}))
       .onRequest(acp.methods.agent.session.new, (ctx) => {
         const sessionId = randomUUID();
-        this.sessions.set(sessionId, { cwd: ctx.params.cwd, turns: 0, cancelled: false });
-        return { sessionId };
+        const advertised = this.opts.playbook.configOptions;
+        const configOptions = advertised ? structuredClone(advertised) : [];
+        this.sessions.set(sessionId, { cwd: ctx.params.cwd, turns: 0, cancelled: false, configOptions });
+        return advertised ? { sessionId, configOptions: toWire(configOptions) } : { sessionId };
       })
+      .onRequest(acp.methods.agent.session.setConfigOption, (ctx) => this.setConfigOption(ctx.params))
       .onNotification(acp.methods.agent.session.cancel, (ctx) => {
         const session = this.sessions.get(ctx.params.sessionId);
         if (!session) return;
@@ -75,6 +86,33 @@ export class ScriptedAgent {
         session.wake?.();
       })
       .onRequest(acp.methods.agent.session.prompt, (ctx) => this.prompt(ctx));
+  }
+
+  /**
+   * Update one option's `currentValue` and answer with the full list, as ACP requires. The set
+   * is appended to the prompt log as `{sessionId, configId, value}` so a test can assert it
+   * arrived. An unknown option, a value the select does not offer, or a type mismatch is refused.
+   */
+  private async setConfigOption(params: acp.SetSessionConfigOptionRequest): Promise<acp.SetSessionConfigOptionResponse> {
+    const { sessionId, configId, value } = params;
+    const session = this.sessions.get(sessionId);
+    if (!session) throw acp.RequestError.invalidParams({ sessionId, reason: "unknown session" });
+    const option = session.configOptions.find((o) => o.id === configId);
+    if (!option) throw acp.RequestError.invalidParams({ configId, reason: "unknown config option" });
+    if (option.type === "boolean") {
+      if (typeof value !== "boolean") throw acp.RequestError.invalidParams({ configId, reason: "expected a boolean" });
+      option.currentValue = value;
+    } else {
+      if (typeof value !== "string" || !configOptionValues(option).some((o) => o.value === value)) {
+        throw acp.RequestError.invalidParams({ configId, value, reason: "value not offered" });
+      }
+      option.currentValue = value;
+    }
+    if (this.opts.promptLog) {
+      await mkdir(dirname(this.opts.promptLog), { recursive: true });
+      await appendJsonl(this.opts.promptLog, { sessionId, configId, value });
+    }
+    return { configOptions: toWire(session.configOptions) };
   }
 
   private async loadState(): Promise<State> {
@@ -194,6 +232,11 @@ export class ScriptedAgent {
     await this.saveState(state);
     return { stopReason };
   }
+}
+
+/** A copy in the SDK's wire shape; the JSON round trip drops the keys zod leaves `undefined`. */
+function toWire(options: SessionConfigOption[]): acp.SessionConfigOption[] {
+  return JSON.parse(JSON.stringify(options)) as acp.SessionConfigOption[];
 }
 
 function renderEntry(entry: PlaybookEntry, vars: { kind: string; path: string; n: number; prompt: string }): string {

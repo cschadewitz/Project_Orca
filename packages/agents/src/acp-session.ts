@@ -9,7 +9,17 @@
  */
 import { isAbsolute, relative } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
-import { newId, OrcaError, silentLogger, systemClock, type AgentSpec, type Clock, type Logger } from "@orca/core";
+import {
+  newId,
+  OrcaError,
+  silentLogger,
+  systemClock,
+  type AgentSpec,
+  type Clock,
+  type Logger,
+  type SessionConfigOption,
+} from "@orca/core";
+import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
 import { loadEffectivePermissionPolicy, resolvePermission } from "./permissions.js";
 import {
@@ -62,6 +72,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const roots = [opts.cwd, ...(opts.additionalDirectories ?? [])];
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   let acpSessionId = "";
+  let configOptions: SessionConfigOption[] = [];
   /** Sidecars already reported as unreadable; one warn per file per session, not per ask. */
   const warnedSidecars = new Set<string>();
 
@@ -100,6 +111,9 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     .onNotification(acp.methods.client.session.update, (ctx) => {
       const p = ctx.params;
       if (p.sessionId !== acpSessionId && acpSessionId !== "") return;
+      if (p.update.sessionUpdate === "config_option_update") {
+        configOptions = p.update.configOptions.map(normalizeConfigOption);
+      }
       const e: SessionUpdateEvent = {
         sessionId: p.sessionId,
         raw: p.update,
@@ -176,7 +190,12 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     const init = await withTimeout(
       conn.agent.request(acp.methods.agent.initialize, {
         protocolVersion: acp.PROTOCOL_VERSION,
-        clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
+        clientCapabilities: {
+          fs: { readTextFile: true, writeTextFile: true },
+          terminal: false,
+          // ORCA can set boolean config options as well as selects.
+          session: { configOptions: { boolean: {} } },
+        },
         clientInfo: { ...ORCA_CLIENT_INFO },
       }),
       handshakeTimeout,
@@ -199,6 +218,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       "session/new",
     );
     acpSessionId = created.sessionId;
+    configOptions = normalizeSessionConfig(created);
   } catch (e) {
     proc.kill();
     conn.close(e);
@@ -334,6 +354,30 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     onUpdate(listener) {
       listeners.add(listener);
       return () => void listeners.delete(listener);
+    },
+
+    get configOptions() {
+      return configOptions;
+    },
+
+    async setConfigOption(configId, value) {
+      const params: acp.SetSessionConfigOptionRequest =
+        typeof value === "boolean"
+          ? { sessionId: acpSessionId, configId, type: "boolean", value }
+          : { sessionId: acpSessionId, configId, value };
+      let res: acp.SetSessionConfigOptionResponse;
+      try {
+        res = await conn.agent.request(acp.methods.agent.session.setConfigOption, params);
+      } catch (e) {
+        throw new OrcaError(
+          "AGENT_PROTOCOL",
+          `agent '${opts.agent.id}' rejected session/set_config_option ${configId}=${String(value)}: ${(e as Error).message}`,
+          { configId, value },
+          { cause: e },
+        );
+      }
+      configOptions = res.configOptions.map(normalizeConfigOption);
+      return configOptions;
     },
 
     async cancel() {
