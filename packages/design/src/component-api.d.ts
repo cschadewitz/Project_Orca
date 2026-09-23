@@ -503,37 +503,99 @@ export interface ScheduleBadgeProps {
   explanation?: unknown;
 }
 
+/**
+ * Dependency node (built, #171: `renderer/src/ui/dependency-node.tsx`). Corrected against
+ * what the graph met:
+ *
+ * - **No `kind`.** A dependency's kind is a fact about an *edge* and is drawn as the edge's
+ *   stroke (`.orca-dep-edge--blocks|soft|informs`); a node can sit on edges of all three.
+ * - **`name` and an optional `title`**, not `itemId`/`title`: a decision or an external target
+ *   has a key and no title, and every node's name is drawn in mono.
+ * - **`state` is folded from the edges around the node** (failed, else open, else waived,
+ *   else satisfied) and said as a word as well as a border colour; `inCycle` says "on a cycle".
+ * - **No `onWaive`.** A waive is about one dependency, not a node, so it lives in the
+ *   relationship inspector in the docked panel, armed with a confirmation naming what it
+ *   unblocks. The node is an `option` on a one-tab-stop canvas and never a control.
+ */
 export interface DependencyNodeProps {
-  itemId: string;
-  title: string;
-  kind: DependencyKind;
-  state: DependencyState;
-  /** 'decision' and 'external' dependencies render a different glyph, same shell. */
+  id: string;
+  name: string;
+  title?: string;
+  /** 'decision' and 'external' targets render a different glyph and word, same shell. */
   target: "item" | "decision" | "external";
-  onWaive?(itemId: string): void;
+  state: DependencyState;
+  inCycle?: boolean;
+  selected?: boolean;
+  onOpen?(): void;
 }
 
+/** The four levels `core` cuts a risk matrix into, lowest first. */
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+
+/**
+ * Risk matrix (built, #172: `renderer/src/ui/risk-matrix.tsx`). Corrected against the wire
+ * (`RisksListResult` in `@orca/protocol`) in four places:
+ *
+ * - **The grid is the plan's, not 5×5.** `riskMatrix.scale` runs 2..10, so `scale` is a
+ *   prop and likelihood and impact are plain numbers in `1..scale`.
+ * - **The band comes from `thresholds`,** the plan's minimum score for each level above
+ *   `low`. The four core levels draw on the four grounds: low → `risk-low`, medium →
+ *   `risk-moderate`, high → `risk-high`, critical → `risk-severe` (hatched).
+ * - **`appetite` is a level word, not a number.** It is the plan's `policy.riskAppetite`;
+ *   every cell whose level is above it is outlined (`.orca-risk__appetite`).
+ * - **A risk has a `key` and a `title`,** and both are drawn on its pin — key in mono, title
+ *   in sans, never a tooltip. What it holds is the detail's, not the pin's.
+ */
 export interface RiskMatrixProps {
-  /** 5×5. Cell band is derived from likelihood × impact, not passed in. */
+  scale: number;
+  thresholds: { medium: number; high: number; critical: number };
+  appetite: RiskLevel;
   risks: ReadonlyArray<{
     id: string;
+    key: string;
     title: string;
-    likelihood: 1 | 2 | 3 | 4 | 5;
-    impact: 1 | 2 | 3 | 4 | 5;
-    holding?: ReadonlyArray<string>;
+    likelihood: number;
+    impact: number;
   }>;
-  /** Exposure above this is outlined as over-appetite. */
-  appetite: number;
+  selected?: string;
   onSelect(riskId: string): void;
 }
 
+/**
+ * Decision matrix (built, #173: `renderer/src/ui/decision-matrix.tsx`). Corrected against the
+ * wire (`DecisionView` in `@orca/protocol`):
+ *
+ * - **`key` and `name`, not `id` and `label`,** and a criterion carries its `direction`
+ *   (`maximize` | `minimize`) — a minimised criterion is drawn as "lower is better".
+ * - **Scores run 0..`scale`,** which is the decision's own and is drawn beside each score.
+ * - **The recommendation and the totals are `result`,** `core`'s `evaluateDecisionMatrix`
+ *   (stored, or previewed by the daemon with `resultIsPreview`), never computed by the
+ *   component. The recommended column is `.orca-matrix__win`, outlined in accent.
+ * - **Deciding is `onChoose`,** one control per option column; absent once decided, when
+ *   `chosen` names the column instead. Due-by and supersedes are the surface's, not the
+ *   table's: they describe the decision, and the table is its arithmetic.
+ */
 export interface DecisionMatrixProps {
-  criteria: ReadonlyArray<{ id: string; label: string; weight: number }>;
-  options: ReadonlyArray<{ id: string; label: string; scores: Record<string, number> }>;
-  /** Highest weighted total; shown as the winning column, never auto-applied. */
-  recommended?: string;
-  due?: Date;
-  supersedes?: string;
+  criteria: ReadonlyArray<{
+    key: string;
+    name: string;
+    weight: number;
+    direction: "maximize" | "minimize";
+    description?: string;
+  }>;
+  options: ReadonlyArray<{ key: string; name: string; scores: Record<string, number> }>;
+  scale: number;
+  result?: {
+    ranking: ReadonlyArray<{ option: string; score: number; normalized: number }>;
+    recommended: string;
+    margin: number;
+    confidence: "clear" | "close" | "tie";
+  };
+  chosen?: string;
+  /** Present while the decision is open; never auto-applied from the app. */
+  onChoose?(option: string): void;
+  disabledReason?: string;
+  label: string;
 }
 
 /**

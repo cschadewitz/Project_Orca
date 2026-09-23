@@ -29,11 +29,13 @@ import {
   compactSchedule,
   computeSchedule,
   decisionBlocks,
+  evaluateDecisionMatrix,
   explainWorkItem,
   isOpenRisk,
   itemRiskExposure,
   riskLevel,
   riskScore,
+  validateDecisionMatrix,
   type Clock,
   type Decision,
   type Dependency,
@@ -199,11 +201,28 @@ function riskView(r: Risk, plan: Plan, byId: ReadonlyMap<string, WorkItem>): Ris
   };
 }
 
+/**
+ * The matrix's answer for a decision that has none stored, as a preview (#173).
+ *
+ * A decision only gets a stored `result` when somebody evaluates or decides it, so an open
+ * decision fresh from a decomposition has criteria, weights and scores and no ranking — and a
+ * client drawing the matrix would have to re-implement `evaluateDecisionMatrix` to show a
+ * recommendation. This computes it on read, writes nothing, and says so with
+ * `resultIsPreview`. A matrix `core` refuses to evaluate (a missing score, no options) has no
+ * preview rather than an error: the read is about the decision, not about its arithmetic.
+ */
+function previewResult(d: Decision, now: string): Decision["result"] {
+  if (d.result || validateDecisionMatrix(d).length > 0) return undefined;
+  return evaluateDecisionMatrix(d, now);
+}
+
 function decisionView(
   d: Decision,
   dependencies: readonly Dependency[],
   byId: ReadonlyMap<string, WorkItem>,
+  now: string,
 ): DecisionView {
+  const preview = previewResult(d, now);
   return {
     id: d.id,
     key: d.key,
@@ -220,6 +239,7 @@ function decisionView(
     updatedAt: d.updatedAt,
     ...(d.context ? { context: d.context } : {}),
     ...(d.result ? { result: d.result } : {}),
+    ...(preview ? { result: preview, resultIsPreview: true } : {}),
     ...(d.chosen ? { chosen: d.chosen } : {}),
     ...(d.decidedBy ? { decidedBy: d.decidedBy } : {}),
     ...(d.rationale ? { rationale: d.rationale } : {}),
@@ -509,7 +529,7 @@ export class PlanModel {
     const byId = new Map(snap.items.map((i) => [i.id, i]));
     const rows = snap.decisions
       .filter((d) => !params.status?.length || params.status.includes(d.status))
-      .map((d) => decisionView(d, snap.dependencies, byId));
+      .map((d) => decisionView(d, snap.dependencies, byId, pass.asOf));
     return { decisions: rows, asOf: pass.asOf };
   }
 
@@ -583,7 +603,7 @@ export class PlanModel {
   /** One decision, with what it gates. Shared with the control model. */
   async decisionViewOf(planId: string, decision: Decision): Promise<DecisionView> {
     const snap = await this.svc.snapshot(planId);
-    return decisionView(decision, snap.dependencies, new Map(snap.items.map((i) => [i.id, i])));
+    return decisionView(decision, snap.dependencies, new Map(snap.items.map((i) => [i.id, i])), this.clock.isoNow());
   }
 
   /** One dependency, with the evaluation recomputed against the plan as it now stands. */

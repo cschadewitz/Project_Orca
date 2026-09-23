@@ -22,6 +22,18 @@ export {
 } from "./menu-placement.js";
 export { ObjectHeader, type Crumb, type HeaderMode, type ObjectHeaderProps } from "./object-header.js";
 export { ScheduleBadge, type ScheduleBadgeProps } from "./schedule-badge.js";
+export { DecisionMatrix, rankedTotal, type DecisionMatrixProps } from "./decision-matrix.js";
+export { DependencyNode, type DependencyNodeProps, type DependencyTarget } from "./dependency-node.js";
+export {
+  RiskMatrix,
+  RISK_BAND,
+  RISK_LEVELS,
+  overAppetite,
+  riskLevelOf,
+  type RiskLevel,
+  type RiskMatrixProps,
+  type RiskPin,
+} from "./risk-matrix.js";
 export { StateView, type StateViewAction, type StateViewProps } from "./state-view.js";
 export { StatusChip, type StatusChipProps } from "./status-chip.js";
 export { StatusDot, type StatusDotProps } from "./status-dot.js";

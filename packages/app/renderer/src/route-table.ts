@@ -54,6 +54,8 @@ export type Route =
   | { kind: "run"; surface: "runs"; runId: string; step?: StepAddress }
   | { kind: "gate"; surface: "attention"; inputId: string }
   | { kind: "item"; surface: "plan"; itemId: string }
+  /** `orca://plan?mode=deps&focus=<id>` (#171): the Plan surface in a mode, something selected. */
+  | { kind: "plan"; surface: "plan"; mode?: string; focus?: string }
   | { kind: "artifact"; surface: "runs"; name: string; version?: number; runId?: string }
   | { kind: "workflow"; surface: "config"; workflowId: string; runId?: string }
   | { kind: "agent"; surface: "agents"; agentId: string }
@@ -111,6 +113,19 @@ export function resolveRoute(url: string): Route | undefined {
       return first === undefined ? undefined : { kind: "gate", surface: "attention", inputId: first };
     case "item":
       return first === undefined ? undefined : { kind: "item", surface: "plan", itemId: first };
+    case "plan": {
+      /* The plan is the surface's object, so the host names it and the query says how it is
+         shown. A path after it is a link this version does not know. */
+      if (first !== undefined) return undefined;
+      const mode = parsed.searchParams.get("mode") ?? undefined;
+      const focus = parsed.searchParams.get("focus") ?? undefined;
+      return {
+        kind: "plan",
+        surface: "plan",
+        ...(mode !== undefined ? { mode } : {}),
+        ...(focus !== undefined ? { focus } : {}),
+      };
+    }
     case "artifact": {
       if (first === undefined) return undefined;
       const { name, version } = parseArtifact(first);
@@ -157,6 +172,15 @@ export const stepUrl = (runId: string, nodeId: string, attempt?: number): string
 export const gateUrl = (inputId: string): string => path("gate", inputId);
 
 export const itemUrl = (itemId: string): string => path("item", itemId);
+
+/** The Plan surface in a mode, optionally focused on an item or a node (#171). */
+export function planUrl(mode?: string, focus?: string): string {
+  const query = new URLSearchParams();
+  if (mode !== undefined) query.set("mode", mode);
+  if (focus !== undefined) query.set("focus", focus);
+  const text = query.toString();
+  return text === "" ? "orca://plan" : `orca://plan?${text}`;
+}
 
 export const agentUrl = (agentId: string): string => path("agent", agentId);
 
@@ -229,6 +253,8 @@ export function counterpartUrl(
   crumb: Crumb,
   counterpart: { id: string },
 ): string | undefined {
+  /* A work item's dependencies are the graph mode focused on it (#171). */
+  if (crumb.type === "item" && counterpart.id === "dependencies") return planUrl("deps", crumb.id);
   if (crumb.type !== "run") return undefined;
   if (counterpart.id === "claimed-item") {
     const item = crumbs.find((c) => c.type === "item");
@@ -260,6 +286,10 @@ export function describeRoute(route: Route): { type: string; id: string } {
       return { type: "gate", id: route.inputId };
     case "item":
       return { type: "work item", id: route.itemId };
+    case "plan":
+      return route.focus !== undefined
+        ? { type: route.mode === "deps" ? "dependencies of" : "plan item", id: route.focus }
+        : { type: "plan view", id: route.mode ?? "schedule" };
     case "artifact":
       return { type: "artifact", id: route.version === undefined ? route.name : `${route.name}@v${route.version}` };
     case "workflow":

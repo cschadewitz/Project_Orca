@@ -330,6 +330,44 @@ export const DEPENDENCIES: readonly DependencyView[] = [
   },
 ];
 
+/**
+ * The same plan with a `blocks` cycle in it (#171): `auth-docs` and `auth-ui` each wait for
+ * the other to be done, so neither can ever start. Served by a test that scripts
+ * `dependencies.list` and `schedule.get` with these; the default plan has no cycle, because
+ * every other screen test is about a plan that can move.
+ */
+export const CYCLE: readonly string[] = ["auth-ui", "auth-docs"];
+
+export const CYCLE_DEPENDENCIES: readonly DependencyView[] = [
+  ...DEPENDENCIES,
+  {
+    id: "dep-ui-docs",
+    from: "wi-ui",
+    fromSlug: "auth-ui",
+    target: { kind: "work-item", workItemId: "wi-docs", slug: "auth-docs" },
+    type: "blocks",
+    requiredBy: "start",
+    status: "open",
+    evaluation: { state: "waiting", detail: "waiting for auth-docs to be done (currently pending)" },
+    createdAt: T,
+    updatedAt: T,
+  },
+  {
+    id: "dep-docs-ui",
+    from: "wi-docs",
+    fromSlug: "auth-docs",
+    target: { kind: "work-item", workItemId: "wi-ui", slug: "auth-ui" },
+    type: "blocks",
+    requiredBy: "start",
+    status: "open",
+    evaluation: { state: "waiting", detail: "waiting for auth-ui to be done (currently pending)" },
+    createdAt: T,
+    updatedAt: T,
+  },
+];
+
+export const CYCLE_SCHEDULE: ScheduleView = { ...SCHEDULE, cycles: [[...CYCLE]] };
+
 /** Highest score first, which is the order `risks.list` answers in. */
 export const RISKS: readonly RiskView[] = [
   {
@@ -401,6 +439,21 @@ export const DECISIONS: readonly DecisionView[] = [
       },
     ],
     scale: 10,
+    /* Nothing has evaluated this decision, so the daemon previews the matrix on read (#173)
+       and says so. `evaluateDecisionMatrix` over the scores above: cookie 6 + 2.667, redis
+       5.333 + 1.333 (`ops` is minimised, so 10 - score), a margin of 0.2 — clear. */
+    result: {
+      ranking: [
+        { option: "cookie", score: 8.667, normalized: 0.867, byCriterion: { latency: 6, ops: 2.667 } },
+        { option: "redis", score: 6.667, normalized: 0.667, byCriterion: { latency: 5.333, ops: 1.333 } },
+      ],
+      recommended: "cookie",
+      margin: 0.2,
+      confidence: "clear",
+      pivotalCriteria: [],
+      evaluatedAt: AS_OF,
+    },
+    resultIsPreview: true,
     consequences: [],
     blocks: [{ id: "wi-store", slug: "auth-store" }],
     createdAt: T,
