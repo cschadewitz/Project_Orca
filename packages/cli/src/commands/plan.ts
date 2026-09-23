@@ -347,6 +347,7 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
       const overrides = selectionOverrides(ctx, {
         agents: app.agents,
         workflows: app.workflows,
+        templates: app.templates,
         config: app.config,
         workflowIds: [workflowId, app.config.program.itemWorkflow],
       });

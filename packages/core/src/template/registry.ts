@@ -58,13 +58,28 @@ export class TemplateRegistry {
   has(id: string): boolean {
     return this.templates.has(id);
   }
-  get(id: string): PromptTemplate {
-    const t = this.templates.get(id);
+  /**
+   * A template by id. With a `pack` (#191) it tries `<pack>/<id>` first and falls back to
+   * `<id>`, so a pack overriding two templates inherits every other one from the base set.
+   */
+  get(id: string, options: { pack?: string } = {}): PromptTemplate {
+    const t = (options.pack ? this.templates.get(`${options.pack}/${id}`) : undefined) ?? this.templates.get(id);
     if (!t)
       throw new OrcaError("TEMPLATE_NOT_FOUND", `template '${id}' not registered`, {
         known: [...this.templates.keys()],
       });
     return t;
+  }
+  /**
+   * The base template ids a pack overrides: every `X` for which both `X` and `<pack>/X` are
+   * registered. Empty for a pack that does not exist or overrides nothing.
+   */
+  packOverrides(pack: string): string[] {
+    const prefix = `${pack}/`;
+    return [...this.templates.keys()]
+      .filter((id) => id.startsWith(prefix) && this.templates.has(id.slice(prefix.length)))
+      .map((id) => id.slice(prefix.length))
+      .sort();
   }
   find(id: string): PromptTemplate | undefined {
     return this.templates.get(id);
