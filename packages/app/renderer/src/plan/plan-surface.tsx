@@ -7,11 +7,10 @@
  *
  * - **Option B, as designed.** The sidebar is requests and filters rather than a list of
  *   sub-screens, and the modes are a segmented control on the object header — a new
- *   `ObjectHeader` variant (`docs/design/80-dependency-graph-options.md`). Two positions
- *   ship: Schedule and Journal. The dependency graph (#171), the risk matrix (#172) and
- *   the decision matrix (#173) are v0.6.0 and are **absent** from the control rather than
- *   disabled in it, because a position that never does anything is a dead end rather than
- *   a promise.
+ *   `ObjectHeader` variant (`docs/design/80-dependency-graph-options.md`). Each position
+ *   arrived with the mode behind it (`PLAN_MODES`): a position that never does anything is
+ *   a dead end rather than a promise. The risk mode (#172) is the plan's matrix over its
+ *   register, and its selection is a risk whose detail goes in the dock.
  * - **Two lists, two scopes.** The schedule table is `list`, the journal is
  *   `plan-journal`. One `VirtualList` per scope, so `J` means "next" in whichever of them
  *   the focus is in.
@@ -28,26 +27,40 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import type { ConnectionState } from "@orca/design";
-import type { ItemClassification, PlanItemView } from "@orca/protocol";
+import type { ItemClassification, PlanItemView, RiskView } from "@orca/protocol";
 import { useKeyboard } from "../keyboard-context.js";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StateView, Text, textClass, type Crumb, type HeaderMode } from "../ui/index.js";
 import { Journal } from "./journal.js";
 import { Inspector } from "./inspector.js";
 import { PlanSidebar } from "./plan-sidebar.js";
+import { RiskDetail } from "./risk-detail.js";
+import { RiskMode } from "./risk-mode.js";
+import { risksForRail } from "./risk-model.js";
 import { ScheduleTable } from "./schedule-table.js";
 import { countLabel, isFiltered, matchesText, NO_FILTERS, type ItemStatus, type PlanFilters } from "./plan-model.js";
 import { useItemDetail, usePlan } from "./use-plan.js";
+import { usePlanRisks, useRiskJournal } from "./use-risks.js";
 import { usePlanWrites } from "./use-plan-writes.js";
 import "./plan.css";
 
-/** The two modes that exist. The graph, the risks and the decisions are v0.6.0 (#171–#173). */
+/**
+ * The modes, in the order the header draws them. Each position arrived with the mode behind
+ * it — a segment that did nothing would be a dead end rather than a promise.
+ */
 export const PLAN_MODES: readonly HeaderMode[] = [
   { id: "schedule", label: "Schedule" },
+  { id: "risk", label: "Risks" },
   { id: "journal", label: "Journal" },
 ];
 
-export type PlanMode = "schedule" | "journal";
+export type PlanMode = "schedule" | "risk" | "journal";
+
+/** What the docked panel is showing for Plan: its body, and the word its head says. */
+export interface PlanPanel {
+  label: string;
+  body: ReactNode;
+}
 
 /** What the surface hands up to the chrome: one breadcrumb, one mode control, one panel. */
 export interface PlanHeader {
@@ -71,7 +84,7 @@ export interface PlanSurfaceProps {
    * the first may open the dock: a content update that opened it would undo the `⌘\` a
    * person pressed a moment after clicking a row.
    */
-  onInspector?: (inspector: ReactNode, options: { open: boolean }) => void;
+  onInspector?: (panel: PlanPanel | null, options: { open: boolean }) => void;
   /** A claim's run, opened through the route table. */
   onOpenRun: (runId: string) => void;
 }
@@ -101,6 +114,8 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
   const [filters, setFilters] = useState<PlanFilters>(NO_FILTERS);
   const [mode, setMode] = useState<PlanMode>("schedule");
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+  /** The risk selected in the risk mode. Held apart from the item: they are two lists. */
+  const [selectedRiskId, setSelectedRiskId] = useState<string | undefined>(undefined);
   /** The item whose explanation is open, and the lines once `schedule.explain` has answered. */
   const [explainFor, setExplainFor] = useState<string | undefined>(undefined);
   const [lines, setLines] = useState<readonly string[] | undefined>(undefined);
@@ -129,6 +144,29 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
   /* The selected item's writes, in the palette and nowhere else (#178). The inspector
      draws the same dependencies, risks and claim and offers none of them. */
   usePlanWrites({ planId, item: selected, dependencies: detail.dependencies, risks: detail.risks });
+
+  /* The risk mode's reads, made only while it is on screen. The rail is shared with the
+     schedule, so what it shows is narrowed by the same items the table would show. */
+  const { state: risksState, reload: reloadRisks } = usePlanRisks(
+    mode === "risk" ? planId : undefined,
+    feed.itemsRevision,
+  );
+  const railRisks = useMemo(
+    () => (risksState.phase === "ready" ? risksForRail(risksState.risks, isFiltered(filters), visible) : []),
+    [risksState, filters, visible],
+  );
+  const selectedRisk = useMemo(
+    () => (mode === "risk" ? railRisks.find((risk) => risk.id === selectedRiskId) : undefined),
+    [mode, railRisks, selectedRiskId],
+  );
+  const riskJournal = useRiskJournal(planId, selectedRisk, feed.journal.lastSeq);
+  const selectRisk = useCallback((risk: RiskView) => setSelectedRiskId(risk.id), []);
+  /* A held item named in the risk's detail is opened on the schedule, which is where a work
+     item is read. */
+  const openItem = useCallback((itemId: string) => {
+    setMode("schedule");
+    setSelectedId(itemId);
+  }, []);
 
   /* A link that arrived. `orca://item/<slug-or-id>` selects the item and opens the
      explanation, which is the information architecture's promise for that URL — so it
@@ -248,13 +286,30 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
 
   /* The inspector goes in the docked panel, which is above every surface — so it is handed
      up the same way the crumbs are rather than drawn in this pane. */
-  const inspector = useMemo(
-    () =>
-      selected === undefined ? null : (
-        <Inspector item={selected} dependencies={detail.dependencies} risks={detail.risks} onOpenRun={onOpenRun} />
-      ),
-    [selected, detail, onOpenRun],
-  );
+  const live = connection === "live";
+  /* Which panel, and what it is about. The risk mode's selection is a risk and its panel
+     names itself "Risk"; every other mode's is the work item. `about` is the identity a new
+     selection is judged by below. */
+  const panel = useMemo((): (PlanPanel & { about: string }) | undefined => {
+    if (mode === "risk") {
+      return selectedRisk === undefined
+        ? undefined
+        : {
+            about: `risk:${selectedRisk.id}`,
+            label: "Risk",
+            body: <RiskDetail risk={selectedRisk} journal={riskJournal} onOpenItem={openItem} live={live} />,
+          };
+    }
+    return selected === undefined
+      ? undefined
+      : {
+          about: `item:${selected.id}`,
+          label: "Work item",
+          body: (
+            <Inspector item={selected} dependencies={detail.dependencies} risks={detail.risks} onOpenRun={onOpenRun} />
+          ),
+        };
+  }, [mode, selectedRisk, riskJournal, openItem, live, selected, detail, onOpenRun]);
   const reportInspector = useRef(onInspector);
   reportInspector.current = onInspector;
   /* Whether *this* report is a new selection, which is the only thing that may open the
@@ -264,12 +319,14 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
      a panel that then came straight back. A person closing the dock is closing it. */
   const shown = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const selectionChanged = shown.current !== selected?.id;
-    shown.current = selected?.id;
-    reportInspector.current?.(inspector, { open: selectionChanged && selected !== undefined });
-  }, [inspector, selected]);
+    const about = panel?.about;
+    const selectionChanged = shown.current !== about;
+    shown.current = about;
+    reportInspector.current?.(panel === undefined ? null : { label: panel.label, body: panel.body }, {
+      open: selectionChanged && panel !== undefined,
+    });
+  }, [panel]);
 
-  const live = connection === "live";
   const filtered = isFiltered(filters);
 
   if (feed.state.phase === "loading") return <StateView kind="loading" title="Loading the plan" />;
@@ -381,6 +438,15 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
                 onClearFilter={() => setFilters(NO_FILTERS)}
               />
             </>
+          ) : mode === "risk" ? (
+            <RiskMode
+              state={risksState}
+              risks={railRisks}
+              selectedId={selectedRisk?.id}
+              onSelect={selectRisk}
+              live={live}
+              onRetry={reloadRisks}
+            />
           ) : (
             <Journal
               entries={feed.journal.entries}

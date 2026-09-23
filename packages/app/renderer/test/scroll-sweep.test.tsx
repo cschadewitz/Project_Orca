@@ -27,6 +27,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { SURFACES } from "../src/chrome/surfaces.js";
+import { PLAN_MODES } from "../src/plan/index.js";
 import { FIVE_GATES, INPUTS_AS_OF, PERMISSION_ASK } from "./fixtures-inputs.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
 import { installDesignSystem, installSurfaceStyles, resolved } from "./themes.js";
@@ -153,6 +154,30 @@ describe("every surface declares where it scrolls", () => {
          region inherits a height that grew to its content and scrolls nothing — which is
          what the Plan inspector's own `overflow-y` was doing before this change. */
       for (const region of scrollers(surfaceRoot())) {
+        for (let box = region.parentElement; box !== null && box !== pane(); box = box.parentElement) {
+          expect(bounded(box), `${box.className || box.tagName} is between a scroller and the pane, unbounded`).toBe(
+            true,
+          );
+        }
+      }
+    });
+  }
+
+  /* Plan is one surface with several modes, and each mode is its own layout (#171–#173):
+     the risk matrix over its register, the decision table, the graph over its strip. Walked
+     from `PLAN_MODES`, so a mode is swept the day it is added, as a surface is. */
+  for (const mode of PLAN_MODES) {
+    it(`Plan's ${mode.label} mode has a bounded scroll region`, async () => {
+      renderChrome(h);
+      await goTo("Plan");
+      fireEvent.click(await screen.findByRole("button", { name: mode.label }));
+      const plan = await waitFor(() => {
+        const root = document.querySelector<HTMLElement>(".orca-plan__pane");
+        expect(root).toBeTruthy();
+        return root!;
+      });
+      await waitFor(() => expect(scrollers(plan).length).toBeGreaterThan(0));
+      for (const region of scrollers(plan)) {
         for (let box = region.parentElement; box !== null && box !== pane(); box = box.parentElement) {
           expect(bounded(box), `${box.className || box.tagName} is between a scroller and the pane, unbounded`).toBe(
             true,

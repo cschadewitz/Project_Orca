@@ -167,6 +167,56 @@
   justify-self: end;
 }
 
+/* ---------- the risk mode (#172) ---------- */
+
+/* The matrix over its register: a split layout of its own, so it bounds both rows and each
+   says where it scrolls. The matrix's share is a fraction by default and a dragged one reads
+   `--pane-plan-risk` (#281); the `auto` track is the splitter's. */
+.orca-plan__risk {
+  display: grid;
+  grid-template-rows: var(--pane-plan-risk, minmax(0, 3fr)) auto minmax(0, 2fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.orca-plan__matrix {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  min-height: 0;
+  overflow: auto;
+}
+.orca-plan__legend {
+  color: var(--ink-secondary);
+  max-width: var(--measure-prose);
+}
+.orca-plan__register {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* A risk pin carrying the selection: the accent edge and the selection ground, the same two
+   marks a selected row takes (rule 10). Focus stays the ring. */
+.orca-risk__pin[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--surface-selected);
+}
+.orca-plan__risk-row {
+  display: grid;
+  grid-template-columns: var(--col-slug) minmax(0, 1fr) var(--col-score) var(--col-risk) var(--col-status);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  height: var(--row-h);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  border-left: var(--stroke-rail) solid transparent;
+}
+.orca-plan__risk-row:hover {
+  background: var(--surface-hover);
+}
+
 /* ---------- the inspector, in the docked panel ---------- */
 
 /* No `overflow-y` here. The dock owns the scroll (`.orca-panel__body`, #275): this is a

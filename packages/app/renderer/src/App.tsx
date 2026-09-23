@@ -28,7 +28,7 @@ import { ConfigProvider } from "./config/config-context.js";
 import { ConfigSurface } from "./config/config-surface.js";
 import { AttentionSurface } from "./attention/attention-surface.js";
 import { WorkflowSurface } from "./workflow/workflow-surface.js";
-import { PlanSurface, type PlanHeader } from "./plan/index.js";
+import { PlanSurface, type PlanHeader, type PlanPanel } from "./plan/index.js";
 import { useAttention } from "./attention/use-attention.js";
 import { InlineAsksProvider } from "./attention/inline-asks.js";
 import { useAlertActivation } from "./attention/use-alert-activation.js";
@@ -109,7 +109,7 @@ export function App(): JSX.Element {
   );
   /* What Plan has put in the dock. Held here because the docked panel is above every
      surface, exactly as the artifact it otherwise shows is. */
-  const [planInspector, setPlanInspector] = useState<ReactNode>(null);
+  const [planInspector, setPlanInspector] = useState<PlanPanel | null>(null);
   /* Selecting a row opens the inspector, which means opening the dock it is drawn in —
      the same act the artifact panel's `onOpen` performs for a chip on a step. Closing it
      again is `⌘\`; selecting another row opens it once more, because that press is a
@@ -119,8 +119,11 @@ export function App(): JSX.Element {
      when the dependencies and risks behind it land, a tick after the click, and when a
      `plan.changed` frame moves them again later — and a dock that reopened on each of
      those would take back the `⌘\` a person had just pressed. The surface says which kind
-     of report this is; the dock only has to believe it. */
-  const showInspector = useCallback((content: ReactNode, options: { open: boolean }) => {
+     of report this is; the dock only has to believe it.
+
+     The panel names itself: a work item, a risk (#172), a decision (#173) or a relationship
+     (#171) — the dock's head says which rather than calling everything a work item. */
+  const showInspector = useCallback((content: PlanPanel | null, options: { open: boolean }) => {
     setPlanInspector(content);
     if (content !== null && options.open) setPanelOpen(true);
   }, []);
@@ -342,9 +345,7 @@ export function App(): JSX.Element {
         {panelOpen ? (
           <DockedPanel
             onClose={togglePanel}
-            content={
-              active === "plan" && planInspector !== null ? { label: "Work item", body: planInspector } : undefined
-            }
+            content={active === "plan" && planInspector !== null ? planInspector : undefined}
           />
         ) : null}
       </div>

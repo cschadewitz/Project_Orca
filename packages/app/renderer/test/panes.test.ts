@@ -49,8 +49,11 @@ describe("pane boundaries", () => {
   it("says which boundaries are a length and which is a ratio, and names each one", () => {
     /* The four column boundaries are lengths, because a side pane is sized to what it holds.
        The stacked one is a ratio, because its two halves are not (#281). */
-    expect(PANE_IDS.filter((id) => PANE_BOUNDARIES[id].size === "fraction")).toEqual(["runs-tree"]);
-    expect(PANE_IDS.filter((id) => PANE_BOUNDARIES[id].orientation === "horizontal")).toEqual(["runs-tree"]);
+    expect(PANE_IDS.filter((id) => PANE_BOUNDARIES[id].size === "fraction")).toEqual(["runs-tree", "plan-risk"]);
+    expect(PANE_IDS.filter((id) => PANE_BOUNDARIES[id].orientation === "horizontal")).toEqual([
+      "runs-tree",
+      "plan-risk",
+    ]);
     // Every boundary has something a person would call it: the preferences section lists them.
     for (const id of PANE_IDS) expect(PANE_BOUNDARIES[id].label).not.toBe("");
   });

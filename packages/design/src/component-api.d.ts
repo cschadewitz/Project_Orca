@@ -513,17 +513,35 @@ export interface DependencyNodeProps {
   onWaive?(itemId: string): void;
 }
 
+/** The four levels `core` cuts a risk matrix into, lowest first. */
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+
+/**
+ * Risk matrix (built, #172: `renderer/src/ui/risk-matrix.tsx`). Corrected against the wire
+ * (`RisksListResult` in `@orca/protocol`) in four places:
+ *
+ * - **The grid is the plan's, not 5×5.** `riskMatrix.scale` runs 2..10, so `scale` is a
+ *   prop and likelihood and impact are plain numbers in `1..scale`.
+ * - **The band comes from `thresholds`,** the plan's minimum score for each level above
+ *   `low`. The four core levels draw on the four grounds: low → `risk-low`, medium →
+ *   `risk-moderate`, high → `risk-high`, critical → `risk-severe` (hatched).
+ * - **`appetite` is a level word, not a number.** It is the plan's `policy.riskAppetite`;
+ *   every cell whose level is above it is outlined (`.orca-risk__appetite`).
+ * - **A risk has a `key` and a `title`,** and both are drawn on its pin — key in mono, title
+ *   in sans, never a tooltip. What it holds is the detail's, not the pin's.
+ */
 export interface RiskMatrixProps {
-  /** 5×5. Cell band is derived from likelihood × impact, not passed in. */
+  scale: number;
+  thresholds: { medium: number; high: number; critical: number };
+  appetite: RiskLevel;
   risks: ReadonlyArray<{
     id: string;
+    key: string;
     title: string;
-    likelihood: 1 | 2 | 3 | 4 | 5;
-    impact: 1 | 2 | 3 | 4 | 5;
-    holding?: ReadonlyArray<string>;
+    likelihood: number;
+    impact: number;
   }>;
-  /** Exposure above this is outlined as over-appetite. */
-  appetite: number;
+  selected?: string;
   onSelect(riskId: string): void;
 }
 
