@@ -275,10 +275,18 @@ function PlanBody({ connection, open, focus, onHeader, onInspector, onOpenRun }:
      names. Once per link, for the same reason as above. */
   const focusKey = focus === undefined ? undefined : `${focus.mode ?? ""}|${focus.id ?? ""}`;
   const focused = useRef<string | undefined>(undefined);
+  /* The mode is applied before the item is looked up, and once: a link to an item this plan
+     does not have (deleted, a slug typo) still lands on the mode it named. */
+  const moded = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (focus === undefined || focusKey === undefined) {
       focused.current = undefined;
+      moded.current = undefined;
       return;
+    }
+    if (moded.current !== focusKey) {
+      moded.current = focusKey;
+      if (focus.mode !== undefined && isPlanMode(focus.mode)) setMode(focus.mode);
     }
     if (focused.current === focusKey) return;
     if (focus.id !== undefined) {
@@ -291,7 +299,6 @@ function PlanBody({ connection, open, focus, onHeader, onInspector, onOpenRun }:
       }
     }
     focused.current = focusKey;
-    if (focus.mode !== undefined && isPlanMode(focus.mode)) setMode(focus.mode);
   }, [focus, focusKey, held]);
 
   /* The explanation is read when it is opened and not before: one `schedule.explain` per

@@ -21,7 +21,20 @@ export function useDecisionWrites(planId: string, decision: DecisionView | undef
 
   const held = useRef(decision);
   held.current = decision;
-  const signature = decision === undefined ? "" : `${decision.id}:${decision.status}:${decision.chosen ?? ""}`;
+  /* Everything the rows read: the picker lists the options and marks the recommendation, and
+     the reopen confirmation names the gated items — so a push that moves any of them, without
+     moving the status, is a new set of rows rather than a stale one. */
+  const signature =
+    decision === undefined
+      ? ""
+      : JSON.stringify([
+          decision.id,
+          decision.status,
+          decision.chosen ?? "",
+          decision.options.map((o) => [o.key, o.name]),
+          decision.result?.recommended ?? "",
+          decision.blocks.map((b) => b.slug),
+        ]);
 
   const rows = useMemo((): readonly PaletteWrite[] => {
     const d = held.current;

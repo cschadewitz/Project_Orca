@@ -22,11 +22,6 @@ export function confidenceWord(decision: DecisionView): "close" | "tie" | undefi
   return confidence === "close" || confidence === "tie" ? confidence : undefined;
 }
 
-/** An option's weighted total, as the matrix ranked it. */
-export function totalOf(decision: DecisionView, option: string): number | undefined {
-  return decision.result?.ranking.find((entry) => entry.option === option)?.score;
-}
-
 /** The option the matrix recommends, when it has a result at all. */
 export const recommendedOf = (decision: DecisionView): string | undefined => decision.result?.recommended;
 

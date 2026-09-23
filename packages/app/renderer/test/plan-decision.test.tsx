@@ -11,7 +11,7 @@
  * nothing else.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { DecisionView } from "@orca/protocol";
 import { decideParams, reopenQuestion } from "../src/plan/decision-model.js";
 import { AS_OF } from "./fixtures.js";
@@ -146,6 +146,37 @@ describe("deciding", () => {
     fireEvent.click(within(menu).getByRole("menuitem", { name: /Redis/ }));
     await waitFor(() => expect(callsTo("decisions.decide")).toHaveLength(1));
     expect(callsTo("decisions.decide")[0]).toEqual({ planId: PLAN_ID, key: "datastore", option: "redis" });
+  });
+});
+
+describe("the palette after a push", () => {
+  it("offers the options and recommendation the decision has now, not the ones it had", async () => {
+    await openDecisions();
+    // A push that changes the options and the recommendation without changing the status.
+    const moved: DecisionView = {
+      ...DATASTORE,
+      options: [...DATASTORE.options, { key: "db", name: "The database", scores: {}, pros: [], cons: [], risks: [] }],
+      result: { ...DATASTORE.result!, recommended: "redis" },
+    };
+    fake.script({ "decisions.list": () => ({ ok: true, result: { decisions: [moved], asOf: AS_OF } }) });
+    await act(async () => {
+      fake.notify({
+        kind: "notification",
+        method: "plan.changed",
+        params: { subscriptionId: "sub-1", planId: PLAN_ID, kinds: ["decisions"], seq: 50, at: AS_OF },
+      });
+    });
+    await waitFor(() => expect(screen.getByText(/The matrix recommends Redis/)).toBeTruthy());
+
+    fireEvent.keyDown(window, { key: "k", code: "KeyK", metaKey: true });
+    const palette = await screen.findByRole("dialog", { name: "Command palette" });
+    const query = within(palette).getByRole("combobox", { name: "Command palette" });
+    fireEvent.change(query, { target: { value: "Decide datastore" } });
+    fireEvent.keyDown(query, { key: "Enter" });
+    const menu = await screen.findByRole("menu", { name: "Which option for datastore?" });
+    expect(within(menu).getByRole("menuitem", { name: /The database/ })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: /Redis/ }).textContent).toContain("the matrix's recommendation");
+    expect(within(menu).getByRole("menuitem", { name: /Signed cookie/ }).textContent).not.toContain("recommendation");
   });
 });
 

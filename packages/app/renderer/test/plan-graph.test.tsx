@@ -190,6 +190,12 @@ describe("keys and links", () => {
     await waitFor(() => expect(graph.getAttribute("aria-activedescendant")).toBe(depNodeDomId("wi-docs")));
   });
 
+  it("still lands on the mode when the focus names an item this plan does not have", async () => {
+    mount({ deepLink: planUrl("deps", "no-such-item") });
+    const graph = await screen.findByRole("listbox", { name: "Dependency graph" });
+    expect(graph.getAttribute("aria-activedescendant")).toBeNull();
+  });
+
   it("resolves, describes and builds the link, and the item's dependencies counterpart follows it", () => {
     const url = "orca://plan?mode=deps&focus=auth-ui";
     expect(resolveRoute(url)).toEqual({ kind: "plan", surface: "plan", mode: "deps", focus: "auth-ui" });
@@ -206,6 +212,23 @@ describe("keys and links", () => {
 });
 
 describe("the model and the layout", () => {
+  it("draws a work item the rail hid in its own state, not as satisfied", () => {
+    const ui = PLAN_ITEMS.find((item) => item.id === "wi-ui")!;
+    // auth-api, hidden by the rail, is itself waiting on something that failed.
+    const failing = {
+      ...DEPENDENCIES[1]!,
+      id: "dep-api-vendor",
+      from: "wi-api",
+      fromSlug: "auth-api",
+      target: { kind: "external" as const, key: "vendor" },
+      evaluation: { state: "failed" as const, detail: "vendor said no" },
+    };
+    const graph = buildGraph([ui], [...DEPENDENCIES, failing], ALL_EDGES);
+    const api = graph.nodes.find((node) => node.id === "wi-api")!;
+    expect(api.target).toBe("item");
+    expect(api.state).toBe("failed");
+  });
+
   it("inverts blocks from the from-side list, and finds the cycle's edges", () => {
     const { blocks } = relationships("wi-api", DEPENDENCIES);
     expect(blocks.map((d) => d.from).sort()).toEqual(["wi-docs", "wi-ui"]);

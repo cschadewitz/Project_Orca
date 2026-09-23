@@ -121,7 +121,12 @@ export function buildGraph(
       id,
       name: d.target.kind === "work-item" ? (d.target.slug ?? d.target.workItemId) : targetName(d),
       target: d.target.kind === "work-item" ? "item" : d.target.kind,
-      state: d.target.kind === "work-item" ? "satisfied" : foldState(incoming),
+      /* A hidden upstream item is still an item: its state is what it waits for, exactly as
+         a shown one's is — never assumed satisfied because the rail left it out. */
+      state:
+        d.target.kind === "work-item"
+          ? foldState(dependencies.filter((other) => other.from === id))
+          : foldState(incoming),
     });
   }
   return {

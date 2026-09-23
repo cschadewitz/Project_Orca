@@ -37,6 +37,11 @@ export interface DecisionMatrixProps {
   label: string;
 }
 
+/** An option's weighted total as the matrix ranked it — the one place this is read. */
+export function rankedTotal(result: DecisionView["result"] | undefined, option: string): number | undefined {
+  return result?.ranking.find((entry) => entry.option === option)?.score;
+}
+
 export function DecisionMatrix({
   criteria,
   options,
@@ -49,7 +54,6 @@ export function DecisionMatrix({
 }: DecisionMatrixProps): JSX.Element {
   const recommended = result?.recommended;
   const win = (option: string): string => (option === recommended ? "orca-matrix__win" : "");
-  const total = (option: string): number | undefined => result?.ranking.find((entry) => entry.option === option)?.score;
 
   return (
     <table className={`orca-table orca-matrix ${textClass("label")}`} aria-label={label}>
@@ -109,7 +113,7 @@ export function DecisionMatrix({
           </th>
           <td />
           {options.map((option) => {
-            const value = total(option.key);
+            const value = rankedTotal(result, option.key);
             return (
               <td key={option.key} className={`orca-table__num ${win(option.key)} ${textClass("mono-id")}`}>
                 {value === undefined ? "—" : value.toFixed(2)}
