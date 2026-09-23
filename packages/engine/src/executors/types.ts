@@ -93,6 +93,8 @@ export interface StepContext {
       workspace?: Workspace;
       workItemId?: string;
       signal?: AbortSignal;
+      /** Selection for the child; it inherits the parent run's overrides when absent. */
+      overrides?: import("@orca/core").RunOverrides;
     },
   ): Promise<import("@orca/core").RunState>;
   /** Obtain an ACP session for an agent (honours sessionMode). */

@@ -21,6 +21,7 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
       ...(first.payload.workItemId ? { workItemId: first.payload.workItemId } : {}),
       ...(first.payload.parentRunId ? { parentRunId: first.payload.parentRunId } : {}),
       ...(first.payload.parentStepRunId ? { parentStepRunId: first.payload.parentStepRunId } : {}),
+      ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
     },
     steps: {},
     stepOrder: [],
@@ -303,6 +304,7 @@ export function runSummary(state: RunState): RunSummary {
     ...(r.requestId ? { requestId: r.requestId } : {}),
     ...(r.workItemId ? { workItemId: r.workItemId } : {}),
     ...(r.parentRunId ? { parentRunId: r.parentRunId } : {}),
+    ...(r.overrides ? { overrides: r.overrides } : {}),
     ...(r.startedAt ? { startedAt: r.startedAt } : {}),
     ...(r.completedAt ? { completedAt: r.completedAt } : {}),
   };
@@ -327,6 +329,7 @@ export function reduceRunSummary(events: readonly OrcaEvent[]): RunSummary {
     ...(first.payload.requestId ? { requestId: first.payload.requestId } : {}),
     ...(first.payload.workItemId ? { workItemId: first.payload.workItemId } : {}),
     ...(first.payload.parentRunId ? { parentRunId: first.payload.parentRunId } : {}),
+    ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
   };
   for (let i = 1; i < events.length; i++) {
     const e = events[i]!;

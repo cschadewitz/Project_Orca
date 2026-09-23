@@ -111,6 +111,23 @@ export const StepRunSchema = z.object({
 });
 export type StepRun = z.infer<typeof StepRunSchema>;
 
+/**
+ * Per-run selection: which agent fills a role, which model an agent uses, which workflow a
+ * program runs per item and which template pack renders prompts. Recorded in `run.created`
+ * so a replay resolves the same agents the live run did; a log without it means no overrides.
+ */
+export const RunOverridesSchema = z
+  .object({
+    /** role -> agent id; consulted before the config's role mapping. */
+    roles: z.record(z.string(), z.string()).optional(),
+    /** One model id for the only agent in play, or agent id -> model id. */
+    model: z.union([z.string(), z.record(z.string(), z.string())]).optional(),
+    itemWorkflow: z.string().optional(),
+    templatePack: z.string().optional(),
+  })
+  .strict();
+export type RunOverrides = z.infer<typeof RunOverridesSchema>;
+
 export const RunSchema = z.object({
   id: z.string(),
   workflowId: z.string(),
@@ -123,6 +140,8 @@ export const RunSchema = z.object({
   parentStepRunId: z.string().optional(),
   workspace: WorkspaceSchema,
   vars: z.record(z.string(), z.unknown()).default({}),
+  /** The run's selection overrides, from `run.created`; absent on runs that had none. */
+  overrides: RunOverridesSchema.optional(),
   error: ErrorInfoSchema.optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
@@ -144,6 +163,7 @@ export const RunSummarySchema = RunSchema.pick({
   requestId: true,
   workItemId: true,
   parentRunId: true,
+  overrides: true,
   createdAt: true,
   startedAt: true,
   completedAt: true,

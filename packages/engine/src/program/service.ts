@@ -3,7 +3,15 @@
  * Creates the Request record and starts the program workflow, which
  * decomposes it and drives each work item through the SDLC workflow.
  */
-import { newId, RequestSchema, succeeded, type Request, type RequestSource, type RunState } from "@orca/core";
+import {
+  newId,
+  RequestSchema,
+  succeeded,
+  type Request,
+  type RequestSource,
+  type RunOverrides,
+  type RunState,
+} from "@orca/core";
 import { isTerminal, type Orchestrator } from "../orchestrator.js";
 
 export interface SubmitRequestInput {
@@ -14,6 +22,11 @@ export interface SubmitRequestInput {
   /** Override the configured program workflow. */
   workflowId?: string;
   vars?: Record<string, unknown>;
+  /**
+   * Per-run selection (#186). `overrides.itemWorkflow` wins over the configured
+   * `program.itemWorkflow`, which stays the default (as `vars.itemWorkflow`) when it is absent.
+   */
+  overrides?: RunOverrides;
 }
 
 export class ProgramService {
@@ -41,6 +54,7 @@ export class ProgramService {
       workflowId: input.workflowId ?? this.programWorkflowId,
       requestId: request.id,
       vars: { request, ...(this.itemWorkflowId ? { itemWorkflow: this.itemWorkflowId } : {}), ...(input.vars ?? {}) },
+      ...(input.overrides ? { overrides: input.overrides } : {}),
     });
     await this.orchestrator.stores.requests.put({ ...request, programRunId: runId });
     return { request: { ...request, programRunId: runId }, runId };

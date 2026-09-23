@@ -11,6 +11,7 @@ import {
   ErrorInfoSchema,
   GateOptionSchema,
   RunOutcomeSchema,
+  RunOverridesSchema,
   RunStatusSchema,
   StepResultSchema,
   WorkspaceSchema,
@@ -109,6 +110,8 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       parentStepRunId: z.string().optional(),
       workspace: WorkspaceSchema,
       vars: z.record(z.string(), z.unknown()),
+      /** Selection overrides (#186). Absent in logs written before v0.6.0: no overrides. */
+      overrides: RunOverridesSchema.optional(),
     }),
   ),
   base("run.started", z.object({})),
