@@ -22,15 +22,19 @@
  *   plan in it. Neither is a failure and neither is retried.
  * - **What writes is the palette, not this pane (#178).** Waive, decide, reopen, update a
  *   risk and release the claim are keyless commands on the selected item
- *   (`use-plan-writes.ts`); the surface and the inspector draw none of them, which is what
- *   "the palette is the only place a phase-2 write has to be discoverable" buys.
+ *   (`use-plan-writes.ts`); the schedule and the work-item inspector draw none of them. Two
+ *   modes are the exception because the write *is* what they are for: the decision matrix
+ *   decides and reopens from the table (#173), and the relationship inspector waives
+ *   (#171). Each of those is in the palette as well.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import type { ConnectionState } from "@orca/design";
-import type { ItemClassification, PlanItemView, RiskView } from "@orca/protocol";
+import type { DecisionView, ItemClassification, PlanItemView, RiskView } from "@orca/protocol";
 import { useKeyboard } from "../keyboard-context.js";
 import { PaneSplitter } from "../chrome/pane-splitter.js";
 import { StateView, Text, textClass, type Crumb, type HeaderMode } from "../ui/index.js";
+import { DecisionMode } from "./decision-mode.js";
+import { decisionsForRail } from "./decision-model.js";
 import { Journal } from "./journal.js";
 import { Inspector } from "./inspector.js";
 import { PlanSidebar } from "./plan-sidebar.js";
@@ -40,6 +44,7 @@ import { risksForRail } from "./risk-model.js";
 import { ScheduleTable } from "./schedule-table.js";
 import { countLabel, isFiltered, matchesText, NO_FILTERS, type ItemStatus, type PlanFilters } from "./plan-model.js";
 import { useItemDetail, usePlan } from "./use-plan.js";
+import { usePlanDecisions } from "./use-decisions.js";
 import { usePlanRisks, useRiskJournal } from "./use-risks.js";
 import { usePlanWrites } from "./use-plan-writes.js";
 import "./plan.css";
@@ -51,10 +56,11 @@ import "./plan.css";
 export const PLAN_MODES: readonly HeaderMode[] = [
   { id: "schedule", label: "Schedule" },
   { id: "risk", label: "Risks" },
+  { id: "decision", label: "Decisions" },
   { id: "journal", label: "Journal" },
 ];
 
-export type PlanMode = "schedule" | "risk" | "journal";
+export type PlanMode = "schedule" | "risk" | "decision" | "journal";
 
 /** What the docked panel is showing for Plan: its body, and the word its head says. */
 export interface PlanPanel {
@@ -116,6 +122,8 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   /** The risk selected in the risk mode. Held apart from the item: they are two lists. */
   const [selectedRiskId, setSelectedRiskId] = useState<string | undefined>(undefined);
+  /** The decision selected in the decision mode. */
+  const [selectedDecisionId, setSelectedDecisionId] = useState<string | undefined>(undefined);
   /** The item whose explanation is open, and the lines once `schedule.explain` has answered. */
   const [explainFor, setExplainFor] = useState<string | undefined>(undefined);
   const [lines, setLines] = useState<readonly string[] | undefined>(undefined);
@@ -161,6 +169,19 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
   );
   const riskJournal = useRiskJournal(planId, selectedRisk, feed.journal.lastSeq);
   const selectRisk = useCallback((risk: RiskView) => setSelectedRiskId(risk.id), []);
+  /* The decision mode's read, on the same terms: only while it is on screen, and narrowed by
+     the same rail. */
+  const { state: decisionsState, reload: reloadDecisions } = usePlanDecisions(
+    mode === "decision" ? planId : undefined,
+    feed.itemsRevision,
+  );
+  const railDecisions = useMemo(
+    () =>
+      decisionsState.phase === "ready" ? decisionsForRail(decisionsState.decisions, isFiltered(filters), visible) : [],
+    [decisionsState, filters, visible],
+  );
+  const selectDecision = useCallback((decision: DecisionView) => setSelectedDecisionId(decision.id), []);
+
   /* A held item named in the risk's detail is opened on the schedule, which is where a work
      item is read. */
   const openItem = useCallback((itemId: string) => {
@@ -446,6 +467,16 @@ function PlanBody({ connection, open, onHeader, onInspector, onOpenRun }: PlanSu
               onSelect={selectRisk}
               live={live}
               onRetry={reloadRisks}
+            />
+          ) : mode === "decision" ? (
+            <DecisionMode
+              planId={plan.id}
+              state={decisionsState}
+              decisions={railDecisions}
+              selectedId={selectedDecisionId}
+              onSelect={selectDecision}
+              live={live}
+              onRetry={reloadDecisions}
             />
           ) : (
             <Journal

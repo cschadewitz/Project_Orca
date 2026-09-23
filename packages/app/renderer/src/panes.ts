@@ -27,7 +27,15 @@
 import { PANE_GEOMETRY, type SizeToken } from "@orca/design";
 
 /** Every boundary the app can resize. The id is what the size is remembered by. */
-export const PANE_IDS = ["sidebar", "panel", "runs-detail", "runs-tree", "plan-rail", "plan-risk"] as const;
+export const PANE_IDS = [
+  "sidebar",
+  "panel",
+  "runs-detail",
+  "runs-tree",
+  "plan-rail",
+  "plan-risk",
+  "plan-decision",
+] as const;
 export type PaneId = (typeof PANE_IDS)[number];
 
 /**
@@ -141,6 +149,19 @@ export const PANE_BOUNDARIES: Readonly<Record<PaneId, PaneBoundary>> = {
   "plan-risk": {
     property: "--pane-plan-risk",
     label: "Risk matrix",
+    token: undefined,
+    size: "fraction",
+    orientation: "horizontal",
+    edge: "leading",
+    min: PANE_GEOMETRY["pane-min-stack"],
+    max: undefined,
+  },
+  /* The decision list over the selected decision's matrix (#173): stacked, and a fraction for
+     the same reason — how many decisions a plan has and how many criteria one has are two
+     unrelated lengths. */
+  "plan-decision": {
+    property: "--pane-plan-decision",
+    label: "Decision list",
     token: undefined,
     size: "fraction",
     orientation: "horizontal",

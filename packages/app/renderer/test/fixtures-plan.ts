@@ -401,6 +401,21 @@ export const DECISIONS: readonly DecisionView[] = [
       },
     ],
     scale: 10,
+    /* Nothing has evaluated this decision, so the daemon previews the matrix on read (#173)
+       and says so. `evaluateDecisionMatrix` over the scores above: cookie 6 + 2.667, redis
+       5.333 + 1.333 (`ops` is minimised, so 10 - score), a margin of 0.2 — clear. */
+    result: {
+      ranking: [
+        { option: "cookie", score: 8.667, normalized: 0.867, byCriterion: { latency: 6, ops: 2.667 } },
+        { option: "redis", score: 6.667, normalized: 0.667, byCriterion: { latency: 5.333, ops: 1.333 } },
+      ],
+      recommended: "cookie",
+      margin: 0.2,
+      confidence: "clear",
+      pivotalCriteria: [],
+      evaluatedAt: AS_OF,
+    },
+    resultIsPreview: true,
     consequences: [],
     blocks: [{ id: "wi-store", slug: "auth-store" }],
     createdAt: T,

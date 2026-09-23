@@ -22,6 +22,7 @@ export {
 } from "./menu-placement.js";
 export { ObjectHeader, type Crumb, type HeaderMode, type ObjectHeaderProps } from "./object-header.js";
 export { ScheduleBadge, type ScheduleBadgeProps } from "./schedule-badge.js";
+export { DecisionMatrix, type DecisionMatrixProps } from "./decision-matrix.js";
 export {
   RiskMatrix,
   RISK_BAND,

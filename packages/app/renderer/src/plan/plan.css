@@ -217,6 +217,72 @@
   background: var(--surface-hover);
 }
 
+/* ---------- the decision mode (#173) ---------- */
+
+/* The decision list over the selected decision's matrix: stacked, bounded, each half with its
+   own scroll. The list is a `VirtualList` and scrolls itself; the detail scrolls here. */
+.orca-plan__decision {
+  display: grid;
+  grid-template-rows: var(--pane-plan-decision, minmax(0, 2fr)) auto minmax(0, 3fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.orca-plan__decision-detail {
+  min-height: 0;
+  overflow: auto;
+}
+.orca-plan__decision-row {
+  display: grid;
+  grid-template-columns:
+    var(--col-status) var(--col-slug) minmax(0, 1fr)
+    var(--col-request) var(--col-classification) var(--col-claim);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  height: var(--row-h);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  border-left: var(--stroke-rail) solid transparent;
+}
+.orca-plan__decision-row:hover {
+  background: var(--surface-hover);
+}
+.orca-plan__recommendation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+.orca-plan__preview {
+  color: var(--ink-secondary);
+}
+/* The table is as wide as its options; a plan with many of them scrolls sideways here rather
+   than pushing the detail past the pane. */
+.orca-plan__matrix-table {
+  overflow-x: auto;
+  /* Stated, because `overflow-x: auto` alone computes this axis to `auto` too, and the detail
+     around it is the vertical scroller — never two for one scroll. */
+  overflow-y: hidden;
+}
+.orca-plan__decide,
+.orca-plan__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.orca-plan__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--ink-secondary);
+  max-width: var(--measure-prose);
+}
+.orca-plan__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* ---------- the inspector, in the docked panel ---------- */
 
 /* No `overflow-y` here. The dock owns the scroll (`.orca-panel__body`, #275): this is a

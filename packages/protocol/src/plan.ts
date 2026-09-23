@@ -423,6 +423,12 @@ export const DecisionViewSchema = z.object({
   scale: z.number().int(),
   /** The weighted matrix: ranking, recommendation, margin and the pivotal criteria. */
   result: DecisionMatrixResultSchema.optional(),
+  /**
+   * True when `result` was computed for this read rather than stored: the decision has never
+   * been evaluated or decided, so the daemon ran the matrix to show what it would recommend.
+   * Absent when `result` is the stored one, or when there is no result at all.
+   */
+  resultIsPreview: z.boolean().optional(),
   chosen: z.string().optional(),
   decidedBy: z.enum(["matrix", "agent", "human"]).optional(),
   rationale: z.string().optional(),

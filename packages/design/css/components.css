@@ -995,6 +995,18 @@
   background: var(--accent-subtle);
   font-weight: 500;
 }
+/* The recommended column, outlined in accent from its header to its total (#173): its header
+   is the control that decides for it, so it is interactive and accent is its colour (rule 5).
+   The ground alone was a tint; the outline is what still reads with the hue gone. */
+.orca-matrix th.orca-matrix__win,
+.orca-matrix td.orca-matrix__win {
+  box-shadow:
+    inset var(--stroke-hairline) 0 0 0 var(--accent),
+    inset calc(-1 * var(--stroke-hairline)) 0 0 0 var(--accent);
+}
+.orca-matrix th.orca-matrix__win {
+  background: var(--accent-subtle);
+}
 .orca-matrix__score {
   display: inline-flex;
   align-items: center;

@@ -545,13 +545,41 @@ export interface RiskMatrixProps {
   onSelect(riskId: string): void;
 }
 
+/**
+ * Decision matrix (built, #173: `renderer/src/ui/decision-matrix.tsx`). Corrected against the
+ * wire (`DecisionView` in `@orca/protocol`):
+ *
+ * - **`key` and `name`, not `id` and `label`,** and a criterion carries its `direction`
+ *   (`maximize` | `minimize`) — a minimised criterion is drawn as "lower is better".
+ * - **Scores run 0..`scale`,** which is the decision's own and is drawn beside each score.
+ * - **The recommendation and the totals are `result`,** `core`'s `evaluateDecisionMatrix`
+ *   (stored, or previewed by the daemon with `resultIsPreview`), never computed by the
+ *   component. The recommended column is `.orca-matrix__win`, outlined in accent.
+ * - **Deciding is `onChoose`,** one control per option column; absent once decided, when
+ *   `chosen` names the column instead. Due-by and supersedes are the surface's, not the
+ *   table's: they describe the decision, and the table is its arithmetic.
+ */
 export interface DecisionMatrixProps {
-  criteria: ReadonlyArray<{ id: string; label: string; weight: number }>;
-  options: ReadonlyArray<{ id: string; label: string; scores: Record<string, number> }>;
-  /** Highest weighted total; shown as the winning column, never auto-applied. */
-  recommended?: string;
-  due?: Date;
-  supersedes?: string;
+  criteria: ReadonlyArray<{
+    key: string;
+    name: string;
+    weight: number;
+    direction: "maximize" | "minimize";
+    description?: string;
+  }>;
+  options: ReadonlyArray<{ key: string; name: string; scores: Record<string, number> }>;
+  scale: number;
+  result?: {
+    ranking: ReadonlyArray<{ option: string; score: number; normalized: number }>;
+    recommended: string;
+    margin: number;
+    confidence: "clear" | "close" | "tie";
+  };
+  chosen?: string;
+  /** Present while the decision is open; never auto-applied from the app. */
+  onChoose?(option: string): void;
+  disabledReason?: string;
+  label: string;
 }
 
 /**
