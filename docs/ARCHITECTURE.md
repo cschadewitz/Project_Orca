@@ -64,12 +64,22 @@ files** come over as a display graph (#174): nodes with the per‑type fields th
 edges with their conditions, and the graphs written inline inside a `loop` or a `parallel`
 under the `parent::node` ids the engine addresses them by, plus a `traversal` on `runs.get` —
 the nodes a run took in order with their attempts and the edges between them — so the viewer
-(#177) can overlay a run on its graph. Both are reads, so `--read-only` answers them. What
-they cannot do is serve an *old* version: ORCA records `workflowVersion` on `run.created` but
-keeps no copy of that definition, so `WorkflowView.versions` is which versions have run and
-`workflows.get` still answers only the one on disk. `workflows.changed` is on the wire with
-nothing emitting it — there is no workflow reload path yet — so a client may subscribe before
-the editor (#181) can send one.
+(#177) can overlay a run on its graph. Both are reads, so `--read-only` answers them. As of
+v0.6.0 they can also serve an *old* version (#179): `startRun` keeps the definition a run
+starts on in the store's **workflow‑version store** (`workflows/<id>@v<version>.json`, one
+immutable file per version, written once), and marks the run `workflowStored` in
+`run.created`. A resumed run is loaded through `Orchestrator.definitionFor(id, version)` —
+the file on disk when it is still at that version, otherwise the stored copy — so publishing
+a new version affects runs started afterwards and a run under way finishes on the version it
+began with. A run that predates versioning carries no `workflowStored` and resumes on
+whatever file is current, as before; a run that does carry it but whose version is neither
+stored nor on disk refuses to resume with `WORKFLOW_VERSION_NOT_FOUND`, naming what exists.
+`workflows.get({ id, version })` answers from the store for a non‑current version,
+`WorkflowView.pinned` says the answer is not the version on disk, and `runs.get` carries
+`workflowPinned` for the same reason (the `◷ pinned` chip in
+`docs/design/70-workflow-editing.md`). A file edited *without* bumping `version` still wins
+over the stored copy. `workflows.changed` is on the wire with nothing emitting it — there is
+no workflow reload path yet — so a client may subscribe before the editor (#181) can send one.
 
 The **configuration** is two documents (#174, #266). `config.get` returns `orca.config.yaml`
 and the ADR 0009 permission sidecar `orca.permissions.json`, each with its own path, raw text
@@ -208,6 +218,19 @@ that never started get a fresh child run.
    session, so `Orchestrator.onAgentSessionOpened(listener)` hands each live
    session to in‑process listeners as it opens (not persisted, not on the
    wire); the ACP facade uses it to learn which models an agent offers (#189).
+   **The run's model goes on before any turn** (#187, `session-model.ts`):
+   `run.overrides.model` (one id, or the map keyed by the resolved agent id),
+   else the agent's `defaultModel`, is set through the session's
+   `category: "model"` option; an agent that offers none can only run on an id
+   its config declares in `models`, recorded as declared since there is
+   nothing to set; an id in neither place fails the step with
+   `AGENT_MODEL_NOT_FOUND`, listing what is available, with no retry. The
+   applied model is recorded as `agent.session.opened.model` (or the agent's
+   own current model when the run selected none), which is what `orca status`
+   and the daemon's step view show. A per‑run pooled session whose agent has
+   switched model itself is re‑applied before the next step and the re‑apply
+   logged as an `agent.update`; if the agent refuses, the pooled session is
+   closed and a fresh one opened.
 4. `session/prompt`. Session updates stream into the event log as
    `agent.update` (text chunks are coalesced; tool calls, plan entries and
    locations are kept as a compact `AgentUpdateSummary`, not the raw ACP payload).

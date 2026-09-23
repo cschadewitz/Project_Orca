@@ -69,6 +69,19 @@ in the other reserved categories are proxied as `orca/<agentId>/<configId>`; the
 recorded on the session, but the run's override record has no field for them yet, so
 choosing one changes nothing downstream in this release.
 
+**How a selected model reaches the agent (#187).** Whatever surface chose it — `orca/model`
+here, `--model` on the CLI — the run records it as `overrides.model`, and the engine applies it
+right after `session/new` and before any turn: through the session's `category: "model"`
+config option when the agent offers one, or, for an agent that offers none, only if the id is
+in the agent's declared `models` (there is nothing to set, so it is recorded as declared). An
+id in neither place fails the step with `AGENT_MODEL_NOT_FOUND`, listing what is available, and
+is not retried. With `sessionMode: per-run`, a pooled session whose model has drifted from the
+run's selection (the agent switched it itself) is **re‑applied** with `session/set_config_option`
+before the next step and the re‑apply is logged as an agent update; if the agent refuses, ORCA
+closes the pooled session and opens a fresh one. T3 Code threads offer no config options, so a
+model override on a T3‑backed agent passes only when it is declared in `models`. The model a
+step ran on is on `agent.session.opened`, in `orca status` and in the daemon's step view.
+
 Implementation: `packages/integrations/src/acp-facade/`. Workspace selection:
 `workspace: { provider: kepler }` in `orca.config.yaml` makes ORCA use the task's worktrees
 (`KeplerTaskWorkspaceProvider` scans the task dir for `*/.git`, picks by work item `repo`,

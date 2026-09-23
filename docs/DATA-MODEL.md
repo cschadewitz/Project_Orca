@@ -151,9 +151,12 @@ absent on older logs and on the cases that have nothing to say (a workflow gate 
 an answer given without a note has no note), and a reader must not turn that into an empty
 string on screen.
 
-`run.created` carries `workspace` and `vars` and, since v0.6.0, two optional additions: the
+`run.created` carries `workspace` and `vars` and, since v0.6.0, three optional additions: the
 `overrides` record described above, which a replay uses to resolve the same agents the live
-run did, and `workspace.previousBranch`. Both are absent on older logs and read as "none".
+run did; `workspace.previousBranch`; and `workflowStored: true`, which says the definition the
+run started on is in the store's `workflows/<id>@v<version>.json` and a resume must use it
+rather than the file on disk (#179). `agent.session.opened` gains an optional `model`, the
+model the session was opened on (#187). All are absent on older logs and read as "none".
 
 ## Expression / template context
 

@@ -563,6 +563,12 @@ procedure above.
   log against a registry whose config has since changed resolves the same agent.
 - `packages/engine/test/local-workspace-branch.test.ts` — the `local` provider in a real
   temp git repo: a work item checks out `orca/<slug>` and records both branches (#139).
+- `packages/engine/test/model-selection.e2e.test.ts` — a model override arriving at the
+  scripted agent as `session/set_config_option`, a per‑run pooled session re‑applied after
+  the agent drifts, and a model nobody offers failing before the turn starts (#187).
+- `packages/engine/test/workflow-pinning.test.ts` — a run parked on v1, a second
+  orchestrator over the same stores with only v2 (which drops a node), and the resume
+  completing on v1; the version‑not‑found error and a pre‑versioning run (#179).
 - `packages/integrations/test/acp-facade.test.ts` — ORCA driven *as* an ACP agent by an
   in‑process ACP client (proxy mode), including gate forwarding as a permission request.
 - `packages/core/test/plan.test.ts` — the pure planning layer: dependency grammar, risk
@@ -615,4 +621,7 @@ in `session/new` (a model list, a mode, a boolean); `scriptedAgentSpec({ configO
 the same thing through `ORCA_CONFIG_OPTIONS_JSON`. Each session gets its own copy, a
 `session/set_config_option` updates that copy's `currentValue` and answers with the full list,
 and every set is appended to the prompt log as `{ sessionId, configId, value }`, which is how
-an engine test asserts a selected model actually reached the agent (#185).
+an engine test asserts a selected model actually reached the agent (#185). A playbook entry
+may also carry `setConfig: { configId, value }`: during that turn the agent switches its own
+option and sends `config_option_update`, which is how the pooled‑session drift test makes an
+agent wander off the run's model (#187).
