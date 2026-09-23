@@ -187,8 +187,7 @@ export class OrcaAcpAgent {
       {
         workflows: o.workflows.list(),
         agents: o.agents.listAgents(),
-        // Template packs arrive with #191; until then only the default is offered.
-        templatePacks: [],
+        templatePacks: o.templates.packs(),
         booleans: this.clientCapabilities?.session?.configOptions?.boolean != null,
         useClientCwd: this.opts.useClientCwd !== false,
         discovered: this.discovered,

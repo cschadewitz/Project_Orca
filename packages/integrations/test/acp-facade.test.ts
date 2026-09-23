@@ -6,11 +6,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import {
   AgentSpecSchema,
+  loadTemplates,
+  parseOrcaConfig,
   parsePromptTemplate,
   parseWorkflow,
   silentLogger,
@@ -22,6 +25,8 @@ import { LocalWorkspaceProvider, Orchestrator, ProgramService } from "@orca/engi
 import { buildConfigOptions, OrcaAcpAgent } from "@orca/integrations";
 import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec } from "@orca/testing";
+
+const REPO_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 
 const dirs: string[] = [];
 afterAll(async () => {
@@ -82,13 +87,16 @@ edges:
 async function setup(
   configOptions?: SessionConfigOption[],
   promptLog?: string,
+  shippedTemplates = false,
 ): Promise<{ dir: string; orchestrator: Orchestrator }> {
   const dir = await mkdtemp(join(tmpdir(), "orca-facade-"));
   dirs.push(dir);
   const workflows = new WorkflowRegistry();
   for (const y of [MINI, ...NESTED]) workflows.register(parseWorkflow(y));
-  const templates = new TemplateRegistry();
-  templates.register(parsePromptTemplate("---\nid: x\n---\nunused"));
+  const templates = shippedTemplates
+    ? await loadTemplates(parseOrcaConfig({}).templates, REPO_ROOT)
+    : new TemplateRegistry();
+  if (!shippedTemplates) templates.register(parsePromptTemplate("---\nid: x\n---\nunused"));
   const orchestrator = new Orchestrator({
     stores: memoryStores(),
     agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })).addAgent({
@@ -252,9 +260,9 @@ describe("session config options (#188)", () => {
   async function drive<T>(
     clientCapabilities: acp.ClientCapabilities,
     body: (ctx: Ctx, updates: acp.SessionUpdate[]) => Promise<T>,
-    agent: { configOptions?: SessionConfigOption[]; promptLog?: string } = {},
+    agent: { configOptions?: SessionConfigOption[]; promptLog?: string; shippedTemplates?: boolean } = {},
   ): Promise<{ result: T; orchestrator: Orchestrator; updates: acp.SessionUpdate[] }> {
-    const { orchestrator } = await setup(agent.configOptions, agent.promptLog);
+    const { orchestrator } = await setup(agent.configOptions, agent.promptLog, agent.shippedTemplates);
     const agentApp = new OrcaAcpAgent({ orchestrator, program: new ProgramService(orchestrator) }).register(
       acp.agent({ name: "orca-under-test" }),
     );
@@ -450,6 +458,29 @@ describe("session config options (#188)", () => {
 
   // Needs #187 (the engine applying overrides.model to the agent's session) before the chosen
   // model can show up in the scripted agent's prompt log as a `{sessionId, configId, value}` entry.
+  it("advertises the shipped template packs and records the chosen one as overrides.templatePack", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-facade-packs-"));
+    dirs.push(dir);
+    const { result, orchestrator } = await drive(
+      {},
+      async (ctx) => {
+        const { sessionId, configOptions } = await open(ctx, dir);
+        await set(ctx, sessionId, "orca/template-pack", "strict");
+        await ctx.request(acp.methods.agent.session.prompt, {
+          sessionId,
+          prompt: [{ type: "text", text: "/run mini" }],
+        });
+        return configOptions!.find((o) => o.id === "orca/template-pack");
+      },
+      { shippedTemplates: true },
+    );
+    expect(result?.type === "select" && result.options.map((o) => ("value" in o ? o.value : o.group))).toContain(
+      "strict",
+    );
+    const [summary] = await orchestrator.listRunSummaries();
+    expect((await orchestrator.getState(summary!.id)).run.overrides).toEqual({ templatePack: "strict" });
+  }, 60_000);
+
   it.todo("a selected model reaches the agent's session (prompt log) once #187 applies overrides.model");
 });
 

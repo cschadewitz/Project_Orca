@@ -54,7 +54,7 @@ export interface FacadeSelection {
 export interface ConfigOptionSources {
   workflows: WorkflowDefinition[];
   agents: AgentSpec[];
-  /** Template pack ids beyond the default; empty until template packs exist (#191). */
+  /** Template pack ids beyond the default (`TemplateRegistry.packs()`, #191). */
   templatePacks: string[];
   /** Whether the client advertised boolean config options. */
   booleans: boolean;
