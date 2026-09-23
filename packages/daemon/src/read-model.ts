@@ -210,14 +210,14 @@ function runFacts(events: readonly OrcaEvent[]): RunFacts {
 }
 
 /** The same facts from a full projection, for `runs.get`, which has already reduced the log. */
-function factsFromState(state: RunState, agentByStep: ReadonlyMap<string, string>): RunFacts {
+function factsFromState(state: RunState, agentByStep: ReadonlyMap<string, { agentId: string }>): RunFacts {
   const facts: RunFacts = { summary: runSummary(state), ...(state.run.error ? { error: state.run.error } : {}) };
   for (const id of state.stepOrder) {
     const step = state.steps[id];
     if (!step) continue;
     if (step.status === "waiting" && step.waitingOn)
       facts.wait = { stepRunId: step.id, on: step.waitingOn, at: step.startedAt ?? step.scheduledAt };
-    const agentId = agentByStep.get(step.id);
+    const agentId = agentByStep.get(step.id)?.agentId;
     if (agentId) facts.agentId = agentId;
   }
   return facts;
@@ -696,15 +696,23 @@ export class ReadModel {
     }
   }
 
-  /** `stepRunId -> agentId`, from the only event that records which agent worked a step. */
-  private async agentsByStep(runId: string): Promise<Map<string, string>> {
-    const byStep = new Map<string, string>();
+  /** `stepRunId -> {agentId, model?}`, from the only event that records which agent worked a step. */
+  private async agentsByStep(runId: string): Promise<Map<string, { agentId: string; model?: string }>> {
+    const byStep = new Map<string, { agentId: string; model?: string }>();
     for (const e of await this.orc.stores.events.readTypes(runId, ["agent.session.opened"]))
-      if (e.type === "agent.session.opened") byStep.set(e.payload.stepRunId, e.payload.agentId);
+      if (e.type === "agent.session.opened")
+        byStep.set(e.payload.stepRunId, {
+          agentId: e.payload.agentId,
+          ...(e.payload.model !== undefined ? { model: e.payload.model } : {}),
+        });
     return byStep;
   }
 
-  private async stepView(pass: Pass, step: StepRun, agentId: string | undefined): Promise<StepView> {
+  private async stepView(
+    pass: Pass,
+    step: StepRun,
+    agent: { agentId: string; model?: string } | undefined,
+  ): Promise<StepView> {
     const finishedAt = step.completedAt;
     const duration = elapsed(step.startedAt, finishedAt ?? pass.now);
     const children: ChildRunView[] = [];
@@ -749,7 +757,8 @@ export class ReadModel {
       ...(step.startedAt ? { startedAt: step.startedAt } : {}),
       ...(finishedAt ? { finishedAt } : {}),
       ...(duration === undefined ? {} : { durationMs: duration }),
-      ...(agentId ? { agentId } : {}),
+      ...(agent ? { agentId: agent.agentId } : {}),
+      ...(agent?.model !== undefined ? { model: agent.model } : {}),
       ...(step.agentSessionId ? { agentSessionId: step.agentSessionId } : {}),
       ...(step.result?.choice ? { choice: step.result.choice } : {}),
       ...(step.result?.message ? { message: step.result.message } : {}),

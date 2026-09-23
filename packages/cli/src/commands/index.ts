@@ -50,7 +50,7 @@ import { PausingHumanInput, autoHumanInput } from "@orca/engine";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { scriptedAgentSpec } from "@orca/testing";
 import { bootstrap, loadConfig, type OrcaApp } from "../bootstrap.js";
-import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../format.js";
+import { formatEvent, formatPaused, formatPendingInput, formatRunState, stepAgents } from "../format.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
 import { planCommand } from "./plan.js";
@@ -515,7 +515,7 @@ export const commands: Record<string, Command> = {
       if (!runId) throw new OrcaError("CONFIG_INVALID", "status needs a run id");
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
       const state = await app.orchestrator.getState(runId);
-      ctx.out(formatRunState(state));
+      ctx.out(formatRunState(state, stepAgents(await app.orchestrator.events(runId))));
       if (state.run.status === "paused") {
         ctx.out("");
         ctx.out(formatPaused(runId, await app.orchestrator.pendingInputs(runId)));

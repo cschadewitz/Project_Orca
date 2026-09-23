@@ -62,6 +62,11 @@ describe("formatEvent", () => {
     expect(
       formatEvent(ev("agent.session.opened", { sessionId: "s1", agentId: "scripted", hostId: "local", cwd: "/w" })),
     ).toBe(`${AT}     session s1 agent=scripted host=local cwd=/w`);
+    expect(
+      formatEvent(
+        ev("agent.session.opened", { sessionId: "s1", agentId: "scripted", hostId: "local", cwd: "/w", model: "opus" }),
+      ),
+    ).toBe(`${AT}     session s1 agent=scripted model=opus host=local cwd=/w`);
     expect(formatEvent(ev("agent.turn.started", { promptHash: "0123456789abcdef", followUp: false }))).toBe(
       `${AT}     prompt (01234567) follow-up=false`,
     );
@@ -217,6 +222,10 @@ describe("formatRunState", () => {
     } as unknown as RunState["artifacts"];
 
     const lines = formatRunState(s).split("\n");
+    // With the session events, a step names its agent and model (#187).
+    expect(formatRunState(s, new Map([["step_a", { agentId: "claude", model: "opus" }]]))).toContain(
+      "attempt=1 agent=claude model=opus inputs=1",
+    );
     expect(lines[0]).toBe("run run_1  workflow=ai-sdlc@1  status=completed/success");
     expect(lines[1]).toBe("workspace local:/w (orca/x)");
     expect(lines[2]).toBe("parent run_0");

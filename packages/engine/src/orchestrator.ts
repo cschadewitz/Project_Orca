@@ -6,6 +6,7 @@
  * transition is an event; a run can be resumed from its log at any time.
  */
 import { AgentRegistry, openAcpSession, type AgentSession, type OpenSessionOptions } from "@orca/agents";
+import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
   describeError,
   evaluateCondition,
@@ -1046,7 +1047,12 @@ export class Orchestrator {
       if (rc.abort.signal.aborted) throw e;
       if (isHumanInputPending(e)) return paused(e.message, e.details);
       const err = describeError(e);
-      return { kind: "failed", error: err, retryable: err.code !== "WORKFLOW_INVALID" && err.code !== "NOT_SUPPORTED" };
+      return {
+        kind: "failed",
+        error: err,
+        retryable:
+          err.code !== "WORKFLOW_INVALID" && err.code !== "NOT_SUPPORTED" && err.code !== "AGENT_MODEL_NOT_FOUND",
+      };
     }
   }
 
@@ -1291,10 +1297,36 @@ export class Orchestrator {
   ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
     const { agent, host } = this.agents.withOverrides(rc.state.run.overrides).resolve(selector);
     const key = `${rc.id}:${agent.id}`;
+    const model = selectedModel(rc.state.run.overrides, agent);
     const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
     if (pooled) {
       pooled.current.step = step;
-      return { session: pooled.session, release: async () => {} };
+      const now = currentModel(pooled.session);
+      // The pooled session is already on the run's model, or has no option to drift in.
+      if (model === undefined || now === undefined || now === model)
+        return { session: pooled.session, release: async () => {} };
+      // It drifted (the agent switched model itself): re-apply rather than run a step on a
+      // model the run did not select. An agent that refuses gets a fresh session instead.
+      try {
+        await applyModel(pooled.session, agent, model);
+        await rc.emit({
+          type: "agent.update",
+          payload: {
+            stepRunId: step.id,
+            sessionId: pooled.session.id,
+            update: { kind: "config_option_update", text: `model re-applied: ${model} (was ${now})` },
+          },
+        });
+        return { session: pooled.session, release: async () => {} };
+      } catch (e) {
+        if (e instanceof OrcaError && e.code === "AGENT_MODEL_NOT_FOUND") throw e;
+        rc.logger.warn("pooled session refused the model; reopening it", { agent: agent.id, model });
+        this.sessions.delete(key);
+        await pooled.session.close().catch(() => undefined);
+        await rc
+          .emit({ type: "agent.session.closed", payload: { stepRunId: step.id, sessionId: pooled.session.id } })
+          .catch(() => undefined);
+      }
     }
     const current = { step };
     let pendingAsks = 0;
@@ -1362,9 +1394,26 @@ export class Orchestrator {
       throw e;
     }
     handshake.ok();
+    // The run's model goes on before any turn does; a model nobody offers fails the step here.
+    if (model !== undefined) {
+      try {
+        await applyModel(session, agent, model);
+      } catch (e) {
+        await session.close().catch(() => undefined);
+        throw e;
+      }
+    }
+    const applied = model ?? currentModel(session);
     await rc.emit({
       type: "agent.session.opened",
-      payload: { stepRunId: step.id, sessionId: session.id, agentId: agent.id, hostId: host.id, cwd: rc.workspace.cwd },
+      payload: {
+        stepRunId: step.id,
+        sessionId: session.id,
+        agentId: agent.id,
+        hostId: host.id,
+        cwd: rc.workspace.cwd,
+        ...(applied !== undefined ? { model: applied } : {}),
+      },
     });
     for (const listener of this.sessionOpenedListeners) {
       try {

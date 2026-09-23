@@ -155,6 +155,12 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       agentId: z.string(),
       hostId: z.string(),
       cwd: z.string(),
+      /**
+       * The model the session runs on (#187): the run's selection as applied, or the agent's own
+       * current model when the run selected none. Absent when neither is known, and on logs
+       * written before v0.6.0.
+       */
+      model: z.string().optional(),
     }),
   ),
   base(

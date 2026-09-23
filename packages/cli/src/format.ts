@@ -37,7 +37,7 @@ export function formatEvent(e: OrcaEvent): string {
     case "step.waiting":
       return `${t}   … waiting on ${String(p.on)}${p.detail ? ` (${String(p.detail)})` : ""}`;
     case "agent.session.opened":
-      return `${t}     session ${String(p.sessionId)} agent=${String(p.agentId)} host=${String(p.hostId)} cwd=${String(p.cwd)}`;
+      return `${t}     session ${String(p.sessionId)} agent=${String(p.agentId)}${p.model ? ` model=${String(p.model)}` : ""} host=${String(p.hostId)} cwd=${String(p.cwd)}`;
     case "agent.turn.started":
       return `${t}     prompt (${String(p.promptHash).slice(0, 8)}) follow-up=${String(p.followUp)}`;
     case "agent.turn.completed":
@@ -85,7 +85,21 @@ function stepName(e: OrcaEvent): string {
   return String((e.payload as { stepRunId?: string }).stepRunId ?? "").replace(/^step_/, "step ");
 }
 
-export function formatRunState(s: RunState): string {
+/** Which agent (and model, when recorded) opened a session for each step, from `agent.session.opened`. */
+export type StepAgents = ReadonlyMap<string, { agentId: string; model?: string }>;
+
+export function stepAgents(events: readonly OrcaEvent[]): StepAgents {
+  const byStep = new Map<string, { agentId: string; model?: string }>();
+  for (const e of events)
+    if (e.type === "agent.session.opened")
+      byStep.set(e.payload.stepRunId, {
+        agentId: e.payload.agentId,
+        ...(e.payload.model !== undefined ? { model: e.payload.model } : {}),
+      });
+  return byStep;
+}
+
+export function formatRunState(s: RunState, agents: StepAgents = new Map()): string {
   const lines = [
     `run ${s.run.id}  workflow=${s.run.workflowId}@${s.run.workflowVersion}  status=${s.run.status}${s.run.outcome ? `/${s.run.outcome}` : ""}`,
     `workspace ${s.run.workspace.hostId}:${s.run.workspace.cwd}${s.run.workspace.branch ? ` (${s.run.workspace.branch})` : ""}`,
@@ -95,7 +109,10 @@ export function formatRunState(s: RunState): string {
   lines.push("", "steps:");
   for (const id of s.stepOrder) {
     const st = s.steps[id]!;
+    const agent = agents.get(id);
     const extras = [
+      agent ? `agent=${agent.agentId}` : "",
+      agent?.model ? `model=${agent.model}` : "",
       st.result?.choice ? `choice=${st.result.choice}` : "",
       st.inputArtifactIds.length ? `inputs=${st.inputArtifactIds.length}` : "",
       st.childRunIds.length ? `children=${st.childRunIds.length}` : "",

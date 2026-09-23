@@ -15,6 +15,11 @@ export type OrcaErrorCode =
   | "AGENT_NOT_FOUND"
   | "AGENT_TRANSPORT"
   | "AGENT_PROTOCOL"
+  /**
+   * The model a run selected is neither in the agent session's `category: "model"` option nor,
+   * for an agent that offers none, in its configured `models`. `details.available` lists what is.
+   */
+  | "AGENT_MODEL_NOT_FOUND"
   | "RUN_NOT_FOUND"
   | "RUN_STATE"
   /** Another interpreter holds the run's single-writer lease; see store/lease-store.ts. */

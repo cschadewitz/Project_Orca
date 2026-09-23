@@ -121,6 +121,8 @@ export const StepViewSchema = z.object({
   /** Start to finish, or start to `asOf` while the step is still going.  */
   durationMs: z.number().int().nonnegative().optional(),
   agentId: z.string().optional(),
+  /** The model the step's session was opened on, when the log records one (v0.6.0 on). */
+  model: z.string().optional(),
   agentSessionId: z.string().optional(),
   inputArtifactIds: z.array(z.string()),
   outputArtifactIds: z.array(z.string()),
