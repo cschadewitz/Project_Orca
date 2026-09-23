@@ -27,6 +27,11 @@ export const PlaybookEntrySchema = z.object({
   delayMs: z.number().int().nonnegative().optional(),
   /** Never finish the turn and ignore `session/cancel` (simulates a wedged agent). */
   hang: z.boolean().default(false),
+  /**
+   * Change one of the session's own config options during the turn and announce it with an
+   * unsolicited `config_option_update` (simulates an agent switching model by itself).
+   */
+  setConfig: z.object({ configId: z.string(), value: z.union([z.string(), z.boolean()]) }).optional(),
 });
 export type PlaybookEntry = z.infer<typeof PlaybookEntrySchema>;
 

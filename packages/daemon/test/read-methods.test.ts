@@ -134,6 +134,9 @@ describe("runs.get", () => {
     const first = r.steps[0]!;
     expect(first.error).toEqual({ code: "AGENT_TRANSPORT", message: "agent went away" });
     expect(first.agentId).toBe("claude");
+    // The model the session was opened on (#187); a log without one leaves it absent.
+    expect(first.model).toBe("opus");
+    expect(r.steps[1]!.model).toBeUndefined();
     expect(first.agentSessionId).toBe("sess-1");
     expect(first.durationMs).toBe(2 * STEP_MS);
 

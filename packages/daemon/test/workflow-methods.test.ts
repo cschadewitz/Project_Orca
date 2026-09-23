@@ -179,14 +179,65 @@ describe("workflows.get", () => {
 
   it("reports the versions it can see, which is the disk's plus the runs'", async () => {
     // The fixture's runs were created against `sdlc` v2 and v1; the file registered here is
-    // v2. The daemon keeps no definition for v1 - it only knows a run recorded it.
+    // v2. The fixture's store kept no definition for v1 - only the run's record of it.
     const r = WorkflowsGetResultSchema.parse((await call("workflows.get", { id: "sdlc" })).result);
     expect(r.workflow.versions).toEqual(["1", "2"]);
+    expect(r.workflow.pinned).toBe(false);
 
     expect((await call("workflows.get", { id: "sdlc", version: "2" })).ok).toBe(true);
     const old = await call("workflows.get", { id: "sdlc", version: "1" });
-    expect(old.error?.code).toBe("WORKFLOW_NOT_FOUND");
-    expect(old.error?.message).toContain("keeps no definition");
+    expect(old.error?.code).toBe("WORKFLOW_VERSION_NOT_FOUND");
+    expect(old.error?.message).toContain("neither stored nor on disk; available: 2");
+  });
+
+  it("answers a stored older version, marked pinned, and runs.get says which runs are pinned (#179)", async () => {
+    // What `startRun` would have kept when `run-lost` started on v1: a graph without `fanout`.
+    const v1 = parseWorkflow(SDLC.replace('version: "2"', 'version: "1"').replace(/\s+fanout:.*\n/, "\n"), "v1.yaml");
+    await f.orchestrator.stores.workflows.put({
+      ...v1,
+      edges: [
+        { from: "start", to: "build" },
+        { from: "build", to: "done" },
+      ],
+    });
+    const r = WorkflowsGetResultSchema.parse((await call("workflows.get", { id: "sdlc", version: "1" })).result);
+    expect(r.workflow.version).toBe("1");
+    expect(r.workflow.pinned).toBe(true);
+    expect(r.workflow.nodes.map((n) => n.id)).toEqual(["start", "build", "done"]);
+    expect(r.workflow.versions).toEqual(["1", "2"]);
+
+    const pinned = RunsGetResultSchema.parse((await call("runs.get", { runId: "run-lost" })).result);
+    expect(pinned.run.workflowVersion).toBe("1");
+    expect(pinned.run.workflowPinned).toBe(true);
+    const current = RunsGetResultSchema.parse((await call("runs.get", { runId: "run-parent" })).result);
+    expect(current.run.workflowPinned).toBe(false);
+  });
+
+  it("does not call a run or a stored definition pinned when no version of the workflow is on disk", async () => {
+    // `run-old` ran `nightly` v1, and this daemon has no `nightly` file registered at all.
+    const old = RunsGetResultSchema.parse((await call("runs.get", { runId: "run-old" })).result);
+    expect(old.run.workflowVersion).toBe("1");
+    expect(old.run.workflowPinned).toBe(false);
+
+    // Only the store has it: shown as what it is, not as pinned behind a newer file.
+    await f.orchestrator.stores.workflows.put(
+      parseWorkflow(
+        `
+id: nightly
+name: nightly
+version: "1"
+start: s
+nodes:
+  s: { type: start }
+  e: { type: end }
+edges: [{ from: s, to: e }]
+`,
+        "nightly.yaml",
+      ),
+    );
+    const r = WorkflowsGetResultSchema.parse((await call("workflows.get", { id: "nightly", version: "1" })).result);
+    expect(r.workflow.version).toBe("1");
+    expect(r.workflow.pinned).toBe(false);
   });
 
   it("answers WORKFLOW_NOT_FOUND for an id it has never heard of", async () => {

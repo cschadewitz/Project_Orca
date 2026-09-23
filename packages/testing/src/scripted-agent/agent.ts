@@ -172,6 +172,18 @@ export class ScriptedAgent {
         await say(`Hanging on ${d.kind} (playbook says hang).\n`);
         await new Promise<never>(() => {});
       }
+      if (entry.setConfig) {
+        const option = session.configOptions.find((o) => o.id === entry.setConfig!.configId);
+        const value = entry.setConfig.value;
+        if (option) {
+          if (option.type === "boolean" && typeof value === "boolean") option.currentValue = value;
+          if (option.type === "select" && typeof value === "string") option.currentValue = value;
+          await ctx.client.notify(acp.methods.client.session.update, {
+            sessionId,
+            update: { sessionUpdate: "config_option_update", configOptions: toWire(session.configOptions) },
+          });
+        }
+      }
       await sleep(entry.delayMs ?? delay, session);
       if (session.cancelled) {
         // Leave the counter alone: the entry was never consumed, so a follow-up turn replays it.
