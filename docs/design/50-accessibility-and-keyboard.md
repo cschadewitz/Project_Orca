@@ -64,6 +64,11 @@ list has selection, the palette has focus), and the design must keep both legibl
 | Workflow canvas | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
 | Schedule table | `Enter` | Explain the selected work item |
 | Plan journal | `J` / `K`, `↑` / `↓` | Move selection |
+| Plan graph | `↑` / `↓` | Move the selection within a layer |
+| Plan graph | `→` / `←` | Move the selection to the next / previous layer |
+| Plan graph | `Enter` | Show the selected node's relationships in the docked panel |
+| Plan graph | `+` / `-` / `0` | Zoom in, zoom out, back to rest |
+| Plan graph | `⇧↑` `⇧↓` `⇧←` `⇧→` | Pan |
 | Panel | `[` / `]` | Previous / next artifact version |
 | Config | `⌘S` | Save the configuration draft |
 | Anywhere | `Esc` | Close the topmost transient layer, never lose an unsent draft |
@@ -71,7 +76,11 @@ list has selection, the palette has focus), and the design must keep both legibl
 The two Plan rows are one screen with two lists on it (#170), and the second list is why
 there is a `plan-journal` scope beside `list`: the substrate registers the movement keys in
 whichever scope a list names, one list per scope, so `J` means "next" in whichever of the
-two the focus is in. The schedule table is `list`, like every other primary list.
+two the focus is in. The schedule table is `list`, like every other primary list. The
+dependency graph (#171) is a third scope, `plan-graph`: it is a canvas with the workflow
+canvas's keys, and two canvases in one scope would register `↑` twice, which the map throws
+on. The risk register (#172) and the decision list (#173) are lists that show in place of the
+schedule table, so they take `list` when the schedule is not mounted.
 
 Every action in this map is also in the command palette, with its key shown beside it. The
 converse does not hold, and deliberately: a command may register with **no key at all** and be
@@ -85,7 +94,8 @@ letters left stays discoverable. Nothing is reachable by keyboard alone or by mo
 - A list whose rows hold **controls** is a `grid` of `row`s with `gridcell` cells, not a
   `listbox` of `option`s: an `option` is a leaf, so the button inside one — the schedule
   badge's **why**, the claim's run — is a control nothing can reach, and that is what axe
-  calls `nested-interactive`. The plan's schedule table is the one such list today.
+  calls `nested-interactive`. The plan's schedule table and its decision list (#173), whose
+  rows hold the decide and reopen controls, are the two such lists today.
 - Streaming output is **not** a live region. An agent producing 40 lines a second would make
   the app unusable with a screen reader. Instead, a polite live region announces step
   transitions and terminal states only ("build step failed, 3 attempts"), and the output pane

@@ -426,7 +426,8 @@ list is full; a new surface starts in that unbuilt assertion again.
 
 It is also the only place **scrolling can be measured** (#277). The renderer's
 `scroll-sweep.test.tsx` runs under happy-dom, which has no layout engine, so it can assert
-that a surface *declares* a scroll region and no more. This spec shrinks the window to
+that a surface *declares* a scroll region and no more; it walks every Plan mode in
+`PLAN_MODES` as well as every surface in `SURFACES`, since each mode is its own split. This spec shrinks the window to
 1280×340 — too short for any surface — and asserts that the box which should scroll actually
 overflows, that it takes a scroll to its end, and that its last child is on screen when it
 gets there, for every surface and for the docked panel with the Plan inspector in it. A rule

@@ -56,15 +56,19 @@ screen now:
   applies them to the whole plan; the text field narrows what is held and the count says
   which ("3 of 9 items").
 - **The object header gained the mode variant**, which is `ObjectHeaderProps.mode` and
-  draws `.orca-seg`. It has **two** positions, Schedule and Journal. The graph (#171), the
-  risk matrix (#172) and the decision matrix (#173) are v0.6.0 and are *absent* from the
-  control rather than disabled in it: a segment that never does anything is a dead end, and
-  the control will gain each position with the mode behind it.
-- **The docked panel is a Plan surface as well as a Runs surface.** The schedule row's
-  selection opens the work-item inspector there — title, slug, status, classification,
-  request, the priority reasons verbatim, its dependencies with both the stored `status`
-  and the live `evaluation.detail`, its risks and the claim. #171's relationship inspector
-  (blocked by, blocks, waive) is the same dock with the edge selected instead of the row.
+  draws `.orca-seg`. In v0.5.0 it had two positions, Schedule and Journal; as of v0.6.0 it
+  has **five** — Schedule, Risks, Decisions, Dependencies, Journal — each gained with the
+  mode behind it (#172, #173, #171) rather than as a disabled segment.
+- **The docked panel is a Plan surface as well as a Runs surface, and Plan names what is in
+  it.** The schedule row's selection opens the work-item inspector there under the head
+  "Work item" — title, slug, status, classification, request, the priority reasons verbatim,
+  its dependencies with both the stored `status` and the live `evaluation.detail`, its risks
+  and the claim. A selected risk opens under "Risk" (#172): status, the work items it holds,
+  what mitigates it and the journal entries that name it. The graph's relationship inspector
+  opens under "Relationships" (#171): blocked by, blocks (inverted client-side from the full
+  list, since `dependencies.list` filters the *from* side only), and a waive that asks once,
+  naming what it unblocks, and then folds the waive's own answer into the table and the
+  graph without a second `dependencies.list`.
 - **The explanation is the badge's `why`, in the one `Menu`**, listing `schedule.explain`'s
   lines word for word. `orca://item/<slug>` lands on Plan with it open, which is what made
   `Menu` take an optional controlled `open` — a link that arrives is not a click.
@@ -114,10 +118,43 @@ screen now:
   to are #171's and #178's — but the selection moves, because "where am I in this list" is
   not an act and does not wait on them.
 
-What is *not* built, and is deliberately not stubbed: the graph, the risk matrix, the
-decision matrix, the pinned row strip under the canvas, the second (graph-only) filter
-rail, and `orca://plan?mode=deps&focus=…`. Every write on this surface is #178's, and every
-link *out* of an explanation line is #171's.
+**Built in v0.6.0 (#171, #172, #173):**
+
+- **The graph** is a mode of Plan, drawn over `dependencies.list` by the same layered layout
+  the workflow canvas uses (`layoutGraph`, generalised to many roots; no dagre, no ELK). Pan,
+  zoom and select, never dragged, in a keyboard scope of its own, `plan-graph`. Work items,
+  decisions and external targets are nodes of their own glyph and word on one `.orca-node`
+  shell (`DependencyNode`); a dependency's **kind is its stroke** (blocks solid, soft dashed,
+  informs dotted, from `semantics.json`'s `dependencyKind` and the `stroke-dash-*` tokens)
+  and its **state is its colour and a word** (`dependencyState`), never colour alone. The
+  `blocks` cycles `schedule.get` reports are drawn heavy in the failed colour.
+- **Shared selection and filters, a second rail, a pinned strip.** The selected schedule
+  row is the focused node and the reverse; the request-and-filter rail applies to the
+  graph as to the table; the graph's own controls sit in a second rail that shares the
+  `plan-rail` boundary; and the selected item's schedule row is pinned under the canvas.
+- **The risk matrix** (`.orca-risk`, square, no radius) is sized by the plan's own
+  `riskMatrix.scale` and banded by its own `thresholds` — the four `risk-*` grounds are the
+  four core levels, not fixed 5×5 score bands, and `critical` takes the hatched
+  `risk-severe` ground so it separates in greyscale. Cells above the appetite are outlined
+  and a legend says so in words; every risk is labelled in place, key in mono, title in sans,
+  without a tooltip. The register sits under it behind the stacked `plan-risk` splitter.
+- **The decision matrix** (`.orca-matrix`) is criteria rows with weights and direction,
+  option columns with scores, the weighted totals, and the recommended column outlined in
+  accent because its header is the control that decides for it. A recommendation that was
+  `close` or `tie` says so beside it; a result the daemon computed on read is labelled a
+  preview (`resultIsPreview`). Deciding, from a column or the palette, sends the same
+  `{ planId, key, option, rationale }` as `orca plan decide`; reopening asks once and names
+  the items whose dependencies it reopens, and never re-decides. The decision list is a
+  `grid`, since its rows hold controls, over the matrix behind the stacked `plan-decision`
+  splitter.
+- **`orca://plan?mode=deps&focus=<id>`** resolves, and a work item's "dependencies"
+  counterpart follows it.
+
+What is *not* built: a plan decision is still not an Attention item, because no wire field
+ties an `OpenInputView` to a plan decision key; it becomes one only when a workflow
+`decision` gate parks a run on it, and that is a protocol addition for a later release.
+The links *out* of an explanation line ("waiting for decision datastore") still copy rather
+than follow.
 
 If you pick B, the three concrete changes to the rest of the system are: the Plan sidebar
 loses its Schedule/Dependencies/Risks/Decisions/Journal list in favour of requests and

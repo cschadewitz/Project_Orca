@@ -41,15 +41,18 @@ boundary and none of them has to draw its own.
 | --- | :---: | --- | --- |
 | **Attention** | ◆ | What needs me right now | 1 — shipped |
 | **Runs** | ☰ | What is happening and what happened | 1 — shipped |
-| **Plan** | ⬡ | What is coming, why it is not moving, what it depends on | 2 — shipped in v0.5.0 (#170); the graph, risk and decision modes are v0.6.0 |
+| **Plan** | ⬡ | What is coming, why it is not moving, what it depends on | 2 — shipped in v0.5.0 (#170); the graph, risk and decision modes shipped in v0.6.0 (#171–#173) |
 | **Agents** | ◉ | Who is doing the work and are they healthy | 1 read, 2 write — both shipped |
 | **Config** | ❋ | How the system is wired, and what the workflows are | 2 — shipped in v0.5.0 (#175, #266, #177) |
 
 Phase 2 is the configuration and monitoring wave, and as of v0.5.0 all five surfaces have
 content. Plan is the schedule table, the scheduler's explanations, a requests sidebar and the
-journal; its dependency graph (#171), risk matrix (#172) and decision matrix (#173) are
-deferred to v0.6.0 and are *absent* from the object header's mode control rather than
-disabled. Config is `orca.config.yaml` as a form over the schema the daemon describes, beside
+journal, and as of v0.6.0 its object header's mode control has five positions — Schedule,
+Risks, Decisions, Dependencies, Journal — with the risk matrix (#172), the decision matrix
+(#173) and the dependency graph (#171) behind them. **The docked panel is a Plan surface as
+well as a Runs surface**: Plan owns what is in it and names it — "Work item" for the schedule
+row's inspector, "Risk" for a selected risk's status, held items and journal entries, and
+"Relationships" for the graph's inspector (blocked by, blocks, waive). Config is `orca.config.yaml` as a form over the schema the daemon describes, beside
 the raw file, with the permission sidecar as its second document, and the workflow viewer
 (#177) is where `orca://workflow/…` lands.
 
@@ -101,6 +104,7 @@ orca://run/7f3a2c                      the run tree, that run selected
 orca://run/7f3a2c/step/build.2         step detail, attempt 2, output scrolled to its start
 orca://gate/91c4                       attention surface, that gate focused, answer buttons armed
 orca://item/auth-sso-epic              plan, that work item, explanation panel open
+orca://plan?mode=deps&focus=auth-sso   plan in the dependency graph, that node selected (#171)
 orca://artifact/spec.md@v3?run=7f3a2c  the docked panel, that artifact, version 3
 orca://workflow/ai-sdlc                workflow viewer, no run overlaid
 orca://workflow/ai-sdlc?run=7f3a2c     workflow viewer with that run overlaid
@@ -118,7 +122,11 @@ one is worth keeping in mind before a new form is added:
   v0.5.0, and the link now lands on the schedule with that work item selected and its
   explanation open, exactly as the table above promises. An id this plan does not have
   leaves the table as it is and says which id it was holding, because a link is never
-  dropped and never answered with something that was not asked for.
+  dropped and never answered with something that was not asked for. **`orca://plan?mode=…`
+  names the surface's own object** (#171): the plan is what the header is about, so the host
+  is `plan` and the query says how it is shown (`mode`) and what is selected (`focus`); a
+  work item's "dependencies" counterpart, which resolved to nothing in v0.5.0, is now this
+  link with `mode=deps` and the item focused.
   **`orca://workflow/…` is built as of #177** and lands on the viewer, on the Config surface,
   with `?run=` overlaying that run's path over the graph. Config's own screen shipped beside
   it in v0.5.0 (#175, #266), so `⌘5` with no workflow named lands on the configuration form
