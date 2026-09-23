@@ -4,7 +4,9 @@
  *   acp-facade/  ORCA exposed as an ACP agent (proxy mode for Kepler, Zed, ...)
  *   kepler/      Kepler task awareness (worktrees, task context)
  *   t3code/      T3 Code threads as ORCA agent sessions (groundwork)
+ *   jev/         TypeSafe JEV evaluation as a `custom:jev-eval` node (proof of concept)
  */
 export * from "./acp-facade/index.js";
 export * from "./kepler/index.js";
 export * from "./t3code/index.js";
+export * from "./jev/index.js";

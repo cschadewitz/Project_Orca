@@ -52,6 +52,7 @@ edges:
 | `custom:plan-schedule` | compute the schedule → `vars.schedule` + `schedule.md` | `plan`, `artifactPath`, `policy`, `record` |
 | `custom:plan-dispatch` | run the item workflow for ready items, dependency‑ordered across the plan; claims each item so two dispatchers cannot both launch it | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request` \| `plan`), `leavesOnly` (default `true`), `onWaiting` (`defer` \| `wait`), `pollMs` (default 5000), `waitTimeoutMs` (default 30 min, `0` = forever), `failFast` (cancels the items still running), `policy` |
 | `custom:plan-await` | (in item workflows) wait for this item's `phase` dependencies | `phase`, `pollMs`, `timeoutMs` |
+| `custom:jev-eval` | (plugin, `docs/INTEGRATIONS.md`) ask JEV Choice/Score/Noul questions over explicit input artifacts → `evaluation` artifact + `result.data.answers` | `inputs`, `context`, `model`, `rubric`, `questions`, `maxStateChars`, `timeoutMs`, `onError`, `produces` |
 
 The plan nodes are described in `docs/PLANNING.md`. Every node also takes `name`,
 `description` and `meta`; edges take `label`; a workflow takes `description`, `inputs`

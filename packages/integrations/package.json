@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./jev-eval": {
+      "types": "./dist/jev/plugin.d.ts",
+      "import": "./dist/jev/plugin.js"
     }
   },
   "files": [
@@ -19,6 +23,7 @@
     "@orca/store": "workspace:*",
     "@orca/agents": "workspace:*",
     "@orca/engine": "workspace:*",
-    "@agentclientprotocol/sdk": "^1.4.0"
+    "@agentclientprotocol/sdk": "^1.4.0",
+    "zod": "^4.6.5"
   }
 }

@@ -100,7 +100,7 @@ crash is picked up with `orca resume <runId>`.
 | `packages/store` | Persistence ports and implementations: event log (memory / JSONL), artifact store (content‑addressed), document stores, plan stores + journal, work‑item claim store. |
 | `packages/agents` | Hosts (local, SSH), ACP client sessions, permission policies. |
 | `packages/engine` | The orchestrator (graph interpreter), node executors (agent, decision, gate, loop, parallel, subworkflow, set, custom), program service, **PlanService** and the plan nodes (`plan-register`, `decision-matrix`, `plan-schedule`, `plan-dispatch`, `plan-await`), workspace providers, plugin API. |
-| `packages/integrations` | ORCA as an ACP agent (proxy mode), Kepler task awareness, T3 Code adapter (groundwork). |
+| `packages/integrations` | ORCA as an ACP agent (proxy mode), Kepler task awareness, T3 Code adapter (groundwork), the `custom:jev-eval` plugin (TypeSafe JEV judgments over artifacts, proof of concept). |
 | `packages/cli` | `orca` command line and config bootstrap. |
 | `packages/protocol` | The wire contract between the daemon and its clients: message envelope, handshake, error codes, protocol version. Zod schemas; depends on `core` only. |
 | `packages/daemon` | `orca serve`: the long‑lived process that exposes the orchestrator, the workspace's configuration and the plan over `protocol` — `POST /rpc` plus `WS /socket` for the push channel. |

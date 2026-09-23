@@ -1,4 +1,4 @@
-# Integrations: Kepler, T3 Code, SSH agents
+# Integrations: Kepler, T3 Code, SSH agents, JEV
 
 ORCA is deliberately **standalone**: it is an ACP *client* to the coding agents
 below it and an ACP *agent* to the tools above it. That lets it work inside or
@@ -135,3 +135,185 @@ is cancelled, and a paused run leaves the Request decomposing. Direct `/run` com
 create a Request. Plan updates suppress identical snapshots and label failed, cancelled and
 skipped steps explicitly (ACP has no separate failed plan-entry status). Child-run nodes are
 flattened beneath their owning container entry and carry their workflow-chain prefix.
+
+## TypeSafe JEV evaluation (`custom:jev-eval`, proof of concept)
+
+[JEV](https://docs.typesafe.ai/introduction) answers typed questions about a piece of text
+without generating any: a **Choice** among fixed options, a **Score** on an ordered rubric,
+or a **Noul** (the probability a proposition holds), each with the model's distribution over
+the outcomes. ORCA already separates the artifact an agent produces from the decision made
+about it, so a narrow semantic judgment can sit in that seam without opening an agent
+session: an artifact-producing step, an optional `custom:jev-eval` node, a durable
+`evaluation` artifact, and then an ordinary `decision` node. The pilot and its boundaries
+are issue #286; this node is the proof of concept (#296).
+
+The node ships as a plugin in `@orca/integrations`, so a workflow that never mentions it is
+untouched and a configuration without it loads exactly as before.
+
+### Setup
+
+```yaml
+# orca.config.yaml
+plugins: ["@orca/integrations/jev-eval"] # from source: "./packages/integrations/src/jev/plugin.ts"
+```
+
+```sh
+export TYPESAFE_API_KEY=...        # required to evaluate; loading the plugin needs nothing
+export ORCA_JEV_MODEL=jev-1.13.0   # optional default; a node's `model:` wins
+export TYPESAFE_BASE_URL=...       # optional; the API's origin, for a proxy or a fake
+```
+
+The key is read when a node runs, goes into the request's `Authorization` header, and is
+written nowhere: not the artifact, not the step result, not the event log, not an error
+message. A test asserts that. `createJevEvalPlugin({ apiKey, model, baseUrl, provider })`
+does the same from code, and `provider` replaces the HTTP client with anything that
+implements `JevProvider` — the scripted one the tests use, for instance.
+
+### The node
+
+```yaml
+  coverageCheck: # expressions read it as `steps.coverageCheck.…` (a hyphenated id needs `steps['coverage-check']`)
+    type: "custom:jev-eval"
+    model: jev-1.13.0 # a version, never `jev-latest`
+    inputs: # explicit refs, resolved like an agent node's; each becomes state.artifacts.<alias>
+      - { kind: implementation }
+      - { name: testReport, as: report }
+      - { kind: review, required: false } # a missing optional input is recorded as missing
+    context: # extra state.context.<key> sections, each a template
+      acceptance: "{{#each workItem.acceptanceCriteria as c}}- {{ c }}\n{{/each}}"
+    rubric: { id: sdlc/coverage, version: 3 } # the questions' identity, recorded with every answer
+    questions:
+      addressed:
+        type: score
+        instructions: "How many acceptance criteria does the implementation summary explicitly address?"
+        criteria: ["None", "Some; at least one is not mentioned", "All of them"] # 2..10 levels, low to high
+      conflict:
+        type: choice
+        instructions: "Do the summary and the test report agree about what was verified?"
+        criteria: # 2..255 options; ids become `choice == '<id>'` edge tests downstream
+          consistent: "They describe the same verification."
+          contradiction: "One names a test as passing that the other reports failed."
+      cites_evidence:
+        type: noul
+        instructions: "Does the review cite specific files, lines or test results?"
+        criteria: { true: "Names locations it checked", false: "Paraphrases the summary" }
+    maxStateChars: 96000 # default; over it the step fails, nothing is truncated
+    timeoutMs: 60000 # default
+    onError: fail # default; `record` is for shadow mode (below)
+    produces: { kind: evaluation, name: coverageCheck } # defaults: kind evaluation, name = node id
+```
+
+The executor validates these fields with zod and fails with `WORKFLOW_INVALID` before
+calling anyone. It then resolves the inputs, renders the context, builds
+`{ artifacts: { <alias>: <content> }, context: { <key>: <text> } }`, and refuses to send it if
+the JSON is over `maxStateChars`. Every field of the response is checked against the
+questions: the answer ids must be exactly the question ids, a choice must be an offered
+option, a score must lie in `[0, levels - 1]`, every probability and confidence must be a
+finite number in `[0, 1]`, and a distribution must cover exactly the options and sum to 1.
+Anything else is `JEV_RESPONSE_INVALID`, not retryable, and no artifact is recorded. A
+response from a model other than the one pinned is `JEV_MODEL_MISMATCH`.
+
+### The artifact, and what downstream reads
+
+A successful node records one `evaluation` artifact whose `parents` are the inputs it
+judged and whose front matter is the whole record: `rubric`, `questions` as sent,
+`model: { requested, resolved }`, `inputs` (alias, artifact id, name, kind, version, content
+hash, byte size), `missingInputs`, `stateChars`, `answers`, `usage` (input and output tokens)
+and `evaluatedAt`. The body is a table for a person. The judged content is referenced by
+id and hash, not copied, so the artifact stays small.
+
+The same record is the step's `result.data`, plus `artifactId`, which is what expressions and
+decision nodes read:
+
+```yaml
+  route:
+    type: decision
+    source: { kind: expression, expr: "steps.coverageCheck.result.data.answers.conflict.choice" }
+    options: [consistent, contradiction]
+  cited:
+    type: decision
+    source: { kind: expression, expr: "steps.coverageCheck.result.data.answers.cites_evidence.noul >= 0.9 ? 'yes' : 'no'" }
+    options: [yes, no]
+```
+
+An answer is `{ type: "noul", noul }`, `{ type: "choice", choice, probabilities, confidence }`
+or `{ type: "score", score, probabilities, confidence, levels, normalized, legend? }`.
+`levels` and `normalized` (`score / (levels - 1)`) are ORCA's arithmetic, added so scores on
+different rubrics compare on one scale; every other field is the provider's. The threshold,
+the comparison and the edge are the workflow's, in a decision node, where they are
+deterministic and reviewable. The model never picks an edge.
+
+### Shadow mode: `onError: record`
+
+The pilot runs *beside* the existing reviewer, not instead of it, and a pilot must not fail
+the run it is observing. With `onError: record`, a provider error, an over-sized state, a
+missing required input or an invalid response completes the step with
+`data.status: "failed"`, `data.error: { code, message }`, **no** `answers`, and an
+`evaluation` artifact saying the same. A decision that reads a missing answer falls to its
+`defaultOption` (and fails without one), which is the intended behaviour: an unanswered
+question is never an approval. `examples/jev/` is the worked version — the shipped
+`ai-sdlc` with a `jevShadow` node between `review` and `review-verdict`, the verdict still
+the reviewer's, and the answers lifted into `vars.jevShadow` for a summary to read:
+
+```sh
+export TYPESAFE_API_KEY=...
+pnpm run orca --config examples/jev/orca.config.yaml validate
+pnpm run orca --config examples/jev/orca.config.yaml run ai-sdlc-jev-shadow --var workItem='{"id":"wi_1","slug":"x","title":"…","acceptanceCriteria":["…"]}'
+```
+
+Under `onError: fail` (the default), `maxAttempts:` on the node retries what the API says
+to retry — 429, 529, 5xx, a network error, a timeout — and nothing else.
+
+### Bounded input, and what the model is not for
+
+`docs.typesafe.ai/models` gives 64k tokens per request and 32k for the state plus the longest
+question; the node's `maxStateChars` default of 96,000 characters sits under that for prose.
+The bound is a failure, not a truncation, because a judgment over half an artifact is a
+judgment over something nobody wrote. Select the artifacts a question is about — a
+summary, a report, a review — rather than a diff or a transcript, and keep the questions
+one dimension each: the model reads instructions literally, treats irrelevant state as a
+distractor, and is not a calculator or a date parser
+([known limitations for jev-1.13](https://docs.typesafe.ai/model-jaggedness/jev-1.13)).
+Per #286, do not ask it what authoritative data already answers (whether tests passed is
+in the test report's front matter; whether a dependency is satisfied is in the plan), do
+not let it stand in for repository review, and treat a judgment over an agent's summary as
+a judgment of what the summary *claims*.
+
+### Two confidences
+
+Two things in ORCA are called confidence and they are not the same quantity:
+
+- **Model confidence** (`answers.<id>.confidence`, on a choice or a score) is a statistic of
+  the returned distribution — 1 when all the probability sits on one outcome, 0 when it is
+  flat. A noul has no separate confidence; its single value *is* the probability. Neither is an
+  accuracy rate: a confidently wrong answer reads exactly like a confidently right one until
+  calibration (#299) says how often each happens on ORCA's own evidence.
+- **Decision-matrix ranking confidence** (`steps.<matrix-node>.result.data.confidence`,
+  `docs/PLANNING.md`) is `clear`, `close` or `tie` from the *margin* between the top two
+  weighted sums — arithmetic over scores people or agents wrote, with no model involved.
+
+A gate can route on either. It should not treat one as the other.
+
+### Known limitations of the proof of concept
+
+- One request per node, no batching across nodes, no caching of identical questions.
+- Retries are the interpreter's `maxAttempts`; there is no backoff schedule of its own, and a
+  resumed run re-asks rather than reusing an in-flight answer (#297).
+- Questions are literal YAML on the node; there is no shared rubric registry, no authoring
+  aid and no inspection surface in the app (#298).
+- No thresholds are recommended. Every one is per question, per model version and per
+  consequence, and none has been measured on ORCA workloads yet (#299).
+
+### Live smoke
+
+The test suite never touches the network. To prove a real answer lands as a real artifact:
+
+```sh
+export TYPESAFE_API_KEY=...
+ORCA_JEV_LIVE=1 pnpm exec vitest run packages/integrations/test/jev-eval.live.test.ts
+```
+
+It runs the same seeded workflow the scripted tests use against the API (one request of
+about 500 input tokens), asserts an `evaluation` artifact with the pinned model, a choice
+from the offered options, a three-level score and a noul, and prints the answers. Without
+both variables the file reports as skipped.
