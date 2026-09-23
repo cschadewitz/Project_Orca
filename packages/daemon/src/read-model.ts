@@ -445,7 +445,8 @@ export class ReadModel {
     }
     const onDisk = this.versionOnDisk(state.run.workflowId);
     return {
-      run: { ...run, workflowPinned: onDisk !== state.run.workflowVersion },
+      // Pinned only against a version that is on disk: an unregistered workflow has nothing newer.
+      run: { ...run, workflowPinned: onDisk !== undefined && onDisk !== state.run.workflowVersion },
       workspace: state.run.workspace,
       vars: state.run.vars,
       steps,
@@ -655,7 +656,8 @@ export class ReadModel {
    * the workflow-version store, where `startRun` keeps the definition each run started on
    * (#179) - so a run pinned to an older version can be shown the graph it is walking. A
    * version in neither place is `WORKFLOW_VERSION_NOT_FOUND`, naming what exists, rather than
-   * a graph that is not the one that ran. `pinned` says the answer is not the version on disk.
+   * a graph that is not the one that ran. `pinned` says a version is on disk and the answer is
+   * not it; a definition only the store has, with no file registered, is not pinned.
    */
   async workflowsGet(params: WorkflowsGetParams): Promise<WorkflowsGetResult> {
     const asOf = this.clock.isoNow();
@@ -663,7 +665,8 @@ export class ReadModel {
       params.version === undefined
         ? this.orc.resolveDefinition(params.id)
         : await this.orc.definitionFor(params.id, params.version);
-    const pinned = this.versionOnDisk(params.id) !== def.version;
+    const onDisk = this.versionOnDisk(params.id);
+    const pinned = onDisk !== undefined && onDisk !== def.version;
     return { workflow: workflowView(def, await this.recordedVersions(def), pinned), asOf };
   }
 

@@ -125,8 +125,9 @@ export interface WorkflowView {
    */
   versions?: string[];
   /**
-   * This view is of a version other than the one on disk: a stored definition a run is pinned
-   * to (`◷ pinned`, docs/design/70-workflow-editing.md). Absent on a nested graph.
+   * A version of this workflow is on disk and this view is of another one: a stored definition
+   * a run is pinned to (`◷ pinned`, docs/design/70-workflow-editing.md). False when no version
+   * is on disk, since nothing newer exists to be pinned behind. Absent on a nested graph.
    */
   pinned?: boolean;
 }

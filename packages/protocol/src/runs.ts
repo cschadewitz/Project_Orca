@@ -31,8 +31,9 @@ export const RunSummaryViewSchema = z.object({
   workflowId: z.string(),
   workflowVersion: z.string(),
   /**
-   * `runs.get` only: the run's recorded `workflowVersion` is not the version on disk, so it
-   * runs (and resumes) on the stored definition it started with (#179). Absent on `runs.list`.
+   * `runs.get` only: a version of the run's workflow is on disk and it is not the recorded
+   * `workflowVersion`, so the run runs (and resumes) on the stored definition it started with
+   * (#179). False when the workflow is not registered at all. Absent on `runs.list`.
    */
   workflowPinned: z.boolean().optional(),
   status: DisplayStatusSchema,

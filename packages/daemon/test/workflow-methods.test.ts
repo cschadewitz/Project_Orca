@@ -213,6 +213,33 @@ describe("workflows.get", () => {
     expect(current.run.workflowPinned).toBe(false);
   });
 
+  it("does not call a run or a stored definition pinned when no version of the workflow is on disk", async () => {
+    // `run-old` ran `nightly` v1, and this daemon has no `nightly` file registered at all.
+    const old = RunsGetResultSchema.parse((await call("runs.get", { runId: "run-old" })).result);
+    expect(old.run.workflowVersion).toBe("1");
+    expect(old.run.workflowPinned).toBe(false);
+
+    // Only the store has it: shown as what it is, not as pinned behind a newer file.
+    await f.orchestrator.stores.workflows.put(
+      parseWorkflow(
+        `
+id: nightly
+name: nightly
+version: "1"
+start: s
+nodes:
+  s: { type: start }
+  e: { type: end }
+edges: [{ from: s, to: e }]
+`,
+        "nightly.yaml",
+      ),
+    );
+    const r = WorkflowsGetResultSchema.parse((await call("workflows.get", { id: "nightly", version: "1" })).result);
+    expect(r.workflow.version).toBe("1");
+    expect(r.workflow.pinned).toBe(false);
+  });
+
   it("answers WORKFLOW_NOT_FOUND for an id it has never heard of", async () => {
     expect((await call("workflows.get", { id: "nope" })).error?.code).toBe("WORKFLOW_NOT_FOUND");
     expect((await call("workflows.get", { id: "ai-sdlc::plan" })).error?.code).toBe("WORKFLOW_NOT_FOUND");
