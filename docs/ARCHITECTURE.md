@@ -203,7 +203,11 @@ that never started get a fresh child run.
    `setConfigOption` sends `session/set_config_option` and replaces the cache
    from the full list the agent returns; an unsolicited `config_option_update`
    does the same and is logged as an `agent.update` (#185). ORCA advertises
-   that it can set boolean options, so agents may offer them.
+   that it can set boolean options, so agents may offer them. The persisted
+   `agent.session.opened` event records that a session opened but carries no
+   session, so `Orchestrator.onAgentSessionOpened(listener)` hands each live
+   session to in‑process listeners as it opens (not persisted, not on the
+   wire); the ACP facade uses it to learn which models an agent offers (#189).
 4. `session/prompt`. Session updates stream into the event log as
    `agent.update` (text chunks are coalesced; tool calls, plan entries and
    locations are kept as a compact `AgentUpdateSummary`, not the raw ACP payload).

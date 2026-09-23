@@ -37,6 +37,38 @@ A Kepler session then drives ORCA like any agent:
   sessions each see only their own gates;
 - `session/cancel` cancels the whole run tree.
 
+**Session config options.** Kepler's Mode / Model dropdowns are ACP *session config
+options*, and the facade advertises the following in `session/new` and handles
+`session/set_config_option` (#188). Every option has a default meaning "what the
+configuration says", so a client that never sets one gets exactly the behaviour above. A
+value set while a run is in flight applies to the **next** run; each option's description
+says so.
+
+| Option | Category | Default | Other values | Becomes |
+| --- | --- | --- | --- | --- |
+| `orca/workflow` | `mode` | `orca:request` (submit a Request) | a workflow id | a direct run of that workflow with the prompt as `vars.prompt`; also `/run`'s default |
+| `orca/item-workflow` | `_workflow` | `orca:default` | workflow ids | `overrides.itemWorkflow` |
+| `orca/agent.<role>` (one per role) | `_agent` | `orca:default` | agent ids, grouped by host when they span hosts | `overrides.roles` |
+| `orca/model` | `model` | `orca:default` (agent default) | `<agentId>/<modelId>`, grouped by agent when several offer models | `overrides.model` as `{ agentId: modelId }` |
+| `orca/template-pack` | `_template_pack` | `orca:default` | pack ids | `overrides.templatePack` |
+| `orca/use-client-cwd` | `_workspace` | the facade's `useClientCwd` | boolean | run in the session's cwd, or through ORCA's workspace provider |
+| `orca/<agentId>/<configId>` | `mode`, `model_config`, `thought_level` | the agent's | the agent's | recorded on the session, **not yet applied** to a run |
+
+Boolean options (`orca/use-client-cwd`) are offered only when the client advertised
+`clientCapabilities.session.configOptions.boolean`. Changing `orca/workflow` re-sends
+`available_commands_update` so the `/run` hint names the chosen workflow.
+
+**Models are discovered lazily (#189).** `orca/model` starts from each agent's declared
+`AgentSpec.models` (or the single "Agent default"); when an agent's first downstream session
+opens, the options that session advertised replace the declaration and every open facade
+session receives a `config_option_update`. The result is cached per agent for the facade
+process's life, so a second session does not re-probe. The engine exposes this moment as
+`Orchestrator.onAgentSessionOpened(listener)`, an in-process hook that hands over the live
+session (the persisted `agent.session.opened` event carries no session). Downstream options
+in the other reserved categories are proxied as `orca/<agentId>/<configId>`; they are
+recorded on the session, but the run's override record has no field for them yet, so
+choosing one changes nothing downstream in this release.
+
 Implementation: `packages/integrations/src/acp-facade/`. Workspace selection:
 `workspace: { provider: kepler }` in `orca.config.yaml` makes ORCA use the task's worktrees
 (`KeplerTaskWorkspaceProvider` scans the task dir for `*/.git`, picks by work item `repo`,

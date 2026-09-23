@@ -295,6 +295,21 @@ Markdown files with front matter (`id`, `name`, `description`, `version`, `requi
 ORCA appends the **deliverables block** to the rendered prompt of every node that declares
 `produces`; do not repeat the file list by hand. Tell the agent *what good looks like* (sections, front‑matter fields).
 
+### Template packs
+
+A workflow names its templates by literal id (`template: sdlc/review`), and a **template
+pack** lets a run swap some of them without editing the YAML (#191). A pack is a directory
+under `templates/<pack>/` whose files carry the front‑matter id `<pack>/<id>`; the default
+`templates` glob loads it with everything else. When a run selects a pack — `--template-pack
+<name>` on the CLI, `orca/template-pack` in an ACP session, `overrides.templatePack` on the
+record — every agent step resolves `<pack>/<id>` first and falls back to `<id>`, so a pack
+that overrides two of six templates inherits the other four. Partials (`{{> partials/… }}`)
+are not looked up in the pack. `orca validate --template-pack <name>` lists which templates
+the pack overrides and which the validated workflows inherit, and fails with
+`TEMPLATE_NOT_FOUND` on a pack that overrides nothing, so a typo cannot silently run the base
+set; `run`, `submit` and `plan dispatch` refuse such a pack the same way. The shipped example is
+`templates/strict/`, which replaces `sdlc/review` with a stricter review.
+
 ## Shipped workflows
 
 - `workflows/ai-sdlc.yaml` — plan → design → spec‑gate → await‑deps → build ⇄ test → review ⇄ build → deploy.
