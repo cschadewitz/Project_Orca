@@ -45,7 +45,13 @@ an event created with `GITHUB_TOKEN`, so the PR that `release-prepare.yml` opens
 triggers `ci.yml`. That is why `release-publish.yml` re-runs the full check set against
 the merge commit before it tags: the verification happens, just after the merge rather
 than before it. If `release-publish.yml` fails, the version bump is on `main` with no tag
-against it — fix forward and re-run the workflow. Giving `release-prepare.yml` a personal
+against it — fix forward, then run **Release (publish)** from the Actions tab against
+`main` (or the fixed commit). It publishes whatever version that commit's `package.json`
+holds, through the same checks, builds and tag step, and refuses if the tag already
+exists. Re-running the failed run is not the same thing: a re-run uses the workflow files
+of the commit it first ran on, so a fix to the workflows never reaches it; and closing the
+milestone again cannot help, since `prepare` refuses to bump to a version `main` already
+carries. Giving `release-prepare.yml` a personal
 access token instead of `GITHUB_TOKEN` would move the checks back onto the PR, at the cost
 of a token to store and rotate; that trade is only worth making if `main` ever gains
 required status checks.
