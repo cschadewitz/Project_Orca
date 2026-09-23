@@ -172,7 +172,7 @@ implements `JevProvider` — the scripted one the tests use, for instance.
 ### The node
 
 ```yaml
-  coverageCheck: # no hyphen: expressions read it as `steps.coverageCheck.…`
+  coverageCheck: # expressions read it as `steps.coverageCheck.…` (a hyphenated id needs `steps['coverage-check']`)
     type: "custom:jev-eval"
     model: jev-1.13.0 # a version, never `jev-latest`
     inputs: # explicit refs, resolved like an agent node's; each becomes state.artifacts.<alias>

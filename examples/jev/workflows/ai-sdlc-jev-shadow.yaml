@@ -116,7 +116,8 @@ nodes:
   # JEV: three narrow judgments over the four artifacts the review stage produced and consumed.
   # Each question is one dimension with concrete levels or options; the model reads the
   # instructions literally, so the criteria say what counts rather than how much it matters.
-  # The node id has no hyphen so expressions can write `steps.jevShadow.…`.
+  # The node id has no hyphen so expressions can write `steps.jevShadow.…` rather than
+  # `steps['jev-shadow'].…`; either works.
   jevShadow:
     type: "custom:jev-eval"
     name: "JEV shadow: criterion coverage and conflicting evidence"
