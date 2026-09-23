@@ -16,6 +16,7 @@ import {
   parseOrcaConfig,
   parsePromptTemplate,
   parseWorkflow,
+  readJsonl,
   silentLogger,
   TemplateRegistry,
   WorkflowRegistry,
@@ -383,6 +384,7 @@ describe("session config options (#188)", () => {
   it("discovers an agent's models from its first session and records the chosen one as overrides.model (#189)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-facade-models-"));
     dirs.push(dir);
+    const promptLog = join(dir, ".orca-test", "prompts.jsonl");
     const downstream: SessionConfigOption[] = [
       {
         type: "select",
@@ -432,7 +434,7 @@ describe("session config options (#188)", () => {
         await run(ctx, sessionId);
         return { before, after: update.configOptions };
       },
-      { configOptions: downstream },
+      { configOptions: downstream, promptLog },
     );
     // Nothing declared, nothing run: only the placeholder.
     expect(result.before?.type === "select" && result.before.options).toEqual([
@@ -454,10 +456,14 @@ describe("session config options (#188)", () => {
     const states = await Promise.all(runs.map((r) => orchestrator.getState(r.id)));
     expect(states.map((s) => s.run.overrides)).toContainEqual({ model: { scripted: "deep" } });
     expect(states.map((s) => s.run.overrides)).toContainEqual(undefined);
+    // The engine applies overrides.model right after session/new (#187): the chosen model
+    // reaches the scripted agent, and only on the second run - the first selected nothing.
+    const sets = (await readJsonl(promptLog, { parse: (raw) => raw as { configId?: string; value?: unknown } }))
+      .filter((l) => l.configId !== undefined)
+      .map((l) => ({ configId: l.configId, value: l.value }));
+    expect(sets).toEqual([{ configId: "model", value: "deep" }]);
   }, 60_000);
 
-  // Needs #187 (the engine applying overrides.model to the agent's session) before the chosen
-  // model can show up in the scripted agent's prompt log as a `{sessionId, configId, value}` entry.
   it("advertises the shipped template packs and records the chosen one as overrides.templatePack", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-facade-packs-"));
     dirs.push(dir);
@@ -480,8 +486,6 @@ describe("session config options (#188)", () => {
     const [summary] = await orchestrator.listRunSummaries();
     expect((await orchestrator.getState(summary!.id)).run.overrides).toEqual({ templatePack: "strict" });
   }, 60_000);
-
-  it.todo("a selected model reaches the agent's session (prompt log) once #187 applies overrides.model");
 });
 
 describe("buildConfigOptions", () => {
