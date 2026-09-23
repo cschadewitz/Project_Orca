@@ -313,7 +313,10 @@ precedence, stated once: an item that names its own `workflowId` wins; otherwise
 `workflow` pin, then `overrides.itemWorkflow` from the run's selection record (#186), then
 `vars.itemWorkflow`. A pin that differs from the selection is logged as a warning, and the
 dispatch result's `itemWorkflowSource` says which one applied (`node`, `override`, `var`).
-(`--workflow` on `orca plan dispatch` picks the *program* workflow to run instead of
-`plan-resume`, not the item workflow.)
+On the command line, `--item-workflow <id>` on `orca submit` and `orca plan dispatch` writes
+`overrides.itemWorkflow`, so it beats `program.itemWorkflow` for that one run without a config
+edit. `--workflow` on `orca plan dispatch` keeps its meaning: it picks the *program* workflow
+to run instead of `plan-resume`, never the item workflow, and one with no
+`custom:plan-dispatch` node is refused with `CONFIG_INVALID` before anything starts (#126).
 
 Render any of them as Mermaid with `pnpm run orca graph <id>` (or `orca validate --mermaid`).

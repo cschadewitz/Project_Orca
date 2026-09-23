@@ -50,6 +50,16 @@ From a shell inside a task folder: `orca kepler` shows what ORCA sees (task id, 
 from `AGENTS.md`, worktrees); `orca submit "$(head -1 AGENTS.md)" --body-file AGENTS.md`
 drives the task through the program workflow using the task's worktrees.
 
+The same selections a Kepler session makes through config options are flags here, so a
+script and a person drive one mechanism: `orca run <wf> --agent <role>=<agentId>
+--model <agentId>=<modelId>` (both repeatable; `--model <modelId>` alone when exactly one
+agent is in play, otherwise the run is refused naming the agents), `--item-workflow <id>` on
+`submit` and `plan dispatch`, and `--template-pack <name>` on all three. They become the
+run's selection record (#186), and an unknown role, agent, model or workflow fails with the
+known set before the run starts. `orca agents` lists each agent's declared models with the
+default marked; models a running daemon has discovered are shown when `agents.list` carries
+them, otherwise the line reads "not probed", because that command never spawns an agent.
+
 ### What Kepler does not expose (yet)
 
 Kepler has no public API to create sessions or tasks from outside; the ACP‑agent route
