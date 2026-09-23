@@ -171,7 +171,18 @@ that never started get a fresh child run.
    artifact inputs as prior workflow context. Earlier reports remain in the
    content-addressed store as explicit inputs, including after an interrupted turn.
 3. Open (or reuse, `sessionMode: per-run`) an **ACP session** on the agent's
-   host. ORCA is the ACP *client*: it serves `fs/read_text_file`,
+   host. The agent is resolved through the run's **selection record** (#186):
+   `run.created` carries an optional `overrides` — `roles` (role → agent id),
+   `model` (one id, or agent id → model id), `itemWorkflow` and `templatePack` —
+   and every step sees the registry through `AgentRegistry.withOverrides(...)`,
+   a read‑only view that consults `overrides.roles` before the config's role
+   mapping and never changes the shared registry. Because the record is in the
+   event log, a replay resolves the same agents the live run did even after the
+   config's roles changed; a log without the field is a run with no overrides.
+   Child runs inherit their parent's record unless the node sets its own, and an
+   unknown agent or an unfilled role is refused at `startRun` with
+   `AGENT_NOT_FOUND` rather than on the first step that needs it.
+   ORCA is the ACP *client*: it serves `fs/read_text_file`,
    `fs/write_text_file` from the host file system (scoped to the workspace) and
    answers `session/request_permission` through the agent's permission policy —
    the rules configured on the agent first, then any the workspace sidecar has
@@ -224,10 +235,18 @@ back to `build` with the review as an extra input. That *is* the hand‑off.
   or something can never run.
 - `custom:plan-dispatch` → runs the item workflow for whatever the scheduler
   says is ready, re‑scheduling after every completion and on every plan change.
-  The workflow per item is the item's own `workflowId`, else `vars.itemWorkflow`
-  (seeded from `program.itemWorkflow`, default `ai-sdlc`); each item gets its
-  own **workspace** from the `WorkspaceProvider` (a git worktree per item, a
-  Kepler task worktree, or the current directory). Items waiting on other
+  The workflow per item is the item's own `workflowId`, else the node's
+  `workflow` pin, else `overrides.itemWorkflow` from the run's selection
+  record, else `vars.itemWorkflow` (seeded from `program.itemWorkflow`, default
+  `ai-sdlc`); the result's `itemWorkflowSource` says which (`node`, `override`
+  or `var`). Each item gets its own **workspace** from the `WorkspaceProvider`
+  (a git worktree per item, a Kepler task worktree, or the current directory).
+  The `local` provider is one shared checkout, so in a git checkout a work‑item
+  run switches it to `orca/<slug>` (created from the current HEAD, or reused)
+  and records the branch it replaced as `workspace.previousBranch` in
+  `run.created`; ORCA does not switch it back, and two items running at once in
+  one `local` checkout will switch the branch under each other. Use
+  `git-worktree` when runs must not share a checkout (#139). Items waiting on other
   requests are deferred and picked up by `workflows/plan-resume.yaml`
   (`orca plan dispatch`). Unlike a `parallel` fan‑out, the set of branches is
   not known up front: it is re‑computed from the live plan on every wake, which

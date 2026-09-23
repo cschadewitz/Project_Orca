@@ -308,8 +308,12 @@ ORCA appends the **deliverables block** to the rendered prompt of every node tha
 
 Neither pins the item workflow on its `custom:plan-dispatch` node: both default
 `vars.itemWorkflow` to `ai-sdlc`, and `orca submit` / `orca plan dispatch` override it with
-`program.itemWorkflow` from `orca.config.yaml`, so the same setting steers both. An item that
-names its own `workflowId` wins over either. (`--workflow` on `orca plan dispatch` picks the
-*program* workflow to run instead of `plan-resume`, not the item workflow.)
+`program.itemWorkflow` from `orca.config.yaml`, so the same setting steers both. The
+precedence, stated once: an item that names its own `workflowId` wins; otherwise the node's
+`workflow` pin, then `overrides.itemWorkflow` from the run's selection record (#186), then
+`vars.itemWorkflow`. A pin that differs from the selection is logged as a warning, and the
+dispatch result's `itemWorkflowSource` says which one applied (`node`, `override`, `var`).
+(`--workflow` on `orca plan dispatch` picks the *program* workflow to run instead of
+`plan-resume`, not the item workflow.)
 
 Render any of them as Mermaid with `pnpm run orca graph <id>` (or `orca validate --mermaid`).

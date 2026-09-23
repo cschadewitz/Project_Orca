@@ -54,6 +54,10 @@ path runs it and reports failures. Agent‑facing input shapes are
 `RiskInputSchema`, `DecisionInputSchema`, `RiskRegisterSchema` (front matter of a
 `risk-register`) and `DecisionMatrixArtifactSchema` (front matter of a `decision-matrix`).
 
+A plan key (`PlanKeySchema`) is kebab‑case, at most 48 characters (`SLUG_MAX_LENGTH`, kept
+beside the schema so `slugify` cannot drift from it) and never starts or ends with `-` —
+the same shape whether ORCA generated it or an agent wrote it in front matter (#117).
+
 ## Plan journal (`model/plan-events.ts`)
 
 `{ id, seq, planId, at, type, origin, payload }` with `origin.kind` ∈ `decomposition | artifact |
@@ -106,7 +110,10 @@ authoring guide.
 
 `Run` carries workflow id+version, status (`created → running ⇄ waiting → completed | failed | cancelled`,
 plus `paused` while parked at a human gate awaiting `orca answer`),
-outcome, `workspace` (host id + cwd + repo/branch), `vars`, and parent links.
+outcome, `workspace` (host id + cwd + repo/branch, plus `previousBranch` when the `local`
+provider switched a shared checkout to the work item's `orca/<slug>` branch), `vars`,
+parent links, and `overrides` — the run's selection record (`RunOverrides`: `roles`,
+`model`, `itemWorkflow`, `templatePack`), present only on runs started with one.
 `StepRun` is one execution attempt of one node: attempt number, iteration, agent session id,
 input artifact ids (accumulated from `step.inputs` as the executor resolves them), `result` (`choice`, `outcome`, `message`, `artifactIds`, `data`), error, child run ids.
 `children` lists the same child runs with their `branch` key (loop index, branch name, work‑item
@@ -144,6 +151,10 @@ absent on older logs and on the cases that have nothing to say (a workflow gate 
 an answer given without a note has no note), and a reader must not turn that into an empty
 string on screen.
 
+`run.created` carries `workspace` and `vars` and, since v0.6.0, two optional additions: the
+`overrides` record described above, which a replay uses to resolve the same agents the live
+run did, and `workspace.previousBranch`. Both are absent on older logs and read as "none".
+
 ## Expression / template context
 
 Built by `RunContext.evalContext()` (`packages/engine/src/run-context.ts`):
@@ -177,7 +188,9 @@ Concurrent `parallel` branches do not precede one another, so they stay isolated
 ## Config (`config.ts`)
 
 `orca.config.yaml`: `storeDir`, `hosts[]` (`local` | `ssh`), `agents[]` (command, args, env,
-hostId, roles, permissions, mcpServers, sessionMode, turnTimeoutMs, cancelGraceMs), `roles{}`,
+hostId, roles, permissions, mcpServers, sessionMode, turnTimeoutMs, cancelGraceMs, and the
+declared `models[]` — `{ id, name, description? }` — with `defaultModel`, which a run's
+`overrides.model` is checked against), `roles{}`,
 `workflows[]`/`templates[]` globs, `program{workflow,itemWorkflow}`,
 `planning{plan, planName, policy, riskMatrix}`, `workspace`
 (`local` | `git-worktree` | `kepler`), `humanInput` (`pause` | `cli` | `auto`), `plugins[]`.

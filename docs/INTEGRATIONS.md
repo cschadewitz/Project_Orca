@@ -19,7 +19,11 @@ and `pnpm link --global`, or `node <repo>/packages/cli/dist/main.js acp --config
 A Kepler session then drives ORCA like any agent:
 
 - the prompt becomes a **Request** (first line = title) — or `/run ai-sdlc key=value` to
-  run a single workflow in the session's cwd, or `/status` to list the session's runs;
+  run a single workflow in the session's cwd, or `/status` to list the session's runs.
+  The facade advertises both to the client as ACP `available_commands_update` right after
+  `session/new`, so Kepler renders them as real slash commands with an input hint (the
+  hint names the selected workflow once one is chosen); an unknown `/command`, or `/run`
+  with no workflow, answers with the command list instead of being submitted as a Request;
 - ORCA decomposes it and launches the real agents (from `orca.config.yaml`) on the task's
   worktrees, locally or over SSH;
 - progress streams back as ACP updates: the root workflow and child runs appear as a flat
