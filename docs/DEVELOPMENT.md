@@ -602,3 +602,10 @@ procedure above.
 writes files from a **playbook** (per artifact kind, sequential entries). It is what makes the
 end‑to‑end tests and the demo deterministic and LLM‑free. Point any ACP client at
 `pnpm exec tsx packages/testing/src/scripted-agent/main.ts --playbook pb.yaml` to try it.
+
+The playbook also takes `configOptions`, the ACP session config options the agent advertises
+in `session/new` (a model list, a mode, a boolean); `scriptedAgentSpec({ configOptions })` sets
+the same thing through `ORCA_CONFIG_OPTIONS_JSON`. Each session gets its own copy, a
+`session/set_config_option` updates that copy's `currentValue` and answers with the full list,
+and every set is appended to the prompt log as `{ sessionId, configId, value }`, which is how
+an engine test asserts a selected model actually reached the agent (#185).

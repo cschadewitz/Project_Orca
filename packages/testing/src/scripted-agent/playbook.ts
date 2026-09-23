@@ -43,7 +43,7 @@ export const PlaybookSchema = z.object({
    */
   configOptions: z.array(SessionConfigOptionSchema).optional(),
 });
-export type Playbook= z.infer<typeof PlaybookSchema>;
+export type Playbook = z.infer<typeof PlaybookSchema>;
 /** What callers write (defaults optional). */
 export type PlaybookInput = z.input<typeof PlaybookSchema>;
 

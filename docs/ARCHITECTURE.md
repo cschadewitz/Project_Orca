@@ -195,6 +195,15 @@ that never started get a fresh child run.
    An `ask` decision becomes its own human‑input request (`human.requested` /
    `human.answered`, one `hi_*` id per ask), so several pending tool calls can be
    listed and answered independently.
+   `AgentSession` also keeps what `session/new` advertised as the agent's
+   **session config options** (a model list, a mode, a reasoning level),
+   normalised into ORCA's own `SessionConfigOption` (`packages/core`) so the
+   engine never sees the SDK's shape: an agent's legacy `modes` become one
+   select with `category: "mode"`, and `configOptions` wins when it sends both.
+   `setConfigOption` sends `session/set_config_option` and replaces the cache
+   from the full list the agent returns; an unsolicited `config_option_update`
+   does the same and is logged as an `agent.update` (#185). ORCA advertises
+   that it can set boolean options, so agents may offer them.
 4. `session/prompt`. Session updates stream into the event log as
    `agent.update` (text chunks are coalesced; tool calls, plan entries and
    locations are kept as a compact `AgentUpdateSummary`, not the raw ACP payload).
