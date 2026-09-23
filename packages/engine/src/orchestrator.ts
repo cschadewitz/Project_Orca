@@ -130,6 +130,9 @@ type AttachedLease = HeldLease & { readonly lost: boolean };
 /** A work-item claim together with the state of the run that holds it. */
 export type HeldClaim = WorkItemClaim & { owner: RunSummary["status"] | "missing" };
 
+/** Called as each downstream agent session opens; see `Orchestrator.onAgentSessionOpened`. */
+export type AgentSessionOpenedListener = (info: { runId: string; agentId: string; session: AgentSession }) => void;
+
 export interface StartRunOptions {
   workflowId?: string;
   inline?: { graph: WorkflowGraph; id: string; version?: string };
@@ -182,6 +185,7 @@ export class Orchestrator {
   private readonly terminalStates = new Map<string, RunState>();
   /** Per-run pooled sessions. `current.step` is the step using the session right now, so events from a long-lived session are attributed correctly. */
   private readonly sessions = new Map<string, { session: AgentSession; current: { step: StepRun } }>();
+  private readonly sessionOpenedListeners = new Set<AgentSessionOpenedListener>();
 
   constructor(o: OrchestratorOptions) {
     this.stores = o.stores;
@@ -336,6 +340,15 @@ export class Orchestrator {
   }
   subscribe(listener: EventListener, filter?: EventFilter): () => void {
     return this.stores.events.subscribe(listener, filter);
+  }
+  /**
+   * Every downstream agent session as it opens, in process. `agent.session.opened` records
+   * that it happened; this hands over the live session, for a caller that needs its state -
+   * the ACP facade reads `configOptions` to learn which models an agent offers (#189).
+   */
+  onAgentSessionOpened(listener: AgentSessionOpenedListener): () => void {
+    this.sessionOpenedListeners.add(listener);
+    return () => this.sessionOpenedListeners.delete(listener);
   }
   listRuns(): Promise<string[]> {
     return this.stores.events.listRuns();
@@ -1353,6 +1366,13 @@ export class Orchestrator {
       type: "agent.session.opened",
       payload: { stepRunId: step.id, sessionId: session.id, agentId: agent.id, hostId: host.id, cwd: rc.workspace.cwd },
     });
+    for (const listener of this.sessionOpenedListeners) {
+      try {
+        listener({ runId: rc.id, agentId: agent.id, session });
+      } catch (e) {
+        rc.logger.warn("agent session listener threw", { error: String(e) });
+      }
+    }
     const close = async () => {
       await session.close();
       await rc

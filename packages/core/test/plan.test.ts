@@ -999,7 +999,8 @@ describe("artifact signals", () => {
     expect(PlanKeySchema.safeParse("auth-flow").success).toBe(true);
     // Anything slugify produces is a valid key.
     for (const text of ["  Where do Sessions live?  ", "a".repeat(47) + " bbbbbbbb", "x".repeat(200), "***"])
-      expect(PlanKeySchema.safeParse(slugify(text)).success).toBe(true);  });
+      expect(PlanKeySchema.safeParse(slugify(text)).success).toBe(true);
+  });
   it("lifts risks, decisions and dependencies from generic front matter", () => {
     const s = extractPlanSignals({
       kind: "spec",
