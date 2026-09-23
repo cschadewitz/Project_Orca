@@ -733,8 +733,7 @@ export class Orchestrator {
     const scoped = this.agents.withOverrides(overrides);
     for (const node of Object.values(def.nodes)) {
       const selector = (node as { agent?: unknown }).agent;
-      if (selector && typeof selector === "object" && "role" in selector)
-        scoped.resolve(selector as AgentSelector);
+      if (selector && typeof selector === "object" && "role" in selector) scoped.resolve(selector as AgentSelector);
     }
   }
 
