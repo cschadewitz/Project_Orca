@@ -717,6 +717,12 @@ export function fakeBridge(options: FakeBridgeOptions = {}): FakeBridge {
 
   const bridge: FakeOrcaBridge = {
     platform: options.platform ?? "darwin",
+    updates: {
+      read: () => ({ phase: "unavailable", current: "0.0.0" }),
+      act: () => Promise.resolve({ ok: true, result: { phase: "unavailable", current: "0.0.0" } }),
+      subscribe: () => () => undefined,
+      prepare: () => () => undefined,
+    },
     hello: () => call("hello", undefined) as Promise<BridgeResult<HelloResult>>,
     workspace: {
       read: () => workspace,

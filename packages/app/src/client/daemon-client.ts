@@ -9,6 +9,8 @@
  * hands back a stream that reconnects and resumes on its own. Both halves are the same
  * daemon on the same port; a client that only reads never opens a socket.
  */
+import { MaintenanceResultSchema, type MaintenanceParams, type MaintenanceResult } from "@orca/protocol";
+
 import {
   AGENTS_LIST_METHOD,
   ARTIFACTS_GET_METHOD,
@@ -159,6 +161,9 @@ export class DaemonClientError extends Error {
 }
 
 export class DaemonClient {
+  maintenance(params: MaintenanceParams): Promise<MaintenanceResult> {
+    return this.call("maintenance", params, MaintenanceResultSchema);
+  }
   private nextId = 1;
 
   constructor(

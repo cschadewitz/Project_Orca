@@ -2,7 +2,7 @@
  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
  * The CLI, the ACP facade and embedders all go through here.
  */
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
@@ -180,8 +180,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     : await loadConfig(cwd, opts.configPath);
   const logger = opts.logger ?? consoleLogger(opts.logLevel ?? "info");
   const agents = AgentRegistry.fromConfig(config);
-  const templates = await loadTemplates(config.templates, configDir);
-  const workflows = await loadWorkflows(config.workflows, configDir);
+  const assets = await releaseAssets(config);
+  const templates = await loadTemplates(assets.templates, configDir);
+  const workflows = await loadWorkflows(assets.workflows, configDir);
   const executors = builtinExecutors();
   let humanInput = opts.humanInput ?? makeHumanInput(config);
   let workspaceProvider = makeWorkspaceProvider(config, configDir, agents);
@@ -268,4 +269,18 @@ function stripUndefined<T extends object>(o: T): { [K in keyof T]?: Exclude<T[K]
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as {
     [K in keyof T]?: Exclude<T[K], undefined>;
   };
+}
+
+/** Resolve shipped paths once; a running process never follows the moving release pointer. */
+export async function releaseAssets(
+  config: Pick<OrcaConfig, "templates" | "workflows">,
+): Promise<Pick<OrcaConfig, "templates" | "workflows">> {
+  const release = process.env.ORCA_RELEASE ? await realpath(process.env.ORCA_RELEASE) : undefined;
+  const paths = (items: string[]) =>
+    items.map((path) => {
+      if (!path.includes("${ORCA_RELEASE}")) return path;
+      if (!release) throw new Error("ORCA_RELEASE must name a concrete managed release");
+      return path.replaceAll("${ORCA_RELEASE}", release);
+    });
+  return { templates: paths(config.templates), workflows: paths(config.workflows) };
 }

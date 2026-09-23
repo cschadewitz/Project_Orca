@@ -37,10 +37,11 @@ describe("startDaemon", () => {
     expect(result).toEqual({
       protocol: PROTOCOL_VERSION,
       orcaVersion: "0.1.0-test",
+      processId: process.pid,
       storeDir: "/tmp/store",
       capabilities: ["runs.read"],
       // This daemon was started without a store, so the read methods are not on offer.
-      methods: ["hello"],
+      methods: ["hello", "maintenance"],
     });
   });
 

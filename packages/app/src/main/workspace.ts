@@ -119,6 +119,43 @@ export class Workspace {
   /** The switch in flight, if there is one. `ready()` is the whole reason it is held. */
   private pending: Promise<void> | undefined;
   private closed = false;
+  private updating = false;
+  private updateStopped = false;
+
+  async stopForUpdate(): Promise<void> {
+    if (!this.updating) throw new Error("Update was not prepared");
+    if (this.daemon) {
+      await this.daemon.stop();
+      this.daemon = undefined;
+      this.updateStopped = true;
+    }
+  }
+
+  async prepareUpdate(token: string): Promise<void> {
+    this.updating = true;
+    try {
+      await this.ready();
+      if (this.daemon) {
+        const result = await this.client.maintenance({ action: "prepare", token });
+        if (!result.ready) throw new Error(`Bundled daemon busy: ${result.active.join(", ")}`);
+      }
+    } catch (error) {
+      this.updating = false;
+      throw error;
+    }
+  }
+
+  async cancelUpdate(token: string): Promise<void> {
+    try {
+      if (this.daemon) await this.client.maintenance({ action: "resume", token });
+    } finally {
+      this.updating = false;
+      if (this.updateStopped) {
+        this.updateStopped = false;
+        await this.connect();
+      }
+    }
+  }
 
   constructor(deps: WorkspaceDeps) {
     this.deps = deps;
@@ -161,6 +198,7 @@ export class Workspace {
    * window that silently did nothing.
    */
   async open(path: string): Promise<WorkspaceSnapshot> {
+    if (this.updating) throw new Error("Update restart is in progress");
     if (!this.deps.findEntry()) throw new NoBundledDaemonError(path);
     await this.switchTo({ path, readOnly: true, source: "chosen" });
     return this.snapshot;
@@ -168,6 +206,7 @@ export class Workspace {
 
   /** The banner's **Connect to a daemon**: back to the daemon the app would have used. */
   async connectLive(): Promise<WorkspaceSnapshot> {
+    if (this.updating) throw new Error("Update restart is in progress");
     const { explicitUrl, defaultPath } = this.deps;
     await this.switchTo({ path: defaultPath(), readOnly: false, source: explicitUrl ? "env" : "default" });
     return this.snapshot;

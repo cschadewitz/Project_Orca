@@ -92,7 +92,8 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * client that switches on the source shows it as the floor it is rather than as config
  * somebody wrote.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 7 };
+/** 1.8 adds maintenance admission and optional hello.processId for local supervisors. */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 8 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
   return `${v.major}.${v.minor}`;

@@ -160,7 +160,21 @@ jobs:
       # way everywhere, which is what this step wants.
       - name: Package
         shell: bash
-        run: pnpm --filter @orca/app exec electron-builder -c.extraMetadata.version=${{ steps.version.outputs.version }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.name }}" = windows ]; then
+            channel=latest
+            case "$VERSION" in *-*) channel=prerelease ;; esac
+            for arch in x64 arm64; do
+              pnpm --filter @orca/app exec electron-builder --win --"$arch" --publish never \
+                -c.extraMetadata.version="$VERSION" -c.directories.output="dist/release/$arch" \
+                -c.publish.channel="$channel-$arch"
+            done
+          else
+            pnpm --filter @orca/app exec electron-builder --publish never -c.extraMetadata.version="$VERSION"
+          fi
 
       # The definition of done, as far as a runner can check it: launch the packaged app
       # with no daemon running and nothing in `ORCA_DAEMON_URL`, and see the bundled daemon
@@ -214,6 +228,14 @@ jobs:
             packages/app/dist/release/*.zip
             packages/app/dist/release/*.exe
             packages/app/dist/release/*.mjs
+            packages/app/dist/release/x64/*.exe
+            packages/app/dist/release/x64/*.zip
+            packages/app/dist/release/x64/*.blockmap
+            packages/app/dist/release/x64/*-x64.yml
+            packages/app/dist/release/arm64/*.exe
+            packages/app/dist/release/arm64/*.zip
+            packages/app/dist/release/arm64/*.blockmap
+            packages/app/dist/release/arm64/*-arm64.yml
           if-no-files-found: error
           retention-days: 14
           # Installers and archives are already compressed; another pass only burns CPU.

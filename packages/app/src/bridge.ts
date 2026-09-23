@@ -14,6 +14,8 @@
  * says so. `alerts.update` is the one call in the other direction with nothing to answer:
  * it states what is waiting, and the main process has no verdict to give back.
  */
+import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
+
 import type { ConnectionState } from "@orca/design";
 import type {
   AgentsListParams,
@@ -191,6 +193,12 @@ export interface AlertActivation {
 }
 
 export interface OrcaBridge {
+  updates: {
+    read(): UpdateSnapshot;
+    act(action: UpdateAction): Promise<BridgeResult<UpdateSnapshot>>;
+    subscribe(listener: (state: UpdateSnapshot) => void): () => void;
+    prepare(listener: (locked: boolean) => boolean): () => void;
+  };
   /** `process.platform` of the main process: `darwin` puts shortcuts on ⌘, everything else on Ctrl. */
   readonly platform: string;
   /** The daemon handshake: protocol version, ORCA version and the daemon's capabilities. */

@@ -28,6 +28,8 @@
  *   file moved. So the hook says the sentence itself, into the app's one live region
  *   (`a11y/announce.ts`).
  */
+import { useUpdateDraft } from "../update-drafts.js";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ConfigDocument,
@@ -101,6 +103,7 @@ export function useConfigFeed(): ConfigFeed {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<ConfigState>({ phase: "loading" });
   const [drafts, setDrafts] = useState<Drafts>({});
+  useUpdateDraft(Object.values(drafts).some(Boolean));
   const [saves, setSaves] = useState<SaveStates>({});
 
   /* The revisions held right now, off React state: the `config.changed` listener has to

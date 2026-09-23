@@ -1,0 +1,78 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+const fake = vi.hoisted(() => ({
+  options: vi.fn(),
+  instance: {
+    autoDownload: true,
+    autoInstallOnAppQuit: true,
+    allowPrerelease: true,
+    allowDowngrade: true,
+    logger: null,
+    on: vi.fn(),
+    off: vi.fn(),
+    once: vi.fn(),
+    checkForUpdates: vi.fn(() => Promise.resolve({ isUpdateAvailable: true, updateInfo: { version: "0.6.1" } })),
+    downloadUpdate: vi.fn(() => Promise.resolve([])),
+    quitAndInstall: vi.fn(),
+  },
+}));
+vi.mock("electron-updater", () => ({
+  default: {
+    NsisUpdater: class {
+      constructor(options: unknown) {
+        fake.options(options);
+        return fake.instance;
+      }
+    },
+  },
+}));
+import { updateDriver } from "../src/main/update-driver.js";
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.clearAllMocks();
+});
+it("configures private HTTPS requests only in main and disables implicit install/prereleases", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "orca-feed-"));
+  try {
+    const file = join(dir, "token");
+    writeFileSync(file, "private-read-token\n");
+    vi.stubEnv("ORCA_UPDATE_URL", "https://feed.example/stable/");
+    vi.stubEnv("ORCA_UPDATE_TOKEN_FILE", file);
+    const driver = updateDriver(true, "win32", "arm64")!;
+    expect(await driver.check()).toBe("0.6.1");
+    expect(fake.options).toHaveBeenCalledWith({
+      provider: "generic",
+      url: "https://feed.example/stable/",
+      channel: "latest-arm64",
+      requestHeaders: { Authorization: "Bearer private-read-token" },
+    });
+    expect(fake.instance).toMatchObject({
+      autoDownload: false,
+      autoInstallOnAppQuit: false,
+      allowPrerelease: false,
+      allowDowngrade: false,
+    });
+    expect(fake.instance.downloadUpdate).not.toHaveBeenCalled();
+    writeFileSync(file, "rotated");
+    await driver.check();
+    expect(fake.options).toHaveBeenLastCalledWith(
+      expect.objectContaining({ requestHeaders: { Authorization: "Bearer rotated" } }),
+    );
+    fake.instance.checkForUpdates.mockRejectedValueOnce(new Error("401"));
+    await expect(driver.check()).rejects.toThrow("401");
+    expect(await driver.check()).toBe("0.6.1");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+it("refuses unsupported installs and non-HTTPS or credential-bearing URLs", async () => {
+  expect(updateDriver(false, "win32", "x64")).toBeUndefined();
+  expect(updateDriver(true, "linux", "x64")).toBeUndefined();
+  for (const url of ["http://feed.example/", "https://user:secret@feed.example/", "https://feed.example/?secret=x"]) {
+    vi.stubEnv("ORCA_UPDATE_URL", url);
+    await expect(updateDriver(true, "win32", "x64")!.check()).rejects.toThrow("Invalid update feed");
+  }
+  expect(fake.options).not.toHaveBeenCalled();
+});

@@ -8,6 +8,7 @@
  * carries has room. `status-waiting` is still the one status permitted in this bar (rule 6),
  * and the waiting affordance is what it is for.
  */
+import { UpdateControl } from "./update-control.js";
 import type { JSX } from "react";
 import { STATUS_PRESENTATION } from "@orca/design";
 import { shortcutLabel } from "../keyboard-map.js";
@@ -42,6 +43,7 @@ export function TitleBar({ platform, waitingCount, onOpenAttention, onOpenPalett
         </button>
       ) : null}
       <span className="orca-spacer" />
+      <UpdateControl />
       {/* The palette is reachable by mouse as well as by ⌘K — "nothing is reachable by
           keyboard alone or by mouse alone" (docs/design/50-accessibility-and-keyboard.md). */}
       <Button
