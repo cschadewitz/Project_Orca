@@ -14,7 +14,11 @@
  * Prompt grammar:
  *   /run <workflowId> [key=value ...]   run a workflow in the session cwd
  *   /status                             summarise runs in this session
- *   anything else                       submit as a Request (first line = title)
+ *   anything else                       submit as a Request (first line = title), or run the
+ *                                       workflow selected in `orca/workflow` with `vars.prompt`
+ *
+ * Session config options (config-options.ts) select the workflow, agents per role, model
+ * and template pack; the choices become the next run's `overrides`.
  *
  * The two commands are advertised as ACP `available_commands_update` after
  * `session/new`, and an unknown `/word` answers with that list instead of
@@ -23,8 +27,15 @@
 import type { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { stdioAcpStream } from "@orca/agents";
-import { newId, type OrcaEvent, type RunState, type WorkflowDefinition } from "@orca/core";
+import { isOrcaError, newId, type OrcaEvent, type RunState, type WorkflowDefinition } from "@orca/core";
 import type { Orchestrator, ProgramService } from "@orca/engine";
+import {
+  applyConfigOption,
+  buildConfigOptions,
+  selectionOverrides,
+  WORKFLOW_OPTION,
+  type FacadeSelection,
+} from "./config-options.js";
 import { UpstreamHumanInput } from "./upstream-human-input.js";
 
 export interface OrcaAcpAgentOptions {
@@ -43,8 +54,8 @@ interface FacadeSession {
   runIds: string[];
   active?: { runId: string };
   lastPlan?: string;
-  /** The workflow `/run` defaults to, once a client has selected one (#188). */
-  workflowId?: string;
+  /** The client's config option choices (#188); `selection.workflow` is also `/run`'s default. */
+  selection: FacadeSelection;
 }
 
 /** The facade's slash commands, as ACP advertises them. */
@@ -67,6 +78,8 @@ const commandList = (defaultWorkflowId?: string): string =>
 export class OrcaAcpAgent {
   private readonly sessions = new Map<string, FacadeSession>();
   private readonly humanInput: UpstreamHumanInput;
+  /** From `initialize`; decides whether boolean config options are offered. */
+  private clientCapabilities: acp.ClientCapabilities | undefined;
   constructor(private readonly opts: OrcaAcpAgentOptions) {
     const orchestrator = opts.orchestrator;
     this.humanInput =
@@ -86,23 +99,20 @@ export class OrcaAcpAgent {
 
   register(app: acp.AgentApp): acp.AgentApp {
     return app
-      .onRequest(acp.methods.agent.initialize, () => ({
-        protocolVersion: acp.PROTOCOL_VERSION,
-        agentCapabilities: {
-          loadSession: false,
-          promptCapabilities: { image: false, audio: false, embeddedContext: true },
-        },
-        agentInfo: { name: this.opts.name ?? "orca", version: this.opts.version ?? "0.1.0" },
-      }))
+      .onRequest(acp.methods.agent.initialize, (ctx) => {
+        this.clientCapabilities = ctx.params.clientCapabilities;
+        return this.initializeResponse();
+      })
       .onRequest(acp.methods.agent.authenticate, () => ({}))
       .onRequest(acp.methods.agent.session.new, (ctx) => {
         const id = newId("sess");
-        const session: FacadeSession = { id, cwd: ctx.params.cwd, runIds: [] };
+        const session: FacadeSession = { id, cwd: ctx.params.cwd, runIds: [], selection: { roles: {} } };
         this.sessions.set(id, session);
         // After the response, so the client knows the session the update names.
         setImmediate(() => void this.sendCommands(ctx.client, session).catch(() => undefined));
-        return { sessionId: id };
+        return { sessionId: id, configOptions: this.configOptions(session) };
       })
+      .onRequest(acp.methods.agent.session.setConfigOption, (ctx) => this.setConfigOption(ctx))
       .onNotification(acp.methods.agent.session.cancel, async (ctx) => {
         const s = this.sessions.get(ctx.params.sessionId);
         if (s?.active) await this.opts.orchestrator.cancel(s.active.runId, "cancelled by client");
@@ -110,12 +120,60 @@ export class OrcaAcpAgent {
       .onRequest(acp.methods.agent.session.prompt, (ctx) => this.prompt(ctx));
   }
 
+  private initializeResponse(): acp.InitializeResponse {
+    return {
+      protocolVersion: acp.PROTOCOL_VERSION,
+      agentCapabilities: {
+        loadSession: false,
+        promptCapabilities: { image: false, audio: false, embeddedContext: true },
+      },
+      agentInfo: { name: this.opts.name ?? "orca", version: this.opts.version ?? "0.1.0" },
+    };
+  }
+
   /** Advertise `/run` and `/status`; called after `session/new` and whenever the session's workflow changes. */
   private async sendCommands(client: acp.AgentContext, session: FacadeSession): Promise<void> {
     await client.notify(acp.methods.client.session.update, {
       sessionId: session.id,
-      update: { sessionUpdate: "available_commands_update", availableCommands: facadeCommands(session.workflowId) },
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: facadeCommands(session.selection.workflow),
+      },
     });
+  }
+
+  /** The complete config option list for a session (#188). */
+  private configOptions(session: FacadeSession): acp.SessionConfigOption[] {
+    const o = this.opts.orchestrator;
+    return buildConfigOptions(
+      {
+        workflows: o.workflows.list(),
+        agents: o.agents.listAgents(),
+        // Template packs arrive with #191; until then only the default is offered.
+        templatePacks: [],
+        booleans: this.clientCapabilities?.session?.configOptions?.boolean != null,
+        useClientCwd: this.opts.useClientCwd !== false,
+      },
+      session.selection,
+    );
+  }
+
+  private async setConfigOption(
+    ctx: acp.AgentRequestContext<acp.SetSessionConfigOptionRequest>,
+  ): Promise<acp.SetSessionConfigOptionResponse> {
+    const { sessionId, configId, value } = ctx.params;
+    const session = this.sessions.get(sessionId);
+    if (!session) throw acp.RequestError.invalidParams({ sessionId, reason: "unknown session" });
+    const before = session.selection.workflow;
+    try {
+      session.selection = applyConfigOption(this.configOptions(session), session.selection, configId, value);
+    } catch (e) {
+      if (isOrcaError(e, "CONFIG_INVALID")) throw acp.RequestError.invalidParams({ ...e.details, reason: e.message });
+      throw e;
+    }
+    if (configId === WORKFLOW_OPTION && session.selection.workflow !== before)
+      await this.sendCommands(ctx.client, session);
+    return { configOptions: this.configOptions(session) };
   }
 
   private async prompt(ctx: acp.AgentRequestContext<acp.PromptRequest>): Promise<acp.PromptResponse> {
@@ -149,17 +207,23 @@ export class OrcaAcpAgent {
     // `/run k=v` (no id) falls back to the session's selected workflow, when there is one.
     const runArgs = command === "run" ? text.split(/\s+/).slice(1) : [];
     const named = runArgs[0] !== undefined && !runArgs[0].includes("=") ? runArgs.shift() : undefined;
-    const runWorkflowId = named ?? session.workflowId;
+    const runWorkflowId = named ?? session.selection.workflow;
     if (command !== undefined && (command !== "run" || !runWorkflowId)) {
       await say(
-        `${command === "run" ? "/run needs a workflow id." : `Unknown command /${command}.`} Available commands:\n${commandList(session.workflowId)}\n`,
+        `${command === "run" ? "/run needs a workflow id." : `Unknown command /${command}.`} Available commands:\n${commandList(session.selection.workflow)}\n`,
       );
       return { stopReason: "end_turn" };
     }
 
     const orchestrator = this.opts.orchestrator;
-    const workspace =
-      this.opts.useClientCwd === false ? undefined : { hostId: "local", cwd: session.cwd, provider: "acp-client" };
+    const useClientCwd = session.selection.useClientCwd ?? this.opts.useClientCwd !== false;
+    const workspace = useClientCwd ? { hostId: "local", cwd: session.cwd, provider: "acp-client" } : undefined;
+    // Read once per prompt: a choice made while this run is in flight applies to the next one.
+    const overrides = selectionOverrides(session.selection);
+    const selected = {
+      ...(workspace ? { workspace } : {}),
+      ...(overrides ? { overrides } : {}),
+    };
     let runId: string;
     if (command === "run" && runWorkflowId) {
       const vars: Record<string, unknown> = {};
@@ -167,13 +231,20 @@ export class OrcaAcpAgent {
         const [k, ...v] = kv.split("=");
         if (k) vars[k] = v.join("=");
       }
-      runId = await orchestrator.startRun({ workflowId: runWorkflowId, vars, ...(workspace ? { workspace } : {}) });
+      runId = await orchestrator.startRun({ workflowId: runWorkflowId, vars, ...selected });
+    } else if (session.selection.workflow) {
+      runId = await orchestrator.startRun({
+        workflowId: session.selection.workflow,
+        vars: { prompt: text },
+        ...selected,
+      });
     } else {
       const [title, ...body] = text.split("\n");
       const submitted = await this.opts.program.submit({
         title: title || "Untitled request",
         body: body.join("\n").trim(),
         source: { kind: "acp-session", sessionId: session.id },
+        ...(overrides ? { overrides } : {}),
       });
       runId = submitted.runId;
     }

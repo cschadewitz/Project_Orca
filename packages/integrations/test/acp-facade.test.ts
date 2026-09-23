@@ -7,11 +7,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
 import { parsePromptTemplate, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, ProgramService } from "@orca/engine";
-import { OrcaAcpAgent } from "@orca/integrations";
+import { buildConfigOptions, OrcaAcpAgent } from "@orca/integrations";
 import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec } from "@orca/testing";
 
@@ -80,11 +80,10 @@ async function setup(): Promise<{ dir: string; orchestrator: Orchestrator }> {
   templates.register(parsePromptTemplate("---\nid: x\n---\nunused"));
   const orchestrator = new Orchestrator({
     stores: memoryStores(),
-    agents: new AgentRegistry()
-      .addHost(new LocalHost({ id: "local", type: "local" }))
-      .addAgent(
-        scriptedAgentSpec({ playbookJson: { kinds: { spec: [{ data: { status: "ready" }, body: "spec" }] } } }),
-      ),
+    agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })).addAgent({
+      ...scriptedAgentSpec({ playbookJson: { kinds: { spec: [{ data: { status: "ready" }, body: "spec" }] } } }),
+      roles: ["builder"],
+    }),
     workflows,
     templates,
     workspaceProvider: new LocalWorkspaceProvider(dir),
@@ -231,4 +230,152 @@ describe("ORCA as an ACP agent", () => {
         ?.entries.some((e) => e.content.includes("nested-child")),
     ).toBe(false);
   }, 60_000);
+});
+
+describe("session config options (#188)", () => {
+  type Ctx = { request: acp.ClientSideConnection["request"] };
+  async function drive<T>(
+    clientCapabilities: acp.ClientCapabilities,
+    body: (ctx: Ctx, updates: acp.SessionUpdate[]) => Promise<T>,
+  ): Promise<{ result: T; orchestrator: Orchestrator; updates: acp.SessionUpdate[] }> {
+    const { orchestrator } = await setup();
+    const agentApp = new OrcaAcpAgent({ orchestrator, program: new ProgramService(orchestrator) }).register(
+      acp.agent({ name: "orca-under-test" }),
+    );
+    const updates: acp.SessionUpdate[] = [];
+    const result = await acp
+      .client({ name: "fake-kepler" })
+      .onNotification(acp.methods.client.session.update, (ctx) => {
+        updates.push(ctx.params.update);
+      })
+      .onRequest(acp.methods.client.session.requestPermission, () => ({
+        outcome: { outcome: "selected" as const, optionId: "ship" },
+      }))
+      .connectWith(agentApp, async (ctx) => {
+        await ctx.request(acp.methods.agent.initialize, { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities });
+        return body(ctx, updates);
+      });
+    return { result, orchestrator, updates };
+  }
+  const open = (ctx: Ctx, dir = tmpdir()) => ctx.request(acp.methods.agent.session.new, { cwd: dir, mcpServers: [] });
+  const set = (ctx: Ctx, sessionId: string, configId: string, value: string) =>
+    ctx.request(acp.methods.agent.session.setConfigOption, { sessionId, configId, value });
+  const current = (options: acp.SessionConfigOption[]) =>
+    Object.fromEntries(options.map((o) => [o.id, o.currentValue]));
+
+  it("returns every option with its default in session/new, and no boolean without the capability", async () => {
+    const { result } = await drive({}, async (ctx) => open(ctx));
+    expect(current(result.configOptions ?? [])).toEqual({
+      "orca/workflow": "orca:request",
+      "orca/item-workflow": "orca:default",
+      "orca/agent.builder": "orca:default",
+      "orca/model": "orca:default",
+      "orca/template-pack": "orca:default",
+    });
+    const workflow = result.configOptions!.find((o) => o.id === "orca/workflow")!;
+    expect(workflow).toMatchObject({ category: "mode" });
+    expect(workflow.type === "select" && workflow.options.map((o) => ("value" in o ? o.value : o.group))).toEqual([
+      "orca:request",
+      "mini",
+      "nested-child",
+      "nested",
+    ]);
+    expect(result.configOptions!.find((o) => o.id === "orca/model")).toMatchObject({ category: "model" });
+    expect(workflow.description).toContain("applies to the next run");
+  });
+
+  it("offers boolean options only when the client advertises them", async () => {
+    const { result } = await drive({ session: { configOptions: { boolean: {} } } }, async (ctx) => open(ctx));
+    expect(result.configOptions?.find((o) => o.id === "orca/use-client-cwd")).toMatchObject({
+      type: "boolean",
+      currentValue: true,
+    });
+  });
+
+  it("records each choice, returns the complete list, and starts the next run with those overrides", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-facade-cfg-"));
+    dirs.push(dir);
+    const { result, orchestrator, updates } = await drive({}, async (ctx, seen) => {
+      const { sessionId } = await open(ctx, dir);
+      const lists = [
+        await set(ctx, sessionId, "orca/item-workflow", "nested"),
+        await set(ctx, sessionId, "orca/agent.builder", "scripted"),
+        await set(ctx, sessionId, "orca/model", "orca:default"),
+        await set(ctx, sessionId, "orca/template-pack", "orca:default"),
+        await set(ctx, sessionId, "orca/workflow", "mini"),
+      ];
+      await expect(set(ctx, sessionId, "orca/workflow", "nope")).rejects.toMatchObject({
+        data: { configId: "orca/workflow" },
+      });
+      await expect(set(ctx, sessionId, "orca/nope", "x")).rejects.toBeDefined();
+      for (const list of lists) expect(list.configOptions).toHaveLength(5);
+      await vi.waitFor(() =>
+        expect(
+          seen.some(
+            (u) =>
+              u.sessionUpdate === "available_commands_update" &&
+              u.availableCommands.some((c) => c.input && "hint" in c.input && c.input.hint.startsWith("mini ")),
+          ),
+        ).toBe(true),
+      );
+      const prompted = await ctx.request(acp.methods.agent.session.prompt, {
+        sessionId,
+        prompt: [{ type: "text", text: "Write the spec" }],
+      });
+      return { lists, prompted };
+    });
+    expect(current(result.lists.at(-1)!.configOptions)).toEqual({
+      "orca/workflow": "mini",
+      "orca/item-workflow": "nested",
+      "orca/agent.builder": "scripted",
+      "orca/model": "orca:default",
+      "orca/template-pack": "orca:default",
+    });
+    expect(result.prompted.stopReason).toBe("end_turn");
+    const [summary] = await orchestrator.listRunSummaries();
+    const state = await orchestrator.getState(summary!.id);
+    expect(state.run.workflowId).toBe("mini");
+    expect(state.run.vars).toMatchObject({ prompt: "Write the spec" });
+    expect(state.run.overrides).toEqual({ roles: { builder: "scripted" }, itemWorkflow: "nested" });
+    expect(updates.some((u) => u.sessionUpdate === "available_commands_update")).toBe(true);
+  }, 60_000);
+
+  it("gives a client that never sets an option today's behaviour: no overrides recorded", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-facade-cfg-"));
+    dirs.push(dir);
+    const { orchestrator } = await drive({}, async (ctx) => {
+      const { sessionId } = await open(ctx, dir);
+      return ctx.request(acp.methods.agent.session.prompt, {
+        sessionId,
+        prompt: [{ type: "text", text: "/run mini" }],
+      });
+    });
+    const [summary] = await orchestrator.listRunSummaries();
+    const state = await orchestrator.getState(summary!.id);
+    expect(state.run.overrides).toBeUndefined();
+    expect(state.run.workspace.provider).toBe("acp-client");
+  }, 60_000);
+});
+
+describe("buildConfigOptions", () => {
+  it("groups an agent role's choices by host when the candidates span more than one host", () => {
+    const spec = (id: string, hostId: string) =>
+      ({ id, hostId, roles: ["builder"], command: "x" }) as Parameters<typeof buildConfigOptions>[0]["agents"][number];
+    const options = buildConfigOptions(
+      {
+        workflows: [],
+        agents: [spec("a", "local"), spec("b", "box")],
+        templatePacks: [],
+        booleans: false,
+        useClientCwd: true,
+      },
+      { roles: {} },
+    );
+    const role = options.find((o) => o.id === "orca/agent.builder");
+    expect(role?.type === "select" && role.options.map((o) => ("group" in o ? o.group : o.value))).toEqual([
+      "orca:default",
+      "local",
+      "box",
+    ]);
+  });
 });
