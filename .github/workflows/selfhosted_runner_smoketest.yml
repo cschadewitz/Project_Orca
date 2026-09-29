@@ -1,0 +1,19 @@
+name: self-hosted smoke test
+on: workflow_dispatch
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, linux, x64, homelab]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Environment
+        run: |
+          whoami; uname -m; nproc
+          git --version
+          git log -1 --oneline
+      - name: LAN must be blocked
+        run: |
+          if timeout 5 bash -c '</dev/tcp/192.168.50.233/8006'; then
+            echo "::error::pve1 reachable from a job - firewall is not applied"; exit 1
+          fi
+          echo "LAN blocked (expected)"
