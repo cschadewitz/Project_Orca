@@ -29,6 +29,240 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.6.0 - 2026-09-29
+
+### Store format
+
+`PlanKeySchema` is stricter: a plan key is now at most 48 characters and cannot end in `-`.
+Keys ORCA generates through `slugify` always had that shape, so a store built by ORCA is
+unaffected. A store whose plan journal holds a hand-written key (front matter `key:` or a work
+item `slug`) longer than 48 characters or ending in `-` fails to parse on replay and has to be
+edited by hand; there is no migration.
+
+`run.created` payloads may now carry `workspace.previousBranch`, an optional string: the branch
+(or detached commit) a `local` workspace was on before ORCA checked out the work item's
+`orca/<slug>` branch. It is additive; existing stores need no migration, and runs created
+before this change simply lack it.
+
+The store gains a `workflows/` directory: `startRun` keeps the definition each run starts on
+as `workflows/<id>@v<version>.json`, written once, and a resumed run walks that definition
+rather than the file on disk when the file has moved to another version. `run.created` gains
+an optional `workflowStored: true` saying the definition was kept. Runs that predate this
+carry no `workflowStored` and have no stored definition; they resume on whatever workflow file
+is current, exactly as before. Nothing needs migrating. A run that does carry
+`workflowStored` but whose version is neither in `workflows/` nor on disk (a store copied
+without that directory) refuses to resume with `WORKFLOW_VERSION_NOT_FOUND`.
+
+`run.created` gains an optional `overrides` field carrying the run's selection record (role
+→ agent, model, item workflow, template pack), so a replay resolves the same agents the live
+run did even after the config's role mapping changes. It is additive: run logs written before
+v0.6.0 have no such field and read as a run with no overrides, and nothing needs migrating.
+An older ORCA reading a v0.6.0 store drops the unknown key rather than failing, so such a
+run replays there with the config's role mapping instead of its recorded selection.
+
+`agent.session.opened` gains an optional `model`: the model the session was opened on — the
+run's selection as applied, or the agent's own current model when the run selected none. Logs
+written before v0.6.0 have no `model` and read as before; nothing needs migrating.
+
+### Added
+
+- cli: Add the standalone Debian `orca-release` deployment adapter with versioned staging, pinned-toolchain builds, CLI/ACP launch locking, atomic activation, hello checks and compatibility-aware recovery. Resolve shipped workflow and template paths to the selected concrete release.
+- protocol: Add protocol 1.8 daemon admission preparation for safe local maintenance, with no installation endpoint. 1.8 also covers the v0.6.0 additive fields (#312: `resultIsPreview`, `workflowPinned`, step `model`, workflow `pinned`, `WORKFLOW_VERSION_NOT_FOUND`).
+- app: Add explicit Windows NSIS update checks, downloads and guarded restart from the header and command palette. Private HTTPS feed credentials stay in the main process; drafts and bundled-daemon work block restart.
+
+#### agents
+
+- an agent session keeps the config options its agent advertises in `session/new`
+  (a model list, a mode, a reasoning level) as `AgentSession.configOptions`, normalised into
+  ORCA's own `SessionConfigOption`; legacy `modes` become one select with `category: "mode"`,
+  and `configOptions` wins when an agent sends both. `setConfigOption(configId, value)` sends
+  `session/set_config_option`, an unsolicited `config_option_update` refreshes the cache and
+  is logged as an agent update, and ORCA now tells agents it can set boolean options. The
+  scripted agent advertises a configurable option set (`configOptions` on the playbook and on
+  `scriptedAgentSpec`).
+
+#### app
+
+- Plan gains a Dependencies mode: the plan's dependencies as a derived, layered
+  graph (pan, zoom and select, never dragged) with work items, decisions and external targets
+  as nodes of their own kind, each dependency's kind as its stroke and its state as its colour
+  and in words, and the `blocks` cycles `schedule.get` reports drawn heavy. The selected
+  schedule row is the focused node and back, the row filters are shared and a second rail
+  holds the graph's own controls, a pinned strip under the canvas shows the selected item's
+  row, and the docked panel holds the relationship inspector — blocked by, blocks, and a waive
+  that names what it unblocks and updates the graph from its own answer. The canvas's keys
+  live in a new `plan-graph` scope. `orca://plan?mode=deps&focus=<id>` opens it, and a work
+  item's "Dependencies" counterpart now follows that link.
+- the workflow canvas's layout is now `layoutGraph`, a plain `{ nodes, edges }`
+  layout with many roots; `layoutWorkflow` is a thin adapter over it. No new dependency.
+- Plan gains a Risks mode: the plan's likelihood × impact matrix, sized by its own
+  `riskMatrix.scale` and banded by its own thresholds, with every risk labelled in place (key
+  in mono, title in sans), cells above the plan's risk appetite outlined, and the critical band
+  hatched so it separates in greyscale. The risk register sits under it behind a stacked,
+  remembered splitter (`plan-risk`), the filter rail is the schedule's, and selecting a risk
+  opens its status, the work items it holds and the journal entries that name it in the docked
+  panel, whose head now names what it is showing.
+- Plan gains a Decisions mode: the plan's decisions as a list over the selected
+  one's weighted matrix — criteria with weights and direction, options with scores, the
+  weighted totals, and the recommended column outlined in accent, with `close` or `tie` said
+  beside a recommendation that was not clear, and a preview labelled as one. A person decides
+  from a column (with an optional rationale, sent exactly as `orca plan decide` sends it) or
+  from the palette; a decided decision shows who, when and why, and reopening asks once,
+  naming the items whose dependencies it reopens. The list and the matrix are split by a
+  stacked, remembered splitter (`plan-decision`).
+
+#### cli
+
+- `orca status` names each step's agent and model, and `orca events` shows the model
+  on the session line; the daemon's `runs.get` step view carries `model`.
+- `orca run` takes `--agent <role>=<agentId>` and `--model <agentId>=<modelId>`, both
+  repeatable, plus `--model <modelId>` alone when the run uses exactly one agent and
+  `--template-pack <name>`; `orca submit` and `orca plan dispatch` take the same flags and
+  `--item-workflow <id>`. They become the run's selection record, so an unknown role, agent,
+  model or workflow is refused with the known set before the run starts.
+- `orca plan dispatch --workflow` is documented as choosing the *program* workflow,
+  and one without a `custom:plan-dispatch` node is refused with `CONFIG_INVALID`.
+- `orca agents` lists each agent's declared models with the default marked, and the
+  models a running daemon has discovered, or "not probed".
+- `orca validate --template-pack <name>` reports which templates the pack overrides
+  and which the validated workflows inherit, and fails with `TEMPLATE_NOT_FOUND` on a pack that
+  overrides nothing; `orca run`/`submit`/`plan dispatch --template-pack` refuse such a pack
+  the same way.
+- `orca validate` loads the configured plugins first, so it reports what an
+  executor says about its node under the node's path (`nodes.jevShadow.rubric`), and
+  bootstrap refuses to start on the same errors, the way it does for a missing template.
+
+#### core
+
+- `RunOverrides`, a per-run selection record — `roles` (role → agent id), `model`
+  (one model id, or agent id → model id), `itemWorkflow` and `templatePack` — recorded in
+  `run.created` and projected onto `Run.overrides` and `RunSummary.overrides`. `AgentSpec`
+  gains optional `models` and `defaultModel` declarations.
+- `TemplateRegistry.packs()` lists the packs present, which the CLI's pack check and the
+  ACP facade now share.
+- Template packs. `TemplateRegistry.get(id, { pack })` tries `<pack>/<id>` and falls
+  back to `<id>`, so a pack overriding one template inherits the rest; an agent step renders
+  from the run's `overrides.templatePack`. `templates/strict/` ships an example pack with a
+  stricter `sdlc/review`, loaded by the default `templates` glob.
+
+#### daemon
+
+- `workflows.get({ id, version })` answers a stored older version instead of
+  refusing it, and `WorkflowView` carries `pinned` (the view is not the version on disk);
+  `runs.get` adds `run.workflowPinned`, and its traversal edges come from the run's pinned
+  definition.
+
+#### design
+
+- `stroke-dash-soft` and `stroke-dash-informs`, the `.orca-dep-edge--*` stroke
+  and state rules and `.orca-dep--open|failed`; `DependencyNodeProps` corrected against the
+  graph (no `kind`, no `onWaive`).
+- `RiskMatrixProps` in `component-api.d.ts` corrected against the wire — a variable
+  `scale`, `thresholds`, an `appetite` level word, and risks by `key` and `title` — and the four
+  `risk-*` grounds documented as the four core levels rather than fixed 5×5 score bands.
+- `DecisionMatrixProps` corrected against the wire (`key`/`name`, criterion
+  `direction`, `scale`, `result`, `onChoose`), and the recommended column of `.orca-matrix`
+  outlined in accent.
+
+#### engine
+
+- a run is pinned to the workflow version it started on. Publishing a new version
+  affects runs started afterwards; a run already under way resumes and finishes on the
+  definition it began with, kept in the store's workflow-version store. `orca resume` on a run
+  whose version is neither stored nor on disk fails with `WORKFLOW_VERSION_NOT_FOUND`, naming
+  the versions that exist.
+- `startRun` takes `overrides`, refuses an unknown agent or an unfilled role with
+  `AGENT_NOT_FOUND` before the run is created, and hands every step a run-scoped view of the
+  agent registry (`AgentRegistry.withOverrides`) instead of changing the shared one. Child
+  runs inherit their parent's overrides. `plan-dispatch` picks its item workflow from the
+  node's pin, then `overrides.itemWorkflow`, then `vars.itemWorkflow`; `ProgramService.submit`
+  accepts `overrides`.
+- a run's selected model reaches the agent. After `session/new` the model from
+  `run.overrides.model` (or the agent's `defaultModel`) is set through the session's
+  `category: "model"` config option; an agent that offers none runs only on a model its config
+  declares in `models`. A model in neither place fails the step with `AGENT_MODEL_NOT_FOUND`,
+  listing what is available, before any turn starts and without a retry. A pooled per-run
+  session whose agent drifted off the run's model has it re-applied before the next step, and
+  is closed and reopened if the agent refuses.
+- `Orchestrator.onAgentSessionOpened(listener)` hands each downstream
+  `AgentSession` to in-process listeners as it opens.
+- a `NodeExecutor` may declare `validate(node) => { errors?, warnings? }`, and
+  `NodeExecutorRegistry.validateNode` hands it to `validateWorkflow` through the new
+  `ValidationContext.validateCustomNode` hook, so a plugin's custom node is checked when the
+  workflows are loaded rather than when a run reaches it. A `custom:*` type no executor
+  registers is a warning saying its fields were not checked.
+- a decision's `source: { kind: artifact }` (and `kind: agent`) reads `field` as
+  a dotted path into the artifact's data, so `field: answers.conflict.choice` routes on a
+  nested record such as a `custom:jev-eval` evaluation without an expression that names the
+  producing node. An exact top-level key wins over a nested path, preserving literal dotted
+  front-matter keys. A deliverable's `validate.requiredFields` and `validate.fieldValues`
+  use the same rule.
+
+#### integrations
+
+- the ACP facade advertises session config options in `session/new` and
+  handles `session/set_config_option`: `orca/workflow` (category `mode`: submit a Request
+  through the program workflow, or run one workflow directly with the prompt as `vars.prompt`),
+  `orca/item-workflow`, one `orca/agent.<role>` per role the configured agents fill (grouped
+  by host when the candidates span hosts), `orca/model` (category `model`) and
+  `orca/template-pack`. A client that advertises boolean config options also gets
+  `orca/use-client-cwd`. The choices become the next run's `overrides`; a client that sets
+  nothing gets exactly the previous behaviour.
+- the ACP facade's `orca/template-pack` option lists the template packs in the
+  registry (the shipped `strict` pack among them); choosing one records `overrides.templatePack`
+  for the next run.
+- the ACP facade's `orca/model` lists real models. At `session/new` it offers
+  each agent's declared `models` (or just "agent default"); when an agent's first downstream
+  session opens, its advertised options replace the declaration and every open facade session
+  receives a `config_option_update`, cached per agent for the facade's life. The select is
+  grouped by agent when more than one agent offers models, and choosing one records
+  `overrides.model` as `{ <agentId>: <modelId> }` for the next run. Downstream options in the
+  other reserved categories (`mode`, `model_config`, `thought_level`) are proxied as
+  `orca/<agentId>/<configId>`.
+- the ACP facade advertises `/run <workflowId> [key=value ...]` and `/status`
+  as ACP `available_commands_update` after `session/new`, so clients render them as real slash
+  commands. An unknown `/word …` prompt (or a bare `/run`) now answers with the command list
+  instead of being submitted as a Request titled `/word …`.
+- `custom:jev-eval`, a proof-of-concept node that judges explicitly selected
+  artifacts with TypeSafe's JEV primitives (Choice, Score, Noul) and records an `evaluation`
+  artifact carrying the rubric version, input provenance, resolved model, answers,
+  distributions, confidence and token usage — never a credential. Opt-in through
+  `plugins: ["@orca/integrations/jev-eval"]` with `TYPESAFE_API_KEY`; thresholds and routing
+  stay in `decision` nodes reading `steps.<node>.result.data.answers`. An example shadow
+  workflow lives in `examples/jev/`; `docs/INTEGRATIONS.md` has the setup, the bounded-input
+  rule and the live smoke procedure.
+- `custom:jev-eval` validates its node at load time with the schema it
+  already parses at run time; a missing `rubric:` or a `model: jev-latest` now fails
+  `orca validate` instead of the run.
+
+#### protocol
+
+- `DecisionView.resultIsPreview`. A decision with no stored `result` now
+  carries the matrix's recommendation computed on read (`core`'s `evaluateDecisionMatrix`),
+  flagged `resultIsPreview: true`; nothing is written.
+
+### Fixed
+
+#### core
+
+- `PlanKeySchema` now bounds a plan key to `SLUG_MAX_LENGTH` (48) characters and
+  rejects a trailing hyphen, so a key authored in front matter has the same shape as one
+  `slugify` generates. `SLUG_MAX_LENGTH` moved next to the schema in `model/plan.ts` and is
+  still exported from `@orca/core`.
+
+#### engine
+
+- the `local` workspace provider, when its directory is a git checkout and the run
+  is for a work item, checks out `orca/<slug>` (creating it from the current HEAD, or reusing
+  it) and returns it as `workspace.branch`, recording the branch it replaced as
+  `workspace.previousBranch`. The build agent no longer picks a branch of its own and leaves
+  the shared checkout on it; the previous branch is recorded, not restored.
+
+#### templates
+
+- `sdlc/build` and `sdlc/deploy` name `{{ workspace.branch }}` when there is
+  one, instead of "the current branch".
+
 ## 0.5.2 - 2026-09-22
 
 ### Store format
