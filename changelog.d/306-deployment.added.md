@@ -1,2 +1,0 @@
-- cli: Add the standalone Debian `orca-release` deployment adapter with versioned staging, pinned-toolchain builds, CLI/ACP launch locking, atomic activation, hello checks and compatibility-aware recovery. Resolve shipped workflow and template paths to the selected concrete release.
-- protocol: Add protocol 1.8 daemon admission preparation for safe local maintenance, with no installation endpoint. 1.8 also covers the v0.6.0 additive fields (#312: `resultIsPreview`, `workflowPinned`, step `model`, workflow `pinned`, `WORKFLOW_VERSION_NOT_FOUND`).

@@ -270,31 +270,34 @@ describe("the policy panel", () => {
 describe("the palette", () => {
   it("lists both actions as keyless commands on the objects on this screen", async () => {
     renderAgents();
-    await claimRows();
+    // Commands register in effects after the cards render; visible rows alone do not
+    // mean the keyboard registry is ready. Wait for the commands themselves.
+    await waitFor(() => {
+      const entries = commandEntries(h.keyboard.list(), "darwin", ["card", "global"]);
+      const permissions = entries.find((entry) => entry.label === "Edit permissions for claude");
+      expect(permissions).toBeDefined();
+      // Keyless (#205): the palette is the whole of how it is reached, so there is no chip.
+      expect(permissions!.shortcut).toBeUndefined();
+      expect(permissions!.section).toBe("actions");
 
-    const entries = commandEntries(h.keyboard.list(), "darwin", ["card", "global"]);
-    const permissions = entries.find((entry) => entry.label === "Edit permissions for claude");
-    expect(permissions).toBeDefined();
-    // Keyless (#205): the palette is the whole of how it is reached, so there is no chip.
-    expect(permissions!.shortcut).toBeUndefined();
-    expect(permissions!.section).toBe("actions");
-
-    // One per releasable claim, and none for the claim the daemon would refuse.
-    expect(entries.some((entry) => entry.label === "Release claim on wi-3")).toBe(true);
-    expect(entries.some((entry) => entry.label === "Release claim on wi-2")).toBe(false);
+      // One per releasable claim, and none for the claim the daemon would refuse.
+      expect(entries.some((entry) => entry.label === "Release claim on wi-3")).toBe(true);
+      expect(entries.some((entry) => entry.label === "Release claim on wi-2")).toBe(false);
+    });
   });
 
   it("opens the policy panel when its palette entry runs", async () => {
     renderAgents();
-    await screen.findAllByRole("region", { name: /^Host / });
-
-    const entry = commandEntries(h.keyboard.list(), "darwin", ["card"]).find(
-      (e) => e.label === "Edit permissions for gemini",
-    );
-    expect(entry).toBeDefined();
+    const entry = await waitFor(() => {
+      const registered = commandEntries(h.keyboard.list(), "darwin", ["card"]).find(
+        (e) => e.label === "Edit permissions for gemini",
+      );
+      expect(registered).toBeDefined();
+      return registered!;
+    });
     // In `act`, because a palette row runs outside React's own event handling: the state it
     // sets would otherwise be flushed at whatever moment the next assertion happened to poll.
-    await act(async () => entry!.run());
+    await act(async () => entry.run());
     await screen.findByRole("complementary", { name: "Permissions for gemini" });
   });
 });
