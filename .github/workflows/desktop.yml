@@ -168,7 +168,9 @@ jobs:
             channel=latest
             case "$VERSION" in *-*) channel=prerelease ;; esac
             for arch in x64 arm64; do
-              pnpm --filter @orca/app exec electron-builder --win --"$arch" --publish never \
+              # Explicit targets keep win.target's two-architecture defaults from
+              # adding the other architecture to this build and duplicating assets.
+              pnpm --filter @orca/app exec electron-builder --win nsis zip --"$arch" --publish never \
                 -c.extraMetadata.version="$VERSION" -c.directories.output="dist/release/$arch" \
                 -c.publish.channel="$channel-$arch"
             done
@@ -215,8 +217,8 @@ jobs:
         shell: bash
         run: cp packages/app/dist/daemon/orca-daemon.mjs "packages/app/dist/release/orca-daemon-${{ steps.version.outputs.version }}.mjs"
 
-      # Installers and archives only. electron-builder also leaves its unpacked directories
-      # and its `.blockmap` sidecars in there, and neither is something to hand a person.
+      # Installers, archives and Windows update metadata/sidecars. Unpacked app directories
+      # stay out; the updater needs the blockmaps beside the installers.
       - name: Upload the artifacts
         uses: actions/upload-artifact@v7
         with:
