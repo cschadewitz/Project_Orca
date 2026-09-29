@@ -92,7 +92,15 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * client that switches on the source shows it as the floor it is rather than as config
  * somebody wrote.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 7 };
+/**
+ * 1.8 adds maintenance admission and optional hello.processId for local supervisors (#306).
+ * It is also the first version to advertise the v0.6.0 additive fields that landed under 1.7
+ * (#312): `resultIsPreview` on a plan decision, `workflowPinned` on `runs.get`, `model` on a
+ * run step, `pinned` on a workflow view, and the `WORKFLOW_VERSION_NOT_FOUND` answer for a
+ * version that is neither on disk nor in the store's workflow-version store. All optional, so
+ * a 1.7 client reads a 1.8 daemon as before.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 8 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
   return `${v.major}.${v.minor}`;

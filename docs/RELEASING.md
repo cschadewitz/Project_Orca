@@ -263,8 +263,9 @@ merge the result, and `gh release create vX.Y.Z --notes-file <(node tools/releas
 - **Settings → Actions → General → Workflow permissions**: "Allow GitHub Actions to create
   and approve pull requests" must be on, or `release-prepare.yml` cannot open its PR.
 - **Labels**: `release`, `release:major`, `release:minor`, `release:patch`, `release:none`.
-- The repository is private, so releases are visible to collaborators only. Making them a
-  distribution channel means making the repository public first.
+- The repository is private, so releases are visible to collaborators only. The optional
+  authenticated HTTPS feed distributes desktop updates without exposing the repository; see
+  [UPDATING.md](UPDATING.md).
 - The release carries the daemon and desktop artifacts described above, built by
   `desktop.yml` on three platform runners. The `hello` handshake still carries the protocol
   version, because a desktop build will eventually attach to an older daemon on another
@@ -281,3 +282,20 @@ missing or changed baseline blocks tagging and leaves the report available for r
 release workflow never updates snapshots. Follow the deliberate screenshot review procedure
 in `docs/DEVELOPMENT.md` before retrying. The proof still uses the dev-only `#type` route;
 this does not make that route part of the shipped renderer.
+
+## v0.6.0 update distribution
+
+[UPDATING.md](UPDATING.md) documents Windows private HTTPS authentication, initial install,
+Debian wrapper/service bootstrap, compatibility markers and recovery. Windows builds now
+include architecture/channel-specific metadata and blockmaps; packaging never publishes.
+The final job validates both feeds and uploads assets to a draft before publishing, then
+optionally activates the private HTTPS feed through a separately provisioned SSH account.
+This replaces the older statement that distribution requires making the repository public.
+Repository credentials stay with GitHub Actions/`gh`; clients use read-only feed credentials.
+The signing setup above remains unproven and unsigned Windows installs require an explicit
+bootstrap trust decision. Do not describe unit tests as packaged-update or signing evidence.
+
+Review `release-compatibility.json` with every store-format change. A changed epoch blocks
+automatic Debian activation and recovery across that boundary; a binary-only rollback is
+not a store migration. Runtime version, protocol, capabilities and store epoch are checked
+before managed work is admitted.

@@ -28,6 +28,7 @@ import type {
   OrcaBridge,
   WorkspaceSnapshot,
 } from "../bridge.js";
+import type { UpdateSnapshot } from "../update-contract.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
 
@@ -43,6 +44,27 @@ const call = <T,>(channel: string, params?: unknown): Promise<BridgeResult<T>> =
 
 const bridge: OrcaBridge = {
   platform: process.platform,
+  updates: {
+    read: () => ipcRenderer.sendSync("orca:update.read") as UpdateSnapshot,
+    act: (action) => call("orca:update.act", action),
+    subscribe: (listener) => {
+      const forward = (_event: unknown, state: UpdateSnapshot) => listener(state);
+      ipcRenderer.on("orca:update", forward);
+      return () => {
+        ipcRenderer.off("orca:update", forward);
+      };
+    },
+    prepare: (listener) => {
+      const forward = (_event: unknown, nonce: string | null) => {
+        const ready = listener(nonce !== null);
+        if (nonce) ipcRenderer.send("orca:update.prepared", { nonce, ready });
+      };
+      ipcRenderer.on("orca:update.prepare", forward);
+      return () => {
+        ipcRenderer.off("orca:update.prepare", forward);
+      };
+    },
+  },
   hello: () => call("orca:hello"),
   runs: {
     list: (params = {}) => call("orca:runs.list", params),

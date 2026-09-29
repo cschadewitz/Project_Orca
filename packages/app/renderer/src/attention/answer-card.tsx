@@ -24,6 +24,8 @@
  *   that `allow_always` means allow, so the two always-buttons say which way the rule goes;
  *   what they wrote comes back in `permission` and is reported verbatim (`alwaysOutcome`).
  */
+import { useUpdateDraft } from "../update-drafts.js";
+
 import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode, type Ref } from "react";
 import { Button, Card, Text, textClass } from "../ui/index.js";
 import { scopeProps } from "../keyboard-map.js";
@@ -106,6 +108,7 @@ export function AnswerCard({
   const [note, setNote] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
   const [text, setText] = useState("");
+  useUpdateDraft(Boolean(note || text || selected !== defaultSelection(options)));
   const noteField = useRef<HTMLInputElement | null>(null);
 
   /* The options can change under a card: an ask re-read after a reconnection comes back as

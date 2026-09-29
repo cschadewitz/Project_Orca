@@ -2,6 +2,8 @@
  * CLI command implementations. Each command receives parsed positionals and
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
+import { releaseAssets } from "../bootstrap.js";
+
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -262,14 +264,15 @@ export const commands: Record<string, Command> = {
     help: "validate [files...] [--template-pack name]  Validate workflow definitions (defaults to those in orca.config.yaml); with a template pack, report which templates it overrides and which it inherits.",
     async run(ctx) {
       const { config, configDir } = await loadConfig(ctx.cwd, ctx.configPath);
-      const templates = await loadTemplates(config.templates, configDir);
+      const assets = await releaseAssets(config);
+      const templates = await loadTemplates(assets.templates, configDir);
       const files = ctx.positionals;
       const workflows = files.length
         ? await loadWorkflows(
             files.map((f) => join(ctx.cwd, f)),
             configDir,
           )
-        : await loadWorkflows(config.workflows, configDir);
+        : await loadWorkflows(assets.workflows, configDir);
       let failed = 0;
       for (const def of workflows.list()) {
         const r = validateWorkflow(def, {
@@ -671,6 +674,8 @@ export const commands: Record<string, Command> = {
               reads,
             });
       const daemon = await startDaemon({
+        maintenanceToken: process.env.ORCA_MAINTENANCE_TOKEN,
+        admissionFile: process.env.ORCA_ADMISSION_FILE,
         host: ctx.flags.host as string | undefined,
         port,
         orcaVersion: ORCA_VERSION,

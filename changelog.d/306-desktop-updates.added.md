@@ -1,0 +1,1 @@
+- app: Add explicit Windows NSIS update checks, downloads and guarded restart from the header and command palette. Private HTTPS feed credentials stay in the main process; drafts and bundled-daemon work block restart.

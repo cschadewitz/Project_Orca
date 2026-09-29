@@ -15,6 +15,7 @@
  * and `hello.methods` does not list them. "Absent" and "present but refusing" are different
  * promises, and a client that has to hide a button needs the first one.
  */
+import type { Maintenance } from "./maintenance.js";
 import { OrcaError } from "@orca/core";
 import {
   AGENTS_LIST_METHOD,
@@ -152,6 +153,8 @@ import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 export interface MethodContext {
   /** ORCA's own version, reported in `hello`. */
   orcaVersion: string;
+  maintenance?: Maintenance | undefined;
+  processId?: number | undefined;
   storeDir?: string | undefined;
   capabilities: readonly DaemonCapability[];
   /** The projection the read methods answer from. Without it they refuse; `hello` does not need it. */
@@ -268,6 +271,7 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
     return {
       protocol: PROTOCOL_VERSION,
       orcaVersion: ctx.orcaVersion,
+      ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
       capabilities: [...ctx.capabilities],
       methods: Object.keys(methodsFor(ctx)),
@@ -614,5 +618,5 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     // has no `control`. Two facts, one `if`, so the two can never drift apart.
     if (ctx.control) Object.assign(table, configControlMethods);
   }
-  return table;
+  return ctx.maintenance ? ctx.maintenance.wrap(table) : table;
 }

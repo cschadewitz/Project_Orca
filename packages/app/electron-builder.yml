@@ -15,6 +15,7 @@
 # packages/ do not carry the release version (docs/RELEASING.md).
 appId: dev.orca.desktop
 productName: ORCA
+artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
 copyright: ORCA contributors
 
 directories:
@@ -110,4 +111,7 @@ nsis:
 # Nothing is published from here. `release-publish.yml` attaches the files to the GitHub
 # release itself, after the same commit's checks have passed; letting electron-builder
 # publish would mean giving three runners a token and three chances to publish half a set.
-publish: null
+publish:
+  provider: generic
+  url: https://updates.invalid/
+  channel: latest

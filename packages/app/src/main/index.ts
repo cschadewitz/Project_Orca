@@ -18,6 +18,9 @@
  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
  * server for hot reload (scripts/dev.js).
  */
+import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
+import { Updates } from "./updates.js";
+import { updateDriver } from "./update-driver.js";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification } from "electron";
@@ -280,6 +283,46 @@ async function openStore(path?: string): Promise<WorkspaceSnapshot> {
 
 handle("orca:workspace.open", (params: { path?: string }) => openStore(params.path));
 handle("orca:workspace.connectLive", () => workspace.connectLive());
+
+/* Updates use their own IPC and never wait on daemon readiness to check/download. */
+const updates = new Updates(
+  updateDriver(app.isPackaged, process.platform, process.arch),
+  app.getVersion(),
+  {
+    prepareDrafts: () =>
+      prepareDrafts({
+        ids: BrowserWindow.getAllWindows().map((win) => win.webContents.id),
+        send: (nonce) => send("orca:update.prepare", nonce),
+        listen: (callback) => {
+          const listener = (event: Electron.IpcMainEvent, value: unknown) => {
+            if (event.senderFrame === event.sender.mainFrame) callback(event.sender.id, value);
+          };
+          ipcMain.on("orca:update.prepared", listener);
+          return () => {
+            ipcMain.off("orca:update.prepared", listener);
+          };
+        },
+      }),
+    prepareDaemon: (token) => workspace.prepareUpdate(token),
+    stopDaemon: () => workspace.stopForUpdate(),
+    resume: (token) => workspace.cancelUpdate(token),
+    releaseDrafts: () => send("orca:update.prepare", null),
+  },
+  (state) => send("orca:update", state),
+);
+ipcMain.on("orca:update.read", (event) => {
+  event.returnValue = updates.state;
+});
+ipcMain.handle("orca:update.act", async (event, action: unknown) => {
+  if (
+    !BrowserWindow.getAllWindows().some((win) => win.webContents === event.sender) ||
+    event.senderFrame !== event.sender.mainFrame ||
+    !isUpdateAction(action)
+  ) {
+    return { ok: false, error: { code: "UPDATE", message: "Invalid update request" } };
+  }
+  return { ok: true, result: await updates.act(action) };
+});
 
 /* ---------- deep links ---------- */
 

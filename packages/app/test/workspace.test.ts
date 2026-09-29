@@ -24,7 +24,7 @@ interface Rig {
   failStarts: () => void;
 }
 
-function rig(options: { bundled?: boolean; explicitUrl?: string; startFails?: boolean } = {}): Rig {
+function rig(options: { bundled?: boolean; explicitUrl?: string; startFails?: boolean; busy?: boolean } = {}): Rig {
   const steps: Step[] = [];
   let port = 0;
   let startFails = options.startFails === true;
@@ -51,7 +51,16 @@ function rig(options: { bundled?: boolean; explicitUrl?: string; startFails?: bo
     },
     client: (url) => {
       steps.push(`client ${url}`);
-      return { url } as DaemonClient;
+      return {
+        url,
+        maintenance: ({ action }: { action: string }) => {
+          steps.push(`maintenance ${action}`);
+          return Promise.resolve({
+            ready: action === "prepare" && !options.busy,
+            active: options.busy ? ["runs.start"] : [],
+          });
+        },
+      } as unknown as DaemonClient;
     },
     subscribe: (client) => {
       steps.push(`subscribe ${client.url}`);
@@ -252,5 +261,37 @@ describe("storeRoot", () => {
   it("leaves an ordinary workspace alone", () => {
     expect(storeRoot("/work/project")).toBe("/work/project");
     expect(storeRoot("/work/.orca-backup")).toBe("/work/.orca-backup");
+  });
+});
+
+describe("update restart lifecycle", () => {
+  it("refuses to stop before preparation and preserves active bundled work", async () => {
+    const { workspace, steps } = rig({ busy: true });
+    await workspace.connect();
+    await expect(workspace.stopForUpdate()).rejects.toThrow("not prepared");
+    await expect(workspace.prepareUpdate("token")).rejects.toThrow("runs.start");
+    expect(steps.filter((step) => step.startsWith("stop"))).toEqual([]);
+    await workspace.cancelUpdate("token");
+    expect(steps).toContain("maintenance resume");
+  });
+  it("holds workspace selection during restart and restores the same store after installer failure", async () => {
+    const { workspace, steps } = rig();
+    await workspace.open("/chosen");
+    await workspace.prepareUpdate("token");
+    await expect(workspace.open("/other")).rejects.toThrow("in progress");
+    await expect(workspace.connectLive()).rejects.toThrow("in progress");
+    await workspace.stopForUpdate();
+    expect(steps).toContain("stop http://127.0.0.1:6001");
+    await workspace.cancelUpdate("token");
+    expect(workspace.snapshot).toMatchObject({ path: "/chosen", readOnly: true });
+    expect(steps.filter((step) => step === "start /chosen --read-only")).toHaveLength(2);
+  });
+  it("never quiesces or stops an attached external daemon", async () => {
+    const { workspace, steps } = rig({ explicitUrl: "http://external:6722" });
+    await workspace.connect();
+    await workspace.prepareUpdate("token");
+    await workspace.stopForUpdate();
+    await workspace.cancelUpdate("token");
+    expect(steps.filter((step) => /^(maintenance|stop)/.test(step))).toEqual([]);
   });
 });

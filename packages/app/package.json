@@ -11,12 +11,13 @@
     "build:renderer": "vite build",
     "build:daemon": "node scripts/build-daemon.js",
     "start": "electron .",
-    "package": "electron-builder",
+    "package": "electron-builder --publish never",
     "typecheck:renderer": "tsc -p renderer/tsconfig.json"
   },
   "dependencies": {
     "@orca/design": "workspace:*",
     "@orca/protocol": "workspace:*",
+    "electron-updater": "^6.8.9",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.6.5"

@@ -20,9 +20,12 @@ import {
   type ResponseMessage,
 } from "@orca/protocol";
 import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
+import { Maintenance } from "./maintenance.js";
 import { attachSocket } from "./socket.js";
 
 export interface DaemonOptions extends MethodContext {
+  maintenanceToken?: string | undefined;
+  admissionFile?: string | undefined;
   host?: string | undefined;
   /** `0` (the default) picks a free port; read the real one from `DaemonHandle.port`. */
   port?: number | undefined;
@@ -93,6 +96,8 @@ export async function dispatch(text: string, methods: MethodTable, ctx: MethodCo
 export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const host = opts.host ?? "127.0.0.1";
   const ctx: MethodContext = {
+    processId: process.pid,
+    maintenance: new Maintenance(opts.maintenanceToken, opts.admissionFile),
     orcaVersion: opts.orcaVersion,
     storeDir: opts.storeDir,
     capabilities: opts.capabilities,
@@ -106,7 +111,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   };
   // A daemon without a store serves `hello` alone, and says so in `hello.methods`: a read
   // method it cannot answer is an unknown method, not a method that fails.
-  const methods = opts.methods ?? methodsFor(ctx);
+  const methods = opts.methods ? ctx.maintenance!.wrap(opts.methods) : methodsFor(ctx);
   const server: Server = createServer((req, res) => {
     void (async () => {
       if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true });

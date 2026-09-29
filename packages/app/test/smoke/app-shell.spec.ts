@@ -189,6 +189,9 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     "platform",
     "preferences",
     "runs",
+    // `updates` is v0.6.0's desktop updater (#306): read, act, subscribe and the unsaved-
+    // draft challenge. No feed URL, credential or install command crosses it.
+    "updates",
     "workflows",
     "workspace",
   ]);

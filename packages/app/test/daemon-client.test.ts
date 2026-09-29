@@ -96,6 +96,14 @@ describe("DaemonClient", () => {
     await d.close();
   });
 
+  it("prepares admission through the typed client and refuses another updater's token", async () => {
+    const client = new DaemonClient(d.url);
+    expect(await client.maintenance({ action: "prepare", token: "owner" })).toEqual({ ready: true, active: [] });
+    await expect(client.maintenance({ action: "resume", token: "other" })).rejects.toBeInstanceOf(DaemonClientError);
+    expect((await client.hello("update-test")).methods).toContain("maintenance");
+    expect(await client.maintenance({ action: "resume", token: "owner" })).toEqual({ ready: false, active: [] });
+  });
+
   it("defaults to the local daemon URL", () => {
     expect(new DaemonClient().url).toBe(DEFAULT_DAEMON_URL);
   });

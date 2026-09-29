@@ -146,6 +146,8 @@ export type DaemonCapability = z.infer<typeof DaemonCapabilitySchema>;
 export const HelloResultSchema = z.object({
   protocol: ProtocolVersionSchema,
   orcaVersion: z.string(),
+  /** Local supervisors bind health/admission to the process they actually own. Protocol 1.8. */
+  processId: z.number().int().positive().optional(),
   /** Absolute path of the `.orca` store the daemon serves, for a client that also reads files. */
   storeDir: z.string().optional(),
   capabilities: z.array(DaemonCapabilitySchema),

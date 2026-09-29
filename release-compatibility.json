@@ -1,0 +1,5 @@
+{
+  "storeEpoch": "ownership-fences-v1",
+  "protocol": { "major": 1, "minor": 8 },
+  "capabilities": ["runs.read", "runs.control", "runs.subscribe", "plan.read", "plan.write"]
+}
