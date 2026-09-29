@@ -1,0 +1,99 @@
+{
+  "id": "app-agents",
+  "title": "Agents and claims UI",
+  "owner": "packages/app",
+  "scope": "renderer/agents/",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "useAgents reads configured agents/health, applies agent.changed and loads claim ownership; reattachment generation causes reread.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "AgentsSurface groups cards and presents claim release controls with method/writability checks.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Health is reported by daemon AgentModel rather than probing from renderer; the preload exposes agents.list only.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/renderer/src/agents/use-agents.ts",
+      "line": 75,
+      "symbol": "export function useAgents"
+    },
+    {
+      "path": "packages/app/renderer/src/agents/agents-surface.tsx",
+      "line": 73,
+      "symbol": "export function AgentsSurface"
+    },
+    {
+      "path": "packages/app/src/preload/index.cts",
+      "line": 108,
+      "symbol": "agents: { list:"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "agents.list / claims.list",
+      "type": "external"
+    },
+    {
+      "id": "2",
+      "label": "useAgents + grouping model",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Agent cards + ownership rows",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "agent.changed",
+      "type": "message"
+    },
+    {
+      "id": "5",
+      "label": "claims.release bridge",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "read snapshots",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "2",
+      "label": "merge health updates",
+      "type": "message",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "render host/role/health groups",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "5",
+      "label": "release selected claim",
+      "type": "call",
+      "evidence": 2
+    }
+  ],
+  "limits": "Configured agent identity, health of recent handshakes, and individual agent sessions are distinct. Cards do not prove continuous agent availability."
+}

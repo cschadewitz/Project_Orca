@@ -1,0 +1,87 @@
+{
+  "id": "core-domain",
+  "title": "Domain and event projection",
+  "owner": "packages/core",
+  "scope": "model/, events/, schemas.ts, ids/errors and shared utilities",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "A run has workflow id/version, workspace, variables and optional request, work-item and parent links; a step is a node attempt inside that run.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The reducer owns the run/step/artifact/human-input projection; event sequence is distinct from wall-clock time.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Requests and work items are separate document shapes; work-item dependency references become plan dependency records after registration.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/core/src/model/run.ts",
+      "line": 136,
+      "symbol": "export const RunSchema"
+    },
+    {
+      "path": "packages/core/src/events/reduce.ts",
+      "line": 6,
+      "symbol": "export function reduceRun"
+    },
+    {
+      "path": "packages/core/src/model/request.ts",
+      "line": 66,
+      "symbol": "export const WorkItemSchema"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "OrcaEvent records",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "reduceRun / reduceRunSummary",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "RunState / RunSummary",
+      "type": "data"
+    },
+    {
+      "id": "4",
+      "label": "Request / WorkItem documents",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "fold in recorded order",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "derive run and step state",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "4",
+      "to": "3",
+      "label": "referenced by run identifiers",
+      "type": "dependency",
+      "evidence": 1
+    }
+  ],
+  "limits": "Schema declarations constrain parsed data; not every exported schema is validated on every in-process mutation."
+}

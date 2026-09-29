@@ -1,0 +1,92 @@
+{
+  "id": "store-content",
+  "title": "Artifacts and workflow version storage",
+  "owner": "packages/store",
+  "scope": "artifact-store.ts and workflow-store.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Artifacts use metadata records plus content-hash named blobs. FileArtifactStore reloads the committed metadata index on get/list and resolves bytes separately.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Workflow definitions are stored once per id/version using an exclusive hard link of a temporary file; reads validate the stored definition.",
+      "evidence": 2
+    },
+    {
+      "classification": "Inferred",
+      "statement": "Artifact metadata and body writes, and later run-event append, form multiple durable operations. No store-wide garbage collector or lifecycle transaction is exposed by these ports.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/store/src/artifact-store.ts",
+      "line": 86,
+      "symbol": "export class FileArtifactStore"
+    },
+    {
+      "path": "packages/store/src/workflow-store.ts",
+      "line": 48,
+      "symbol": "export class FileWorkflowVersionStore"
+    },
+    {
+      "path": "packages/store/src/artifact-store.ts",
+      "line": 37,
+      "symbol": "export interface ArtifactStore"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Engine artifact recorder",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "artifacts/index.jsonl",
+      "type": "storage"
+    },
+    {
+      "id": "3",
+      "label": "artifacts/blobs/<hash>",
+      "type": "storage"
+    },
+    {
+      "id": "4",
+      "label": "Workflow definition registry",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "workflows/<id>@v<version>.json",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "3",
+      "label": "write content bytes",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "2",
+      "label": "append metadata",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "pin first definition for id/version",
+      "type": "data",
+      "evidence": 2
+    }
+  ],
+  "limits": "Workflow version ordering is lexical; templates and effective agent configuration are not part of this workflow-definition store."
+}

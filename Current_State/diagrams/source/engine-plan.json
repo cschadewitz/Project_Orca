@@ -1,0 +1,109 @@
+{
+  "id": "engine-plan",
+  "title": "Planning application service",
+  "owner": "packages/engine",
+  "scope": "plan/service.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "PlanService owns plan creation, item registration, dependency reconciliation, risk/decision mutation, artifact intake and schedule queries.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "withPlan serializes reentrant asynchronous operations by plan id/key within one service instance, using an in-memory promise map and async ownership context.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Artifact intake records produced stages and normalized signals; exceptions become reported issues/logs rather than rolling back the earlier run artifact event.",
+      "evidence": 3
+    },
+    {
+      "classification": "Inferred",
+      "statement": "Plan document updates and audit journal append are separate awaits. The journal is an audit of these mutations, not the sole replay source for the plan document collections.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/engine/src/plan/service.ts",
+      "line": 146,
+      "symbol": "export class PlanService"
+    },
+    {
+      "path": "packages/engine/src/plan/service.ts",
+      "line": 187,
+      "symbol": "private withPlan"
+    },
+    {
+      "path": "packages/engine/src/plan/service.ts",
+      "line": 1271,
+      "symbol": "async onArtifactRecorded"
+    },
+    {
+      "path": "packages/engine/src/plan/service.ts",
+      "line": 212,
+      "symbol": "private async ensurePlanLocked"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "CLI / daemon controls / engine hooks",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "PlanService + local plan lock",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Plan document collections",
+      "type": "storage"
+    },
+    {
+      "id": "4",
+      "label": "PlanJournal",
+      "type": "storage"
+    },
+    {
+      "id": "5",
+      "label": "Core schedule / risk / matrix",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "register, mutate, reconcile, query",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "read/write business documents",
+      "type": "data",
+      "evidence": 4
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "append audit entries",
+      "type": "data",
+      "evidence": 4
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "derive schedule and decisions",
+      "type": "call",
+      "evidence": 1
+    }
+  ],
+  "limits": "A service lock is not an interprocess transaction. Scheduling is a snapshot computation; it does not itself reserve global execution capacity."
+}

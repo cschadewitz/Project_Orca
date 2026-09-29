@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="1479" viewBox="0 0 1180 1479" role="img" aria-labelledby="title description">
+<title id="title">Runtime package dependency spine</title>
+<desc id="description">Static architecture view. Core, stores, agents, engine, protocol and daemon; arrows mean imports, not network calls. Numbered arrows have full labels and source evidence in the table and linked specification.</desc>
+<defs>
+<marker id="arrow-call" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#1559a1"/></marker>
+<marker id="arrow-dependency" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#794b98"/></marker>
+<marker id="arrow-message" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#21754a"/></marker>
+<marker id="arrow-data" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#975523"/></marker>
+<marker id="arrow-containment" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#656b73"/></marker>
+<marker id="arrow-declared" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#a73d3d"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="#fff"/>
+<g font-family="sans-serif" fill="#17212c">
+<text x="32" y="40" font-size="25" font-weight="bold">Runtime package dependency spine</text>
+<text x="32" y="70" font-size="16">Ownership view: repository • system • static inspection</text>
+<a href="../../architecture/runtime-packages.md"><text x="32" y="99" font-size="15" fill="#1559a1">Architecture specification, responsibilities and source evidence ↗</text></a>
+<rect x="25" y="119" width="1130" height="646" rx="12" fill="#f9fafc" stroke="#9aa6b3"/>
+<rect id="node-1" x="50" y="150" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="170" font-size="12" fill="#475666">N1 · COMPONENT</text>
+<text x="66" y="193" font-size="16">@orca/core: domain and pure algorithms</text>
+<rect id="node-2" x="50" y="250" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="270" font-size="12" fill="#475666">N2 · COMPONENT</text>
+<text x="66" y="293" font-size="16">@orca/store: persistence ports</text>
+<rect id="node-3" x="50" y="350" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="370" font-size="12" fill="#475666">N3 · COMPONENT</text>
+<text x="66" y="393" font-size="16">@orca/agents: hosts and sessions</text>
+<rect id="node-4" x="50" y="450" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="470" font-size="12" fill="#475666">N4 · COMPONENT</text>
+<text x="66" y="493" font-size="16">@orca/engine: orchestration</text>
+<rect id="node-5" x="50" y="550" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="570" font-size="12" fill="#475666">N5 · COMPONENT</text>
+<text x="66" y="593" font-size="16">@orca/protocol: wire schemas</text>
+<rect id="node-6" x="50" y="650" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="670" font-size="12" fill="#475666">N6 · COMPONENT</text>
+<text x="66" y="693" font-size="16">@orca/daemon: wire adaptation</text>
+<path d="M695,278 H783 V192 H698" fill="none" stroke="#794b98" stroke-width="2" stroke-dasharray="9 5" marker-end="url(#arrow-dependency)"/>
+<circle cx="783" cy="235.0" r="13" fill="white" stroke="#794b98"/><text x="783" y="240.0" text-anchor="middle" font-size="13" fill="#794b98">1</text>
+<path d="M695,378 H826 V192 H698" fill="none" stroke="#794b98" stroke-width="2" stroke-dasharray="9 5" marker-end="url(#arrow-dependency)"/>
+<circle cx="826" cy="285.0" r="13" fill="white" stroke="#794b98"/><text x="826" y="290.0" text-anchor="middle" font-size="13" fill="#794b98">2</text>
+<path d="M695,478 H869 V292 H698" fill="none" stroke="#794b98" stroke-width="2" stroke-dasharray="9 5" marker-end="url(#arrow-dependency)"/>
+<circle cx="869" cy="385.0" r="13" fill="white" stroke="#794b98"/><text x="869" y="390.0" text-anchor="middle" font-size="13" fill="#794b98">3</text>
+<path d="M695,478 H912 V392 H698" fill="none" stroke="#794b98" stroke-width="2" stroke-dasharray="9 5" marker-end="url(#arrow-dependency)"/>
+<circle cx="912" cy="435.0" r="13" fill="white" stroke="#794b98"/><text x="912" y="440.0" text-anchor="middle" font-size="13" fill="#794b98">4</text>
+<path d="M695,478 H955 V192 H698" fill="none" stroke="#794b98" stroke-width="2" stroke-dasharray="9 5" marker-end="url(#arrow-dependency)"/>
+<circle cx="955" cy="335.0" r="13" fill="white" stroke="#794b98"/><text x="955" y="340.0" text-anchor="middle" font-size="13" fill="#794b98">5</text>
+<path d="M695,578 H998 V192 H698" fill="none" stroke="#794b98" stroke-width="2" stroke-dasharray="9 5" marker-end="url(#arrow-dependency)"/>
+<circle cx="998" cy="385.0" r="13" fill="white" stroke="#794b98"/><text x="998" y="390.0" text-anchor="middle" font-size="13" fill="#794b98">6</text>
+<path d="M695,678 H1041 V592 H698" fill="none" stroke="#794b98" stroke-width="2" stroke-dasharray="9 5" marker-end="url(#arrow-dependency)"/>
+<circle cx="1041" cy="635.0" r="13" fill="white" stroke="#794b98"/><text x="1041" y="640.0" text-anchor="middle" font-size="13" fill="#794b98">7</text>
+<path d="M695,678 H1084 V492 H698" fill="none" stroke="#794b98" stroke-width="2" stroke-dasharray="9 5" marker-end="url(#arrow-dependency)"/>
+<circle cx="1084" cy="585.0" r="13" fill="white" stroke="#794b98"/><text x="1084" y="590.0" text-anchor="middle" font-size="13" fill="#794b98">8</text>
+<text x="32" y="820" font-size="19" font-weight="bold">Labeled interfaces and movements</text>
+<rect x="30" y="842" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="865" font-size="16" fill="#794b98">1. N2 → N1: domain contracts [dependency; source claim E1]</text>
+<text x="43" y="888" font-size="13">@orca/store: persistence ports → @orca/core: domain and pure algorithms</text>
+<rect x="30" y="910" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="933" font-size="16" fill="#794b98">2. N3 → N1: agent configuration contracts [dependency; source claim E1]</text>
+<text x="43" y="956" font-size="13">@orca/agents: hosts and sessions → @orca/core: domain and pure algorithms</text>
+<rect x="30" y="978" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="1001" font-size="16" fill="#794b98">3. N4 → N2: persistence ports [dependency; source claim E1]</text>
+<text x="43" y="1024" font-size="13">@orca/engine: orchestration → @orca/store: persistence ports</text>
+<rect x="30" y="1046" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="1069" font-size="16" fill="#794b98">4. N4 → N3: agent/host invocation [dependency; source claim E1]</text>
+<text x="43" y="1092" font-size="13">@orca/engine: orchestration → @orca/agents: hosts and sessions</text>
+<rect x="30" y="1114" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="1137" font-size="16" fill="#794b98">5. N4 → N1: domain and algorithms [dependency; source claim E1]</text>
+<text x="43" y="1160" font-size="13">@orca/engine: orchestration → @orca/core: domain and pure algorithms</text>
+<rect x="30" y="1182" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="1205" font-size="16" fill="#794b98">6. N5 → N1: browser-safe schemas [dependency; source claim E2]</text>
+<text x="43" y="1228" font-size="13">@orca/protocol: wire schemas → @orca/core: domain and pure algorithms</text>
+<rect x="30" y="1250" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="1273" font-size="16" fill="#794b98">7. N6 → N5: method envelopes and views [dependency; source claim E2]</text>
+<text x="43" y="1296" font-size="13">@orca/daemon: wire adaptation → @orca/protocol: wire schemas</text>
+<rect x="30" y="1318" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="1341" font-size="16" fill="#794b98">8. N6 → N4: orchestration controls; also store/core/agents [dependency; source claim E2]</text>
+<text x="43" y="1364" font-size="13">@orca/daemon: wire adaptation → @orca/engine: orchestration</text>
+<a href="../notation.md"><text x="32" y="1414" font-size="14" fill="#1559a1">Legend: blue calls · purple dashed dependencies · green dotted messages · brown data · gray containment · red declared</text></a>
+<text x="32" y="1441" font-size="13">Outer frame = view ownership; external and process nodes retain their labeled boundaries. Not a deployment verification.</text>
+</g>
+</svg>

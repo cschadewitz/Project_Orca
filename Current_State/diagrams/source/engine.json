@@ -1,0 +1,99 @@
+{
+  "id": "engine",
+  "title": "@orca/engine",
+  "owner": "packages/engine",
+  "scope": "Interpreter and application services, executors, workspace and plugin ports",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Orchestrator composes stores, registries, executors, a session factory, human-input port, workspace provider and PlanService.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Built-in node executors include basic routing, agent turns, containers and program/plan custom executors.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "PluginApi exposes registries and plan service plus human/workspace replacements; SessionFactory is separately injected through OrchestratorOptions.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/engine/src/orchestrator.ts",
+      "line": 86,
+      "symbol": "export interface OrchestratorOptions"
+    },
+    {
+      "path": "packages/engine/src/executors/index.ts",
+      "line": 28,
+      "symbol": "export function builtinExecutors"
+    },
+    {
+      "path": "packages/engine/src/plugin.ts",
+      "line": 14,
+      "symbol": "export interface PluginApi"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Orchestrator / RunContext",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "NodeExecutorRegistry + executors",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "PlanService / ProgramService",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Agents + stores + core",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Workspace / human-input / plugin ports",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "execute one node attempt",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "1",
+      "to": "3",
+      "label": "synchronize planning and request lifecycle",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "4",
+      "label": "persist and invoke agents",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "5",
+      "label": "invoke injected services",
+      "type": "call",
+      "evidence": 3
+    }
+  ],
+  "limits": ""
+}

@@ -1,0 +1,97 @@
+{
+  "id": "workflow-assets",
+  "title": "Shipped workflow and template assets",
+  "owner": "repository assets",
+  "scope": "workflows/, templates/, examples/",
+  "kind": "assets",
+  "claims": [
+    {
+      "classification": "Declared",
+      "statement": "The shipped program workflow composes decomposition, plan registration/risk/schedule/dispatch stages; ai-sdlc and plan-resume are separate workflow definitions.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Template discovery loads files from configured glob patterns and registers parsed front matter/body; user packs use prefix-based selection.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Plugin example demonstrates registration through definePlugin; production startup imports configured ESM modules before graph validation.",
+      "evidence": 3
+    },
+    {
+      "classification": "Declared",
+      "statement": "The JEV example opts into an evaluation plugin and shadow workflow explicitly; it is not a global evaluator enabled by default.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "workflows/program.yaml",
+      "line": 4,
+      "symbol": "id:"
+    },
+    {
+      "path": "packages/core/src/template/load.ts",
+      "line": 7,
+      "symbol": "export async function loadTemplates"
+    },
+    {
+      "path": "examples/plugin-example.ts",
+      "line": 5,
+      "symbol": "definePlugin"
+    },
+    {
+      "path": "examples/jev/orca.config.yaml",
+      "line": 43,
+      "symbol": "plugins:"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Configured workflow/template globs",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "Shipped and user-authored files",
+      "type": "storage"
+    },
+    {
+      "id": "3",
+      "label": "Core loaders + registries",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Engine built-ins / custom plugins",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "3",
+      "label": "select discovery roots",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "parse authoring assets",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "supply graphs and prompt bodies",
+      "type": "data",
+      "evidence": 1
+    }
+  ],
+  "limits": "Baseline inspected workflow YAML as executable definitions and template discovery/frontmatter identifiers; natural-language template prose was deferred to the documentation phase."
+}

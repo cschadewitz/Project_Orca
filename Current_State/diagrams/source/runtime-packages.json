@@ -1,0 +1,122 @@
+{
+  "id": "runtime-packages",
+  "title": "Runtime package dependency spine",
+  "owner": "repository",
+  "scope": "Core, stores, agents, engine, protocol and daemon; arrows mean imports, not network calls",
+  "kind": "system",
+  "claims": [
+    {
+      "classification": "Declared",
+      "statement": "Manifests declare engine dependencies on core/store/agents; store and agents depend on core.",
+      "evidence": 1
+    },
+    {
+      "classification": "Declared",
+      "statement": "Protocol depends on core schemas; daemon depends on protocol, core, engine, agents and store.",
+      "evidence": 2
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/engine/package.json",
+      "line": 17,
+      "symbol": "\"dependencies\""
+    },
+    {
+      "path": "packages/daemon/package.json",
+      "line": 17,
+      "symbol": "\"dependencies\""
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "@orca/core: domain and pure algorithms",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "@orca/store: persistence ports",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "@orca/agents: hosts and sessions",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "@orca/engine: orchestration",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "@orca/protocol: wire schemas",
+      "type": "component"
+    },
+    {
+      "id": "6",
+      "label": "@orca/daemon: wire adaptation",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "2",
+      "to": "1",
+      "label": "domain contracts",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "1",
+      "label": "agent configuration contracts",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "2",
+      "label": "persistence ports",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "3",
+      "label": "agent/host invocation",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "1",
+      "label": "domain and algorithms",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "5",
+      "to": "1",
+      "label": "browser-safe schemas",
+      "type": "dependency",
+      "evidence": 2
+    },
+    {
+      "from": "6",
+      "to": "5",
+      "label": "method envelopes and views",
+      "type": "dependency",
+      "evidence": 2
+    },
+    {
+      "from": "6",
+      "to": "4",
+      "label": "orchestration controls; also store/core/agents",
+      "type": "dependency",
+      "evidence": 2
+    }
+  ],
+  "limits": "Manifest declarations are the dependency graph basis. Transitive dependencies are omitted from arrows; all direct manifest edges are tabulated in baseline/dependencies.md."
+}

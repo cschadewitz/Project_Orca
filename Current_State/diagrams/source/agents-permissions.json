@@ -1,0 +1,116 @@
+{
+  "id": "agents-permissions",
+  "title": "Permission policy and standing rules",
+  "owner": "packages/agents",
+  "scope": "permissions.ts and core/model/agent.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "First matching rule wins; configured rules precede sidecars, then built-in workspace rules apply only when default is unset.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Ask calls the supplied human channel, matches the selected option id and otherwise returns cancelled. Auto allow/deny select the agent-offered option kinds.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Policy sidecars are re-read for each live ask; unreadable sidecars are logged and skipped by the ACP adapter.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Standing decisions derive rules and use a dedicated file writer; callers receive added, existing or refused-rule details.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/core/src/model/agent.ts",
+      "line": 289,
+      "symbol": "export function effectivePermissionPolicy"
+    },
+    {
+      "path": "packages/agents/src/permissions.ts",
+      "line": 119,
+      "symbol": "export async function resolvePermission"
+    },
+    {
+      "path": "packages/agents/src/acp-session.ts",
+      "line": 94,
+      "symbol": "const policyForAsk"
+    },
+    {
+      "path": "packages/agents/src/permissions.ts",
+      "line": 276,
+      "symbol": "export async function recordAlwaysDecision"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Configured agent rules",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "orca.permissions.json",
+      "type": "storage"
+    },
+    {
+      "id": "3",
+      "label": "effectivePermissionPolicy / decidePermission",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "ACP offered permission options",
+      "type": "external"
+    },
+    {
+      "id": "5",
+      "label": "Human answer + standing rule writer",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "3",
+      "label": "highest rule precedence",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "read overlay per ask",
+      "type": "data",
+      "evidence": 3
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "select allow / deny / cancel",
+      "type": "message",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "5",
+      "label": "ask when policy requires",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "5",
+      "to": "2",
+      "label": "persist derivable standing rule",
+      "type": "data",
+      "evidence": 4
+    }
+  ],
+  "limits": "Policy is cooperative authorization for reported ACP tool calls. A missing overlay and a corrupt overlay are different operational situations even though the session can fall back in both."
+}

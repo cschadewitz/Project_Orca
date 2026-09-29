@@ -1,0 +1,87 @@
+{
+  "id": "core",
+  "title": "@orca/core",
+  "owner": "packages/core",
+  "scope": "Shared domain, authoring, pure planning and utilities",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Exports a browser-safe schema subpath plus Node-aware loading/utilities through the main barrel. The package has no workspace runtime dependencies.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Run state is folded from typed events; planning scheduling and matrix evaluation are functions over supplied snapshots.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Authoring combines workflow schemas/validation, a custom expression interpreter, and a custom prompt template renderer.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/core/src/index.ts",
+      "line": 7,
+      "symbol": "export * from \"./schemas.js\""
+    },
+    {
+      "path": "packages/core/src/events/reduce.ts",
+      "line": 6,
+      "symbol": "export function reduceRun"
+    },
+    {
+      "path": "packages/core/src/workflow/validate.ts",
+      "line": 31,
+      "symbol": "export function validateWorkflow"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Domain schemas + event reducer",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Workflow / expression / templates",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Plan graph, risk, decisions, scheduling",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Engine, store, protocol consumers",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "4",
+      "to": "1",
+      "label": "use domain contracts and projections",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "2",
+      "label": "load and evaluate definitions",
+      "type": "call",
+      "evidence": 3
+    },
+    {
+      "from": "4",
+      "to": "3",
+      "label": "compute planning decisions",
+      "type": "call",
+      "evidence": 2
+    }
+  ],
+  "limits": ""
+}

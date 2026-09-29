@@ -1,0 +1,109 @@
+{
+  "id": "core-authoring",
+  "title": "Workflow, expression and template authoring",
+  "owner": "packages/core",
+  "scope": "workflow/, expr/, template/, frontmatter/glob utilities",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Workflow loading parses YAML/JSON through WorkflowDefinitionSchema; validation checks graph routing, references and built-in node fields.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Expression calls resolve through a function map and evaluate a parsed AST. This path does not evaluate arbitrary JavaScript source.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Templates support expression interpolation, if/each and named partials with a depth bound. A selected pack tries pack/id before the base template.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Custom node shape is permissive; built-in workflow validation cannot fully validate every plugin-specific field.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/core/src/workflow/load.ts",
+      "line": 10,
+      "symbol": "export function parseWorkflow"
+    },
+    {
+      "path": "packages/core/src/expr/evaluate.ts",
+      "line": 77,
+      "symbol": "function evalAst"
+    },
+    {
+      "path": "packages/core/src/template/registry.ts",
+      "line": 65,
+      "symbol": "get(id:"
+    },
+    {
+      "path": "packages/core/src/model/workflow.ts",
+      "line": 308,
+      "symbol": "export const CustomNodeSchema"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Workflow YAML/JSON and template files",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "Schema + graph validation",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Registries",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "AST expression / template rendering",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Engine executor context",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "parse definitions",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "register loaded definitions",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "5",
+      "to": "3",
+      "label": "select definition and template",
+      "type": "call",
+      "evidence": 3
+    },
+    {
+      "from": "5",
+      "to": "4",
+      "label": "evaluate conditions and render prompt",
+      "type": "call",
+      "evidence": 2
+    }
+  ],
+  "limits": "Template bodies were not read as project documentation during baseline; parsers, registries, renderers and template-file metadata were inspected."
+}

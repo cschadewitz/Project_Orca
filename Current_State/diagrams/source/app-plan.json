@@ -1,0 +1,106 @@
+{
+  "id": "app-plan",
+  "title": "Plan UI and decision surfaces",
+  "owner": "packages/app",
+  "scope": "renderer/plan/",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "usePlan reads plans, header, filtered/paged items and journal. plan.changed increments area revisions and rereads affected views.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "PlanSurface composes schedule, dependencies, risks and decisions with inspectors; each mode has separate plain models and feeds.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Decision UI submits chosen options/rationale and supports reopening through plan bridge methods.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/renderer/src/plan/use-plan.ts",
+      "line": 114,
+      "symbol": "export function usePlan"
+    },
+    {
+      "path": "packages/app/renderer/src/plan/plan-surface.tsx",
+      "line": 117,
+      "symbol": "export function PlanSurface"
+    },
+    {
+      "path": "packages/app/renderer/src/plan/decision-mode.tsx",
+      "line": 224,
+      "symbol": "window.orca.plan.decide"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "plan.changed invalidations",
+      "type": "message"
+    },
+    {
+      "id": "2",
+      "label": "Plan feed + area revisions",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Schedule / dependency / risk / decision modes",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Journal + dock inspector",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Plan read/write bridge",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "invalidate affected projections",
+      "type": "message",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "reread current span / journal",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "supply derived daemon views",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "select object / explain reasons",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "5",
+      "label": "waive, decide, reopen, update risk",
+      "type": "call",
+      "evidence": 3
+    }
+  ],
+  "limits": "Plan notifications are invalidations rather than full row patches. See uncertainties for reconnection parity with run feeds."
+}

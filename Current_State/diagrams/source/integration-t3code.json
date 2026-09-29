@@ -1,0 +1,87 @@
+{
+  "id": "integration-t3code",
+  "title": "T3 Code session adapter boundary",
+  "owner": "packages/integrations",
+  "scope": "t3code/contracts.ts and session.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "openT3CodeSession creates a thread, subscribes to thread events and maps prompt/cancel/close onto orchestration commands.",
+      "evidence": 1
+    },
+    {
+      "classification": "Declared",
+      "statement": "T3CodeRpc and mirrored command/event types define the expected external contract; the file labels them handwritten mirrors.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "UnimplementedT3CodeRpc throws NOT_SUPPORTED for both call and subscribe; no concrete transport is wired by CLI bootstrap.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/integrations/src/t3code/session.ts",
+      "line": 33,
+      "symbol": "export async function openT3CodeSession"
+    },
+    {
+      "path": "packages/integrations/src/t3code/contracts.ts",
+      "line": 52,
+      "symbol": "export interface T3CodeRpc"
+    },
+    {
+      "path": "packages/integrations/src/t3code/session.ts",
+      "line": 161,
+      "symbol": "export class UnimplementedT3CodeRpc"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Injected SessionFactory caller",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "T3 Code session adapter",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Injected T3CodeRpc",
+      "type": "interface"
+    },
+    {
+      "id": "4",
+      "label": "External T3 Code server",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "open with project/model/RPC",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "dispatch commands / subscribe",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "transport contract; implementation absent",
+      "type": "declared",
+      "evidence": 3
+    }
+  ],
+  "limits": "A supported configuration-only T3 connection and live contract compatibility are not established. Treat as partial adapter implementation, not a shipped end-to-end transport."
+}

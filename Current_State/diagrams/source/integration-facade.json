@@ -1,0 +1,106 @@
+{
+  "id": "integration-facade",
+  "title": "ORCA as an upstream ACP agent",
+  "owner": "packages/integrations",
+  "scope": "acp-facade/",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "The facade keeps in-memory sessions with selected workflow/roles/models/template pack and exposes session/new, prompt, config option change and cancel. It advertises loadSession false.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "/run selects a workflow, /status reports prior runs, ordinary text starts the selected workflow or submits a Request through ProgramService.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Human questions route by run/ancestor to the bound upstream session and map gate options onto ACP permission options; output forwarding is serialized.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/integrations/src/acp-facade/orca-acp-agent.ts",
+      "line": 132,
+      "symbol": "register(app:"
+    },
+    {
+      "path": "packages/integrations/src/acp-facade/orca-acp-agent.ts",
+      "line": 217,
+      "symbol": "private async prompt("
+    },
+    {
+      "path": "packages/integrations/src/acp-facade/upstream-human-input.ts",
+      "line": 67,
+      "symbol": "async ask(q:"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Upstream ACP client",
+      "type": "external"
+    },
+    {
+      "id": "2",
+      "label": "OrcaAcpAgent session selection",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "ProgramService / Orchestrator",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "UpstreamHumanInput run bindings",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "ORCA event stream",
+      "type": "data"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "session/new, config, prompt, cancel",
+      "type": "message",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "start workflow or submit request",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "ask decision/permission",
+      "type": "call",
+      "evidence": 3
+    },
+    {
+      "from": "4",
+      "to": "1",
+      "label": "request_permission options",
+      "type": "message",
+      "evidence": 3
+    },
+    {
+      "from": "5",
+      "to": "1",
+      "label": "translated session/update",
+      "type": "message",
+      "evidence": 2
+    }
+  ],
+  "limits": "Facade session selections are not persisted across process restarts. ACP capability support is a subset; actual host interoperability was not exercised."
+}

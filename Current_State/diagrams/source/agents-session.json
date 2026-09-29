@@ -1,0 +1,109 @@
+{
+  "id": "agents-session",
+  "title": "ACP session lifecycle",
+  "owner": "packages/agents",
+  "scope": "acp-session.ts, session.ts and config-options.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "openAcpSession spawns a process, connects ACP, initializes capabilities, then creates a new ACP session with cwd and configured MCP servers.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "One active prompt is admitted per session; timeout/abort requests cancellation, grace expiry fails the turn and termination escalates from SIGTERM to SIGKILL.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "ACP fs handlers restrict absolute paths lexically to configured roots, then delegate to HostFileSystem; they do not sandbox direct agent OS operations.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The concrete adapter creates session/new and exposes no session/load method through AgentSession. Engine run replay therefore is distinct from restoring an ACP conversation.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/agents/src/acp-session.ts",
+      "line": 69,
+      "symbol": "export async function openAcpSession"
+    },
+    {
+      "path": "packages/agents/src/acp-session.ts",
+      "line": 283,
+      "symbol": "const requestCancel"
+    },
+    {
+      "path": "packages/agents/src/acp-session.ts",
+      "line": 61,
+      "symbol": "function withinRoots"
+    },
+    {
+      "path": "packages/agents/src/session.ts",
+      "line": 28,
+      "symbol": "export interface AgentSession"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Engine session factory",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "openAcpSession",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "ACP agent process",
+      "type": "external"
+    },
+    {
+      "id": "4",
+      "label": "Updates + config option cache",
+      "type": "data"
+    },
+    {
+      "id": "5",
+      "label": "Host filesystem roots",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "open and prompt / cancel / close",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "initialize → session/new → prompt",
+      "type": "message",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "session/update notifications",
+      "type": "message",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "5",
+      "label": "fs requests through root checks",
+      "type": "call",
+      "evidence": 3
+    }
+  ],
+  "limits": "External agents may operate outside ACP fs callbacks. Path checks are not a claim of realpath/symlink confinement."
+}

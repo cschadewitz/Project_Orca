@@ -1,0 +1,116 @@
+{
+  "id": "engine-execution",
+  "title": "Node execution and artifact handoff",
+  "owner": "packages/engine",
+  "scope": "executors/basic.ts, agent-step.ts, containers.ts and types.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "runAgentTurn resolves input artifacts, renders a selected template/inline prompt, assigns private attempt output paths, invokes the session, collects/validates deliverables and sends bounded follow-ups.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Loop/parallel/subworkflow executors use child runs. FanOut limits concurrent children, captures failures and provides a shared abort signal; parallel join and failFast choose settlement.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Agent updates are coalesced into a serial append chain; the step observes append failure when draining rather than assuming the callback persisted it.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The interpreter routes to the first true conditional edge, otherwise the unconditional edge; terminal result.outcome ends the run irrespective of node type.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/engine/src/executors/agent-step.ts",
+      "line": 279,
+      "symbol": "export async function runAgentTurn"
+    },
+    {
+      "path": "packages/engine/src/executors/containers.ts",
+      "line": 130,
+      "symbol": "export class FanOut"
+    },
+    {
+      "path": "packages/engine/src/executors/agent-step.ts",
+      "line": 163,
+      "symbol": "class UpdateRecorder"
+    },
+    {
+      "path": "packages/engine/src/orchestrator.ts",
+      "line": 1075,
+      "symbol": "private async route("
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "StepContext + selected node",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Basic / agent / container executor",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Child runs or AgentSession",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Host deliverable files",
+      "type": "external"
+    },
+    {
+      "id": "5",
+      "label": "ArtifactStore + run events",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "execute node contract",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "prompt or runChild",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "produce attempt outputs",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "read and validate deliverables",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "record artifact and update stream",
+      "type": "data",
+      "evidence": 3
+    }
+  ],
+  "limits": "artifact-present polls only required file existence before requesting cancel; artifact validation occurs in collection. Follow-ups and whole-step retries are separate budgets."
+}

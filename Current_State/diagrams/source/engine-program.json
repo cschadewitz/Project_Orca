@@ -1,0 +1,99 @@
+{
+  "id": "engine-program",
+  "title": "Requests and work-item projections",
+  "owner": "packages/engine",
+  "scope": "program/service.ts, executors.ts and work-items.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "ProgramService.submit stores a Request, creates its program run and writes programRunId back; submitAndRun/resume settle terminal root outcomes onto the Request.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "deriveWorkItemProgress maps child and skipped-branch records onto work-item status/runId; later attempts supersede earlier progress.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Claim release recovery can project a terminal child or reset an abandoned item while excluding a successor claimant.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/engine/src/program/service.ts",
+      "line": 32,
+      "symbol": "export class ProgramService"
+    },
+    {
+      "path": "packages/engine/src/program/work-items.ts",
+      "line": 82,
+      "symbol": "export function deriveWorkItemProgress"
+    },
+    {
+      "path": "packages/engine/src/program/work-items.ts",
+      "line": 47,
+      "symbol": "export async function recoverReleasedWorkItem"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "User request title/body/source",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "ProgramService",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Request document",
+      "type": "storage"
+    },
+    {
+      "id": "4",
+      "label": "Program + item run events",
+      "type": "storage"
+    },
+    {
+      "id": "5",
+      "label": "WorkItem projection",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "submit intent",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "create/link/settle request",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "start and drive program run",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "derive item progress",
+      "type": "data",
+      "evidence": 2
+    }
+  ],
+  "limits": "Request settlement is explicitly invoked by ProgramService callers; daemon run controls call Orchestrator directly. Status ownership therefore differs across these entry paths."
+}

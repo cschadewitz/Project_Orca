@@ -1,0 +1,109 @@
+{
+  "id": "protocol",
+  "title": "@orca/protocol",
+  "owner": "packages/protocol",
+  "scope": "Wire envelopes, method schemas, views, notifications and compatibility",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Protocol uses request/response/notification envelopes with id/method/params and success/error results, validated with Zod. It is not a JSON-RPC 2.0 envelope.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Compatibility requires equal major and a daemon minor at least the client minor; current source constant is 1.8.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "DisplayStatus folds core run/step status and outcome plus lease context; it is a presentation vocabulary distinct from the seven core run states.",
+      "evidence": 3
+    },
+    {
+      "classification": "Declared",
+      "statement": "workflows.changed is a schema/client extension point without a runtime workflow reload producer traced in the method table and bootstrap.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/protocol/src/envelope.ts",
+      "line": 14,
+      "symbol": "export const RequestMessageSchema"
+    },
+    {
+      "path": "packages/protocol/src/version.ts",
+      "line": 103,
+      "symbol": "export const PROTOCOL_VERSION"
+    },
+    {
+      "path": "packages/protocol/src/status.ts",
+      "line": 71,
+      "symbol": "export function displayStatusForRun"
+    },
+    {
+      "path": "packages/protocol/src/version.ts",
+      "line": 52,
+      "symbol": "`workflows.changed` is in the list"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Core schema subpath / domain types",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Protocol schemas + method constants",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Daemon dispatch and projections",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "App client / preload / renderer",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Version + capabilities + errors",
+      "type": "data"
+    }
+  ],
+  "edges": [
+    {
+      "from": "2",
+      "to": "1",
+      "label": "reuse domain schema/types",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "2",
+      "label": "validate requests / construct views",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "2",
+      "label": "validate results / notifications",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "5",
+      "label": "hello advertises compatibility",
+      "type": "message",
+      "evidence": 2
+    }
+  ],
+  "limits": "Method families: runs/events, inputs, artifacts, claims, workflows, agents, config, planning, controls, subscriptions and maintenance. Error code is open string; consumers must tolerate unknown codes. See data-contracts for family ownership."
+}

@@ -1,0 +1,99 @@
+{
+  "id": "daemon-controls",
+  "title": "Run, input and planning controls",
+  "owner": "packages/daemon",
+  "scope": "control.ts and plan-control.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "answerAndResume centralizes input lookup, option validation and refusal semantics; standing permission writes occur before recording the answer.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "runs.start and runs.resume await execution until it pauses or terminates; control response latency therefore spans the workflow execution call.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "PlanControlModel handles dependency waivers, decisions, reopening and risk updates, using PlanService and read projections for results.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/daemon/src/control.ts",
+      "line": 91,
+      "symbol": "export async function answerAndResume"
+    },
+    {
+      "path": "packages/daemon/src/control.ts",
+      "line": 315,
+      "symbol": "async startRun(params:"
+    },
+    {
+      "path": "packages/daemon/src/plan-control.ts",
+      "line": 55,
+      "symbol": "export class PlanControlModel"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "App / RPC control parameters",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "ControlModel / PlanControlModel",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Orchestrator / PlanService",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Permission sidecar",
+      "type": "storage"
+    },
+    {
+      "id": "5",
+      "label": "Updated protocol view / fault",
+      "type": "data"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "answer / resume / start / mutate",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "validate ownership and execute",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "record standing grant if requested",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "return after service settlement",
+      "type": "data",
+      "evidence": 2
+    }
+  ],
+  "limits": "Read-only removes control methods; agents.ping remains possible when an AgentModel is present. Run control is not request submission through ProgramService."
+}

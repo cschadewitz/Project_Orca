@@ -1,0 +1,109 @@
+{
+  "id": "delivery",
+  "title": "Release, deployment and CI",
+  "owner": "repository tooling",
+  "scope": "Root scripts, .github workflows, app packaging and tools/deploy",
+  "kind": "infrastructure",
+  "claims": [
+    {
+      "classification": "Declared",
+      "statement": "Root scripts define tsc project-reference compilation, Vite renderer bundling, Vitest, ESLint, formatting and design generation. CI declares Node 22/24 lanes plus desktop and smoke workflows.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The standalone deployment tool stages releases and coordinates activation with process/admission checks, a pending journal, systemd stop/start, symlink selection and recovery.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Activation compatibility compares storeEpoch; store changes requiring a different epoch are refused rather than migrated automatically.",
+      "evidence": 3
+    },
+    {
+      "classification": "Declared",
+      "statement": "Desktop packages target Linux/macOS/Windows; mac signing/notarization is explicitly disabled in configuration. Publication waits for selected build/verification jobs.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "package.json",
+      "line": 11,
+      "symbol": "\"scripts\":"
+    },
+    {
+      "path": "tools/deploy/orca-release.py",
+      "line": 241,
+      "symbol": "def activate("
+    },
+    {
+      "path": "tools/deploy/orca-release.py",
+      "line": 91,
+      "symbol": "def compatible("
+    },
+    {
+      "path": "packages/app/electron-builder.yml",
+      "line": 82,
+      "symbol": "mac:"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Source commit + lockfile + compatibility metadata",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "CI / release preparation and publication",
+      "type": "process"
+    },
+    {
+      "id": "3",
+      "label": "Desktop artifacts + daemon bundle",
+      "type": "data"
+    },
+    {
+      "id": "4",
+      "label": "Managed daemon release directory",
+      "type": "storage"
+    },
+    {
+      "id": "5",
+      "label": "systemd + current symlink + pending journal",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "configured checks/build/package",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "publish matched release assets",
+      "type": "data",
+      "evidence": 4
+    },
+    {
+      "from": "1",
+      "to": "4",
+      "label": "stage verified managed release",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "guarded activate / recover",
+      "type": "call",
+      "evidence": 2
+    }
+  ],
+  "limits": "No workflow, deployment helper, packaging command or integration test was executed. Environment-provided signing, SSH and feed secrets were not read."
+}
