@@ -26,7 +26,7 @@ export default definePlugin({
 
 | Extension | Interface | Where |
 | --- | --- | --- |
-| New node type | `NodeExecutor` → `api.executors.register()` | `engine/executors/types.ts` |
+| New node type | `NodeExecutor` → `api.executors.register()`; an optional `validate(node)` runs at load time | `engine/executors/types.ts` |
 | New artifact kind | just use it in `produces.kind`; register validation in a node or plugin | `core/model/artifact.ts` |
 | New prompt templates / partials | `api.templates.registerSource()` or files matched by `templates:` globs | `core/template/registry.ts` |
 | New workflows | `api.workflows.register()` or files matched by `workflows:` globs | `core/workflow/load.ts` |
@@ -52,13 +52,20 @@ Conventions that keep extensions reviewable:
 - Nothing in the interpreter is keyed on node type: a custom node gets retries by setting
   `maxAttempts:` on the node (its executor must return `failed(..., retryable = true)`), and
   ends the run by returning `completed({ outcome, message })` — no `end` node needed after it.
-- Custom node types are `custom:<kebab-name>`; validation of their fields is the plugin's job:
-  parse `ctx.node` with zod at the top of `execute` and return
-  `failed("WORKFLOW_INVALID", …, retryable = false)`. There is no plugin validation hook today.
+- Custom node types are `custom:<kebab-name>`; validation of their fields is the plugin's job,
+  and it has two moments. Give the executor a `validate(node)` returning
+  `{ errors?, warnings? }` of `{ path?, message }` (paths relative to the node: `rubric`,
+  `.questions.conflict`): `validateWorkflow` calls it for every `custom:*` node whose executor
+  is registered, so `orca validate` and bootstrap reject a malformed node up front, the way
+  they reject a missing template (#308). Then parse `ctx.node` again at the top of `execute`
+  and return `failed("WORKFLOW_INVALID", …, retryable = false)`, because a node can reach an
+  executor without having been validated by it (a workflow registered by another plugin, an
+  embedder that skips validation). The engine calls `NodeExecutorRegistry.validateNode` for
+  the hook; a type nobody registered is reported as a warning, not an error.
   `packages/integrations/src/jev/` (`custom:jev-eval`, `docs/INTEGRATIONS.md`) is a worked
-  plugin of this shape: a zod schema for the node, `ctx.resolveInputs` for explicit inputs, an
-  injectable provider port so the tests script the remote, `ctx.recordArtifact` for the durable
-  record, and the routable part in `result.data`.
+  plugin of this shape: one zod parse shared by `validate` and `execute`, `ctx.resolveInputs`
+  for explicit inputs, an injectable provider port so the tests script the remote,
+  `ctx.recordArtifact` for the durable record, and the routable part in `result.data`.
 - A `HumanInputPort` receives `query.signal`, which fires when the run is cancelled while the
   question is open. Drop the request and reject with `humanInputCancelled(signal)`; the engine
   stops waiting on `cancel()` regardless, but a cooperative port avoids stranded questions.

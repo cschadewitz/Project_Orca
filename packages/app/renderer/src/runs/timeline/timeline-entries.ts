@@ -172,8 +172,9 @@ export function mergeEntries(
 
   const firstHeld = held[0];
   if (firstHeld === undefined) return { entries, prepended: 0 };
-  const at = entries.findIndex((entry) => entry.seq === firstHeld.seq);
-  return { entries, prepended: at === -1 ? 0 : at };
+  // Every held entry is in `bySeq`, so the first one is always found: its index is the count
+  // of rows that landed in front of it, and there is no -1 case to default (#251).
+  return { entries, prepended: entries.findIndex((entry) => entry.seq === firstHeld.seq) };
 }
 
 /** The lowest sequence number the list holds — the anchor the next backward page uses. */

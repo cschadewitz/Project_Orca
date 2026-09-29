@@ -2,6 +2,7 @@
 import {
   evaluateVars,
   OrcaError,
+  pathGet,
   type DecisionNode,
   type EndNode,
   type GateNode,
@@ -97,7 +98,9 @@ async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise
         ])
       ).find((r) => r !== undefined);
       if (!a) throw new OrcaError("ARTIFACT_MISSING", `decision '${ctx.nodeId}' needs artifact '${s.artifact}'`);
-      return { raw: a.data[s.field], source: `artifact:${a.name}.${s.field}` };
+      // `field` is a dotted path into the artifact's data (#309): `verdict` reads a top-level
+      // front-matter key as before, `answers.conflict.choice` reaches into a nested record.
+      return { raw: pathGet(a.data, s.field), source: `artifact:${a.name}.${s.field}` };
     }
     case "agent": {
       const produces = s.produces ?? {
@@ -122,7 +125,7 @@ async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise
       if (turn.kind === "failed")
         throw new OrcaError(turn.error.code as "INTERNAL", turn.error.message, turn.error.details);
       const art = turn.artifacts[0];
-      return { raw: art?.data[s.field], source: `agent:${art?.name ?? "decision"}` };
+      return { raw: art ? pathGet(art.data, s.field) : undefined, source: `agent:${art?.name ?? "decision"}` };
     }
     case "human":
       return { raw: await askHuman(ctx, s.question, ctx.node.options), source: "human" };

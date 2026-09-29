@@ -101,6 +101,14 @@ export function diffText(a: string, b: string): Diff {
   return diffLines(bodyLines(a), bodyLines(b));
 }
 
+/**
+ * Every indexed read below is bounded by the loop it sits in, so it is asserted (`!`) rather
+ * than defaulted (#251). A `?? ""` there was never a case, only a way to satisfy
+ * `noUncheckedIndexedAccess`, and it counted as an unreachable branch against the renderer's
+ * coverage ratchet. The trade is deliberate: `!` is erased at runtime, so an off-by-one that
+ * would once have rendered a blank line now renders nothing for that line - louder, and the
+ * kind of wrong a test notices.
+ */
 export function diffLines(a: readonly string[], b: readonly string[]): Diff {
   const lines: DiffLine[] = [];
   let added = 0;
@@ -118,15 +126,15 @@ export function diffLines(a: readonly string[], b: readonly string[]): Diff {
   let tail = 0;
   while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
 
-  for (let i = 0; i < head; i++) emit("same", a[i] ?? "", i + 1, i + 1);
+  for (let i = 0; i < head; i++) emit("same", a[i]!, i + 1, i + 1);
 
   const midA = a.slice(head, a.length - tail);
   const midB = b.slice(head, b.length - tail);
   const coarse = midA.length * midB.length > MAX_CELLS;
 
   if (coarse) {
-    for (let i = 0; i < midA.length; i++) emit("del", midA[i] ?? "", head + i + 1, undefined);
-    for (let i = 0; i < midB.length; i++) emit("add", midB[i] ?? "", undefined, head + i + 1);
+    for (let i = 0; i < midA.length; i++) emit("del", midA[i]!, head + i + 1, undefined);
+    for (let i = 0; i < midB.length; i++) emit("add", midB[i]!, undefined, head + i + 1);
   } else {
     for (const step of walk(midA, midB)) {
       emit(
@@ -140,7 +148,7 @@ export function diffLines(a: readonly string[], b: readonly string[]): Diff {
 
   for (let i = 0; i < tail; i++) {
     const ai = a.length - tail + i;
-    emit("same", a[ai] ?? "", ai + 1, b.length - tail + i + 1);
+    emit("same", a[ai]!, ai + 1, b.length - tail + i + 1);
   }
 
   return { lines, added, removed, coarse };
@@ -162,7 +170,7 @@ function* walk(
   for (let i = rows - 1; i >= 0; i--) {
     for (let j = cols - 1; j >= 0; j--) {
       const row = table[i]!;
-      row[j] = a[i] === b[j] ? (table[i + 1]![j + 1] ?? 0) + 1 : Math.max(table[i + 1]![j] ?? 0, row[j + 1] ?? 0);
+      row[j] = a[i] === b[j] ? table[i + 1]![j + 1]! + 1 : Math.max(table[i + 1]![j]!, row[j + 1]!);
     }
   }
 
@@ -170,23 +178,23 @@ function* walk(
   let j = 0;
   while (i < rows && j < cols) {
     if (a[i] === b[j]) {
-      yield { op: "same", text: a[i] ?? "", a: i + 1, b: j + 1 };
+      yield { op: "same", text: a[i]!, a: i + 1, b: j + 1 };
       i++;
       j++;
-    } else if ((table[i + 1]![j] ?? 0) >= (table[i]![j + 1] ?? 0)) {
-      yield { op: "del", text: a[i] ?? "", a: i + 1 };
+    } else if (table[i + 1]![j]! >= table[i]![j + 1]!) {
+      yield { op: "del", text: a[i]!, a: i + 1 };
       i++;
     } else {
-      yield { op: "add", text: b[j] ?? "", b: j + 1 };
+      yield { op: "add", text: b[j]!, b: j + 1 };
       j++;
     }
   }
   while (i < rows) {
-    yield { op: "del", text: a[i] ?? "", a: i + 1 };
+    yield { op: "del", text: a[i]!, a: i + 1 };
     i++;
   }
   while (j < cols) {
-    yield { op: "add", text: b[j] ?? "", b: j + 1 };
+    yield { op: "add", text: b[j]!, b: j + 1 };
     j++;
   }
 }

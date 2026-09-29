@@ -19,6 +19,22 @@ export interface ValidationResult {
   warnings: ValidationIssue[];
 }
 
+/**
+ * One thing a plugin has to say about a custom node's fields. `path` is relative to the node
+ * (`.rubric`, `.questions.conflict`), the way the validator's own sub-paths are; a bare
+ * segment (`rubric`) is accepted and prefixed. Absent means the node as a whole.
+ */
+export interface NodeIssue {
+  path?: string | undefined;
+  message: string;
+}
+
+/** What a custom node's validator reports (#308). Both lists may be empty or absent. */
+export interface NodeValidation {
+  errors?: NodeIssue[] | undefined;
+  warnings?: NodeIssue[] | undefined;
+}
+
 export interface ValidationContext {
   /** Resolve referenced workflow ids (subworkflow / loop / parallel refs). */
   hasWorkflow?: (id: string) => boolean;
@@ -26,6 +42,12 @@ export interface ValidationContext {
   hasTemplate?: (id: string) => boolean;
   /** Resolve agent ids / roles. */
   hasAgent?: (selector: string | { id: string } | { role: string }) => boolean;
+  /**
+   * Check a `custom:*` node's own fields (#308). The core schema keeps custom nodes loose, so
+   * this is where a registered executor's schema gets a say at load time rather than when the
+   * run reaches the node. Return `undefined` when nothing has an opinion about this type.
+   */
+  validateCustomNode?: (node: NodeDef) => NodeValidation | undefined;
 }
 
 export function validateWorkflow(def: WorkflowDefinition, ctx: ValidationContext = {}): ValidationResult {
@@ -238,5 +260,16 @@ function validateNode(
       break;
     default:
       if (!String(n.type).startsWith("custom:")) err(`unknown node type '${String((n as { type: string }).type)}'`);
+      else if (ctx.validateCustomNode) {
+        const r = ctx.validateCustomNode(n);
+        for (const i of r?.errors ?? []) err(i.message, issuePath(i.path));
+        for (const i of r?.warnings ?? []) warn(i.message, issuePath(i.path));
+      }
   }
+}
+
+/** A plugin's node-relative issue path as the validator's sub-path: `rubric` and `.rubric` both read `.rubric`. */
+function issuePath(path: string | undefined): string {
+  if (!path) return "";
+  return path.startsWith(".") || path.startsWith("[") ? path : `.${path}`;
 }

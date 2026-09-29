@@ -40,7 +40,7 @@ edges:
 | --- | --- | --- |
 | `start` / `end` | entry and exit; `end.outcome` = `success` (default) \| `failure` \| `cancelled` | `end.message`; `start` takes no fields |
 | `agent` | run an agent turn and collect artifacts | `agent`, `template`/`prompt`, `inputs`, `produces`, `completion`, `vars` |
-| `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human` \| `matrix`), `options` (see below), `defaultOption` (an option id) |
+| `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human` \| `matrix`), `options` (see below), `defaultOption` (an option id). An `artifact` or `agent` source's `field` is a dotted path into the artifact's data: `verdict` reads a front‑matter key, `answers.conflict.choice` reaches a nested one |
 | `gate` | human approval; can auto‑approve | `question`, `options` (see below), `autoApproveWhen`, `autoOption` (an option id) |
 | `set` | assign run vars | `vars` |
 | `loop` | repeat a nested graph / workflow as child runs | `mode` (`while` \| `until` \| `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
@@ -60,8 +60,15 @@ The plan nodes are described in `docs/PLANNING.md`. Every node also takes `name`
 `item`, `loop.indexVar` `index`, `loop.maxIterations` 10, `parallel.concurrency` 4,
 `completion.maxFollowUps` 1, `completion.maxAttempts` 1. `produces[]` entries carry
 `name`, `mediaType`, `required` and `validate` (`requiredFields`, `fieldValues`,
-`minBodyLength`); `inputs[]` entries carry `kind`/`name`, `fromNode` and `as` (the alias
-under `inputs.<as>` in the prompt context).
+`minBodyLength`; a field name is a dotted path, so `answers.conflict.choice` checks the
+leaf); `inputs[]` entries carry `kind`/`name`, `fromNode` and `as` (the alias under
+`inputs.<as>` in the prompt context).
+
+A `custom:*` node's fields are the plugin's to check, and a plugin whose executor has a
+`validate(node)` gets to do it here: `orca validate` and bootstrap load the configured
+plugins and report what the executor says under the node's path, so a missing field fails
+the workflow before any agent has spent a turn (`docs/EXTENSIBILITY.md`). A custom node whose
+type no loaded plugin registers is a warning saying its fields were not checked.
 
 Wherever a node takes `vars` (`set`, `agent`, `subworkflow`), a string value starting
 with `=` is evaluated as an expression and anything else is a literal, e.g.

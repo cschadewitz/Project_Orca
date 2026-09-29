@@ -262,8 +262,11 @@ implements `JevProvider` — the scripted one the tests use, for instance.
     produces: { kind: evaluation, name: coverageCheck } # defaults: kind evaluation, name = node id
 ```
 
-The executor validates these fields with zod and fails with `WORKFLOW_INVALID` before
-calling anyone. It then resolves the inputs, renders the context, builds
+The executor validates these fields with zod twice: when the workflows are loaded, so
+`orca validate` and bootstrap report a missing `rubric:` or a `model: jev-latest` under the
+node's path before any agent has run (#308), and again at the top of `execute`, where a node
+that arrived unvalidated fails with `WORKFLOW_INVALID` before calling anyone. It then
+resolves the inputs, renders the context, builds
 `{ artifacts: { <alias>: <content> }, context: { <key>: <text> } }`, and refuses to send it if
 the JSON is over `maxStateChars`. Every field of the response is checked against the
 questions: the answer ids must be exactly the question ids, a choice must be an offered
@@ -282,12 +285,14 @@ and `evaluatedAt`. The body is a table for a person. The judged content is refer
 id and hash, not copied, so the artifact stays small.
 
 The same record is the step's `result.data`, plus `artifactId`, which is what expressions and
-decision nodes read:
+decision nodes read. A decision on one answer names the artifact and a dotted path into it,
+which ties the decision to the evaluation rather than to the node that produced it (#309);
+an expression is for arithmetic over an answer:
 
 ```yaml
   route:
     type: decision
-    source: { kind: expression, expr: "steps.coverageCheck.result.data.answers.conflict.choice" }
+    source: { kind: artifact, artifact: coverageCheck, field: answers.conflict.choice }
     options: [consistent, contradiction]
   cited:
     type: decision

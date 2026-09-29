@@ -1,7 +1,9 @@
 /**
  * The `custom:jev-eval` node's fields. The core workflow schema keeps custom nodes loose, so
- * this is where the fields are checked - at the top of `execute`, per docs/EXTENSIBILITY.md -
- * and a bad node fails with WORKFLOW_INVALID rather than reaching the provider.
+ * this is where the fields are checked - by the executor's `validate` when the workflows are
+ * loaded (#308) and again at the top of `execute`, per docs/EXTENSIBILITY.md - so a bad node
+ * fails `orca validate` and bootstrap, and a run that reaches one anyway fails with
+ * WORKFLOW_INVALID rather than reaching the provider.
  */
 import { ArtifactRefSchema } from "@orca/core";
 import { z } from "zod";

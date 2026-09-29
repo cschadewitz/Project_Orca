@@ -3,6 +3,9 @@
  * add node executors, prompt templates, workflows, hosts/agents, planning
  * signal extractors, or wrap the human-input port. Listed under `plugins:` in
  * orca.config.yaml.
+ *
+ * An executor with a `validate(node)` has its custom node's fields checked when the
+ * workflows are validated - bootstrap and `orca validate` both load the plugins first (#308).
  */
 import type { AgentRegistry } from "@orca/agents";
 import type { TemplateRegistry, WorkflowRegistry } from "@orca/core";

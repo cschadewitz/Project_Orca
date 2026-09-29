@@ -14,6 +14,7 @@ import {
   describeError,
   evaluateVars,
   OrcaError,
+  pathGet,
   renderDeliverablesBlock,
   sha256,
   type AgentNode,
@@ -88,16 +89,21 @@ async function planDeliverables(
   return out;
 }
 
-/** Validate an artifact's structured data against the node's rules. Returns a reason when invalid. */
+/**
+ * Validate an artifact's structured data against the node's rules. Returns a reason when invalid.
+ *
+ * A field name is a dotted path into the data (#309), the same one a decision's `field` is:
+ * `verdict` is the top-level key, `answers.conflict.choice` is the leaf under it.
+ */
 export function validateArtifact(spec: ArtifactSpec, data: Record<string, unknown>, body: string): string | undefined {
   const v = spec.validate;
   if (!v) return undefined;
   for (const f of v.requiredFields ?? []) {
-    const val = data[f];
+    const val = pathGet(data, f);
     if (val === undefined || val === null || val === "") return `front matter field '${f}' is missing`;
   }
   for (const [f, allowed] of Object.entries(v.fieldValues ?? {})) {
-    const val = data[f];
+    const val = pathGet(data, f);
     if (val !== undefined && !allowed.includes(String(val)))
       return `front matter field '${f}' must be one of ${allowed.join(", ")} (got '${String(val)}')`;
   }
