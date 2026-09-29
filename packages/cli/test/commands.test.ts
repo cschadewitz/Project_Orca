@@ -59,6 +59,39 @@ edges:
   - { from: sub, to: done }
 `;
 
+/** A plugin whose executor validates its node at load time (#308): `field` is required. */
+const STRICT_PLUGIN = [
+  "export default {",
+  '  name: "strict",',
+  "  register(api) {",
+  "    api.executors.register({",
+  '      type: "custom:strict",',
+  '      validate: (node) => ("field" in node ? {} : { errors: [{ path: "field", message: "Required" }] }),',
+  '      async execute() { return { kind: "completed", result: { artifactIds: [], data: {} } }; },',
+  "    });",
+  "  },",
+  "};",
+  "",
+].join("\n");
+
+/** One custom node the strict plugin accepts, one it rejects, and one no plugin registers. */
+const CUSTOM = `
+id: custom
+name: Custom nodes
+start: s
+nodes:
+  s: { type: start }
+  ok: { type: "custom:strict", field: 1 }
+  bad: { type: "custom:strict" }
+  nobody: { type: "custom:nobody" }
+  done: { type: end }
+edges:
+  - { from: s, to: ok }
+  - { from: ok, to: bad }
+  - { from: bad, to: nobody }
+  - { from: nobody, to: done }
+`;
+
 /** `submit` runs the configured program workflow; this one just records the request and ends. */
 const PROGRAM = `
 id: program
@@ -116,6 +149,61 @@ describe("orca validate", () => {
     const c = ctx(dir, ["tiny.yaml"], { mermaid: true });
     expect(await commands.validate!.run(c)).toBe(0);
     expect(c.lines.join("\n")).toContain("flowchart");
+  });
+
+  it("loads the config's plugins so a custom node's fields are checked by its executor (#308)", async () => {
+    const pdir = await mkdtemp(join(tmpdir(), "orca-validate-plugin-"));
+    dirs.push(pdir);
+    await writeFile(join(pdir, "plugin.mjs"), STRICT_PLUGIN, "utf8");
+    await writeFile(join(pdir, "custom.yaml"), CUSTOM, "utf8");
+    await writeFile(
+      join(pdir, "orca.config.yaml"),
+      'version: 1\nworkflows: [custom.yaml]\ntemplates: []\nplugins: ["./plugin.mjs"]\n',
+      "utf8",
+    );
+    const c = ctx(pdir, []);
+    expect(await commands.validate!.run(c)).toBe(1);
+    const text = c.lines.join("\n");
+    expect(text).toMatch(/^FAIL custom/m);
+    expect(text).toContain("error   workflow(custom).nodes.bad.field: Required");
+    expect(text).toContain(
+      "warning workflow(custom).nodes.nobody: no executor is registered for 'custom:nobody'; its fields were not checked",
+    );
+    // The node that passes its executor's check is not mentioned.
+    expect(text).not.toContain("nodes.ok");
+  });
+
+  it("validates only named files while keeping plugin workflows available as references", async () => {
+    const pdir = await mkdtemp(join(tmpdir(), "orca-validate-targets-"));
+    dirs.push(pdir);
+    await writeFile(
+      join(pdir, "selected.yaml"),
+      "id: selected\nname: Selected\nstart: s\nnodes:\n  s: { type: start }\n  child: { type: subworkflow, workflow: plugin-good }\n  done: { type: end }\nedges: [{ from: s, to: child }, { from: child, to: done }]\n",
+      "utf8",
+    );
+    await writeFile(
+      join(pdir, "plugin.mjs"),
+      `export default { name: "extra-workflows", register(api) {
+  const good = { id: "plugin-good", name: "Good", version: "1", vars: {}, inputs: {}, start: "s",
+    nodes: { s: { type: "start" }, done: { type: "end" } }, edges: [{ from: "s", to: "done" }] };
+  api.workflows.register(good);
+  api.workflows.register({ ...good, id: "plugin-bad", name: "Bad", edges: [{ from: "s", to: "missing" }] });
+} };\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(pdir, "orca.config.yaml"),
+      'version: 1\nworkflows: [selected.yaml]\ntemplates: []\nplugins: ["./plugin.mjs"]\n',
+      "utf8",
+    );
+
+    const selected = ctx(pdir, ["selected.yaml"]);
+    expect(await commands.validate!.run(selected)).toBe(0);
+    expect(selected.lines).toEqual(["OK   selected (3 nodes, 2 edges)"]);
+
+    const all = ctx(pdir, []);
+    expect(await commands.validate!.run(all)).toBe(1);
+    expect(all.lines.join("\n")).toContain("FAIL plugin-bad");
   });
 });
 

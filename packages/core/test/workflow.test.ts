@@ -163,4 +163,42 @@ edges: [{ from: s, to: l }, { from: l, to: e }]
     expect(loop?.type).toBe("loop");
     if (loop?.type === "loop" && "graph" in loop.body) expect(loop.body.graph.nodes.c?.type).toBe("custom:hello");
   });
+
+  it("lets the context check a custom node's fields, with issue paths under the node (#308)", () => {
+    const def = parseWorkflow(`
+id: custom
+name: custom
+start: s
+nodes:
+  s: { type: start }
+  eval: { type: "custom:jev-eval", model: jev-latest }
+  other: { type: "custom:other" }
+  e: { type: end }
+edges: [{ from: s, to: eval }, { from: eval, to: other }, { from: other, to: e }]
+`);
+    const asked: string[] = [];
+    const r = validateWorkflow(def, {
+      validateCustomNode: (n) => {
+        asked.push(n.type);
+        if (n.type !== "custom:jev-eval") return undefined;
+        return {
+          // A bare segment and a dotted one both land under the node's path.
+          errors: [
+            { path: "rubric", message: "Required" },
+            { path: ".model", message: "alias" },
+          ],
+          warnings: [{ message: "unpinned" }],
+        };
+      },
+    });
+    expect(asked).toEqual(["custom:jev-eval", "custom:other"]);
+    expect(r.ok).toBe(false);
+    expect(r.errors).toEqual([
+      { path: "workflow(custom).nodes.eval.rubric", message: "Required" },
+      { path: "workflow(custom).nodes.eval.model", message: "alias" },
+    ]);
+    expect(r.warnings).toEqual([{ path: "workflow(custom).nodes.eval", message: "unpinned" }]);
+    // Without the hook the same definition validates the way it always did.
+    expect(validateWorkflow(def).ok).toBe(true);
+  });
 });

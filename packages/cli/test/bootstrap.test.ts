@@ -276,4 +276,27 @@ describe("bootstrap", () => {
       details: { problems: expect.arrayContaining([expect.stringContaining("broken")]) },
     });
   });
+
+  it("refuses to start when a plugin's executor rejects its own custom node (#308)", async () => {
+    const dir = await temp();
+    await writeFile(
+      join(dir, "custom.yaml"),
+      'id: custom\nname: Custom\nstart: s\nnodes:\n  s: { type: start }\n  bad: { type: "custom:strict" }\n  done: { type: end }\nedges:\n  - { from: s, to: bad }\n  - { from: bad, to: done }\n',
+      "utf8",
+    );
+    await writeFile(
+      join(dir, "plugin.mjs"),
+      'export default { name: "strict", register(api) { api.executors.register({ type: "custom:strict", validate: (node) => ("field" in node ? {} : { errors: [{ path: "field", message: "Required" }] }), async execute() { return { kind: "completed", result: { artifactIds: [], data: {} } }; } }); } };\n',
+      "utf8",
+    );
+    await writeFile(
+      join(dir, "orca.config.yaml"),
+      'version: 1\nworkflows: [custom.yaml]\ntemplates: []\nplugins: ["./plugin.mjs"]\n',
+      "utf8",
+    );
+    await expect(bootstrap({ cwd: dir, ephemeral: true, logger: silentLogger })).rejects.toMatchObject({
+      code: "WORKFLOW_INVALID",
+      details: { problems: ["custom: workflow(custom).nodes.bad.field: Required"] },
+    });
+  });
 });

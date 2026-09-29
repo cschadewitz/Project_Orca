@@ -12,6 +12,7 @@ import {
 import { askHumanInput, type HumanInputQuery } from "../human-input.js";
 import { resolveMatrixChoice } from "../plan/executors.js";
 import { runAgentTurn } from "./agent-step.js";
+import { artifactFieldGet } from "./artifact-field.js";
 import { completed, failed, type NodeExecutor, type StepContext } from "./types.js";
 
 export const startExecutor: NodeExecutor<StartNode> = {
@@ -97,7 +98,7 @@ async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise
         ])
       ).find((r) => r !== undefined);
       if (!a) throw new OrcaError("ARTIFACT_MISSING", `decision '${ctx.nodeId}' needs artifact '${s.artifact}'`);
-      return { raw: a.data[s.field], source: `artifact:${a.name}.${s.field}` };
+      return { raw: artifactFieldGet(a.data, s.field), source: `artifact:${a.name}.${s.field}` };
     }
     case "agent": {
       const produces = s.produces ?? {
@@ -122,7 +123,7 @@ async function resolveChoice(ctx: StepContext & { node: DecisionNode }): Promise
       if (turn.kind === "failed")
         throw new OrcaError(turn.error.code as "INTERNAL", turn.error.message, turn.error.details);
       const art = turn.artifacts[0];
-      return { raw: art?.data[s.field], source: `agent:${art?.name ?? "decision"}` };
+      return { raw: art ? artifactFieldGet(art.data, s.field) : undefined, source: `agent:${art?.name ?? "decision"}` };
     }
     case "human":
       return { raw: await askHuman(ctx, s.question, ctx.node.options), source: "human" };

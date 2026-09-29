@@ -11,6 +11,7 @@ import type {
   Clock,
   Logger,
   NodeDef,
+  NodeValidation,
   OrcaEventInput,
   StepResult,
   StepRun,
@@ -106,6 +107,14 @@ export interface StepContext {
 export interface NodeExecutor<N extends NodeDef = NodeDef> {
   readonly type: N["type"];
   execute(ctx: StepContext & { node: N }): Promise<StepOutcome>;
+  /**
+   * Check a node of this type at load time (#308). `validateWorkflow` calls it for every
+   * `custom:*` node whose executor is registered, so `orca validate` and bootstrap reject a
+   * malformed node before any agent has spent a turn. The core schema keeps custom nodes
+   * loose, so `node` is the raw definition: parse it here the way `execute` does. Errors
+   * block; warnings inform. Issue paths are relative to the node (`.rubric`).
+   */
+  validate?(node: N): NodeValidation;
 }
 
 export class NodeExecutorRegistry {
@@ -119,6 +128,18 @@ export class NodeExecutorRegistry {
   }
   types(): string[] {
     return [...this.executors.keys()];
+  }
+  /**
+   * The `validateCustomNode` hook for a `ValidationContext`: the node's executor checks its
+   * fields. A type nobody registered is a warning, not an error - the run would fail at that
+   * node with NOT_SUPPORTED, but a validation pass without the plugin loaded (`orca validate
+   * <file>` against another config) should say what it could not check rather than refuse.
+   */
+  validateNode(node: NodeDef): NodeValidation | undefined {
+    const executor = this.executors.get(node.type);
+    if (!executor)
+      return { warnings: [{ message: `no executor is registered for '${node.type}'; its fields were not checked` }] };
+    return executor.validate?.(node);
   }
 }
 

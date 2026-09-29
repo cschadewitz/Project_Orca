@@ -33,6 +33,7 @@ import {
   type StepContext,
   type StepOutcome,
 } from "./types.js";
+import { artifactFieldGet } from "./artifact-field.js";
 
 export interface AgentTurnSpec {
   agent: AgentSelector;
@@ -88,16 +89,21 @@ async function planDeliverables(
   return out;
 }
 
-/** Validate an artifact's structured data against the node's rules. Returns a reason when invalid. */
+/**
+ * Validate an artifact's structured data against the node's rules. Returns a reason when invalid.
+ *
+ * A field name reads an exact top-level key first, then a dotted path into the data (#309),
+ * the same way a decision's `field` does.
+ */
 export function validateArtifact(spec: ArtifactSpec, data: Record<string, unknown>, body: string): string | undefined {
   const v = spec.validate;
   if (!v) return undefined;
   for (const f of v.requiredFields ?? []) {
-    const val = data[f];
+    const val = artifactFieldGet(data, f);
     if (val === undefined || val === null || val === "") return `front matter field '${f}' is missing`;
   }
   for (const [f, allowed] of Object.entries(v.fieldValues ?? {})) {
-    const val = data[f];
+    const val = artifactFieldGet(data, f);
     if (val !== undefined && !allowed.includes(String(val)))
       return `front matter field '${f}' must be one of ${allowed.join(", ")} (got '${String(val)}')`;
   }

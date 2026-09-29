@@ -209,14 +209,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     setHumanInput: (p) => (humanInput = p),
     setWorkspaceProvider: (p) => (workspaceProvider = p),
   };
-  for (const spec of config.plugins) {
-    const url = spec.startsWith(".") || isAbsolute(spec) ? pathToFileURL(resolve(configDir, spec)).href : spec;
-    const mod = (await import(url)) as { default?: OrcaPlugin };
-    if (!mod.default?.register)
-      throw new OrcaError("CONFIG_INVALID", `plugin ${spec} has no default OrcaPlugin export`);
-    await mod.default.register(api);
-    logger.debug("plugin loaded", { plugin: mod.default.name });
-  }
+  await loadPlugins(config, configDir, api, logger);
 
   const problems: string[] = [];
   for (const def of workflows.list()) {
@@ -224,6 +217,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       hasTemplate: (id) => templates.has(id),
       hasWorkflow: (id) => workflows.has(id),
       hasAgent: (s) => agents.canResolve(s),
+      validateCustomNode: (n) => executors.validateNode(n),
     });
     for (const e of r.errors) problems.push(`${def.id}: ${e.path}: ${e.message}`);
     for (const w of r.warnings) logger.warn(`workflow ${def.id}: ${w.path}: ${w.message}`);
@@ -263,6 +257,27 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     agents,
     logger,
   };
+}
+
+/**
+ * Import and register `config.plugins`, in order. A relative or absolute spec is a file next
+ * to the config; anything else is a package specifier. Shared by `bootstrap` and
+ * `orca validate`, which loads them so a plugin's node validators are registered (#308).
+ */
+export async function loadPlugins(
+  config: OrcaConfig,
+  configDir: string,
+  api: PluginApi,
+  logger: Logger,
+): Promise<void> {
+  for (const spec of config.plugins) {
+    const url = spec.startsWith(".") || isAbsolute(spec) ? pathToFileURL(resolve(configDir, spec)).href : spec;
+    const mod = (await import(url)) as { default?: OrcaPlugin };
+    if (!mod.default?.register)
+      throw new OrcaError("CONFIG_INVALID", `plugin ${spec} has no default OrcaPlugin export`);
+    await mod.default.register(api);
+    logger.debug("plugin loaded", { plugin: mod.default.name });
+  }
 }
 
 function stripUndefined<T extends object>(o: T): { [K in keyof T]?: Exclude<T[K], undefined> } {

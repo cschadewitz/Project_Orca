@@ -4,8 +4,15 @@
  * downstream routing that reads the answers. No network anywhere.
  */
 import { describe, expect, it } from "vitest";
-import { parseFrontMatter } from "@orca/core";
-import { JevHttpProvider, JevProviderError, validateJevResponse, type JevQuestion } from "@orca/integrations";
+import { parseFrontMatter, parseWorkflow, validateWorkflow } from "@orca/core";
+import { NodeExecutorRegistry } from "@orca/engine";
+import {
+  JevHttpProvider,
+  JevProviderError,
+  jevEvalExecutor,
+  validateJevResponse,
+  type JevQuestion,
+} from "@orca/integrations";
 import {
   artifactsOfKind,
   endedAt,
@@ -103,6 +110,67 @@ describe("custom:jev-eval", () => {
     expect(state.run.status).toBe("completed");
     expect(state.run.outcome).toBe("failure");
     expect(endedAt(state)).toBe("disagree");
+  });
+
+  it("routes on a nested answer through the artifact itself: a dotted `field` on `source: artifact` (#309)", async () => {
+    // The decision names the evaluation artifact and a path into its data, not the node that
+    // produced it, so it survives the node being renamed or the artifact coming from elsewhere.
+    const yaml = ROUTED.replace(
+      'source: { kind: expression, expr: "steps.jev.result.data.answers.conflict.choice" }',
+      "source: { kind: artifact, artifact: jev, field: answers.conflict.choice }",
+    );
+    const h = jevHarness(yaml, { provider: new ScriptedJevProvider({ body: GOOD_ANSWERS }) });
+    const state = await h.run("routed", { acceptance: ACCEPTANCE });
+    expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+    expect(endedAt(state)).toBe("agree");
+    expect(stepFor(state, "conflict")!.result?.choice).toBe("none");
+    const resolved = (await h.stores.events.read(state.run.id)).filter((e) => e.type === "decision.resolved");
+    expect(resolved[0]?.payload).toMatchObject({ choice: "none", source: "artifact:jev.answers.conflict.choice" });
+
+    // A path that reaches nothing is an unanswered decision, which a defaultOption catches and nothing else does.
+    const missing = yaml.replace("field: answers.conflict.choice", "field: answers.nothing.choice");
+    let failed = await jevHarness(missing, { provider: new ScriptedJevProvider({ body: GOOD_ANSWERS }) }).run(
+      "routed",
+      { acceptance: ACCEPTANCE },
+    );
+    expect(failed.run.status).toBe("failed");
+    expect(failed.run.error?.message).toMatch(/decision 'conflict' produced 'undefined'/);
+    failed = await jevHarness(
+      missing.replace("options: [none, minor, major]", "options: [none, minor, major]\n    defaultOption: major"),
+      {
+        provider: new ScriptedJevProvider({ body: GOOD_ANSWERS }),
+      },
+    ).run("routed", { acceptance: ACCEPTANCE });
+    expect(failed.run.status).toBe("completed");
+    expect(endedAt(failed)).toBe("disagree");
+  });
+
+  it("checks a node's fields when the workflow is validated, before any agent has run (#308)", () => {
+    const executors = new NodeExecutorRegistry().register(jevEvalExecutor({ provider: new ScriptedJevProvider() }));
+    const check = (yaml: string) =>
+      validateWorkflow(parseWorkflow(yaml), { validateCustomNode: (n) => executors.validateNode(n) });
+
+    const good = check(ROUTED);
+    expect(good.errors).toEqual([]);
+    // The harness's seed node is registered by the test plugin, not here: the validator says so and moves on.
+    expect(good.warnings.map((w) => w.path)).toEqual(["workflow(routed).nodes.impl", "workflow(routed).nodes.tests"]);
+    expect(good.warnings[0]?.message).toMatch(/no executor is registered for 'custom:seed'/);
+
+    const noRubric = check(ROUTED.replace("    rubric: { id: test/shadow, version: 2 }\n", ""));
+    expect(noRubric.ok).toBe(false);
+    expect(noRubric.errors).toEqual([{ path: "workflow(routed).nodes.jev.rubric", message: expect.any(String) }]);
+
+    const alias = check(ROUTED.replace("model: jev-1.13.0", "model: jev-latest"));
+    expect(alias.errors).toEqual([
+      {
+        path: "workflow(routed).nodes.jev.model",
+        message: "model 'jev-latest' is an alias; pin a version such as jev-1.13.0",
+      },
+    ]);
+
+    const badOption = check(ROUTED.replace('none: "The two agree', 'no way: "The two agree'));
+    expect(badOption.ok).toBe(false);
+    expect(badOption.errors[0]?.path).toMatch(/^workflow\(routed\)\.nodes\.jev\.questions\.conflict\.criteria/);
   });
 
   it("rejects a response whose answers are not the questions asked, and records nothing", async () => {

@@ -10,7 +10,7 @@
  * thresholds, arithmetic and routing stay in `decision` nodes and expressions, which read the
  * result as `steps.<node>.result.data.answers.<id>`.
  */
-import { describeError, serializeFrontMatter } from "@orca/core";
+import { describeError, serializeFrontMatter, type NodeIssue } from "@orca/core";
 import {
   completed,
   failed,
@@ -264,17 +264,41 @@ export function jevEvalExecutor(options: JevEvalOptions = {}): NodeExecutor {
     return completed({ artifactIds: [artifact.id], data: { artifactId: artifact.id, ...data } });
   }
 
+  /**
+   * The node's fields, or what is wrong with them. One parse for both moments it matters:
+   * `validate` at load time (#308), where `orca validate` and bootstrap refuse the workflow,
+   * and `execute`, where a node that got past neither still fails before the provider is
+   * called. A pinned alias is a node-level mistake too, so it is reported here rather than
+   * left for `modelFor` to find at run time.
+   */
+  function parseNode(
+    raw: unknown,
+  ): { node: JevEvalNode; issues?: undefined } | { node?: undefined; issues: NodeIssue[] } {
+    const parsed = JevEvalNodeSchema.safeParse(raw);
+    if (!parsed.success)
+      return { issues: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })) };
+    const node = parsed.data;
+    if (node.model !== undefined && MODEL_ALIASES.has(node.model))
+      return {
+        issues: [{ path: "model", message: `model '${node.model}' is an alias; pin a version such as jev-1.13.0` }],
+      };
+    return { node };
+  }
+
   return {
     type: "custom:jev-eval",
+    validate(node) {
+      const { issues } = parseNode(node);
+      return issues ? { errors: issues } : {};
+    },
     async execute(ctx) {
-      const parsed = JevEvalNodeSchema.safeParse(ctx.node);
-      if (!parsed.success)
+      const { node, issues } = parseNode(ctx.node);
+      if (issues)
         return failed(
           "WORKFLOW_INVALID",
-          `custom:jev-eval '${ctx.nodeId}': ${parsed.error.issues.map((i) => `${i.path.join(".") || "node"}: ${i.message}`).join("; ")}`,
-          { issues: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })) },
+          `custom:jev-eval '${ctx.nodeId}': ${issues.map((i) => `${i.path || "node"}: ${i.message}`).join("; ")}`,
+          { issues },
         );
-      const node = parsed.data;
       let requested: string | undefined;
       try {
         requested = modelFor(node);

@@ -48,10 +48,12 @@ import {
 } from "@orca/core";
 import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
-import { PausingHumanInput, autoHumanInput } from "@orca/engine";
+import { PausingHumanInput, PlanService, autoHumanInput, builtinExecutors } from "@orca/engine";
+import { AgentRegistry } from "@orca/agents";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
+import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec } from "@orca/testing";
-import { bootstrap, loadConfig, type OrcaApp } from "../bootstrap.js";
+import { bootstrap, loadConfig, loadPlugins, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState, stepAgents } from "../format.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
@@ -273,11 +275,36 @@ export const commands: Record<string, Command> = {
             configDir,
           )
         : await loadWorkflows(assets.workflows, configDir);
+      // Explicit files are the validation targets. Plugins may add workflows to the registry
+      // so references resolve, but those additions must not change which files were requested.
+      const selectedWorkflows = files.length ? workflows.list() : undefined;
+      // The plugins are loaded for their node validators (#308): a `custom:*` node's fields are
+      // checked here, by the executor that will run it, rather than when a run reaches it. The
+      // stores are in memory because nothing runs; the config's agents are what a plugin's
+      // `register` may consult, not what this command checks (a file is validated against its
+      // own selectors, so `hasAgent` is deliberately absent).
+      const executors = builtinExecutors();
+      await loadPlugins(
+        config,
+        configDir,
+        {
+          executors,
+          templates,
+          workflows,
+          agents: AgentRegistry.fromConfig(config),
+          plan: new PlanService({ stores: memoryStores() }),
+          setHumanInput() {},
+          setWorkspaceProvider() {},
+        },
+        consoleLogger((ctx.flags["log-level"] as never) ?? "warn"),
+      );
+      const definitions = selectedWorkflows ?? workflows.list();
       let failed = 0;
-      for (const def of workflows.list()) {
+      for (const def of definitions) {
         const r = validateWorkflow(def, {
           hasTemplate: (id) => templates.has(id),
           hasWorkflow: (id) => workflows.has(id),
+          validateCustomNode: (n) => executors.validateNode(n),
         });
         ctx.out(
           `${r.ok ? "OK  " : "FAIL"} ${def.id} (${Object.keys(def.nodes).length} nodes, ${def.edges.length} edges)`,
@@ -292,8 +319,7 @@ export const commands: Record<string, Command> = {
         // Throws TEMPLATE_NOT_FOUND for a pack that overrides nothing (#191).
         const overridden = requireTemplatePack(templates, pack);
         const used = new Set(
-          workflows
-            .list()
+          definitions
             .flatMap((def) => Object.values(def.nodes))
             .flatMap((n) => {
               const t = (n as { template?: unknown }).template;
