@@ -54,6 +54,14 @@ pnpm run orca claims                       # who owns which work item; `claims r
 pnpm run orca leases                       # who is interpreting which run; `leases break <runId>` frees a dead one's
 ```
 
+A run's selections are flags, not config edits: `--agent <role>=<agentId>` and
+`--model <agentId>=<modelId>` (both repeatable; a bare `--model <modelId>` when the run uses
+exactly one agent) on `run`, `submit` and `plan dispatch`; `--item-workflow <id>` on `submit`
+and `plan dispatch` to choose what each work item runs; `--template-pack <name>` to render
+prompts from a pack under `templates/<name>/` (the shipped `strict` pack is the example).
+An unknown role, agent, model or workflow is refused with the known set before the run
+starts, and `orca agents` lists each agent's declared models.
+
 To use real agents, create `orca.config.yaml` (see `examples/orca.config.yaml`),
 list your hosts/agents/roles, then `orca ping <agent>` to verify the ACP
 handshake (works over SSH too) and `orca submit "Add SSO" --body-file req.md`.

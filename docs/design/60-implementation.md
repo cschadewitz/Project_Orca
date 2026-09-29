@@ -95,8 +95,15 @@ written to `--pane-runs-tree` is a percentage rather than a length, and a split 
 monitor arrives as the same split on a laptop. Everything between the two ends stays px — the
 drag, the arrow keys, the clamp, and `aria-valuenow`/`min`/`max`, because px is what the
 separator moves in — and the conversion happens at the two edges only (`panePreferenceOf`,
-`panePx`). The next stacked split the roadmap implies (the risk matrix over its detail, #172;
-the decision log, #173) arrives with this answered.
+`panePx`). The two stacked splits v0.6.0 added arrived with this answered: `plan-risk` (the
+risk matrix over the risk register, #172) and `plan-decision` (the decision list over the
+selected decision's matrix, #173) are both fraction boundaries, because a matrix sized by the
+plan's scale and a register sized by how many risks there are have no length that is right on
+every window. The graph's second, graph-only rail (#171) reuses the `plan-rail` boundary id,
+so it shares the request rail's remembered width rather than adding a sixth column boundary.
+A mode says where it scrolls: the risk register, the decision list and the schedule table are
+the scrolling region of their split, the matrices and the canvas are bounded, and
+`scroll-sweep.test.tsx` walks every entry in `PLAN_MODES` as it walks `SURFACES`.
 
 Five rules it keeps:
 
@@ -644,6 +651,12 @@ called out on the screen that needs it so nobody implements a placeholder by acc
 3. **Agent cost or token usage.** Not shown. ACP does not necessarily carry it and the model
    does not mention it. If it becomes available it belongs in the step detail header beside
    duration, and the layout leaves room for exactly one more metric there.
+
+One thing the model *did not* supply and the daemon now derives on read: an open decision has
+no stored `result` until somebody evaluates or decides it, so `decisions.list` computes the
+matrix's recommendation through core's `evaluateDecisionMatrix` and flags it
+`resultIsPreview: true` (#173). The renderer labels it as a preview; nothing is written, and a
+matrix core refuses to evaluate has no preview rather than an error.
 
 ### Reconciliation after transport reattachment
 

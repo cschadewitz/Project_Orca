@@ -160,10 +160,13 @@ describe("counterpartUrl", () => {
     expect(counterpartUrl(crumbs, crumbs[1]!, { id: "claimed-item" })).toBe("orca://item/wi-1");
   });
 
-  it("answers nothing for the three that are queries the header cannot make", () => {
+  it("follows a work item to its dependencies, which is the graph mode focused on it (#171)", () => {
+    expect(counterpartUrl(crumbs, crumbs[0]!, { id: "dependencies" })).toBe("orca://plan?mode=deps&focus=wi-1");
+  });
+
+  it("answers nothing for the queries the header cannot make", () => {
     expect(counterpartUrl(crumbs, crumbs[1]!, { id: "workflow" })).toBeUndefined();
     expect(counterpartUrl(crumbs, crumbs[0]!, { id: "runs" })).toBeUndefined();
-    expect(counterpartUrl(crumbs, crumbs[0]!, { id: "dependencies" })).toBeUndefined();
     // And nothing when the trail has no work item to go to.
     expect(counterpartUrl([crumbs[1]!], crumbs[1]!, { id: "claimed-item" })).toBeUndefined();
   });

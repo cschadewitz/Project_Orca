@@ -93,10 +93,13 @@ started afterwards; a run already executing finishes against the version it bega
 draft bar states this in numbers — `3 runs pinned to v11` — and each is a link.
 
 > This requires ORCA to record a workflow version on the run when it starts, and to be able
-> to execute a version other than the newest. If it cannot today, this is the design's one
-> hard ask of the runtime. Without it the honest fallback is the warning-only model, where
-> publishing changes a running workflow underneath its run — in which case the draft bar must
-> say exactly that, in those words, and the publish button becomes destructive-toned.
+> to execute a version other than the newest. **As of v0.6.0 it can (#179):** the engine
+> keeps every version a run starts on in the store and resumes the run on that definition;
+> `WorkflowView.pinned` and `RunSummaryView.workflowPinned` (on `runs.get`) are what the
+> `◷ pinned` chip reads, and `workflows.get({ id, version })` returns a pinned version's
+> graph for the overlay. Runs that predate v0.6.0 have no stored definition and resume on
+> whatever file is current; the warning-only fallback below is no longer needed for the
+> editor. A file edited without bumping `version` still changes runs in flight.
 
 Version is shown wherever a run's workflow is named — the run header, the workflow viewer's
 overlay control, the step detail's node line — as `ai-sdlc v11`, and a run pinned to a version

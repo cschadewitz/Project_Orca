@@ -27,6 +27,8 @@ function fakeSessions(clock: FakeClock, failures: number) {
       hostId: o.host.id,
       cwd: o.cwd,
       acpSessionId: "acp",
+      configOptions: [],
+      setConfigOption: async () => [],
       closed: new Promise(() => {}),
       prompt: async () => ({ stopReason: "end_turn", durationMs: 1 }),
       onUpdate: () => () => {},

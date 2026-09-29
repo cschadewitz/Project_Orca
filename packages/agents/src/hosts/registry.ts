@@ -7,6 +7,7 @@ import {
   type AgentSpec,
   type Clock,
   type HostSpec,
+  type RunOverrides,
 } from "@orca/core";
 import type { AgentHost } from "../host.js";
 import { LocalHost } from "./local-host.js";
@@ -213,22 +214,68 @@ export class AgentRegistry {
   private readonly roles = new Map<string, string>();
   /** Handshake health for the agents in this registry; fed by whoever opens a session. */
   readonly health: AgentHealthTracker;
+  /** A run's `overrides.roles`, consulted before `roles`. Only set on a `withOverrides` view. */
+  private readonly roleOverrides = new Map<string, string>();
+  /** True on a `withOverrides` view: it shares the parent's maps, so it must not write to them. */
+  private readonly readOnly: boolean = false;
 
   constructor(clock: Clock = systemClock) {
     this.health = new AgentHealthTracker(clock);
   }
 
+  private writable(what: string): void {
+    if (this.readOnly) throw new OrcaError("NOT_SUPPORTED", `cannot ${what} on a run-scoped agent registry view`, {});
+  }
+
   addHost(host: AgentHost): this {
+    this.writable("add a host");
     this.hosts.set(host.id, host);
     return this;
   }
   addAgent(spec: AgentSpec): this {
+    this.writable("add an agent");
     this.agents.set(spec.id, spec);
     return this;
   }
   mapRole(role: string, agentId: string): this {
+    this.writable("map a role");
     this.roles.set(role, agentId);
     return this;
+  }
+
+  /**
+   * A read-only view of this registry for one run (#186): `resolve({ role })` consults
+   * `overrides.roles` first, then the config's role mapping. Hosts, agents and health are
+   * shared with this registry, which is never mutated. Resolving by id is unchanged. With no
+   * role overrides the view would behave exactly like this registry, so this registry is it.
+   */
+  withOverrides(overrides?: RunOverrides): AgentRegistry {
+    const roles = overrides?.roles;
+    if (!roles || Object.keys(roles).length === 0) return this;
+    const view = Object.create(AgentRegistry.prototype) as AgentRegistry;
+    Object.assign(view, {
+      hosts: this.hosts,
+      agents: this.agents,
+      roles: this.roles,
+      health: this.health,
+      roleOverrides: new Map([...this.roleOverrides, ...Object.entries(roles)]),
+      readOnly: true,
+    });
+    return view;
+  }
+
+  /**
+   * Every agent a selection record names must be configured. Throws `AGENT_NOT_FOUND` with
+   * the known set, in the same words `resolve` uses.
+   */
+  validateOverrides(overrides: RunOverrides): void {
+    const named = [
+      ...Object.values(overrides.roles ?? {}),
+      ...(overrides.model && typeof overrides.model === "object" ? Object.keys(overrides.model) : []),
+    ];
+    for (const id of named)
+      if (!this.agents.has(id))
+        throw new OrcaError("AGENT_NOT_FOUND", `agent '${id}' not configured`, { known: [...this.agents.keys()] });
   }
   static fromConfig(
     cfg: { hosts: HostSpec[]; agents: AgentSpec[]; roles: Record<string, string> },
@@ -280,9 +327,15 @@ export class AgentRegistry {
     if (typeof selector === "string") id = selector;
     else if ("id" in selector) id = selector.id;
     else {
-      id = this.roles.get(selector.role) ?? [...this.agents.values()].find((a) => a.roles.includes(selector.role))?.id;
+      id =
+        this.roleOverrides.get(selector.role) ??
+        this.roles.get(selector.role) ??
+        [...this.agents.values()].find((a) => a.roles.includes(selector.role))?.id;
       if (!id)
-        throw new OrcaError("AGENT_NOT_FOUND", `no agent fills role '${selector.role}'`, { role: selector.role });
+        throw new OrcaError("AGENT_NOT_FOUND", `no agent fills role '${selector.role}'`, {
+          role: selector.role,
+          known: [...this.agents.keys()],
+        });
     }
     const agent = this.agents.get(id);
     if (!agent)

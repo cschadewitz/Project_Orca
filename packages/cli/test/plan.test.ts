@@ -51,6 +51,20 @@ edges:
   - { from: s, to: done }
 `;
 
+/** A program workflow with a plan-dispatch node that never runs, so `--workflow` accepts it without agents. */
+const DISPATCHER = `
+id: dispatcher
+name: Dispatcher
+start: s
+nodes:
+  s: { type: start }
+  dispatch: { type: "custom:plan-dispatch", scope: plan }
+  done: { type: end }
+edges:
+  - { from: s, to: done }
+  - { from: dispatch, to: done }
+`;
+
 const human = { kind: "human" as const, actor: "test" };
 
 let dir: string;
@@ -60,9 +74,10 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "orca-plan-cli-"));
   dirs.push(dir);
   await writeFile(join(dir, "tiny.yaml"), TINY, "utf8");
+  await writeFile(join(dir, "dispatcher.yaml"), DISPATCHER, "utf8");
   await writeFile(
     join(dir, "orca.config.yaml"),
-    "version: 1\nworkflows: [tiny.yaml]\ntemplates: []\nplanning: { plan: roadmap, planName: Roadmap }\n",
+    "version: 1\nworkflows: [tiny.yaml, dispatcher.yaml]\ntemplates: []\nplanning: { plan: roadmap, planName: Roadmap }\n",
     "utf8",
   );
 
@@ -351,9 +366,33 @@ describe("orca plan decide / risk", () => {
 describe("orca plan dispatch", () => {
   it("runs the dispatch workflow and reports its exit code like `orca run` does", async () => {
     // `--workflow` stands in for `plan-resume`, which needs agents this config has none of.
-    const { c, run } = plan(dir, ["dispatch"], { workflow: "tiny" });
+    const { c, run } = plan(dir, ["dispatch"], { workflow: "dispatcher" });
     expect(await run()).toBe(0);
-    expect(c.lines.join("\n")).toMatch(/workflow=tiny@1 +status=completed\/success/);
+    expect(c.lines.join("\n")).toMatch(/workflow=dispatcher@1 +status=completed\/success/);
+  });
+
+  it("refuses a --workflow with no plan-dispatch node before starting a run (#126)", async () => {
+    const runs = async () => (await bootstrap({ cwd: dir, logger: silentLogger })).orchestrator.listRuns();
+    const before = (await runs()).length;
+    await expect(plan(dir, ["dispatch"], { workflow: "tiny" }).run()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("'tiny' has no custom:plan-dispatch node"),
+    });
+    expect((await runs()).length).toBe(before);
+  });
+
+  it("records --item-workflow in the run's overrides", async () => {
+    const { run } = plan(dir, ["dispatch"], { workflow: "dispatcher", "item-workflow": "tiny" });
+    expect(await run()).toBe(0);
+    const app = await bootstrap({ cwd: dir, logger: silentLogger });
+    const states = await Promise.all((await app.orchestrator.listRuns()).map((id) => app.orchestrator.getState(id)));
+    expect(states.some((s) => s.run.overrides?.itemWorkflow === "tiny")).toBe(true);
+  });
+
+  it("rejects an unknown --item-workflow with the known set", async () => {
+    await expect(
+      plan(dir, ["dispatch"], { workflow: "dispatcher", "item-workflow": "nope" }).run(),
+    ).rejects.toMatchObject({ code: "WORKFLOW_NOT_FOUND", message: "workflow 'nope' not registered" });
   });
 });
 

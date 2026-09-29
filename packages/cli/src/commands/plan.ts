@@ -15,6 +15,7 @@
  *   plan decide <decisionKey> <option> [key] [--rationale text]
  *   plan risk <riskKey> --status <status> [key]   accept / mitigate / close a risk
  *   plan dispatch [key]           run the plan-resume workflow: schedule -> gate -> dispatch across the plan
+ *                                 (--workflow picks that program workflow, --item-workflow what each item runs)
  */
 import {
   decisionBlocks,
@@ -30,6 +31,7 @@ import {
 import type { PlanService } from "@orca/engine";
 import { bootstrap } from "../bootstrap.js";
 import { attachEventPrinter, finish, type CommandContext } from "./index.js";
+import { selectionOverrides, workflowHasNodeType } from "./selection.js";
 
 const HUMAN: PlanOrigin = { kind: "human", actor: "cli" };
 
@@ -333,13 +335,30 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
 
     case "dispatch": {
       const p = await resolvePlan(plan, ctx, args[0], defaultKey);
+      // `--workflow` picks the *program* workflow run in place of plan-resume (#126). One with no
+      // plan-dispatch node would run as if it were an item workflow against the plan, so refuse it.
+      const workflowId = (ctx.flags.workflow as string | undefined) ?? "plan-resume";
+      if (!workflowHasNodeType(app.workflows, app.workflows.get(workflowId).id, "custom:plan-dispatch"))
+        throw new OrcaError(
+          "CONFIG_INVALID",
+          `plan dispatch --workflow picks the program workflow, and '${workflowId}' has no custom:plan-dispatch node; use --item-workflow to choose what each item runs`,
+          { workflow: workflowId },
+        );
+      const overrides = selectionOverrides(ctx, {
+        agents: app.agents,
+        workflows: app.workflows,
+        templates: app.templates,
+        config: app.config,
+        workflowIds: [workflowId, app.config.program.itemWorkflow],
+      });
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
         // Same exit-code contract as `orca run` / `orca submit`: 3 + the pending question when a gate parks the run.
         const itemWorkflow = app.config.program.itemWorkflow;
         const state = await app.orchestrator.startAndRun({
-          workflowId: (ctx.flags.workflow as string | undefined) ?? "plan-resume",
+          workflowId,
           vars: { plan: p.key, planId: p.id, ...(itemWorkflow ? { itemWorkflow } : {}) },
+          ...(overrides ? { overrides } : {}),
         });
         return await finish(app, ctx, state);
       } finally {

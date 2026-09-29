@@ -78,6 +78,8 @@ function fakeSessions(asksPerTurn: number) {
       hostId: o.host.id,
       cwd: o.cwd,
       acpSessionId: "acp",
+      configOptions: [],
+      setConfigOption: async () => [],
       closed: new Promise(() => {}),
       async prompt() {
         const reqs = Array.from({ length: asksPerTurn }, () => permissionRequest(`tool-${++calls}`));

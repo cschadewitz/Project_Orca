@@ -28,9 +28,22 @@
  *   needs a scope of its own or the substrate's `J` would be registered twice and the map
  *   would throw. It is the same situation `run-tree` beside `list` is, named for the list
  *   rather than for the surface because that is what a person's `J` is moving through.
+ * - `plan-graph` (#171) — the plan's dependency graph is a canvas like the workflow's, with
+ *   the same arrows, zoom and pan, and it is not the workflow canvas: the two can never share
+ *   a scope without one registering `↑` over the other, which the map throws on.
  */
 export type ShortcutScope =
-  "global" | "list" | "run-tree" | "stream" | "card" | "panel" | "config" | "menu" | "workflow" | "plan-journal";
+  | "global"
+  | "list"
+  | "run-tree"
+  | "stream"
+  | "card"
+  | "panel"
+  | "config"
+  | "menu"
+  | "workflow"
+  | "plan-journal"
+  | "plan-graph";
 
 export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "global",
@@ -50,6 +63,7 @@ export const SHORTCUT_SCOPES: readonly ShortcutScope[] = [
   "menu",
   "workflow",
   "plan-journal",
+  "plan-graph",
 ];
 
 /** Which of the palette's three sections a shortcut belongs in. Search is not a command. */

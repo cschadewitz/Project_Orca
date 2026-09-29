@@ -534,6 +534,10 @@ export const AgentSpecSchema = z.object({
    * wedged and its process killed.
    */
   cancelGraceMs: z.number().int().positive().default(10_000),
+  /** Models this agent offers, as declared in config (#186); applied per run in #187. */
+  models: z.array(z.object({ id: z.string().min(1), name: z.string(), description: z.string().optional() })).optional(),
+  /** The model used when a run selects none; one of `models[].id`. */
+  defaultModel: z.string().optional(),
 });
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;
 
@@ -544,3 +548,48 @@ export const AgentSelectorSchema = z.union([
   z.object({ role: z.string().min(1) }),
 ]);
 export type AgentSelector = z.infer<typeof AgentSelectorSchema>;
+
+/**
+ * A session configuration option an agent advertises (ACP "Session Config Options"): a model
+ * list, a mode, a reasoning level. ORCA's own shape, so the engine does not depend on the SDK's
+ * — `normalizeConfigOption` in `@orca/agents` converts. An agent's legacy `modes` arrive here as
+ * one select with `category: "mode"`.
+ */
+export const SessionConfigSelectOptionSchema = z.object({
+  value: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+});
+export type SessionConfigSelectOption = z.infer<typeof SessionConfigSelectOptionSchema>;
+
+export const SessionConfigSelectGroupSchema = z.object({
+  group: z.string(),
+  name: z.string(),
+  options: z.array(SessionConfigSelectOptionSchema),
+});
+export type SessionConfigSelectGroup = z.infer<typeof SessionConfigSelectGroupSchema>;
+
+const sessionConfigOptionBase = {
+  id: z.string().min(1),
+  name: z.string(),
+  description: z.string().optional(),
+  /** "mode" | "model" | "model_config" | "thought_level", or an agent's own. */
+  category: z.string().optional(),
+};
+
+export const SessionConfigOptionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("select"),
+    ...sessionConfigOptionBase,
+    currentValue: z.string(),
+    options: z.union([z.array(SessionConfigSelectOptionSchema), z.array(SessionConfigSelectGroupSchema)]),
+  }),
+  z.object({ type: z.literal("boolean"), ...sessionConfigOptionBase, currentValue: z.boolean() }),
+]);
+export type SessionConfigOption = z.infer<typeof SessionConfigOptionSchema>;
+
+/** Every value a select offers, flattening groups. Empty for a boolean. */
+export function configOptionValues(option: SessionConfigOption): SessionConfigSelectOption[] {
+  if (option.type !== "select") return [];
+  return option.options.flatMap((o) => ("group" in o ? o.options : [o]));
+}

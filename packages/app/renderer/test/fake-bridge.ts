@@ -619,9 +619,11 @@ const defaults: Handlers = {
     const options = decision.options.map((o) => o.key);
     if (!options.includes(option))
       return err("PLAN_INVALID", `'${option}' is not an option of decision '${decision.key}': ${options.join(", ")}`);
+    // Deciding stores the matrix's result, so it is no longer a preview (#173).
+    const { resultIsPreview: _preview, ...stored } = decision;
     return ok({
       decision: {
-        ...decision,
+        ...stored,
         status: "decided",
         chosen: option,
         decidedBy: "human",

@@ -19,7 +19,11 @@ and `pnpm link --global`, or `node <repo>/packages/cli/dist/main.js acp --config
 A Kepler session then drives ORCA like any agent:
 
 - the prompt becomes a **Request** (first line = title) — or `/run ai-sdlc key=value` to
-  run a single workflow in the session's cwd, or `/status` to list the session's runs;
+  run a single workflow in the session's cwd, or `/status` to list the session's runs.
+  The facade advertises both to the client as ACP `available_commands_update` right after
+  `session/new`, so Kepler renders them as real slash commands with an input hint (the
+  hint names the selected workflow once one is chosen); an unknown `/command`, or `/run`
+  with no workflow, answers with the command list instead of being submitted as a Request;
 - ORCA decomposes it and launches the real agents (from `orca.config.yaml`) on the task's
   worktrees, locally or over SSH;
 - progress streams back as ACP updates: the root workflow and child runs appear as a flat
@@ -33,6 +37,51 @@ A Kepler session then drives ORCA like any agent:
   sessions each see only their own gates;
 - `session/cancel` cancels the whole run tree.
 
+**Session config options.** Kepler's Mode / Model dropdowns are ACP *session config
+options*, and the facade advertises the following in `session/new` and handles
+`session/set_config_option` (#188). Every option has a default meaning "what the
+configuration says", so a client that never sets one gets exactly the behaviour above. A
+value set while a run is in flight applies to the **next** run; each option's description
+says so.
+
+| Option | Category | Default | Other values | Becomes |
+| --- | --- | --- | --- | --- |
+| `orca/workflow` | `mode` | `orca:request` (submit a Request) | a workflow id | a direct run of that workflow with the prompt as `vars.prompt`; also `/run`'s default |
+| `orca/item-workflow` | `_workflow` | `orca:default` | workflow ids | `overrides.itemWorkflow` |
+| `orca/agent.<role>` (one per role) | `_agent` | `orca:default` | agent ids, grouped by host when they span hosts | `overrides.roles` |
+| `orca/model` | `model` | `orca:default` (agent default) | `<agentId>/<modelId>`, grouped by agent when several offer models | `overrides.model` as `{ agentId: modelId }` |
+| `orca/template-pack` | `_template_pack` | `orca:default` | pack ids | `overrides.templatePack` |
+| `orca/use-client-cwd` | `_workspace` | the facade's `useClientCwd` | boolean | run in the session's cwd, or through ORCA's workspace provider |
+| `orca/<agentId>/<configId>` | `mode`, `model_config`, `thought_level` | the agent's | the agent's | recorded on the session, **not yet applied** to a run |
+
+Boolean options (`orca/use-client-cwd`) are offered only when the client advertised
+`clientCapabilities.session.configOptions.boolean`. Changing `orca/workflow` re-sends
+`available_commands_update` so the `/run` hint names the chosen workflow.
+
+**Models are discovered lazily (#189).** `orca/model` starts from each agent's declared
+`AgentSpec.models` (or the single "Agent default"); when an agent's first downstream session
+opens, the options that session advertised replace the declaration and every open facade
+session receives a `config_option_update`. The result is cached per agent for the facade
+process's life, so a second session does not re-probe. The engine exposes this moment as
+`Orchestrator.onAgentSessionOpened(listener)`, an in-process hook that hands over the live
+session (the persisted `agent.session.opened` event carries no session). Downstream options
+in the other reserved categories are proxied as `orca/<agentId>/<configId>`; they are
+recorded on the session, but the run's override record has no field for them yet, so
+choosing one changes nothing downstream in this release.
+
+**How a selected model reaches the agent (#187).** Whatever surface chose it — `orca/model`
+here, `--model` on the CLI — the run records it as `overrides.model`, and the engine applies it
+right after `session/new` and before any turn: through the session's `category: "model"`
+config option when the agent offers one, or, for an agent that offers none, only if the id is
+in the agent's declared `models` (there is nothing to set, so it is recorded as declared). An
+id in neither place fails the step with `AGENT_MODEL_NOT_FOUND`, listing what is available, and
+is not retried. With `sessionMode: per-run`, a pooled session whose model has drifted from the
+run's selection (the agent switched it itself) is **re‑applied** with `session/set_config_option`
+before the next step and the re‑apply is logged as an agent update; if the agent refuses, ORCA
+closes the pooled session and opens a fresh one. T3 Code threads offer no config options, so a
+model override on a T3‑backed agent passes only when it is declared in `models`. The model a
+step ran on is on `agent.session.opened`, in `orca status` and in the daemon's step view.
+
 Implementation: `packages/integrations/src/acp-facade/`. Workspace selection:
 `workspace: { provider: kepler }` in `orca.config.yaml` makes ORCA use the task's worktrees
 (`KeplerTaskWorkspaceProvider` scans the task dir for `*/.git`, picks by work item `repo`,
@@ -45,6 +94,16 @@ via `agents[].mcpServers` so they keep the task's resource list honest.
 From a shell inside a task folder: `orca kepler` shows what ORCA sees (task id, title/body
 from `AGENTS.md`, worktrees); `orca submit "$(head -1 AGENTS.md)" --body-file AGENTS.md`
 drives the task through the program workflow using the task's worktrees.
+
+The same selections a Kepler session makes through config options are flags here, so a
+script and a person drive one mechanism: `orca run <wf> --agent <role>=<agentId>
+--model <agentId>=<modelId>` (both repeatable; `--model <modelId>` alone when exactly one
+agent is in play, otherwise the run is refused naming the agents), `--item-workflow <id>` on
+`submit` and `plan dispatch`, and `--template-pack <name>` on all three. They become the
+run's selection record (#186), and an unknown role, agent, model or workflow fails with the
+known set before the run starts. `orca agents` lists each agent's declared models with the
+default marked; models a running daemon has discovered are shown when `agents.list` carries
+them, otherwise the line reads "not probed", because that command never spawns an agent.
 
 ### What Kepler does not expose (yet)
 

@@ -4,6 +4,7 @@
  * last one repeats), which lets a test model "reviewer asks for changes, then
  * approves" without any LLM.
  */
+import { SessionConfigOptionSchema } from "@orca/core";
 import { z } from "zod";
 
 export const PlaybookEntrySchema = z.object({
@@ -26,6 +27,11 @@ export const PlaybookEntrySchema = z.object({
   delayMs: z.number().int().nonnegative().optional(),
   /** Never finish the turn and ignore `session/cancel` (simulates a wedged agent). */
   hang: z.boolean().default(false),
+  /**
+   * Change one of the session's own config options during the turn and announce it with an
+   * unsolicited `config_option_update` (simulates an agent switching model by itself).
+   */
+  setConfig: z.object({ configId: z.string(), value: z.union([z.string(), z.boolean()]) }).optional(),
 });
 export type PlaybookEntry = z.infer<typeof PlaybookEntrySchema>;
 
@@ -36,6 +42,11 @@ export const PlaybookSchema = z.object({
   greeting: z.string().default("Scripted agent: reading deliverables."),
   /** Sleep between updates to mimic streaming. */
   delayMs: z.number().int().nonnegative().default(0),
+  /**
+   * Session config options advertised in `session/new` (a model list, a mode, …). Each session
+   * gets its own copy; `session/set_config_option` updates that copy's `currentValue`.
+   */
+  configOptions: z.array(SessionConfigOptionSchema).optional(),
 });
 export type Playbook = z.infer<typeof PlaybookSchema>;
 /** What callers write (defaults optional). */

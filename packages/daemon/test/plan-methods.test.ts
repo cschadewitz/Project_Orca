@@ -219,6 +219,24 @@ describe("plan reads", () => {
     expect(decided.decisions).toEqual([]);
   });
 
+  it("decisions.list previews the matrix for an undecided decision and says it is a preview (#173)", async () => {
+    const f = await planFixture();
+    const open = DecisionsListResultSchema.parse(await f.plans.decisionsList({ planId: f.planId })).decisions[0]!;
+    // Nothing evaluated it, so the stored decision has no result; the read computes one.
+    expect(open.resultIsPreview).toBe(true);
+    expect(open.result?.recommended).toBe("cookie");
+    expect(open.result?.ranking.map((r) => r.option)).toEqual(["cookie", "redis"]);
+    // A read writes nothing: the journal has no evaluation in it.
+    const journal = await f.plans.journalList({ planId: f.planId, limit: 500 });
+    expect(journal.entries.some((e) => e.type === "decision.updated")).toBe(false);
+
+    // Once decided, the result is the stored one and is not labelled a preview.
+    await f.control.decide({ planId: f.planId, key: "datastore", option: "redis" });
+    const decided = DecisionsListResultSchema.parse(await f.plans.decisionsList({ planId: f.planId })).decisions[0]!;
+    expect(decided.result?.recommended).toBe("cookie");
+    expect(decided.resultIsPreview).toBeUndefined();
+  });
+
   it("journal.list pages forwards and backwards over the same entries", async () => {
     const f = await planFixture();
     const whole = JournalListResultSchema.parse(await f.plans.journalList({ planId: f.planId, limit: 500 }));

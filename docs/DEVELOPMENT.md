@@ -426,7 +426,8 @@ list is full; a new surface starts in that unbuilt assertion again.
 
 It is also the only place **scrolling can be measured** (#277). The renderer's
 `scroll-sweep.test.tsx` runs under happy-dom, which has no layout engine, so it can assert
-that a surface *declares* a scroll region and no more. This spec shrinks the window to
+that a surface *declares* a scroll region and no more; it walks every Plan mode in
+`PLAN_MODES` as well as every surface in `SURFACES`, since each mode is its own split. This spec shrinks the window to
 1280×340 — too short for any surface — and asserts that the box which should scroll actually
 overflows, that it takes a scroll to its end, and that its last child is on screen when it
 gets there, for every surface and for the docked panel with the Plan inspector in it. A rule
@@ -556,6 +557,18 @@ procedure above.
   blocked items on failure.
 - `packages/engine/test/containers.test.ts` — loop / parallel / subworkflow / resume / cancel
   with a plugin‑registered custom node.
+- `packages/engine/test/run-overrides.e2e.test.ts` — the selection record (#186): a
+  `roles` override sends the build step and a subworkflow child's to the chosen agent while
+  the config maps the role elsewhere, the shared registry is untouched, and replaying the
+  log against a registry whose config has since changed resolves the same agent.
+- `packages/engine/test/local-workspace-branch.test.ts` — the `local` provider in a real
+  temp git repo: a work item checks out `orca/<slug>` and records both branches (#139).
+- `packages/engine/test/model-selection.e2e.test.ts` — a model override arriving at the
+  scripted agent as `session/set_config_option`, a per‑run pooled session re‑applied after
+  the agent drifts, and a model nobody offers failing before the turn starts (#187).
+- `packages/engine/test/workflow-pinning.test.ts` — a run parked on v1, a second
+  orchestrator over the same stores with only v2 (which drops a node), and the resume
+  completing on v1; the version‑not‑found error and a pre‑versioning run (#179).
 - `packages/integrations/test/acp-facade.test.ts` — ORCA driven *as* an ACP agent by an
   in‑process ACP client (proxy mode), including gate forwarding as a permission request.
 - `packages/core/test/plan.test.ts` — the pure planning layer: dependency grammar, risk
@@ -602,3 +615,13 @@ procedure above.
 writes files from a **playbook** (per artifact kind, sequential entries). It is what makes the
 end‑to‑end tests and the demo deterministic and LLM‑free. Point any ACP client at
 `pnpm exec tsx packages/testing/src/scripted-agent/main.ts --playbook pb.yaml` to try it.
+
+The playbook also takes `configOptions`, the ACP session config options the agent advertises
+in `session/new` (a model list, a mode, a boolean); `scriptedAgentSpec({ configOptions })` sets
+the same thing through `ORCA_CONFIG_OPTIONS_JSON`. Each session gets its own copy, a
+`session/set_config_option` updates that copy's `currentValue` and answers with the full list,
+and every set is appended to the prompt log as `{ sessionId, configId, value }`, which is how
+an engine test asserts a selected model actually reached the agent (#185). A playbook entry
+may also carry `setConfig: { configId, value }`: during that turn the agent switches its own
+option and sends `config_option_update`, which is how the pooled‑session drift test makes an
+agent wander off the run's model (#187).

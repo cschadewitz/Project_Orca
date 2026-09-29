@@ -167,6 +167,167 @@
   justify-self: end;
 }
 
+/* ---------- the risk mode (#172) ---------- */
+
+/* The matrix over its register: a split layout of its own, so it bounds both rows and each
+   says where it scrolls. The matrix's share is a fraction by default and a dragged one reads
+   `--pane-plan-risk` (#281); the `auto` track is the splitter's. */
+.orca-plan__risk {
+  display: grid;
+  grid-template-rows: var(--pane-plan-risk, minmax(0, 3fr)) auto minmax(0, 2fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.orca-plan__matrix {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  min-height: 0;
+  overflow: auto;
+}
+.orca-plan__legend {
+  color: var(--ink-secondary);
+  max-width: var(--measure-prose);
+}
+.orca-plan__register {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* A risk pin carrying the selection: the accent edge and the selection ground, the same two
+   marks a selected row takes (rule 10). Focus stays the ring. */
+.orca-risk__pin[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--surface-selected);
+}
+.orca-plan__risk-row {
+  display: grid;
+  grid-template-columns: var(--col-slug) minmax(0, 1fr) var(--col-score) var(--col-risk) var(--col-status);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  height: var(--row-h);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  border-left: var(--stroke-rail) solid transparent;
+}
+.orca-plan__risk-row:hover {
+  background: var(--surface-hover);
+}
+
+/* ---------- the decision mode (#173) ---------- */
+
+/* The decision list over the selected decision's matrix: stacked, bounded, each half with its
+   own scroll. The list is a `VirtualList` and scrolls itself; the detail scrolls here. */
+.orca-plan__decision {
+  display: grid;
+  grid-template-rows: var(--pane-plan-decision, minmax(0, 2fr)) auto minmax(0, 3fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.orca-plan__decision-detail {
+  min-height: 0;
+  overflow: auto;
+}
+.orca-plan__decision-row {
+  display: grid;
+  grid-template-columns:
+    var(--col-status) var(--col-slug) minmax(0, 1fr)
+    var(--col-request) var(--col-classification) var(--col-claim);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  height: var(--row-h);
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+  border-left: var(--stroke-rail) solid transparent;
+}
+.orca-plan__decision-row:hover {
+  background: var(--surface-hover);
+}
+.orca-plan__hint {
+  display: block;
+  padding: var(--space-3);
+  color: var(--ink-secondary);
+}
+.orca-plan__recommendation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+.orca-plan__preview {
+  color: var(--ink-secondary);
+}
+/* The table is as wide as its options; a plan with many of them scrolls sideways here rather
+   than pushing the detail past the pane. */
+.orca-plan__matrix-table {
+  overflow-x: auto;
+  /* Stated, because `overflow-x: auto` alone computes this axis to `auto` too, and the detail
+     around it is the vertical scroller — never two for one scroll. */
+  overflow-y: hidden;
+}
+.orca-plan__decide,
+.orca-plan__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.orca-plan__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--ink-secondary);
+  max-width: var(--measure-prose);
+}
+.orca-plan__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ---------- the dependency graph (#171) ---------- */
+
+/* The graph-only rail, its boundary, and the canvas over the pinned strip. The rail shares
+   the requests rail's remembered width; the canvas scrolls, the strip is one fixed row. */
+.orca-plan__deps {
+  display: grid;
+  grid-template-columns: var(--pane-plan-rail, var(--sidebar-width)) auto minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.orca-plan__graph-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+}
+.orca-plan__graph {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  min-width: 0;
+}
+.orca-plan__canvas {
+  min-height: 0;
+}
+.orca-plan__strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  height: var(--row-h);
+  border-top: var(--stroke-hairline) solid var(--border-hairline);
+  background: var(--surface-selected);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 /* ---------- the inspector, in the docked panel ---------- */
 
 /* No `overflow-y` here. The dock owns the scroll (`.orca-panel__body`, #275): this is a

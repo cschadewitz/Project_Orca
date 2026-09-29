@@ -209,7 +209,14 @@ export async function fixture(): Promise<Fixture> {
   await append({
     type: "agent.session.opened",
     runId: "run-parent",
-    payload: { stepRunId: "s-build-1", sessionId: "sess-1", agentId: "claude", hostId: "local", cwd: workspace.cwd },
+    payload: {
+      stepRunId: "s-build-1",
+      sessionId: "sess-1",
+      agentId: "claude",
+      hostId: "local",
+      cwd: workspace.cwd,
+      model: "opus",
+    },
   });
   await append({
     type: "step.failed",

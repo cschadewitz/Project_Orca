@@ -18,6 +18,7 @@ import {
   startDaemon,
 } from "@orca/daemon";
 import {
+  AGENTS_LIST_METHOD,
   AGENTS_PING_METHOD,
   AGENT_METHODS,
   CONTROL_METHODS,
@@ -49,10 +50,11 @@ import { PausingHumanInput, autoHumanInput } from "@orca/engine";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { scriptedAgentSpec } from "@orca/testing";
 import { bootstrap, loadConfig, type OrcaApp } from "../bootstrap.js";
-import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../format.js";
+import { formatEvent, formatPaused, formatPendingInput, formatRunState, stepAgents } from "../format.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
 import { planCommand } from "./plan.js";
+import { requireTemplatePack, selectionOverrides } from "./selection.js";
 
 /**
  * The release version, as `orca --version` and `hello.orcaVersion` report it.
@@ -211,6 +213,45 @@ async function pingViaDaemon(
   };
 }
 
+/**
+ * Model ids a running daemon has discovered per agent, from `agents.list`, or `undefined`
+ * when no daemon answers. An agent is in the map only when its view carries a `models` list;
+ * the rest have not been probed.
+ */
+async function discoveredModels(url: string): Promise<Map<string, string[]> | undefined> {
+  let hello: unknown;
+  try {
+    hello = await daemonCall(url, HELLO_METHOD, { client: `orca-cli/${ORCA_VERSION}`, protocol: PROTOCOL_VERSION });
+  } catch {
+    return undefined;
+  }
+  const methods = (hello as { methods?: string[] } | undefined)?.methods ?? [];
+  if (!methods.includes(AGENTS_LIST_METHOD)) return undefined;
+  let result: unknown;
+  try {
+    result = await daemonCall(url, AGENTS_LIST_METHOD, {});
+  } catch {
+    return undefined;
+  }
+  const agents = (result as { agents?: unknown } | undefined)?.agents;
+  if (!Array.isArray(agents)) return undefined;
+  const map = new Map<string, string[]>();
+  for (const a of agents as { id?: unknown; models?: unknown }[]) {
+    if (typeof a.id !== "string" || !Array.isArray(a.models)) continue;
+    map.set(
+      a.id,
+      (a.models as unknown[]).flatMap((m) =>
+        typeof m === "string"
+          ? [m]
+          : m && typeof (m as { id?: unknown }).id === "string"
+            ? [(m as { id: string }).id]
+            : [],
+      ),
+    );
+  }
+  return map;
+}
+
 interface Command {
   help: string;
   usage?: string;
@@ -218,7 +259,7 @@ interface Command {
 }
 export const commands: Record<string, Command> = {
   validate: {
-    help: "validate [files...]  Validate workflow definitions (defaults to those in orca.config.yaml).",
+    help: "validate [files...] [--template-pack name]  Validate workflow definitions (defaults to those in orca.config.yaml); with a template pack, report which templates it overrides and which it inherits.",
     async run(ctx) {
       const { config, configDir } = await loadConfig(ctx.cwd, ctx.configPath);
       const templates = await loadTemplates(config.templates, configDir);
@@ -243,6 +284,24 @@ export const commands: Record<string, Command> = {
         if (!r.ok) failed++;
         if (ctx.flags.mermaid) ctx.out("\n" + toMermaid(def, def.name) + "\n");
       }
+      const pack = ctx.flags["template-pack"] as string | undefined;
+      if (pack !== undefined) {
+        // Throws TEMPLATE_NOT_FOUND for a pack that overrides nothing (#191).
+        const overridden = requireTemplatePack(templates, pack);
+        const used = new Set(
+          workflows
+            .list()
+            .flatMap((def) => Object.values(def.nodes))
+            .flatMap((n) => {
+              const t = (n as { template?: unknown }).template;
+              return typeof t === "string" ? [t] : [];
+            }),
+        );
+        const inherited = [...used].filter((id) => !overridden.includes(id)).sort();
+        ctx.out(`template pack ${pack}:`);
+        ctx.out(`  overrides ${overridden.join(", ")}`);
+        ctx.out(`  inherits  ${inherited.length ? inherited.join(", ") : "nothing the validated workflows use"}`);
+      }
       return failed ? 1 : 0;
     },
   },
@@ -265,19 +324,32 @@ export const commands: Record<string, Command> = {
   },
 
   agents: {
-    help: "agents  List configured hosts, agents and roles.",
+    help: "agents [--host addr] [--port n]  List configured hosts, agents, their models and roles.",
     async run(ctx) {
       const { config } = await loadConfig(ctx.cwd, ctx.configPath);
+      // Discovered models come from a running daemon only; this command never spawns an agent.
+      const discovered = await discoveredModels(daemonAddress(ctx));
       ctx.out("hosts:");
       for (const h of config.hosts)
         ctx.out(
           `  ${h.id.padEnd(14)} ${h.type}${h.type === "ssh" ? ` ${h.user ? h.user + "@" : ""}${h.host}${h.port ? ":" + h.port : ""}` : ""}`,
         );
       ctx.out("agents:");
-      for (const a of config.agents)
+      for (const a of config.agents) {
         ctx.out(
           `  ${a.id.padEnd(14)} host=${a.hostId.padEnd(10)} roles=[${a.roles.join(", ")}] ${a.command} ${a.args.join(" ")}`,
         );
+        const declared = a.models ?? [];
+        ctx.out(
+          `    models declared: ${
+            declared.length
+              ? declared.map((m) => `${m.id}${m.id === a.defaultModel ? " (default)" : ""}`).join(", ")
+              : "none"
+          }`,
+        );
+        const found = discovered?.get(a.id);
+        ctx.out(`    models discovered: ${found ? found.join(", ") || "none" : "not probed"}`);
+      }
       if (Object.keys(config.roles).length)
         ctx.out(
           "roles: " +
@@ -335,19 +407,29 @@ export const commands: Record<string, Command> = {
 
   run: {
     usage:
-      "--var key=value may be repeated; values are parsed as JSON when possible.\n--cwd dir selects the run workspace. --quiet suppresses event output.\nExit: 0 success, 2 failure or cancellation, 3 paused for input.\n",
-    help: "run <workflowId> [--var k=v]... [--cwd dir] [--quiet]  Start a workflow run and follow it until it completes or pauses at a human gate.",
+      "--var key=value may be repeated; values are parsed as JSON when possible.\n--agent role=agentId and --model agentId=modelId may be repeated; --model modelId alone when the run uses exactly one agent.\n--template-pack name renders prompts from that template pack.\n--cwd dir selects the run workspace. --quiet suppresses event output.\nExit: 0 success, 2 failure or cancellation, 3 paused for input.\n",
+    help: "run <workflowId> [--var k=v]... [--agent role=id]... [--model [agent=]model]... [--cwd dir] [--quiet]  Start a workflow run and follow it until it completes or pauses at a human gate.",
     async run(ctx) {
       const workflowId = ctx.positionals[0];
       if (!workflowId) throw new OrcaError("CONFIG_INVALID", "run needs a workflow id");
+      const vars = parseVars(ctx.flags.var as string[] | undefined);
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
+      app.workflows.get(workflowId);
+      const overrides = selectionOverrides(ctx, {
+        agents: app.agents,
+        workflows: app.workflows,
+        templates: app.templates,
+        config: app.config,
+        workflowIds: [workflowId],
+      });
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
         const workspace = ctx.flags.cwd ? { hostId: "local", cwd: String(ctx.flags.cwd) } : undefined;
         const state = await app.orchestrator.startAndRun({
           workflowId,
-          vars: parseVars(ctx.flags.var as string[] | undefined),
+          vars,
           ...(workspace ? { workspace } : {}),
+          ...(overrides ? { overrides } : {}),
         });
         return await finish(app, ctx, state);
       } finally {
@@ -357,20 +439,29 @@ export const commands: Record<string, Command> = {
   },
 
   submit: {
-    help: 'submit "<title>" [--body text | --body-file f] [--var k=v]  Submit a request to the program workflow and follow it.',
+    help: 'submit "<title>" [--body text | --body-file f] [--var k=v] [--item-workflow id] [--agent role=id]... [--model [agent=]model]...  Submit a request to the program workflow and follow it.',
     async run(ctx) {
       const title = ctx.positionals.join(" ");
       if (!title) throw new OrcaError("CONFIG_INVALID", "submit needs a title");
       const body = ctx.flags["body-file"]
         ? await readFile(String(ctx.flags["body-file"]), "utf8")
         : String(ctx.flags.body ?? "");
+      const vars = parseVars(ctx.flags.var as string[] | undefined);
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
+      const overrides = selectionOverrides(ctx, {
+        agents: app.agents,
+        workflows: app.workflows,
+        templates: app.templates,
+        config: app.config,
+        workflowIds: [app.config.program.workflow, app.config.program.itemWorkflow],
+      });
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
         const { request, state } = await app.program.submitAndRun({
           title,
           body,
-          vars: parseVars(ctx.flags.var as string[] | undefined),
+          vars,
+          ...(overrides ? { overrides } : {}),
         });
         ctx.out(`request ${request.id}: ${request.status}`);
         const code = await finish(app, ctx, state);
@@ -389,7 +480,7 @@ export const commands: Record<string, Command> = {
 
   plan: {
     usage:
-      "Subcommands:\n  list\n  show|schedule|graph|risks|decisions|journal [key]\n  explain <slug> [key]\n  depend <slug> <ref> [key]\n  waive|satisfy <dependencyId> [key] [--rationale text]\n  decide <decisionKey> <option> [key] [--rationale text]\n  risk <riskKey> --status <status> [key]\n  dispatch [key] [--workflow id] [--quiet]\n--plan key overrides the positional plan. --json prints structured read results.\n",
+      "Subcommands:\n  list\n  show|schedule|graph|risks|decisions|journal [key]\n  explain <slug> [key]\n  depend <slug> <ref> [key]\n  waive|satisfy <dependencyId> [key] [--rationale text]\n  decide <decisionKey> <option> [key] [--rationale text]\n  risk <riskKey> --status <status> [key]\n  dispatch [key] [--workflow id] [--item-workflow id] [--agent role=id]... [--model [agent=]model]... [--quiet]\n    --workflow picks the program workflow (default plan-resume; it must contain a custom:plan-dispatch node);\n    --item-workflow picks the workflow each dispatched item runs (default program.itemWorkflow).\n--plan key overrides the positional plan. --json prints structured read results.\n",
     help: "plan [list|show|schedule|explain|graph|risks|decisions|journal|depend|waive|satisfy|decide|risk|dispatch] ...  Inspect and steer the long-term plan (see docs/PLANNING.md).",
     run: planCommand,
   },
@@ -424,7 +515,7 @@ export const commands: Record<string, Command> = {
       if (!runId) throw new OrcaError("CONFIG_INVALID", "status needs a run id");
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
       const state = await app.orchestrator.getState(runId);
-      ctx.out(formatRunState(state));
+      ctx.out(formatRunState(state, stepAgents(await app.orchestrator.events(runId))));
       if (state.run.status === "paused") {
         ctx.out("");
         ctx.out(formatPaused(runId, await app.orchestrator.pendingInputs(runId)));

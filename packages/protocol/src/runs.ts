@@ -30,6 +30,12 @@ export const RunSummaryViewSchema = z.object({
   name: z.string(),
   workflowId: z.string(),
   workflowVersion: z.string(),
+  /**
+   * `runs.get` only: a version of the run's workflow is on disk and it is not the recorded
+   * `workflowVersion`, so the run runs (and resumes) on the stored definition it started with
+   * (#179). False when the workflow is not registered at all. Absent on `runs.list`.
+   */
+  workflowPinned: z.boolean().optional(),
   status: DisplayStatusSchema,
   /** Present once the run has finished; `status` already accounts for it. */
   outcome: RunOutcomeSchema.optional(),
@@ -121,6 +127,8 @@ export const StepViewSchema = z.object({
   /** Start to finish, or start to `asOf` while the step is still going.  */
   durationMs: z.number().int().nonnegative().optional(),
   agentId: z.string().optional(),
+  /** The model the step's session was opened on, when the log records one (v0.6.0 on). */
+  model: z.string().optional(),
   agentSessionId: z.string().optional(),
   inputArtifactIds: z.array(z.string()),
   outputArtifactIds: z.array(z.string()),

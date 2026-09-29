@@ -11,6 +11,7 @@ import {
   ErrorInfoSchema,
   GateOptionSchema,
   RunOutcomeSchema,
+  RunOverridesSchema,
   RunStatusSchema,
   StepResultSchema,
   WorkspaceSchema,
@@ -109,6 +110,14 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       parentStepRunId: z.string().optional(),
       workspace: WorkspaceSchema,
       vars: z.record(z.string(), z.unknown()),
+      /** Selection overrides (#186). Absent in logs written before v0.6.0: no overrides. */
+      overrides: RunOverridesSchema.optional(),
+      /**
+       * The definition the run started on is in the workflow-version store under
+       * `(workflowId's root, workflowVersion)` (#179), so a resume runs that and never the file
+       * on disk. Absent on runs that predate versioning, which run on whatever file is current.
+       */
+      workflowStored: z.literal(true).optional(),
     }),
   ),
   base("run.started", z.object({})),
@@ -152,6 +161,12 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       agentId: z.string(),
       hostId: z.string(),
       cwd: z.string(),
+      /**
+       * The model the session runs on (#187): the run's selection as applied, or the agent's own
+       * current model when the run selected none. Absent when neither is known, and on logs
+       * written before v0.6.0.
+       */
+      model: z.string().optional(),
     }),
   ),
   base(

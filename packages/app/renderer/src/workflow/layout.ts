@@ -41,6 +41,31 @@
 import type { WorkflowEdgeView, WorkflowNodeView, WorkflowView } from "@orca/protocol";
 
 /**
+ * ## Any graph, not only a workflow (#171)
+ *
+ * `layoutGraph` is the whole of the above over a plain `{ nodes, edges }`: anything with an
+ * `id`, anything with a `from` and a `to`. The plan's dependency graph is the second caller,
+ * and it differs from a workflow in one way that matters — it has **many roots** and no
+ * `start`. So `roots` is optional: given, they are layer 0 and the search starts from them
+ * (a workflow passes `[start]`, which is exactly what `layoutWorkflow` always did); absent,
+ * every node nothing points at is a root, and only a node reachable from none of them — one
+ * sitting on a cycle — goes in the trailing layer. `layoutWorkflow` is a thin adapter.
+ */
+export interface GraphNode {
+  id: string;
+}
+export interface GraphEdge {
+  from: string;
+  to: string;
+}
+export interface PlainGraph<N extends GraphNode, E extends GraphEdge> {
+  nodes: readonly N[];
+  edges: readonly E[];
+  /** Layer 0. Absent means every node with no incoming forward edge. */
+  roots?: readonly string[];
+}
+
+/**
  * The box and the gaps, in px. `GRAPH_GEOMETRY` from `@orca/design` is the value to pass;
  * it is a parameter rather than an import so the test can lay a graph out on a unit grid and
  * assert on the shape instead of on four-digit numbers.
@@ -57,8 +82,8 @@ export interface GraphMetrics {
 }
 
 /** One node, placed. `x`/`y` is its top-left corner; the box is `metrics.nodeW` × `nodeH`. */
-export interface PlacedNode {
-  node: WorkflowNodeView;
+export interface PlacedNode<N extends GraphNode = WorkflowNodeView> {
+  node: N;
   /** Dependency depth: 0 is `start`. */
   layer: number;
   /** Position within the layer, top to bottom. */
@@ -68,8 +93,8 @@ export interface PlacedNode {
 }
 
 /** One edge, routed. `path` is an SVG `d` in the same coordinate space as the nodes. */
-export interface PlacedEdge {
-  edge: WorkflowEdgeView;
+export interface PlacedEdge<E extends GraphEdge = WorkflowEdgeView> {
+  edge: E;
   /**
    * This edge's identity within the layout: its index and its ends. It carries the index
    * because a `decision` with two branches to one target is two edges, and keying them both
@@ -94,9 +119,9 @@ export interface PlacedEdge {
   labelY: number;
 }
 
-export interface GraphLayout {
-  nodes: readonly PlacedNode[];
-  edges: readonly PlacedEdge[];
+export interface GraphLayout<N extends GraphNode = WorkflowNodeView, E extends GraphEdge = WorkflowEdgeView> {
+  nodes: readonly PlacedNode<N>[];
+  edges: readonly PlacedEdge<E>[];
   /** The whole drawing's extent, for the SVG `viewBox` and for a fit-to-window zoom. */
   width: number;
   height: number;
@@ -105,8 +130,7 @@ export interface GraphLayout {
 }
 
 /** An edge whose ends both exist. An edge into a node that is not here is not drawn. */
-const isDrawable = (edge: WorkflowEdgeView, ids: ReadonlySet<string>): boolean =>
-  ids.has(edge.from) && ids.has(edge.to);
+const isDrawable = (edge: GraphEdge, ids: ReadonlySet<string>): boolean => ids.has(edge.from) && ids.has(edge.to);
 
 /**
  * The edges that close a cycle, found by depth-first search from `start` and then from
@@ -123,10 +147,10 @@ const isDrawable = (edge: WorkflowEdgeView, ids: ReadonlySet<string>): boolean =
  * Iterative rather than recursive: a workflow is a file a person wrote and a deep chain must
  * not be able to overflow the stack of the window drawing it.
  */
-function backEdges(nodes: readonly WorkflowNodeView[], edges: readonly WorkflowEdgeView[], start: string): Set<string> {
+function backEdges(nodes: readonly GraphNode[], edges: readonly GraphEdge[], starts: readonly string[]): Set<string> {
   /* Keyed by `edgeKey`, so two edges between one pair are two entries here and one of them
      can be a back edge without the other becoming one. */
-  const out = new Map<string, { edge: WorkflowEdgeView; key: string }[]>();
+  const out = new Map<string, { edge: GraphEdge; key: string }[]>();
   edges.forEach((edge, index) => {
     const entry = { edge, key: edgeKey(edge, index) };
     const list = out.get(edge.from);
@@ -139,7 +163,7 @@ function backEdges(nodes: readonly WorkflowNodeView[], edges: readonly WorkflowE
   const open = new Set<string>();
   const done = new Set<string>();
 
-  const roots = [start, ...nodes.map((n) => n.id)];
+  const roots = [...starts, ...nodes.map((n) => n.id)];
   for (const root of roots) {
     if (done.has(root) || !nodes.some((n) => n.id === root)) continue;
     const stack: { id: string; next: number }[] = [{ id: root, next: 0 }];
@@ -172,23 +196,32 @@ function backEdges(nodes: readonly WorkflowNodeView[], edges: readonly WorkflowE
  * `layoutWorkflow` turns into the trailing layer unreachable nodes go in.
  */
 function depths(
-  nodes: readonly WorkflowNodeView[],
-  edges: readonly WorkflowEdgeView[],
-  start: string,
+  nodes: readonly GraphNode[],
+  edges: readonly GraphEdge[],
+  starts: readonly string[] | undefined,
 ): Map<string, number> {
   const depth = new Map<string, number>();
-  const root = nodes.some((n) => n.id === start) ? start : nodes[0]?.id;
-  if (root === undefined) return depth;
-  depth.set(root, 0);
 
   const indegree = new Map<string, number>(nodes.map((n) => [n.id, 0]));
-  const out = new Map<string, WorkflowEdgeView[]>();
+  const out = new Map<string, GraphEdge[]>();
   for (const edge of edges) {
     indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
     const list = out.get(edge.from);
     if (list) list.push(edge);
     else out.set(edge.from, [edge]);
   }
+
+  /* Given roots, the first of them present — or the first node — is where depth is counted
+     from, which is a workflow's `start`. No roots given, every source of the DAG is layer 0:
+     a plan has as many independent chains as it has items nothing waits on. */
+  if (starts === undefined) {
+    for (const [id, n] of indegree) if (n === 0) depth.set(id, 0);
+  } else {
+    const present = starts.filter((id) => nodes.some((n) => n.id === id));
+    const root = present.length > 0 ? present : nodes[0] ? [nodes[0].id] : [];
+    for (const id of root) depth.set(id, 0);
+  }
+  if (depth.size === 0) return depth;
 
   const queue = [...indegree].filter(([, n]) => n === 0).map(([id]) => id);
   for (let head = 0; head < queue.length; head += 1) {
@@ -216,13 +249,21 @@ function depths(
  * laid out by another call to this function, inside its own group box.
  */
 export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): GraphLayout {
-  const ids = new Set(workflow.nodes.map((n) => n.id));
-  const edges = workflow.edges.filter((edge) => isDrawable(edge, ids));
-  const back = backEdges(workflow.nodes, edges, workflow.start);
+  return layoutGraph({ nodes: workflow.nodes, edges: workflow.edges, roots: [workflow.start] }, metrics);
+}
+
+/** The layout of any graph: `layoutWorkflow`'s contract, over `{ nodes, edges, roots? }`. */
+export function layoutGraph<N extends GraphNode, E extends GraphEdge>(
+  graph: PlainGraph<N, E>,
+  metrics: GraphMetrics,
+): GraphLayout<N, E> {
+  const ids = new Set(graph.nodes.map((n) => n.id));
+  const edges = graph.edges.filter((edge) => isDrawable(edge, ids));
+  const back = backEdges(graph.nodes, edges, graph.roots ?? []);
   const depth = depths(
-    workflow.nodes,
+    graph.nodes,
     edges.filter((edge, index) => !back.has(edgeKey(edge, index))),
-    workflow.start,
+    graph.roots,
   );
 
   /* An unreachable node is placed after the deepest reachable one, in a layer of its own
@@ -248,8 +289,8 @@ export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): G
     else predecessors.set(edge.to, [edge.from]);
   });
 
-  const byLayer = new Map<number, WorkflowNodeView[]>();
-  for (const node of workflow.nodes) {
+  const byLayer = new Map<number, N[]>();
+  for (const node of graph.nodes) {
     const layer = layerOf(node.id);
     const list = byLayer.get(layer);
     if (list) list.push(node);
@@ -266,7 +307,7 @@ export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): G
   for (let layer = 0; layer < layerCount; layer += 1) {
     const members = byLayer.get(layer) ?? [];
     const declared = new Map(members.map((node, index) => [node.id, index]));
-    const barycentre = (node: WorkflowNodeView): number => {
+    const barycentre = (node: N): number => {
       const parents = (predecessors.get(node.id) ?? []).map((id) => orderOf.get(id)).filter((o) => o !== undefined);
       // No placed predecessor: keep file order, which is the one ordering an author chose.
       return parents.length === 0 ? declared.get(node.id)! : parents.reduce((a, b) => a + b, 0) / parents.length;
@@ -282,7 +323,7 @@ export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): G
   }
 
   const step = { x: metrics.nodeW + metrics.layerGap, y: metrics.nodeH + metrics.rankGap };
-  const placed: PlacedNode[] = [];
+  const placed: PlacedNode<N>[] = [];
   for (let layer = 0; layer < layerCount; layer += 1) {
     (byLayer.get(layer) ?? []).forEach((node, order) => {
       placed.push({ node, layer, order, x: layer * step.x, y: order * step.y });
@@ -318,10 +359,10 @@ export function layoutWorkflow(workflow: WorkflowView, metrics: GraphMetrics): G
  * `edgePair` is the same edge without the index, for the one question that is genuinely
  * about the pair: whether a run's traversal came this way.
  */
-export const edgeKey = (edge: WorkflowEdgeView, index: number): string => `${index}:${edge.from}→${edge.to}`;
+export const edgeKey = (edge: GraphEdge, index: number): string => `${index}:${edge.from}→${edge.to}`;
 
 /** `from→to` — what a traversal can say about an edge, and all it can say. */
-export const edgePair = (edge: WorkflowEdgeView): string => `${edge.from}→${edge.to}`;
+export const edgePair = (edge: GraphEdge): string => `${edge.from}→${edge.to}`;
 
 /**
  * The node with this id, anywhere in the view — including inside a container's nested graphs,
@@ -363,14 +404,14 @@ export function findNode(workflow: WorkflowView, id: string | undefined): Workfl
  * cubic from a right edge to a left edge that is to its left passes straight back through
  * every node between them.
  */
-function route(
-  edge: WorkflowEdgeView,
+function route<E extends GraphEdge>(
+  edge: E,
   key: string,
-  boxes: ReadonlyMap<string, PlacedNode>,
+  boxes: ReadonlyMap<string, { x: number; y: number }>,
   metrics: GraphMetrics,
   isBack: boolean,
   gutter: number,
-): PlacedEdge {
+): PlacedEdge<E> {
   const from = boxes.get(edge.from)!;
   const to = boxes.get(edge.to)!;
   const pair = edgePair(edge);

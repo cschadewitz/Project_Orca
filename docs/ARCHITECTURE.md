@@ -64,12 +64,22 @@ files** come over as a display graph (#174): nodes with the per‑type fields th
 edges with their conditions, and the graphs written inline inside a `loop` or a `parallel`
 under the `parent::node` ids the engine addresses them by, plus a `traversal` on `runs.get` —
 the nodes a run took in order with their attempts and the edges between them — so the viewer
-(#177) can overlay a run on its graph. Both are reads, so `--read-only` answers them. What
-they cannot do is serve an *old* version: ORCA records `workflowVersion` on `run.created` but
-keeps no copy of that definition, so `WorkflowView.versions` is which versions have run and
-`workflows.get` still answers only the one on disk. `workflows.changed` is on the wire with
-nothing emitting it — there is no workflow reload path yet — so a client may subscribe before
-the editor (#181) can send one.
+(#177) can overlay a run on its graph. Both are reads, so `--read-only` answers them. As of
+v0.6.0 they can also serve an *old* version (#179): `startRun` keeps the definition a run
+starts on in the store's **workflow‑version store** (`workflows/<id>@v<version>.json`, one
+immutable file per version, written once), and marks the run `workflowStored` in
+`run.created`. A resumed run is loaded through `Orchestrator.definitionFor(id, version)` —
+the file on disk when it is still at that version, otherwise the stored copy — so publishing
+a new version affects runs started afterwards and a run under way finishes on the version it
+began with. A run that predates versioning carries no `workflowStored` and resumes on
+whatever file is current, as before; a run that does carry it but whose version is neither
+stored nor on disk refuses to resume with `WORKFLOW_VERSION_NOT_FOUND`, naming what exists.
+`workflows.get({ id, version })` answers from the store for a non‑current version,
+`WorkflowView.pinned` says the answer is not the version on disk, and `runs.get` carries
+`workflowPinned` for the same reason (the `◷ pinned` chip in
+`docs/design/70-workflow-editing.md`). A file edited *without* bumping `version` still wins
+over the stored copy. `workflows.changed` is on the wire with nothing emitting it — there is
+no workflow reload path yet — so a client may subscribe before the editor (#181) can send one.
 
 The **configuration** is two documents (#174, #266). `config.get` returns `orca.config.yaml`
 and the ADR 0009 permission sidecar `orca.permissions.json`, each with its own path, raw text
@@ -171,7 +181,18 @@ that never started get a fresh child run.
    artifact inputs as prior workflow context. Earlier reports remain in the
    content-addressed store as explicit inputs, including after an interrupted turn.
 3. Open (or reuse, `sessionMode: per-run`) an **ACP session** on the agent's
-   host. ORCA is the ACP *client*: it serves `fs/read_text_file`,
+   host. The agent is resolved through the run's **selection record** (#186):
+   `run.created` carries an optional `overrides` — `roles` (role → agent id),
+   `model` (one id, or agent id → model id), `itemWorkflow` and `templatePack` —
+   and every step sees the registry through `AgentRegistry.withOverrides(...)`,
+   a read‑only view that consults `overrides.roles` before the config's role
+   mapping and never changes the shared registry. Because the record is in the
+   event log, a replay resolves the same agents the live run did even after the
+   config's roles changed; a log without the field is a run with no overrides.
+   Child runs inherit their parent's record unless the node sets its own, and an
+   unknown agent or an unfilled role is refused at `startRun` with
+   `AGENT_NOT_FOUND` rather than on the first step that needs it.
+   ORCA is the ACP *client*: it serves `fs/read_text_file`,
    `fs/write_text_file` from the host file system (scoped to the workspace) and
    answers `session/request_permission` through the agent's permission policy —
    the rules configured on the agent first, then any the workspace sidecar has
@@ -184,6 +205,32 @@ that never started get a fresh child run.
    An `ask` decision becomes its own human‑input request (`human.requested` /
    `human.answered`, one `hi_*` id per ask), so several pending tool calls can be
    listed and answered independently.
+   `AgentSession` also keeps what `session/new` advertised as the agent's
+   **session config options** (a model list, a mode, a reasoning level),
+   normalised into ORCA's own `SessionConfigOption` (`packages/core`) so the
+   engine never sees the SDK's shape: an agent's legacy `modes` become one
+   select with `category: "mode"`, and `configOptions` wins when it sends both.
+   `setConfigOption` sends `session/set_config_option` and replaces the cache
+   from the full list the agent returns; an unsolicited `config_option_update`
+   does the same and is logged as an `agent.update` (#185). ORCA advertises
+   that it can set boolean options, so agents may offer them. The persisted
+   `agent.session.opened` event records that a session opened but carries no
+   session, so `Orchestrator.onAgentSessionOpened(listener)` hands each live
+   session to in‑process listeners as it opens (not persisted, not on the
+   wire); the ACP facade uses it to learn which models an agent offers (#189).
+   **The run's model goes on before any turn** (#187, `session-model.ts`):
+   `run.overrides.model` (one id, or the map keyed by the resolved agent id),
+   else the agent's `defaultModel`, is set through the session's
+   `category: "model"` option; an agent that offers none can only run on an id
+   its config declares in `models`, recorded as declared since there is
+   nothing to set; an id in neither place fails the step with
+   `AGENT_MODEL_NOT_FOUND`, listing what is available, with no retry. The
+   applied model is recorded as `agent.session.opened.model` (or the agent's
+   own current model when the run selected none), which is what `orca status`
+   and the daemon's step view show. A per‑run pooled session whose agent has
+   switched model itself is re‑applied before the next step and the re‑apply
+   logged as an `agent.update`; if the agent refuses, the pooled session is
+   closed and a fresh one opened.
 4. `session/prompt`. Session updates stream into the event log as
    `agent.update` (text chunks are coalesced; tool calls, plan entries and
    locations are kept as a compact `AgentUpdateSummary`, not the raw ACP payload).
@@ -224,10 +271,18 @@ back to `build` with the review as an extra input. That *is* the hand‑off.
   or something can never run.
 - `custom:plan-dispatch` → runs the item workflow for whatever the scheduler
   says is ready, re‑scheduling after every completion and on every plan change.
-  The workflow per item is the item's own `workflowId`, else `vars.itemWorkflow`
-  (seeded from `program.itemWorkflow`, default `ai-sdlc`); each item gets its
-  own **workspace** from the `WorkspaceProvider` (a git worktree per item, a
-  Kepler task worktree, or the current directory). Items waiting on other
+  The workflow per item is the item's own `workflowId`, else the node's
+  `workflow` pin, else `overrides.itemWorkflow` from the run's selection
+  record, else `vars.itemWorkflow` (seeded from `program.itemWorkflow`, default
+  `ai-sdlc`); the result's `itemWorkflowSource` says which (`node`, `override`
+  or `var`). Each item gets its own **workspace** from the `WorkspaceProvider`
+  (a git worktree per item, a Kepler task worktree, or the current directory).
+  The `local` provider is one shared checkout, so in a git checkout a work‑item
+  run switches it to `orca/<slug>` (created from the current HEAD, or reused)
+  and records the branch it replaced as `workspace.previousBranch` in
+  `run.created`; ORCA does not switch it back, and two items running at once in
+  one `local` checkout will switch the branch under each other. Use
+  `git-worktree` when runs must not share a checkout (#139). Items waiting on other
   requests are deferred and picked up by `workflows/plan-resume.yaml`
   (`orca plan dispatch`). Unlike a `parallel` fan‑out, the set of branches is
   not known up front: it is re‑computed from the live plan on every wake, which

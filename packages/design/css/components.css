@@ -995,6 +995,18 @@
   background: var(--accent-subtle);
   font-weight: 500;
 }
+/* The recommended column, outlined in accent from its header to its total (#173): its header
+   is the control that decides for it, so it is interactive and accent is its colour (rule 5).
+   The ground alone was a tint; the outline is what still reads with the hue gone. */
+.orca-matrix th.orca-matrix__win,
+.orca-matrix td.orca-matrix__win {
+  box-shadow:
+    inset var(--stroke-hairline) 0 0 0 var(--accent),
+    inset calc(-1 * var(--stroke-hairline)) 0 0 0 var(--accent);
+}
+.orca-matrix th.orca-matrix__win {
+  background: var(--accent-subtle);
+}
 .orca-matrix__score {
   display: inline-flex;
   align-items: center;
@@ -1214,6 +1226,39 @@
 .orca-dep--waived {
   border-style: dashed;
   color: var(--ink-secondary);
+}
+.orca-dep--failed {
+  border-color: var(--status-failed);
+}
+.orca-dep--open {
+  border-color: var(--border-control);
+}
+
+/* Dependency edges on the plan graph (#171). Kind is the stroke (semantics `dependencyKind`:
+   blocks solid, soft dashed, informs dotted) and state is the colour (`dependencyState`), so
+   the two facts never share a channel (rule 4). */
+.orca-dep-edge--soft {
+  stroke-dasharray: var(--stroke-dash-soft);
+}
+.orca-dep-edge--informs {
+  stroke-dasharray: var(--stroke-dash-informs);
+  stroke-linecap: round;
+}
+.orca-dep-edge--open,
+.orca-dep-edge--waived {
+  stroke: var(--graph-edge);
+}
+.orca-dep-edge--satisfied {
+  stroke: var(--graph-edge-active);
+}
+.orca-dep-edge--failed {
+  stroke: var(--status-failed);
+}
+/* A `blocks` edge on a cycle: nothing on it can ever start. Heavier as well as coloured, so
+   it still stands out with the hue gone. */
+.orca-dep-edge--cycle {
+  stroke: var(--status-failed);
+  stroke-width: var(--stroke-edge-active);
 }
 
 /* ---------- agent health card ---------- */

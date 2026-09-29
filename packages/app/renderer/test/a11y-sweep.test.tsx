@@ -673,6 +673,35 @@ describe("Plan: two lists, one tab stop each, and nothing that speaks", () => {
    *
    * `toHaveLength(0)` rather than a cap: a surface either mounts a region or it does not.
    */
+  /**
+   * The v0.6.0 modes (#171–#173): each is one tab stop per list or canvas, marks its scope,
+   * and speaks through nothing but the app's announcer. The graph is a `listbox` of nodes on
+   * one tab stop, in its own `plan-graph` scope; the risk register and the decision list are
+   * the `list` scope the schedule gives up when it is not on screen.
+   */
+  it("keeps every other mode to one tab stop per list, its own scope, and no live region", async () => {
+    await goToPlan();
+    const expectations: [string, string, string][] = [
+      ["Risks", "Risk register", "list"],
+      ["Decisions", "Decisions", "list"],
+      ["Dependencies", "Dependency graph", "plan-graph"],
+    ];
+    for (const [mode, name, scope] of expectations) {
+      fireEvent.click(screen.getByRole("button", { name: mode }));
+      const list = await screen.findByRole(mode === "Decisions" ? "grid" : "listbox", { name });
+      expect(list.getAttribute("tabindex")).toBe("0");
+      expect(list.closest("[data-kbd-scope]")?.getAttribute("data-kbd-scope")).toBe(scope);
+      const rows = [...list.querySelectorAll("[role=option], [role=row]")];
+      expect(rows.some((row) => row.hasAttribute("tabindex"))).toBe(false);
+      expect(
+        [
+          ...document.querySelectorAll(".orca-plan [role=status], .orca-plan [role=alert], .orca-plan [aria-live]"),
+        ].filter((element) => element.closest(".orca-banner--stale") === null),
+      ).toHaveLength(0);
+      expect(announcers()).toHaveLength(1);
+    }
+  });
+
   it("mounts no live region of its own, in either mode — only the app's stale banner", async () => {
     const speaking = (): Element[] =>
       [
