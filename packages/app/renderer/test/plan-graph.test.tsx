@@ -9,13 +9,13 @@
  * in their own scope.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { GRAPH_GEOMETRY } from "@orca/design";
 import { depNodeDomId } from "../src/plan/dependency-graph.js";
 import { buildGraph, cycleDependencies, relationships, ALL_EDGES } from "../src/plan/graph-model.js";
 import { scheduleRowId } from "../src/plan/index.js";
 import { counterpartUrl, describeRoute, planUrl, resolveRoute } from "../src/route-table.js";
-import { layoutGraph } from "../src/workflow/layout.js";
+import { layoutGraph, type PlacedNode } from "../src/workflow/layout.js";
 import { AS_OF } from "./fixtures.js";
 import { CYCLE_DEPENDENCIES, CYCLE_SCHEDULE, DEPENDENCIES, PLAN_ITEMS } from "./fixtures-plan.js";
 import { harness, installBridge, renderChrome, stubMatchMedia, type Harness } from "./harness.js";
@@ -53,12 +53,39 @@ async function openGraph(options: { cycle?: boolean } = {}): Promise<HTMLElement
   fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
   await screen.findByRole("grid", { name: "Schedule" });
   fireEvent.click(screen.getByRole("button", { name: "Dependencies" }));
-  return screen.findByRole("listbox", { name: "Dependency graph" });
+  const graph = await screen.findByRole("listbox", { name: "Dependency graph" });
+  /* The canvas registers its keys in a passive effect, which runs after the DOM `findByRole`
+     resolved on — the same first-press window `workflow-surface.test.tsx` describes. One
+     empty `act` flushes it, so a press below always meets a registered map. */
+  await act(async () => {});
+  return graph;
 }
+
+/** A key, pressed where the focus is: the `plan-graph` scope is resolved from the canvas outwards. */
+function press(canvas: HTMLElement, key: string, code: string, shiftKey = false): void {
+  act(() => canvas.focus());
+  fireEvent.keyDown(canvas, { key, code, shiftKey });
+}
+
+const METRICS = {
+  nodeW: GRAPH_GEOMETRY["node-w"],
+  nodeH: GRAPH_GEOMETRY["node-h"],
+  layerGap: GRAPH_GEOMETRY["layer-gap"],
+  rankGap: GRAPH_GEOMETRY["rank-gap"],
+};
+
+/** `plan.changed` for the dependencies, the way the daemon pushes it. */
+const dependenciesChanged = (seq: number): void =>
+  fake.notify({
+    kind: "notification",
+    method: "plan.changed",
+    params: { subscriptionId: "sub-1", planId: "plan-sso", kinds: ["dependencies"], seq, at: AS_OF },
+  });
 
 const callsTo = (method: string): unknown[] => fake.calls.filter((call) => call.method === method).map((c) => c.params);
 const edge = (id: string): SVGPathElement | null =>
   document.querySelector<SVGPathElement>(`g[data-dependency="${id}"] path`);
+const focused = (graph: HTMLElement): string | null => graph.getAttribute("aria-activedescendant");
 
 describe("the graph", () => {
   it("draws every item and every target, with the kind as stroke and the state in words", async () => {
@@ -239,14 +266,8 @@ describe("the model and the layout", () => {
   });
 
   it("lays out a graph with many roots, each at layer 0, and a cycle without dropping a node", () => {
-    const metrics = {
-      nodeW: GRAPH_GEOMETRY["node-w"],
-      nodeH: GRAPH_GEOMETRY["node-h"],
-      layerGap: GRAPH_GEOMETRY["layer-gap"],
-      rankGap: GRAPH_GEOMETRY["rank-gap"],
-    };
     const graph = buildGraph(PLAN_ITEMS, CYCLE_DEPENDENCIES, ALL_EDGES);
-    const layout = layoutGraph(graph, metrics);
+    const layout = layoutGraph(graph, METRICS);
     expect(layout.nodes).toHaveLength(graph.nodes.length);
     const layer = (id: string): number => layout.nodes.find((p) => p.node.id === id)!.layer;
     // Three independent roots — an item, a decision and an external target — side by side.
@@ -257,5 +278,218 @@ describe("the model and the layout", () => {
     // Exactly one edge of the two-node cycle is drawn backwards.
     const back = layout.edges.filter((e) => e.isBack).map((e) => e.edge.dependency.id);
     expect(back.filter((id) => id === "dep-ui-docs" || id === "dep-docs-ui")).toHaveLength(1);
+  });
+});
+
+describe("the canvas's keys", () => {
+  /* The placement the canvas navigates over, computed the way the surface computes it: the
+     whole plan, every kind of edge. The keys' rule is the workflow canvas's, so what is
+     asserted is where the rule lands on *this* graph, not the rule again. */
+  const placed = layoutGraph(buildGraph(PLAN_ITEMS, DEPENDENCIES, ALL_EDGES), METRICS).nodes;
+  const at = (layer: number, order: number): PlacedNode<{ id: string }> =>
+    placed.find((p) => p.layer === layer && p.order === order)!;
+  const nearest = (layer: number, order: number): PlacedNode<{ id: string }> =>
+    placed
+      .filter((p) => p.layer === layer)
+      .reduce((best, p) => (Math.abs(p.order - order) < Math.abs(best.order - order) ? p : best));
+
+  it("selects the first node when nothing is selected, then walks layers and ranks", async () => {
+    const graph = await openGraph();
+    await waitFor(() => expect(within(graph).getAllByRole("option").length).toBe(placed.length));
+    expect(focused(graph)).toBeNull();
+    // One tab stop: the canvas, and no node of its own.
+    expect(graph.getAttribute("tabindex")).toBe("0");
+    expect(
+      within(graph)
+        .getAllByRole("option")
+        .some((node) => node.hasAttribute("tabindex")),
+    ).toBe(false);
+
+    // With nothing selected any arrow lands on the first placed node, which is a root.
+    press(graph, "ArrowRight", "ArrowRight");
+    await waitFor(() => expect(focused(graph)).toBe(depNodeDomId(placed[0]!.node.id)));
+    expect(placed[0]!.layer).toBe(0);
+    const start = placed[0]!;
+
+    // Down and up move within the layer; up past the first rank stays put.
+    press(graph, "ArrowDown", "ArrowDown");
+    await waitFor(() => expect(focused(graph)).toBe(depNodeDomId(at(0, start.order + 1).node.id)));
+    press(graph, "ArrowUp", "ArrowUp");
+    await waitFor(() => expect(focused(graph)).toBe(depNodeDomId(start.node.id)));
+    press(graph, "ArrowUp", "ArrowUp");
+    await act(async () => {});
+    expect(focused(graph)).toBe(depNodeDomId(start.node.id));
+
+    // Left of layer 0 is nowhere; right lands on the nearest rank in the next layer.
+    press(graph, "ArrowLeft", "ArrowLeft");
+    await act(async () => {});
+    expect(focused(graph)).toBe(depNodeDomId(start.node.id));
+    press(graph, "ArrowRight", "ArrowRight");
+    const next = nearest(1, start.order);
+    await waitFor(() => expect(focused(graph)).toBe(depNodeDomId(next.node.id)));
+    press(graph, "ArrowLeft", "ArrowLeft");
+    await waitFor(() => expect(focused(graph)).toBe(depNodeDomId(nearest(0, next.order).node.id)));
+  });
+
+  it("selects a decision or an external target by key too, without making it the item selection", async () => {
+    const graph = await openGraph();
+    await waitFor(() => expect(within(graph).getAllByRole("option").length).toBe(placed.length));
+    const decision = placed.find((p) => p.node.id === "decision:dec-datastore")!;
+    // Walk down layer 0 until the decision is the focused node.
+    press(graph, "ArrowRight", "ArrowRight");
+    for (let order = placed[0]!.order; order < decision.order; order++) press(graph, "ArrowDown", "ArrowDown");
+    await waitFor(() => expect(focused(graph)).toBe(depNodeDomId("decision:dec-datastore")));
+    // The strip still asks for a work item: a decision is a node, not a row.
+    expect(screen.getByRole("group", { name: "Selected work item" }).textContent).toContain("Select a work item");
+  });
+
+  it("opens the relationships on Enter, and asks nothing when nothing is selected", async () => {
+    const graph = await openGraph();
+    await waitFor(() => expect(document.getElementById(depNodeDomId("wi-api"))).not.toBeNull());
+    press(graph, "Enter", "Enter");
+    await act(async () => {});
+    expect(screen.queryByLabelText(/^Relationships of/)).toBeNull();
+
+    fireEvent.click(document.getElementById(depNodeDomId("wi-api"))!);
+    await screen.findByLabelText("Relationships of auth-api");
+    fireEvent.click(screen.getByRole("button", { name: /Close panel/ }));
+    await waitFor(() => expect(screen.queryByLabelText("Relationships of auth-api")).toBeNull());
+
+    // Enter is the ask that re-opens the dock a person closed.
+    press(graph, "Enter", "Enter");
+    await screen.findByLabelText("Relationships of auth-api");
+  });
+
+  it("zooms with + and -, pans with a shifted arrow, and 0 puts both back", async () => {
+    const graph = await openGraph();
+    const scene = graph.querySelector<HTMLElement>(".orca-wfcanvas__scene")!;
+    const rest = scene.style.transform;
+    expect(rest).toContain("scale(1)");
+
+    press(graph, "+", "Equal", true);
+    await waitFor(() => expect(scene.style.transform).toContain("scale(1.5)"));
+    press(graph, "-", "Minus");
+    await waitFor(() => expect(scene.style.transform).toBe(rest));
+    // The zoom is clamped at both ends rather than running off the table.
+    press(graph, "-", "Minus");
+    press(graph, "-", "Minus");
+    press(graph, "-", "Minus");
+    await waitFor(() => expect(scene.style.transform).toContain("scale(0.5)"));
+    for (let i = 0; i < 6; i++) press(graph, "+", "Equal", true);
+    await waitFor(() => expect(scene.style.transform).toContain("scale(2)"));
+
+    press(graph, "ArrowRight", "ArrowRight", true);
+    press(graph, "ArrowDown", "ArrowDown", true);
+    await waitFor(() => expect(scene.style.transform).toMatch(/translate\(-\d+px, -\d+px\)/));
+    press(graph, "ArrowLeft", "ArrowLeft", true);
+    press(graph, "ArrowUp", "ArrowUp", true);
+    await waitFor(() => expect(scene.style.transform).toContain("translate(0px, 0px)"));
+    // Panning selected nothing: the two are different verbs.
+    expect(focused(graph)).toBeNull();
+
+    press(graph, "0", "Digit0");
+    await waitFor(() => expect(scene.style.transform).toBe(rest));
+  });
+
+  it("pans on a drag of the empty canvas, and never on a press that started on a node", async () => {
+    const graph = await openGraph();
+    await waitFor(() => expect(document.getElementById(depNodeDomId("wi-api"))).not.toBeNull());
+    const scene = graph.querySelector<HTMLElement>(".orca-wfcanvas__scene")!;
+    const rest = scene.style.transform;
+
+    // A move with no press before it is nothing.
+    fireEvent.pointerMove(graph, { clientX: 40, clientY: 40, pointerId: 1 });
+    await act(async () => {});
+    expect(scene.style.transform).toBe(rest);
+
+    // A press on a node is a selection, and the move after it does not pan.
+    fireEvent.pointerDown(document.getElementById(depNodeDomId("wi-api"))!, { clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(graph, { clientX: 50, clientY: 30, pointerId: 1 });
+    await act(async () => {});
+    expect(scene.style.transform).toBe(rest);
+
+    // A press on the canvas itself drags it by the pointer's own delta, in two moves.
+    fireEvent.pointerDown(graph, { clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(graph, { clientX: 50, clientY: 30, pointerId: 1 });
+    await waitFor(() => expect(scene.style.transform).toContain("translate(40px, 20px)"));
+    fireEvent.pointerMove(graph, { clientX: 60, clientY: 30, pointerId: 1 });
+    await waitFor(() => expect(scene.style.transform).toContain("translate(50px, 20px)"));
+
+    // Released with the capture the press took, when the platform has one, and without.
+    let released = 0;
+    Object.assign(graph, {
+      hasPointerCapture: () => true,
+      releasePointerCapture: () => {
+        released += 1;
+      },
+    });
+    fireEvent.pointerUp(graph, { clientX: 60, clientY: 30, pointerId: 1 });
+    expect(released).toBe(1);
+    Object.assign(graph, { hasPointerCapture: () => false });
+    fireEvent.pointerCancel(graph, { pointerId: 1 });
+    expect(released).toBe(1);
+    // And after the release, a move is no longer a drag.
+    fireEvent.pointerMove(graph, { clientX: 90, clientY: 90, pointerId: 1 });
+    await act(async () => {});
+    expect(scene.style.transform).toContain("translate(50px, 20px)");
+  });
+});
+
+describe("the mode's states", () => {
+  it("says it is loading until the dependencies answer", async () => {
+    mount();
+    const release = fake.hold("dependencies.list");
+    fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+    await screen.findByRole("grid", { name: "Schedule" });
+    fireEvent.click(screen.getByRole("button", { name: "Dependencies" }));
+    await screen.findByText("Loading the dependencies");
+    expect(screen.queryByRole("listbox", { name: "Dependency graph" })).toBeNull();
+    release();
+    await screen.findByRole("listbox", { name: "Dependency graph" });
+  });
+
+  it("names the error and offers a retry while live, and calls it disconnected when nothing answers", async () => {
+    await openGraph();
+    fake.fail("dependencies.list", { code: "STORE_READ", message: "the plan store is unreadable" });
+    await act(async () => dependenciesChanged(50));
+    await screen.findByText("Could not load the dependencies");
+    expect(screen.getByText("STORE_READ: the plan store is unreadable")).toBeTruthy();
+    expect(screen.queryByRole("listbox", { name: "Dependency graph" })).toBeNull();
+
+    const before = callsTo("dependencies.list").length;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(callsTo("dependencies.list").length).toBe(before + 1));
+    await screen.findByText("Could not load the dependencies");
+
+    /* The daemon went away: the same daemon, so its capabilities stay on the snapshot — a
+       snapshot with none would read as a daemon that serves no plan at all. */
+    fake.connect({ ...fake.connection, state: "disconnected", since: AS_OF });
+    await screen.findByText("No daemon to read the dependencies from");
+    expect(screen.getByText("Start one with orca serve, then try again.")).toBeTruthy();
+  });
+
+  it("says there is nothing to draw when the filter leaves no item", async () => {
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+    await screen.findByRole("grid", { name: "Schedule" });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter work items" }), {
+      target: { value: "no-such-item" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dependencies" }));
+    await screen.findByText("Nothing to draw");
+    expect(screen.queryByRole("listbox", { name: "Dependency graph" })).toBeNull();
+  });
+
+  it("pins a settled item's row under the canvas with its status rather than a schedule class", async () => {
+    const graph = await openGraph();
+    await waitFor(() => expect(document.getElementById(depNodeDomId("wi-spike"))).not.toBeNull());
+    fireEvent.click(document.getElementById(depNodeDomId("wi-spike"))!);
+    const strip = screen.getByRole("group", { name: "Selected work item" });
+    await waitFor(() => expect(strip.textContent).toContain("auth-spike"));
+    expect(strip.textContent).toContain("Spike the provider SDK");
+    // Done: the strip says the status, and there is no score to print.
+    expect(strip.textContent).toContain("done");
+    expect(strip.querySelector(".orca-plan__score")).toBeNull();
+    expect(focused(graph)).toBe(depNodeDomId("wi-spike"));
   });
 });

@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { DecisionView } from "@orca/protocol";
+import { ANNOUNCER_ATTRIBUTE } from "../src/a11y/announcer.js";
 import { decideParams, reopenQuestion } from "../src/plan/decision-model.js";
 import { AS_OF } from "./fixtures.js";
 import { DECISIONS, PLAN_ID } from "./fixtures-plan.js";
@@ -177,6 +178,112 @@ describe("the palette after a push", () => {
     expect(within(menu).getByRole("menuitem", { name: /The database/ })).toBeTruthy();
     expect(within(menu).getByRole("menuitem", { name: /Redis/ }).textContent).toContain("the matrix's recommendation");
     expect(within(menu).getByRole("menuitem", { name: /Signed cookie/ }).textContent).not.toContain("recommendation");
+  });
+});
+
+const announced = (): string => document.querySelector(`[${ANNOUNCER_ATTRIBUTE}]`)?.textContent ?? "";
+
+describe("what is said when the record is thin", () => {
+  it("says what was not recorded, and that a reopen with nothing behind it reopens nothing", async () => {
+    // Decided by a daemon that recorded no actor, no time and no rationale, gating nothing.
+    const { decidedBy: _by, decidedAt: _at, rationale: _why, ...bare } = DECIDED;
+    await openDecisions([{ ...bare, blocks: [] }]);
+    const decided = screen.getByLabelText("Decided");
+    expect(decided.textContent).toContain("Redis, by an unrecorded actor");
+    expect(decided.textContent).toContain("No rationale was recorded.");
+    expect(decided.querySelector("time")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reopen…" }));
+    expect(screen.getByRole("group", { name: "Reopen datastore" }).textContent).toContain(
+      "No dependency is waiting on it.",
+    );
+    fake.script({
+      "decisions.reopen": () => ({
+        ok: true,
+        result: { decision: { ...bare, status: "open" }, reopenedDependencyIds: [], asOf: AS_OF },
+      }),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reopen datastore" }));
+    await waitFor(() => expect(announced()).toBe("datastore is open again; nothing reopened with it."));
+  });
+
+  it("counts the one dependency a reopen reopened", async () => {
+    await openDecisions([DECIDED]);
+    fireEvent.click(screen.getByRole("button", { name: "Reopen…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reopen datastore" }));
+    await waitFor(() => expect(announced()).toBe("datastore is open again; 1 dependency reopened with it."));
+  });
+
+  it("says a reopen that did not go through did not, in the daemon's words", async () => {
+    await openDecisions([DECIDED]);
+    fake.fail("decisions.reopen", { code: "PLAN_INVALID", message: "datastore is already open" });
+    fireEvent.click(screen.getByRole("button", { name: "Reopen…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reopen datastore" }));
+    await waitFor(() => expect(announced()).toBe("That did not go through: datastore is already open"));
+    // The question is put away either way; it is asked once.
+    expect(screen.queryByRole("group", { name: "Reopen datastore" })).toBeNull();
+  });
+
+  it("says when the matrix has no ranking, in the row and in the detail", async () => {
+    const { result: _result, resultIsPreview: _preview, ...unranked } = DATASTORE;
+    await openDecisions([unranked]);
+    expect(
+      screen.getByText("The matrix has no ranking: an option is missing a score, or there is nothing to rank."),
+    ).toBeTruthy();
+    const row = within(screen.getByRole("grid", { name: "Decisions" })).getAllByRole("row")[0]!;
+    expect(row.textContent).not.toContain("recommends");
+  });
+
+  it("narrows the list with the rail, and says so when nothing is left", async () => {
+    await openDecisions();
+    expect(screen.getByText("1 decision")).toBeTruthy();
+    // Only the held item is left, and the one decision gates an item that is not.
+    fireEvent.click(screen.getByRole("button", { name: /^held/ }));
+    await screen.findByText("0 of 1 decisions");
+    expect(screen.getByText("No decisions here")).toBeTruthy();
+    expect(screen.queryByRole("grid", { name: "Decisions" })).toBeNull();
+  });
+});
+
+describe("the mode's states", () => {
+  it("says it is loading until the decisions answer", async () => {
+    fake = installBridge();
+    teardown.push(fake.install());
+    const release = fake.hold("decisions.list");
+    const h = harness();
+    teardown.push(h.dispose);
+    renderChrome(h);
+    fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+    await screen.findByRole("grid", { name: "Schedule" });
+    fireEvent.click(screen.getByRole("button", { name: "Decisions" }));
+    await screen.findByText("Loading the decisions");
+    expect(screen.queryByRole("grid", { name: "Decisions" })).toBeNull();
+    release();
+    await screen.findByRole("grid", { name: "Decisions" });
+  });
+
+  it("names the error and offers a retry while live, and calls it disconnected when nothing answers", async () => {
+    await openDecisions();
+    fake.fail("decisions.list", { code: "STORE_READ", message: "the plan store is unreadable" });
+    await act(async () => {
+      fake.notify({
+        kind: "notification",
+        method: "plan.changed",
+        params: { subscriptionId: "sub-1", planId: PLAN_ID, kinds: ["decisions"], seq: 50, at: AS_OF },
+      });
+    });
+    await screen.findByText("Could not load the decisions");
+    expect(screen.getByText("STORE_READ: the plan store is unreadable")).toBeTruthy();
+    expect(screen.queryByRole("grid", { name: "Decisions" })).toBeNull();
+
+    const before = callsTo("decisions.list").length;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(callsTo("decisions.list").length).toBe(before + 1));
+    await screen.findByText("Could not load the decisions");
+
+    // The same daemon gone quiet, so its capabilities stay: none would read as "no plan".
+    fake.connect({ ...fake.connection, state: "disconnected", since: AS_OF });
+    await screen.findByText("No daemon to read the decisions from");
   });
 });
 
