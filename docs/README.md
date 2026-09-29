@@ -12,5 +12,6 @@
 | [EXTENSIBILITY.md](EXTENSIBILITY.md) | add node types, transports, hosts, stores, human channels via plugins |
 | [ROADMAP.md](ROADMAP.md) | see what is intentionally left open |
 | [adr/](adr/) | the reasons behind the seven structural decisions |
+| [INSTALL.md](INSTALL.md) | install a release for the first time: the desktop app, and the daemon locally, in Docker, or on a remote server |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | build, test, and review the code base |
 | [RELEASING.md](RELEASING.md) | cut a release: the versioning policy, what counts as breaking, and the milestone‑driven flow |

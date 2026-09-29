@@ -33,6 +33,9 @@ integration works yet — it is groundwork (see `docs/INTEGRATIONS.md`).
 
 ## Quick start
 
+Installing a release rather than working from source? `docs/INSTALL.md` covers the desktop
+app and the daemon: local, in Docker, and on a remote server.
+
 ```bash
 mise install            # Node 24 + pnpm 12 (any Node >= 22 works)
 pnpm install
