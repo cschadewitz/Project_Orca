@@ -44,7 +44,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'release'))
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     outputs:
       version: ${{ steps.version.outputs.version }}
       sha: ${{ steps.sha.outputs.sha }}
@@ -112,7 +112,7 @@ jobs:
   publish:
     name: tag and publish
     needs: [check, desktop, app-verification]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     steps:
       - uses: actions/checkout@v7
         with:

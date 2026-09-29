@@ -26,7 +26,7 @@ concurrency:
 jobs:
   fragment:
     name: a fragment, or a reason not to
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     # `no-changelog` is the opt-out for a `packages/` change that genuinely reads as
     # nothing to a user — a refactor, a test, a comment. `release` is the label
     # release-prepare.yml puts on the `release: vX.Y.Z` pull request, which *deletes*

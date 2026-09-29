@@ -22,7 +22,7 @@ concurrency:
 jobs:
   changes:
     name: classify changes
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     outputs:
       code: ${{ steps.classify.outputs.code }}
     steps:
@@ -61,7 +61,7 @@ jobs:
     name: check (node ${{ matrix.node }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     strategy:
       fail-fast: false
       matrix:

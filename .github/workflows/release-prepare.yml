@@ -29,7 +29,7 @@ permissions:
 jobs:
   prepare:
     name: propose a release
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     steps:
       - uses: actions/checkout@v7
         with:

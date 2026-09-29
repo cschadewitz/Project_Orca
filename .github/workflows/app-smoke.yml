@@ -45,7 +45,7 @@ concurrency:
 jobs:
   changes:
     name: classify app checks
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     outputs:
       type_proof: ${{ steps.classify.outputs.type_proof }}
     steps:
