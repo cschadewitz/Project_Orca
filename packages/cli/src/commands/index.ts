@@ -275,6 +275,9 @@ export const commands: Record<string, Command> = {
             configDir,
           )
         : await loadWorkflows(assets.workflows, configDir);
+      // Explicit files are the validation targets. Plugins may add workflows to the registry
+      // so references resolve, but those additions must not change which files were requested.
+      const selectedWorkflows = files.length ? workflows.list() : undefined;
       // The plugins are loaded for their node validators (#308): a `custom:*` node's fields are
       // checked here, by the executor that will run it, rather than when a run reaches it. The
       // stores are in memory because nothing runs; the config's agents are what a plugin's
@@ -295,8 +298,9 @@ export const commands: Record<string, Command> = {
         },
         consoleLogger((ctx.flags["log-level"] as never) ?? "warn"),
       );
+      const definitions = selectedWorkflows ?? workflows.list();
       let failed = 0;
-      for (const def of workflows.list()) {
+      for (const def of definitions) {
         const r = validateWorkflow(def, {
           hasTemplate: (id) => templates.has(id),
           hasWorkflow: (id) => workflows.has(id),
@@ -315,8 +319,7 @@ export const commands: Record<string, Command> = {
         // Throws TEMPLATE_NOT_FOUND for a pack that overrides nothing (#191).
         const overridden = requireTemplatePack(templates, pack);
         const used = new Set(
-          workflows
-            .list()
+          definitions
             .flatMap((def) => Object.values(def.nodes))
             .flatMap((n) => {
               const t = (n as { template?: unknown }).template;

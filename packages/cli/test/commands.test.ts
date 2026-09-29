@@ -172,6 +172,39 @@ describe("orca validate", () => {
     // The node that passes its executor's check is not mentioned.
     expect(text).not.toContain("nodes.ok");
   });
+
+  it("validates only named files while keeping plugin workflows available as references", async () => {
+    const pdir = await mkdtemp(join(tmpdir(), "orca-validate-targets-"));
+    dirs.push(pdir);
+    await writeFile(
+      join(pdir, "selected.yaml"),
+      "id: selected\nname: Selected\nstart: s\nnodes:\n  s: { type: start }\n  child: { type: subworkflow, workflow: plugin-good }\n  done: { type: end }\nedges: [{ from: s, to: child }, { from: child, to: done }]\n",
+      "utf8",
+    );
+    await writeFile(
+      join(pdir, "plugin.mjs"),
+      `export default { name: "extra-workflows", register(api) {
+  const good = { id: "plugin-good", name: "Good", version: "1", vars: {}, inputs: {}, start: "s",
+    nodes: { s: { type: "start" }, done: { type: "end" } }, edges: [{ from: "s", to: "done" }] };
+  api.workflows.register(good);
+  api.workflows.register({ ...good, id: "plugin-bad", name: "Bad", edges: [{ from: "s", to: "missing" }] });
+} };\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(pdir, "orca.config.yaml"),
+      'version: 1\nworkflows: [selected.yaml]\ntemplates: []\nplugins: ["./plugin.mjs"]\n',
+      "utf8",
+    );
+
+    const selected = ctx(pdir, ["selected.yaml"]);
+    expect(await commands.validate!.run(selected)).toBe(0);
+    expect(selected.lines).toEqual(["OK   selected (3 nodes, 2 edges)"]);
+
+    const all = ctx(pdir, []);
+    expect(await commands.validate!.run(all)).toBe(1);
+    expect(all.lines.join("\n")).toContain("FAIL plugin-bad");
+  });
 });
 
 describe("orca graph", () => {
