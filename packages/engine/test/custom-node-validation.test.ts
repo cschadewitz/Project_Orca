@@ -78,4 +78,22 @@ describe("validateArtifact", () => {
       "front matter field 'status' must be one of ok (got 'failed')",
     );
   });
+
+  it("prefers a literal dotted key for required fields and allowed values", () => {
+    const data = {
+      status: "ok",
+      "answers.conflict.choice": "consistent",
+      answers: { conflict: { choice: "maybe" } },
+    };
+    expect(validateArtifact(spec, data, "")).toBeUndefined();
+
+    const invalid = { ...data, "answers.conflict.choice": "maybe", answers: { conflict: { choice: "consistent" } } };
+    expect(validateArtifact(spec, invalid, "")).toBe(
+      "front matter field 'answers.conflict.choice' must be one of consistent, contradiction (got 'maybe')",
+    );
+    // A fieldValues rule without requiredFields must still inspect an existing literal key.
+    expect(validateArtifact({ ...spec, validate: { fieldValues: spec.validate!.fieldValues } }, invalid, "")).toBe(
+      "front matter field 'answers.conflict.choice' must be one of consistent, contradiction (got 'maybe')",
+    );
+  });
 });

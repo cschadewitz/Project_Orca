@@ -79,9 +79,8 @@ export const DecisionSourceSchema = z.discriminatedUnion("kind", [
   /** Evaluate an expression; its string/boolean result is the choice. */
   z.object({ kind: z.literal("expression"), expr: ConditionSchema }),
   /**
-   * Read a field from an artifact's data (e.g. review.verdict). `field` is a dotted path
-   * (`answers.conflict.choice`) resolved with `pathGet`; a plain key reads the top-level
-   * front-matter field it always did (#309).
+   * Read a field from an artifact's data (e.g. review.verdict). An exact top-level key
+   * takes precedence; otherwise `field` is a dotted path (`answers.conflict.choice`) (#309).
    */
   z.object({ kind: z.literal("artifact"), artifact: z.string(), field: z.string().default("choice") }),
   /** Ask an agent; it must produce a `decision` artifact with a `choice` field (also a dotted path). */

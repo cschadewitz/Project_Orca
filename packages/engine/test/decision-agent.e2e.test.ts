@@ -63,4 +63,52 @@ describe("agent-sourced decision node (e2e with scripted ACP agent)", () => {
     expect(resolved?.payload).toMatchObject({ choice: "ship", source: "agent:decision" });
     expect((await h.prompts()).some((p) => p.text.includes("Decide whether we should ship"))).toBe(true);
   }, 60_000);
+
+  it("routes agent and artifact decisions through a literal dotted front-matter key", async () => {
+    const dotted = parseWorkflow(`
+id: dotted-decision
+name: Dotted decision
+start: start
+nodes:
+  start: { type: start }
+  ask:
+    type: decision
+    source:
+      kind: agent
+      agent: { role: reviewer }
+      prompt: "Choose ship or hold."
+      field: review.verdict
+    options: [ship, hold]
+  route:
+    type: decision
+    source: { kind: artifact, artifact: decision, field: review.verdict }
+    options: [ship, hold]
+  shipped: { type: end, outcome: success }
+  held: { type: end, outcome: failure }
+edges:
+  - { from: start, to: ask }
+  - { from: ask, to: route, when: "choice == 'ship'" }
+  - { from: ask, to: held, when: "choice == 'hold'" }
+  - { from: route, to: shipped, when: "choice == 'ship'" }
+  - { from: route, to: held, when: "choice == 'hold'" }
+`);
+    const h = await harness(
+      {
+        kinds: {
+          decision: [{ data: { "review.verdict": "ship", review: { verdict: "hold" } }, body: "Ship it." }],
+        },
+      },
+      { workflows: (await loadShippedWorkflows()).register(dotted) },
+    );
+    dirs.push(h.dir);
+    const state = await h.orchestrator.startAndRun({ workflowId: "dotted-decision" });
+
+    expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+    expect(state.run.outcome).toBe("success");
+    expect(state.stepOrder.map((id) => state.steps[id]!.nodeId)).toEqual(["start", "ask", "route", "shipped"]);
+    expect(Object.values(state.artifacts)[0]?.data).toMatchObject({
+      "review.verdict": "ship",
+      review: { verdict: "hold" },
+    });
+  }, 60_000);
 });

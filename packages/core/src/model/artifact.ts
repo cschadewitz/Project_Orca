@@ -69,9 +69,9 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
 
 /** Validation rules a node can attach to an artifact it expects. */
 export const ArtifactValidationSchema = z.object({
-  /** Front-matter fields that must be present and non-empty. A field is a dotted path (`answers.x.choice`). */
+  /** Front-matter fields that must be present and non-empty. Exact keys precede dotted paths. */
   requiredFields: z.array(z.string()).optional(),
-  /** Allowed values per front-matter field (a dotted path), e.g. { verdict: ["approve","changes-requested"] }. */
+  /** Allowed values per front-matter field (exact key or dotted path), e.g. { verdict: ["approve"] }. */
   fieldValues: z.record(z.string(), z.array(z.string())).optional(),
   /** Minimum body length in characters (guards against empty files). */
   minBodyLength: z.number().int().nonnegative().optional(),
