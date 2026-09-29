@@ -25,6 +25,6 @@
     "orca-scripted-agent": "./dist/scripted-agent/main.js"
   },
   "devDependencies": {
-    "tsx": "^4.23.13"
+    "tsx": "^4.23.15"
   }
 }
