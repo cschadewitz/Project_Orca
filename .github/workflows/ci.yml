@@ -134,7 +134,7 @@ jobs:
         with:
           name: coverage
           path: coverage/
-          retention-days: 14
+          retention-days: 7
 
       - name: Warn if coverage upload failed
         if: ${{ !cancelled() && steps.upload-coverage.outcome == 'failure' }}

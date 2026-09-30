@@ -164,7 +164,8 @@ jobs:
           path: |
             test-results/
             playwright-report/
-          retention-days: 14
+          # Release calls supply a ref; PR and standalone outputs only need one week.
+          retention-days: ${{ inputs.ref && 14 || 7 }}
           if-no-files-found: ignore
 
   # The second job, and deliberately not a wider first one: it launches `#type` and nothing
@@ -253,5 +254,6 @@ jobs:
             packages/app/test/smoke/type-proof.spec.ts-snapshots/
             test-results/
             playwright-report/
-          retention-days: 14
+          # Release calls supply a ref; PR and standalone outputs only need one week.
+          retention-days: ${{ inputs.ref && 14 || 7 }}
           if-no-files-found: ignore
