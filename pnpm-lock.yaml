@@ -203,8 +203,8 @@ importers:
   packages/agents:
     dependencies:
       '@agentclientprotocol/sdk':
-        specifier: ^1.4.0
-        version: 1.4.0(zod@4.6.5)
+        specifier: ^1.5.0
+        version: 1.5.0(zod@4.6.5)
       '@orca/core':
         specifier: workspace:*
         version: link:../core
@@ -343,14 +343,14 @@ importers:
         version: link:../store
     devDependencies:
       '@agentclientprotocol/sdk':
-        specifier: ^1.4.0
-        version: 1.4.0(zod@4.6.5)
+        specifier: ^1.5.0
+        version: 1.5.0(zod@4.6.5)
 
   packages/integrations:
     dependencies:
       '@agentclientprotocol/sdk':
-        specifier: ^1.4.0
-        version: 1.4.0(zod@4.6.5)
+        specifier: ^1.5.0
+        version: 1.5.0(zod@4.6.5)
       '@orca/agents':
         specifier: workspace:*
         version: link:../agents
@@ -388,8 +388,8 @@ importers:
   packages/testing:
     dependencies:
       '@agentclientprotocol/sdk':
-        specifier: ^1.4.0
-        version: 1.4.0(zod@4.6.5)
+        specifier: ^1.5.0
+        version: 1.5.0(zod@4.6.5)
       '@orca/agents':
         specifier: workspace:*
         version: link:../agents
@@ -448,8 +448,8 @@ importers:
 
 packages:
 
-  '@agentclientprotocol/sdk@1.4.0':
-    resolution: {integrity: sha512-/eufudw+aFY1LKLolT6yFE6UMmYRl7fMJ/DEONSIyR6wI3slHWITBsANRGqXEY8FRzqUxwh7QEaGiZHcJPVThg==}
+  '@agentclientprotocol/sdk@1.5.0':
+    resolution: {integrity: sha512-524jwbB2iYWA+kWWyv9fhKbhU89dH/lu9u5EXwVNmfYzopV8BujCDxByBDZhxRUkB7RWIJzISCnwivdDk+bdVg==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -2766,7 +2766,7 @@ packages:
 
 snapshots:
 
-  '@agentclientprotocol/sdk@1.4.0(zod@4.6.5)':
+  '@agentclientprotocol/sdk@1.5.0(zod@4.6.5)':
     dependencies:
       zod: 4.6.5
 
