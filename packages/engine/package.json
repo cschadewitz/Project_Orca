@@ -20,6 +20,6 @@
     "@orca/agents": "workspace:*"
   },
   "devDependencies": {
-    "@agentclientprotocol/sdk": "^1.4.0"
+    "@agentclientprotocol/sdk": "^1.5.0"
   }
 }
