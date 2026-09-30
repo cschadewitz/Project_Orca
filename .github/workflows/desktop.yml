@@ -60,7 +60,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: [self-hosted, linux, x64, homelab]
             name: linux
             cache_path: |
               ~/.cache/electron
@@ -135,12 +135,14 @@ jobs:
         run: |
           set -euo pipefail
           workspace=$(mktemp -d)
-          node packages/app/dist/daemon/orca-daemon.mjs --cwd "$workspace" serve --port 6799 &
+          # Let the OS bind a free port so concurrent jobs cannot answer for each other.
+          node packages/app/dist/daemon/orca-daemon.mjs --cwd "$workspace" serve --port 0 > daemon.log 2>&1 &
           daemon=$!
           trap 'kill "$daemon" 2>/dev/null || true' EXIT
           body='{"kind":"request","id":1,"method":"hello","params":{"client":"desktop-ci/0","protocol":{"major":1,"minor":0}}}'
           for _ in $(seq 1 60); do
-            if curl -sS --fail -X POST http://127.0.0.1:6799/rpc \
+            url=$(sed -n 's/.*listening on \(http:\/\/127\.0\.0\.1:[0-9]*\).*/\1/p' daemon.log | head -n 1)
+            if [ -n "$url" ] && curl -sS --fail -X POST "$url/rpc" \
               -H 'content-type: application/json' -d "$body" -o hello.json; then
               break
             fi
@@ -191,15 +193,19 @@ jobs:
         if: matrix.name == 'linux'
         run: |
           set -euo pipefail
-          # Chromium's sandbox needs unprivileged user namespaces, which Ubuntu restricts by
-          # default. Lifted rather than worked around: `--no-sandbox` would be testing the
-          # app in a configuration nobody ships. Same as app-smoke.yml.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # Check the provisioned runner without changing its host security policy.
+          command -v xvfb-run
+          command -v setsid
+          if ! unshare --user --map-root-user true; then
+            echo "::error::The self-hosted runner must support unprivileged user namespaces for Chromium's sandbox."
+            exit 1
+          fi
           profile=$(mktemp -d)
-          xvfb-run -a packages/app/dist/release/linux-unpacked/orca \
+          setsid xvfb-run -a packages/app/dist/release/linux-unpacked/orca \
             --user-data-dir="$profile" > app.log 2>&1 &
           app=$!
-          trap 'kill "$app" 2>/dev/null || true; pkill -f orca-daemon.mjs || true' EXIT
+          # The display, app and bundled daemon share this job's own process group.
+          trap 'kill -- "-$app" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             if grep -q 'listening on http://127.0.0.1:' app.log; then break; fi
             sleep 1
@@ -207,7 +213,7 @@ jobs:
           echo '--- the packaged app said ---'
           cat app.log
           grep -q 'listening on http://127.0.0.1:' app.log
-          pgrep -af orca-daemon.mjs
+          pgrep -af -g "$app" orca-daemon.mjs
 
       # The standalone daemon artifact, named for the release. Built once and taken from the
       # Linux leg: it is one ESM file with no platform in it, and three identical copies on
@@ -251,6 +257,7 @@ jobs:
           name: desktop-${{ matrix.name }}-logs
           path: |
             app.log
+            daemon.log
             hello.json
           if-no-files-found: ignore
           retention-days: 14

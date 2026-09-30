@@ -90,7 +90,7 @@ jobs:
 
   smoke:
     name: electron smoke test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, homelab]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -111,13 +111,16 @@ jobs:
       # Playwright needs no browser download — the only driver used is Electron's.
       - run: pnpm install --frozen-lockfile
 
-      # Chromium's own sandbox needs unprivileged user namespaces, and Ubuntu 24.04
-      # restricts those by default. Lifting the restriction is the right fix here:
-      # passing `--no-sandbox` would be testing the app in a configuration nobody ships.
-      # A container with no user namespaces at all cannot do this — that is what
-      # ORCA_SMOKE_NO_SANDBOX is for, and it is not set here.
-      - name: Allow unprivileged user namespaces, so the Chromium sandbox works
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The self-hosted image must provide xvfb and unprivileged user namespaces.
+      # Check the prerequisite without changing the host's security policy or bypassing
+      # Chromium's sandbox with `--no-sandbox` / ORCA_SMOKE_NO_SANDBOX.
+      - name: Check the Linux display and sandbox prerequisites
+        run: |
+          command -v xvfb-run
+          if ! unshare --user --map-root-user true; then
+            echo "::error::The self-hosted runner must support unprivileged user namespaces for Chromium's sandbox."
+            exit 1
+          fi
 
       # Electron's binary, on disk before any test's clock is running.
       #
@@ -178,13 +181,19 @@ jobs:
     name: type proof (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.type_proof == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       # Every leg is a different answer to the same question. A Windows failure must not
       # cancel the macOS run that would have told us whether the glyph is wrong everywhere.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            runner: [self-hosted, linux, x64, homelab]
+          - os: macos-latest
+            runner: macos-latest
+          - os: windows-latest
+            runner: windows-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -200,13 +209,16 @@ jobs:
       # Without ELECTRON_SKIP_BINARY_DOWNLOAD, as above: the binary is the point.
       - run: pnpm install --frozen-lockfile
 
-      # Linux only, and in the step rather than in a third job: macOS and Windows runners
-      # have neither AppArmor nor this sysctl, and running it there is an error, not a
-      # no-op. See the `smoke` job for why the restriction is lifted rather than worked
-      # around with `--no-sandbox`.
-      - name: Allow unprivileged user namespaces, so the Chromium sandbox works
+      # As in the smoke job: provision the self-hosted image, never relax its security
+      # policy from a job. Native macOS and Windows do not use these Linux prerequisites.
+      - name: Check the Linux display and sandbox prerequisites
         if: runner.os == 'Linux'
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: |
+          command -v xvfb-run
+          if ! unshare --user --map-root-user true; then
+            echo "::error::The self-hosted runner must support unprivileged user namespaces for Chromium's sandbox."
+            exit 1
+          fi
 
       # As in the `smoke` job above, and this is the job that found it.
       # From `packages/app`, which is the package that depends on electron: pnpm's node_modules
