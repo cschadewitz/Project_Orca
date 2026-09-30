@@ -239,7 +239,8 @@ jobs:
             packages/app/dist/release/arm64/*.blockmap
             packages/app/dist/release/arm64/*-arm64.yml
           if-no-files-found: error
-          retention-days: 14
+          # Release calls supply a ref; PR and standalone outputs only need one week.
+          retention-days: ${{ inputs.ref && 14 || 7 }}
           # Installers and archives are already compressed; another pass only burns CPU.
           compression-level: 0
 
@@ -253,4 +254,5 @@ jobs:
             app.log
             hello.json
           if-no-files-found: ignore
-          retention-days: 14
+          # Release calls supply a ref; PR and standalone outputs only need one week.
+          retention-days: ${{ inputs.ref && 14 || 7 }}
