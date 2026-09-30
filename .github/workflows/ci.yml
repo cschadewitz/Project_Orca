@@ -125,13 +125,21 @@ jobs:
         if: ${{ !cancelled() && matrix.node == 24 && hashFiles('coverage/coverage-summary.json') != '' }}
         run: node tools/coverage-summary.js >> "$GITHUB_STEP_SUMMARY"
 
+      # Artifact storage is best effort; test and coverage failures above remain blocking.
       - name: Upload coverage report
+        id: upload-coverage
+        continue-on-error: true
         if: ${{ !cancelled() && matrix.node == 24 && hashFiles('coverage/coverage-summary.json') != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage/
           retention-days: 14
+
+      - name: Warn if coverage upload failed
+        if: ${{ !cancelled() && steps.upload-coverage.outcome == 'failure' }}
+        run: |
+          echo "::warning title=Coverage upload failed::Could not upload the coverage report. See the job summary for coverage results when available."
 
       - name: Build
         run: pnpm run build
