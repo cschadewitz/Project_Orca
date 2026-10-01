@@ -64,13 +64,16 @@ claim — write the fragment when it would be false, and see `docs/RELEASING.md`
 
 ## The check
 
-`.github/workflows/changelog.yml` fails a pull request that changes anything under
-`packages/` and adds no file here. It asks only that — the section suffix is checked when a
-release renders the fragment, and the prose is nobody's business.
+`.github/workflows/changelog.yml` is manual-only. Dispatch **Changelog** with the
+`pull_request` number to check its current head and labels. It fails when `packages/`
+changed without a new file here. It asks only that — the section suffix is checked when a
+release renders the fragment, and the prose is nobody's business. PR events and label
+changes no longer trigger this workflow; only CI runs automatically before merge.
 
 Some `packages/` changes genuinely read as nothing to someone upgrading: a refactor, a test,
-a comment, a rename with no surface. **Label the pull request `no-changelog`** and the check
-passes. Labelling re-runs it, so there is nothing else to click.
+a comment, a rename with no surface. **Label the pull request `no-changelog`** and a manual
+check skips it; `release` PRs are also exempt. Dispatch again after a label change if needed.
+The requirement to add a release note or explain why none is needed remains unchanged.
 
 ## Reading and releasing them
 

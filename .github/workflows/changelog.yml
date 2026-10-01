@@ -6,52 +6,66 @@
 # suffix is checked by tools/changelog.js when a release renders it, and prose is not a
 # thing to lint.
 #
-# It is its own workflow rather than a job in ci.yml because the opt-out is a label, and a
-# label change has to re-run the check. `labeled`/`unlabeled` on ci.yml would re-run the
-# whole lint/test/build matrix; here it re-runs one checkout and one `git diff`.
+# This is an optional manual check. Pull-request events run CI only; a maintainer can
+# dispatch this workflow with a PR number to check its current head and labels.
 name: Changelog
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "Pull request number to check"
+        required: true
+        type: string
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
-  group: changelog-${{ github.ref }}
+  group: changelog-${{ inputs.pull_request }}
   cancel-in-progress: true
 
 jobs:
   fragment:
     name: a fragment, or a reason not to
     runs-on: [self-hosted, linux, x64, homelab]
-    # `no-changelog` is the opt-out for a `packages/` change that genuinely reads as
-    # nothing to a user — a refactor, a test, a comment. `release` is the label
-    # release-prepare.yml puts on the `release: vX.Y.Z` pull request, which *deletes*
-    # fragments rather than adding one; that pull request touches only CHANGELOG.md and
-    # package.json today, so this is belt and braces, and it never runs CI anyway (a
-    # workflow does not start from an event created with GITHUB_TOKEN).
-    if: >-
-      !contains(github.event.pull_request.labels.*.name, 'no-changelog') &&
-      !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ inputs.pull_request }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::pull_request must be a positive integer"
+            exit 1
+          fi
+          pr=$(gh api "repos/$REPO/pulls/$NUMBER")
+          jq -r '"base=" + .base.sha, "head=" + .head.sha,
+            "skip=" + ([.labels[].name] | any(. == "no-changelog" or . == "release") | tostring)' \
+            <<<"$pr" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
+        if: steps.pr.outputs.skip != 'true'
         with:
-          # The three-dot diff below needs the merge base, so the full history.
+          # The three-dot diff below needs the merge base and the resolved PR head.
+          ref: ${{ steps.pr.outputs.head }}
           fetch-depth: 0
 
       - name: A packages/ change carries a changelog fragment
+        if: steps.pr.outputs.skip != 'true'
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ steps.pr.outputs.base }}
+          HEAD: ${{ steps.pr.outputs.head }}
         run: |
           set -euo pipefail
 
           # A base that is not in the history (a force-push that rewrote it away) leaves
           # nothing to compare against; passing is the right way to be wrong here, since
-          # the next push re-runs this against a base that resolves.
+          # a later manual run can check against a base that resolves.
           if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             echo "base commit $BASE unavailable; skipping"
             exit 0

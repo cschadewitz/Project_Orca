@@ -321,11 +321,16 @@ Markdown but the engine loads them, so they count as code). A small `changes` jo
 against the merge base and gates the matrix with a job-level `if`, so a docs-only PR still
 shows a green check rather than none — see the comments in `.github/workflows/ci.yml`.
 
-A second, much cheaper workflow — `.github/workflows/changelog.yml` — fails a pull request
-that changes anything under `packages/` and adds no fragment under `changelog.d/`. The
-opt-out is the `no-changelog` label, which is why the check is its own workflow: it runs on
-`labeled` and `unlabeled` too, and re-running one `git diff` on a label change is cheap
-where re-running the whole matrix would not be.
+Only `.github/workflows/ci.yml` runs automatically before a pull request merges. Desktop
+packaging and App smoke remain available by manual dispatch and as reusable release checks;
+post-merge release publishing is unchanged. CodeQL remains manual-only.
+
+`.github/workflows/changelog.yml` is an optional manual check: dispatch it with the
+`pull_request` number to check that PR's current head and labels. It fails if `packages/`
+changed without a new fragment under `changelog.d/`, unless `no-changelog` or `release` is
+present. Label changes do not trigger a run; dispatch again if another check is wanted.
+The requirement to write release notes still applies even though automatic enforcement
+is off.
 
 ## Layout conventions
 
@@ -377,9 +382,9 @@ where re-running the whole matrix would not be.
 - `exactOptionalPropertyTypes` is on: use conditional spreads (`...(x ? { x } : {})`) instead
   of assigning `undefined`.
 - Release notes are a file, not a list to edit: a pull request adds `changelog.d/<issue>-<slug>.<section>.md`
-  rather than touching `CHANGELOG.md`, which is rendered at release time. CI enforces it for
-  any change under `packages/`, with `no-changelog` as the opt-out label. `changelog.d/README.md`
-  has the naming and `docs/RELEASING.md` the rest.
+  rather than touching `CHANGELOG.md`, which is rendered at release time. The manual Changelog
+  workflow can check any change under `packages/`, with `no-changelog` as the opt-out label.
+  `changelog.d/README.md` has the naming and `docs/RELEASING.md` the rest.
 - Most `tools/` build/check scripts are plain JavaScript run straight by node — no build,
   outside the workspace's `tsconfig.json` — so the tests that cover it are JavaScript too, in `tools/test/`, and
   `vitest.config.ts` includes that glob alongside the packages'. Deployment tooling also
@@ -499,19 +504,23 @@ a committed PNG to the thing under test rather than to a window's worth of chrom
 **Creating them the first time.** They are not generated on a developer's machine, because a
 baseline is only useful if it was taken on the machine that will be compared against it: a
 Linux baseline shot on a laptop and a Linux baseline shot on `ubuntu-latest` are different
-pictures of the same page. So **CI produces the first set**. On a platform with no baseline,
-Playwright writes the image it just took to the baseline path and fails the job — which is
+pictures of the same page. So **a manually dispatched App smoke run produces the first set**.
+On a platform with no baseline, Playwright writes the image it just took to the baseline path
+and fails the job — which is
 the behaviour to want, since a run that silently accepted whatever it saw would be recording
 a bug as the truth. The `type-proof` job uploads
 `packages/app/test/smoke/type-proof.spec.ts-snapshots/` as an artifact named
 `type-proof-<os>`, so the procedure is:
 
-1. Open the pull request. All three `type-proof` legs go red with "A snapshot doesn't exist".
+1. Push the branch, then manually dispatch **App smoke** with `ref` set to its commit SHA.
+   All three `type-proof` legs go red with "A snapshot doesn't exist". Opening a PR alone
+   does not run them.
 2. Download the three `type-proof-<os>` artifacts from the run.
 3. Unpack all three into `packages/app/test/smoke/type-proof.spec.ts-snapshots/`, **look at
    the images** — tofu, wrong weights and fallback faces are visible to a person and to
    nothing else — and commit them with the reason in the message.
-4. Push. The legs are now green, and stay green until a glyph changes.
+4. Push and dispatch App smoke again against the new commit SHA. The legs are now green,
+   and stay green until a glyph changes.
 
 **Updating them deliberately.** A diff is a question, not a chore, and the answer is never a
 larger `maxDiffPixelRatio`. `playwright.config.ts` budgets `0.002` for antialiasing moving
@@ -525,7 +534,7 @@ and is orders of magnitude above it. When a leg goes red:
    family, a token changed a size — is fixed, and the baseline stays as the thing that
    caught it. *An intended change* — a new glyph, a re-subset face, a deliberate type-scale
    edit — is a baseline update.
-3. For an intended change, regenerate from CI the same way the first set was made, or
+3. For an intended change, regenerate with a manual App smoke run as above, or
    locally for **this platform only** with `pnpm run app:type-proof:update` (`xvfb-run -a`
    on a headless box). That script exists so the update has a name: it is
    `--update-snapshots`, which rewrites the current platform's four files and leaves the
@@ -539,17 +548,15 @@ and is orders of magnitude above it. When a leg goes red:
 A runner image moving under us is the expected cause of an unexplained diff, and the answer
 is still a deliberate update with that written down — never a loosened threshold.
 
-It runs from `.github/workflows/app-smoke.yml`, not `ci.yml`. The functional smoke test runs
-on pull requests touching `packages/app`, `packages/design`, `packages/daemon` or
-`packages/protocol`; the three-platform type proof runs only when the app, design system,
-lockfile or workflow itself changes. A daemon/protocol-only change cannot alter the bundled
-faces or renderer output, so it gets the smoke test alone. `ci.yml` keeps
-`ELECTRON_SKIP_BINARY_DOWNLOAD=1` and so has no Electron to launch; the smoke workflow
-installs without it. No browser binaries are involved — the driver uses the workspace's own
-`electron`, so `playwright install` is never needed. The reusable workflow also runs from
-release publication against the exact merge commit, including all three type-proof
-platforms. A failed proof blocks tagging; baseline review uses the same deliberate
-procedure above.
+It runs from `.github/workflows/app-smoke.yml`, not `ci.yml`. Pull requests do not start
+this workflow automatically. Manually dispatch **App smoke** with a commit SHA in `ref`
+to run the functional smoke test and all three type-proof platforms without publishing a
+release. `ci.yml` keeps `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and so has no Electron to launch;
+the smoke workflow installs without it. No browser binaries are involved — the driver uses
+the workspace's own `electron`, so `playwright install` is never needed. The reusable
+workflow still runs from release publication against the exact merge commit, including
+all three type-proof platforms. A failed proof blocks tagging; baseline review uses the same
+deliberate procedure above.
 
 ## Tests worth reading first
 

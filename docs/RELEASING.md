@@ -19,8 +19,9 @@ Closing it proposes the release.
 2. Each pull request drops its entry into `changelog.d/` as a **fragment** — one file per
    entry, named `<issue>-<slug>.<section>.md`, holding the bullet(s) verbatim. This is the
    part that matters: the notes are written when the change is fresh, by whoever made it,
-   and releasing never has to reconstruct them from commit subjects. CI fails a pull request
-   that changes `packages/` and adds no fragment, unless it carries the `no-changelog` label.
+   and releasing never has to reconstruct them from commit subjects. The manually dispatched
+   Changelog workflow can check a PR number for `packages/` changes without a fragment,
+   honoring the `no-changelog` label. It no longer runs automatically on PR events.
    `changelog.d/README.md` has the naming and the four sections; `node tools/release.js notes
    --unreleased` renders what is pending.
 3. When the work is done, **close the milestone**. `release-prepare.yml` checks that no
@@ -70,9 +71,9 @@ construction rather than by anyone checking:
 `windows-latest`. `release-publish.yml` calls it as a reusable workflow against the merge
 commit and attaches what comes out; a platform runner failing therefore means no tag, which
 is the right way round, since a release page with two of three installers is not something
-a later run can fix. The workflow also runs on `workflow_dispatch`, and on a pull request
-that touches the packaging itself — the config, the spawn module, the build scripts or the
-lockfile. It is deliberately not part of `ci.yml`, which sets
+a later run can fix. The workflow also runs on `workflow_dispatch`; it no longer starts
+on pull requests. Manually dispatch it when packaging needs verification before release.
+It is deliberately not part of `ci.yml`, which sets
 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and never launches the app.
 
 Architectures: x64 and arm64 everywhere, except the Linux `AppImage`, which is x64 only —
