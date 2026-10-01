@@ -23,6 +23,10 @@
  * making the collapse control a round trip.
  */
 import { z } from "zod";
+import { WorkflowInputSchemaViewSchema, type WorkflowInputSchemaView } from "./workflow-inputs.js";
+
+// Typed launch inputs and the reserved preflight (#330), published through this module.
+export * from "./workflow-inputs.js";
 
 export const WORKFLOWS_LIST_METHOD = "workflows.list";
 export const WORKFLOWS_GET_METHOD = "workflows.get";
@@ -109,7 +113,16 @@ export interface WorkflowView {
   start: string;
   /** Documented inputs (name → description); informational, shown by the run-start form. */
   inputs?: Record<string, string>;
-  /** The workflow's default `vars`, before a run's inputs override them. */
+  /**
+   * The typed launch-input declaration (#330), when the workflow has one: what the run-start
+   * form draws and validates against. Sensitive declarations arrive without `default`/`enum`.
+   * Absent on a nested graph and on a workflow that only documents its inputs.
+   */
+  inputSchema?: WorkflowInputSchemaView;
+  /**
+   * The workflow's default `vars`, before a run's inputs override them. A var whose input is
+   * declared sensitive is left out.
+   */
   vars?: Record<string, unknown>;
   nodes: WorkflowNodeView[];
   edges: WorkflowEdgeView[];
@@ -152,6 +165,7 @@ export const WorkflowViewSchema: z.ZodType<WorkflowView> = z.lazy(() =>
     description: z.string().optional(),
     start: z.string(),
     inputs: z.record(z.string(), z.string()).optional(),
+    inputSchema: WorkflowInputSchemaViewSchema.optional(),
     vars: z.record(z.string(), z.unknown()).optional(),
     nodes: z.array(WorkflowNodeViewSchema),
     edges: z.array(WorkflowEdgeViewSchema),

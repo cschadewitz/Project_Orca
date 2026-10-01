@@ -111,6 +111,7 @@ describe("daemon to renderer", () => {
     daemon = await startDaemon({
       orcaVersion: "0.1.0-test",
       capabilities: ["runs.subscribe"],
+      auth: { mode: "loopback-unauthenticated" },
       source: events,
     });
 

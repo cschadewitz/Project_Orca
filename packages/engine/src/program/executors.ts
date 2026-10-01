@@ -21,6 +21,9 @@
 import { DecompositionSchema, newId, parseDependencyRef, type CustomNode, type WorkItem } from "@orca/core";
 import { completed, failed, type NodeExecutor, type StepOutcome } from "../executors/types.js";
 
+import { MaterializeWorkItemsNodeSchema } from "./nodes.js";
+import { invalidNode, parseNode, validateNode } from "../plan/node-validation.js";
+
 export interface MaterializeWorkItemsNode extends CustomNode {
   type: "custom:materialize-work-items";
   /** Name/kind of the decomposition artifact (default "decomposition"). */
@@ -29,8 +32,11 @@ export interface MaterializeWorkItemsNode extends CustomNode {
 
 export const materializeWorkItemsExecutor: NodeExecutor<MaterializeWorkItemsNode> = {
   type: "custom:materialize-work-items",
+  validate: (node) => validateNode(MaterializeWorkItemsNodeSchema, node),
   async execute(ctx): Promise<StepOutcome> {
-    const name = ctx.node.artifact ?? "decomposition";
+    const { node, issues } = parseNode(MaterializeWorkItemsNodeSchema, ctx.node);
+    if (issues) return invalidNode(ctx, issues);
+    const name = node.artifact;
     const [art] = await ctx.resolveInputs([{ name, required: false }]);
     const source = art ?? (await ctx.resolveInputs([{ kind: name, required: true }]))[0]!;
     const parsed = DecompositionSchema.safeParse(source.data);

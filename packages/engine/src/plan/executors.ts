@@ -40,6 +40,14 @@ import {
 } from "@orca/core";
 import { ownsClaim } from "@orca/store";
 import type { PlanSnapshot } from "./service.js";
+import { invalidNode, parseNode, validateNode } from "./node-validation.js";
+import {
+  PlanRegisterNodeSchema,
+  DecisionMatrixNodeSchema,
+  PlanScheduleNodeSchema,
+  PlanDispatchNodeSchema,
+  PlanAwaitNodeSchema,
+} from "./nodes.js";
 import { FanOut, pausedByChildren } from "../executors/containers.js";
 import { completed, failed, type NodeExecutor, type StepContext, type StepOutcome } from "../executors/types.js";
 
@@ -108,8 +116,11 @@ export interface PlanRegisterNode extends CustomNode {
 
 export const planRegisterExecutor: NodeExecutor<PlanRegisterNode> = {
   type: "custom:plan-register",
+  validate: (node) => validateNode(PlanRegisterNodeSchema, node),
   async execute(ctx): Promise<StepOutcome> {
-    const name = ctx.node.artifact ?? "decomposition";
+    const { node: n, issues } = parseNode(PlanRegisterNodeSchema, ctx.node);
+    if (issues) return invalidNode(ctx, issues);
+    const name = n.artifact;
     const [byName] = await ctx.resolveInputs([{ name, required: false }]);
     const source = byName ?? (await ctx.resolveInputs([{ kind: name, required: true }]))[0]!;
     const parsed = DecompositionSchema.safeParse(source.data);
@@ -124,13 +135,13 @@ export const planRegisterExecutor: NodeExecutor<PlanRegisterNode> = {
     const request = await ctx.run.request();
     const requestId = request?.id ?? ctx.run.id;
     const keyTemplate =
-      ctx.node.plan ?? (typeof ctx.run.state.run.vars.plan === "string" ? ctx.run.state.run.vars.plan : undefined);
+      n.plan ?? (typeof ctx.run.state.run.vars.plan === "string" ? ctx.run.state.run.vars.plan : undefined);
     const key = keyTemplate ? await ctx.render(keyTemplate) : undefined;
     const origin: PlanOrigin = { kind: "decomposition", runId: ctx.run.id, artifactId: source.id };
     const plan = await ctx.plan.ensurePlan(
       {
         ...(key ? { key } : {}),
-        ...(ctx.node.planName ? { name: await ctx.render(ctx.node.planName) } : {}),
+        ...(n.planName ? { name: await ctx.render(n.planName) } : {}),
         requestId,
       },
       origin,
@@ -293,14 +304,13 @@ export async function resolveMatrixChoice(
 
 export const decisionMatrixExecutor: NodeExecutor<DecisionMatrixNode> = {
   type: "custom:decision-matrix",
+  validate: (node) => validateNode(DecisionMatrixNodeSchema, node),
   async execute(ctx): Promise<StepOutcome> {
+    const { node: n, issues } = parseNode(DecisionMatrixNodeSchema, ctx.node);
+    if (issues) return invalidNode(ctx, issues);
     let m: MatrixChoice;
     try {
-      m = await resolveMatrixChoice(
-        ctx,
-        ctx.node.artifact ?? "decisionMatrix",
-        ctx.node.decision ? await ctx.render(ctx.node.decision) : undefined,
-      );
+      m = await resolveMatrixChoice(ctx, n.artifact, n.decision ? await ctx.render(n.decision) : undefined);
     } catch (e) {
       return failed("ARTIFACT_INVALID", (e as Error).message, {}, false);
     }
@@ -353,24 +363,27 @@ async function planOf(ctx: StepContext, key?: string) {
 
 export const planScheduleExecutor: NodeExecutor<PlanScheduleNode> = {
   type: "custom:plan-schedule",
+  validate: (node) => validateNode(PlanScheduleNodeSchema, node),
   async execute(ctx): Promise<StepOutcome> {
+    const { node: n, issues } = parseNode(PlanScheduleNodeSchema, ctx.node);
+    if (issues) return invalidNode(ctx, issues);
     let plan;
     try {
-      plan = await planOf(ctx, ctx.node.plan);
+      plan = await planOf(ctx, n.plan);
     } catch (e) {
       return failed("PLAN_NOT_FOUND", (e as Error).message, {}, false);
     }
     const schedule = await ctx.plan.schedule(plan.id, {
-      ...(ctx.node.policy ? { policy: ctx.node.policy } : {}),
-      record: ctx.node.record !== false,
+      ...(n.policy ? { policy: n.policy } : {}),
+      record: n.record,
       runId: ctx.run.id,
       origin: originOf(ctx),
     });
     const snap = await ctx.plan.snapshot(plan.id);
-    const compact = await ctx.plan.compactSchedule(plan.id, ctx.node.policy ? { policy: ctx.node.policy } : {});
+    const compact = await ctx.plan.compactSchedule(plan.id, n.policy ? { policy: n.policy } : {});
     await ctx.emit({ type: "vars.set", payload: { vars: { schedule: compact } } });
 
-    const pathTemplate = ctx.node.artifactPath ?? ".orca/plans/{{ vars.plan }}/schedule.md";
+    const pathTemplate = n.artifactPath;
     const artifactIds: string[] = [];
     if (pathTemplate) {
       const relative = await ctx.render(pathTemplate);
@@ -503,16 +516,15 @@ export interface PlanDispatchNode extends CustomNode {
   policy?: Partial<SchedulingPolicy>;
 }
 
-/** `onWaiting: wait` without a timeout parks a run for as long as the plan takes; bound it by default. */
-const DEFAULT_WAIT_TIMEOUT_MS = 30 * 60_000;
-
 /** What this step did with one item. `cancelled` is a child `failFast` stopped, not one that failed. */
 type DispatchStatus = "done" | "failed" | "paused" | "cancelled";
 
 export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
   type: "custom:plan-dispatch",
+  validate: (node) => validateNode(PlanDispatchNodeSchema, node),
   async execute(ctx): Promise<StepOutcome> {
-    const n = ctx.node;
+    const { node: n, issues } = parseNode(PlanDispatchNodeSchema, ctx.node);
+    if (issues) return invalidNode(ctx, issues);
     let plan;
     try {
       plan = await planOf(ctx);
@@ -520,7 +532,7 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
       return failed("PLAN_NOT_FOUND", (e as Error).message, {}, false);
     }
     const requestId = ctx.run.state.run.requestId;
-    const scope = n.scope ?? "request";
+    const scope = n.scope;
     // Precedence: the node's own pin, then the run's selection record (#186), then the var that
     // `program.itemWorkflow` seeds - kept so shipped workflows that read `vars.itemWorkflow` still work.
     const itemWorkflowOverride = ctx.run.state.run.overrides?.itemWorkflow || undefined;
@@ -547,9 +559,9 @@ export const planDispatchExecutor: NodeExecutor<PlanDispatchNode> = {
       ...(n.policy ?? {}),
       ...(n.concurrency ? { concurrency: n.concurrency } : {}),
     };
-    const concurrency = Math.max(1, n.concurrency ?? plan.policy.concurrency);
-    const pollMs = n.pollMs ?? 5_000;
-    const waitTimeoutMs = n.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+    const concurrency = n.concurrency ?? plan.policy.concurrency;
+    const pollMs = n.pollMs;
+    const waitTimeoutMs = n.waitTimeoutMs;
     const deadline = waitTimeoutMs > 0 ? Date.now() + waitTimeoutMs : Number.POSITIVE_INFINITY;
 
     const allItems = await ctx.stores.workItems.list((w) => w.planId === plan.id);
@@ -811,14 +823,17 @@ export interface PlanAwaitNode extends CustomNode {
 
 export const planAwaitExecutor: NodeExecutor<PlanAwaitNode> = {
   type: "custom:plan-await",
+  validate: (node) => validateNode(PlanAwaitNodeSchema, node),
   async execute(ctx): Promise<StepOutcome> {
+    const { node: n, issues } = parseNode(PlanAwaitNodeSchema, ctx.node);
+    if (issues) return invalidNode(ctx, issues);
     const workItemId = ctx.run.state.run.workItemId;
     if (!workItemId) return completed({ data: { skipped: "no work item" } });
     const wi = await ctx.stores.workItems.get(workItemId);
     if (!wi?.planId) return completed({ data: { skipped: "work item is not in a plan" } });
-    const phase = ctx.node.phase ?? "build";
-    const pollMs = ctx.node.pollMs ?? 2_000;
-    const deadline = Date.now() + (ctx.node.timeoutMs ?? 30 * 60_000);
+    const phase = n.phase;
+    const pollMs = n.pollMs;
+    const deadline = Date.now() + n.timeoutMs;
     const started = Date.now();
     let announced = false;
     for (;;) {
