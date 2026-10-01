@@ -53,7 +53,10 @@ export class OwnershipStore {
     // A failed write narrows access after the next restart and nothing else, so it is kept
     // for `flush` to report rather than allowed to wedge every later write.
     this.writing = this.writing
-      .then(() => writePrivateFile(file, `${snapshot}\n`))
+      .then(() => {
+        writePrivateFile(file, `${snapshot}\n`);
+        this.lastError = undefined;
+      })
       .catch((e: unknown) => {
         this.lastError = e;
       });

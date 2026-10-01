@@ -127,15 +127,11 @@ type Params = any;
 export class Authorizer {
   readonly runs: RunAccess;
   private readonly audit: AuditSink | undefined;
-  private readonly admissions: AdmissionSource | undefined;
   private readonly now: () => Date;
-  /** Serializes the admission window of `runs.start` so a `run.created` has one candidate owner. */
-  private admitting: Promise<void> = Promise.resolve();
 
   constructor(opts: AuthorizerOptions) {
     this.runs = new RunAccess(opts.resolver, opts.ownership);
     this.audit = opts.audit;
-    this.admissions = opts.admissions;
     this.now = opts.now ?? (() => new Date());
   }
 
@@ -199,7 +195,24 @@ export class Authorizer {
             this.deny(principal, meta, name, params, "AUTH_FORBIDDEN", `missing-permission:${spec.permission}`);
             throw authForbidden();
           }
-          const original = (p: Params) => method.handle(p, ctx);
+          const invocation = bindPrincipal(
+            {
+              ...ctx,
+              mutationActor: {
+                principalId: principal.id,
+                ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
+              },
+              attributeStartedRun: async (runId) => {
+                this.attributeRun(runId, principal);
+                await this.runs.ownership.flush();
+                if (this.runs.ownership.lastError)
+                  throw new OrcaError("INTERNAL", "run ownership could not be persisted; execution was not started");
+              },
+            },
+            principal,
+            meta,
+          );
+          const original = (p: Params) => method.handle(p, invocation);
           try {
             const result = await this.authorized(name, spec, principal, params, original, table, ctx);
             if (spec.audit) this.operation(principal, meta, name, params, "succeeded", undefined, result);
@@ -296,7 +309,7 @@ export class Authorizer {
         const workflowId = params[spec.param ?? "workflowId"] as string;
         if (!workflowAllowed(principal.scope, workflowId))
           throw new Denied(workflowNotFound(workflowId), "workflow-not-in-scope");
-        const call = () => (name === "runs.start" ? this.startOwned(principal, params, original) : original(params));
+        const call = () => original(params);
         // A restricted principal never sees `known`: the not-found is rebuilt without it.
         return principal.scope.workflows === "*"
           ? call()
@@ -374,45 +387,6 @@ export class Authorizer {
       throw new Denied(notFound(), "input-not-open");
     }
     return original(params);
-  }
-
-  /**
-   * `runs.start`, attributed to its caller. `ControlModel.startRun` drives the run until it
-   * parks before it returns, so ownership recorded on return would hide a caller's own run from
-   * it for the whole of its first stretch. Instead the run is attributed when its `run.created`
-   * is appended: starts are serialized for that window (a few milliseconds - the run is driven
-   * outside it), so the first root `run.created` for this workflow is this call's. The id the
-   * call returns is checked against it afterwards, and a mismatch is corrected.
-   */
-  private async startOwned(principal: Principal, params: Params, original: (p: Params) => unknown): Promise<unknown> {
-    if (!this.admissions) {
-      const result = (await original(params)) as { runId: string };
-      this.attributeRun(result.runId, principal);
-      return result;
-    }
-    let release!: () => void;
-    const previous = this.admitting;
-    this.admitting = new Promise<void>((resolve) => (release = resolve));
-    await previous;
-    let attributed: string | undefined;
-    const detach = this.admissions.subscribe((event) => {
-      if (attributed || event.type !== "run.created" || event.payload.parentRunId) return;
-      if (event.payload.workflowId !== params.workflowId) return;
-      attributed = event.runId;
-      this.attributeRun(event.runId, principal);
-      release();
-    });
-    try {
-      const result = (await original(params)) as { runId: string };
-      if (attributed !== result.runId) {
-        if (attributed) this.runs.ownership.forget(attributed, principal.id);
-        this.attributeRun(result.runId, principal);
-      }
-      return result;
-    } finally {
-      detach();
-      release();
-    }
   }
 
   private async runsList(principal: Principal, params: Params, original: (p: Params) => unknown): Promise<unknown> {

@@ -25,8 +25,9 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
-import { join } from "node:path";
-import { HELLO_METHOD, PROTOCOL_VERSION } from "@orca/protocol";
+import { isAbsolute, join } from "node:path";
+import { DaemonClient } from "../client/daemon-client.js";
+import { LocalDaemonToken } from "../client/auth.js";
 
 /** Where `scripts/build-daemon.js` writes the bundle and electron-builder copies it to. */
 export const BUNDLED_DAEMON_DIR = "daemon";
@@ -59,6 +60,8 @@ export interface BundledDaemon {
   /** What to hand `DaemonClient`: `http://host:port`. */
   readonly url: string;
   readonly pid: number | undefined;
+  /** The safe startup metadata, never the credential itself. */
+  readonly tokenFile?: string;
   /**
    * Stop it and wait for it to be gone. Idempotent, and never reports the exit it causes
    * through `onExit` — a daemon that stops because it was asked to is not news.
@@ -165,21 +168,13 @@ async function freePort(host: string): Promise<number> {
 }
 
 /** `hello` over HTTP: the same handshake the app's own client opens with. */
-async function helloAnswers(url: string): Promise<boolean> {
+async function helloAnswers(url: string, cwd: string, tokenFile?: string): Promise<boolean> {
   try {
-    const res = await fetch(`${url}/rpc`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind: "request",
-        id: 1,
-        method: HELLO_METHOD,
-        params: { client: "orca-app/startup", protocol: PROTOCOL_VERSION },
-      }),
-    });
-    return res.ok;
+    const auth = new LocalDaemonToken({ url, workspace: cwd, ...(tokenFile ? { tokenFile } : {}), env: {} });
+    await new DaemonClient(url, fetch, { auth }).hello("orca-app/startup");
+    return true;
   } catch {
-    // Nothing listening yet, which is the normal answer for the first second or so.
+    // The server or its startup metadata may not have arrived yet. No token is logged.
     return false;
   }
 }
@@ -251,7 +246,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
     onLog,
     spawn = nodeSpawn,
     findPort = freePort,
-    probe = helloAnswers,
+    probe,
     sleep = wait,
     now = Date.now,
   } = options;
@@ -279,7 +274,15 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  const tail = new OutputTail(200, onLog);
+  let tokenFile: string | undefined;
+  const tail = new OutputTail(200, (line) => {
+    const prefix = "authentication: token; local token file: ";
+    if (line.startsWith(prefix)) {
+      const path = line.slice(prefix.length);
+      if (isAbsolute(path)) tokenFile = path;
+    }
+    onLog?.(line);
+  });
   child.stdout?.on("data", (d: Buffer) => tail.push(d.toString()));
   child.stderr?.on("data", (d: Buffer) => tail.push(d.toString()));
 
@@ -305,7 +308,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
   const deadline = now() + startTimeoutMs;
   for (;;) {
     if (exit) throw died(exit);
-    if (await probe(url)) break;
+    if (await (probe ? probe(url) : helloAnswers(url, cwd, tokenFile))) break;
     if (now() >= deadline) {
       const output = tail.toString();
       child.kill("SIGKILL");
@@ -324,6 +327,7 @@ async function startOnce(options: BundledDaemonOptions): Promise<BundledDaemon> 
   return {
     url,
     pid: child.pid,
+    ...(tokenFile ? { tokenFile } : {}),
     stop: async () => {
       if (exit) return;
       stopping = true;

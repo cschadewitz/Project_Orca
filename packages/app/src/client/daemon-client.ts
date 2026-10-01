@@ -142,6 +142,7 @@ import {
   type WorkflowsListResult,
 } from "@orca/protocol";
 import type { ZodType } from "zod";
+import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
 import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
 
 /** Where `orca serve` listens unless told otherwise; 6722 spells ORCA on a phone keypad. */
@@ -160,6 +161,11 @@ export class DaemonClientError extends Error {
   }
 }
 
+export interface DaemonClientOptions {
+  auth?: DaemonTokenSource;
+  onAuthFailure?: () => void;
+}
+
 export class DaemonClient {
   maintenance(params: MaintenanceParams): Promise<MaintenanceResult> {
     return this.call("maintenance", params, MaintenanceResultSchema);
@@ -169,6 +175,7 @@ export class DaemonClient {
   constructor(
     readonly url: string = DEFAULT_DAEMON_URL,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly options: DaemonClientOptions = {},
   ) {}
 
   /** The WebSocket beside the read endpoint, on the same host and port. */
@@ -176,22 +183,63 @@ export class DaemonClient {
     return socketUrlFor(this.url);
   }
 
-  async call<R>(method: string, params: unknown, result: ZodType<R>): Promise<R> {
+  async call<R>(method: string, params: unknown, result: ZodType<R>, retryAuth = true): Promise<R> {
     const req: RequestMessage = { kind: "request", id: this.nextId++, method, params };
-    const res = await this.fetchImpl(`${this.url}/rpc`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(req),
-    });
-    const parsed = ResponseMessageSchema.safeParse(await res.json());
-    if (!parsed.success) {
-      throw new DaemonClientError({
-        code: "PROTOCOL_MESSAGE",
-        message: `daemon sent something that is not a response`,
+    for (let attempt = 0; ; attempt++) {
+      let token: string | undefined;
+      try {
+        token = this.options.auth?.read();
+      } catch {
+        this.options.onAuthFailure?.();
+        throw new DaemonClientError({ code: "AUTH_INVALID", message: "Daemon authentication failed" });
+      }
+      assertCredentialDestination(this.url, token);
+      const res = await this.fetchImpl(`${this.url}/rpc`, {
+        method: "POST",
+        redirect: "manual",
+        headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(req),
       });
+      // Proxies may reject before the daemon sees the request, with HTML/plain text rather
+      // than an ORCA envelope. Status is authoritative: never retry these as network blips
+      // or accept an apparent successful envelope carried by a refused HTTP response.
+      if (res.status >= 300 && res.status < 400) {
+        void res.body?.cancel().catch(() => undefined);
+        this.options.onAuthFailure?.();
+        throw new DaemonClientError({ code: "AUTH_FORBIDDEN", message: "Daemon RPC redirects are refused" });
+      }
+      const transportAuthError: ProtocolError | undefined =
+        res.status === 401
+          ? { code: token ? "AUTH_INVALID" : "AUTH_REQUIRED", message: "Daemon authentication failed" }
+          : res.status === 403
+            ? { code: "AUTH_FORBIDDEN", message: "Daemon access denied" }
+            : undefined;
+      const parsed = ResponseMessageSchema.safeParse(await res.json().catch(() => undefined));
+      let error: ProtocolError;
+      if (transportAuthError) {
+        error =
+          parsed.success && !parsed.data.ok && authenticationCode(parsed.data) ? parsed.data.error : transportAuthError;
+      } else {
+        if (!parsed.success) {
+          throw new DaemonClientError({
+            code: "PROTOCOL_MESSAGE",
+            message: "daemon sent something that is not a response",
+          });
+        }
+        if (parsed.data.ok) return result.parse(parsed.data.result);
+        error = parsed.data.error;
+      }
+      if (error.code === "AUTH_INVALID" && retryAuth && attempt === 0) {
+        try {
+          if (this.options.auth?.refresh()) continue;
+        } catch {
+          // Keep the generic wire failure; filesystem errors must never expose a token.
+        }
+      }
+      if (transportAuthError || error.code === "AUTH_INVALID" || error.code === "AUTH_REQUIRED")
+        this.options.onAuthFailure?.();
+      throw new DaemonClientError(error);
     }
-    if (!parsed.data.ok) throw new DaemonClientError(parsed.data.error);
-    return result.parse(parsed.data.result);
   }
 
   hello(client: string): Promise<HelloResult> {
@@ -396,7 +444,27 @@ export class DaemonClient {
    * saw, so the caller gets a stream with gaps in *time* and none in content. Call `close()`
    * on it when the screen behind it goes away.
    */
-  subscribe(opts: Omit<DaemonSubscriptionOptions, "url">): DaemonSubscription {
-    return new DaemonSubscription({ ...opts, url: this.socketUrl });
+  subscribe(opts: Omit<DaemonSubscriptionOptions, "url" | "auth">): DaemonSubscription {
+    return new DaemonSubscription({
+      ...opts,
+      url: this.socketUrl,
+      ...(this.options.auth
+        ? {
+            auth: {
+              tokens: this.options.auth,
+              // Browser-style WebSockets hide a rejected upgrade's HTTP status. Verify first so
+              // AUTH_* is visible rather than an endless series of indistinguishable 1006s.
+              verify: async () => {
+                await this.call(
+                  HELLO_METHOD,
+                  { client: "orca-app/subscription", protocol: PROTOCOL_VERSION },
+                  HelloResultSchema,
+                  false,
+                );
+              },
+            },
+          }
+        : {}),
+    });
   }
 }

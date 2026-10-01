@@ -166,6 +166,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     storeDir: opts.storeDir,
     capabilities: opts.capabilities,
     reads: opts.reads,
+    workflowInputs: opts.workflowInputs,
     source: opts.source,
     planSource: opts.planSource,
     control: opts.control,

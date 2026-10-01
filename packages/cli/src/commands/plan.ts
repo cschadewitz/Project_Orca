@@ -31,6 +31,7 @@ import {
 import type { PlanService } from "@orca/engine";
 import { bootstrap } from "../bootstrap.js";
 import { attachEventPrinter, finish, type CommandContext } from "./index.js";
+import { workflowGuards } from "./launch-options.js";
 import { selectionOverrides, workflowHasNodeType } from "./selection.js";
 
 const HUMAN: PlanOrigin = { kind: "human", actor: "cli" };
@@ -357,6 +358,7 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
         const itemWorkflow = app.config.program.itemWorkflow;
         const state = await app.orchestrator.startAndRun({
           workflowId,
+          ...workflowGuards(ctx),
           vars: { plan: p.key, planId: p.id, ...(itemWorkflow ? { itemWorkflow } : {}) },
           ...(overrides ? { overrides } : {}),
         });

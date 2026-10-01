@@ -41,7 +41,7 @@ import {
   type WorkItem,
 } from "@orca/core";
 import type { Orchestrator, PlanService } from "@orca/engine";
-import type { WorkItemClaim } from "@orca/store";
+import { redactExecutionValue, type WorkItemClaim } from "@orca/store";
 import {
   INLINE_WORKFLOW_SEPARATOR,
   displayStatusForRun,
@@ -562,7 +562,9 @@ export class ReadModel {
       // this is the version list the panel steps through with `[` and `]`.
       .sort((a, b) => a.name.localeCompare(b.name) || a.version - b.version || a.id.localeCompare(b.id));
     return {
-      artifacts: rows.slice(params.offset, params.offset + params.limit).map(artifactView),
+      artifacts: await Promise.all(
+        rows.slice(params.offset, params.offset + params.limit).map((artifact) => this.publicArtifactView(artifact)),
+      ),
       total: rows.length,
       asOf,
     };
@@ -610,7 +612,7 @@ export class ReadModel {
           : { artifactId: params.artifactId }),
       });
     }
-    const view = artifactView(artifact);
+    const view = await this.publicArtifactView(artifact);
     if (!isTextMediaType(artifact.mediaType))
       return {
         artifact: view,
@@ -631,7 +633,9 @@ export class ReadModel {
       };
     // `content` is the one read that touches a blob, and it raises ARTIFACT_MISSING itself
     // when the index knows an artifact whose body is gone.
-    return { artifact: view, text: await store.content(artifact.id), asOf };
+    const privateInputs = await this.orc.stores.execution.getInputs(artifact.producedBy.runId);
+    const text = await store.content(artifact.id);
+    return { artifact: view, text: privateInputs ? redactExecutionValue(text, privateInputs.secrets) : text, asOf };
   }
 
   /**
@@ -668,6 +672,20 @@ export class ReadModel {
     const onDisk = this.versionOnDisk(params.id);
     const pinned = onDisk !== undefined && onDisk !== def.version;
     return { workflow: workflowView(def, await this.recordedVersions(def), pinned), asOf };
+  }
+
+  /** Artifact originals stay authoritative in their store; the wire gets a safe projection. */
+  private async publicArtifactView(artifact: Artifact): Promise<ArtifactView> {
+    // Applies legacy-sensitive withholding even when this method is addressed by artifact ID.
+    await this.orc.stores.events.readRange(artifact.producedBy.runId, { limit: 1 });
+    const view = artifactView(artifact);
+    const inputs = await this.orc.stores.execution.getInputs(artifact.producedBy.runId);
+    if (!inputs) return view;
+    return {
+      ...view,
+      name: redactExecutionValue(view.name, inputs.secrets),
+      ...(view.path ? { path: redactExecutionValue(view.path, inputs.secrets) } : {}),
+    };
   }
 
   // ------------------------------------------------------------------ pieces

@@ -170,6 +170,9 @@ export const RunsStartParamsSchema = z.object({
   workflowId: z.string().min(1),
   /** Merged over the workflow's own `vars`, exactly as `orca run --var` merges them. */
   vars: z.record(z.string(), z.unknown()).default({}),
+  /** Exact version and revision returned by workflows.validateInputs. */
+  workflowVersion: z.string().min(1).optional(),
+  expectedWorkflowRevision: z.string().min(1).optional(),
   /**
    * Recorded on `run.created` and carried into the `run.changed` notification, so a client
    * that started the run can find it. **No request document is written or read** - see the

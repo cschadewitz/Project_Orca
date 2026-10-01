@@ -176,8 +176,8 @@ daemon's declaration instead of failing.
 ## Sensitive inputs and secrets
 
 Prefer a **reference** to a secret over the secret itself: declare `tokenRef` (the name
-of an environment variable or a vault path) and resolve it where it is used. A run's
-vars are recorded in its event log in plain text.
+of an environment variable or a vault path) and resolve it where it is used. On the combined runtime integration, sensitive vars use protected execution storage;
+ordinary vars remain in public run history. See [protected storage](protected-execution-storage.md).
 
 `sensitive: true` on a declaration, inherited by everything beneath it, means:
 
@@ -190,6 +190,12 @@ vars are recorded in its event log in plain text.
 - the preflight result never contains values at all.
 
 ### Outstanding integration gate: protected execution values
+
+This section records the independent #330 slice's handoff. The combined integration
+implements the encrypted storage, projections and migration fences described in
+[runtime integration](runtime-foundation-integration.md) and
+[protected execution storage](protected-execution-storage.md). The limitations below
+describe the slice before that shared wiring, not the integrated runtime.
 
 The current implementation does **not** protect sensitive execution values after
 admission: `run.created`, `runs.get`, `runs.events` and live/replayed `event.appended`

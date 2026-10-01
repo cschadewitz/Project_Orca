@@ -2,6 +2,7 @@
 /** `orca` command line. */
 import { parseArgs } from "node:util";
 import { consoleLogger, describeError, isOrcaError, type Logger } from "@orca/core";
+import { isProtocolFault } from "@orca/protocol";
 import { commands, ORCA_VERSION } from "./commands/index.js";
 
 const USAGE = `orca - Orchestration Runtime for Coding Agents
@@ -30,6 +31,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         config: { type: "string" },
         cwd: { type: "string" },
         var: { type: "string", multiple: true },
+        "var-json": { type: "string", multiple: true },
+        "workflow-version": { type: "string" },
+        "expected-workflow-revision": { type: "string" },
+        "trusted-proxy": { type: "string", multiple: true },
+        "allow-origin": { type: "string", multiple: true },
+        "unauthenticated-loopback": { type: "boolean" },
+        preset: { type: "string" },
+        label: { type: "string" },
+        "workflow-scope": { type: "string", multiple: true },
+        "runs-scope": { type: "string" },
+        "expires-at": { type: "string" },
         agent: { type: "string", multiple: true },
         model: { type: "string", multiple: true },
         "item-workflow": { type: "string" },
@@ -96,7 +108,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       err: (l) => process.stderr.write(l + "\n"),
     });
   } catch (e) {
-    if (isOrcaError(e)) {
+    if (isOrcaError(e) || isProtocolFault(e)) {
       process.stderr.write(`error [${e.code}]: ${e.message}\n`);
       if (e.details) process.stderr.write(JSON.stringify(e.details, null, 2) + "\n");
     } else process.stderr.write(`error: ${e instanceof Error ? e.message : String(e)}\n\n${USAGE}`);

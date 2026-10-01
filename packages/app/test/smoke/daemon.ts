@@ -114,6 +114,8 @@ export interface Daemon {
   url: string;
   /** The workspace the demo wrote, `.orca` store and all. */
   dir: string;
+  /** The fixture-only credential path; the token stays in its private file. */
+  tokenFile: string;
   stop: () => Promise<void>;
 }
 
@@ -134,10 +136,17 @@ async function freePort(): Promise<number> {
 }
 
 /** One request over `/rpc`, answered or thrown. The fixture speaks the wire, like any client. */
-async function rpc(url: string, method: string, params: unknown = {}): Promise<Record<string, unknown>> {
+async function rpc(
+  url: string,
+  tokenFile: string,
+  method: string,
+  params: unknown = {},
+): Promise<Record<string, unknown>> {
+  const token = (await readFile(tokenFile, "utf8")).trim();
   const res = await fetch(`${url}/rpc`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    redirect: "error",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
     body: JSON.stringify({ kind: "request", id: nextId++, method, params }),
   });
   if (!res.ok) throw new Error(`${method} answered HTTP ${res.status}`);
@@ -149,11 +158,11 @@ async function rpc(url: string, method: string, params: unknown = {}): Promise<R
 let nextId = 1;
 
 /** Poll `hello` until the daemon answers it, or give up — a failed handshake is the test's news, not a hang. */
-async function waitForHello(url: string, timeoutMs = 30_000): Promise<void> {
+async function waitForHello(url: string, tokenFile: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      await rpc(url, "hello", { client: "orca-smoke/0", protocol: { major: 1, minor: 0 } });
+      await rpc(url, tokenFile, "hello", { client: "orca-smoke/0", protocol: { major: 1, minor: 0 } });
       return;
     } catch {
       // Not listening yet.
@@ -288,16 +297,16 @@ async function writeSmokeConfig(dir: string): Promise<string> {
  * parked by the time each call answers — the polls after them are about the *projections*
  * catching up, which is the thing a client can actually observe.
  */
-async function seedAttention(url: string): Promise<void> {
-  await rpc(url, "runs.start", { workflowId: FIXTURE.failure.workflowId, vars: {} });
+async function seedAttention(url: string, tokenFile: string): Promise<void> {
+  await rpc(url, tokenFile, "runs.start", { workflowId: FIXTURE.failure.workflowId, vars: {} });
   await until("the failed run to reach runs.list", async () => {
-    const result = (await rpc(url, "runs.list", { status: ["failed"] })) as { runs?: unknown[] };
+    const result = (await rpc(url, tokenFile, "runs.list", { status: ["failed"] })) as { runs?: unknown[] };
     return (result.runs?.length ?? 0) > 0;
   });
 
-  await rpc(url, "runs.start", { workflowId: FIXTURE.gate.workflowId, vars: {} });
+  await rpc(url, tokenFile, "runs.start", { workflowId: FIXTURE.gate.workflowId, vars: {} });
   await until("the gate to park on inputs.list", async () => {
-    const result = (await rpc(url, "inputs.list")) as { waiting?: number };
+    const result = (await rpc(url, tokenFile, "inputs.list")) as { waiting?: number };
     return (result.waiting ?? 0) > 0;
   });
 }
@@ -320,6 +329,7 @@ export async function startDemoDaemon(): Promise<Daemon> {
     throw new Error(`\`orca demo\` failed, so there is no store to smoke-test\n${stdout}${stderr}`, { cause: e });
   }
   const configPath = await writeSmokeConfig(dir);
+  const tokenFile = join(dir, "auth", "local-client.token");
 
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
@@ -332,8 +342,8 @@ export async function startDemoDaemon(): Promise<Daemon> {
   serve.stderr?.on("data", (d: Buffer) => log.push(d.toString()));
 
   try {
-    await waitForHello(url);
-    await seedAttention(url);
+    await waitForHello(url, tokenFile);
+    await seedAttention(url, tokenFile);
   } catch (e) {
     serve.kill("SIGKILL");
     throw new Error(`the smoke test's daemon never came up\ndaemon output:\n${log.join("")}`, { cause: e });
@@ -342,6 +352,7 @@ export async function startDemoDaemon(): Promise<Daemon> {
   return {
     url,
     dir,
+    tokenFile,
     stop: async () => {
       const exited = serve.exitCode === null && serve.signalCode === null ? once(serve, "exit") : undefined;
       serve.kill("SIGTERM");

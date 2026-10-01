@@ -139,7 +139,14 @@ export const HelloParamsSchema = z.object({
 export type HelloParams = z.infer<typeof HelloParamsSchema>;
 
 /** What a daemon can do; a client checks these rather than the ORCA version. */
-export const DAEMON_CAPABILITIES = ["runs.read", "runs.subscribe", "runs.control", "plan.read", "plan.write"] as const;
+export const DAEMON_CAPABILITIES = [
+  "runs.read",
+  "runs.subscribe",
+  "runs.control",
+  "plan.read",
+  "plan.write",
+  "workflows.validateInputs",
+] as const;
 export const DaemonCapabilitySchema = z.enum(DAEMON_CAPABILITIES);
 export type DaemonCapability = z.infer<typeof DaemonCapabilitySchema>;
 

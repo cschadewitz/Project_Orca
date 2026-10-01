@@ -51,7 +51,7 @@ export interface WorkspaceDeps {
     onExit: (exit: DaemonExit) => void;
   }) => Promise<BundledDaemon>;
   /** Build the read client for a daemon URL. */
-  client: (url: string) => DaemonClient;
+  client: (url: string, options: { workspace: string; bundled: boolean; tokenFile?: string }) => DaemonClient;
   /** Open the push stream on a client, wired to the broadcast and the connection machine. */
   subscribe: (client: DaemonClient) => DaemonSubscription;
   /**
@@ -159,8 +159,8 @@ export class Workspace {
 
   constructor(deps: WorkspaceDeps) {
     this.deps = deps;
-    this.clientNow = deps.client(deps.explicitUrl ?? deps.defaultUrl);
     this.target = { path: deps.defaultPath(), readOnly: false, source: deps.explicitUrl ? "env" : "default" };
+    this.clientNow = deps.client(deps.explicitUrl ?? deps.defaultUrl, { workspace: this.target.path, bundled: false });
   }
 
   /** The client every bridge handler reads, at call time and after `ready()`. */
@@ -295,7 +295,11 @@ export class Workspace {
     }
 
     if (this.closed) return;
-    this.clientNow = this.deps.client(url);
+    this.clientNow = this.deps.client(url, {
+      workspace: target.path,
+      bundled: this.daemon !== undefined,
+      ...(this.daemon?.tokenFile ? { tokenFile: this.daemon.tokenFile } : {}),
+    });
     this.stream = this.deps.subscribe(this.clientNow);
     this.deps.onSnapshot(this.snapshot);
   }

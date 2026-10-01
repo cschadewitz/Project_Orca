@@ -9,3 +9,5 @@ export * from "./claim-store.js";
 export * from "./lease-store.js";
 export * from "./plan-store.js";
 export * from "./workflow-store.js";
+export * from "./execution-store.js";
+export * from "./protected-event-store.js";

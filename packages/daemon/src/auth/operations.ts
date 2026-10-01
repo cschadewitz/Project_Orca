@@ -124,4 +124,5 @@ export const CAPABILITY_PERMISSIONS: Readonly<Record<string, readonly Permission
   "runs.control": ["runs.control", "runs.start", "inputs.answer", "claims.release"],
   "plan.read": ["plan.read"],
   "plan.write": ["plan.write"],
+  "workflows.validateInputs": ["runs.start"],
 };

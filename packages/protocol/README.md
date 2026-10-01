@@ -5,8 +5,9 @@ both ends validate at the boundary and the TypeScript types fall out of them. It
 `@orca/core` for the domain types and on nothing else — a client that depends only on this
 package cannot reach the engine, the stores or the transports (ADR 0008).
 
-Everything below is exported from the package root. The current protocol is **1.8**
-([version source](src/version.ts)), shipped in ORCA v0.6.0. Protocol 1.7 introduced the
+Everything below is exported from the package root. The current protocol is **1.9**
+([version source](src/version.ts)). Protocol 1.9 adds authenticated clients, typed-input
+preflight and pinned launch guards. Protocol 1.7 introduced the
 v0.5.0 config/workflow/plan methods; 1.8 adds maintenance admission and optional
 `hello.processId`. It also advertises the additive v0.6.0 fields initially landed
 under 1.7: decision `resultIsPreview`, `runs.get.workflowPinned`, step `model`,
@@ -49,6 +50,32 @@ A client that only reads never opens a socket: `hello` and every read method wor
 `/rpc` with none. `DaemonHandle.socketUrl` is present only when the daemon was given an
 engine feed, and `socketUrlFor(httpUrl)` derives it (`http`→`ws`, `https`→`wss`, plus
 `SOCKET_PATH`).
+
+## Authentication and typed preflight (1.9)
+
+The default daemon requires a bearer credential on `/rpc` and `/socket`. HTTP uses
+`Authorization: Bearer <token>`; WebSocket uses subprotocols `orca.v1` and
+`orca.bearer.<token>`. Tokens must never be placed in URLs. `/health` remains an
+unauthenticated `{ok:true}` liveness response without resource or identity details.
+
+Missing credentials produce `AUTH_REQUIRED` (401). Invalid, malformed, expired and revoked
+credentials produce the same `AUTH_INVALID` (401), without reason-specific details. An
+operation refusal is `AUTH_FORBIDDEN` in the normal response envelope; inaccessible and
+absent protected resources have matching not-found responses. WebSocket authority is
+rechecked for messages, notifications and idle connections; expiry/revocation closes with
+4401. Reconnect/replay reauthorizes rather than retaining an old principal.
+
+`workflows.validateInputs` takes `{workflowId, version?, vars?}` and returns
+`{workflowId, version, revision, validation}` without echoing resolved values. Access
+requires launch authority and workflow scope before resolution/validation. Discover it
+through `hello.methods` and `workflows.validateInputs` capability. The result's version
+and revision are forwarded as `runs.start.workflowVersion` and
+`runs.start.expectedWorkflowRevision`. A stale revision is `WORKFLOW_INVALID`; input
+failures are `WORKFLOW_INPUT_INVALID` with `{errors, warnings}`. Read-only mode may offer
+preflight but still omits `runs.start`.
+
+See [runtime integration](../../docs/runtime-foundation-integration.md) for token-file
+migration, protected execution state and standing-permission failure semantics.
 
 ## Maintenance admission (1.8)
 

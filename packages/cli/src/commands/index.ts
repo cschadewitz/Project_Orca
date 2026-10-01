@@ -18,6 +18,12 @@ import {
   ReadModel,
   answerAndResume,
   startDaemon,
+  bootstrapLocalOwner,
+  openAuthDirectory,
+  orchestratorResolver,
+  validateDeployment,
+  WorkflowInputsModel,
+  orchestratorDefinitionResolver,
 } from "@orca/daemon";
 import {
   AGENTS_LIST_METHOD,
@@ -30,7 +36,6 @@ import {
   READ_METHODS,
   SUBSCRIPTION_METHODS,
   AgentsPingResultSchema,
-  ResponseMessageSchema,
   formatProtocolVersion,
   isProtocolFault,
 } from "@orca/protocol";
@@ -55,6 +60,9 @@ import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec } from "@orca/testing";
 import { bootstrap, loadConfig, loadPlugins, type OrcaApp } from "../bootstrap.js";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState, stepAgents } from "../format.js";
+import { daemonCall, DaemonRedirectError, isAuthenticationFailure } from "../daemon-client.js";
+import { parseVars, workflowGuards } from "./launch-options.js";
+import { authCommand } from "./auth.js";
 import { claimsCommand } from "./claims.js";
 import { leasesCommand } from "./leases.js";
 import { planCommand } from "./plan.js";
@@ -102,22 +110,6 @@ export interface CommandContext {
   err: (line: string) => void;
 }
 
-function parseVars(values: string[] | undefined): Record<string, unknown> {
-  const vars: Record<string, unknown> = {};
-  for (const kv of values ?? []) {
-    const i = kv.indexOf("=");
-    if (i < 0) throw new OrcaError("CONFIG_INVALID", `--var expects key=value, got '${kv}'`);
-    const k = kv.slice(0, i);
-    const v = kv.slice(i + 1);
-    try {
-      vars[k] = JSON.parse(v);
-    } catch {
-      vars[k] = v;
-    }
-  }
-  return vars;
-}
-
 /** Print the final state of a followed run and turn it into an exit code: 0 success, 2 failed/rejected, 3 paused at a human gate. */
 export async function finish(app: OrcaApp, ctx: CommandContext, state: RunState): Promise<number> {
   ctx.out(formatRunState(state));
@@ -136,66 +128,36 @@ export function attachEventPrinter(app: OrcaApp, ctx: CommandContext, quiet: boo
 
 /** Where `orca serve` is expected to be listening: the same defaults `serve` binds to. */
 function daemonAddress(ctx: CommandContext): string {
+  if (process.env.ORCA_DAEMON_URL && ctx.flags.host === undefined && ctx.flags.port === undefined)
+    return process.env.ORCA_DAEMON_URL;
   const host = (ctx.flags.host as string | undefined) ?? "127.0.0.1";
   const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
-  return `http://${host}:${port}`;
+  return `http://${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
 }
 
 /**
- * One request envelope to a daemon's `/rpc`, or `undefined` when nothing answered.
- *
- * Deliberately `fetch` and a short timeout rather than a client class: the CLI is not a
- * daemon client yet (roadmap item 1), this is the first call it makes, and inventing the
- * client for one method would be guessing at what the rest of them need. "Nothing answered"
- * covers a refused connection, a timeout and a body that is not a response envelope - every
- * one of them means "fall back and do it here".
- */
-async function daemonCall(url: string, method: string, params: unknown): Promise<unknown | undefined> {
-  const timeout = AbortSignal.timeout(2000);
-  let body: string;
-  try {
-    const res = await fetch(`${url}/rpc`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind: "request", id: 1, method, params }),
-      signal: timeout,
-    });
-    if (!res.ok) return undefined;
-    body = await res.text();
-  } catch {
-    return undefined;
-  }
-  let json: unknown;
-  try {
-    json = JSON.parse(body);
-  } catch {
-    return undefined;
-  }
-  const parsed = ResponseMessageSchema.safeParse(json);
-  if (!parsed.success) return undefined;
-  if (!parsed.data.ok) {
-    const { code, message } = parsed.data.error;
-    throw new OrcaError("NOT_SUPPORTED", `daemon refused '${method}': ${message}`, { code, method });
-  }
-  return parsed.data.result;
-}
-
-/**
- * `agents.ping` against a daemon, or `undefined` when there is none (or when the one there
- * is too old to have the method, which `hello.methods` says before the call is made).
+ * `agents.ping` against a daemon, or `undefined` when none answers. An answered handshake
+ * with ping omitted is not permission to run locally: auth filters its method inventory.
  */
 async function pingViaDaemon(
+  ctx: CommandContext,
   url: string,
   agentId: string,
   cwd: string | undefined,
 ): Promise<{ ok: boolean; line: string } | undefined> {
   let hello: unknown;
   try {
-    hello = await daemonCall(url, HELLO_METHOD, {
+    hello = await daemonCall(ctx, url, HELLO_METHOD, {
       client: `orca-cli/${ORCA_VERSION}`,
       protocol: PROTOCOL_VERSION,
     });
-  } catch {
+  } catch (e) {
+    if (
+      e instanceof DaemonRedirectError ||
+      isAuthenticationFailure(e) ||
+      (e instanceof OrcaError && e.code === "CONFIG_INVALID")
+    )
+      throw e;
     // A daemon that refuses the handshake - an older protocol, most likely - is a daemon
     // this CLI cannot use. Falling back to the in-process handshake is strictly better than
     // failing: the person asked whether an agent answers, not whether a daemon is current.
@@ -203,9 +165,10 @@ async function pingViaDaemon(
   }
   if (!hello) return undefined;
   const methods = (hello as { methods?: string[] }).methods ?? [];
-  if (!methods.includes(AGENTS_PING_METHOD)) return undefined;
+  if (!methods.includes(AGENTS_PING_METHOD))
+    throw new OrcaError("NOT_SUPPORTED", "the daemon does not offer agents.ping to this client");
   const result = AgentsPingResultSchema.safeParse(
-    await daemonCall(url, AGENTS_PING_METHOD, { agentId, ...(cwd ? { cwd } : {}) }),
+    await daemonCall(ctx, url, AGENTS_PING_METHOD, { agentId, ...(cwd ? { cwd } : {}) }),
   );
   if (!result.success) return undefined;
   const { agent, ok, roundTripMs, error } = result.data;
@@ -222,19 +185,34 @@ async function pingViaDaemon(
  * when no daemon answers. An agent is in the map only when its view carries a `models` list;
  * the rest have not been probed.
  */
-async function discoveredModels(url: string): Promise<Map<string, string[]> | undefined> {
+async function discoveredModels(ctx: CommandContext, url: string): Promise<Map<string, string[]> | undefined> {
   let hello: unknown;
   try {
-    hello = await daemonCall(url, HELLO_METHOD, { client: `orca-cli/${ORCA_VERSION}`, protocol: PROTOCOL_VERSION });
-  } catch {
+    hello = await daemonCall(ctx, url, HELLO_METHOD, {
+      client: `orca-cli/${ORCA_VERSION}`,
+      protocol: PROTOCOL_VERSION,
+    });
+  } catch (e) {
+    if (
+      e instanceof DaemonRedirectError ||
+      isAuthenticationFailure(e) ||
+      (e instanceof OrcaError && e.code === "CONFIG_INVALID")
+    )
+      throw e;
     return undefined;
   }
   const methods = (hello as { methods?: string[] } | undefined)?.methods ?? [];
   if (!methods.includes(AGENTS_LIST_METHOD)) return undefined;
   let result: unknown;
   try {
-    result = await daemonCall(url, AGENTS_LIST_METHOD, {});
-  } catch {
+    result = await daemonCall(ctx, url, AGENTS_LIST_METHOD, {});
+  } catch (e) {
+    if (
+      e instanceof DaemonRedirectError ||
+      isAuthenticationFailure(e) ||
+      (e instanceof OrcaError && e.code === "CONFIG_INVALID")
+    )
+      throw e;
     return undefined;
   }
   const agents = (result as { agents?: unknown } | undefined)?.agents;
@@ -262,6 +240,13 @@ interface Command {
   run: (ctx: CommandContext) => Promise<number>;
 }
 export const commands: Record<string, Command> = {
+  auth: {
+    help: "auth [issue <principal>|list|rotate <credentialId>|revoke <credentialId>]  Manage this workspace's daemon credentials.",
+    usage:
+      "issue defaults to --preset client (owner, operator, viewer also supported).\n--workflow-scope id may be repeated; --runs-scope all|owned selects run scope.\n--label text names a credential; --expires-at ISO sets an expiry for issue or rotate.\n--json prints structured results. Only issue and rotate print a token, once. Restart serve to rotate its local bootstrap credential.\nLocal clients use ORCA_DAEMON_TOKEN, ORCA_DAEMON_TOKEN_FILE, or auth/local-client.token beside the workspace config.\n",
+    run: authCommand,
+  },
+
   validate: {
     help: "validate [files...] [--template-pack name]  Validate workflow definitions (defaults to those in orca.config.yaml); with a template pack, report which templates it overrides and which it inherits.",
     async run(ctx) {
@@ -357,7 +342,7 @@ export const commands: Record<string, Command> = {
     async run(ctx) {
       const { config } = await loadConfig(ctx.cwd, ctx.configPath);
       // Discovered models come from a running daemon only; this command never spawns an agent.
-      const discovered = await discoveredModels(daemonAddress(ctx));
+      const discovered = await discoveredModels(ctx, daemonAddress(ctx));
       ctx.out("hosts:");
       for (const h of config.hosts)
         ctx.out(
@@ -401,7 +386,7 @@ export const commands: Record<string, Command> = {
       // the daemon - and every screen reading from it - still saying `unknown`. Going
       // through `agents.ping` puts the result where the surfaces can see it (#225).
       const daemon = daemonAddress(ctx);
-      const viaDaemon = await pingViaDaemon(daemon, id, ctx.flags.cwd as string | undefined);
+      const viaDaemon = await pingViaDaemon(ctx, daemon, id, ctx.flags.cwd as string | undefined);
       if (viaDaemon) {
         ctx.out(viaDaemon.line);
         return viaDaemon.ok ? 0 : 1;
@@ -436,12 +421,12 @@ export const commands: Record<string, Command> = {
 
   run: {
     usage:
-      "--var key=value may be repeated; values are parsed as JSON when possible.\n--agent role=agentId and --model agentId=modelId may be repeated; --model modelId alone when the run uses exactly one agent.\n--template-pack name renders prompts from that template pack.\n--cwd dir selects the run workspace. --quiet suppresses event output.\nExit: 0 success, 2 failure or cancellation, 3 paused for input.\n",
+      "--var key=value may be repeated; values are parsed as JSON when possible, otherwise kept as strings.\n--var-json key=JSON requires valid JSON and overrides --var for the same key. Quote JSON strings to keep numeric-looking text as a string.\n--workflow-version and --expected-workflow-revision pin the version and revision returned by preflight.\n--agent role=agentId and --model agentId=modelId may be repeated; --model modelId alone when the run uses exactly one agent.\n--template-pack name renders prompts from that template pack.\n--cwd dir selects the run workspace. --quiet suppresses event output.\nExit: 0 success, 2 failure or cancellation, 3 paused for input.\n",
     help: "run <workflowId> [--var k=v]... [--agent role=id]... [--model [agent=]model]... [--cwd dir] [--quiet]  Start a workflow run and follow it until it completes or pauses at a human gate.",
     async run(ctx) {
       const workflowId = ctx.positionals[0];
       if (!workflowId) throw new OrcaError("CONFIG_INVALID", "run needs a workflow id");
-      const vars = parseVars(ctx.flags.var as string[] | undefined);
+      const vars = parseVars(ctx.flags.var as string[] | undefined, ctx.flags["var-json"] as string[] | undefined);
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
       app.workflows.get(workflowId);
       const overrides = selectionOverrides(ctx, {
@@ -457,6 +442,7 @@ export const commands: Record<string, Command> = {
         const state = await app.orchestrator.startAndRun({
           workflowId,
           vars,
+          ...workflowGuards(ctx),
           ...(workspace ? { workspace } : {}),
           ...(overrides ? { overrides } : {}),
         });
@@ -475,7 +461,7 @@ export const commands: Record<string, Command> = {
       const body = ctx.flags["body-file"]
         ? await readFile(String(ctx.flags["body-file"]), "utf8")
         : String(ctx.flags.body ?? "");
-      const vars = parseVars(ctx.flags.var as string[] | undefined);
+      const vars = parseVars(ctx.flags.var as string[] | undefined, ctx.flags["var-json"] as string[] | undefined);
       const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
       const overrides = selectionOverrides(ctx, {
         agents: app.agents,
@@ -490,6 +476,7 @@ export const commands: Record<string, Command> = {
           title,
           body,
           vars,
+          ...workflowGuards(ctx),
           ...(overrides ? { overrides } : {}),
         });
         ctx.out(`request ${request.id}: ${request.status}`);
@@ -645,7 +632,9 @@ export const commands: Record<string, Command> = {
   },
 
   serve: {
-    help: "serve [--host addr] [--port n] [--read-only]  Run the ORCA daemon (the desktop app's backend) over this workspace's store until interrupted. It drives runs by default - answering gates, resuming, cancelling and starting them - and --read-only serves projections alone. The port carries no authentication: any local process can call the control methods, and the per-run lease guards against a second writer, not against a caller. Default 127.0.0.1:6722.",
+    help: "serve [--host addr] [--port n] [--read-only] [--unauthenticated-loopback]  Run the authenticated ORCA daemon until interrupted. Default 127.0.0.1:6722; --read-only omits run controls.",
+    usage:
+      "Token authentication is on by default; the local credential is stored in auth/local-client.token beside the workspace config.\n--unauthenticated-loopback explicitly permits unauthenticated local access.\nRemote binds require --trusted-proxy IP (repeatable) behind a TLS-terminating proxy.\n--allow-origin origin permits a browser origin (repeatable; none by default).\n",
     async run(ctx) {
       const port = ctx.flags.port === undefined ? 6722 : Number(ctx.flags.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -699,7 +688,27 @@ export const commands: Record<string, Command> = {
               plans: reads.plans,
               reads,
             });
+      const authDir = ctx.flags["unauthenticated-loopback"]
+        ? undefined
+        : openAuthDirectory(resolvePath(app.configDir, "auth"));
+      const auth = authDir
+        ? {
+            mode: "token" as const,
+            credentials: authDir.credentials,
+            ownership: authDir.ownership,
+            resolver: orchestratorResolver(app.orchestrator),
+            audit: authDir.audit,
+            trustedProxies: ctx.flags["trusted-proxy"] as string[] | undefined,
+            allowedOrigins: ctx.flags["allow-origin"] as string[] | undefined,
+          }
+        : {
+            mode: "loopback-unauthenticated" as const,
+            allowedOrigins: ctx.flags["allow-origin"] as string[] | undefined,
+          };
+      // Refuse an unsafe bind before rotating the credential local clients already use.
+      validateDeployment(auth, (ctx.flags.host as string | undefined) ?? "127.0.0.1");
       const daemon = await startDaemon({
+        auth,
         maintenanceToken: process.env.ORCA_MAINTENANCE_TOKEN,
         admissionFile: process.env.ORCA_ADMISSION_FILE,
         host: ctx.flags.host as string | undefined,
@@ -726,6 +735,7 @@ export const commands: Record<string, Command> = {
         capabilities: [
           "runs.read",
           "runs.subscribe",
+          "workflows.validateInputs",
           ...(control ? (["runs.control"] as const) : []),
           ...(reads.plans ? (["plan.read"] as const) : []),
           ...(planControl ? (["plan.write"] as const) : []),
@@ -733,6 +743,7 @@ export const commands: Record<string, Command> = {
         reads,
         agents,
         config,
+        workflowInputs: new WorkflowInputsModel({ resolve: orchestratorDefinitionResolver(app.orchestrator) }),
         ...(control ? { control } : {}),
         ...(planControl ? { planControl } : {}),
         source: app.orchestrator,
@@ -741,6 +752,12 @@ export const commands: Record<string, Command> = {
         // the same boundary the run feed has just above.
         planSource: app.orchestrator.stores.plan.journal,
       });
+      try {
+        if (authDir) await bootstrapLocalOwner(authDir);
+      } catch (error) {
+        await daemon.close();
+        throw error;
+      }
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
       );
@@ -748,17 +765,14 @@ export const commands: Record<string, Command> = {
       if (reads.plans) ctx.out(`serving the plan: ${PLAN_READ_METHODS.join(", ")}`);
       if (control) {
         ctx.out(`driving runs: ${CONTROL_METHODS.join(", ")}`);
-        // Said out loud because it is a real cost that was accepted, not an oversight. The
-        // port is loopback and unauthenticated, so anything running as this user can answer
-        // a gate, cancel a run or start one. The lease is a correctness guard against two
-        // interpreters; it is not a permission check. Pass --read-only if that is not the
-        // machine you want.
-        ctx.out(
-          "  no authentication on this port: any local process may call them. The per-run lease stops a second writer, not a caller.",
-        );
       } else {
         ctx.out("read-only: no 'runs.control' capability, and the control methods are absent from this daemon");
       }
+      ctx.out(
+        authDir
+          ? `authentication: token; local token file: ${authDir.tokenFile}`
+          : "authentication: explicit unauthenticated loopback compatibility mode; any local process may call this daemon",
+      );
       if (daemon.socketUrl) ctx.out(`notifications on ${daemon.socketUrl}: ${SUBSCRIPTION_METHODS.join(", ")}`);
       await new Promise<void>((resolve) => {
         const stop = () => {

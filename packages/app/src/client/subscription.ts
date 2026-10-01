@@ -30,6 +30,8 @@ import {
   type SubscribeParams,
 } from "@orca/protocol";
 
+import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
+
 /** What the subscription needs of an open connection. */
 export interface SocketHandle {
   send: (text: string) => void;
@@ -40,24 +42,24 @@ export interface SocketHandle {
 export interface SocketHandlers {
   onOpen: () => void;
   onMessage: (text: string) => void;
-  onClose: () => void;
+  onClose: (code?: number) => void;
 }
 
-export type SocketFactory = (url: string, handlers: SocketHandlers) => SocketHandle;
+export type SocketFactory = (url: string, handlers: SocketHandlers, protocols?: string[]) => SocketHandle;
 
 /**
  * The default: Node 22's own `WebSocket`, which is also Electron's. No `ws` on this side -
  * the daemon needs a WebSocket *server* and the platform has none, but a client it has.
  */
-export const webSocketFactory: SocketFactory = (url, handlers) => {
-  const ws = new WebSocket(url);
+export const webSocketFactory: SocketFactory = (url, handlers, protocols) => {
+  const ws = new WebSocket(url, protocols);
   ws.onopen = () => handlers.onOpen();
   ws.onmessage = (event: MessageEvent) => handlers.onMessage(String(event.data));
   // A connection that never opened fires `error` and then `close`. `close` is the one that
   // always comes, so reconnection hangs off that alone; this handler exists only so that a
   // failed connect is not an unhandled error event.
   ws.onerror = () => {};
-  ws.onclose = () => handlers.onClose();
+  ws.onclose = (event: CloseEvent) => handlers.onClose(event.code);
   return { send: (text) => ws.send(text), close: () => ws.close() };
 };
 
@@ -69,7 +71,7 @@ export const webSocketFactory: SocketFactory = (url, handlers) => {
 export const RECONNECT_BACKOFF_MS = [0, 250, 1_000, 2_500, 5_000] as const;
 
 /** What the connection indicator shows. `closed` is deliberate: nobody is trying any more. */
-export type SubscriptionState = "connecting" | "live" | "reconnecting" | "closed";
+export type SubscriptionState = "connecting" | "live" | "reconnecting" | "auth-failed" | "closed";
 
 /**
  * How badly the retry loop is doing, reported beside the state.
@@ -99,6 +101,7 @@ export interface DaemonSubscriptionOptions {
   onState?: ((state: SubscriptionState, retries: RetryCount) => void) | undefined;
   socket?: SocketFactory | undefined;
   backoffMs?: readonly number[] | undefined;
+  auth?: { tokens: DaemonTokenSource; verify: () => Promise<void> };
 }
 
 export class DaemonSubscription {
@@ -115,6 +118,8 @@ export class DaemonSubscription {
   private cursor: number | undefined;
   private current: SubscriptionState = "connecting";
   private done = false;
+  private authRetried = false;
+  private epoch = 0;
 
   constructor(opts: DaemonSubscriptionOptions) {
     this.opts = opts;
@@ -146,6 +151,7 @@ export class DaemonSubscription {
   close(): void {
     if (this.done) return;
     this.done = true;
+    this.epoch += 1;
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
     this.handle?.close();
@@ -159,19 +165,69 @@ export class DaemonSubscription {
     this.opts.onState?.(state, this.retries);
   }
 
-  // Only ever called from the constructor or from a timer `close()` would have cleared, so
-  // it needs no `done` guard of its own; `onOpen` does, because a socket can still open
-  // after the close that stopped caring about it.
   private connect(): void {
-    this.handle = this.socket(this.opts.url, {
-      onOpen: () => this.onOpen(),
-      onMessage: (text) => this.onMessage(text),
-      onClose: () => this.onClose(),
-    });
+    if (this.done) return;
+    const epoch = ++this.epoch;
+    if (this.opts.auth) {
+      void this.opts.auth.verify().then(
+        () => {
+          if (!this.done && this.epoch === epoch) this.openSocket(epoch);
+        },
+        (error: unknown) => {
+          if (this.done || this.epoch !== epoch) return;
+          const code = authenticationCode(error);
+          if (code) this.authenticationFailed(code === "AUTH_INVALID");
+          else this.onClose();
+        },
+      );
+    } else this.openSocket(epoch);
   }
 
+  private openSocket(epoch: number): void {
+    let token: string | undefined;
+    try {
+      token = this.opts.auth?.tokens.read();
+      assertCredentialDestination(this.opts.url, token);
+    } catch {
+      this.authenticationFailed(false);
+      return;
+    }
+    this.handle = this.socket(
+      this.opts.url,
+      {
+        onOpen: () => {
+          if (this.epoch === epoch) this.onOpen();
+        },
+        onMessage: (text) => {
+          if (this.epoch === epoch) this.onMessage(text);
+        },
+        onClose: (code) => {
+          if (this.epoch === epoch) this.onClose(code);
+        },
+      },
+      token ? ["orca.v1", `orca.bearer.${token}`] : undefined,
+    );
+  }
+
+  /** A revoked credential is not a network blip. One local reload, then stay refused. */
+  private authenticationFailed(refresh: boolean): void {
+    this.epoch += 1;
+    const handle = this.handle;
+    this.handle = undefined;
+    this.pendingSubscribe = undefined;
+    handle?.close();
+    this.setState("auth-failed");
+    if (!refresh || this.authRetried || !this.opts.auth) return;
+    this.authRetried = true;
+    try {
+      if (this.opts.auth.tokens.refresh()) this.connect();
+    } catch {
+      // The state already says authentication failed; never log credential-file contents.
+    }
+  }
+
+  // The socket callbacks are epoch-guarded in openSocket; close invalidates that epoch.
   private onOpen(): void {
-    if (this.done) return;
     this.pendingSubscribe = ++this.requestId;
     // Resume where the stream got to. A cursor is a sequence number within one run, so it
     // only goes out when the subscription is for one run (the protocol refuses it otherwise).
@@ -183,16 +239,20 @@ export class DaemonSubscription {
   }
 
   private onMessage(text: string): void {
-    if (this.done) return;
     const message = parseMessage(text);
     if (!message) return;
     if (message.kind === "response") {
       if (message.id !== this.pendingSubscribe) return;
       this.pendingSubscribe = undefined;
+      if (!message.ok && authenticationCode(message)) {
+        this.authenticationFailed(message.error.code === "AUTH_INVALID");
+        return;
+      }
       // A refused subscribe is not a transport failure, and retrying it would loop: the
       // daemon means it. The stream stays open for whatever else the connection carries.
       if (!message.ok || !SubscribeResultSchema.safeParse(message.result).success) return;
       this.attempt = 0;
+      this.authRetried = false;
       this.setState("live");
       return;
     }
@@ -212,8 +272,12 @@ export class DaemonSubscription {
     this.opts.onNotification(notification);
   }
 
-  private onClose(): void {
-    if (this.done) return;
+  private onClose(code?: number): void {
+    if (code === 4401) {
+      this.authenticationFailed(true);
+      return;
+    }
+    this.epoch += 1;
     this.handle = undefined;
     this.pendingSubscribe = undefined;
     const delay = this.backoff[Math.min(this.attempt, this.backoff.length - 1)] ?? 0;
@@ -222,8 +286,8 @@ export class DaemonSubscription {
        even though the word stays `reconnecting`: the second, third and seventh failures
        are all news to a machine that gives up at the cap (#239), and `setState` would
        swallow every one of them after the first. */
-    this.current = "reconnecting";
-    this.opts.onState?.("reconnecting", this.retries);
+    if (this.current !== "auth-failed") this.current = "reconnecting";
+    this.opts.onState?.(this.current, this.retries);
     this.timer = setTimeout(() => {
       this.timer = undefined;
       this.connect();
