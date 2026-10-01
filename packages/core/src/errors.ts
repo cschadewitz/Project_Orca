@@ -4,6 +4,8 @@
  */
 export type OrcaErrorCode =
   | "WORKFLOW_INVALID"
+  /** Launch vars failed the selected workflow revision's input schema; details has errors and warnings. */
+  | "WORKFLOW_INPUT_INVALID"
   | "WORKFLOW_NOT_FOUND"
   | "TEMPLATE_NOT_FOUND"
   | "TEMPLATE_RENDER"

@@ -43,11 +43,15 @@ export const CONTROL_ERROR_CODES = [
   "CONFIG_STALE",
 ] as const;
 
-export type ProtocolOnlyErrorCode = (typeof PROTOCOL_ERROR_CODES)[number] | (typeof CONTROL_ERROR_CODES)[number];
+/** Reserved for daemon authentication/authorization (#328); declaring codes enables no access. */
+export const AUTH_ERROR_CODES = ["AUTH_REQUIRED", "AUTH_INVALID", "AUTH_FORBIDDEN"] as const;
+
+export type ProtocolOnlyErrorCode =
+  (typeof PROTOCOL_ERROR_CODES)[number] | (typeof CONTROL_ERROR_CODES)[number] | (typeof AUTH_ERROR_CODES)[number];
 export type ProtocolErrorCode = OrcaErrorCode | ProtocolOnlyErrorCode;
 
 export const ProtocolErrorSchema = z.object({
-  /** An `OrcaErrorCode` or one of `PROTOCOL_ERROR_CODES`; kept as a string so a newer daemon's codes still parse. */
+  /** An engine, protocol, control or auth code; kept as a string so a newer daemon's codes still parse. */
   code: z.string(),
   message: z.string(),
   details: z.record(z.string(), z.unknown()).optional(),
