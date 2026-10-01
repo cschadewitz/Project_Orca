@@ -17,7 +17,15 @@
  *   spelling is `Orchestrator.resolveDefinition`'s and it is published as
  *   `INLINE_WORKFLOW_SEPARATOR`.
  */
-import { isContainerNode, type Edge, type NodeDef, type WorkflowDefinition, type WorkflowGraph } from "@orca/core";
+import {
+  isContainerNode,
+  redactWorkflowInputSchema,
+  sensitiveInputNames,
+  type Edge,
+  type NodeDef,
+  type WorkflowDefinition,
+  type WorkflowGraph,
+} from "@orca/core";
 import {
   INLINE_WORKFLOW_SEPARATOR,
   type WorkflowEdgeView,
@@ -184,10 +192,18 @@ export function workflowView(def: WorkflowDefinition, versions: readonly string[
     name: def.name,
     ...(def.description === undefined ? {} : { description: def.description }),
     ...(Object.keys(def.inputs).length ? { inputs: def.inputs } : {}),
-    ...(Object.keys(def.vars).length ? { vars: def.vars } : {}),
+    ...(def.inputSchema ? { inputSchema: redactWorkflowInputSchema(def.inputSchema) } : {}),
+    ...displayVars(def),
     versions: [...versions],
     pinned,
   };
+}
+
+/** The workflow's default `vars`, less any whose input is declared sensitive (#330). */
+function displayVars(def: WorkflowDefinition): { vars?: Record<string, unknown> } {
+  const hidden = new Set(sensitiveInputNames(def.inputSchema));
+  const vars = Object.fromEntries(Object.entries(def.vars).filter(([name]) => !hidden.has(name)));
+  return Object.keys(vars).length ? { vars } : {};
 }
 
 /** One workflow as a row. Counts the top-level graph only; nested graphs are their own. */

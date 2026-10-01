@@ -14,6 +14,11 @@ import { z } from "zod";
 import { AgentSelectorSchema } from "./agent.js";
 import { ArtifactRefSchema, ArtifactSpecSchema } from "./artifact.js";
 import { GateOptionSchema } from "./run.js";
+import { WorkflowInputSchemaSchema, type WorkflowInputSchema } from "./workflow-inputs.js";
+
+// Typed launch inputs (#330). Re-exported here so they reach `@orca/core/schemas` with the model.
+export * from "./workflow-inputs.js";
+export { checkInputValue, validateWorkflowInputs, type WorkflowInputsResult } from "../workflow/inputs.js";
 
 export const ConditionSchema = z.string().min(1);
 export type Condition = z.infer<typeof ConditionSchema>;
@@ -344,6 +349,11 @@ export interface WorkflowDefinition extends WorkflowGraph {
   vars: Record<string, unknown>;
   /** Documented inputs (name -> description); informational. */
   inputs: Record<string, string>;
+  /**
+   * Typed launch-input declarations (#330), enforced when a run is admitted. Absent means the
+   * legacy behaviour: `inputs` documents, nothing is checked. See docs/workflow-inputs.md.
+   */
+  inputSchema?: WorkflowInputSchema | undefined;
   meta?: Record<string, unknown>;
 }
 
@@ -355,6 +365,7 @@ export const WorkflowDefinitionSchema: z.ZodType<WorkflowDefinition> = z.lazy(()
     description: z.string().optional(),
     vars: z.record(z.string(), z.unknown()).default({}),
     inputs: z.record(z.string(), z.string()).default({}),
+    inputSchema: WorkflowInputSchemaSchema.optional(),
     meta: z.record(z.string(), z.unknown()).optional(),
     start: z.string().min(1),
     nodes: z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), NodeDefSchema),

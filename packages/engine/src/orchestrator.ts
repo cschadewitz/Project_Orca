@@ -25,6 +25,7 @@ import {
   silentLogger,
   systemClock,
   TemplateRegistry,
+  validateWorkflowInputs,
   WorkflowRegistry,
   type AgentSelector,
   type Artifact,
@@ -148,9 +149,50 @@ export interface StartRunOptions {
    * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
    */
   overrides?: RunOverrides;
+  /**
+   * Launch this version of `workflowId` rather than the one on disk (#330): the definition the
+   * workflow-version store kept for it, or the loaded one when it is at this version and has
+   * never been stored. Any other version is `WORKFLOW_VERSION_NOT_FOUND`, never the latest.
+   */
+  workflowVersion?: string;
+  /**
+   * The `revision` a preflight (`workflows.validateInputs`) returned. The selected definition
+   * must still have it, or the launch is refused as `WORKFLOW_INVALID` before anything is
+   * written - so a client never validates one definition and starts another.
+   */
+  expectedWorkflowRevision?: string;
 }
 
 export const INLINE_SEP = "::";
+
+/**
+ * The deterministic content digest of a definition (#330): SHA-256 over its JSON with object
+ * keys sorted and `undefined` members dropped, so the copy on disk and the copy the
+ * workflow-version store round-trips hash alike. Version text alone is not identity - a file
+ * can change without its `version` changing - so this is what a preflight hands a client and
+ * what admission and the same-version collision check compare.
+ */
+export function workflowRevision(def: WorkflowDefinition): string {
+  return `sha256:${sha256(canonicalJson(def))}`;
+}
+
+function versionCollision(def: WorkflowDefinition): OrcaError {
+  return new OrcaError(
+    "WORKFLOW_INVALID",
+    `workflow '${def.id}' version ${def.version} differs from the definition already recorded for that version; ` +
+      "a recorded version is immutable, so change the workflow's version",
+    { id: def.id, version: def.version },
+  );
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((v) => (v === undefined ? "null" : canonicalJson(v))).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+}
 
 export class Orchestrator {
   readonly stores: Stores;
@@ -212,10 +254,28 @@ export class Orchestrator {
 
   /** Create a run (emits run.created) without executing it. */
   async startRun(opts: StartRunOptions): Promise<string> {
+    // Admission (#330): select, check the preflight revision, check the selection and the
+    // launch vars - all before anything is written, provisioned or appended, so a refused
+    // launch leaves no definition, workspace, run, agent or child behind.
     const def = opts.inline
       ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1")
-      : this.workflows.get(opts.workflowId!);
+      : await this.selectDefinition(opts.workflowId!, opts.workflowVersion);
+    if (opts.expectedWorkflowRevision !== undefined && opts.expectedWorkflowRevision !== workflowRevision(def))
+      throw new OrcaError(
+        "WORKFLOW_INVALID",
+        `workflow '${def.id}' changed since its inputs were validated; validate them again before starting`,
+      );
     if (opts.overrides) this.validateOverrides(def, opts.overrides);
+    const inputs = validateWorkflowInputs(def, opts.vars ?? {});
+    if (!inputs.validation.ok) {
+      const { errors, warnings } = inputs.validation;
+      const listed = errors.slice(0, 3).map((e) => `${e.path}: ${e.message}`);
+      throw new OrcaError(
+        "WORKFLOW_INPUT_INVALID",
+        `workflow '${def.id}' inputs are invalid: ${listed.join("; ")}${errors.length > 3 ? `; and ${errors.length - 3} more` : ""}`,
+        { errors, warnings },
+      );
+    }
     // Before `run.created`, so a run that says its definition is stored always has it (#179).
     const workflowStored = await this.recordDefinition(def);
     const runId = newId("run", this.clock.now());
@@ -237,7 +297,7 @@ export class Orchestrator {
         workflowId: def.id,
         workflowVersion: def.version,
         workspace,
-        vars: { ...def.vars, ...(opts.vars ?? {}) },
+        vars: inputs.vars,
         ...(opts.requestId ? { requestId: opts.requestId } : {}),
         ...(opts.workItemId ? { workItemId: opts.workItemId } : {}),
         ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
@@ -722,35 +782,78 @@ export class Orchestrator {
   async definitionFor(workflowId: string, version: string, stored = true): Promise<WorkflowDefinition> {
     const rootId = workflowId.split(INLINE_SEP)[0]!;
     const live = this.workflows.has(rootId) ? this.workflows.get(rootId) : undefined;
-    let root: WorkflowDefinition | undefined =
-      live?.version === version ? live : await this.stores.workflows.get(rootId, version);
+    // A run that recorded its definition walks that snapshot, even when the file on disk has
+    // since been edited without a version bump (#330); the file is the fallback for a store that
+    // lost it. A run from before versioning keeps its old order: the file first.
+    let root: WorkflowDefinition | undefined = stored
+      ? ((await this.stores.workflows.get(rootId, version)) ?? (live?.version === version ? live : undefined))
+      : live?.version === version
+        ? live
+        : await this.stores.workflows.get(rootId, version);
     // Predates versioning: whatever is current, and an unknown workflow is the registry's error.
     if (!root && !stored) root = live ?? this.workflows.get(rootId);
-    if (!root) {
-      const available = [
-        ...new Set([...(await this.stores.workflows.versions(rootId)), ...(live ? [live.version] : [])]),
-      ];
-      throw new OrcaError(
-        "WORKFLOW_VERSION_NOT_FOUND",
-        `workflow '${rootId}' version ${version} is neither stored nor on disk; ${
-          available.length ? `available: ${available.join(", ")}` : "no version of it exists"
-        }`,
-        { id: rootId, version, available },
-      );
-    }
+    if (!root) throw await this.versionNotFound(rootId, version, live);
     return workflowId.includes(INLINE_SEP) ? this.walkInline(root, workflowId) : root;
   }
 
   /**
+   * The definition a new run of `workflowId` would be admitted on, and the one a preflight
+   * validates against (#330), so the two cannot disagree.
+   *
+   * With a `version`: the copy the workflow-version store kept for it, else the loaded file
+   * when it is at that version (a workflow that has never run). Anything else is
+   * `WORKFLOW_VERSION_NOT_FOUND` - never the latest instead.
+   *
+   * Without one: the loaded file, provided that a stored definition of the same version, if
+   * any, is the same content. A version is immutable once a run has recorded it, so an edit
+   * that kept the version is `WORKFLOW_INVALID` here rather than a new run silently starting
+   * on a definition its resume would not find.
+   */
+  async selectDefinition(workflowId: string, version?: string): Promise<WorkflowDefinition> {
+    if (version !== undefined) {
+      const live = this.workflows.has(workflowId) ? this.workflows.get(workflowId) : undefined;
+      const def =
+        (await this.stores.workflows.get(workflowId, version)) ?? (live?.version === version ? live : undefined);
+      if (!def) throw await this.versionNotFound(workflowId, version, live);
+      return def;
+    }
+    const live = this.workflows.get(workflowId);
+    const kept = await this.stores.workflows.get(live.id, live.version);
+    if (kept && workflowRevision(kept) !== workflowRevision(live)) throw versionCollision(live);
+    return live;
+  }
+
+  private async versionNotFound(
+    rootId: string,
+    version: string,
+    live: WorkflowDefinition | undefined,
+  ): Promise<OrcaError> {
+    const available = [
+      ...new Set([...(await this.stores.workflows.versions(rootId)), ...(live ? [live.version] : [])]),
+    ];
+    return new OrcaError(
+      "WORKFLOW_VERSION_NOT_FOUND",
+      `workflow '${rootId}' version ${version} is neither stored nor on disk; ${
+        available.length ? `available: ${available.join(", ")}` : "no version of it exists"
+      }`,
+      { id: rootId, version, available },
+    );
+  }
+
+  /**
    * Keep the definition a run is starting on, so it can be resumed after the file changes.
-   * True when the store holds the run's root definition at this version afterwards.
+   * True when the store holds the run's root definition at this version afterwards. The store
+   * is write-once, so when this call did not write it - an earlier run did, or another process
+   * won a race to the first write - what is there is read back and must be this same content.
    */
   private async recordDefinition(def: WorkflowDefinition): Promise<boolean> {
     if (def.id.includes(INLINE_SEP)) {
       // A nested graph is part of its root's file; the root was kept when the parent started.
       return (await this.stores.workflows.get(def.id.split(INLINE_SEP)[0]!, def.version)) !== undefined;
     }
-    await this.stores.workflows.put(def);
+    if (await this.stores.workflows.put(def)) return true;
+    const kept = await this.stores.workflows.get(def.id, def.version);
+    if (!kept || workflowRevision(kept) !== workflowRevision(def)) throw versionCollision(def);
     return true;
   }
 
