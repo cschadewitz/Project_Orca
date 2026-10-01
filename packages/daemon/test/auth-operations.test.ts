@@ -94,15 +94,15 @@ describe("the operation inventory", () => {
     for (const method of NOTIFICATION_METHODS) expect(doc).toContain(`\`${method}\``);
   });
 
-  it("keeps workspace grants from restricted presets, and refuses to issue them", () => {
+  it("keeps workspace grants from restricted presets, and refuses to issue them", async () => {
     expect(PRESETS.client.permissions).not.toContain("config.read");
     const store = new CredentialStore();
-    expect(() =>
+    await expect(
       store.issue({ principal: "x", permissions: ["config.read"], scope: { workflows: "*", runs: "owned" } }),
-    ).toThrow(CredentialError);
-    expect(() => store.issue({ principal: "x", permissions: [], scope: { workflows: "*", runs: "all" } })).toThrow(
-      CredentialError,
-    );
+    ).rejects.toThrow(CredentialError);
+    await expect(
+      store.issue({ principal: "x", permissions: [], scope: { workflows: "*", runs: "all" } }),
+    ).rejects.toThrow(CredentialError);
   });
 });
 

@@ -1,10 +1,17 @@
+import { request as httpRequest } from "node:http";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CredentialStore } from "../src/auth/index.js";
 /**
  * #328 over `/rpc`: authentication refusals, the permission matrix at work, resource isolation
  * between principals, gate decisions and the audit trail - against a real orchestrator.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PlanService } from "@orca/engine";
+import { RequestSchema } from "@orca/core";
 import { PROTOCOL_VERSION } from "@orca/protocol";
-import { harness, putArtifact, raw, type Harness } from "./security-harness.js";
+import { harness, putArtifact, recordJsonArtifact, raw, type Harness } from "./security-harness.js";
 
 let h: Harness;
 beforeEach(async () => {
@@ -31,9 +38,9 @@ describe("authentication on /rpc", () => {
 
   it("answers malformed, unknown, wrong, expired and revoked credentials identically", async () => {
     const [, id, secret] = h.tokens.alice.split(".");
-    const expired = h.credentials.issue({ principal: "late", preset: "viewer", ttlMs: -1 }).token;
-    const revoked = h.credentials.issue({ principal: "gone", preset: "viewer" });
-    h.credentials.revoke(revoked.credential.id);
+    const expired = (await h.credentials.issue({ principal: "late", preset: "viewer", ttlMs: -1 })).token;
+    const revoked = await h.credentials.issue({ principal: "gone", preset: "viewer" });
+    await h.credentials.revoke(revoked.credential.id);
     const presented = [
       "not-a-token",
       `orca1.${"A".repeat(12)}.${secret}`,
@@ -54,11 +61,69 @@ describe("authentication on /rpc", () => {
   });
 
   it("has no side effects for a refused call", async () => {
-    const revoked = h.credentials.issue({ principal: "alice", preset: "client" });
-    h.credentials.revoke(revoked.credential.id);
+    const revoked = await h.credentials.issue({ principal: "alice", preset: "client" });
+    await h.credentials.revoke(revoked.credential.id);
     const r = await h.rpc(revoked.token, "runs.cancel", { runId: h.runs.alice });
     expect(r.body).toEqual(INVALID);
     expect((await h.orchestrator.getState(h.runs.alice)).run.status).toBe("paused");
+  });
+
+  it.each(["revoked", "expired", "reduced-grants"])("refreshes %s authority after a pending body", async (change) => {
+    await h.close();
+    const dir = await mkdtemp(join(tmpdir(), "orca-http-auth-"));
+    const file = join(dir, "credentials.json");
+    let now = Date.now();
+    const credentials = new CredentialStore({ file, now: () => new Date(now) });
+    h = await harness({ credentials });
+    const issued = await credentials.issue({ principal: "alice", preset: "client", ttlMs: 60_000 });
+    let admitted!: () => void;
+    const headersRead = new Promise<void>((resolve) => {
+      admitted = resolve;
+    });
+    const authenticate = credentials.authenticate.bind(credentials);
+    const spy = vi.spyOn(credentials, "authenticate").mockImplementation((token) => {
+      const result = authenticate(token);
+      admitted();
+      return result;
+    });
+    const payload = JSON.stringify({ kind: "request", id: 9, method: "runs.cancel", params: { runId: h.runs.alice } });
+    const req = httpRequest(`${h.daemon.url}/rpc`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${issued.token}`, "content-length": Buffer.byteLength(payload) },
+    });
+    const response = new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      req.on("error", reject);
+      req.on("response", (res) => {
+        let body = "";
+        res.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+        });
+        res.on("end", () => resolve({ status: res.statusCode!, body: JSON.parse(body) }));
+      });
+    });
+    try {
+      req.write(payload.slice(0, 10));
+      await headersRead;
+      if (change === "revoked") await credentials.revoke(issued.credential.id);
+      else if (change === "expired") now += 120_000;
+      else {
+        const stored = JSON.parse(await readFile(file, "utf8")) as {
+          credentials: { id: string; permissions: string[] }[];
+        };
+        stored.credentials.find((c) => c.id === issued.credential.id)!.permissions = ["runs.read"];
+        await writeFile(file, JSON.stringify(stored));
+      }
+      req.end(payload.slice(10));
+      const r = await response;
+      if (change === "reduced-grants")
+        expect(r).toMatchObject({ status: 200, body: { id: 9, error: { code: "AUTH_FORBIDDEN" } } });
+      else expect(r).toEqual({ status: 401, body: INVALID });
+      expect((await h.orchestrator.getState(h.runs.alice)).run.status).toBe("paused");
+    } finally {
+      req.destroy();
+      spy.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("refuses a credential in the URL and never records it", async () => {
@@ -149,6 +214,56 @@ describe("resource isolation", () => {
     expect((await h.rpc(h.tokens.owner, "runs.get", { runId: h.runs.legacy })).body.ok).toBe(true);
   });
 
+  it("refuses linked documents before admission, disclosure or plan settlement", async () => {
+    const request = RequestSchema.parse({
+      id: "protected-request",
+      title: "confidential request",
+      body: "confidential body",
+      createdAt: h.clock.isoNow(),
+      updatedAt: h.clock.isoNow(),
+    });
+    await h.stores.requests.put(request);
+    const plan = new PlanService({ stores: h.stores, clock: h.clock });
+    const origin = { kind: "human" as const, actor: "owner" };
+    const p = await plan.ensurePlan({ key: "protected", requestId: request.id }, origin);
+    const registered = await plan.registerWorkItems(
+      p.id,
+      {
+        requestId: request.id,
+        items: [{ slug: "secret-item", title: "confidential item" }],
+      },
+      origin,
+    );
+    const item = registered.items[0]!;
+    expect(item.runId).toBeUndefined();
+    const before = await h.stores.workItems.get(item.id);
+    const runsBefore = (await h.rpc(h.tokens.owner, "runs.list")).body.result;
+    for (const links of [
+      { requestId: request.id },
+      { requestId: "guessed-request" },
+      { workItemId: item.id },
+      { workItemId: "guessed-item" },
+      { requestId: request.id, workItemId: item.id },
+    ]) {
+      const r = await h.rpc(h.tokens.alice, "runs.start", { workflowId: "gated", ...links });
+      expect(r.body.error).toEqual({ code: "AUTH_FORBIDDEN", message: "not permitted" });
+      expect(JSON.stringify(r.body)).not.toContain("confidential");
+    }
+    expect((await h.rpc(h.tokens.owner, "runs.list")).body.result).toEqual(runsBefore);
+    expect(await h.stores.workItems.get(item.id)).toEqual(before);
+    // Positive control: the same unassigned item really is settled by an authorized run.
+    const started = await h.rpc(h.tokens.owner, "runs.start", {
+      workflowId: "gated",
+      requestId: request.id,
+      workItemId: item.id,
+    });
+    expect(started.body.ok).toBe(true);
+    const { runId } = started.body.result as { runId: string };
+    const gate = (await h.orchestrator.pendingInputs(runId))[0]!;
+    expect((await h.rpc(h.tokens.owner, "inputs.answer", { requestId: gate.id, optionId: "ship" })).body.ok).toBe(true);
+    expect(await h.stores.workItems.get(item.id)).toMatchObject({ runId, status: "done" });
+  });
+
   it("lets a child run inherit its root's access", async () => {
     await h.append({
       type: "run.created",
@@ -187,6 +302,22 @@ describe("resource isolation", () => {
     const byAddress = await h.rpc(h.tokens.bob, "artifacts.get", { runId: h.runs.alice, name: "spec" });
     expect(byAddress.body.error?.code).toBe("ARTIFACT_MISSING");
     expect(JSON.stringify(byAddress.body)).not.toContain("alice's plan");
+  });
+
+  it("withholds artifact projections from runs.read-only credentials without losing page cursors", async () => {
+    const seq = await recordJsonArtifact(h, "json-secret");
+    for (const method of ["artifacts.get", "artifacts.list"])
+      expect((await h.rpc(h.tokens.runsOnly, method, { artifactId: "json-secret" })).body.error?.code).toBe(
+        "AUTH_FORBIDDEN",
+      );
+    const get = await h.rpc(h.tokens.runsOnly, "runs.get", { runId: h.runs.alice });
+    expect(get.body.result).toMatchObject({ artifacts: [] });
+    const events = await h.rpc(h.tokens.runsOnly, "runs.events", { runId: h.runs.alice, after: seq - 1, limit: 1 });
+    expect(events.body.result).toMatchObject({ events: [], nextCursor: seq, prevCursor: seq });
+    expect(JSON.stringify([get.body, events.body])).not.toContain("json-secret");
+    expect(JSON.stringify([get.body, events.body])).not.toContain("private-json-value");
+    const owner = await h.rpc(h.tokens.owner, "runs.events", { runId: h.runs.alice, after: seq - 1 });
+    expect(JSON.stringify(owner.body.result)).toContain("private-json-value");
   });
 
   it("filters open inputs and claims to visible runs", async () => {

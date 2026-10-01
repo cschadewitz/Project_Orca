@@ -75,7 +75,7 @@ describe("behind a trusted proxy", () => {
 
   it("refuses a request that bypasses the proxy", async () => {
     const credentials = new CredentialStore();
-    const { token: t } = credentials.issue({ principal: "o", preset: "owner" });
+    const { token: t } = await credentials.issue({ principal: "o", preset: "owner" });
     daemon = await startDaemon({
       orcaVersion: "0",
       capabilities: [],
@@ -88,7 +88,7 @@ describe("behind a trusted proxy", () => {
   it("requires https from the proxy, and records the client it forwarded", async () => {
     const credentials = new CredentialStore();
     const audit = new MemoryAuditSink();
-    const { token: t } = credentials.issue({ principal: "o", preset: "owner" });
+    const { token: t } = await credentials.issue({ principal: "o", preset: "owner" });
     daemon = await startDaemon({
       orcaVersion: "0",
       capabilities: [],

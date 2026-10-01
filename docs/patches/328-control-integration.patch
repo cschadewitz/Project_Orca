@@ -1,0 +1,343 @@
+diff --git a/packages/daemon/src/auth/guard.ts b/packages/daemon/src/auth/guard.ts
+--- a/packages/daemon/src/auth/guard.ts
++++ b/packages/daemon/src/auth/guard.ts
+@@ -68,6 +68,7 @@
+ interface Binding {
+   principal: Principal;
+   meta: RequestMeta;
++  onRunStarted?: (runId: string) => void;
+ }
+ 
+ const bindings = new WeakMap<object, Binding>();
+@@ -86,6 +87,14 @@
+   return bindings.get(ctx);
+ }
+ 
++/** Called by the method/control adapter with its actual admitted id, before execution. */
++export function attributeStartedRun(ctx: MethodContext, runId: string): void {
++  const binding = bindings.get(ctx);
++  if (!binding) return; // Direct in-process callers have no transport principal.
++  if (!binding.onRunStarted) throw authRequired();
++  binding.onRunStarted(runId);
++}
++
+ /** A refusal the guard decided on: the error the caller sees, and the reason only the audit log sees. */
+ class Denied extends Error {
+   constructor(
+@@ -127,15 +136,11 @@
+ export class Authorizer {
+   readonly runs: RunAccess;
+   private readonly audit: AuditSink | undefined;
+-  private readonly admissions: AdmissionSource | undefined;
+   private readonly now: () => Date;
+-  /** Serializes the admission window of `runs.start` so a `run.created` has one candidate owner. */
+-  private admitting: Promise<void> = Promise.resolve();
+ 
+   constructor(opts: AuthorizerOptions) {
+     this.runs = new RunAccess(opts.resolver, opts.ownership);
+     this.audit = opts.audit;
+-    this.admissions = opts.admissions;
+     this.now = opts.now ?? (() => new Date());
+   }
+ 
+@@ -199,7 +204,13 @@
+             this.deny(principal, meta, name, params, "AUTH_FORBIDDEN", `missing-permission:${spec.permission}`);
+             throw authForbidden();
+           }
+-          const original = (p: Params) => method.handle(p, ctx);
++          const callContext = name === "runs.start" ? { ...ctx } : ctx;
++          if (callContext !== ctx)
++            bindings.set(callContext, {
++              ...bound,
++              onRunStarted: (runId) => this.attributeRun(runId, principal),
++            });
++          const original = (p: Params) => method.handle(p, callContext);
+           try {
+             const result = await this.authorized(name, spec, principal, params, original, table, ctx);
+             if (spec.audit) this.operation(principal, meta, name, params, "succeeded", undefined, result);
+@@ -296,7 +307,7 @@
+         const workflowId = params[spec.param ?? "workflowId"] as string;
+         if (!workflowAllowed(principal.scope, workflowId))
+           throw new Denied(workflowNotFound(workflowId), "workflow-not-in-scope");
+-        const call = () => (name === "runs.start" ? this.startOwned(principal, params, original) : original(params));
++        const call = () => original(params);
+         // A restricted principal never sees `known`: the not-found is rebuilt without it.
+         return principal.scope.workflows === "*"
+           ? call()
+@@ -376,45 +387,6 @@
+     return original(params);
+   }
+ 
+-  /**
+-   * `runs.start`, attributed to its caller. `ControlModel.startRun` drives the run until it
+-   * parks before it returns, so ownership recorded on return would hide a caller's own run from
+-   * it for the whole of its first stretch. Instead the run is attributed when its `run.created`
+-   * is appended: starts are serialized for that window (a few milliseconds - the run is driven
+-   * outside it), so the first root `run.created` for this workflow is this call's. The id the
+-   * call returns is checked against it afterwards, and a mismatch is corrected.
+-   */
+-  private async startOwned(principal: Principal, params: Params, original: (p: Params) => unknown): Promise<unknown> {
+-    if (!this.admissions) {
+-      const result = (await original(params)) as { runId: string };
+-      this.attributeRun(result.runId, principal);
+-      return result;
+-    }
+-    let release!: () => void;
+-    const previous = this.admitting;
+-    this.admitting = new Promise<void>((resolve) => (release = resolve));
+-    await previous;
+-    let attributed: string | undefined;
+-    const detach = this.admissions.subscribe((event) => {
+-      if (attributed || event.type !== "run.created" || event.payload.parentRunId) return;
+-      if (event.payload.workflowId !== params.workflowId) return;
+-      attributed = event.runId;
+-      this.attributeRun(event.runId, principal);
+-      release();
+-    });
+-    try {
+-      const result = (await original(params)) as { runId: string };
+-      if (attributed !== result.runId) {
+-        if (attributed) this.runs.ownership.forget(attributed, principal.id);
+-        this.attributeRun(result.runId, principal);
+-      }
+-      return result;
+-    } finally {
+-      detach();
+-      release();
+-    }
+-  }
+-
+   private async runsList(principal: Principal, params: Params, original: (p: Params) => unknown): Promise<unknown> {
+     type Page = { runs: RunSummaryView[]; total: number; asOf: string };
+     const rows: RunSummaryView[] = [];
+diff --git a/packages/daemon/src/methods.ts b/packages/daemon/src/methods.ts
+--- a/packages/daemon/src/methods.ts
++++ b/packages/daemon/src/methods.ts
+@@ -141,6 +141,7 @@
+   type WorkflowsGetResult,
+   type WorkflowsListResult,
+ } from "@orca/protocol";
++import { attributeStartedRun } from "./auth/guard.js";
+ import type { ZodType } from "zod";
+ import type { AgentModel } from "./agent-model.js";
+ import type { ConfigModel } from "./config-model.js";
+@@ -426,7 +427,7 @@
+ /** `runs.start`: a workflow and its vars. No request, no work item, no documents - by decision. */
+ export const runsStart: Method<RunsStartParams, RunsStartResult> = {
+   params: RunsStartParamsSchema,
+-  handle: (params, ctx) => control(ctx).startRun(params),
++  handle: (params, ctx) => control(ctx).startRun(params, (runId) => attributeStartedRun(ctx, runId)),
+ };
+ 
+ /**
+diff --git a/packages/daemon/src/control.ts b/packages/daemon/src/control.ts
+--- a/packages/daemon/src/control.ts
++++ b/packages/daemon/src/control.ts
+@@ -59,6 +59,8 @@
+   runId?: string | undefined;
+   /** Re-drive afterwards and return once the run is parked again or finished. Default true. */
+   resume?: boolean | undefined;
++  /** Persist a standing rule only after the engine has accepted the answer under its lease. */
++  afterAnswer?: (() => Promise<void>) | undefined;
+   /**
+    * How to continue. Defaults to `Orchestrator.resume`; `orca answer` passes
+    * `ProgramService.resume`, which additionally mirrors a finished program run onto its
+@@ -115,6 +117,7 @@
+   await refuseIfLeasedElsewhere(orc, runId);
+ 
+   const request = await orc.answer(opts.requestId, opts.answer, runId, opts.note);
++  await opts.afterAnswer?.();
+   if (opts.resume === false) return { request };
+   // `resume` walks up to the topmost parked ancestor and re-attaches on the way down, so a
+   // gate answered inside a child continues the tree and not just the child.
+@@ -247,16 +250,17 @@
+    * it is not: nothing generalised, so the answer held for this one call.
+    */
+   async answerInput(params: InputsAnswerParams): Promise<InputsAnswerResult> {
+-    const permission = params.always ? await this.recordAlways(params) : undefined;
+-    // Only when the file actually changed: `alreadyPresent` rewrote nothing, and a frame
+-    // announcing a revision nobody moved is the kind of noise `agent.changed` refuses to
+-    // send on `lastSeenAt`.
+-    if (permission && permission.added.length > 0) await this.config?.announce("permissions");
++    const recordPermission = params.always ? await this.prepareAlways(params) : undefined;
++    let permission: RecordAlwaysResult | undefined;
+     const { request, state } = await answerAndResume(this.orc, {
+       requestId: params.requestId,
+       answer: params.optionId,
+       ...(params.runId ? { runId: params.runId } : {}),
+       ...(params.note ? { note: params.note } : {}),
++      afterAnswer: async () => {
++        permission = await recordPermission?.();
++        if (permission && permission.added.length > 0) await this.config?.announce("permissions");
++      },
+       resume: params.resume,
+     });
+     return {
+@@ -312,13 +316,14 @@
+    * `requestId` and `workItemId` travel onto `run.created` and out on the `run.changed`
+    * notification; neither is read back from a document store.
+    */
+-  async startRun(params: RunsStartParams): Promise<RunsStartResult> {
++  async startRun(params: RunsStartParams, onStarted?: (runId: string) => void): Promise<RunsStartResult> {
+     const runId = await this.orc.startRun({
+       workflowId: params.workflowId,
+       vars: params.vars,
+       ...(params.requestId ? { requestId: params.requestId } : {}),
+       ...(params.workItemId ? { workItemId: params.workItemId } : {}),
+     });
++    onStarted?.(runId);
+     // A run this daemon has just created cannot be leased by anyone else *yet*, but it can be
+     // by the time `run` reaches `execute`, and the lease can be taken away mid-run (#267).
+     // Either way the engine raises `RUN_LEASED`, and an unmapped one reaches the client as an
+@@ -371,13 +376,8 @@
+     return (await this.reads.runsGet({ runId })).run;
+   }
+ 
+-  /**
+-   * Append the standing rule an "always" answer implies. It runs *before* the answer is
+-   * recorded, deliberately: a sidecar write that fails must not leave a run resumed against
+-   * a permission grant that does not exist, and the reverse - a rule written for an answer
+-   * that was then refused - costs nothing, because a rule only ever fires on the next ask.
+-   */
+-  private async recordAlways(params: InputsAnswerParams): Promise<RecordAlwaysResult> {
++  /** Prepare a rule without writing; the returned write runs only after accepted input. */
++  private async prepareAlways(params: InputsAnswerParams): Promise<() => Promise<RecordAlwaysResult>> {
+     if (!this.permissionsFile)
+       throw new OrcaError(
+         "NOT_SUPPORTED",
+@@ -402,13 +402,16 @@
+     const asRequest = { sessionId: "", toolCall, options: [] } as unknown as Parameters<
+       typeof recordAlwaysDecision
+     >[0]["request"];
+-    return recordAlwaysDecision({
+-      file: this.permissionsFile,
+-      agentId: await this.agentForStep(request.runId, request.stepRunId),
+-      request: asRequest,
+-      decision: params.always!.decision,
+-      workspaceCwd: state.run.workspace.cwd,
+-    });
++    const file = this.permissionsFile;
++    const agentId = await this.agentForStep(request.runId, request.stepRunId);
++    return () =>
++      recordAlwaysDecision({
++        file,
++        agentId,
++        request: asRequest,
++        decision: params.always!.decision,
++        workspaceCwd: state.run.workspace.cwd,
++      });
+   }
+ 
+   /**
+diff --git a/packages/daemon/test/security-control-integration.test.ts b/packages/daemon/test/security-control-integration.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/daemon/test/security-control-integration.test.ts
+@@ -0,0 +1,107 @@
++import { mkdtemp, readFile, rm } from "node:fs/promises";
++import { join } from "node:path";
++import { tmpdir } from "node:os";
++import { describe, expect, it, vi } from "vitest";
++import { ControlModel, ReadModel } from "@orca/daemon";
++import { runLeaseResource } from "@orca/engine";
++import { harness } from "./security-harness.js";
++
++describe("Cal control integration", () => {
++  it("does not persist a rule for invalid, leased or stale permission decisions", async () => {
++    const h = await harness();
++    const dir = await mkdtemp(join(tmpdir(), "orca-always-order-"));
++    const file = join(dir, "permissions.json");
++    try {
++      const stepRunId = (await h.orchestrator.pendingInputs(h.runs.alice))[0]!.stepRunId;
++      await h.append({
++        type: "agent.session.opened",
++        runId: h.runs.alice,
++        payload: {
++          stepRunId,
++          sessionId: "permission-session",
++          agentId: "builder",
++          hostId: "local",
++          cwd: "/tmp",
++        },
++      });
++      await h.append({
++        type: "human.requested",
++        runId: h.runs.alice,
++        payload: {
++          stepRunId,
++          requestId: "permission-ask",
++          kind: "permission",
++          question: "Edit?",
++          options: [
++            { id: "allow", label: "Allow" },
++            { id: "deny", label: "Deny" },
++          ],
++          context: {
++            toolCall: {
++              toolCallId: "tool",
++              title: "Edit lib/a.ts",
++              kind: "edit",
++              locations: [{ path: "/tmp/lib/a.ts" }],
++            },
++          },
++        },
++      });
++      const control = new ControlModel({
++        orchestrator: h.orchestrator,
++        reads: new ReadModel({ orchestrator: h.orchestrator }),
++        permissionsFile: file,
++      });
++      const params = {
++        requestId: "permission-ask",
++        runId: h.runs.alice,
++        optionId: "allow",
++        resume: false,
++        always: { decision: "allow" as const },
++      };
++      await expect(control.answerInput({ ...params, optionId: "invalid" })).rejects.toMatchObject({
++        code: "INPUT_OPTION_UNKNOWN",
++      });
++      await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
++      const lease = await h.stores.leases.acquire({ resource: runLeaseResource(h.runs.alice), holder: "other-writer" });
++      await expect(control.answerInput(params)).rejects.toMatchObject({ code: "RUN_LEASED_ELSEWHERE" });
++      await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
++      await h.stores.leases.release(lease);
++      const accepted = await control.answerInput(params);
++      expect(accepted.permission?.added.length).toBeGreaterThan(0);
++      const saved = await readFile(file, "utf8");
++      await expect(
++        control.answerInput({ ...params, optionId: "deny", always: { decision: "deny" } }),
++      ).rejects.toMatchObject({ code: "INPUT_ANSWERED" });
++      expect(await readFile(file, "utf8")).toBe(saved);
++    } finally {
++      await h.close();
++      await rm(dir, { recursive: true, force: true });
++    }
++  });
++
++  it("attributes the exact admitted run before execution despite a competing same-workflow root", async () => {
++    const h = await harness();
++    try {
++      const start = h.orchestrator.startRun.bind(h.orchestrator);
++      let unrelated = "";
++      vi.spyOn(h.orchestrator, "startRun").mockImplementationOnce(async (opts) => {
++        unrelated = await start({ workflowId: opts.workflowId! });
++        return start(opts);
++      });
++      const drive = h.orchestrator.run.bind(h.orchestrator);
++      const runs: string[] = [];
++      vi.spyOn(h.orchestrator, "run").mockImplementation(async (runId, ...rest) => {
++        expect(h.ownership.owner(runId)).toBe("alice");
++        expect(h.ownership.owner(unrelated)).toBeUndefined();
++        runs.push(runId);
++        return drive(runId, ...rest);
++      });
++      const result = await h.rpc(h.tokens.alice, "runs.start", { workflowId: "gated" });
++      expect(result.body.ok).toBe(true);
++      expect(runs).toEqual([(result.body.result as { runId: string }).runId]);
++    } finally {
++      vi.restoreAllMocks();
++      await h.close();
++    }
++  });
++});

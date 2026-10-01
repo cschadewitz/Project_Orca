@@ -65,7 +65,7 @@ export interface Harness {
   credentials: CredentialStore;
   ownership: OwnershipStore;
   audit: MemoryAuditSink;
-  tokens: { owner: string; alice: string; bob: string; viewer: string; narrow: string };
+  tokens: { owner: string; alice: string; bob: string; viewer: string; narrow: string; runsOnly: string };
   ids: { alice: string; bob: string; viewer: string };
   /** alice's and bob's parked runs, and the run nobody owns. */
   runs: { alice: string; bob: string; legacy: string };
@@ -99,17 +99,23 @@ export async function harness(extra: Partial<TokenAuthOptions> = {}): Promise<Ha
   const credentials = extra.credentials ?? new CredentialStore();
   const ownership = extra.ownership ?? new OwnershipStore();
   const audit = new MemoryAuditSink();
-  const issue = (principal: string, preset: "owner" | "client" | "viewer", workflows?: string[]) =>
-    credentials.issue({
+  const issue = async (principal: string, preset: "owner" | "client" | "viewer", workflows?: string[]) =>
+    await credentials.issue({
       principal,
       preset,
       ...(workflows ? { scope: { workflows, runs: "owned" as const } } : {}),
     });
-  const owner = issue("owner", "owner");
-  const alice = issue("alice", "client");
-  const bob = issue("bob", "client");
-  const viewer = issue("viewer", "viewer");
-  const narrow = issue("narrow", "client", ["gated"]);
+  const owner = await issue("owner", "owner");
+  const alice = await issue("alice", "client");
+  const bob = await issue("bob", "client");
+  const viewer = await issue("viewer", "viewer");
+  const narrow = await issue("narrow", "client", ["gated"]);
+
+  const runsOnly = await credentials.issue({
+    principal: "alice",
+    permissions: ["runs.read"],
+    scope: { workflows: "*", runs: "owned" },
+  });
 
   const daemon = await startDaemon({
     orcaVersion: "0.0.0-security",
@@ -159,7 +165,14 @@ export async function harness(extra: Partial<TokenAuthOptions> = {}): Promise<Ha
     credentials,
     ownership,
     audit,
-    tokens: { owner: owner.token, alice: alice.token, bob: bob.token, viewer: viewer.token, narrow: narrow.token },
+    tokens: {
+      owner: owner.token,
+      alice: alice.token,
+      bob: bob.token,
+      viewer: viewer.token,
+      narrow: narrow.token,
+      runsOnly: runsOnly.token,
+    },
     ids: { alice: alice.credential.id, bob: bob.credential.id, viewer: viewer.credential.id },
     runs: { alice: aliceRun, bob: bobRun, legacy },
     gates: { alice: await gateOf(aliceRun), bob: await gateOf(bobRun), legacy: await gateOf(legacy) },
@@ -212,5 +225,29 @@ export function raw(
     );
     req.on("error", reject);
     req.end(opts.body ?? JSON.stringify({ kind: "request", id: 1, method: "hello", params: {} }));
+  });
+}
+
+/** Real JSON-object artifact, including the parsed data carried by artifact.recorded. */
+export async function recordJsonArtifact(h: Harness, id: string): Promise<number> {
+  const artifact: Artifact = {
+    id,
+    kind: "report",
+    name: "report",
+    path: `/tmp/${id}.json`,
+    mediaType: "application/json",
+    contentHash: `sha256:${id}`,
+    size: 30,
+    version: 1,
+    producedBy: { runId: h.runs.alice, stepRunId: "artifact-step" },
+    parents: [],
+    data: { secret: "private-json-value" },
+    createdAt: h.clock.isoNow(),
+  };
+  await h.stores.artifacts.put(artifact, JSON.stringify(artifact.data));
+  return h.append({
+    type: "artifact.recorded",
+    runId: h.runs.alice,
+    payload: { stepRunId: "artifact-step", artifact },
   });
 }

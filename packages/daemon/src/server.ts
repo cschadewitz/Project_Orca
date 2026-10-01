@@ -207,7 +207,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         } catch (e) {
           return sendJson(res, 413, { kind: "response", id: 0, ok: false, error: describeError(e) });
         }
-        const { principal, meta } = admission;
+        // Body receipt can outlive a credential or its grants. Keep the early rejection,
+        // then authenticate again at dispatch and bind only the current authority.
+        const current = gate.admit(req, "http");
+        if (!current.ok) {
+          const refusal = refusalOf(current);
+          return sendJson(res, refusal.status, refusal.body, refusal.headers);
+        }
+        const { principal, meta } = current;
         return sendJson(
           res,
           200,

@@ -8,7 +8,7 @@ import WebSocket from "ws";
 import type { OrcaEventInput } from "@orca/core";
 import { STEP_CHANGED } from "@orca/protocol";
 import { CredentialStore } from "../src/auth/index.js";
-import { harness, type Harness } from "./security-harness.js";
+import { harness, recordJsonArtifact, type Harness } from "./security-harness.js";
 
 type Frame = {
   kind: string;
@@ -123,8 +123,8 @@ describe("socket authentication", () => {
         error: { code: "AUTH_REQUIRED", message: "authentication required" },
       },
     });
-    const revoked = h.credentials.issue({ principal: "x", preset: "viewer" });
-    h.credentials.revoke(revoked.credential.id);
+    const revoked = await h.credentials.issue({ principal: "x", preset: "viewer" });
+    await h.credentials.revoke(revoked.credential.id);
     const invalid = {
       kind: "response",
       id: 0,
@@ -158,7 +158,7 @@ describe("socket authentication", () => {
       code: "AUTH_FORBIDDEN",
       message: "not permitted",
     });
-    const agentsOnly = h.credentials.issue({
+    const agentsOnly = await h.credentials.issue({
       principal: "agents-only",
       permissions: ["agents.read"],
       scope: { workflows: "*", runs: "all" },
@@ -204,6 +204,28 @@ describe("notification authorization", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("withholds JSON artifacts from socket reads, replay and live events", async () => {
+    h = await harness();
+    const seq = await recordJsonArtifact(h, "json-replay");
+    const reader = await connect(h.tokens.runsOnly);
+    const owner = await connect(h.tokens.owner);
+    expect((await reader.call("runs.get", { runId: h.runs.alice })).result).toMatchObject({ artifacts: [] });
+    expect((await reader.call("runs.events", { runId: h.runs.alice, after: seq - 1 })).result).toMatchObject({
+      events: [],
+    });
+    for (const c of [reader, owner])
+      await c.call("subscribe", { runId: h.runs.alice, since: seq - 1, methods: ["event.appended"] });
+    expect(reader.notifications()).toEqual([]);
+    expect(JSON.stringify(owner.notifications())).toContain("json-replay");
+    await recordJsonArtifact(h, "json-live");
+    await h.append(scheduled(h.runs.alice, "after-artifact"));
+    for (const c of [reader, owner]) await c.waitFor((f) => JSON.stringify(f).includes("after-artifact"));
+    expect(JSON.stringify(reader.frames)).not.toContain("json-replay");
+    expect(JSON.stringify(reader.frames)).not.toContain("json-live");
+    expect(JSON.stringify(reader.frames)).not.toContain("private-json-value");
+    expect(JSON.stringify(owner.notifications())).toContain("json-live");
+  });
+
   it("scopes a subscription id to its connection", async () => {
     h = await harness();
     const first = await connect(h.tokens.alice);
@@ -224,7 +246,7 @@ describe("credential lifetime on an open connection", () => {
     h = await harness();
     const alice = await connect(h.tokens.alice);
     expect((await alice.call("subscribe", { runId: h.runs.alice })).ok).toBe(true);
-    h.credentials.revoke(h.ids.alice);
+    await h.credentials.revoke(h.ids.alice);
     await h.append(scheduled(h.runs.alice, "sr-after"));
     expect(await alice.closed).toBe(4401);
     expect(alice.notifications()).toEqual([]);
@@ -239,7 +261,7 @@ describe("credential lifetime on an open connection", () => {
     let now = Date.parse("2026-10-01T00:00:00Z");
     const credentials = new CredentialStore({ now: () => new Date(now) });
     h = await harness({ credentials, revalidateMs: 10 });
-    const brief = credentials.issue({ principal: "alice", preset: "client", ttlMs: 60_000 });
+    const brief = await credentials.issue({ principal: "alice", preset: "client", ttlMs: 60_000 });
     const c = await connect(brief.token);
     expect((await c.call("runs.list")).ok).toBe(true);
     now += 120_000;
@@ -248,7 +270,7 @@ describe("credential lifetime on an open connection", () => {
 
   it("re-establishes current authority on reconnect, not the old connection's", async () => {
     h = await harness();
-    const rotated = h.credentials.rotate(h.ids.alice);
+    const rotated = await h.credentials.rotate(h.ids.alice);
     expect((await refusal(h.daemon.socketUrl!, { token: h.tokens.alice })).status).toBe(401);
     const again = await connect(rotated.token);
     // Same principal, so the same runs: ownership belongs to the principal, not the credential.

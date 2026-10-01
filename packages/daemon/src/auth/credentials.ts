@@ -21,6 +21,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
+import { withFileLock } from "@orca/store";
 import {
   PRESETS,
   PermissionSchema,
@@ -127,7 +128,11 @@ export class CredentialStore {
   }
 
   /** Issue a credential. The token is returned once and is not recoverable afterwards. */
-  issue(opts: IssueOptions): { token: string; credential: CredentialInfo } {
+  async issue(opts: IssueOptions): Promise<{ token: string; credential: CredentialInfo }> {
+    return this.mutate(() => this.create(opts));
+  }
+
+  private create(opts: IssueOptions): { token: string; credential: CredentialInfo } {
     if (!PRINCIPAL_RE.test(opts.principal))
       throw new CredentialError("a principal is 1-64 letters, digits and . _ @ -, starting with a letter or digit");
     const preset = opts.preset ? PRESETS[opts.preset] : undefined;
@@ -145,8 +150,6 @@ export class CredentialStore {
     }
     const expiresAt =
       opts.expiresAt ?? (opts.ttlMs === undefined ? undefined : new Date(this.now().getTime() + opts.ttlMs));
-    this.reload();
-    if (this.broken) throw new CredentialError("the credentials file cannot be read; fix or remove it first");
     const id = randomBytes(9).toString("base64url");
     const secret = randomBytes(32).toString("base64url");
     const record: CredentialRecord = {
@@ -161,14 +164,15 @@ export class CredentialStore {
       ...(opts.bootstrap ? { bootstrap: true as const } : {}),
     };
     this.records = [...this.records, record];
-    this.persist();
     return { token: `${TOKEN_PREFIX}.${id}.${secret}`, credential: info(record) };
   }
 
   /** Mark a credential revoked. False when there was no such live credential. */
-  revoke(id: string): boolean {
-    this.reload();
-    if (this.broken) throw new CredentialError("the credentials file cannot be read; fix or remove it first");
+  async revoke(id: string): Promise<boolean> {
+    return this.mutate(() => this.markRevoked(id));
+  }
+
+  private markRevoked(id: string): boolean {
     const at = this.now().toISOString();
     let changed = false;
     this.records = this.records.map((r) => {
@@ -176,26 +180,62 @@ export class CredentialStore {
       changed = true;
       return { ...r, revokedAt: at };
     });
-    if (changed) this.persist();
     return changed;
   }
 
   /** A new secret for the same principal and grants; the old credential is revoked. */
-  rotate(id: string, opts: { ttlMs?: number | undefined; expiresAt?: Date | undefined } = {}) {
-    this.reload();
-    const old = this.records.find((r) => r.id === id && !r.revokedAt);
-    if (!old) throw new CredentialError(`no live credential ${id}`);
-    const issued = this.issue({
-      principal: old.principal,
-      label: old.label,
-      permissions: old.permissions,
-      scope: old.scope,
-      expiresAt: opts.expiresAt,
-      ttlMs: opts.ttlMs,
-      bootstrap: old.bootstrap,
+  async rotate(id: string, opts: { ttlMs?: number | undefined; expiresAt?: Date | undefined } = {}) {
+    return this.mutate(() => {
+      const old = this.records.find((r) => r.id === id && !r.revokedAt);
+      if (!old) throw new CredentialError(`no live credential ${id}`);
+      const issued = this.create({
+        principal: old.principal,
+        label: old.label,
+        permissions: old.permissions,
+        scope: old.scope,
+        expiresAt: opts.expiresAt,
+        ttlMs: opts.ttlMs,
+        bootstrap: old.bootstrap,
+      });
+      this.markRevoked(id);
+      return issued;
     });
-    this.revoke(id);
-    return issued;
+  }
+
+  /** Replace all bootstrap credentials and publish the matching token under the same lock. */
+  async bootstrap(opts: IssueOptions, tokenFile: string): Promise<{ credentialId: string }> {
+    return this.mutate(
+      () => {
+        for (const record of this.records) if (record.bootstrap) this.markRevoked(record.id);
+        return this.create({ ...opts, bootstrap: true });
+      },
+      (issued) => writePrivateFile(tokenFile, `${issued.token}\n`),
+    ).then((issued) => ({ credentialId: issued.credential.id }));
+  }
+
+  /** Lock covers reload, mutation, persistence and bootstrap publication across all writers. */
+  private async mutate<T>(change: () => T, publish?: (result: T) => void): Promise<T> {
+    const transaction = async () => {
+      this.seen = undefined;
+      this.reload();
+      if (this.broken) throw new CredentialError("the credentials file cannot be read; fix or remove it first");
+      const previous = this.records;
+      try {
+        const result = change();
+        this.persist();
+        publish?.(result);
+        return result;
+      } catch (error) {
+        // Do not let a failed write become an in-memory authority change.
+        this.records = previous;
+        this.seen = undefined;
+        this.reload();
+        throw error;
+      }
+    };
+    if (!this.file) return transaction();
+    mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+    return withFileLock(`${this.file}.lock`, transaction);
   }
 
   list(): CredentialInfo[] {

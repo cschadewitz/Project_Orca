@@ -10,7 +10,8 @@ Three checks are kept separate, and every call passes all three:
 
 1. **Authentication** — which principal is calling. Decided by the transport from a bearer
    credential (or by the explicit loopback compatibility mode), before a body is read or a
-   socket is accepted. A caller can never name its own principal.
+   socket is accepted. HTTP authenticates again after body receipt, using current grants
+   immediately before dispatch. A caller can never name its own principal.
 2. **Operation authorization** — whether that principal holds the permission the method
    needs. Checked before the method's params are validated. Methods missing from the
    inventory are denied by default.
@@ -49,6 +50,14 @@ and a revocation time.
 | Rotate         | `CredentialStore.rotate(id)`                           | New secret, same principal and grants. The old one is revoked. |
 | Expire         | `expiresAt` / `ttlMs` at issue                         | Refused from that moment, just like a revoked credential.  |
 | Revoke         | `CredentialStore.revoke(id)`                           | Refused on the next request, and open sockets close (below). |
+
+Credential mutations (`issue`, `rotate`, `revoke`, `bootstrapLocalOwner`) return promises;
+callers must await them. They use the store’s cross-process file lock across reload,
+mutation and atomic persistence. Rotation publishes revocation and replacement together.
+Bootstrap also publishes the matching token file before releasing the lock, so concurrent
+starts cannot leave two live bootstrap credentials or a token from the wrong writer.
+An interrupted bootstrap may leave an unusable token file; restart bootstrap to repair it.
+The shared lock recovers a provably dead local holder; unknown holders fail closed.
 
 The daemon re-reads `credentials.json` whenever the file changes. A credential issued or
 revoked by another process, such as a CLI, takes effect without a restart. If the file is
@@ -126,6 +135,11 @@ Presets are expanded into the record at issue time:
 The `client` preset fits an adapter or a bot, including a future MCP adapter (#327): it can
 launch work, steer it and answer its gates, and it sees nothing else.
 
+Starting with `requestId` additionally requires `plan.read`; `workItemId` requires both
+`plan.read` and `plan.write`, because execution reads these documents and can settle a plan
+item. Restricted callers therefore cannot attach either link. Existing and guessed IDs
+receive the same `AUTH_FORBIDDEN` before admission or document access.
+
 ## Permission matrix
 
 This table is `OPERATIONS` in `auth/operations.ts`, and `auth-operations.test.ts` checks
@@ -173,6 +187,13 @@ that the two match. A method that is missing from the table is refused with
 
 `hello` is not a substitute for per-resource authorization. It reports which methods a
 principal may call, but each call is still checked against the specific resource it names.
+
+Without `artifacts.read`, `runs.get.artifacts` is empty. `runs.events` and raw
+`event.appended` delivery omit `artifact.*`, `step.inputs`, and `plan.signals.rejected`
+events, which carry artifact data, metadata or references. This applies even to an
+unrestricted run scope, and covers live delivery and replay. Event pages retain their
+scan cursors and `lastSeq`; clients must follow those cursors even when a filtered page
+is empty. Sequence gaps do not contain artifact content.
 
 ### Notifications
 
@@ -365,7 +386,7 @@ shared wiring are reserved for the integration step
 (`docs/runtime-foundation-parallel-contract.md`), so on this branch `orca serve` refuses to
 start until they land:
 
-- `orca serve`: open the auth directory, call `bootstrapLocalOwner`, and pass
+- `orca serve`: open the auth directory, await `bootstrapLocalOwner`, and pass
   `auth: { mode: "token", credentials, ownership, resolver: orchestratorResolver(app.orchestrator), audit }`.
   Add `--trusted-proxy` and `--allow-origin`, and an explicit `--unauthenticated-loopback`.
   Update the banner, which currently says there is no authentication.
@@ -377,3 +398,32 @@ start until they land:
 - Record the answering principal on `human.answered`, so the run log also shows who
   answered.
 - Protocol README: the auth error codes, close code 4401, and the bearer subprotocol.
+
+### Review handoff: control integration
+
+[328-control-integration.patch](patches/328-control-integration.patch) is a separate,
+apply-ready patch for Cal, based on this branch after the four inline review fixes.
+It changes the reserved method/control files and the guard together, plus adds a
+regression suite. Apply with `git apply docs/patches/328-control-integration.patch`.
+It is intentionally not applied to this implementation branch.
+
+- The method passes a server-bound admission callback into `ControlModel.startRun`;
+  the control model reports the actual admitted id before execution. The patch removes
+  `startOwned` and all global event-matching attribution. A concurrent unrelated start
+  of the same workflow stays unowned.
+- Standing rules are prepared without writing, then persisted only after `orc.answer`
+  has accepted the decision under its lease, before resumption. Invalid options, stale
+  decisions and lease refusals leave the sidecar unchanged. These stores do not have
+  a shared transaction: if persistence fails after acceptance, the answer stays recorded
+  and this call does not resume. The operator must repair the sidecar and resume explicitly.
+
+Validation in an isolated copy: 55 tests passed across the new integration suite,
+`control-methods`, `security-http`, and `security-socket`; TypeScript checking passed.
+This does not verify client migration. CLI/app/update-supervisor token wiring and
+Electron smoke remain integration acceptance gates, and the branch must not merge alone.
+All new credential mutation call sites must now await the promise, including bootstrap.
+
+Compatibility-only edits already present in the first pass (the two changelog fragments,
+`packages/app/test/daemon-client.test.ts`, `packages/app/test/notifications.test.ts`, and
+`packages/daemon/test/maintenance.test.ts`) still need Cal's ownership reconciliation;
+the review fixes do not expand those edits.

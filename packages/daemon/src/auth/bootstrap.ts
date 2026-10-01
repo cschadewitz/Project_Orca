@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FileAuditSink } from "./audit.js";
-import { CredentialStore, parseToken, writePrivateFile } from "./credentials.js";
+import { CredentialStore, parseToken } from "./credentials.js";
 import { OwnershipStore } from "./ownership.js";
 
 export const LOCAL_TOKEN_FILE = "local-client.token";
@@ -52,16 +52,17 @@ export function openAuthDirectory(dir: string): AuthDirectory {
  * Issue this start's local owner credential and write its token file. Every earlier
  * bootstrap credential is revoked first, so at most one is ever live.
  */
-export function bootstrapLocalOwner(auth: Pick<AuthDirectory, "credentials" | "tokenFile">): { credentialId: string } {
-  for (const c of auth.credentials.list()) if (c.bootstrap && !c.revokedAt) auth.credentials.revoke(c.id);
-  const { token, credential } = auth.credentials.issue({
-    principal: LOCAL_OWNER,
-    label: "local client bootstrap",
-    preset: "owner",
-    bootstrap: true,
-  });
-  writePrivateFile(auth.tokenFile, `${token}\n`);
-  return { credentialId: credential.id };
+export async function bootstrapLocalOwner(
+  auth: Pick<AuthDirectory, "credentials" | "tokenFile">,
+): Promise<{ credentialId: string }> {
+  return auth.credentials.bootstrap(
+    {
+      principal: LOCAL_OWNER,
+      label: "local client bootstrap",
+      preset: "owner",
+    },
+    auth.tokenFile,
+  );
 }
 
 /**

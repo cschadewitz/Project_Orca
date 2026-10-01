@@ -37,6 +37,8 @@ import {
   type ClaimView,
   type HelloResult,
   type OpenInputView,
+  type RunsGetResult,
+  type RunsEventsResult,
   type RunSummaryView,
   type WorkflowSummaryView,
 } from "@orca/protocol";
@@ -238,7 +240,18 @@ export class Authorizer {
         const runId = params.runId as string;
         if (restricted && !(await this.runs.allows(principal, runId)))
           throw new Denied(runNotFound(runId), "run-not-visible");
-        return restricted ? rethrowAs(original(params), "RUN_NOT_FOUND", () => runNotFound(runId)) : original(params);
+        const result = await (restricted
+          ? rethrowAs(original(params), "RUN_NOT_FOUND", () => runNotFound(runId))
+          : original(params));
+        if (!holds(principal, "artifacts.read")) {
+          if (name === "runs.get") return { ...(result as RunsGetResult), artifacts: [] };
+          if (name === "runs.events") {
+            const page = result as RunsEventsResult;
+            // Retain scan cursors: even an entirely hidden page must allow forward/backward progress.
+            return { ...page, events: page.events.filter((event) => !artifactEvent(event.type)) };
+          }
+        }
+        return result;
       }
 
       case "run-list":
@@ -272,6 +285,14 @@ export class Authorizer {
       }
 
       case "workflow": {
+        // Linked documents are workspace resources, not made visible by owning a new run.
+        // Work-item execution may settle the plan, so reading it alone is insufficient.
+        if (name === "runs.start") {
+          if (params.requestId !== undefined && !holds(principal, "plan.read"))
+            throw new Denied(authForbidden(), "linked-request-not-permitted");
+          if (params.workItemId !== undefined && (!holds(principal, "plan.read") || !holds(principal, "plan.write")))
+            throw new Denied(authForbidden(), "linked-work-item-not-permitted");
+        }
         const workflowId = params[spec.param ?? "workflowId"] as string;
         if (!workflowAllowed(principal.scope, workflowId))
           throw new Denied(workflowNotFound(workflowId), "workflow-not-in-scope");
@@ -486,6 +507,10 @@ export class Authorizer {
    * this gate does not know is withheld - a newer push is not a bypass either.
    */
   async allowsNotification(principal: Principal, method: string, params: Record<string, unknown>): Promise<boolean> {
+    if (method === EVENT_APPENDED && !holds(principal, "artifacts.read")) {
+      const event = params.event as { type?: string } | undefined;
+      if (!event?.type || artifactEvent(event.type)) return false;
+    }
     if (RUN_NOTIFICATIONS.has(method))
       return holds(principal, "runs.read") && (await this.runs.allows(principal, String(params.runId)));
     switch (method) {
@@ -602,6 +627,11 @@ export class Authorizer {
       remote: meta.remote,
     });
   }
+}
+
+/** Raw events that expose artifact content, metadata, or references. */
+function artifactEvent(type: string): boolean {
+  return type.startsWith("artifact.") || type === "step.inputs" || type === "plan.signals.rejected";
 }
 
 function codeOf(e: unknown): string {
