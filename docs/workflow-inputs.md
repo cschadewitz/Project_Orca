@@ -182,9 +182,49 @@ vars are recorded in its event log in plain text.
 `sensitive: true` on a declaration, inherited by everything beneath it, means:
 
 - validation messages never include the value, the declared `pattern` or the `enum`;
+  unknown object keys beneath a sensitive declaration report at the enclosing declared
+  path, since a supplied key can itself be secret;
 - the `workflows.get` view omits its `default` and `enum` at every depth, and omits the
-  workflow's own `vars` value for that name;
+  workflow's own `vars` value for that name. An enclosing default or workflow var is
+  omitted in full when any object property or array item declaration is sensitive;
 - the preflight result never contains values at all.
+
+### Outstanding integration gate: protected execution values
+
+The current implementation does **not** protect sensitive execution values after
+admission: `run.created`, `runs.get`, `runs.events` and live/replayed `event.appended`
+still expose them. #363 tracks this gap; it is a prerequisite for accepting #330,
+not a waiver of the frozen contract. Do not remove authoritative resume values as
+an interim redaction fix.
+
+Proposed integration design (not implemented in this owned-module slice):
+
+- Introduce a private execution-value store accessed only by the engine. Store each
+  sensitive top-level value (including values with sensitive descendants) as an
+  immutable encrypted record, with an opaque reference in the durable run data.
+  Define key provisioning, rotation, backup/restore and authorized engine access
+  before choosing a storage adapter; a plaintext sidecar is not sufficient.
+- Keep the reference map separate from user vars, so a user object cannot impersonate
+  a reference. Bind records to the run and selected workflow revision. Persist the
+  protected records before publishing `run.created`; recover or garbage-collect
+  orphaned records after a failed admission.
+- Hydrate only the engine's execution state, including child inheritance and resumed
+  runs. Missing records or unavailable keys must fail closed before execution, never
+  fall back to redacted placeholders or the latest workflow's defaults.
+- Protect sensitive defaults and workflow vars in stored definition snapshots too.
+  Preserve the original revision and immutable identity when hydrating snapshots.
+  Otherwise moving launch values alone leaves another plaintext copy on disk.
+- Build one public projection for run views and events, used by reads, live delivery,
+  replay and diagnostic logging. Omit protected values and private references. Define
+  how historical plaintext records are migrated or conservatively withheld; current
+  schemas alone cannot identify every secret in an old event.
+- Verify crash/restart, pinned resume, children, missing-key failure, definition
+  persistence and HTTP/WS read/live/replay parity with sentinel secrets. Also audit
+  execution outputs and logger call sites; hiding `run.created` alone is insufficient.
+
+The shared-file patch for this design remains an integration-owner deliverable.
+The storage/key lifecycle and legacy migration need an agreed contract before it
+can safely replace authoritative event-sourced inputs.
 
 Redaction is not access control. Who may read a workflow or start a run is #328's.
 
