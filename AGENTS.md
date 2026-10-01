@@ -5,6 +5,21 @@ agent — Claude Code, Codex, Gemini CLI, or ORCA driving itself — doing work 
 build, test and layout conventions read `docs/DEVELOPMENT.md`; for the architecture read
 `docs/ARCHITECTURE.md`; for the desktop app's design system read on.
 
+## Before creating or reorganizing issues
+
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) for issue planning and use the feature
+template for substantial planned work. In particular:
+
+- Inventory open and relevant closed work; reuse or cross-reference existing issues
+  and build on shipped foundations rather than duplicating them.
+- State outcome, scope, acceptance criteria and non-goals. Use one primary
+  `ship-group:<coherent-outcome>` label for work intended to ship together, separate
+  from topic labels, release bump labels and milestone decisions.
+- Link actual hard blockers separately from related work; describe ordering and
+  parallel work, and validate the hard-dependency graph is acyclic.
+- Preserve existing metadata and history unless asked to change them. Leave milestone
+  assignment for explicit release planning, and read published issues back to verify.
+
 ## Before you touch the UI
 
 Read **`docs/design/RULES.md`** first. It is short and it is binding. The full reasoning is in

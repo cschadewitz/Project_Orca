@@ -13,4 +13,5 @@
 | [ROADMAP.md](ROADMAP.md) | see what is intentionally left open |
 | [adr/](adr/) | the reasons behind the seven structural decisions |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | build, test, and review the code base |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | plan issues, reuse existing work, group coherent outcomes and make dependencies explicit |
 | [RELEASING.md](RELEASING.md) | cut a release: the versioning policy, what counts as breaking, and the milestone‑driven flow |
