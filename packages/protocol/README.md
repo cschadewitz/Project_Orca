@@ -5,7 +5,13 @@ both ends validate at the boundary and the TypeScript types fall out of them. It
 `@orca/core` for the domain types and on nothing else — a client that depends only on this
 package cannot reach the engine, the stores or the transports (ADR 0008).
 
-Everything below is exported from the package root.
+Everything below is exported from the package root. The current protocol is **1.8**
+([version source](src/version.ts)), shipped in ORCA v0.6.0. Protocol 1.7 introduced the
+v0.5.0 config/workflow/plan methods; 1.8 adds maintenance admission and optional
+`hello.processId`. It also advertises the additive v0.6.0 fields initially landed
+under 1.7: decision `resultIsPreview`, `runs.get.workflowPinned`, step `model`,
+workflow `pinned`, and `WORKFLOW_VERSION_NOT_FOUND`. Introduction versions below
+are history, not the current handshake version. See [release history](../../CHANGELOG.md).
 
 ## Transport
 
@@ -43,6 +49,31 @@ A client that only reads never opens a socket: `hello` and every read method wor
 `/rpc` with none. `DaemonHandle.socketUrl` is present only when the daemon was given an
 engine feed, and `socketUrlFor(httpUrl)` derives it (`http`→`ws`, `https`→`wss`, plus
 `SOCKET_PATH`).
+
+## Maintenance admission (1.8)
+
+The standard daemon installs `maintenance` independently of `runs.control`, including
+in read-only mode; discover availability through `hello.methods`. `hello.processId` is
+optional supervisor identity, not caller authentication.
+
+```ts
+params: { action: "prepare" | "resume"; token: string } // nonempty token
+result: { ready: boolean; active: string[] } // active method names, not run IDs
+```
+
+`prepare` closes admission only when no wrapped calls remain active; otherwise it returns
+`ready: false` and the active methods for the supervisor to drain/retry. Once held,
+another token is refused with `PROTOCOL_MESSAGE` ("Another updater owns admission").
+`resume` clears that in-memory token and returns `ready: false`. An external admission
+file can independently keep admission closed. While closed, wrapped reads and writes
+fail with `PROTOCOL_MESSAGE` ("Update admission is closed; retry later"); `hello`,
+`subscribe`, `unsubscribe` and `maintenance` remain available. Invalid parameters also
+use `PROTOCOL_MESSAGE`. This counts in-flight method calls, not all persisted run states.
+
+This method does not install software or accept paths/commands. The token coordinates
+updaters; it is not the general API authentication planned in #328. The supervisor must
+also check run/update readiness and daemon ownership as described in [Updating](../../docs/UPDATING.md).
+See [schema](src/maintenance.ts) and [admission implementation](../daemon/src/maintenance.ts).
 
 ## Conventions the read methods share
 
@@ -88,7 +119,7 @@ risk appetite, and belongs to the plan methods.
 
 ```ts
 params: { client: string; protocol: { major, minor } }
-result: { protocol, orcaVersion, storeDir?, capabilities: DaemonCapability[], methods?: string[] }
+result: { protocol, orcaVersion, storeDir?, processId?, capabilities: DaemonCapability[], methods?: string[] }
 ```
 
 `capabilities` is coarse (`runs.read`, `runs.subscribe`, `runs.control`, `plan.read`,
@@ -136,7 +167,7 @@ result: { run: RunSummaryView; workspace; vars; steps: StepView[]; traversal?: R
 `steps` is every step run in scheduling order — one entry per *attempt*, so a retried node
 appears more than once with ascending `attempt`; a tree groups by `nodeId` (and `iteration`,
 inside a loop). Each `StepView` carries `status`, `waitingOn?`, its timestamps and
-`durationMs?`, `agentId?` / `agentSessionId?`, `inputArtifactIds` / `outputArtifactIds`,
+`durationMs?`, `agentId?` / `agentSessionId?`, `model?`, `inputArtifactIds` / `outputArtifactIds`,
 `choice?`, `message?`, `error?`, its `children` (`ChildRunView`: `runId`, `name`, `status`,
 `branch?`, `workItemId?`, `resumed?`) and its `skippedBranches` — the fan-out branches that
 never became child runs, so the whole fan-out is shown and not just the part that ran.
@@ -168,7 +199,7 @@ no "shipped or user-defined" flag: a daemon loads every workflow from one glob i
 registry and does not keep the path, so the distinction is not one it can make.
 
 `WorkflowView` is `id`, `name`, `version`, `description?`, `start`, `inputs?`, `vars?`,
-`nodes`, `edges`, `versions?`. A `WorkflowNodeView` carries `id`, `type`, `name?`,
+`nodes`, `edges`, `versions?`, `pinned?`. A `WorkflowNodeView` carries `id`, `type`, `name?`,
 `description?`, `maxAttempts?` and **`fields`** — the per-type configuration flattened for
 display (an agent's `role` / `agentId` and `template`, a decision's `source`, a gate's
 `options`, a loop's bounds, a subworkflow's target), never the `NodeDef` whole. An unknown or
@@ -181,13 +212,13 @@ runs it under — `parent::node`, or `parent::node::branch` (`INLINE_WORKFLOW_SE
 viewer may draw the graph it was given or fetch the same one again by id when a collapsed
 node is expanded, and both name one thing.
 
-**`versions` is what the daemon can see, not what it can serve.** ORCA records
-`workflowVersion` on `run.created` but keeps no copy of that definition — a workflow is one
-file at whatever version it is at now — so `versions` is the version on disk unioned with the
-versions the store's runs were started against. `workflows.get({ id, version })` therefore
-answers only for the version on disk and gives `WORKFLOW_NOT_FOUND` for any other, with both
-versions in the details. A client uses the list to say a run is pinned to a version that is no
-longer the newest, not to offer a picker that would 404.
+**`versions` combines registered, stored and run-referenced versions.** Since v0.6.0,
+`workflows.get({ id, version })` can serve a stored definition; `pinned` is true when a registered definition exists
+and has a different version. A recorded version need not still be available: a missing requested version
+returns `WORKFLOW_VERSION_NOT_FOUND`. Resume uses the live definition if its version
+matches, otherwise the stored definition; legacy runs without `workflowStored` may fall
+back to current. Editing a file without changing its version can still change resumed
+behavior. Version labels do not establish byte-immutable execution recipes.
 
 `WORKFLOW_NOT_FOUND` for an unknown id, and for a `parent::node` whose node has no nested
 graph.
@@ -321,8 +352,11 @@ YAML/JSON read it, *before* schema defaults, which is what a form binds to.
 
 **Nothing is redacted.** `text` is the file, host entries and command lines included. A form
 that edits a file has to show the file, and a redacted text written back would destroy what
-it hid; the port is loopback and unauthenticated either way, so this grants a reader nothing
-a `cat` did not.
+it hid. Loopback is the default bind address, not a caller identity or a filesystem
+permission check. The bind address is configurable, and general HTTP/WebSocket caller
+authentication is not implemented ([#328](https://github.com/cschadewitz/Project_Orca/issues/328)).
+Treat all reachable callers as trusted to read these bytes, including environment values.
+Read-only mode and the maintenance admission token do not provide general authorization.
 
 `schema` describes `OrcaConfigSchema`, walked at runtime rather than written out by hand:
 `{ path, type, enum?, required, default?, help? }` per field, with an array's element type
@@ -365,9 +399,13 @@ therefore *canonicalised* rather than stored verbatim — the one place `text` d
 trip byte for byte. A `permissions` document carrying a `default` is refused: answering one
 prompt must not change the answer to every other one (ADR 0009).
 
-**Nothing reloads.** The daemon goes on serving the configuration it booted with; the new one
-takes effect on the next `orca serve`. `config.set` takes no lease and appends no event, so
-editing the config while a run is in flight disturbs neither.
+**Activation depends on the document.** Main configuration is captured at bootstrap and
+changes take effect on the next `orca serve`. Permission sidecars are loaded by
+`openAcpSession` on every permission ask (#271), including an already-open session.
+This reread does not apply general configuration or preserve callbacks across a parked
+run/restart: those are [#332](https://github.com/cschadewitz/Project_Orca/issues/332) and
+[#237](https://github.com/cschadewitz/Project_Orca/issues/237). `config.set` takes no run lease
+and appends no run event. App appearance preferences have their own app-owned lifetime.
 
 ## The plan methods
 
@@ -711,12 +749,15 @@ params: { planId; key; status }                   result: { risk: RiskView; asOf
 ```
 
 Not guarded by a run lease, because a plan is not a run: what serialises them is
-`PlanService`'s per-plan lock, and each one journals with
+one `PlanService` instance's in-memory per-plan queue. Per-file locks protect document
+updates, but the document and journal writes are separate persistence operations, not
+a cross-process transaction. Each write journals with
 `PlanOrigin { kind: "human", actor: "daemon" }` — the same shape `orca plan` writes with
 `actor: "cli"`. The journal is the audit trail, and "a human, through the daemon" is the
 honest entry: these only ever run because a person pressed something.
 
-**A decided decision is reopened explicitly, never overwritten** (#104). Deciding one the
+**Automatic matrix decisions preserve an already-decided choice** (#104). Explicit human
+decisions can replace it without reopening. Deciding one the
 same way again is idempotent and journals nothing; deciding it *differently* re-decides it,
 which is what asking for it means. `recommended` comes back beside the choice when the
 decision has a matrix, so a client can show that a person went against it without the daemon

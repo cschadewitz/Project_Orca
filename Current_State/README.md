@@ -1,4 +1,9 @@
-# Project Orca current-state review
+# Project Orca historical current-state review
+
+**Historical snapshot, not a description of current main.** The original review,
+comparisons, corrections and validation records below retain their 2026-09-29 meaning.
+For current dispositions, read the [2026-10-01 reconciliation](addenda/2026-10-01-main-reconciliation.md)
+and the living [capability ledger and roadmap](../docs/ROADMAP.md).
 
 **Static architecture and maintainability review of `09f32690ffca5d9c79f6d8702481f6efe30a4cf3`, branch `casey/Review-Prompt`, dated 2026-09-29.** The initial working tree was clean; no pre-existing uncommitted implementation was included. All deliverables are under this directory. No application, build, test, migration, service or integration was run.
 

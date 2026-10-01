@@ -105,7 +105,11 @@ Version is shown wherever a run's workflow is named — the run header, the work
 overlay control, the step detail's node line — as `ai-sdlc v11`, and a run pinned to a version
 that is no longer the newest says so with a `◷ pinned` chip rather than looking current.
 
-## As built (v0.5.0)
+## As built (v0.5.0) — historical
+
+The no-stored-version statements in this section are superseded by the v0.6.0
+qualification above and the [current protocol reference](../../packages/protocol/README.md).
+Keep this section as the original viewer/editor design context.
 
 The viewer shipped in #177; everything above about editing is still ahead of it. What exists,
 and the two things a reader of this file would otherwise get wrong:

@@ -1,3 +1,6 @@
+# Frozen historical review artifacts; preserve their recorded bytes and checksums.
+Current_State/
+
 # Generated or vendored.
 node_modules/
 dist/
