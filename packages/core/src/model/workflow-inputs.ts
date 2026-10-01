@@ -196,7 +196,7 @@ function redactDeclaration(decl: WorkflowInputDeclaration, inherited: boolean): 
   const sensitive = inherited || decl.sensitive === true;
   const { default: dflt, enum: values, items, properties, ...rest } = decl;
   const out: WorkflowInputDeclaration = { ...rest };
-  if (!sensitive && dflt !== undefined) out.default = dflt;
+  if (!sensitive && !containsSensitiveInput(decl) && dflt !== undefined) out.default = dflt;
   if (!sensitive && values !== undefined) out.enum = values;
   if (items) out.items = redactDeclaration(items, sensitive);
   if (properties) {
@@ -206,10 +206,19 @@ function redactDeclaration(decl: WorkflowInputDeclaration, inherited: boolean): 
   return out;
 }
 
-/** The top-level var names a schema marks sensitive; their values never belong in a display view. */
+/** Whether a value contains any sensitive declaration, including object properties and array items. */
+function containsSensitiveInput(decl: WorkflowInputDeclaration): boolean {
+  return (
+    decl.sensitive === true ||
+    (decl.items !== undefined && containsSensitiveInput(decl.items)) ||
+    Object.values(decl.properties ?? {}).some(containsSensitiveInput)
+  );
+}
+
+/** Top-level vars containing sensitive declarations; omit the whole value from discovery. */
 export function sensitiveInputNames(schema: WorkflowInputSchema | undefined): string[] {
   if (!schema) return [];
   return Object.entries(schema.fields)
-    .filter(([, d]) => d.sensitive === true)
+    .filter(([, d]) => containsSensitiveInput(d))
     .map(([name]) => name);
 }

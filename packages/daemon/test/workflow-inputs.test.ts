@@ -122,6 +122,46 @@ describe("workflow view with an input declaration (#330)", () => {
     expect(JSON.stringify(view)).not.toMatch(/secret/);
   });
 
+  it("omits enclosing defaults and vars with sensitive object or array descendants", () => {
+    const def = parseWorkflow(TYPED.replace(/vars:[\s\S]*?(?=start:)/, `
+vars:
+  credentials: { token: VAR_SECRET, label: visible }
+  accounts: [{ token: ARRAY_VAR_SECRET }]
+  tokens: [ITEM_VAR_SECRET]
+  mode: fast
+inputSchema:
+  fields:
+    credentials:
+      type: object
+      default: { token: DEFAULT_SECRET, label: visible }
+      properties:
+        token: { type: string, sensitive: true }
+        label: { type: string }
+    accounts:
+      type: array
+      default: [{ token: ARRAY_DEFAULT_SECRET }]
+      items:
+        type: object
+        properties:
+          token: { type: string, sensitive: true }
+    tokens:
+      type: array
+      default: [ITEM_DEFAULT_SECRET]
+      items: { type: string, sensitive: true }
+    mode: { type: string, default: fast }
+`));
+    const before = structuredClone(def);
+    const view = workflowView(def, ["3"]);
+    expect(WorkflowViewSchema.parse(view)).toEqual(view);
+    expect(view.vars).toEqual({ mode: "fast" });
+    for (const name of ["credentials", "accounts", "tokens"])
+      expect(view.inputSchema?.fields[name]).not.toHaveProperty("default");
+    expect(view.inputSchema?.fields.credentials?.properties?.token).toEqual({ type: "string", sensitive: true });
+    expect(view.inputSchema?.fields.mode?.default).toBe("fast");
+    expect(JSON.stringify(view)).not.toContain("SECRET");
+    expect(def).toEqual(before);
+  });
+
   it("is unchanged for a workflow that only documents its inputs", () => {
     const legacy: WorkflowDefinition = parseWorkflow(TYPED.replace(/inputSchema:[\s\S]*?(?=start:)/, ""));
     const view = workflowView(legacy, ["3"]);
