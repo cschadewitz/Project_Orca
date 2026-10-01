@@ -1,0 +1,87 @@
+{
+  "id": "integration-kepler",
+  "title": "Kepler task directory adapter",
+  "owner": "packages/integrations",
+  "scope": "kepler/workspace-provider.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "inspectKeplerTask scans task child directories for .git, reads AGENTS/CLAUDE task text and derives a task id from a tasks/<uuid> path.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Provision picks a worktree by work-item repo, matching parent, first worktree, or falls back to parent/task directory.",
+      "evidence": 2
+    },
+    {
+      "classification": "Inferred",
+      "statement": "This adapter integrates through directory conventions rather than a Kepler MCP RPC client; configured agent MCP servers are a separate ACP session mechanism.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/integrations/src/kepler/workspace-provider.ts",
+      "line": 34,
+      "symbol": "export async function inspectKeplerTask"
+    },
+    {
+      "path": "packages/integrations/src/kepler/workspace-provider.ts",
+      "line": 66,
+      "symbol": "export class KeplerTaskWorkspaceProvider"
+    },
+    {
+      "path": "packages/agents/src/acp-session.ts",
+      "line": 207,
+      "symbol": "mcpServers: opts.agent.mcpServers"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Kepler task directory",
+      "type": "external"
+    },
+    {
+      "id": "2",
+      "label": "inspectKeplerTask",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "KeplerTaskWorkspaceProvider",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Run workspace record",
+      "type": "data"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "read task files / discover worktrees",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "provide candidates and task context",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "choose cwd/host",
+      "type": "data",
+      "evidence": 2
+    }
+  ],
+  "limits": "Directory conventions are assumptions, not a versioned Kepler API. This review did not inspect actual external task contents through this code."
+}

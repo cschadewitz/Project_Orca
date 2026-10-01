@@ -1,0 +1,109 @@
+{
+  "id": "engine-dispatch",
+  "title": "Plan registration, scheduling and dispatch nodes",
+  "owner": "packages/engine",
+  "scope": "plan/executors.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Plan custom nodes register decomposition, ingest risks, compute a schedule, dispatch items and wait for dependencies through the same NodeExecutor contract.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "planDispatchExecutor scopes candidate items, recomputes schedule, claims each item and launches children with upstream artifact context through FanOut.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The dispatch loop listens to the local plan journal and also has a polling fallback; wait mode has a deadline, while deferred/blocked/claimed outcomes remain distinct.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Paused child runs park their parent; later execution reattaches prior branches instead of automatically creating replacements.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/engine/src/plan/executors.ts",
+      "line": 870,
+      "symbol": "export const PLAN_EXECUTOR_TYPES"
+    },
+    {
+      "path": "packages/engine/src/plan/executors.ts",
+      "line": 512,
+      "symbol": "export const planDispatchExecutor"
+    },
+    {
+      "path": "packages/engine/src/plan/executors.ts",
+      "line": 551,
+      "symbol": "const pollMs = n.pollMs"
+    },
+    {
+      "path": "packages/engine/src/orchestrator.ts",
+      "line": 1166,
+      "symbol": "const resumedId = self.interruptedChild"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Decomposition / plan custom node",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "PlanService schedule + journal",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Dispatcher + FanOut slots",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Persistent item claim",
+      "type": "storage"
+    },
+    {
+      "id": "5",
+      "label": "Child workflow runs",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "register inputs / compute schedule",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "ready set + journal wake-up",
+      "type": "message",
+      "evidence": 3
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "claim before launch",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "5",
+      "label": "dispatch / reattach / cancel",
+      "type": "call",
+      "evidence": 4
+    }
+  ],
+  "limits": "Concurrency is allocated per dispatcher/FanOut; source does not show a shared host-wide quota or a durable global job queue."
+}

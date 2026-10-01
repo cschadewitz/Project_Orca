@@ -1,0 +1,140 @@
+{
+  "id": "adapter-packages",
+  "title": "Application, integration and tooling dependencies",
+  "owner": "repository",
+  "scope": "Composition packages and build-only edges around the runtime spine",
+  "kind": "system",
+  "claims": [
+    {
+      "classification": "Declared",
+      "statement": "CLI composes the engine, integrations and daemon and includes scripted testing support for demo.",
+      "evidence": 1
+    },
+    {
+      "classification": "Declared",
+      "statement": "App runtime imports protocol/design; daemon is a development dependency used for bundled subprocess production.",
+      "evidence": 2
+    },
+    {
+      "classification": "Declared",
+      "statement": "Integrations depend on engine/agents/store/core; testing depends on agents/core and ACP SDK.",
+      "evidence": 3
+    },
+    {
+      "classification": "Declared",
+      "statement": "Font and ESLint tools are independent workspace dependency closures.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/cli/package.json",
+      "line": 17,
+      "symbol": "\"dependencies\""
+    },
+    {
+      "path": "packages/app/package.json",
+      "line": 17,
+      "symbol": "\"dependencies\""
+    },
+    {
+      "path": "packages/integrations/package.json",
+      "line": 21,
+      "symbol": "\"dependencies\""
+    },
+    {
+      "path": "pnpm-workspace.yaml",
+      "line": 2,
+      "symbol": "packages:"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "@orca/cli: composition and executables",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "@orca/integrations: ACP / Kepler / T3 / JEV",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "@orca/engine + daemon runtime spine",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "@orca/app: desktop processes",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "@orca/protocol + design",
+      "type": "component"
+    },
+    {
+      "id": "6",
+      "label": "@orca/testing: scripted ACP executable",
+      "type": "component"
+    },
+    {
+      "id": "7",
+      "label": "font-build + eslint-config tooling",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "compose adapters",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "3",
+      "label": "direct runtime services",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "6",
+      "label": "demo fixture runtime dependency",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "engine ports; also agents/store/core",
+      "type": "dependency",
+      "evidence": 3
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "runtime wire/design imports",
+      "type": "dependency",
+      "evidence": 2
+    },
+    {
+      "from": "4",
+      "to": "3",
+      "label": "development-only daemon bundling",
+      "type": "dependency",
+      "evidence": 2
+    },
+    {
+      "from": "7",
+      "to": "5",
+      "label": "generate fonts / enforce source constraints",
+      "type": "dependency",
+      "evidence": 4
+    }
+  ],
+  "limits": "Detailed external and development dependencies are in the manifest table. Build-time inclusion of daemon code is separate from renderer authority."
+}

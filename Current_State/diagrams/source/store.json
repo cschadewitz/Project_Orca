@@ -1,0 +1,99 @@
+{
+  "id": "store",
+  "title": "@orca/store",
+  "owner": "packages/store",
+  "scope": "Persistence ports and file/memory implementations",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Stores groups events, artifacts, requests, workItems, claims, leases, plan collections/journal and workflow versions; bootstrap selects fileStores or memoryStores.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "File implementations combine per-log append serialization, whole-collection rewrites, blob files, immutable workflow definitions and ownership records.",
+      "evidence": 2
+    },
+    {
+      "classification": "Inferred",
+      "statement": "These ports expose no cross-collection transaction; durability and atomicity are operation-specific rather than one database transaction spanning a run and plan.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/store/src/document-store.ts",
+      "line": 223,
+      "symbol": "export interface Stores"
+    },
+    {
+      "path": "packages/store/src/document-store.ts",
+      "line": 239,
+      "symbol": "export function fileStores"
+    },
+    {
+      "path": "packages/store/src/document-store.ts",
+      "line": 20,
+      "symbol": "export interface DocumentStore"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Engine / daemon readers",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Stores ports",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "JSONL run + plan logs",
+      "type": "storage"
+    },
+    {
+      "id": "4",
+      "label": "JSON documents + blobs + versions",
+      "type": "storage"
+    },
+    {
+      "id": "5",
+      "label": "Claims / leases / file locks",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "invoke persistence ports",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "append and replay",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "read/write collections and content",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "coordinate ownership",
+      "type": "call",
+      "evidence": 2
+    }
+  ],
+  "limits": ""
+}

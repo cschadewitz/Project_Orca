@@ -1,0 +1,99 @@
+{
+  "id": "app-runs",
+  "title": "Run, step, timeline and artifact inspection",
+  "owner": "packages/app",
+  "scope": "renderer/runs/, step/ and artifacts/",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "useRuns takes a list snapshot, merges run.changed and resolves unknown run ids through runs.get; reattachment generation retriggers the snapshot.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Tree and timeline have separate plain models and paged feeds; step logs aggregate agent updates into bounded line/tool views with prepend and hold handling.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Artifact panel fetches selected versions, renders body-specific content and computes local version diffs.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/renderer/src/runs/use-runs.ts",
+      "line": 45,
+      "symbol": "export function useRuns"
+    },
+    {
+      "path": "packages/app/renderer/src/step/use-step-log.ts",
+      "line": 77,
+      "symbol": "export function useStepLog"
+    },
+    {
+      "path": "packages/app/renderer/src/artifacts/artifact-panel.tsx",
+      "line": 63,
+      "symbol": "export function ArtifactPanel"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Run/tree/timeline selection",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Snapshot + notification hooks",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Step line/tool buffer",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "VirtualList run/timeline/output views",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Artifact body/version panel",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "read selected run/event pages",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "fold coalesced updates",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "render visible rows / follow",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "1",
+      "to": "5",
+      "label": "open artifact id/name/version",
+      "type": "call",
+      "evidence": 3
+    }
+  ],
+  "limits": "Different feeds use merge, cursor catch-up or invalidation. Cursor/selection preservation is not evidence that all cross-process store changes are pushed."
+}

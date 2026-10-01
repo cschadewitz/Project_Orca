@@ -1,0 +1,99 @@
+{
+  "id": "app-updates",
+  "title": "Desktop updates and restart coordination",
+  "owner": "packages/app",
+  "scope": "main/updates.ts, update-driver.ts, update-ipc.ts, workspace update hooks",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "updateDriver enables the private HTTPS generic feed only in packaged Windows x64/arm64 builds, reads credentials from an operator file and disables automatic download/install and downgrade.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Updates orders draft preparation, daemon maintenance preparation, daemon stop and installer invocation; failure attempts resume and releases draft holds.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Workspace prepares/stops only its owned daemon; external daemon lifecycle is separate from installing the desktop app.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/src/main/update-driver.ts",
+      "line": 5,
+      "symbol": "export function updateDriver"
+    },
+    {
+      "path": "packages/app/src/main/updates.ts",
+      "line": 32,
+      "symbol": "async act(action:"
+    },
+    {
+      "path": "packages/app/src/main/workspace.ts",
+      "line": 134,
+      "symbol": "async prepareUpdate"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "User check/download/restart",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "Updates state machine",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Private HTTPS feed + NsisUpdater",
+      "type": "external"
+    },
+    {
+      "id": "4",
+      "label": "Renderer draft acknowledgments",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Owned daemon maintenance / stop",
+      "type": "process"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "explicit update action",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "check/download/install",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "prepare draft barrier",
+      "type": "message",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "close admission then stop",
+      "type": "call",
+      "evidence": 3
+    }
+  ],
+  "limits": "Cross-platform desktop packaging does not imply cross-platform in-app updates. Credentials and feed service are external deployment dependencies."
+}

@@ -1,0 +1,87 @@
+{
+  "id": "tool-fonts",
+  "title": "@orca/font-build",
+  "owner": "tools/font-build",
+  "scope": "Font source dependencies, subsetting and committed outputs",
+  "kind": "tool",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "The font build script consumes installed IBM Plex and Noto font sources, subsets selected glyph ranges and emits bundled font assets.",
+      "evidence": 1
+    },
+    {
+      "classification": "Declared",
+      "statement": "Font source packages and subset tools are isolated in a tooling workspace, with upstream telemetry postinstalls disabled in workspace configuration.",
+      "evidence": 2
+    },
+    {
+      "classification": "Declared",
+      "statement": "Design font tests inspect declared faces/glyph coverage and bundled files.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "tools/font-build/build-fonts.js",
+      "line": 26,
+      "symbol": "import"
+    },
+    {
+      "path": "pnpm-workspace.yaml",
+      "line": 19,
+      "symbol": "\"@ibm/plex-sans\": false"
+    },
+    {
+      "path": "packages/design/test/fonts.test.ts",
+      "line": 36,
+      "symbol": "describe("
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "IBM Plex + Noto packages",
+      "type": "external"
+    },
+    {
+      "id": "2",
+      "label": "font-build subsetting script",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Committed woff2 + licenses",
+      "type": "data"
+    },
+    {
+      "id": "4",
+      "label": "Design CSS / app renderer",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "read pinned dependency font inputs",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "subset and emit",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "load bundled typefaces",
+      "type": "dependency",
+      "evidence": 3
+    }
+  ],
+  "limits": "No assets were regenerated; actual glyph rendering is unverified."
+}

@@ -1,0 +1,109 @@
+{
+  "id": "daemon-transport",
+  "title": "RPC, socket and admission boundary",
+  "owner": "packages/daemon",
+  "scope": "server.ts, socket.ts, methods.ts and maintenance.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "HTTP serves POST /rpc and GET /health; body size is limited, params are schema-checked and thrown errors become response envelopes.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The WebSocket upgrade accepts /socket, handles subscription lifecycle and routes other methods through the same dispatcher.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Maintenance tracks active wrapped method promises, admits hello/subscription management, and uses an optional persistent admission file plus token ownership.",
+      "evidence": 3
+    },
+    {
+      "classification": "Inferred",
+      "statement": "Default binding is loopback but host is configurable. Neither shown transport authenticates general RPC callers or checks WebSocket Origin.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/daemon/src/server.ts",
+      "line": 66,
+      "symbol": "export async function dispatch"
+    },
+    {
+      "path": "packages/daemon/src/socket.ts",
+      "line": 60,
+      "symbol": "export function attachSocket"
+    },
+    {
+      "path": "packages/daemon/src/maintenance.ts",
+      "line": 31,
+      "symbol": "wrap(table:"
+    },
+    {
+      "path": "packages/daemon/src/server.ts",
+      "line": 97,
+      "symbol": "const host = opts.host"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Local or configured network caller",
+      "type": "external"
+    },
+    {
+      "id": "2",
+      "label": "HTTP /rpc or WS /socket",
+      "type": "process"
+    },
+    {
+      "id": "3",
+      "label": "Method params validation",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Maintenance barrier",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Model handler",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "send envelope",
+      "type": "message",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "parse / select method",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "admit tracked operation",
+      "type": "call",
+      "evidence": 3
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "await handler and map failure",
+      "type": "call",
+      "evidence": 3
+    }
+  ],
+  "limits": "Maintenance token coordinates update ownership; it is not general API authentication. Health answers process liveness, not complete storage/agent health."
+}

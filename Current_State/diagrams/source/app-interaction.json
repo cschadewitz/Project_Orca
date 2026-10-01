@@ -1,0 +1,116 @@
+{
+  "id": "app-interaction",
+  "title": "Shared renderer interaction infrastructure",
+  "owner": "packages/app",
+  "scope": "renderer/ui/, list/, keyboard-map, palette, layers and a11y/",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "VirtualList renders a viewport window, owns row semantics/selection keys and supports follow/hold and prepend compensation.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "KeyboardMap registers scoped commands; the palette reads command registries and object sources, while LayerStack centralizes Escape behavior.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Menu owns popup focus/placement and routes navigation through shared keyboard infrastructure; announcer holds a common live region.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Pane boundaries share a registry that validates/clamps remembered sizes and connects to preferences.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/renderer/src/list/virtual-list.tsx",
+      "line": 161,
+      "symbol": "export function VirtualList"
+    },
+    {
+      "path": "packages/app/renderer/src/keyboard-map.ts",
+      "line": 273,
+      "symbol": "export class KeyboardMap"
+    },
+    {
+      "path": "packages/app/renderer/src/ui/menu.tsx",
+      "line": 256,
+      "symbol": "export function Menu"
+    },
+    {
+      "path": "packages/app/renderer/src/panes.ts",
+      "line": 88,
+      "symbol": "export const PANE_BOUNDARIES"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Surface components",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "UI primitives + Menu + PaneSplitter",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "VirtualList + viewport arithmetic",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "KeyboardMap / layers / palette",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Shared announcements + preferences",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "compose reusable controls",
+      "type": "dependency",
+      "evidence": 3
+    },
+    {
+      "from": "1",
+      "to": "3",
+      "label": "render row windows",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "register scoped commands",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "register list navigation",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "5",
+      "label": "announce and persist choices",
+      "type": "call",
+      "evidence": 4
+    }
+  ],
+  "limits": "Accessibility and layout behavior are intended by source/test contracts; no rendered UI or assistive technology was exercised."
+}

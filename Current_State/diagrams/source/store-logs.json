@@ -1,0 +1,99 @@
+{
+  "id": "store-logs",
+  "title": "Run logs and planning journal",
+  "owner": "packages/store",
+  "scope": "event-store, jsonl-event-store, jsonl-log, plan journal",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "JsonlLogDir serializes same-key writes, takes a filesystem lock, derives the next sequence and appends. It detects a non-newline tail before subsequent writes.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "JsonlEventStore supports typed filtering and forward/backward range scans; each run has its own sequence domain.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "PlanJournal append notifies listeners attached to that journal object; it does not watch writes made by another process.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/store/src/jsonl-log.ts",
+      "line": 108,
+      "symbol": "private async appendLocked"
+    },
+    {
+      "path": "packages/store/src/jsonl-event-store.ts",
+      "line": 57,
+      "symbol": "override async readRange"
+    },
+    {
+      "path": "packages/store/src/plan-store.ts",
+      "line": 38,
+      "symbol": "abstract class BasePlanJournal"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Run/plan event producer",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "JsonlLogDir + withFileLock",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "runs/<id>.jsonl / plans/<id>.jsonl",
+      "type": "storage"
+    },
+    {
+      "id": "4",
+      "label": "Same-process listeners",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Range / replay reader",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "append sequenced record",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "persist JSONL",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "4",
+      "label": "publish after append",
+      "type": "message",
+      "evidence": 3
+    },
+    {
+      "from": "5",
+      "to": "3",
+      "label": "scan by cursor and event type",
+      "type": "data",
+      "evidence": 2
+    }
+  ],
+  "limits": "Ordering is per log, not global. Invalid JSON and valid JSON with invalid schemas have different handling; power-loss durability is not established by source inspection."
+}
