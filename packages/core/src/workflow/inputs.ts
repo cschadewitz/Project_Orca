@@ -126,7 +126,7 @@ export function checkInputValue(
       }
       if (decl.additionalProperties === false)
         for (const key of Object.keys(record))
-          if (!Object.hasOwn(declared, key)) fail("is not a declared property", `${path}.${key}`);
+          if (!Object.hasOwn(declared, key)) fail("is not a declared property", secret ? path : `${path}.${key}`);
       break;
     }
   }

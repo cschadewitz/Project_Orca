@@ -259,6 +259,37 @@ inputSchema:
       expect(JSON.stringify(errors)).not.toMatch(/secret|leaked|\^sk-/);
     });
 
+    it("keeps sensitive dynamic keys out of diagnostics while preserving declared paths", () => {
+      const schema = wf(`inputSchema:
+  fields:
+    auth:
+      type: object
+      sensitive: true
+      additionalProperties: false
+      properties:
+        nested:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              token: { type: string, required: true }
+    public:
+      type: object
+      additionalProperties: false`);
+      const result = validateWorkflowInputs(schema, {
+        auth: { SENSITIVE_KEY: "value", nested: [{ NESTED_SECRET: "value" }] },
+        public: { extra: "value" },
+      });
+      expect(result.validation.errors).toEqual([
+        { path: "vars.auth.nested[0].token", message: "is required" },
+        { path: "vars.auth.nested[0]", message: "is not a declared property" },
+        { path: "vars.auth", message: "is not a declared property" },
+        { path: "vars.public.extra", message: "is not a declared property" },
+      ]);
+      expect(JSON.stringify(result.validation)).not.toMatch(/SENSITIVE_KEY|NESTED_SECRET/);
+    });
+
     it("are redacted from discovery at every depth", () => {
       const redacted = redactWorkflowInputSchema(def.inputSchema!);
       expect(redacted.fields.apiKey).toEqual({ type: "string", sensitive: true, pattern: "^sk-" });
