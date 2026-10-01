@@ -1,0 +1,99 @@
+{
+  "id": "agents-hosts",
+  "title": "Host adapters and agent registry",
+  "owner": "packages/agents",
+  "scope": "host.ts and hosts/",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "LocalHost spawns the configured command/args with inherited environment overlaid by agent and invocation environment; its exec path uses a shell.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "SshHost constructs a quoted login-shell command over the ssh binary; remote filesystem methods issue shell commands, including batched existence checks.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Agent health is memory owned by the registry: handshake success/failure and stream activity update it; it is not a persistent agent history.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/agents/src/hosts/local-host.ts",
+      "line": 47,
+      "symbol": "spawnAgent(agent:"
+    },
+    {
+      "path": "packages/agents/src/hosts/ssh-host.ts",
+      "line": 66,
+      "symbol": "spawnAgent(agent:"
+    },
+    {
+      "path": "packages/agents/src/hosts/registry.ts",
+      "line": 95,
+      "symbol": "export class AgentHealthTracker"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Registry + role mapping",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Host interface",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Local child process / filesystem",
+      "type": "external"
+    },
+    {
+      "id": "4",
+      "label": "SSH child / remote shell / files",
+      "type": "external"
+    },
+    {
+      "id": "5",
+      "label": "Health memory",
+      "type": "data"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "resolve agent host",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "spawn and file operations",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "SSH command and content stream",
+      "type": "message",
+      "evidence": 2
+    },
+    {
+      "from": "1",
+      "to": "5",
+      "label": "record handshake / activity",
+      "type": "data",
+      "evidence": 3
+    }
+  ],
+  "limits": "SSH transport uses the local ssh process and remote credentials/configuration. Remote process-tree cleanup and cross-OS path semantics require later execution evidence."
+}

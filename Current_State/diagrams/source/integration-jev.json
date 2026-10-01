@@ -1,0 +1,99 @@
+{
+  "id": "integration-jev",
+  "title": "JEV evaluation executor",
+  "owner": "packages/integrations",
+  "scope": "jev/",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "The plugin registers custom:jev-eval. Execution validates the custom node, requires a pinned model, resolves explicitly selected artifacts and bounds serialized state characters.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The HTTP provider sends a bearer-authenticated POST /v1/systemone. Node timeout and run cancellation are composed into a signal.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Response validation checks requested answer keys and numerical structures; results or configured failure records become provenance-bearing artifacts with parent input ids.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/integrations/src/jev/executor.ts",
+      "line": 138,
+      "symbol": "export function jevEvalExecutor"
+    },
+    {
+      "path": "packages/integrations/src/jev/http-provider.ts",
+      "line": 33,
+      "symbol": "async evaluate(request:"
+    },
+    {
+      "path": "packages/integrations/src/jev/validate.ts",
+      "line": 122,
+      "symbol": "export function validateJevResponse"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Custom node + rubric + selected artifacts",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "JEV executor + validation",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Injected provider / HTTP provider",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "TypeSafe service",
+      "type": "external"
+    },
+    {
+      "id": "5",
+      "label": "Evaluation artifact + step data",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "resolve, bound and validate inputs",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "evaluate with timeout/abort",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "POST selected bodies and context",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "record validated result or failure",
+      "type": "data",
+      "evidence": 3
+    }
+  ],
+  "limits": "Credentials come from injection or environment; model output quality, billing and service availability are outside static scope. This review does not verify third-party API documentation."
+}

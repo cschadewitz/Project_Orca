@@ -127,7 +127,10 @@ facade alike. Two smaller corrections travel with it: the session now passes the
 workspace as the evaluation scope, without which the workspace‑relative paths this ADR
 insists on could never match anything; and a sidecar that is corrupt is logged once at warn
 and skipped for the ask rather than failing it, because an unreadable file must not be able
-to block an agent — and skipping only ever loses a grant, never a restriction.
+to block an agent. **2026-10-01 clarification:** this fallback can lose restrictions too:
+the sidecar schema allows deny/ask rules, and dropping them can expose a later default
+allow. Configured rules still precede the overlay. A conservative error policy is not
+established by rereading; see [R07 reconciliation](../../Current_State/addenda/2026-10-01-main-reconciliation.md).
 
 ## Consequences
 + The hand‑written half of the config stays hand‑written. Nothing appends to the Nth element

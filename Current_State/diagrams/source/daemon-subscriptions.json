@@ -1,0 +1,99 @@
+{
+  "id": "daemon-subscriptions",
+  "title": "Notifications and replay",
+  "owner": "packages/daemon",
+  "scope": "notifications.ts and subscriptions.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Subscription attaches a listener before reading a run replay, buffers events, then drops overlap by sequence before live delivery.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Agent output is coalesced per step; terminal run delivery flushes held batches.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Agent/config/plan notifications attach only for store-wide subscriptions; since is a run cursor and does not replay those channels.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/daemon/src/subscriptions.ts",
+      "line": 166,
+      "symbol": "async start():"
+    },
+    {
+      "path": "packages/daemon/src/subscriptions.ts",
+      "line": 278,
+      "symbol": "private batch("
+    },
+    {
+      "path": "packages/daemon/src/subscriptions.ts",
+      "line": 212,
+      "symbol": "if (runId === undefined && this.opts.plans)"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "EventStore / PlanJournal / model listeners",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Subscription buffer + batcher",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Run-specific eventsRange replay",
+      "type": "storage"
+    },
+    {
+      "id": "4",
+      "label": "WebSocket notification",
+      "type": "message"
+    },
+    {
+      "id": "5",
+      "label": "App subscription parser",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "same-process events and revisions",
+      "type": "message",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "2",
+      "label": "catch up after run cursor",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "emit typed notifications",
+      "type": "message",
+      "evidence": 2
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "parse, dispatch to UI feed",
+      "type": "message",
+      "evidence": 3
+    }
+  ],
+  "limits": "Store-wide reconnect cannot use a single run seq. Agent health has no durable replay; plan seq belongs to the plan journal, not a run log."
+}

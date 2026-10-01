@@ -145,8 +145,8 @@ it is the one remembered appearance a drag can set by accident.
 **Lists do not poll. The daemon pushes.** `window.orca.notifications.subscribe` is the raw
 envelope stream; wrap it with `createNotificationStream` (`renderer/src/notifications.ts`)
 and listen to one method — `run.changed`, `step.changed`, `agent.update`, `input.opened`,
-`input.answered`, `event.appended`, `agent.changed` — with an optional `runId` filter. Never
-re-read a list because a notification arrived; a notification for an object the list has
+`input.answered`, `event.appended`, `agent.changed` — with an optional `runId` filter. For run
+patch notifications, do not re-read the whole list; a notification for an object the list has
 never seen is resolved with one `runs.get` and inserted. Every *run* notification carries
 `seq`, the cursor, and the main process owns reconnection and resume, so a screen only has to
 unsubscribe when it goes away. `agent.changed` is the one that is not about a run: it carries
@@ -155,6 +155,11 @@ no `runId` and no `seq`, it goes only to a store-wide subscription, and it carri
 inside) — render the batch, do not assume one line per frame. And a push can never tell you
 a run went `stale`: that is a lapsed lease, which is nothing happening, so it shows up only
 on a read.
+
+`plan.changed`, `config.changed` and `workflows.changed` are scoped invalidations,
+not full-object patches: their consumers reread the affected snapshot. Reconnect generation
+changes can require fresh reads too. Keep these recovery reads separate from periodic polling;
+not every data family yet has a complete reconnect convergence contract.
 
 **The connection is pushed too, and it is a different channel.** `window.orca.connection`
 (`read()` for the snapshot, `subscribe()` for the changes) carries

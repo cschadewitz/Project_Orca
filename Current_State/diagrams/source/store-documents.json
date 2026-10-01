@@ -1,0 +1,87 @@
+{
+  "id": "store-documents",
+  "title": "Mutable document collections",
+  "owner": "packages/store",
+  "scope": "Requests, work items, plans, dependencies, risks, decisions",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "JsonFileDocumentStore maintains an inode/size/mtime cache, overlays queued changes for reads and coalesces concurrent mutations into locked whole-file rewrites.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The writer reloads under its file lock, writes a temporary file, syncs that file and renames it into place.",
+      "evidence": 2
+    },
+    {
+      "classification": "Inferred",
+      "statement": "A service-level list-then-put decision remains outside the collection lock. Independent services can base business decisions on separate snapshots even when individual writes serialize.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/store/src/document-store.ts",
+      "line": 80,
+      "symbol": "export class JsonFileDocumentStore"
+    },
+    {
+      "path": "packages/store/src/document-store.ts",
+      "line": 145,
+      "symbol": "private enqueue("
+    },
+    {
+      "path": "packages/engine/src/plan/service.ts",
+      "line": 187,
+      "symbol": "private withPlan"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "PlanService / ProgramService / projections",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "DocumentStore<T>",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Mutation queue + fingerprint cache",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Whole-collection JSON file",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "get/list/put/putMany/delete",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "queue and overlay mutations",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "locked reload, sync, rename",
+      "type": "data",
+      "evidence": 2
+    }
+  ],
+  "limits": "The inspected shared-store PlanService test uses sequential service calls; it does not establish simultaneous uniqueness or multi-file transaction isolation."
+}

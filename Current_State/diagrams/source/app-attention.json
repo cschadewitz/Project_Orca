@@ -1,0 +1,99 @@
+{
+  "id": "app-attention",
+  "title": "Attention and human controls",
+  "owner": "packages/app",
+  "scope": "renderer/attention/ and main/alerts.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "useAttention shares open asks, failed/running summaries, incoming changes and derived badge/OS alert inputs.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Gate, permission and generic answer cards share a plain model for options/digits; useControls calls input answer or run resume/cancel through the bridge.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Main alerts implement tier preferences and timed escalation; OS notification activation returns a route target to the renderer.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/renderer/src/attention/use-attention.ts",
+      "line": 72,
+      "symbol": "export function useAttention"
+    },
+    {
+      "path": "packages/app/renderer/src/attention/use-controls.ts",
+      "line": 51,
+      "symbol": "export function useControls"
+    },
+    {
+      "path": "packages/app/src/main/alerts.ts",
+      "line": 102,
+      "symbol": "export function createAlerts"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "inputs.list + run snapshots / pushes",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "Shared Attention feed",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Gate / permission / answer cards",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Protocol control handlers",
+      "type": "external"
+    },
+    {
+      "id": "5",
+      "label": "OS alerts and badge",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "merge open and settled asks",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "render question/options",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "answer/resume/cancel",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "publish preference-controlled alerts",
+      "type": "message",
+      "evidence": 3
+    }
+  ],
+  "limits": "Standing-grant UI promises follow daemon returned persistence details. A gate and an ACP permission ask have different parking/lifetime behavior."
+}

@@ -1,0 +1,87 @@
+{
+  "id": "tool-eslint",
+  "title": "@orca/eslint-config",
+  "owner": "tools/eslint-config",
+  "scope": "Type-aware lint, app import boundary and token rules",
+  "kind": "tool",
+  "claims": [
+    {
+      "classification": "Declared",
+      "statement": "The workspace config declares type-aware TypeScript lint, a header-comment rule, app import restrictions and token-only inline style rules.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "A standalone CSS checker parses token usage patterns and reports violations in supplied files; root lint composes ESLint and this checker.",
+      "evidence": 2
+    },
+    {
+      "classification": "Declared",
+      "statement": "This workspace pins TypeScript 6.0.3 for typescript-eslint while root compilation declares TypeScript 7.0.2.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "tools/eslint-config/index.js",
+      "line": 23,
+      "symbol": "const appImportBoundary"
+    },
+    {
+      "path": "tools/eslint-config/bin/check-css-tokens.js",
+      "line": 10,
+      "symbol": "import"
+    },
+    {
+      "path": "tools/eslint-config/package.json",
+      "line": 15,
+      "symbol": "\"typescript\":"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Root lint command",
+      "type": "external"
+    },
+    {
+      "id": "2",
+      "label": "ESLint flat config + local rules",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "App import/token/header constraints",
+      "type": "data"
+    },
+    {
+      "id": "4",
+      "label": "CSS token checker",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "load lint configuration",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "enforce declared source boundaries",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "4",
+      "label": "scan renderer/component CSS",
+      "type": "call",
+      "evidence": 2
+    }
+  ],
+  "limits": "Enforcement coverage is configuration evidence, not a claim that current source passes lint."
+}

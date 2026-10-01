@@ -1,0 +1,99 @@
+{
+  "id": "app-main",
+  "title": "Desktop workspace and daemon lifecycle",
+  "owner": "packages/app",
+  "scope": "src/main/index.ts, workspace.ts, daemon-process.ts, connection-state.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Workspace can choose explicit daemon URL, bundled daemon for the default workspace, or a read-only bundled daemon for an opened store. Switching closes the old stream and owned daemon before rebuilding the client.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Main forwards one store-wide daemon subscription to windows; per-run replay support in the client is not used for this shared store subscription.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "ConnectionMachine derives visible connection state from socket/handshake/process state, with delayed loss presentation and a generation signal for reattachment.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/src/main/workspace.ts",
+      "line": 260,
+      "symbol": "private async performSwitch"
+    },
+    {
+      "path": "packages/app/src/main/index.ts",
+      "line": 220,
+      "symbol": "params: {},"
+    },
+    {
+      "path": "packages/app/src/main/connection-state.ts",
+      "line": 115,
+      "symbol": "export class ConnectionMachine"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Open store / environment selection",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "Workspace state machine",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Owned bundled daemon",
+      "type": "process"
+    },
+    {
+      "id": "4",
+      "label": "DaemonClient + subscription",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Connection snapshot to renderer",
+      "type": "data"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "choose target",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "start/stop own daemon only",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "swap client and socket",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "link state + hello + generation",
+      "type": "message",
+      "evidence": 3
+    }
+  ],
+  "limits": "File mode still reads through a daemon. A process opened by another operator is not owned by the app lifecycle."
+}

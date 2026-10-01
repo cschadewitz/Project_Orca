@@ -445,13 +445,18 @@ and least well read by a DOM test (ordering, the text filter, folding a notifica
 row) is a plain module with a plain test; the data is one hook; selection and its keys are
 another; the markup is composed from `ui/`.
 
-**A surface never polls and never re-reads a list because a notification arrived.** One read
+**A surface never polls. Run patch notifications do not trigger whole-list rereads.** One read
 on mount and per filter change, then the stream. A notification about an object the list has
 never seen is resolved with a single read *scoped to that object* and inserted in order — a
 `run.changed` carries a status and a cursor, not a name or a creation time, so there is no row
 to draw from it alone, and an `input.opened` carries the question but not the run's name, how
 long it has waited or the artifacts the decision is about. One `runs.get`, or one
 `inputs.list` for one run; never the list again.
+
+`plan.changed`, `config.changed` and `workflows.changed` are scoped invalidations,
+not full-object patches: their consumers reread the affected snapshot. Reconnect generation
+changes can require fresh reads too. Keep these recovery reads separate from periodic polling;
+not every data family yet has a complete reconnect convergence contract.
 
 Attention is the second surface in this shape and departs from it in one place, deliberately:
 its cards are not rows, so they are not virtualised. What is bounded there is the number of

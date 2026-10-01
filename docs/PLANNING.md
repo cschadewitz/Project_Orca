@@ -170,7 +170,8 @@ Every artifact recorded by an item's run also updates `WorkItem.produced`,
 keyed by artifact kind *and* name, which is what stage-level dependencies test
 (`other@spec` and `other@<artifactName>` both work). Intake happens *inline* in the
 orchestrator, so the next node always sees the updated plan, and it is
-**serialised per plan**: sibling item runs record artifacts at the same time, so
+**serialised per plan within one `PlanService` instance**: sibling item runs record
+artifacts at the same time, so
 they take turns rather than interleaving their read-modify-write updates and
 each raising the same risk. Risks, decisions and dependencies also carry ids
 derived from their key, so a duplicate can only overwrite, never accumulate.
@@ -255,12 +256,14 @@ for decisions whose options are fixed in the workflow.
 projection of the dispatch step's own log (`child.spawned` / `child.finished` /
 `branch.skipped`, ADR 0001 and
 `engine/program/work-items.ts`); the plan side journals each transition the projection makes
-(`work-item.updated`) and re-evaluates the dependencies it clears, so `orca plan journal` and
-`orca plan show` cannot disagree even if the process dies between a child finishing and the
-dispatch step resuming. `custom:plan-dispatch` never skips a branch, so within plan
+(`work-item.updated`) and re-evaluates the dependencies it clears. Resuming dispatch
+replays child events to repair projections; document updates and journal appends are
+separate writes, so immediate agreement after every crash cut point is not guaranteed.
+Per-file exclusion does not make the whole operation transactional across processes.
+`custom:plan-dispatch` never skips a branch, so within plan
 dispatch no run log can produce `blocked` - an item the scheduler refused to start never
 gets a branch. That status the plan owns, through `PlanService.deferWorkItem`, which
-writes the reason and journals `dispatch.deferred` together and never overwrites a status
+writes the reason and then journals `dispatch.deferred` and never overwrites a status
 the projection set. (A plain `parallel` fan‑out does project `blocked`, from
 `branch.skipped` with `reason: dependency`.)
 
@@ -386,20 +389,22 @@ says what is held. Selecting a row opens the work‑item inspector in the docked
 priority reasons, the dependencies with *both* the status stored on the document and the
 scheduler's live evaluation of it, the risks that name the item, and the claim as a link to
 the run. A Journal mode pages the plan journal backwards, newest first. The surface repaints
-from `plan.changed` in place and never polls. Every write is the command palette's — waive a
-dependency, decide, reopen, update a risk, release a claim (#178) — and nothing was added to
-the screen's chrome. **Waiting for v0.6.0:** the dependency graph (#171), the risk matrix
-(#172) and the decision matrix (#173). They are absent from the header's mode control rather
-than disabled, so a person is never offered a segment that does nothing.
+from `plan.changed` in place and never polls. Writes are available through the command
+palette (#178). Since v0.6.0, the
+header offers Schedule, Risks, Decisions, Dependencies and Journal modes (#171–#173).
+Risk and decision modes also expose their own controls and docked details. These are
+implemented modes; capacity scheduling and an automatic Maintain loop remain planned.
+See the [capability ledger](ROADMAP.md) for source owners and the current issue groups.
 
 ## Known limitations
 
-Reviewed when the layer was rebased onto main; tracked as issues #77 and #81–#84 (label
-`planning`), #88, #104 and #105. In short: the scheduler still re‑reads the whole plan on every
-wake, which grows with plan age (#83, `docs/ROADMAP.md` item 12); a *different* choice re-decides a `decided`
-decision without `reopenDecision`, so the decide loop can undo a human's `orca plan decide`
-(#104); artifact intake reconciles even when a signal changed nothing (#105). See
-`docs/ROADMAP.md` item 13. Fixed since: cycle
+The scheduler still rereads the whole plan on each wake; history scale remains unmeasured.
+Artifact intake reconciles unchanged signals (#105), and critical-path treatment of later
+phases/in-progress work remains #108. Automatic matrix intake preserves decided choices
+(#104); an explicit human decision may replace one. Artifact-index locking (#102), fenced
+run writes (#197) and released-item repair (#123) are implemented. These mechanisms do not
+prove every crash/interleaving scenario: see the [historical review reconciliation](../Current_State/addenda/2026-10-01-main-reconciliation.md)
+and [operations/history backlog](ROADMAP.md). Fixed since: cycle
 detection ignores `soft` edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
 artifact intake is serialised per plan (#73); work‑item status is projected from the event
 log, with the plan side following it (#74); the dispatcher loop runs on the same `FanOut` as

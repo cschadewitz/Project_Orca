@@ -1,0 +1,99 @@
+{
+  "id": "agents",
+  "title": "@orca/agents",
+  "owner": "packages/agents",
+  "scope": "Agent registry, host processes, ACP sessions and permissions",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "AgentRegistry resolves concrete agent ids or roles to AgentSpec and AgentHost; per-run role overrides are separate views over the registry.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "AgentSession abstracts prompt, updates, config options, cancellation and close; openAcpSession supplies the production stdio implementation.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Permission evaluation combines configured policy, sidecar rules and conditional defaults before selecting an ACP permission option.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/agents/src/hosts/registry.ts",
+      "line": 325,
+      "symbol": "resolve(selector:"
+    },
+    {
+      "path": "packages/agents/src/session.ts",
+      "line": 28,
+      "symbol": "export interface AgentSession"
+    },
+    {
+      "path": "packages/agents/src/permissions.ts",
+      "line": 216,
+      "symbol": "export async function loadEffectivePermissionPolicy"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "AgentRegistry + health",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "LocalHost / SshHost",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "ACP AgentSession",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Permission evaluation",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "External ACP binary",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "3",
+      "to": "1",
+      "label": "resolve configured agent and host",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "2",
+      "label": "spawn process / access files",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "resolve permission requests",
+      "type": "call",
+      "evidence": 3
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "stdio or SSH stdio",
+      "type": "message",
+      "evidence": 2
+    }
+  ],
+  "limits": ""
+}

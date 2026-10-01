@@ -36,8 +36,9 @@
 ```
 
 Dependencies only point right/down. `core` has no I/O beyond parsing files.
-`engine` depends on the *ports* in `store` and `agents`, never on concrete
-transports, so tests use in‑memory stores and a scripted ACP agent.
+`engine` uses the ports in `store` and `agents`; the orchestrator also supplies a concrete
+`openAcpSession` default when no session factory is injected. CLI bootstrap injects its
+configured factory. Tests use in-memory stores and a scripted ACP agent.
 
 `protocol` is the wire contract (Zod schemas, depends on `core` only) — the envelope, the
 `hello` handshake, and the display read models the read methods answer with, including the
@@ -360,7 +361,8 @@ plan and journals it. The orchestrator calls it inline: after each
 and lifts planning signals from the artifact's front matter (`risks:`,
 `dependencies:`, `decisions:`, risk registers, decision matrices); when a run
 finishes it marks the item and reconciles dependencies. The scheduler
-(`packages/core/src/plan/schedule.ts`) is pure and evaluates dependencies live.
+(`packages/core/src/plan/schedule.ts`) is pure and evaluates open/failed dependencies live;
+satisfied/waived edges are sticky until an explicit reopening path changes them.
 Inside `ai-sdlc`, `custom:plan-await` holds the build until the item's
 build‑phase dependencies are satisfied and passes upstream artifacts into the
 prompt as `vars.upstream`. Full description: `docs/PLANNING.md`.

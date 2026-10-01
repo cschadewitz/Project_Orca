@@ -1,0 +1,109 @@
+{
+  "id": "daemon-config",
+  "title": "Configuration document editing",
+  "owner": "packages/daemon",
+  "scope": "config-model.ts and config-schema.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "ConfigModel reads raw config and permission documents, hashes revisions and returns a schema description plus effective policy. Raw text is returned without redaction.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Set supports text/patch and validateOnly; revision comparison occurs under the respective writer lock and refusal preserves the client draft.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The model changes files and publishes document revisions. Bootstrap-built registries remain fixed; live sessions independently re-read permission sidecars.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Schema description walks Zod nodes to derive field descriptions rather than maintaining a second manually written config field list.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/daemon/src/config-model.ts",
+      "line": 150,
+      "symbol": "async get():"
+    },
+    {
+      "path": "packages/daemon/src/config-model.ts",
+      "line": 216,
+      "symbol": "private async writeConfigFile"
+    },
+    {
+      "path": "packages/cli/src/bootstrap.ts",
+      "line": 182,
+      "symbol": "const agents = AgentRegistry.fromConfig(config)"
+    },
+    {
+      "path": "packages/daemon/src/config-schema.ts",
+      "line": 50,
+      "symbol": "export function describeConfigSchema"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Config form/raw draft",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "ConfigModel revision + validation",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "orca.config.yaml/json",
+      "type": "storage"
+    },
+    {
+      "id": "4",
+      "label": "orca.permissions.json",
+      "type": "storage"
+    },
+    {
+      "id": "5",
+      "label": "config.changed + effective view",
+      "type": "data"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "patch/text with expectedRevision",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "locked atomic config write",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "sidecar-specific replace",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "publish revision after write",
+      "type": "message",
+      "evidence": 1
+    }
+  ],
+  "limits": "Editing an agent executable, templates or workspace config is not a hot-reload operation. Reflection depends on Zod structural details and needs compatibility coverage."
+}

@@ -1,0 +1,94 @@
+{
+  "id": "app-client",
+  "title": "Daemon transport client and IPC contract",
+  "owner": "packages/app",
+  "scope": "src/client/, bridge.ts and preload/index.cts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "DaemonClient sends HTTP request envelopes and validates response envelope and method-specific result schema before returning typed data.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "DaemonSubscription reconnects with bounded backoff values and uses since only for a run-specific subscription; parsed notifications drive listeners.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Main bridge handlers return BridgeResult success/error values instead of IPC promise error stacks; preload exposes corresponding named methods.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/src/client/daemon-client.ts",
+      "line": 179,
+      "symbol": "async call<R>"
+    },
+    {
+      "path": "packages/app/src/client/subscription.ts",
+      "line": 173,
+      "symbol": "private onOpen()"
+    },
+    {
+      "path": "packages/app/src/main/index.ts",
+      "line": 72,
+      "symbol": "function handle<P, R>"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Renderer typed bridge caller",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "CJS preload + main handlers",
+      "type": "boundary"
+    },
+    {
+      "id": "3",
+      "label": "DaemonClient / DaemonSubscription",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "HTTP /rpc + WS /socket",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "named request / BridgeResult",
+      "type": "message",
+      "evidence": 3
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "invoke typed client method",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "schema-validated wire exchange",
+      "type": "message",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "1",
+      "label": "parsed notifications via IPC",
+      "type": "message",
+      "evidence": 2
+    }
+  ],
+  "limits": "Method names and shapes are represented across protocol, daemon tables, client, bridge, preload and main. Typechecking helps but registration parity is a separate maintenance concern."
+}

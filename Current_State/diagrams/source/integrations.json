@@ -1,0 +1,109 @@
+{
+  "id": "integrations",
+  "title": "@orca/integrations",
+  "owner": "packages/integrations",
+  "scope": "ACP facade, Kepler workspaces, T3 Code adapter and JEV plugin",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "The package exports four independent adapters with different maturity and trust boundaries; core engine interfaces remain the integration seams.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The ACP facade exposes ORCA as an agent and translates ORCA events and human gates to the upstream client.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "T3CodeRpc has an injectable contract and an explicitly unimplemented default transport class.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "JEV is registered through the same custom executor plugin API used by application extensions.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/integrations/src/index.ts",
+      "line": 9,
+      "symbol": "export * from \"./acp-facade/index.js\""
+    },
+    {
+      "path": "packages/integrations/src/acp-facade/orca-acp-agent.ts",
+      "line": 87,
+      "symbol": "export class OrcaAcpAgent"
+    },
+    {
+      "path": "packages/integrations/src/t3code/session.ts",
+      "line": 161,
+      "symbol": "export class UnimplementedT3CodeRpc"
+    },
+    {
+      "path": "packages/integrations/src/jev/plugin.ts",
+      "line": 10,
+      "symbol": "export function createJevEvalPlugin"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Engine extension contracts",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "ACP facade",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Kepler provider",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "T3 Code session adapter",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "JEV evaluation plugin",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "2",
+      "to": "1",
+      "label": "call orchestration and human-input port",
+      "type": "dependency",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "1",
+      "label": "implement workspace provider",
+      "type": "dependency",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "1",
+      "label": "implement session contract via injected RPC",
+      "type": "dependency",
+      "evidence": 3
+    },
+    {
+      "from": "5",
+      "to": "1",
+      "label": "register custom executor",
+      "type": "dependency",
+      "evidence": 4
+    }
+  ],
+  "limits": ""
+}

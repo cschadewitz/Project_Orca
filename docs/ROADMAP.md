@@ -1,195 +1,113 @@
-# Roadmap / open items
+# Roadmap and current capabilities
 
-Groundwork is complete and tested end‑to‑end. Deliberately left for follow‑up:
+Reconciled on **2026-10-01** against main `a73ee04f5dc146d19caa265c658cea98abfd152c`.
+The current release is v0.6.0 ([release history](../CHANGELOG.md)); protocol is 1.8.
+This ledger describes code, not a new claim that every runtime/platform scenario was tested.
+The [historical review](../Current_State/README.md) and its
+[dated reconciliation](../Current_State/addenda/2026-10-01-main-reconciliation.md) retain the
+older evidence, corrections and remaining verification questions.
 
-1. **Daemon mode** — `orca serve` exists (`packages/daemon`) with the transport, the
-   `hello` handshake over HTTP and the seven read methods it started with over `Orchestrator`
-   — `runs.list`, `runs.get`, `runs.events`, `inputs.list`, `claims.list` (#150), `artifacts.list`,
-   `artifacts.get` (#159), answering the display read
-   models in `packages/protocol` (its README is the method reference). A step's output is
-   `runs.events` filtered by `stepRunId` rather than a method of its own (#158). The desktop app
-   (`packages/app`) reaches them through `packages/protocol` and nothing else (ADR 0008).
-   `WS /socket` carries the six run `notification` messages off `Orchestrator.subscribe()`, with
-   a per‑run cursor a client resumes from and agent output coalesced to one frame per step
-   per 100ms (#151); the HTTP path is unchanged and a read‑only client never opens a socket.
-   The **control methods** landed in v0.4.0 — `inputs.answer`, `runs.resume`, `runs.cancel`
-   and `runs.start` (protocol 1.4), with `agents.list` / `agents.ping` and the `agent.changed`
-   push beside them. `orca serve` drives runs **by default**; `--read-only` opts out and
-   leaves the four methods out of the dispatch table *and* out of `hello.methods`, and drops
-   `runs.control` from `capabilities`. The port carries no authentication: any process on the
-   machine can reach the control methods over loopback, and the per‑run lease guards against
-   a second *writer* rather than against a caller — an accepted cost, said plainly in
-   `orca serve --help`. What a gate has to *say* caught up with them at protocol 1.6: a
-   workflow's options may be written as `{ id, label, consequence?, destructive? }` and bare
-   strings still parse (#247), an open ask names the agent whose turn it is holding and the
-   host it runs on (#248), and the note a person writes beside an answer is recorded on
-   `human.answered` rather than in the operator's log (#238, `orca answer --note`).
-   **v0.5.0 finished the method inventory at protocol 1.7.** The reads are ten —
-   `workflows.list` and `workflows.get` draw the workflow files as a display graph and
-   `runs.get` gained a `traversal` of the nodes a run took (#174), and `config.get` answers
-   with the workspace's two configuration documents (#174, #266). The **plan methods** over
-   `PlanService` landed (#169): nine reads under `plan.read` and five writes under
-   `plan.write`, `claims.release` among them (#88), with a `plan.changed` push. `config.set`
-   writes one of the two documents (#174, #266). That makes ten methods behind
-   `runs.control`, all ten absent from a `--read-only` daemon's `hello.methods`. Two things
-   are declared and not done: `config.set` **reloads nothing** — the daemon serves the
-   configuration it booted with until the next `orca serve` — and `workflows.changed` is on
-   the wire with nothing emitting it, because there is no workflow reload path yet. Making a
-   running agent session read the permission sidecar as it stands rather than as it booted is
-   #271, in flight for this wave.
-   Human input survives process boundaries: `pause` mode parks the run in its event log and
-   `orca answer <requestId> <option>` resumes it, through the same shared function
-   `inputs.answer` calls. What the daemon does **not** do is keep an agent session alive
-   across the wait — a gate parks the run to the log, the interpreter lets go, and the step
-   that resumes afterwards opens a **fresh** session, so the agent loses the conversation it
-   was in the middle of (#237, split out of #160; unmilestoned). `runs.start` takes a
-   workflow and vars only: it records `requestId` / `workItemId` on `run.created` and writes
-   no request or work‑item document, for the reason below.
-   Two processes over one store are safe now. Every interpreter holds a single‑writer lease
-   per run (#101), and since v0.5.0 the document stores are safe too: `JsonFileDocumentStore`
-   re‑reads a collection under a file lock before every write and renames a uniquely named,
-   flushed temp file over it, so a daemon and a CLI command no longer lose each other's
-   requests, work items and plan records (#196). What is *not* closed is the push channel:
-   the socket fans out *this process's* event store and plan journal, so a run a separate CLI
-   process appends is not pushed and only appears on the next read. That is an in‑memory
-   listener list rather than a stale store, and a store watcher is what would close it.
-   **Open decision for Casey:** `runs.start` stays narrow **by decision**, not because of the
-   store. Submitting a request and decomposing it is a workflow with an agent and an artifact
-   in it, not a record insert, and growing `runs.start` into it would settle that design
-   inside the schema of a method whose job is "run this workflow". A `requests.submit` method
-   goes beside it when somebody designs one; until then the daemon cannot create a request.
-2. **T3 Code WebSocket transport** — implement `T3CodeRpc` over T3's Effect‑RPC envelope and
-   depend on `@t3tools/contracts`; map `thread.meta-updated.worktreePath` into the workspace.
-3. **SQLite stores** — `EventStore`/`ArtifactStore`/`DocumentStore`/`ClaimStore` over
-   `node:sqlite` for large histories; JSONL remains the reviewable default.
-4. **Maintain stage** — a `custom:metrics-watch` node (or a scheduled trigger) that turns
-   breached production controls into new Requests, closing the playbook's loop.
-5. **Remote workspace sync** — optional rsync/`git push` step for SSH hosts that do not share
-   a filesystem with the orchestrator.
-6. **ACP terminal capability** — serve `terminal/*` so agents that require it can run tests
-   through ORCA (currently `terminal: false`).
-7. **Session resume** — use `session/load` for agents that support it so a retried step can
-   continue the same conversation.
-8. **Client‑surfaced selection of agent, model and workflow** — the client above ORCA should
-   pick these the way Kepler picks a model for Claude Code. The mechanism is ACP
-   [session config options](https://agentclientprotocol.com/protocol/session-config-options)
-   (the successor to session modes, already in `@agentclientprotocol/sdk@^1.4.0`): the facade
-   advertises `configOptions` from `session/new` and honours `session/set_config_option`
-   (#188), proxying the sub‑agents' own model lists upstream with `config_option_update`
-   (#189, over the downstream session surface #185). Underneath it, a run needs an override
-   record for role→agent, model and item workflow that replays faithfully and children
-   inherit (#186), the model has to reach the turn (#187), the CLI needs the same flags so
-   it is not ACP‑only (#190), and prompt templates become selectable packs (#191). `/run`
-   and `/status` become advertised slash commands in the same pass (#192). **Moved out of
-   v0.5.0:** #185–#192, with #126 and #127 beside them, are the milestone **"Model and agent
-   selection"** rather than part of the configuration and monitoring wave — picking a model
-   is a different question from seeing what the system is wired to.
-9. **Desktop app** — the foundation is complete (milestone v0.3.0). The design system is
-   done: tokens in both themes, the CSS component layer, the typed status maps
-   (`packages/design`) and the brand book, rules and surface specs (`docs/design/`), with
-   IBM Plex bundled as woff2 (#144) and a dev‑only `#type` route that proves the bundled
-   faces render against the OS stack rather than assuming it (#194). The app is a React
-   renderer on Vite with a hot‑reloading dev loop (#145), theme and density through its own
-   preferences file (#146), the primitives over `components.css` (#147), the window chrome
-   (#148), the command palette over the keyboard map (#149), one `Menu` primitive carrying
-   the popover keyboard and focus contract for every popover after it (#202), and the Runs
-   surface reading `runs.list` and keeping up from the notification stream (#152) — the
-   first screen with real data behind it. The preload is built as CommonJS because a
-   sandboxed preload cannot be ESM (#198), literal colours and sizes are rejected by lint
-   (#153), and the renderer is tested in both themes against the real tokens with an
-   Electron smoke test beside it (#154). v0.4.0 added the three things every later surface
-   builds on: the type scale reaches an element as a second class and a test sweeps the
-   rendered trees to keep it true (#211); `renderer/src/list/` is the virtualised row
-   substrate, with the height read back off `--row-h`, the status gutter over the whole list
-   and the list keys on the keyboard map, adopted by the Runs surface (#155); and the
-   connection is a state machine in the main process pushed over its own bridge channel,
-   which is also where "can write, or why not" comes from (#163). Phase 1's read half is now
-   in: the Runs surface is a run tree over an event timeline with step detail beside it and
-   artifacts in the dock (#155, #156, #157, #158, #159), and Agents is a grid of health cards
-   fed by `agent.changed` (#166). The run's cursor is drawn per run in the timeline's header,
-   which is where it belongs — the status bar outlives any one run's selection and has no
-   single number to show. Phase 1's write half is in too: Attention is the surface, and a gate
-   or a permission ask is answered in place from it or inline in the run it came from, with
-   one count (`inputs.list`'s `waiting`) on the title bar, the sidebar and the dock badge and
-   OS notifications per tier behind the preference (#161, #162); a command may have no key at
-   all and live in the palette alone (#205). The ways in are one route table: `orca://` deep
-   links with the single‑instance lock, **Copy link** on every object header, and the palette
-   listing recent runs, agents and a search over step and artifact names (#165, #206). File
-   mode is real (#164) — **File ▸ Open a store…** re‑points the running app at any workspace
-   with `orca serve --read-only` behind it, so the writes are absent rather than disabled —
-   and `reconnecting` now gives up at backoff saturation (#239). One thing in that list is
-   still not true: writes are not queued while reconnecting, and a control says the daemon is
-   not answering rather than promising a send. The accessibility pass and the cross‑platform
-   screenshots have landed (#167, #213), which **completes phase 1**: the app announces step
-   transitions and terminal states through one polite live region, the output pane is a
-   labelled `log` region rather than a narrated flood, `prefers-contrast: more` is honoured,
-   axe runs over every built surface in both themes, and the bundled type faces are checked by
-   machine on Linux, macOS and Windows against committed baselines. What those checks do *not*
-   reach is written down beside them in `docs/design/50-accessibility-and-keyboard.md`, which
-   now names the check that enforces each of its paragraphs. **Phase 2 shipped in v0.5.0**,
-   "configuration and monitoring": all five surfaces have content. Config is
-   `orca.config.yaml` as a form over the schema the daemon describes, beside the raw file,
-   with the ADR 0009 permission sidecar as its second document (#175, #266); Agents grew the
-   write half — each agent's policy edited where the grants actually live, and `claims.release`
-   (#176); the workflow viewer draws a workflow as a derived graph with a run overlaid on it
-   (#177); Plan is the schedule table, the scheduler's own explanations, a requests sidebar
-   and the journal (#170); and every write the daemon serves is a keyless action in the
-   command palette — answer, cancel, resume, start a run, waive, decide, reopen, risk,
-   release — with nothing added to any screen's chrome (#178). The sidebar's five surfaces
-   have designed glyphs (#261), and #245 is decided: the artifact panel stays raw.
-   **Deferred to v0.6.0:** the dependency graph (#171), the risk matrix (#172) and the
-   decision matrix (#173) — the three remaining modes of Plan. They are *absent* from the
-   object header's mode control rather than disabled, because a segment that never does
-   anything is a dead end; the docked-inspector shape they go in as is
-   `docs/design/80-dependency-graph-options.md`. **Still not done anywhere:** notification
-   tiers (#162), auto‑approval counts (ORCA does not collect that data, and the policy panel
-   says so where a count would have gone), a handshake retry from an agent card, and vars on
-   `runs.start` — nothing in the protocol says what a workflow's inputs are called, so the
-   palette's picker starts a workflow with the workflow's own vars rather than inventing a
-   form. Workflow editing (`docs/design/70-workflow-editing.md`, #181) comes after the viewer
-   and needs the runtime to execute a run against the workflow version it started with, not
-   only the newest; a run already records its workflow version, and `workflows.changed` is on
-   the wire waiting for it.
-10. **Planning: capacity and milestones** — the scheduler orders by dependencies, risk and
-    priority but has no notion of agent capacity per host, calendar milestones or due dates
-    beyond `Decision.dueBy`; add `Milestone` records and a capacity model per host/agent.
-11. **Planning: realised risks reopen work** — `risk.status: realized` is recorded but does
-    not yet create a follow‑up Request (ties into the Maintain stage, item 4).
-12. **Planning: matrix confidence gates** — the shipped program auto‑decides from the matrix;
-    a `decision` node with `source: matrix` plus a gate on `confidence == 'close'` would
-    route close calls to a human. All inputs exist.
-13. **Planning: cross‑plan dependencies and indexes** — one plan per product is assumed and
-    the scheduler re‑reads the whole plan per pass.
-14. **Planning: review findings** — filed as issues #71–#84 when the planning layer was
-    rebased onto main. Done: cycle detection ignores `soft` edges (#71); a work‑item claim
-    stops two dispatchers from launching one item twice (#72); artifact intake is
-    serialised per plan (#73); work‑item status is projected from the event log, with the
-    plan side following it (#74); `custom:plan-dispatch` drives the same `FanOut` as
-    `parallel`, so `failFast` cancels in‑flight items, the journal is watched before the
-    plan is read, and `onWaiting: wait` logs one event per reason under a default timeout
-    (#96, consolidating #75/#76; the per‑wake full‑plan recompute #83 named there is item
-    13's); scheduler explanations, the critical path and cycle messages agree with each
-    other (#80; the remaining critical‑path overlaps are #108); the JSONL event store and
-    plan journal number events on disk under a lock file, so two processes over one store
-    extend one log (#97, consolidating #78/#87); driving a run takes a single‑writer lease
-    that is heartbeated while an interpreter is attached, so a second one is refused rather
-    than interleaved, and `orca leases` lists and breaks them (#101); `custom:decision-matrix`
-    no longer re-decides a decision the artifact intake already made (#79); `orca claims`
-    lists and releases a dead run's work‑item claims (#88, over the wire as `claims.release`
-    since v0.5.0; the released item still reads `in-progress` to the dispatcher, #123); and
-    the document stores write under a file lock and re‑read the collection first, so the
-    lease's guarantee no longer stops at the run log and two processes over one store keep
-    each other's documents (#196). The rest are smaller:
-    #77, #81, #82, #84, #104 (a
-    `decided` decision is re-decided by a different choice without reopening it, so the
-    decide loop can undo a human's pick), #105 (intake reconciles on unchanged signals), and
-    the #97 follow‑ups still open: the artifact index appended without the lock (#102), and
-    lock liveness across pid namespaces (#103) — the lease's heartbeat answers that question
-    for runs, the lock file still decides on pid and age alone. Of the two #101 left of its
-    own, #196 is fixed above; breaking a live lease still leaves a one‑heartbeat window in
-    which the old interpreter can append (#197). Carried over and fixed in v0.5.0 besides: a
-    lease lost while the context loads refuses the run rather than writing (#267), a streamed
-    agent append that fails fails the step (#268), a failed file‑mode daemon start is a failed
-    open (#269), an unreadable artifact body fails the step instead of rendering as `""`
-    (#270), and an empty artifact version has no lines to remove (#250). #237 and #255 are
-    unmilestoned.
+## Implemented foundations and their limits
+
+| Capability | Implemented / released | Source owner and remaining boundary |
+| --- | --- | --- |
+| Agent/model/workflow selection | v0.6.0: persisted role/model/item-workflow overrides, inherited by children; CLI flags, ACP config options/model lists, prompt packs and advertised commands ([#185](https://github.com/cschadewitz/Project_Orca/issues/185)–[#192](https://github.com/cschadewitz/Project_Orca/issues/192)) | [Orchestrator](../packages/engine/src/orchestrator.ts), [agent turn](../packages/engine/src/executors/agent-step.ts), [ACP facade](../packages/integrations/src/acp-facade/orca-acp-agent.ts). This is not a guided app launch workspace ([#334](https://github.com/cschadewitz/Project_Orca/issues/334)), generic capability delivery ([#337](https://github.com/cschadewitz/Project_Orca/issues/337)), or `session/load`. |
+| Plan modes | v0.6.0: Schedule, Risks, Decisions, Dependencies, Journal ([#171](https://github.com/cschadewitz/Project_Orca/issues/171)–[#173](https://github.com/cschadewitz/Project_Orca/issues/173)) | [Mode registry](../packages/app/renderer/src/plan/plan-surface.tsx). Capacity, milestones and automatic Maintain remain future. |
+| Config and permission editing | v0.5.0: revision-aware YAML/sidecar edits; sidecar reread on every agent permission ask ([#271](https://github.com/cschadewitz/Project_Orca/issues/271)) | [Config model](../packages/daemon/src/config-model.ts), [ACP session](../packages/agents/src/acp-session.ts). Main config is loaded at bootstrap; apply generations/provenance remain [#332](https://github.com/cschadewitz/Project_Orca/issues/332). Unreadable sidecars are skipped, which can drop deny/ask rules too. |
+| Durable gates | Run-log-backed parking/answer/resume; concurrent-answer protection | [Human input](../packages/engine/src/human-input.ts), [daemon controls](../packages/daemon/src/control.ts). Durable gates differ from ephemeral tool-permission callbacks. Holding/delivering an answer to the original live callback, lease ownership and restart fallback remain [#237](https://github.com/cschadewitz/Project_Orca/issues/237). |
+| Daemon and notifications | HTTP reads/writes and WebSocket run/store notifications; read-only method omission | [Protocol reference](../packages/protocol/README.md). Local instance feeds do not observe all external writers; reconnect convergence varies by data family. No general caller authentication: [#328](https://github.com/cschadewitz/Project_Orca/issues/328). |
+| Workflow versions | v0.6.0: stored definitions and old-version reads ([#179](https://github.com/cschadewitz/Project_Orca/issues/179)) | [Definition lookup](../packages/engine/src/orchestrator.ts). Same-version live files win; legacy runs may fall back to current. No byte-immutable recipe guarantee. |
+| Extension validation and artifact fields | v0.6.0: optional `NodeExecutor.validate`, bootstrap/CLI preflight and dotted field lookup ([#315](https://github.com/cschadewitz/Project_Orca/issues/315)) | [Executor contract](../packages/engine/src/executors/types.ts), [field lookup](../packages/engine/src/executors/artifact-field.ts). Builtin plan/program schemas remain [#314](https://github.com/cschadewitz/Project_Orca/issues/314); broader R14 metadata/prompt work is not complete. |
+| Ownership and storage | Fenced run leases, per-file document locks, locked artifact index, released-item repair, automatic decided-choice preservation | [Lease store](../packages/store/src/lease-store.ts), [artifact store](../packages/store/src/artifact-store.ts), [work-item projection](../packages/engine/src/program/work-items.ts), [PlanService](../packages/engine/src/plan/service.ts). [#102](https://github.com/cschadewitz/Project_Orca/issues/102)/[#197](https://github.com/cschadewitz/Project_Orca/issues/197)/[#123](https://github.com/cschadewitz/Project_Orca/issues/123)/[#104](https://github.com/cschadewitz/Project_Orca/issues/104) are delivered mechanisms, not proof of all interleavings. Plan queues are instance-local; multi-record writes are not atomic. |
+| Desktop interaction | Five surfaces, revision-aware drafts, virtualized lists, keyboard map, accessibility checks and preference-gated OS notification tiers ([#162](https://github.com/cschadewitz/Project_Orca/issues/162)) | [App renderer](../packages/app/renderer/src). No offline write queue, agent cost, completion percentage or ETA; workflow viewer is not an editor. |
+| Updates | v0.6.0: guarded desktop/daemon updates, protocol 1.8 admission and supervisor identity | [Updating](UPDATING.md), [admission](../packages/daemon/src/maintenance.ts). Maintenance token is not general API authentication; installed-package/signing/recovery evidence is platform-specific. |
+
+## Planned ship groups
+
+All issues [#329](https://github.com/cschadewitz/Project_Orca/issues/329)–[#357](https://github.com/cschadewitz/Project_Orca/issues/357) were **open planned work**, not shipped functionality, when inspected.
+Group labels describe coherent outcomes, not milestones or version promises. The table
+retains the existing hard blockers from issue bodies; a related issue is not automatically
+a blocker. Issue bodies remain authoritative as work evolves. No issues or milestones were
+created or changed by this reconciliation. Follow [Contributing](../CONTRIBUTING.md) before
+changing the plan.
+
+| Existing primary label | Planned outcome / issue owners | Hard prerequisites and parallel work |
+| --- | --- | --- |
+| `ship-group:runtime-foundation` | General authorization [#328](https://github.com/cschadewitz/Project_Orca/issues/328); submission [#329](https://github.com/cschadewitz/Project_Orca/issues/329); typed inputs [#330](https://github.com/cschadewitz/Project_Orca/issues/330); retry-safe admission [#331](https://github.com/cschadewitz/Project_Orca/issues/331); configuration generations [#332](https://github.com/cschadewitz/Project_Orca/issues/332); live-session continuity [#237](https://github.com/cschadewitz/Project_Orca/issues/237); builtin validation [#314](https://github.com/cschadewitz/Project_Orca/issues/314); inbound MCP [#327](https://github.com/cschadewitz/Project_Orca/issues/327); explicit human revisions [#356](https://github.com/cschadewitz/Project_Orca/issues/356) | [#328](https://github.com/cschadewitz/Project_Orca/issues/328) has no new prerequisite; [#330](https://github.com/cschadewitz/Project_Orca/issues/330)/[#314](https://github.com/cschadewitz/Project_Orca/issues/314) can proceed independently. [#329](https://github.com/cschadewitz/Project_Orca/issues/329)/[#332](https://github.com/cschadewitz/Project_Orca/issues/332)/[#237](https://github.com/cschadewitz/Project_Orca/issues/237) need [#328](https://github.com/cschadewitz/Project_Orca/issues/328); [#331](https://github.com/cschadewitz/Project_Orca/issues/331) needs [#329](https://github.com/cschadewitz/Project_Orca/issues/329)/[#328](https://github.com/cschadewitz/Project_Orca/issues/328). [#327](https://github.com/cschadewitz/Project_Orca/issues/327) consumes [#329](https://github.com/cschadewitz/Project_Orca/issues/329)/[#330](https://github.com/cschadewitz/Project_Orca/issues/330)/[#331](https://github.com/cschadewitz/Project_Orca/issues/331)/[#332](https://github.com/cschadewitz/Project_Orca/issues/332)/[#237](https://github.com/cschadewitz/Project_Orca/issues/237)/[#328](https://github.com/cschadewitz/Project_Orca/issues/328). [#356](https://github.com/cschadewitz/Project_Orca/issues/356) consumes [#237](https://github.com/cschadewitz/Project_Orca/issues/237)/[#328](https://github.com/cschadewitz/Project_Orca/issues/328)/[#330](https://github.com/cschadewitz/Project_Orca/issues/330)/[#331](https://github.com/cschadewitz/Project_Orca/issues/331). |
+| `ship-group:configuration-studio` | Daemon identity/draft isolation [#318](https://github.com/cschadewitz/Project_Orca/issues/318); structured config [#333](https://github.com/cschadewitz/Project_Orca/issues/333); guided launch [#334](https://github.com/cschadewitz/Project_Orca/issues/334); prompt/template authoring [#355](https://github.com/cschadewitz/Project_Orca/issues/355) | [#333](https://github.com/cschadewitz/Project_Orca/issues/333) needs [#332](https://github.com/cschadewitz/Project_Orca/issues/332)/[#318](https://github.com/cschadewitz/Project_Orca/issues/318). [#334](https://github.com/cschadewitz/Project_Orca/issues/334) needs [#329](https://github.com/cschadewitz/Project_Orca/issues/329)/[#330](https://github.com/cschadewitz/Project_Orca/issues/330)/[#331](https://github.com/cschadewitz/Project_Orca/issues/331)/[#332](https://github.com/cschadewitz/Project_Orca/issues/332)/[#318](https://github.com/cschadewitz/Project_Orca/issues/318) and can develop alongside [#333](https://github.com/cschadewitz/Project_Orca/issues/333) using fixtures. [#355](https://github.com/cschadewitz/Project_Orca/issues/355) needs [#332](https://github.com/cschadewitz/Project_Orca/issues/332)/[#333](https://github.com/cschadewitz/Project_Orca/issues/333). |
+| `ship-group:scoped-capabilities` | Resolver [#335](https://github.com/cschadewitz/Project_Orca/issues/335); secret references [#336](https://github.com/cschadewitz/Project_Orca/issues/336); session delivery/verification [#337](https://github.com/cschadewitz/Project_Orca/issues/337) | [#335](https://github.com/cschadewitz/Project_Orca/issues/335) needs [#332](https://github.com/cschadewitz/Project_Orca/issues/332)/[#328](https://github.com/cschadewitz/Project_Orca/issues/328); [#336](https://github.com/cschadewitz/Project_Orca/issues/336) needs [#335](https://github.com/cschadewitz/Project_Orca/issues/335)/[#328](https://github.com/cschadewitz/Project_Orca/issues/328); [#337](https://github.com/cschadewitz/Project_Orca/issues/337) needs [#335](https://github.com/cschadewitz/Project_Orca/issues/335)/[#336](https://github.com/cschadewitz/Project_Orca/issues/336). Pure resolver and secret backend work can overlap after contracts agree. This is outbound capability delivery, separate from inbound MCP [#327](https://github.com/cschadewitz/Project_Orca/issues/327). |
+| `ship-group:visual-authoring` | Workflow drafts/publish [#180](https://github.com/cschadewitz/Project_Orca/issues/180); editor [#181](https://github.com/cschadewitz/Project_Orca/issues/181); validation panel [#182](https://github.com/cschadewitz/Project_Orca/issues/182); dry run [#183](https://github.com/cschadewitz/Project_Orca/issues/183) | Build on existing viewer, layout, version store and [#314](https://github.com/cschadewitz/Project_Orca/issues/314). See each issue's blockers below; editor fixtures need not wait for every backend implementation. |
+| `ship-group:operations-history` | Store contracts [#338](https://github.com/cschadewitz/Project_Orca/issues/338); SQLite [#339](https://github.com/cschadewitz/Project_Orca/issues/339); operations/history [#340](https://github.com/cschadewitz/Project_Orca/issues/340); storage benchmarks [#341](https://github.com/cschadewitz/Project_Orca/issues/341); daemon search [#255](https://github.com/cschadewitz/Project_Orca/issues/255); checkpoint recovery [#357](https://github.com/cschadewitz/Project_Orca/issues/357) | [#338](https://github.com/cschadewitz/Project_Orca/issues/338) has no hard prerequisite; [#339](https://github.com/cschadewitz/Project_Orca/issues/339)/[#340](https://github.com/cschadewitz/Project_Orca/issues/340)/[#341](https://github.com/cschadewitz/Project_Orca/issues/341) follow [#338](https://github.com/cschadewitz/Project_Orca/issues/338) in parallel. [#357](https://github.com/cschadewitz/Project_Orca/issues/357) needs [#340](https://github.com/cschadewitz/Project_Orca/issues/340)/[#338](https://github.com/cschadewitz/Project_Orca/issues/338)/[#332](https://github.com/cschadewitz/Project_Orca/issues/332)/[#331](https://github.com/cschadewitz/Project_Orca/issues/331). Fleet recovery [#344](https://github.com/cschadewitz/Project_Orca/issues/344) is related, not a blocker for local checkpoints. |
+| `ship-group:managed-fleet` | Host monitor [#223](https://github.com/cschadewitz/Project_Orca/issues/223); lock liveness [#103](https://github.com/cschadewitz/Project_Orca/issues/103); managed hosts [#342](https://github.com/cschadewitz/Project_Orca/issues/342); capacity/fencing [#343](https://github.com/cschadewitz/Project_Orca/issues/343); drain/recovery [#344](https://github.com/cschadewitz/Project_Orca/issues/344) | [#342](https://github.com/cschadewitz/Project_Orca/issues/342) needs [#338](https://github.com/cschadewitz/Project_Orca/issues/338)/[#223](https://github.com/cschadewitz/Project_Orca/issues/223); [#343](https://github.com/cschadewitz/Project_Orca/issues/343) needs [#342](https://github.com/cschadewitz/Project_Orca/issues/342)/[#339](https://github.com/cschadewitz/Project_Orca/issues/339); [#344](https://github.com/cschadewitz/Project_Orca/issues/344) needs [#343](https://github.com/cschadewitz/Project_Orca/issues/343). |
+| `ship-group:usage-routing` | Attributable usage [#345](https://github.com/cschadewitz/Project_Orca/issues/345); budgets/reservations [#346](https://github.com/cschadewitz/Project_Orca/issues/346); account routing [#347](https://github.com/cschadewitz/Project_Orca/issues/347) | [#345](https://github.com/cschadewitz/Project_Orca/issues/345) needs [#338](https://github.com/cschadewitz/Project_Orca/issues/338); [#346](https://github.com/cschadewitz/Project_Orca/issues/346) needs [#345](https://github.com/cschadewitz/Project_Orca/issues/345)/[#339](https://github.com/cschadewitz/Project_Orca/issues/339); [#347](https://github.com/cschadewitz/Project_Orca/issues/347) needs [#346](https://github.com/cschadewitz/Project_Orca/issues/346). ORCA does not currently collect the cost data this needs. |
+| `ship-group:github-planning` | Tracker contract [#348](https://github.com/cschadewitz/Project_Orca/issues/348); GitHub import [#349](https://github.com/cschadewitz/Project_Orca/issues/349); conflict-safe outbox [#350](https://github.com/cschadewitz/Project_Orca/issues/350) | [#348](https://github.com/cschadewitz/Project_Orca/issues/348) needs [#338](https://github.com/cschadewitz/Project_Orca/issues/338); [#349](https://github.com/cschadewitz/Project_Orca/issues/349) needs [#348](https://github.com/cschadewitz/Project_Orca/issues/348)/[#339](https://github.com/cschadewitz/Project_Orca/issues/339); [#350](https://github.com/cschadewitz/Project_Orca/issues/350) needs [#349](https://github.com/cschadewitz/Project_Orca/issues/349). |
+| `ship-group:ado-planning`, `ship-group:jira-planning`, `ship-group:linear-planning`, `ship-group:beads-planning` | Adapter outcomes [#351](https://github.com/cschadewitz/Project_Orca/issues/351), [#352](https://github.com/cschadewitz/Project_Orca/issues/352), [#353](https://github.com/cschadewitz/Project_Orca/issues/353), [#354](https://github.com/cschadewitz/Project_Orca/issues/354) respectively | Each depends on [#350](https://github.com/cschadewitz/Project_Orca/issues/350); adapters can proceed in parallel after the shared contract. |
+
+### Issue links and recorded blockers
+
+These links also provide acceptance criteria and non-goals; they do not advertise methods
+or UI which already exist.
+
+| Issue | Planned outcome | Recorded hard blockers |
+| --- | --- | --- |
+| [#237](https://github.com/cschadewitz/Project_Orca/issues/237) | Keep an agent session alive across a gate | [#328](https://github.com/cschadewitz/Project_Orca/issues/328) |
+| [#314](https://github.com/cschadewitz/Project_Orca/issues/314) | engine: give the builtin plan and program custom nodes a `validate` ([#308](https://github.com/cschadewitz/Project_Orca/issues/308) follow-up) | No hard prerequisite listed in the inspected dependency section |
+| [#318](https://github.com/cschadewitz/Project_Orca/issues/318) | app: configure the daemon URL from the UI instead of only ORCA_DAEMON_URL | [#328](https://github.com/cschadewitz/Project_Orca/issues/328) |
+| [#327](https://github.com/cschadewitz/Project_Orca/issues/327) | Add an MCP interface for ORCA workflow orchestration | [#329](https://github.com/cschadewitz/Project_Orca/issues/329), [#330](https://github.com/cschadewitz/Project_Orca/issues/330), [#331](https://github.com/cschadewitz/Project_Orca/issues/331), [#332](https://github.com/cschadewitz/Project_Orca/issues/332), [#237](https://github.com/cschadewitz/Project_Orca/issues/237), [#328](https://github.com/cschadewitz/Project_Orca/issues/328) |
+| [#328](https://github.com/cschadewitz/Project_Orca/issues/328) | Add authentication and authorization to the daemon API | No hard prerequisite listed in the inspected dependency section |
+| [#329](https://github.com/cschadewitz/Project_Orca/issues/329) | Submit Requests through a shared application service | [#328](https://github.com/cschadewitz/Project_Orca/issues/328) |
+| [#330](https://github.com/cschadewitz/Project_Orca/issues/330) | Validate typed workflow launch inputs across clients | No hard prerequisite listed in the inspected dependency section |
+| [#331](https://github.com/cschadewitz/Project_Orca/issues/331) | Make submission and run admission retry safe | [#329](https://github.com/cschadewitz/Project_Orca/issues/329), [#328](https://github.com/cschadewitz/Project_Orca/issues/328) |
+| [#332](https://github.com/cschadewitz/Project_Orca/issues/332) | Apply configuration generations and record effective run provenance | [#328](https://github.com/cschadewitz/Project_Orca/issues/328) |
+| [#333](https://github.com/cschadewitz/Project_Orca/issues/333) | Complete structured configuration editing and change previews | [#332](https://github.com/cschadewitz/Project_Orca/issues/332), [#318](https://github.com/cschadewitz/Project_Orca/issues/318) |
+| [#334](https://github.com/cschadewitz/Project_Orca/issues/334) | Launch Requests and workflows from a guided app workspace | [#329](https://github.com/cschadewitz/Project_Orca/issues/329), [#330](https://github.com/cschadewitz/Project_Orca/issues/330), [#331](https://github.com/cschadewitz/Project_Orca/issues/331), [#332](https://github.com/cschadewitz/Project_Orca/issues/332), [#318](https://github.com/cschadewitz/Project_Orca/issues/318) |
+| [#335](https://github.com/cschadewitz/Project_Orca/issues/335) | Resolve scoped MCP servers and skills deterministically | [#332](https://github.com/cschadewitz/Project_Orca/issues/332), [#328](https://github.com/cschadewitz/Project_Orca/issues/328) |
+| [#336](https://github.com/cschadewitz/Project_Orca/issues/336) | Resolve capability secrets only at their execution boundary | [#335](https://github.com/cschadewitz/Project_Orca/issues/335), [#328](https://github.com/cschadewitz/Project_Orca/issues/328) |
+| [#337](https://github.com/cschadewitz/Project_Orca/issues/337) | Deliver and verify scoped capabilities for each agent session | [#335](https://github.com/cschadewitz/Project_Orca/issues/335), [#336](https://github.com/cschadewitz/Project_Orca/issues/336) |
+| [#338](https://github.com/cschadewitz/Project_Orca/issues/338) | Define versioned store contracts and conformance tests | No hard prerequisite listed in the inspected dependency section |
+| [#339](https://github.com/cschadewitz/Project_Orca/issues/339) | Implement durable SQLite metadata and recovery | [#338](https://github.com/cschadewitz/Project_Orca/issues/338) |
+| [#340](https://github.com/cschadewitz/Project_Orca/issues/340) | Build live multi-run operations dashboard and history | [#338](https://github.com/cschadewitz/Project_Orca/issues/338) |
+| [#341](https://github.com/cschadewitz/Project_Orca/issues/341) | Benchmark graph and key-value storage options | [#338](https://github.com/cschadewitz/Project_Orca/issues/338) |
+| [#342](https://github.com/cschadewitz/Project_Orca/issues/342) | Register managed hosts and report usable capacity | [#338](https://github.com/cschadewitz/Project_Orca/issues/338), [#223](https://github.com/cschadewitz/Project_Orca/issues/223) |
+| [#343](https://github.com/cschadewitz/Project_Orca/issues/343) | Place work with capacity reservations and fencing | [#342](https://github.com/cschadewitz/Project_Orca/issues/342), [#339](https://github.com/cschadewitz/Project_Orca/issues/339) |
+| [#344](https://github.com/cschadewitz/Project_Orca/issues/344) | Drain hosts and recover interrupted assignments | [#343](https://github.com/cschadewitz/Project_Orca/issues/343) |
+| [#345](https://github.com/cschadewitz/Project_Orca/issues/345) | Record attributable usage with provenance and reconciliation | [#338](https://github.com/cschadewitz/Project_Orca/issues/338) |
+| [#346](https://github.com/cschadewitz/Project_Orca/issues/346) | Enforce configurable budgets with in-flight reservations | [#345](https://github.com/cschadewitz/Project_Orca/issues/345), [#339](https://github.com/cschadewitz/Project_Orca/issues/339) |
+| [#347](https://github.com/cschadewitz/Project_Orca/issues/347) | Route work across authorized provider accounts | [#346](https://github.com/cschadewitz/Project_Orca/issues/346) |
+| [#348](https://github.com/cschadewitz/Project_Orca/issues/348) | Define tracker ownership and synchronization contracts | [#338](https://github.com/cschadewitz/Project_Orca/issues/338) |
+| [#349](https://github.com/cschadewitz/Project_Orca/issues/349) | Import GitHub planning items with stable identity | [#348](https://github.com/cschadewitz/Project_Orca/issues/348), [#339](https://github.com/cschadewitz/Project_Orca/issues/339) |
+| [#350](https://github.com/cschadewitz/Project_Orca/issues/350) | Publish GitHub updates through a conflict-safe outbox | [#349](https://github.com/cschadewitz/Project_Orca/issues/349) |
+| [#351](https://github.com/cschadewitz/Project_Orca/issues/351) | Add Azure DevOps planning adapter | [#350](https://github.com/cschadewitz/Project_Orca/issues/350) |
+| [#352](https://github.com/cschadewitz/Project_Orca/issues/352) | Add Jira planning adapter | [#350](https://github.com/cschadewitz/Project_Orca/issues/350) |
+| [#353](https://github.com/cschadewitz/Project_Orca/issues/353) | Add Linear planning adapter | [#350](https://github.com/cschadewitz/Project_Orca/issues/350) |
+| [#354](https://github.com/cschadewitz/Project_Orca/issues/354) | Add beads planning adapter | [#350](https://github.com/cschadewitz/Project_Orca/issues/350) |
+| [#355](https://github.com/cschadewitz/Project_Orca/issues/355) | Author reusable prompt templates and packs in the app | [#332](https://github.com/cschadewitz/Project_Orca/issues/332), [#333](https://github.com/cschadewitz/Project_Orca/issues/333) |
+| [#356](https://github.com/cschadewitz/Project_Orca/issues/356) | Route explicit human revision input to the intended next step | [#237](https://github.com/cschadewitz/Project_Orca/issues/237), [#328](https://github.com/cschadewitz/Project_Orca/issues/328), [#330](https://github.com/cschadewitz/Project_Orca/issues/330), [#331](https://github.com/cschadewitz/Project_Orca/issues/331) |
+| [#357](https://github.com/cschadewitz/Project_Orca/issues/357) | Recover interrupted work with explicit checkpoints and side-effect review | [#340](https://github.com/cschadewitz/Project_Orca/issues/340), [#338](https://github.com/cschadewitz/Project_Orca/issues/338), [#332](https://github.com/cschadewitz/Project_Orca/issues/332), [#331](https://github.com/cschadewitz/Project_Orca/issues/331) |
+| [#180](https://github.com/cschadewitz/Project_Orca/issues/180) | daemon: workflow drafts — one per workflow per person, validation, publish with a diff, discard | [#179](https://github.com/cschadewitz/Project_Orca/issues/179), [#328](https://github.com/cschadewitz/Project_Orca/issues/328), [#314](https://github.com/cschadewitz/Project_Orca/issues/314), [#330](https://github.com/cschadewitz/Project_Orca/issues/330), [#332](https://github.com/cschadewitz/Project_Orca/issues/332), [#335](https://github.com/cschadewitz/Project_Orca/issues/335) |
+| [#181](https://github.com/cschadewitz/Project_Orca/issues/181) | Build a visual workflow editor with a node palette and inspector | [#180](https://github.com/cschadewitz/Project_Orca/issues/180), [#177](https://github.com/cschadewitz/Project_Orca/issues/177), [#175](https://github.com/cschadewitz/Project_Orca/issues/175), [#330](https://github.com/cschadewitz/Project_Orca/issues/330), [#335](https://github.com/cschadewitz/Project_Orca/issues/335), [#337](https://github.com/cschadewitz/Project_Orca/issues/337) |
+| [#182](https://github.com/cschadewitz/Project_Orca/issues/182) | app: validation panel docked under the editor canvas, always present, rows jump to nodes | [#180](https://github.com/cschadewitz/Project_Orca/issues/180), [#181](https://github.com/cschadewitz/Project_Orca/issues/181), [#314](https://github.com/cschadewitz/Project_Orca/issues/314), [#330](https://github.com/cschadewitz/Project_Orca/issues/330), [#337](https://github.com/cschadewitz/Project_Orca/issues/337) |
+| [#183](https://github.com/cschadewitz/Project_Orca/issues/183) | engine: dry run of a draft — stubbed agent turns, auto-answered gates, tagged events | [#180](https://github.com/cschadewitz/Project_Orca/issues/180), [#181](https://github.com/cschadewitz/Project_Orca/issues/181), [#330](https://github.com/cschadewitz/Project_Orca/issues/330), [#335](https://github.com/cschadewitz/Project_Orca/issues/335) |
+| [#223](https://github.com/cschadewitz/Project_Orca/issues/223) | Investigate adding host monitor endpoint | No hard prerequisite listed in the inspected dependency section |
+| [#103](https://github.com/cschadewitz/Project_Orca/issues/103) | store: file lock liveness assumes one pid namespace; add a heartbeat so container and cross-host holders can be told apart from dead ones | No hard prerequisite listed in the inspected dependency section |
+| [#255](https://github.com/cschadewitz/Project_Orca/issues/255) | protocol: a daemon-side `search` method, so the palette can search event text and artifact contents | No hard prerequisite listed in the inspected dependency section |
+
+## Other limitations and verification
+
+T3 Code still needs its production WebSocket transport. ACP terminal support, session/load,
+remote workspace synchronization, calendar/capacity planning and an autonomous Maintain
+loop remain future work. A realized risk records state; it does not create follow-up Requests.
+The risk-assessor prompt still overstates that effect; correcting an executable prompt is
+outside this documentation-only change (R14/D13).
+
+Planning still recomputes the whole snapshot; unchanged-signal reconciliation is [#105](https://github.com/cschadewitz/Project_Orca/issues/105) and
+critical-path treatment of later phases/in-progress work is [#108](https://github.com/cschadewitz/Project_Orca/issues/108). Lock liveness across PID
+namespaces is [#103](https://github.com/cschadewitz/Project_Orca/issues/103). Shared-checkout ownership, conservative unreadable-policy behavior,
+external-writer observation, multi-record recovery and unified lifecycle settlement need
+explicit design and focused verification; the historical R04–R09 findings are not reproduced
+runtime failures. Broader issues [#338](https://github.com/cschadewitz/Project_Orca/issues/338)/[#357](https://github.com/cschadewitz/Project_Orca/issues/357)/[#328](https://github.com/cschadewitz/Project_Orca/issues/328) are related work, not proof those findings
+are closed or fully owned.
+
+JEV is a proof of concept with follow-up [#286](https://github.com/cschadewitz/Project_Orca/issues/286)/[#297](https://github.com/cschadewitz/Project_Orca/issues/297)–[#299](https://github.com/cschadewitz/Project_Orca/issues/299). Contributor-tooling follow-ups are
+[#129](https://github.com/cschadewitz/Project_Orca/issues/129)/[#131](https://github.com/cschadewitz/Project_Orca/issues/131). The [verification queue](../Current_State/roadmap/future-verification.md) preserves
+H01–H03 and V01–V08 for separately scoped fault, scale, deployment and integration evidence.

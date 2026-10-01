@@ -42,11 +42,12 @@ The app is three programs with three different runtimes, and they are built by t
 
 **Vite, on the renderer only.** Plain Vite rather than `electron-vite` or `electron-forge`:
 the renderer is the only part that needs bundling (JSX, CSS imports, HMR), while main and
-preload are ordinary Node ESM that the workspace's `tsc -b` already builds in dependency
+preload are compiled by the workspace's `tsc -b` (main as ESM, preload as CommonJS) in dependency
 order with the project references and declaration output the rest of the repo relies on.
 Handing all three to a bundler would mean a second, parallel build graph for `protocol` and
-`core` and would take `packages/app` out of `tsconfig.build.json` for no gain. Revisit when
-packaging (`electron-builder`) lands and wants to own the whole app — that is its own ADR.
+`core` and would take `packages/app` out of `tsconfig.build.json` for no gain. Packaging
+already uses `electron-builder`; its daemon resource bundle is separate from the renderer.
+See [Updating](UPDATING.md) for delivery and activation ownership.
 
 `pnpm run build` runs both: `tsc -b` then `vite build`. `emptyOutDir` in the Vite config is
 scoped to `dist/renderer`, so the two never clear each other's output.
@@ -379,9 +380,10 @@ where re-running the whole matrix would not be.
   rather than touching `CHANGELOG.md`, which is rendered at release time. CI enforces it for
   any change under `packages/`, with `no-changelog` as the opt-out label. `changelog.d/README.md`
   has the naming and `docs/RELEASING.md` the rest.
-- `tools/` is plain JavaScript run straight by node — no build, outside the workspace's
-  `tsconfig.json` — so the tests that cover it are JavaScript too, in `tools/test/`, and
-  `vitest.config.ts` includes that glob alongside the packages'.
+- Most `tools/` build/check scripts are plain JavaScript run straight by node — no build,
+  outside the workspace's `tsconfig.json` — so the tests that cover it are JavaScript too, in `tools/test/`, and
+  `vitest.config.ts` includes that glob alongside the packages'. Deployment tooling also
+  includes Python (`tools/deploy/orca-release.py`); it is not part of that JavaScript suite.
 
 ## Testing the app
 

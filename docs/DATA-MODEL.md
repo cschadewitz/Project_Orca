@@ -2,8 +2,10 @@
 
 All types are zod schemas in `packages/core/src/model/` and exported from `@orca/core`, and
 from `@orca/core/schemas` for code that has to run in a browser (see `packages/core/src/schemas.ts`).
-Identifiers are prefixed ULIDs (`req_…`, `wi_…`, `run_…`, `step_…`, `art_…`, `evt_…`, `sess_…`,
+Generated temporal identifiers are prefixed ULIDs (`req_…`, `wi_…`, `run_…`, `step_…`, `art_…`, `evt_…`, `sess_…`,
 `plan_…`, `dep_…`, `risk_…`, `dec_…`, `pev_…`, `hi_…` for human‑input requests).
+Keyed planning entities also use deterministic IDs from `keyedId` in
+`packages/core/src/ids.ts`. Treat all IDs as opaque; do not infer a timestamp from every ID.
 
 ```
 Plan 1──* Request 1──* WorkItem 1──? Run 1──* StepRun 1──* Artifact
@@ -154,8 +156,10 @@ string on screen.
 `run.created` carries `workspace` and `vars` and, since v0.6.0, three optional additions: the
 `overrides` record described above, which a replay uses to resolve the same agents the live
 run did; `workspace.previousBranch`; and `workflowStored: true`, which says the definition the
-run started on is in the store's `workflows/<id>@v<version>.json` and a resume must use it
-rather than the file on disk (#179). `agent.session.opened` gains an optional `model`, the
+run started on is in the store's `workflows/<id>@v<version>.json` (#179). Resume prefers
+the live definition when its version matches, otherwise the stored copy; legacy runs
+can fall back to current. Same-version edits are not immutable recipe snapshots.
+`agent.session.opened` gains an optional `model`, the
 model the session was opened on (#187). All are absent on older logs and read as "none".
 
 ## Expression / template context

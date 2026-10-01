@@ -1,0 +1,99 @@
+{
+  "id": "app-config-workflow",
+  "title": "Config and workflow inspection UI",
+  "owner": "packages/app",
+  "scope": "renderer/config/ and workflow/",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Config drafts retain edits over received documents, support schema/form or raw editing, revision-aware save and policy provenance.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Workflow feed reads definitions and optionally run traversal; canvas layout uses a shared local graph-layout function with pan/zoom/selection.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "WorkflowSurface is a viewer over workflows.get and run overlays; protocol methods offer no workflow document write operation.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/renderer/src/config/use-config.ts",
+      "line": 100,
+      "symbol": "export function useConfig"
+    },
+    {
+      "path": "packages/app/renderer/src/workflow/layout.ts",
+      "line": 256,
+      "symbol": "export function layoutGraph"
+    },
+    {
+      "path": "packages/app/renderer/src/workflow/use-workflow.ts",
+      "line": 56,
+      "symbol": "export function useWorkflow"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Config edits / workflow selection",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "Config draft model and hook",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "ConfigModel get/set RPC",
+      "type": "external"
+    },
+    {
+      "id": "4",
+      "label": "Workflow read + traversal hook",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Graph canvas / field inspector",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "retain patch/text draft",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "validate/save expected revision",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "4",
+      "label": "select workflow and run overlay",
+      "type": "call",
+      "evidence": 3
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "layout nodes/edges and traversal",
+      "type": "data",
+      "evidence": 2
+    }
+  ],
+  "limits": "A workflow editor is not implemented by the viewer. Common draft bar markup does not establish workflow authoring or reload support."
+}

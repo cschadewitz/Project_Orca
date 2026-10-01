@@ -1,0 +1,141 @@
+{
+  "id": "system",
+  "title": "System and process boundaries",
+  "owner": "repository",
+  "scope": "CLI/daemon process; Electron main/preload/renderer; agent subprocesses; local store; external services",
+  "kind": "system",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "CLI bootstrap composes registries, file or memory stores, PlanService, Orchestrator and ProgramService; most CLI commands execute this stack in their own process.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The daemon exposes HTTP RPC and an optional WebSocket endpoint using injected models and event sources. It is a mode of the CLI executable, not a separate orchestration implementation.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Electron main owns a daemon client, daemon lifecycle and IPC. The renderer receives a named bridge through an isolated sandboxed preload.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Agent execution crosses a local-child or SSH stdio boundary; artifact collection reads the agent host filesystem and records content in the orchestrator store.",
+      "evidence": 4
+    },
+    {
+      "classification": "Implemented",
+      "statement": "JEV optionally sends selected artifact bodies and rendered context to an external HTTPS service; this is separate from ACP agent execution.",
+      "evidence": 5
+    },
+    {
+      "classification": "Inferred",
+      "statement": "Trust rests on configured programs, plugins, filesystem ownership and daemon reachability. The shown RPC dispatcher performs message/schema validation but has no caller identity authorization.",
+      "evidence": 6
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/cli/src/bootstrap.ts",
+      "line": 176,
+      "symbol": "export async function bootstrap"
+    },
+    {
+      "path": "packages/daemon/src/server.ts",
+      "line": 96,
+      "symbol": "export async function startDaemon"
+    },
+    {
+      "path": "packages/app/src/main/index.ts",
+      "line": 478,
+      "symbol": "function createWindow()"
+    },
+    {
+      "path": "packages/engine/src/executors/agent-step.ts",
+      "line": 110,
+      "symbol": "async function collect("
+    },
+    {
+      "path": "packages/integrations/src/jev/http-provider.ts",
+      "line": 33,
+      "symbol": "async evaluate(request:"
+    },
+    {
+      "path": "packages/daemon/src/server.ts",
+      "line": 66,
+      "symbol": "export async function dispatch"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Human / CLI or ACP host",
+      "type": "external"
+    },
+    {
+      "id": "2",
+      "label": "CLI bootstrap + engine + daemon models",
+      "type": "process"
+    },
+    {
+      "id": "3",
+      "label": "Electron renderer → preload → main",
+      "type": "process"
+    },
+    {
+      "id": "4",
+      "label": "Run logs, plan documents, artifacts",
+      "type": "storage"
+    },
+    {
+      "id": "5",
+      "label": "Local or SSH ACP agent",
+      "type": "external"
+    },
+    {
+      "id": "6",
+      "label": "Optional TypeSafe JEV service",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "CLI commands or ACP prompt",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "2",
+      "label": "HTTP RPC / WebSocket notifications",
+      "type": "message",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "append, project and read",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "ACP turns; collect host files",
+      "type": "message",
+      "evidence": 4
+    },
+    {
+      "from": "2",
+      "to": "6",
+      "label": "JEV POST with selected input bodies",
+      "type": "data",
+      "evidence": 5
+    }
+  ],
+  "limits": "No process was started; external protocol interoperability and deployment reachability remain unverified."
+}

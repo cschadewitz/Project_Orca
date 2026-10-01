@@ -1,0 +1,109 @@
+{
+  "id": "cli-bootstrap",
+  "title": "CLI composition and configuration loading",
+  "owner": "packages/cli",
+  "scope": "bootstrap.ts and selection.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "findConfig searches upward for yaml/yml/json config; paths and storeDir resolve against configDir, while missing configuration uses schema defaults.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Plugins load serially as trusted ESM default exports before workflow validation and final Orchestrator construction.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Run selection records role/model/item-workflow/template-pack overrides; template packs and model selection are checked against registries/known declarations.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "ORCA_RELEASE placeholders are resolved to a concrete release path once for loaded templates/workflows.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/cli/src/bootstrap.ts",
+      "line": 105,
+      "symbol": "export async function loadConfig"
+    },
+    {
+      "path": "packages/cli/src/bootstrap.ts",
+      "line": 212,
+      "symbol": "for (const spec of config.plugins)"
+    },
+    {
+      "path": "packages/cli/src/commands/selection.ts",
+      "line": 115,
+      "symbol": "export function selectionOverrides"
+    },
+    {
+      "path": "packages/cli/src/bootstrap.ts",
+      "line": 275,
+      "symbol": "export async function releaseAssets"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Config + defaults + CLI selection",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "Bootstrap loader",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Trusted ESM plugins",
+      "type": "external"
+    },
+    {
+      "id": "4",
+      "label": "Registries / PlanService / stores",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Orchestrator + ProgramService",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "resolve config and asset paths",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "import and await register",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "extend startup registries",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "validate then compose",
+      "type": "call",
+      "evidence": 2
+    }
+  ],
+  "limits": "PluginApi does not expose replacing SessionFactory, while a custom embedding can inject it. Config-only selection cannot activate every exported adapter."
+}

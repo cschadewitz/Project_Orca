@@ -21,8 +21,9 @@ recording every change with its origin. Runs stay event‑sourced (ADR 0001); th
 read model with an audit trail, because it outlives any run and is queried far more than it
 is replayed.
 
-The **scheduler** is a pure function over a snapshot. It evaluates dependencies *live*
-(against item status, `produced` artifacts and decision status), classifies items as
+The **scheduler** is a pure function over a snapshot. It evaluates open/failed dependencies
+*live* against item status, `produced` artifacts and decision status; satisfied/waived edges
+remain sticky until explicitly reopened. It classifies items as
 ready / waiting (with the reason) / held (risk) / unschedulable, ranks ready items with
 explainable factors, and reports waves and the critical path. `custom:plan-dispatch`
 re‑schedules after every child completion **and** on every plan‑changing journal event
