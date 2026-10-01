@@ -1,0 +1,94 @@
+{
+  "id": "testing",
+  "title": "@orca/testing",
+  "owner": "packages/testing",
+  "scope": "Scripted ACP agent, playbooks and test setup helpers",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "ScriptedAgent implements an ACP agent driven by playbook responses, deliverable parsing, configured permissions/updates and persisted scripted state.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The executable loads a playbook and serves ACP over stdio; tests and the CLI demo use this as a subprocess integration fixture.",
+      "evidence": 2
+    },
+    {
+      "classification": "Declared",
+      "statement": "PlaybookSchema describes supported scripted response data and settings; it is deterministic test infrastructure, not evidence that a real provider behaves similarly.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/testing/src/scripted-agent/agent.ts",
+      "line": 62,
+      "symbol": "export class ScriptedAgent"
+    },
+    {
+      "path": "packages/testing/src/scripted-agent/main.ts",
+      "line": 15,
+      "symbol": "async function main"
+    },
+    {
+      "path": "packages/testing/src/scripted-agent/playbook.ts",
+      "line": 38,
+      "symbol": "export const PlaybookSchema"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Tests / CLI demo",
+      "type": "external"
+    },
+    {
+      "id": "2",
+      "label": "Playbook YAML + state file",
+      "type": "storage"
+    },
+    {
+      "id": "3",
+      "label": "orca-scripted-agent executable",
+      "type": "process"
+    },
+    {
+      "id": "4",
+      "label": "ACP requests and deliverable writes",
+      "type": "message"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "create scripted fixtures",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "1",
+      "to": "3",
+      "label": "spawn fixture agent",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "select scripted responses",
+      "type": "data",
+      "evidence": 3
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "simulate ACP + output files",
+      "type": "message",
+      "evidence": 1
+    }
+  ],
+  "limits": "The CLI declares this package as a runtime dependency for demo; its code is excluded from in-process coverage because tests spawn it."
+}

@@ -1,0 +1,99 @@
+{
+  "id": "cli-commands",
+  "title": "CLI commands and server modes",
+  "owner": "packages/cli",
+  "scope": "commands/, format.ts and human-input-cli.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "run/submit/answer/plan commands directly call services; answer supplies ProgramService.resume so request settlement follows the root result.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "serve composes read/control/config/agent/plan models and uses PausingHumanInput for writing daemon mode. Its subscriptions attach to this process’s stores only.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Process error handlers log and keep serving for serve mode but exit nonzero for one-shot commands.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/cli/src/commands/index.ts",
+      "line": 591,
+      "symbol": "resumeWith: (id) => app.program.resume(id)"
+    },
+    {
+      "path": "packages/cli/src/commands/index.ts",
+      "line": 621,
+      "symbol": "serve: {"
+    },
+    {
+      "path": "packages/cli/src/main.ts",
+      "line": 114,
+      "symbol": "export function installProcessErrorHandlers"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Run / submit / plan / ownership commands",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Bootstrap + services",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "serve HTTP/WS mode",
+      "type": "process"
+    },
+    {
+      "id": "4",
+      "label": "acp stdio facade mode",
+      "type": "process"
+    },
+    {
+      "id": "5",
+      "label": "Terminal human input / formatting",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "direct service calls",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "2",
+      "label": "wire daemon models",
+      "type": "dependency",
+      "evidence": 2
+    },
+    {
+      "from": "4",
+      "to": "2",
+      "label": "wire ACP adapter",
+      "type": "dependency",
+      "evidence": 2
+    },
+    {
+      "from": "1",
+      "to": "5",
+      "label": "prompt / render result",
+      "type": "call",
+      "evidence": 1
+    }
+  ],
+  "limits": "The commands module also embeds a large demo fixture and server composition. Long-running process fault containment is not proven by logging uncaught errors."
+}

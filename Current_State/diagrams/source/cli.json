@@ -1,0 +1,99 @@
+{
+  "id": "cli",
+  "title": "@orca/cli",
+  "owner": "packages/cli",
+  "scope": "Executable command dispatch, composition and human terminal adapter",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "main uses strict parseArgs and dispatches named commands; errors produce stderr diagnostics and nonzero status.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Commands include validate/graph, agents/ping, run/submit/runs/status/events/answer, ACP/daemon modes, planning, claims, leases, Kepler inspection and demo.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "CLI mostly composes the engine locally, while agent discovery/ping can contact a daemon. This creates legitimate simultaneous file-store clients.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/cli/src/main.ts",
+      "line": 23,
+      "symbol": "export async function main"
+    },
+    {
+      "path": "packages/cli/src/commands/index.ts",
+      "line": 262,
+      "symbol": "export const commands:"
+    },
+    {
+      "path": "packages/cli/src/commands/index.ts",
+      "line": 185,
+      "symbol": "async function pingViaDaemon"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "argv + cwd + config path",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "main + command handlers",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "bootstrap composition",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Local engine / stores",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Daemon probe / ACP host / terminal",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "strict argument parse",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "construct command runtime",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "wire runtime services",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "probe or serve integration",
+      "type": "message",
+      "evidence": 3
+    }
+  ],
+  "limits": ""
+}

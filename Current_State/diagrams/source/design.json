@@ -1,0 +1,99 @@
+{
+  "id": "design",
+  "title": "@orca/design",
+  "owner": "packages/design",
+  "scope": "Token/semantic sources, generated CSS/TS/fonts and component CSS/API",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "build-tokens.js reads tokens.json and semantics.json and emits CSS custom properties/type styles and typed TypeScript maps; check mode compares generated output.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Component CSS consumes tokens; React primitives live in app, while component-api.d.ts describes their expected properties.",
+      "evidence": 2
+    },
+    {
+      "classification": "Declared",
+      "statement": "Contrast, font, token and component tests declare invariants for both themes and semantic glyph/type coverage. These tests were not run.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/design/build-tokens.js",
+      "line": 17,
+      "symbol": "const T = read"
+    },
+    {
+      "path": "packages/design/src/component-api.d.ts",
+      "line": 28,
+      "symbol": "export interface"
+    },
+    {
+      "path": "packages/design/test/contrast.test.ts",
+      "line": 108,
+      "symbol": "test(`contrast"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "tokens.json + semantics.json",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "build-tokens.js",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Generated CSS + TS maps",
+      "type": "data"
+    },
+    {
+      "id": "4",
+      "label": "Component CSS + API declarations",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "App primitives and surfaces",
+      "type": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "source design values and words",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "generate / compare output",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "3",
+      "label": "reference tokens",
+      "type": "dependency",
+      "evidence": 2
+    },
+    {
+      "from": "5",
+      "to": "4",
+      "label": "compose style-backed primitives",
+      "type": "dependency",
+      "evidence": 2
+    }
+  ],
+  "limits": "Generated outputs were inventoried, not regenerated. Bundled font production belongs to the separate font-build workspace."
+}

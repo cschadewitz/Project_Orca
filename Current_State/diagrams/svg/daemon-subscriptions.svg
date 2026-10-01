@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="1107" viewBox="0 0 1180 1107" role="img" aria-labelledby="title description">
+<title id="title">Notifications and replay</title>
+<desc id="description">Static architecture view. notifications.ts and subscriptions.ts. Numbered arrows have full labels and source evidence in the table and linked specification.</desc>
+<defs>
+<marker id="arrow-call" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#1559a1"/></marker>
+<marker id="arrow-dependency" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#794b98"/></marker>
+<marker id="arrow-message" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#21754a"/></marker>
+<marker id="arrow-data" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#975523"/></marker>
+<marker id="arrow-containment" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#656b73"/></marker>
+<marker id="arrow-declared" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#a73d3d"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="#fff"/>
+<g font-family="sans-serif" fill="#17212c">
+<text x="32" y="40" font-size="25" font-weight="bold">Notifications and replay</text>
+<text x="32" y="70" font-size="16">Ownership view: packages/daemon • component • static inspection</text>
+<a href="../../architecture/daemon-subscriptions.md"><text x="32" y="99" font-size="15" fill="#1559a1">Architecture specification, responsibilities and source evidence ↗</text></a>
+<rect x="25" y="119" width="1130" height="546" rx="12" fill="#f9fafc" stroke="#9aa6b3"/>
+<rect id="node-1" x="50" y="150" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="170" font-size="12" fill="#475666">N1 · COMPONENT</text>
+<text x="66" y="193" font-size="16">EventStore / PlanJournal / model listeners</text>
+<rect id="node-2" x="50" y="250" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="270" font-size="12" fill="#475666">N2 · COMPONENT</text>
+<text x="66" y="293" font-size="16">Subscription buffer + batcher</text>
+<rect id="node-3" x="50" y="350" width="645" height="70" rx="2" fill="#eff7ed" stroke="#526171" stroke-width="1"/>
+<text x="66" y="370" font-size="12" fill="#475666">N3 · STORAGE</text>
+<text x="66" y="393" font-size="16">Run-specific eventsRange replay</text>
+<rect id="node-4" x="50" y="450" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="470" font-size="12" fill="#475666">N4 · MESSAGE</text>
+<text x="66" y="493" font-size="16">WebSocket notification</text>
+<rect id="node-5" x="50" y="550" width="645" height="70" rx="9" fill="#fff" stroke="#526171" stroke-width="1"/>
+<text x="66" y="570" font-size="12" fill="#475666">N5 · COMPONENT</text>
+<text x="66" y="593" font-size="16">App subscription parser</text>
+<path d="M695,178 H783 V292 H698" fill="none" stroke="#21754a" stroke-width="2" stroke-dasharray="3 5" marker-end="url(#arrow-message)"/>
+<circle cx="783" cy="235.0" r="13" fill="white" stroke="#21754a"/><text x="783" y="240.0" text-anchor="middle" font-size="13" fill="#21754a">1</text>
+<path d="M695,378 H826 V292 H698" fill="none" stroke="#975523" stroke-width="3" stroke-dasharray="" marker-end="url(#arrow-data)"/>
+<circle cx="826" cy="335.0" r="13" fill="white" stroke="#975523"/><text x="826" y="340.0" text-anchor="middle" font-size="13" fill="#975523">2</text>
+<path d="M695,278 H869 V492 H698" fill="none" stroke="#21754a" stroke-width="2" stroke-dasharray="3 5" marker-end="url(#arrow-message)"/>
+<circle cx="869" cy="385.0" r="13" fill="white" stroke="#21754a"/><text x="869" y="390.0" text-anchor="middle" font-size="13" fill="#21754a">3</text>
+<path d="M695,478 H912 V592 H698" fill="none" stroke="#21754a" stroke-width="2" stroke-dasharray="3 5" marker-end="url(#arrow-message)"/>
+<circle cx="912" cy="535.0" r="13" fill="white" stroke="#21754a"/><text x="912" y="540.0" text-anchor="middle" font-size="13" fill="#21754a">4</text>
+<text x="32" y="720" font-size="19" font-weight="bold">Labeled interfaces and movements</text>
+<rect x="30" y="742" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="765" font-size="16" fill="#21754a">1. N1 → N2: same-process events and revisions [message; source claim E1]</text>
+<text x="43" y="788" font-size="13">EventStore / PlanJournal / model listeners → Subscription buffer + batcher</text>
+<rect x="30" y="810" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="833" font-size="16" fill="#975523">2. N3 → N2: catch up after run cursor [data; source claim E1]</text>
+<text x="43" y="856" font-size="13">Run-specific eventsRange replay → Subscription buffer + batcher</text>
+<rect x="30" y="878" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="901" font-size="16" fill="#21754a">3. N2 → N4: emit typed notifications [message; source claim E2]</text>
+<text x="43" y="924" font-size="13">Subscription buffer + batcher → WebSocket notification</text>
+<rect x="30" y="946" width="1120" height="62" rx="5" fill="#f5f7fa"/>
+<text x="43" y="969" font-size="16" fill="#21754a">4. N4 → N5: parse, dispatch to UI feed [message; source claim E3]</text>
+<text x="43" y="992" font-size="13">WebSocket notification → App subscription parser</text>
+<a href="../notation.md"><text x="32" y="1042" font-size="14" fill="#1559a1">Legend: blue calls · purple dashed dependencies · green dotted messages · brown data · gray containment · red declared</text></a>
+<text x="32" y="1069" font-size="13">Outer frame = view ownership; external and process nodes retain their labeled boundaries. Not a deployment verification.</text>
+</g>
+</svg>

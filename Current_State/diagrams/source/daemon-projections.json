@@ -1,0 +1,109 @@
+{
+  "id": "daemon-projections",
+  "title": "Read projections and derived views",
+  "owner": "packages/daemon",
+  "scope": "read-model.ts, plan-model.ts, workflow-model.ts and agent-model.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "ReadModel uses per-pass facts/document caches for run listings/details, inputs, claims, artifacts and workflow views, and derives stale status from leases on reads.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "PlanModel computes schedule-backed item classifications, reasons, risk/decision views and journal pages; preview matrix results are labeled as previews.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "AgentModel reports configured agents and memory health and can actively ping a configured agent session.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Artifact reads distinguish text, image and binary views and impose content-size limits.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/daemon/src/read-model.ts",
+      "line": 387,
+      "symbol": "export class ReadModel"
+    },
+    {
+      "path": "packages/daemon/src/plan-model.ts",
+      "line": 351,
+      "symbol": "export class PlanModel"
+    },
+    {
+      "path": "packages/daemon/src/agent-model.ts",
+      "line": 89,
+      "symbol": "async ping("
+    },
+    {
+      "path": "packages/daemon/src/read-model.ts",
+      "line": 582,
+      "symbol": "async artifactsGet("
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Protocol read request",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "ReadModel / PlanModel pass",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Orchestrator + documents + leases",
+      "type": "storage"
+    },
+    {
+      "id": "4",
+      "label": "Core schedule / presentation fold",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Protocol views",
+      "type": "data"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "request filtered/paged projection",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "read authoritative inputs",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "derive classification / status",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "serialize view with asOf",
+      "type": "data",
+      "evidence": 1
+    }
+  ],
+  "limits": "Pagination bounds responses; it does not necessarily bound source traversal. Static read cost follows loops and store implementations, not measured latency."
+}

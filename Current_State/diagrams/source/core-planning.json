@@ -1,0 +1,109 @@
+{
+  "id": "core-planning",
+  "title": "Planning algorithms",
+  "owner": "packages/core",
+  "scope": "plan/ and model/plan.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "computeSchedule classifies ready, running, waiting, held, unschedulable and settled items using supplied items, dependencies, risks, decisions and time.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Hard dependency cycles block scheduling; optional soft edges inform ordering and cycle-closing soft edges are dropped. Stage dependencies use produced artifact kinds.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Decision matrices rank weighted criteria and report sensitivity; extracted artifact signals normalize risks, decisions and dependency references.",
+      "evidence": 3
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Dependency evaluation returns persisted satisfied/waived states directly before checking target work-item/decision state.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/core/src/plan/schedule.ts",
+      "line": 222,
+      "symbol": "export function computeSchedule"
+    },
+    {
+      "path": "packages/core/src/plan/schedule.ts",
+      "line": 242,
+      "symbol": "const blockingGraph"
+    },
+    {
+      "path": "packages/core/src/plan/decision-matrix.ts",
+      "line": 75,
+      "symbol": "export function evaluateDecisionMatrix"
+    },
+    {
+      "path": "packages/core/src/plan/schedule.ts",
+      "line": 102,
+      "symbol": "export function evaluateDependency"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Plan snapshot + time + policy",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "Dependency graph / risk exposure",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "computeSchedule",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Schedule + reasons + critical path",
+      "type": "data"
+    },
+    {
+      "id": "5",
+      "label": "Matrix / artifact signals",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "build and score graph",
+      "type": "data",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "classify candidates",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "return derived snapshot",
+      "type": "data",
+      "evidence": 1
+    },
+    {
+      "from": "5",
+      "to": "1",
+      "label": "produce normalized planning inputs",
+      "type": "data",
+      "evidence": 3
+    }
+  ],
+  "limits": "Critical-path length uses estimate weights; it is not elapsed time or ETA. The comment describing all dependency evaluation as live is broader than the early satisfied-state return."
+}

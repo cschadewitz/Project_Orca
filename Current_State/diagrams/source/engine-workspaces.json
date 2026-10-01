@@ -1,0 +1,99 @@
+{
+  "id": "engine-workspaces",
+  "title": "Workspace provisioning",
+  "owner": "packages/engine",
+  "scope": "workspace/provider.ts and git-worktree.ts, plus Kepler adapter",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "LocalWorkspaceProvider reuses one checkout and, for work items, checks out or creates orca/<slug>, recording the previous branch.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "GitWorktreeProvider creates/reuses an item directory and branch through AgentHost file and exec ports; ordinary non-item children can inherit the parent workspace.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "WorkspaceProvider exposes optional release; the interface explicitly leaves automatic cleanup to callers, and the interpreter execution-finally closes sessions rather than releasing workspaces.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/engine/src/workspace/provider.ts",
+      "line": 50,
+      "symbol": "export class LocalWorkspaceProvider"
+    },
+    {
+      "path": "packages/engine/src/workspace/git-worktree.ts",
+      "line": 20,
+      "symbol": "export class GitWorktreeProvider"
+    },
+    {
+      "path": "packages/engine/src/workspace/provider.ts",
+      "line": 23,
+      "symbol": "export interface WorkspaceProvider"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Run + optional work item + parent",
+      "type": "data"
+    },
+    {
+      "id": "2",
+      "label": "WorkspaceProvider.provision",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Shared checkout / branch",
+      "type": "external"
+    },
+    {
+      "id": "4",
+      "label": "Git worktree per slug",
+      "type": "external"
+    },
+    {
+      "id": "5",
+      "label": "Workspace record in run.created",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "request workspace",
+      "type": "call",
+      "evidence": 3
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "local provider checkout",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "git-worktree provider create/reuse",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "return resolved host/cwd/branch",
+      "type": "data",
+      "evidence": 1
+    }
+  ],
+  "limits": "Provisioning selects a directory; it does not impose process sandboxing. Parallel item runs with a shared local checkout need an explicit ownership policy."
+}

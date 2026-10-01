@@ -1,0 +1,14 @@
+{
+  "workspace_manifests_accounted_for": 13,
+  "coverage_rows_with_spec_source_svg": 55,
+  "frozen_source_hashes_verified": 614,
+  "documentation_text_files_inventoried": 86,
+  "documentation_findings": 17,
+  "recommendations_with_required_fields": 18,
+  "svg_text_and_rectangle_origins_in_canvas": 55,
+  "maximum_heuristic_text_extent_px": 1091.2,
+  "svg_canvas_width_px": 1180,
+  "tracked_git_changes": [],
+  "new_files_outside_Current_State": 0,
+  "errors": []
+}

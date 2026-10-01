@@ -180,7 +180,7 @@ An option is either a bare word or a record. The two forms may be mixed in one l
 | `id` | what the answer *is*. Compared by `defaultOption`, `autoOption` and every `when: "choice == '<id>'"` edge, and what `human.answered` records |
 | `label` | the words a person reads. Reword it freely: no edge and no recorded answer depends on it |
 | `consequence` | one clause on what choosing this does. The desktop app shows it under the label |
-| `destructive` | marks the choice a UI must not make easy to hit by accident — it is never bound to a number key (`docs/design/20-attention-and-gates.md`) |
+| `destructive` | marks the choice a UI must not make easy to hit by accident — safe choices sort first, then destructive choices; the first nine get number keys. If all choices are destructive, the first still gets `1`, although none is selected by default. The stronger design intent remains a verification item in the [historical review reconciliation](../Current_State/addenda/2026-10-01-main-reconciliation.md) |
 
 `approve` on its own means `{ id: approve, label: approve }`, so every workflow written
 before options had fields keeps working unchanged and needs no migration. A `gate` with no

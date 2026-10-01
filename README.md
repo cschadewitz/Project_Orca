@@ -80,12 +80,14 @@ re‑points it at a workspace with a read‑only daemon behind it). All five
 surfaces have content: **Attention** (answer a gate or a permission ask),
 **Runs** (run tree, event timeline, step detail, artifacts), **Plan** (the
 schedule with the scheduler's own explanations, a requests sidebar and the
-journal), **Agents** (health cards, and each agent's permission policy edited
+journal, dependency graph, risk matrix and decision matrix), **Agents** (health cards, and each agent's permission policy edited
 where the grants live) and **Config** (`orca.config.yaml` as a form over the
 schema the daemon describes, beside the raw file, with the permission sidecar as
 its second document). Every write the daemon serves is in the command palette —
 answer, cancel, resume, start a run, waive, decide, reopen, update a risk,
-release a claim. A saved config takes effect on the **next** `orca serve`.
+release a claim. Saved main configuration takes effect on the **next** `orca serve`; permission
+sidecars are reread on each agent permission ask. This does not preserve a live agent
+session across a parked gate (#237).
 
 To run **inside Kepler / Zed / any ACP client**, register `orca acp` as an agent
 command; prompts sent to it become Requests and progress streams back as ACP
@@ -134,14 +136,19 @@ templates, the long‑term planning layer (dependencies across requests, risk ma
 matrices, explainable scheduling) and the CLI are implemented and tested end‑to‑end against a
 real ACP subprocess.
 
-`orca serve` (protocol 1.7) is a writer, not a reader: it answers the run, workflow, config
+`orca serve` (protocol 1.8) is a writer, not a reader: it answers the run, workflow, config
 and plan reads, drives runs, edits the configuration and the permission sidecar, and pushes
-ten notifications over `WS /socket`; `--read-only` leaves every write out of the handshake so
-a client hides a control rather than pressing one that would fail (ADR 0008). The Electron
+ten notifications over `WS /socket`; `--read-only` omits run/config/plan write methods from the handshake so
+a client can hide unavailable controls (ADR 0008). Supervisor maintenance admission is
+separate and remains available in read-only mode. The Electron
 app is the configuration and monitoring surface over it — five surfaces, all with content,
-and the write actions in the command palette. The document stores are multi‑process safe
-(#196), so a daemon and a CLI command over one store no longer lose each other's documents.
+and the write actions in the command palette. Document writes reread each collection
+under a file lock (#196); this is not a
+transaction across plan documents and their journal, nor cross-process push observation.
 
-See `docs/ROADMAP.md` for what is deliberately left open: no daemon config reload, the Plan
-surface's graph, risk and decision modes (v0.6.0), client‑surfaced model and agent selection,
-workflow editing, T3 Code's WebSocket transport, and capacity‑aware scheduling.
+See the [current capability ledger and roadmap](docs/ROADMAP.md) for implemented behavior,
+limitations and issue dependencies. Agent/model selection and all five Plan modes shipped
+in v0.6.0. Configuration activation, session continuity, general daemon authentication,
+workflow editing, T3 Code's WebSocket transport and capacity-aware scheduling remain planned.
+The [historical architecture review](Current_State/README.md) preserves an earlier snapshot;
+its [dated reconciliation](Current_State/addenda/2026-10-01-main-reconciliation.md) maps the findings to current code.

@@ -23,7 +23,7 @@ non-negotiables are here.
    dock badge.
 7. **Both themes, every time.** Check a new colour against `surface-canvas`, `surface-base`,
    `surface-raised` and `surface-sunken` in light *and* dark, and give it a `usage` note naming
-   the grounds it sits on. `node --test "design/test/*.test.mjs"` enforces the floors.
+   the grounds it sits on. `pnpm exec vitest run packages/design/test/contrast.test.ts` enforces the floors.
 8. **Mono means ORCA produced it.** Ids, step and node names, paths, expressions, tool names,
    agent output, artifact bodies. Sans is for prose a person wrote. The distinction is
    load-bearing.

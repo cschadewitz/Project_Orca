@@ -1,0 +1,99 @@
+{
+  "id": "store-ownership",
+  "title": "Claims, leases and filesystem exclusion",
+  "owner": "packages/store",
+  "scope": "claim-store.ts, lease-store.ts, file-lock.ts",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "A work-item claim records parent run and branch ownership and survives ordinary run termination until explicitly released.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Leases identify a resource, holder, host/pid and heartbeat TTL; withOwnership fences writes and keepLease renews ownership or calls onLost.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "File locks use a directory with a unique owner token; removal is tied to the token, while incomplete/foreign ownership is conservatively retained.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/store/src/claim-store.ts",
+      "line": 38,
+      "symbol": "export interface ClaimStore"
+    },
+    {
+      "path": "packages/store/src/lease-store.ts",
+      "line": 156,
+      "symbol": "export function keepLease"
+    },
+    {
+      "path": "packages/store/src/file-lock.ts",
+      "line": 27,
+      "symbol": "export async function withFileLock"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Dispatcher",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Persistent item claim",
+      "type": "storage"
+    },
+    {
+      "id": "3",
+      "label": "Run interpreter",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Renewable run lease + guarded write",
+      "type": "storage"
+    },
+    {
+      "id": "5",
+      "label": "Directory lock + owner token",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "claim work item before launch",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "acquire / renew / fence writes",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "5",
+      "label": "serialize claim mutation",
+      "type": "dependency",
+      "evidence": 3
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "serialize resource mutation",
+      "type": "dependency",
+      "evidence": 3
+    }
+  ],
+  "limits": "Claims prevent duplicate work-item launch; leases prevent concurrent run interpretation; short file locks serialize individual store operations. None identifies an authorized human caller."
+}

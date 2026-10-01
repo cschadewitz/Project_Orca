@@ -1,0 +1,106 @@
+{
+  "id": "daemon",
+  "title": "@orca/daemon",
+  "owner": "packages/daemon",
+  "scope": "Transport, method table, projections, controls and notifications",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "methodsFor derives registered methods from provided read/control/config/plan/agent models and event sources. Missing capabilities are represented by absent method families.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "ReadModel projects engine/store state into protocol views; ControlModel invokes orchestration and PlanControlModel invokes plan mutations.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Configuration writes and process-local subscriptions are distinct models; maintenance wraps method execution to close admission during update.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/daemon/src/methods.ts",
+      "line": 605,
+      "symbol": "export function methodsFor"
+    },
+    {
+      "path": "packages/daemon/src/control.ts",
+      "line": 225,
+      "symbol": "export class ControlModel"
+    },
+    {
+      "path": "packages/daemon/src/maintenance.ts",
+      "line": 5,
+      "symbol": "export class Maintenance"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "HTTP / WebSocket transport",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "Method table + maintenance",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "ReadModel / PlanModel / AgentModel",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "ControlModel / PlanControlModel / ConfigModel",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Orchestrator / stores / registries",
+      "type": "component"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "dispatch validated envelope",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "read operations",
+      "type": "call",
+      "evidence": 1
+    },
+    {
+      "from": "2",
+      "to": "4",
+      "label": "control / document operations",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "5",
+      "label": "read and project state",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "invoke owning service",
+      "type": "call",
+      "evidence": 2
+    }
+  ],
+  "limits": ""
+}

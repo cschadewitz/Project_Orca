@@ -1,0 +1,109 @@
+{
+  "id": "app",
+  "title": "@orca/app",
+  "owner": "packages/app",
+  "scope": "Electron main, CJS preload, React renderer and browser-safe client contracts",
+  "kind": "package",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "Electron main owns daemon lifecycle/client, updates, OS alerts, preferences and IPC; BrowserWindow uses sandbox and context isolation.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The preload exposes a fixed window.orca API; it does not expose generic ipcRenderer or a raw filesystem interface.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "The renderer composes a shared notification stream, keyboard/layer registries, appearance and announcement channels around the route-driven app.",
+      "evidence": 3
+    },
+    {
+      "classification": "Declared",
+      "statement": "ESLint restricts app workspace imports to protocol and design; daemon is a development dependency to build the separate bundled subprocess.",
+      "evidence": 4
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/src/main/index.ts",
+      "line": 478,
+      "symbol": "function createWindow()"
+    },
+    {
+      "path": "packages/app/src/preload/index.cts",
+      "line": 45,
+      "symbol": "const bridge: OrcaBridge"
+    },
+    {
+      "path": "packages/app/renderer/src/main.tsx",
+      "line": 31,
+      "symbol": "const keyboard = new KeyboardMap"
+    },
+    {
+      "path": "tools/eslint-config/index.js",
+      "line": 23,
+      "symbol": "const appImportBoundary"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "React renderer process",
+      "type": "process"
+    },
+    {
+      "id": "2",
+      "label": "Isolated CJS preload bridge",
+      "type": "boundary"
+    },
+    {
+      "id": "3",
+      "label": "Electron main process",
+      "type": "process"
+    },
+    {
+      "id": "4",
+      "label": "HTTP/WS daemon process",
+      "type": "external"
+    },
+    {
+      "id": "5",
+      "label": "Preferences / private update credentials",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "named window.orca calls / listeners",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "fixed IPC channels",
+      "type": "message",
+      "evidence": 2
+    },
+    {
+      "from": "3",
+      "to": "4",
+      "label": "RPC and subscription transport",
+      "type": "message",
+      "evidence": 1
+    },
+    {
+      "from": "3",
+      "to": "5",
+      "label": "main-owned preferences and feed secret",
+      "type": "data",
+      "evidence": 1
+    }
+  ],
+  "limits": ""
+}

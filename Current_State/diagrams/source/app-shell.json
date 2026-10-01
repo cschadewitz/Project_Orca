@@ -1,0 +1,99 @@
+{
+  "id": "app-shell",
+  "title": "Renderer shell, navigation and appearance",
+  "owner": "packages/app",
+  "scope": "renderer/App.tsx, routes/route-table, chrome/, appearance/panes",
+  "kind": "component",
+  "claims": [
+    {
+      "classification": "Implemented",
+      "statement": "App owns active surface, route, dock content and one shared Attention feed used by chrome counts and surfaces.",
+      "evidence": 1
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Surface identity comes from design semantics; route resolution maps object links to surfaces and selections.",
+      "evidence": 2
+    },
+    {
+      "classification": "Implemented",
+      "statement": "Preferences store theme, per-surface density, pane sizes and alert settings; mergePreferences applies patches without resetting unrelated choices.",
+      "evidence": 3
+    }
+  ],
+  "evidence": [
+    {
+      "path": "packages/app/renderer/src/App.tsx",
+      "line": 138,
+      "symbol": "const attention = useAttention()"
+    },
+    {
+      "path": "packages/app/renderer/src/route-table.ts",
+      "line": 89,
+      "symbol": "export function resolveRoute"
+    },
+    {
+      "path": "packages/app/src/preferences/schema.ts",
+      "line": 136,
+      "symbol": "export function mergePreferences"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "1",
+      "label": "Routes / deep links / command palette",
+      "type": "component"
+    },
+    {
+      "id": "2",
+      "label": "App shell + shared Attention feed",
+      "type": "component"
+    },
+    {
+      "id": "3",
+      "label": "Five surfaces + dock",
+      "type": "component"
+    },
+    {
+      "id": "4",
+      "label": "Appearance + PaneSplitter registry",
+      "type": "component"
+    },
+    {
+      "id": "5",
+      "label": "Main PreferencesFile",
+      "type": "storage"
+    }
+  ],
+  "edges": [
+    {
+      "from": "1",
+      "to": "2",
+      "label": "select surface/object",
+      "type": "call",
+      "evidence": 2
+    },
+    {
+      "from": "2",
+      "to": "3",
+      "label": "render selected content",
+      "type": "containment",
+      "evidence": 1
+    },
+    {
+      "from": "4",
+      "to": "3",
+      "label": "apply token-bound layout choices",
+      "type": "data",
+      "evidence": 3
+    },
+    {
+      "from": "4",
+      "to": "5",
+      "label": "read/write preference patch",
+      "type": "message",
+      "evidence": 3
+    }
+  ],
+  "limits": "The five surfaces are Attention, Runs, Plan, Agents and Config; workflow inspection is reached through Config/routes, not a sixth top-level surface."
+}
