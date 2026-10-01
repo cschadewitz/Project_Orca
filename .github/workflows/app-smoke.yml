@@ -1,39 +1,29 @@
 # Launch the desktop app in a real Electron window: once against a real daemon, and once
-# more on each platform at `#type` to check the bundled faces by machine. Daemon/protocol-only
-# changes still get the smoke test, but skip the type proof because they cannot change bundled
-# faces or renderer output.
+# more on each platform at `#type` to check the bundled faces by machine. Release and manual
+# runs verify the full matrix against their supplied ref.
 #
 # Separate from ci.yml on purpose. That workflow sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1` —
 # it typechecks, lints and builds the app but never runs it, and skipping the ~100 MB
 # binary keeps every one of its matrix legs fast. This one needs that binary, so it
-# installs without the flag and only on the pull requests that could break the app: the
-# app itself, the design system it renders, and the daemon and protocol it talks to.
-#
-# Pull requests classify their paths below so daemon/protocol-only changes can skip the
-# type proof. Release calls run every job against the exact merge commit before publication.
-#
-# ## The paths filter covers the screenshot baselines
-#
-# The `type-proof` job's baselines live in `packages/app/test/smoke/*-snapshots/`, which
-# `packages/app/**` already matches, and the fonts and tokens they are a picture of are
-# under `packages/design/**`. The filter needs nothing added for the second job.
+# installs without the flag. It no longer runs automatically on pull requests: CI is the
+# only pre-merge workflow. Release calls still run every job against the exact merge commit
+# before publication; a manual run can verify a branch or produce screenshot evidence.
+# The supplied ref makes the existing classifier run the complete type-proof matrix.
 name: App smoke
 
 on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "The branch or commit to smoke-test and type-proof"
+        required: true
+        type: string
+        default: main
   workflow_call:
     inputs:
       ref:
         required: true
         type: string
-  pull_request:
-    branches: [main]
-    paths:
-      - "packages/app/**"
-      - "packages/design/**"
-      - "packages/daemon/**"
-      - "packages/protocol/**"
-      - ".github/workflows/app-smoke.yml"
-      - "pnpm-lock.yaml"
 
 permissions:
   contents: read

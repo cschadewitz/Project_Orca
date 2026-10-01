@@ -12,10 +12,8 @@
 # artifact and the daemon beside it are one build of one commit, and their protocol versions
 # agree by construction rather than by review (docs/RELEASING.md).
 #
-# On a pull request it runs only when the packaging itself changes. The things that break
-# packaging are the packaging config, the spawn module, the build scripts and the dependency
-# graph; a change to a renderer component cannot, and `app-smoke.yml` already covers the app
-# running at all.
+# Packaging runs on manual dispatch and release calls only. Pull requests run CI without
+# launching or packaging Electron; dispatch this workflow to verify packaging before release.
 name: Desktop
 
 on:
@@ -30,16 +28,6 @@ on:
         type: string
         required: false
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    paths:
-      - ".github/workflows/desktop.yml"
-      - "packages/app/electron-builder.yml"
-      - "packages/app/package.json"
-      - "packages/app/scripts/**"
-      - "packages/app/src/main/**"
-      - "pnpm-workspace.yaml"
-      - "pnpm-lock.yaml"
 
 permissions:
   contents: read
