@@ -33,7 +33,7 @@ export function validateWorkflowInputs(
 
   const errors: ValidationIssue[] = [];
   const warnings: ValidationIssue[] = [];
-  const vars: Record<string, unknown> = {};
+  const vars = Object.create(null) as Record<string, unknown>;
   for (const [name, decl] of Object.entries(schema.fields))
     if (decl.default !== undefined) vars[name] = structuredClone(decl.default);
   // An explicit `undefined` is absence, not an override of a default.
@@ -42,7 +42,7 @@ export function validateWorkflowInputs(
 
   for (const [name, decl] of Object.entries(schema.fields)) {
     const path = `vars.${name}`;
-    const value = vars[name];
+    const value = Object.hasOwn(vars, name) ? vars[name] : undefined;
     if (value === undefined) {
       if (decl.required) errors.push({ path, message: "is required" });
       continue;

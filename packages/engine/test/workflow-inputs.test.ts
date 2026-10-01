@@ -100,6 +100,11 @@ describe("launch-input admission (#330)", () => {
   it.each([
     ["a missing required input", {}, [{ path: "vars.count", message: "is required" }]],
     [
+      "a required input supplied only through __proto__",
+      JSON.parse('{"__proto__":{"count":2}}') as Record<string, unknown>,
+      [{ path: "vars.count", message: "is required" }],
+    ],
+    [
       "a value outside an enum",
       { count: 1, level: "mid" },
       [{ path: "vars.level", message: "must be one of: low, high" }],

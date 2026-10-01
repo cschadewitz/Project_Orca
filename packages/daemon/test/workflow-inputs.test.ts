@@ -123,7 +123,10 @@ describe("workflow view with an input declaration (#330)", () => {
   });
 
   it("omits enclosing defaults and vars with sensitive object or array descendants", () => {
-    const def = parseWorkflow(TYPED.replace(/vars:[\s\S]*?(?=start:)/, `
+    const def = parseWorkflow(
+      TYPED.replace(
+        /vars:[\s\S]*?(?=start:)/,
+        `
 vars:
   credentials: { token: VAR_SECRET, label: visible }
   accounts: [{ token: ARRAY_VAR_SECRET }]
@@ -149,7 +152,9 @@ inputSchema:
       default: [ITEM_DEFAULT_SECRET]
       items: { type: string, sensitive: true }
     mode: { type: string, default: fast }
-`));
+`,
+      ),
+    );
     const before = structuredClone(def);
     const view = workflowView(def, ["3"]);
     expect(WorkflowViewSchema.parse(view)).toEqual(view);

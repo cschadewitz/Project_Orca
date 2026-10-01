@@ -187,8 +187,9 @@ function nestedDefaults(decl: WorkflowInputDeclaration, at: (string | number)[])
  * and constraints but loses its `default` and `enum`, which are values, at every depth.
  */
 export function redactWorkflowInputSchema(schema: WorkflowInputSchema): WorkflowInputSchema {
-  const fields: Record<string, WorkflowInputDeclaration> = {};
-  for (const [name, decl] of Object.entries(schema.fields)) fields[name] = redactDeclaration(decl, false);
+  const fields = Object.fromEntries(
+    Object.entries(schema.fields).map(([name, decl]) => [name, redactDeclaration(decl, false)]),
+  );
   return { ...schema, fields };
 }
 
@@ -200,8 +201,9 @@ function redactDeclaration(decl: WorkflowInputDeclaration, inherited: boolean): 
   if (!sensitive && values !== undefined) out.enum = values;
   if (items) out.items = redactDeclaration(items, sensitive);
   if (properties) {
-    out.properties = {};
-    for (const [k, d] of Object.entries(properties)) out.properties[k] = redactDeclaration(d, sensitive);
+    out.properties = Object.fromEntries(
+      Object.entries(properties).map(([k, d]) => [k, redactDeclaration(d, sensitive)]),
+    );
   }
   return out;
 }

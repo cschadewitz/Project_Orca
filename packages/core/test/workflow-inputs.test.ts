@@ -129,6 +129,43 @@ inputSchema:
     expect(validateWorkflowInputs(def).vars).toEqual({ count: 3, dryRun: true, level: "low" });
   });
 
+  it("does not resolve omitted prototype-named inputs from inherited properties", () => {
+    const def = {
+      vars: {},
+      inputSchema: { fields: { constructor: { type: "string" as const }, toString: { type: "string" as const } } },
+    };
+    expect(validateWorkflowInputs(def).validation.ok).toBe(true);
+    expect(validateWorkflowInputs(def, { constructor: "own", toString: "text" }).vars).toEqual({
+      constructor: "own",
+      toString: "text",
+    });
+  });
+
+  it("cannot satisfy required fields by assigning a supplied __proto__", () => {
+    const def = wf(`inputSchema:\n  fields:\n    count: { type: integer, required: true }`);
+    const supplied = JSON.parse('{"__proto__":{"count":2}}') as Record<string, unknown>;
+    expect(validateWorkflowInputs(def, supplied)).toEqual({
+      validation: { ok: false, errors: [{ path: "vars.count", message: "is required" }], warnings: [] },
+      vars: {},
+    });
+    const result = validateWorkflowInputs(def, { ...supplied, count: 3 });
+    expect(result.validation.ok).toBe(true);
+    expect(Object.getPrototypeOf(result.vars)).toBeNull();
+    expect(JSON.parse(JSON.stringify(result.vars))).toEqual({ ...supplied, count: 3 });
+  });
+
+  it("preserves own __proto__ defaults and overrides as serializable data", () => {
+    const fields = JSON.parse('{"__proto__":{"type":"string","default":"default"}}') as NonNullable<
+      WorkflowDefinition["inputSchema"]
+    >["fields"];
+    const def = { vars: {}, inputSchema: { fields } };
+    expect(JSON.stringify(validateWorkflowInputs(def).vars)).toBe('{"__proto__":"default"}');
+    const vars = JSON.parse('{"__proto__":"workflow"}') as Record<string, unknown>;
+    expect(JSON.stringify(validateWorkflowInputs({ ...def, vars }).vars)).toBe('{"__proto__":"workflow"}');
+    const supplied = JSON.parse('{"__proto__":"supplied"}') as Record<string, unknown>;
+    expect(JSON.stringify(validateWorkflowInputs({ ...def, vars }, supplied).vars)).toBe('{"__proto__":"supplied"}');
+  });
+
   it("treats an explicit undefined as absent rather than clearing a default", () => {
     expect(validateWorkflowInputs(TYPED, { ...good, count: undefined }).vars.count).toBe(2);
   });
