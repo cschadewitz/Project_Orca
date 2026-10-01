@@ -94,7 +94,7 @@ A credential holds a list of these permissions:
 | Permission           | Grants                                                                     |
 | -------------------- | -------------------------------------------------------------------------- |
 | `runs.read`          | Read runs, their events, open inputs and claims; run notifications.        |
-| `artifacts.read`     | Artifact metadata and bodies.                                              |
+| `artifacts.read`     | Artifact references, metadata and bodies.                                  |
 | `workflows.read`     | Workflow definitions; `workflows.changed`.                                 |
 | `runs.start`         | Start runs; the reserved launch-input preflight.                           |
 | `runs.control`       | Resume and cancel runs.                                                    |
@@ -189,17 +189,22 @@ that the two match. A method that is missing from the table is refused with
 principal may call, but each call is still checked against the specific resource it names.
 
 Without `artifacts.read`, `runs.get.artifacts` and each `inputs.list` entry's `artifacts`
-are empty. Input visibility and waiting counts still follow run scope. `runs.events` and raw
+are empty, as are each step's `inputArtifactIds` and `outputArtifactIds`. Input visibility
+and waiting counts still follow run scope. `runs.events` and raw
 `event.appended` delivery omit `artifact.*`, `step.inputs`, and `plan.signals.rejected`
 events, which carry artifact data, metadata or references. This applies even to an
 unrestricted run scope, and covers live delivery and replay. Event pages retain their
 scan cursors and `lastSeq`; clients must follow those cursors even when a filtered page
 is empty. Sequence gaps do not contain artifact content.
 
-Artifact IDs in step views and `step.started` / `step.completed` events remain visible
-as run-execution references under `runs.read`. These IDs confer no authority to retrieve
-artifact metadata or bodies: `artifacts.get` and `artifacts.list` still require
-`artifacts.read` and run visibility.
+Lifecycle events remain visible, with `step.started.inputArtifactIds` and
+`step.completed.result.artifactIds` emptied. `journal.list` omits artifact IDs from
+entry and entity origins, empties work-item `produced` maps (including updates and their
+summaries), and withholds `signals.rejected` entries. Journal page cursors, `hasMore` and
+`lastSeq` are retained too. Other plan views and folded notifications carry no
+schema-defined artifact IDs. These projections cover explicit schema fields, not arbitrary
+artifact-like strings in user-authored values. They copy outbound data only: authoritative
+run/journal history and results for authorized artifact readers remain unchanged.
 
 ### Notifications
 

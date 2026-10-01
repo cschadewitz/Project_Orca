@@ -76,9 +76,9 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function harness(extra: Partial<TokenAuthOptions> = {}): Promise<Harness> {
+export async function harness(extra: Partial<TokenAuthOptions> = {}, backingStores?: Stores): Promise<Harness> {
   const clock = new FakeClock();
-  const stores = memoryStores(clock);
+  const stores = backingStores ?? memoryStores(clock);
   const orchestrator = new Orchestrator({
     stores,
     agents: new AgentRegistry(clock),

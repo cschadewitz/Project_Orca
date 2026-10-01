@@ -195,12 +195,8 @@ export function attachSocket(server: Server, opts: SocketOptions): () => Promise
                 if (silent) return;
                 const now = current();
                 if (!now) return;
-                const allowed = await opts.authorizer.allowsNotification(
-                  now,
-                  message.method,
-                  (message.params ?? {}) as Record<string, unknown>,
-                );
-                if (allowed) send(message);
+                const projected = await opts.authorizer.projectNotification(now, message);
+                if (projected) send(projected);
               })
               .catch(() => undefined);
           };

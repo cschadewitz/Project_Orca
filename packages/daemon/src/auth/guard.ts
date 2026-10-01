@@ -36,7 +36,9 @@ import {
   type ArtifactView,
   type ClaimView,
   type HelloResult,
+  type JournalListResult,
   type OpenInputView,
+  type NotificationMessage,
   type RunsGetResult,
   type RunsEventsResult,
   type RunSummaryView,
@@ -44,6 +46,12 @@ import {
 } from "@orca/protocol";
 import type { OrcaEvent } from "@orca/core";
 import type { MethodContext, MethodTable } from "../methods.js";
+import {
+  artifactEvent,
+  eventWithoutArtifacts,
+  journalWithoutArtifacts,
+  runWithoutArtifacts,
+} from "./artifact-projection.js";
 import { actorOf, targetOf, type AuditRecord, type AuditSink } from "./audit.js";
 import {
   artifactNotFound,
@@ -246,6 +254,9 @@ export class Authorizer {
 
     switch (spec.resource) {
       case "none":
+        if (name === "journal.list" && !holds(principal, "artifacts.read"))
+          return journalWithoutArtifacts((await original(params)) as JournalListResult);
+        return original(params);
       case "subscription":
         return original(params);
 
@@ -257,11 +268,14 @@ export class Authorizer {
           ? rethrowAs(original(params), "RUN_NOT_FOUND", () => runNotFound(runId))
           : original(params));
         if (!holds(principal, "artifacts.read")) {
-          if (name === "runs.get") return { ...(result as RunsGetResult), artifacts: [] };
+          if (name === "runs.get") return runWithoutArtifacts(result as RunsGetResult);
           if (name === "runs.events") {
             const page = result as RunsEventsResult;
             // Retain scan cursors: even an entirely hidden page must allow forward/backward progress.
-            return { ...page, events: page.events.filter((event) => !artifactEvent(event.type)) };
+            return {
+              ...page,
+              events: page.events.filter((event) => !artifactEvent(event.type)).map(eventWithoutArtifacts),
+            };
           }
         }
         return result;
@@ -501,6 +515,17 @@ export class Authorizer {
     }
   }
 
+  /** Authorize and project for this recipient, without changing a shared frame or stored event. */
+  async projectNotification(
+    principal: Principal,
+    message: NotificationMessage,
+  ): Promise<NotificationMessage | undefined> {
+    const params = (message.params ?? {}) as Record<string, unknown>;
+    if (!(await this.allowsNotification(principal, message.method, params))) return undefined;
+    if (message.method !== EVENT_APPENDED || holds(principal, "artifacts.read")) return message;
+    return { ...message, params: { ...params, event: eventWithoutArtifacts(params.event as OrcaEvent) } };
+  }
+
   /**
    * `subscribe` over the socket. A run-scoped stream needs `runs.read`; for a run the caller
    * cannot see it is answered exactly as one for a run that does not exist - a subscription
@@ -601,11 +626,6 @@ export class Authorizer {
       remote: meta.remote,
     });
   }
-}
-
-/** Raw events that expose artifact content, metadata, or references. */
-function artifactEvent(type: string): boolean {
-  return type.startsWith("artifact.") || type === "step.inputs" || type === "plan.signals.rejected";
 }
 
 function codeOf(e: unknown): string {
