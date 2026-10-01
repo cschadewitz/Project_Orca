@@ -251,3 +251,14 @@ export async function recordJsonArtifact(h: Harness, id: string): Promise<number
     payload: { stepRunId: "artifact-step", artifact },
   });
 }
+
+/** Attach a real artifact to the pending gate so inputs.list must project its metadata. */
+export async function recordGateArtifact(h: Harness, id: string): Promise<void> {
+  await recordJsonArtifact(h, id);
+  const gate = (await h.orchestrator.pendingInputs(h.runs.alice)).find((input) => input.id === h.gates.alice)!;
+  await h.append({
+    type: "step.inputs",
+    runId: h.runs.alice,
+    payload: { stepRunId: gate.stepRunId, artifactIds: [id] },
+  });
+}

@@ -8,7 +8,7 @@ import WebSocket from "ws";
 import type { OrcaEventInput } from "@orca/core";
 import { STEP_CHANGED } from "@orca/protocol";
 import { CredentialStore } from "../src/auth/index.js";
-import { harness, recordJsonArtifact, type Harness } from "./security-harness.js";
+import { harness, recordGateArtifact, recordJsonArtifact, type Harness } from "./security-harness.js";
 
 type Frame = {
   kind: string;
@@ -202,6 +202,38 @@ describe("notification authorization", () => {
     expect(
       ((await owner.call("subscribe", { runId: h.runs.bob, since: 0 })).result as { replayed: number }).replayed,
     ).toBeGreaterThan(0);
+  });
+
+  it.each(["owned", "all"] as const)("withholds input artifact metadata with %s run scope", async (runs) => {
+    h = await harness();
+    await recordGateArtifact(h, "gate-secret");
+    const reader = await h.credentials.issue({
+      principal: "alice",
+      permissions: ["runs.read"],
+      scope: { workflows: "*", runs },
+    });
+    const restricted = await connect(reader.token);
+    const allowed = await connect(runs === "owned" ? h.tokens.alice : h.tokens.owner);
+    const positive = await allowed.call("inputs.list");
+    const negative = await restricted.call("inputs.list");
+    expect(positive.ok).toBe(true);
+    const result = positive.result as { inputs: { id: string; artifacts: unknown[] }[]; waiting: number };
+    expect(result.waiting).toBe(runs === "owned" ? 1 : 3);
+    expect(result.inputs.find((input) => input.id === h.gates.alice)?.artifacts).toEqual([
+      expect.objectContaining({
+        id: "gate-secret",
+        name: "report",
+        path: "/tmp/gate-secret.json",
+        mediaType: "application/json",
+        size: 30,
+      }),
+    ]);
+    expect(negative.ok).toBe(true);
+    expect(negative.result).toEqual({
+      ...result,
+      inputs: result.inputs.map((input) => ({ ...input, artifacts: [] })),
+    });
+    expect(JSON.stringify(negative.result)).not.toContain("gate-secret");
   });
 
   it("withholds JSON artifacts from socket reads, replay and live events", async () => {

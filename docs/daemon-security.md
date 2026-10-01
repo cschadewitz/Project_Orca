@@ -188,12 +188,18 @@ that the two match. A method that is missing from the table is refused with
 `hello` is not a substitute for per-resource authorization. It reports which methods a
 principal may call, but each call is still checked against the specific resource it names.
 
-Without `artifacts.read`, `runs.get.artifacts` is empty. `runs.events` and raw
+Without `artifacts.read`, `runs.get.artifacts` and each `inputs.list` entry's `artifacts`
+are empty. Input visibility and waiting counts still follow run scope. `runs.events` and raw
 `event.appended` delivery omit `artifact.*`, `step.inputs`, and `plan.signals.rejected`
 events, which carry artifact data, metadata or references. This applies even to an
 unrestricted run scope, and covers live delivery and replay. Event pages retain their
 scan cursors and `lastSeq`; clients must follow those cursors even when a filtered page
 is empty. Sequence gaps do not contain artifact content.
+
+Artifact IDs in step views and `step.started` / `step.completed` events remain visible
+as run-execution references under `runs.read`. These IDs confer no authority to retrieve
+artifact metadata or bodies: `artifacts.get` and `artifacts.list` still require
+`artifacts.read` and run visibility.
 
 ### Notifications
 

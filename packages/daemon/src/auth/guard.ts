@@ -259,8 +259,8 @@ export class Authorizer {
 
       case "input-list": {
         const result = (await original(params)) as { inputs: OpenInputView[]; waiting: number };
-        if (!restricted) return result;
-        const inputs = await this.visible(principal, result.inputs, (i) => i.runId);
+        let inputs = restricted ? await this.visible(principal, result.inputs, (i) => i.runId) : result.inputs;
+        if (!holds(principal, "artifacts.read")) inputs = inputs.map((input) => ({ ...input, artifacts: [] }));
         return { ...result, inputs, waiting: inputs.length };
       }
 

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanService } from "@orca/engine";
 import { RequestSchema } from "@orca/core";
 import { PROTOCOL_VERSION } from "@orca/protocol";
-import { harness, putArtifact, recordJsonArtifact, raw, type Harness } from "./security-harness.js";
+import { harness, recordGateArtifact, putArtifact, recordJsonArtifact, raw, type Harness } from "./security-harness.js";
 
 let h: Harness;
 beforeEach(async () => {
@@ -302,6 +302,35 @@ describe("resource isolation", () => {
     const byAddress = await h.rpc(h.tokens.bob, "artifacts.get", { runId: h.runs.alice, name: "spec" });
     expect(byAddress.body.error?.code).toBe("ARTIFACT_MISSING");
     expect(JSON.stringify(byAddress.body)).not.toContain("alice's plan");
+  });
+
+  it.each(["owned", "all"] as const)("withholds input artifact metadata with %s run scope", async (runs) => {
+    await recordGateArtifact(h, "gate-secret");
+    const reader = await h.credentials.issue({
+      principal: "alice",
+      permissions: ["runs.read"],
+      scope: { workflows: "*", runs },
+    });
+    const positive = (await h.rpc(runs === "owned" ? h.tokens.alice : h.tokens.owner, "inputs.list")).body;
+    const negative = (await h.rpc(reader.token, "inputs.list")).body;
+    expect(positive.ok).toBe(true);
+    const result = positive.result as { inputs: { id: string; artifacts: unknown[] }[]; waiting: number };
+    expect(result.waiting).toBe(runs === "owned" ? 1 : 3);
+    expect(result.inputs.find((input) => input.id === h.gates.alice)?.artifacts).toEqual([
+      expect.objectContaining({
+        id: "gate-secret",
+        name: "report",
+        path: "/tmp/gate-secret.json",
+        mediaType: "application/json",
+        size: 30,
+      }),
+    ]);
+    expect(negative.ok).toBe(true);
+    expect(negative.result).toEqual({
+      ...result,
+      inputs: result.inputs.map((input) => ({ ...input, artifacts: [] })),
+    });
+    expect(JSON.stringify(negative.result)).not.toContain("gate-secret");
   });
 
   it("withholds artifact projections from runs.read-only credentials without losing page cursors", async () => {
