@@ -63,6 +63,8 @@ export interface PermissionContext {
   ask?: (request: acp.RequestPermissionRequest) => Promise<string | undefined>;
   /** Passed through to `decidePermission`, so workspace-relative rules can resolve. */
   scope?: PermissionEvalContext | undefined;
+  /** The exact invocation's lifetime; late answers cannot authorize a subsequent turn. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -120,6 +122,7 @@ export async function resolvePermission(
   policy: PermissionPolicy,
   ctx: PermissionContext,
 ): Promise<{ response: acp.RequestPermissionResponse; decision: string }> {
+  if (ctx.signal?.aborted) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:expired" };
   const decision = decidePermission(policy, ctx.request, ctx.scope);
   const options = ctx.request.options;
   const select = (o: acp.PermissionOption | undefined, label: string) =>
@@ -136,13 +139,42 @@ export async function resolvePermission(
       // decision rather than logging a bare "cancelled", because "the policy wanted a person
       // and there was none" is the one a person reading the log has to act on (#140).
       if (!ctx.ask) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:no-answerer" };
-      const chosen = await ctx.ask(ctx.request);
+      const chosen = await permissionWhileLive(() => ctx.ask!(ctx.request), ctx.signal);
+      if (ctx.signal?.aborted) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:expired" };
       const o = chosen ? options.find((x) => x.optionId === chosen) : undefined;
       return o
         ? { response: { outcome: { outcome: "selected", optionId: o.optionId } }, decision: `ask:${o.kind}` }
         : { response: { outcome: { outcome: "cancelled" } }, decision: "ask:cancelled" };
     }
   }
+}
+
+/** Release a dead callback even if its host never settles; detach the abort listener on both paths. */
+function permissionWhileLive(
+  ask: () => Promise<string | undefined>,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (!signal) return ask();
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      resolve(undefined);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void Promise.resolve()
+      .then(() => (signal.aborted ? undefined : ask()))
+      .then(
+        (answer) => {
+          signal.removeEventListener("abort", abort);
+          resolve(signal.aborted ? undefined : answer);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", abort);
+          reject(error instanceof Error ? error : new Error("permission callback failed", { cause: error }));
+        },
+      );
+  });
 }
 
 /* -------------------------------------------------------------------------- *

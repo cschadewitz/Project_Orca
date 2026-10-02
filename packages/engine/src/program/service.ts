@@ -6,13 +6,18 @@
 import {
   newId,
   RequestSchema,
+  SubmissionCommandSchema,
+  OrcaError,
   succeeded,
   type Request,
   type RequestSource,
   type RunOverrides,
   type RunState,
+  type SubmissionAuthority,
+  type SubmissionService,
 } from "@orca/core";
 import { isTerminal, workflowRevision, type Orchestrator } from "../orchestrator.js";
+import { RequestSubmissionService, type RequestSubmissionOptions } from "./request-submission.js";
 
 export interface SubmitRequestInput {
   title: string;
@@ -24,6 +29,7 @@ export interface SubmitRequestInput {
   /** Pin the root program definition selected by a launch preflight. */
   workflowVersion?: string;
   expectedWorkflowRevision?: string;
+  expectedConfigGeneration?: string;
   vars?: Record<string, unknown>;
   /**
    * Per-run selection (#186). `overrides.itemWorkflow` wins over the configured
@@ -33,14 +39,34 @@ export interface SubmitRequestInput {
 }
 
 export class ProgramService {
+  readonly submissions: SubmissionService | undefined;
   constructor(
     private readonly orchestrator: Orchestrator,
     private readonly programWorkflowId = "program",
     /** Seeded as `vars.itemWorkflow`; the program workflow dispatches work items to it. */
     private readonly itemWorkflowId?: string,
-  ) {}
+    private readonly submission?: Omit<RequestSubmissionOptions, "orchestrator"> & { authority?: SubmissionAuthority },
+  ) {
+    this.submissions = submission ? new RequestSubmissionService({ ...submission, orchestrator }) : undefined;
+  }
 
-  async submit(input: SubmitRequestInput): Promise<{ request: Request; runId: string }> {
+  async submit(input: SubmitRequestInput): Promise<{ request: Request; runId: string; admissionId?: string }> {
+    if (this.submissions) {
+      if (!this.submission?.authority)
+        throw new OrcaError("NOT_SUPPORTED", "Request submission requires explicit authority");
+      const result = await this.submissions.submit(input, this.submission.authority);
+      if (result.state !== "accepted")
+        throw new OrcaError("RUN_STATE", "Request requires reconciliation", { ...result });
+      const request = await this.orchestrator.stores.requests.get(result.requestId);
+      if (!request) throw new OrcaError("RUN_STATE", "accepted Request is unavailable", { ...result });
+      return { request, runId: result.runId, admissionId: result.admissionId };
+    }
+    if (input.expectedConfigGeneration !== undefined)
+      throw new OrcaError("NOT_SUPPORTED", "configuration generation guards require the submission provider");
+    // Legacy embedded callers retain the old constructor until their composition root supplies
+    // the durable admission store, generation provider and explicit local authority.
+    if (!SubmissionCommandSchema.safeParse(input).success)
+      throw new OrcaError("WORKFLOW_INPUT_INVALID", "invalid Request submission");
     const now = this.orchestrator.clock.isoNow();
     const request = RequestSchema.parse({
       id: newId("req", this.orchestrator.clock.now()),
@@ -59,7 +85,7 @@ export class ProgramService {
         ? { expectedWorkflowRevision: input.expectedWorkflowRevision }
         : {}),
       requestId: request.id,
-      vars: { request, ...(this.itemWorkflowId ? { itemWorkflow: this.itemWorkflowId } : {}), ...(input.vars ?? {}) },
+      vars: { ...(this.itemWorkflowId ? { itemWorkflow: this.itemWorkflowId } : {}), ...(input.vars ?? {}), request },
       ...(input.overrides ? { overrides: input.overrides } : {}),
     };
     // Admission errors must not leave an orphaned Request. Pin the admitted definition for
@@ -76,9 +102,23 @@ export class ProgramService {
   }
 
   async submitAndRun(input: SubmitRequestInput): Promise<{ request: Request; state: RunState }> {
-    const { request, runId } = await this.submit(input);
-    const state = await this.orchestrator.run(runId);
+    const admitted = await this.submit(input);
+    const { request } = admitted;
+    const state = await this.runSubmitted(admitted);
     return { request: (await this.settle(state)) ?? request, state };
+  }
+
+  /** Execute an admitted Request only after rechecking current authority at the worker boundary. */
+  async runSubmitted(
+    admitted: { runId: string; admissionId?: string },
+    authority: SubmissionAuthority | undefined = this.submission?.authority,
+  ): Promise<RunState> {
+    if (!this.submissions) return this.orchestrator.run(admitted.runId);
+    if (!authority || !admitted.admissionId)
+      throw new OrcaError("NOT_SUPPORTED", "Request execution requires its admission and explicit authority");
+    return executeAcceptedSubmission(this.submissions, admitted.admissionId, admitted.runId, authority, (runId) =>
+      this.orchestrator.run(runId),
+    );
   }
 
   /** Continue a parked run tree (see Orchestrator.resume) and record the outcome on its Request. */
@@ -98,4 +138,18 @@ export class ProgramService {
     await this.orchestrator.stores.requests.put(updated);
     return updated;
   }
+}
+
+/** Shared live authority boundary for daemon workers, ProgramService/CLI and configured ACP. */
+export async function executeAcceptedSubmission<T>(
+  service: SubmissionService,
+  admissionId: string,
+  runId: string,
+  authority: SubmissionAuthority,
+  execute: (runId: string) => Promise<T>,
+): Promise<T> {
+  const current = await service.inspect(admissionId, authority);
+  if (current.state !== "accepted" || current.runId !== runId)
+    throw new OrcaError("RUN_STATE", "Request admission is not accepted for this run");
+  return execute(runId);
 }

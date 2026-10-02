@@ -59,6 +59,7 @@ import {
   InputsAnswerResultSchema,
   InputsListResultSchema,
   PROTOCOL_VERSION,
+  isCompatible,
   RUNS_CANCEL_METHOD,
   RUNS_EVENTS_METHOD,
   RUNS_GET_METHOD,
@@ -101,7 +102,6 @@ import {
   type DependenciesListResult,
   type DependenciesWaiveParams,
   type DependenciesWaiveResult,
-  type HelloResult,
   type ItemsListParams,
   type ItemsListResult,
   type JournalListParams,
@@ -141,7 +141,8 @@ import {
   type WorkflowsListParams,
   type WorkflowsListResult,
 } from "@orca/protocol";
-import type { ZodType } from "zod";
+import { z, type ZodType } from "zod";
+import type { IdentifiedHello } from "../main/connection-target.js";
 import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
 import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
 
@@ -163,7 +164,9 @@ export class DaemonClientError extends Error {
 
 export interface DaemonClientOptions {
   auth?: DaemonTokenSource;
+  requireAuthentication?: boolean;
   onAuthFailure?: () => void;
+  onHello?: (hello: IdentifiedHello) => void;
 }
 
 export class DaemonClient {
@@ -183,7 +186,13 @@ export class DaemonClient {
     return socketUrlFor(this.url);
   }
 
-  async call<R>(method: string, params: unknown, result: ZodType<R>, retryAuth = true): Promise<R> {
+  async call<R>(
+    method: string,
+    params: unknown,
+    result: ZodType<R>,
+    retryAuth = true,
+    signal?: AbortSignal,
+  ): Promise<R> {
     const req: RequestMessage = { kind: "request", id: this.nextId++, method, params };
     for (let attempt = 0; ; attempt++) {
       let token: string | undefined;
@@ -193,9 +202,15 @@ export class DaemonClient {
         this.options.onAuthFailure?.();
         throw new DaemonClientError({ code: "AUTH_INVALID", message: "Daemon authentication failed" });
       }
+      if (this.options.requireAuthentication && !token)
+        throw new DaemonClientError({
+          code: "AUTH_REQUIRED",
+          message: "Remote daemon requires an explicit credential",
+        });
       assertCredentialDestination(this.url, token);
       const res = await this.fetchImpl(`${this.url}/rpc`, {
         method: "POST",
+        ...(signal ? { signal } : {}),
         redirect: "manual",
         headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(req),
@@ -242,8 +257,16 @@ export class DaemonClient {
     }
   }
 
-  hello(client: string): Promise<HelloResult> {
-    return this.call(HELLO_METHOD, { client, protocol: PROTOCOL_VERSION }, HelloResultSchema);
+  async hello(client: string, retryAuth = true): Promise<IdentifiedHello> {
+    const hello = await this.call(
+      HELLO_METHOD,
+      { client, protocol: PROTOCOL_VERSION },
+      HelloResultSchema.extend({ identity: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }).optional() }),
+      retryAuth,
+      AbortSignal.timeout(10_000),
+    );
+    if (hello.identity) this.options.onHello?.(hello);
+    return hello;
   }
 
   runsList(params: Params<RunsListParams> = {}): Promise<RunsListResult> {
@@ -448,23 +471,15 @@ export class DaemonClient {
     return new DaemonSubscription({
       ...opts,
       url: this.socketUrl,
-      ...(this.options.auth
-        ? {
-            auth: {
-              tokens: this.options.auth,
-              // Browser-style WebSockets hide a rejected upgrade's HTTP status. Verify first so
-              // AUTH_* is visible rather than an endless series of indistinguishable 1006s.
-              verify: async () => {
-                await this.call(
-                  HELLO_METHOD,
-                  { client: "orca-app/subscription", protocol: PROTOCOL_VERSION },
-                  HelloResultSchema,
-                  false,
-                );
-              },
-            },
-          }
-        : {}),
+      verify: async () => {
+        const hello = await this.hello("orca-app/subscription", false);
+        this.options.onHello?.(hello);
+        if (!isCompatible(PROTOCOL_VERSION, hello.protocol)) {
+          throw new DaemonClientError({ code: "PROTOCOL_VERSION", message: "Daemon protocol mismatch" });
+        }
+        return hello.identity;
+      },
+      ...(this.options.auth ? { auth: { tokens: this.options.auth } } : {}),
     });
   }
 }

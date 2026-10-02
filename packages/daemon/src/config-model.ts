@@ -55,6 +55,9 @@ import {
 } from "@orca/core";
 import {
   ProtocolFault,
+  type ConfigApplyParams,
+  type ConfigApplyResult,
+  type ConfigGenerationStatus,
   type ConfigDocument,
   type ConfigDocumentView,
   type ConfigEffectivePolicy,
@@ -70,9 +73,26 @@ import { describeConfigSchema, validationErrors } from "./config-schema.js";
 /** The default name a `config.set` creates when the workspace has no config file yet. */
 export const DEFAULT_CONFIG_FILENAME = "orca.config.yaml";
 
+/** Structural seam: the engine provider is injected at bootstrap, never fabricated here. */
+export interface ConfigGenerationProvider {
+  effectiveConfig(): unknown;
+  status(raw: unknown, revision: string): ConfigGenerationStatus;
+  apply(
+    raw: unknown,
+    revision: string,
+    expectedGeneration: string,
+    validateOnly: boolean,
+    recheck: () => Promise<void>,
+  ): Promise<ConfigApplyResult>;
+  onChange(
+    listener: (status: ConfigGenerationStatus, workflows: { id: string; version: string; removed?: boolean }[]) => void,
+  ): () => void;
+}
+
 export interface ConfigModelOptions {
   /** The directory the two documents live in - `OrcaApp.configDir`. */
   configDir: string;
+  generations?: ConfigGenerationProvider;
   /**
    * The config file discovery actually found, when it found one. Absent means the workspace
    * is running on schema defaults; `config.get` reports `exists: false` at the path a
@@ -91,6 +111,9 @@ export interface ConfigChange {
   revision: string;
   path: string;
   at: string;
+  kind?: "saved" | "activated";
+  generation?: ConfigGenerationStatus;
+  workflows?: { id: string; version: string; removed?: boolean }[];
 }
 
 /**
@@ -101,6 +124,7 @@ export interface ConfigChange {
  * frame has the same shape of life - no run, no cursor, nothing to replay.
  */
 export class ConfigModel {
+  private readonly generations: ConfigGenerationProvider | undefined;
   private readonly configFile: string;
   private readonly permissionsFile: string;
   private readonly clock: Clock;
@@ -110,6 +134,25 @@ export class ConfigModel {
     this.configFile = opts.configFile ?? join(opts.configDir, DEFAULT_CONFIG_FILENAME);
     this.permissionsFile = opts.permissionsFile ?? join(opts.configDir, PERMISSION_POLICY_FILENAME);
     this.clock = opts.clock ?? systemClock;
+    this.generations = opts.generations;
+    this.generations?.onChange((generation, workflows) => {
+      const change: ConfigChange = {
+        document: "config",
+        path: this.configFile,
+        revision: generation.activeRevision,
+        at: this.clock.isoNow(),
+        kind: "activated",
+        generation,
+        workflows,
+      };
+      for (const listener of this.listeners) {
+        try {
+          listener(change);
+        } catch {
+          /* notification isolation */
+        }
+      }
+    });
   }
 
   /** Where each document is. Public so `orca serve` can say what it is serving. */
@@ -141,11 +184,9 @@ export class ConfigModel {
    * `config.get`: both documents, the schema a form renders, and the effective permission
    * policy the two of them add up to.
    *
-   * **Nothing in `text` is redacted** - see `ConfigDocumentViewSchema.text` for why, and say
-   * so to anyone who asks: this method hands a client the bytes of the config file, host
-   * entries and command lines included. The daemon's port is loopback and unauthenticated,
-   * so it grants no reader anything a `cat` did not already grant them, but it is a real
-   * widening of what travels over the wire and it is not hidden behind a flag.
+   * Editor bytes are unredacted and require config.read authority. The generation provider
+   * reports saved versus active state; the effective policy uses active config plus the
+   * current sidecar. A saved draft must never masquerade as the running permission policy.
    */
   async get(): Promise<ConfigGetResult> {
     const config = await this.read("config");
@@ -154,7 +195,11 @@ export class ConfigModel {
       config,
       permissions,
       schema: describeConfigSchema(),
-      effective: this.effective(config, permissions),
+      effective: this.effective(
+        this.generations ? { ...config, parsed: this.generations.effectiveConfig() } : config,
+        permissions,
+      ),
+      ...(this.generations ? { generation: this.generations.status(configurationValue(config), config.revision) } : {}),
       asOf: this.clock.isoNow(),
     };
   }
@@ -162,14 +207,9 @@ export class ConfigModel {
   /**
    * `config.set`: write one document, or say why it cannot be written.
    *
-   * **The daemon goes on serving the configuration it booted with.** Nothing here reloads
-   * the orchestrator: agents, hosts, workflows and the store were wired at `bootstrap` and
-   * rewiring them under runs that are in flight is its own piece of work, not a side effect
-   * of a form being saved. So a `config.set` changes the file and the next `orca serve`, and
-   * a run starting a moment later still uses the old config. A run already in flight is
-   * likewise undisturbed - this method touches no run, takes no lease and appends no event,
-   * which is what makes editing the config while a run starts a safe thing to do rather than
-   * a race (#174).
+   * Saving changes only the document. Explicit apply validates and activates a generation
+   * for future launches; existing runs retain their admitted choices. Sidecar edits remain
+   * live at the next permission check. No save takes a run lease or appends a run event.
    *
    * **`CONFIG_STALE` is decided inside the write lock, not before it.** The revision compare
    * and the write used to be two unsynchronised steps, with a window between them wide enough
@@ -200,7 +240,42 @@ export class ConfigModel {
     const written =
       params.document === "config" ? await this.writeConfigFile(params) : await this.writeSidecarFile(params);
     this.publish(written);
-    return { document: written, written: true, asOf: this.clock.isoNow() };
+    const config = params.document === "config" ? written : await this.read("config");
+    return {
+      document: written,
+      written: true,
+      asOf: this.clock.isoNow(),
+      ...(this.generations ? { generation: this.generations.status(configurationValue(config), config.revision) } : {}),
+    };
+  }
+
+  get canApply(): boolean {
+    return this.generations !== undefined;
+  }
+
+  /** Explicit manual refresh: reads current file bytes and all candidate assets under the writer lock. */
+  async apply(params: ConfigApplyParams): Promise<ConfigApplyResult> {
+    const generations = this.generations;
+    if (!generations) throw new OrcaError("NOT_SUPPORTED", "configuration activation is not wired");
+    await mkdir(dirname(this.configFile), { recursive: true });
+    return withFileLock(`${this.configFile}.lock`, async () => {
+      const current = await this.read("config");
+      if (current.revision !== params.expectedRevision)
+        throw new ProtocolFault("CONFIG_STALE", "saved configuration changed; refresh before applying");
+      const recheck = async () => {
+        const latest = await this.read("config");
+        if (latest.revision !== params.expectedRevision)
+          throw new ProtocolFault("CONFIG_STALE", "saved configuration changed; refresh before applying");
+      };
+      await recheck();
+      return generations.apply(
+        configurationValue(current),
+        current.revision,
+        params.expectedGeneration,
+        params.validateOnly ?? false,
+        recheck,
+      );
+    });
   }
 
   /**
@@ -280,6 +355,7 @@ export class ConfigModel {
       document: view.document,
       revision: view.revision,
       path: view.path,
+      ...(this.generations ? { kind: "saved" as const } : {}),
       at: this.clock.isoNow(),
     };
     for (const listener of this.listeners) listener(change);
@@ -453,4 +529,9 @@ async function writeAtomically(file: string, text: string): Promise<void> {
   const tmp = `${file}.${process.pid}.tmp`;
   await writeFile(tmp, text, "utf8");
   await rename(tmp, file);
+}
+
+/** YAML null/empty documents use schema defaults; syntax failures keep undefined and fail validation. */
+function configurationValue(view: ConfigDocumentView): unknown {
+  return !view.exists || view.parsed === null ? {} : view.parsed;
 }

@@ -1,0 +1,118 @@
+/** Probe, guard and commit one authenticated target without disturbing the live connection. */
+import { isCompatible, PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
+import { authenticationCode } from "../client/auth.js";
+import type { DaemonClient } from "../client/daemon-client.js";
+import { daemonEndpoint, type DaemonIdentity } from "../daemon-connection.js";
+
+export type IdentifiedHello = HelloResult & { identity?: DaemonIdentity | undefined };
+export interface ConnectionCandidate {
+  client: DaemonClient;
+  check?: () => void;
+  /** Synchronous publication: no await between persistence and activation. */
+  activate(hello: IdentifiedHello): void;
+  dispose(): Promise<void>;
+}
+export function connectionFailure(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "error" in error &&
+    typeof error.error === "object" &&
+    error.error !== null &&
+    "code" in error.error &&
+    error.error.code === "PROTOCOL_VERSION"
+  ) {
+    return "Daemon protocol mismatch. Install compatible app and daemon versions.";
+  }
+  const code = authenticationCode(error);
+  if (code === "AUTH_REQUIRED") return "Authentication required. Configure ORCA_DAEMON_TOKEN_FILE before connecting.";
+  if (code === "AUTH_INVALID") return "Credential invalid or revoked. Update the configured credential file.";
+  if (code === "AUTH_FORBIDDEN") return "This credential is not authorized to access the daemon.";
+  return error instanceof ConnectionRefusal
+    ? error.message
+    : "The daemon could not be reached or returned an invalid handshake.";
+}
+export class ConnectionRefusal extends Error {}
+
+/** A candidate never touches the live stream or preference until its probe succeeds. */
+export class ConnectionTarget {
+  private attempt = 0;
+  private committing = false;
+  constructor(
+    private readonly deps: {
+      explicitUrl?: string | undefined;
+      prepare(url: string | null, source: "saved" | "env"): Promise<ConnectionCandidate>;
+      save(url: string | null): void;
+      guard(): Promise<boolean>;
+      release(): void;
+    },
+  ) {}
+  cancel(): void {
+    this.attempt += 1;
+  }
+  async connect(input: string | null): Promise<void> {
+    if (this.deps.explicitUrl)
+      throw new ConnectionRefusal("ORCA_DAEMON_URL controls this launch. Unset it and restart to change the daemon.");
+    return this.change(input, "saved");
+  }
+  /** Return only to the launch-pinned endpoint; it is never a saved preference. */
+  async returnToEnvironment(): Promise<void> {
+    if (!this.deps.explicitUrl) throw new ConnectionRefusal("No environment daemon is configured for this launch.");
+    return this.change(this.deps.explicitUrl, "env");
+  }
+  private async change(input: string | null, source: "saved" | "env"): Promise<void> {
+    if (this.committing) throw new ConnectionRefusal("A connection change is already being committed.");
+    let url: string | null;
+    try {
+      url = input === null ? null : daemonEndpoint(input);
+    } catch {
+      throw new ConnectionRefusal("Enter an HTTP or HTTPS URL without credentials, query parameters or fragments.");
+    }
+    const attempt = ++this.attempt;
+    let candidate: ConnectionCandidate | undefined;
+    let activated = false;
+    let guarded = false;
+    try {
+      candidate = await this.deps.prepare(url, source);
+      // Fetch is abortable and bounded in DaemonClient; cancellation also fences its result.
+      const hello = await candidate.client.hello("orca-app/connection");
+      if (!isCompatible(PROTOCOL_VERSION, hello.protocol))
+        throw new ConnectionRefusal("Daemon protocol mismatch. Install compatible app and daemon versions.");
+      if (!hello.capabilities.includes("runs.read") || !hello.capabilities.includes("runs.subscribe")) {
+        throw new ConnectionRefusal(
+          "This daemon does not authorize the read and subscription capabilities required by the app.",
+        );
+      }
+      if (attempt !== this.attempt) throw new ConnectionRefusal("Connection cancelled.");
+      this.committing = true;
+      guarded = true;
+      if (!(await this.deps.guard()))
+        throw new ConnectionRefusal("Save or discard pending edits before changing daemons.");
+      if (attempt !== this.attempt) throw new ConnectionRefusal("Connection cancelled.");
+      candidate.check?.();
+      if (source === "saved") this.deps.save(url);
+      candidate.activate(hello);
+      activated = true;
+    } finally {
+      if (guarded) {
+        this.deps.release();
+        this.committing = false;
+      }
+      if (candidate && !activated) await candidate.dispose();
+    }
+  }
+}
+
+/** Fence queued requests and late results; never retry a write against a replacement. */
+export async function callInConnection<R>(
+  workspace: { ready(): Promise<void>; assertEpoch(epoch: number): void },
+  epoch: number,
+  run: () => Promise<R>,
+): Promise<R> {
+  workspace.assertEpoch(epoch);
+  await workspace.ready();
+  workspace.assertEpoch(epoch);
+  const result = await run();
+  workspace.assertEpoch(epoch);
+  return result;
+}

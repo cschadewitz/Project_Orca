@@ -1,0 +1,1 @@
+- engine: Add a shared Request admission service with protected inputs, durable recovery IDs, ownership-before-execution, and reconciliation of partial Request/run/link writes. Daemon and configured CLI/ACP adapters share the contract; production generation-provider wiring is supplied separately for runtime integration.

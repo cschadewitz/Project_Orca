@@ -300,6 +300,10 @@ export class AgentRegistry {
   listHosts(): AgentHost[] {
     return [...this.hosts.values()];
   }
+  /** Explicit mappings; implicit AgentSpec.roles still resolve in registration order. */
+  listRoles(): Record<string, string> {
+    return Object.fromEntries([...this.roles, ...this.roleOverrides]);
+  }
   listAgents(): AgentSpec[] {
     return [...this.agents.values()];
   }

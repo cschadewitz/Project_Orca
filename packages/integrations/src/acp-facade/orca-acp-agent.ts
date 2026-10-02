@@ -34,6 +34,7 @@ import {
   type RunState,
   type SessionConfigOption,
   type WorkflowDefinition,
+  type SubmissionAuthority,
 } from "@orca/core";
 import type { Orchestrator, ProgramService } from "@orca/engine";
 import {
@@ -48,6 +49,8 @@ import { UpstreamHumanInput } from "./upstream-human-input.js";
 export interface OrcaAcpAgentOptions {
   orchestrator: Orchestrator;
   program: ProgramService;
+  /** Verified local authority from the composition root, never from the ACP session label. */
+  submissionAuthority?: SubmissionAuthority;
   /** Where ORCA's workspace provider is ignored and the client's cwd is used instead (default true). */
   useClientCwd?: boolean;
   humanInput?: UpstreamHumanInput;
@@ -263,6 +266,7 @@ export class OrcaAcpAgent {
       ...(overrides ? { overrides } : {}),
     };
     let runId: string;
+    let admissionId: string | undefined;
     if (command === "run" && runWorkflowId) {
       const vars: Record<string, unknown> = {};
       for (const kv of runArgs) {
@@ -278,13 +282,26 @@ export class OrcaAcpAgent {
       });
     } else {
       const [title, ...body] = text.split("\n");
-      const submitted = await this.opts.program.submit({
+      const command = {
         title: title || "Untitled request",
         body: body.join("\n").trim(),
-        source: { kind: "acp-session", sessionId: session.id },
+        source: { kind: "acp-session" as const, sessionId: session.id },
         ...(overrides ? { overrides } : {}),
-      });
-      runId = submitted.runId;
+      };
+      if (this.opts.program.submissions) {
+        if (!this.opts.submissionAuthority)
+          throw acp.RequestError.invalidParams({ reason: "Request submission authority is unavailable" });
+        const submitted = await this.opts.program.submissions.submit(command, this.opts.submissionAuthority);
+        await say(`Request ${submitted.requestId}; admission ${submitted.admissionId}: ${submitted.state}\n`);
+        if (submitted.state !== "accepted") {
+          await say("Reconcile this admission before starting another Request.\n");
+          return { stopReason: "end_turn" };
+        }
+        runId = submitted.runId;
+        admissionId = submitted.admissionId;
+      } else {
+        runId = (await this.opts.program.submit(command)).runId;
+      }
     }
     session.runIds.push(runId);
     session.active = { runId };
@@ -304,7 +321,9 @@ export class OrcaAcpAgent {
       forwarding = forwarding.then(() => this.forward(ctx, session, runId, e)).catch(() => undefined);
     });
     try {
-      const final = await orchestrator.run(runId);
+      const final = admissionId
+        ? await this.opts.program.runSubmitted({ runId, admissionId }, this.opts.submissionAuthority)
+        : await orchestrator.run(runId);
       await this.opts.program.settle(final);
       await forwarding;
       await this.sendPlan(ctx, session, def, final);
