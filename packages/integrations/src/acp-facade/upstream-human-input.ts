@@ -107,8 +107,8 @@ export class UpstreamHumanInput implements HumanInputPort {
   }
 
   private disconnected(q: HumanInputQuery): Promise<string | undefined> {
-    if (this.fallback) return this.fallback.ask(q);
     if (q.kind !== "permission") return Promise.reject(new HumanInputPending(q));
+    if (this.fallback) return this.fallback.ask(q);
     return Promise.resolve(undefined);
   }
 }

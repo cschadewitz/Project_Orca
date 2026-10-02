@@ -1,6 +1,6 @@
 /** ACP targets cannot answer another generation's callback or turn disconnect into a workflow decision. */
 import { expect, it, vi } from "vitest";
-import { HumanInputPending, type HumanInputQuery } from "@orca/engine";
+import { autoHumanInput, HumanInputPending, type HumanInputQuery } from "@orca/engine";
 import { UpstreamHumanInput, type UpstreamTarget } from "../src/acp-facade/upstream-human-input.js";
 
 const query: HumanInputQuery = {
@@ -13,8 +13,13 @@ const query: HumanInputQuery = {
   context: {},
 };
 
+it("retains automatic fallback for a durable gate with no bound upstream", async () => {
+  const input = new UpstreamHumanInput({ fallback: autoHumanInput() });
+  expect(await input.ask(query)).toBe("yes");
+});
+
 it("parks a durable gate when its upstream disconnects", async () => {
-  const input = new UpstreamHumanInput();
+  const input = new UpstreamHumanInput({ fallback: autoHumanInput() });
   input.bind("run", {
     sessionId: "old",
     request: async () => {
@@ -29,7 +34,7 @@ it("discards a late answer from a replaced upstream target", async () => {
   const result = new Promise<{ outcome: { outcome: "selected"; optionId: string } }>((r) => {
     resolve = r;
   });
-  const input = new UpstreamHumanInput();
+  const input = new UpstreamHumanInput({ fallback: autoHumanInput() });
   input.bind("run", { sessionId: "old", request: (() => result) as UpstreamTarget["request"] });
   const pending = input.ask(query);
   await Promise.resolve();
