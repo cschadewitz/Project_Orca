@@ -244,10 +244,31 @@ export class Authorizer {
                     throw inputNotFound(target.requestId, target.runId);
                 },
               },
+              executionResumeAuthority: {
+                actor: {
+                  principalId: principal.id,
+                  ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
+                },
+                authorize: async (origin) => {
+                  if (!this.currentPrincipal) throw authRequired();
+                  const current = this.currentPrincipal(principal);
+                  if (
+                    current.id !== principal.id ||
+                    current.credentialId !== principal.credentialId ||
+                    current.id !== origin.actor.principalId ||
+                    !holds(current, "runs.control") ||
+                    !holds(current, "runs.start") ||
+                    (origin.request && !holds(current, "plan.write")) ||
+                    !workflowAllowed(current.scope, origin.workflowId)
+                  )
+                    throw authForbidden();
+                  if (!(await this.runs.allows(current, origin.rootId))) throw runNotFound(origin.rootId);
+                },
+              },
               attributeStartedRun: async (runId) => {
                 this.attributeRun(runId, principal);
-                await this.runs.ownership.flush();
-                if (this.runs.ownership.lastError || this.runs.ownership.owner(runId) !== principal.id)
+                await this.runs.ownership.flush(runId);
+                if (this.runs.ownership.owner(runId) !== principal.id)
                   throw new OrcaError("INTERNAL", "run ownership could not be persisted; execution was not started");
               },
             },

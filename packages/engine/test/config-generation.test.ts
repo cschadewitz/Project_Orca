@@ -9,7 +9,7 @@ import {
   type GenerationAssets,
   type GenerationMaterial,
 } from "../src/configuration-generation.js";
-import { launchProvenance } from "../src/configuration-provenance.js";
+import { configuredGenerationSecrets, launchProvenance } from "../src/configuration-provenance.js";
 
 const definition = (version = "1", prompt = "initial") =>
   parseWorkflow(`
@@ -248,7 +248,7 @@ describe("configuration generations", () => {
     await expect(generations.restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
     records.delete(id);
     await expect(generations.restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
-    expect(await workflows.versions("flow")).toEqual(["1"]);
+    expect(await workflows.versions("flow")).toEqual([]);
   });
   it("a failed durable write or external edit during apply never replaces active material", async () => {
     const { generations, writes } = await fixture();
@@ -370,4 +370,93 @@ it("restores plugin-bound material in a later provider only for the same describ
   Object.defineProperty(host, "id", { value: "plugin-host" });
   extra.addHost(host);
   await expect((await later("plugins-a", extra)).restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+});
+
+it("boots edited unlaunched workflows without reserving versions and retains each frozen catalog", async () => {
+  const { generations, workflows, setAssets, restart } = await fixture();
+  const original = generations.current.snapshot.id;
+  setAssets({ workflows: [definition("1", "edited")], templates: [] });
+  const next = await restart();
+  expect(await workflows.versions("flow")).toEqual([]);
+  expect((await next.restore(original)).workflows.get("flow")).toEqual(definition());
+  expect((await next.restore(next.current.snapshot.id)).workflows.get("flow")).toEqual(definition("1", "edited"));
+  await expect(next.captureLaunch({ purpose: "workflow", workflowId: "flow" })).resolves.toBeDefined();
+  // An actual earlier launch's version pin changes admission, never boot/recovery.
+  await workflows.put(definition());
+  const again = await restart();
+  await expect(again.captureLaunch({ purpose: "workflow", workflowId: "flow" })).rejects.toMatchObject({
+    code: "WORKFLOW_INVALID",
+  });
+  await expect(
+    again.captureLaunch({ purpose: "workflow", workflowId: "flow", workflowVersion: "1" }),
+  ).resolves.toBeDefined();
+  expect((await again.restore(original)).workflows.get("flow")).toEqual(definition());
+});
+
+it("restores legacy version-pin snapshots and rejects missing or changed protected definitions", async () => {
+  const { generations, records, workflows } = await fixture();
+  const id = generations.current.snapshot.id;
+  const original = structuredClone(records.get(id)!);
+  const legacy = structuredClone(original);
+  delete legacy.workflowDefinitions;
+  records.set(id, legacy);
+  await expect(generations.restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+  await workflows.put(definition());
+  expect((await generations.restore(id)).workflows.get("flow")).toEqual(definition());
+  for (const workflowDefinitions of [[], [definition("1", "tampered")], [{ ...definition(), id: "other" }]]) {
+    records.set(id, { ...original, workflowDefinitions });
+    await expect(generations.restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+  }
+});
+
+it("collects configured credentials without treating transport words and settings as secret literals", async () => {
+  const { generations } = await fixture();
+  const agents = AgentRegistry.fromConfig(
+    parseOrcaConfig({
+      agents: [
+        {
+          id: "worker",
+          command: "agent",
+          args: ["acp", "--api-key=arg-canary", "--password", "pass-canary", "ghp_1234567890abcdefghij"],
+          env: {
+            FORCE_COLOR: "1",
+            MODE: "mcp",
+            API_TOKEN: "env-canary",
+            URL: "https://user:url-canary@example.com/?api_key=query-canary",
+          },
+          mcpServers: [
+            {
+              name: "tools",
+              command: "tool",
+              args: [
+                "mcp",
+                "--auth-token",
+                "mcp-arg-canary",
+                "Authorization: Bearer bearer-canary",
+                "X-Api-Key: header-canary",
+              ],
+              env: { SECRET: "mcp-env-canary", FORCE_COLOR: "1" },
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const secrets = configuredGenerationSecrets({ ...generations.current, agents });
+  expect(secrets).toEqual(
+    expect.arrayContaining([
+      "arg-canary",
+      "pass-canary",
+      "ghp_1234567890abcdefghij",
+      "env-canary",
+      "url-canary",
+      "query-canary",
+      "mcp-arg-canary",
+      "bearer-canary",
+      "mcp-env-canary",
+    ]),
+  );
+  expect(secrets).not.toEqual(expect.arrayContaining(["acp"]));
+  expect(secrets).not.toEqual(expect.arrayContaining(["mcp"]));
+  expect(secrets).not.toEqual(expect.arrayContaining(["1"]));
 });

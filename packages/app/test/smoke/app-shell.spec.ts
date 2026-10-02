@@ -457,6 +457,7 @@ async function setWindowSize(width: number, height: number): Promise<void> {
   await browserWindow.evaluate((win, size) => win.setContentSize(size.width, size.height), { width, height });
   // Within a couple of pixels: a window manager may round, and the point is "short", not "340".
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(height + 4);
+  await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeGreaterThanOrEqual(height - 4);
 }
 
 test.describe("a window too short for what is in it", () => {
@@ -681,13 +682,55 @@ test("a connected live permission expires without dispatching a stale answer", a
       requestId: input.id,
     });
     expect(input.question).toContain(FIXTURE.live.subject);
-    const card = attention.locator(`[id="attention-card-${input.id}"]`);
+    // Focus/Enter belong to the inner card body, not its non-focusable alert shell.
+    const card = attention.locator(`.orca-attn__card-body[id="attention-card-${input.id}"]`);
     await expect(card).toBeVisible();
     await expect(card).toContainText(input.question);
     const allow = card.getByRole("button", { name: /^1\s*Allow$/ });
     const answer = card.getByRole("button", { name: "Answer", exact: true });
     await expect(allow).toBeEnabled();
-    await allow.click();
+    // The waiting section must contain its cards at both heights. A shrinkable flex
+    // section can leave them visible outside its box while Failed runs intercepts
+    // every click. Visibility/scroll arithmetic alone cannot detect that overlap.
+    for (const size of [{ width: 1200, height: 800 }, SHORT_WINDOW]) {
+      await setWindowSize(size.width, size.height);
+      const geometry = await attention.locator('.orca-attn__section[aria-label="Waiting"]').evaluate((section) => {
+        const waiting = section.getBoundingClientRect();
+        const cards = section.querySelector(".orca-attn__cards")!.getBoundingClientRect();
+        const failures = section.parentElement!.querySelector(".orca-attn__failures")!.getBoundingClientRect();
+        return { waitingBottom: waiting.bottom, cardsBottom: cards.bottom, failuresTop: failures.top };
+      });
+      expect(geometry.waitingBottom, `Waiting must contain its cards at ${size.height}px`).toBeGreaterThanOrEqual(
+        geometry.cardsBottom - 1,
+      );
+      expect(geometry.failuresTop, `Failed runs must follow the cards at ${size.height}px`).toBeGreaterThanOrEqual(
+        geometry.cardsBottom,
+      );
+      for (const control of [allow, answer]) {
+        await control.scrollIntoViewIfNeeded();
+        const hit = await control.evaluate((button) => {
+          const rect = button.getBoundingClientRect();
+          const root = button.closest(".orca-attn-surface")!.getBoundingClientRect();
+          const x = rect.left + rect.width / 2;
+          const y = rect.top + rect.height / 2;
+          const target = document.elementFromPoint(x, y);
+          return {
+            inScroller: x >= root.left && x < root.right && y >= root.top && y < root.bottom,
+            receivesPointer: target !== null && button.contains(target),
+            hit: target?.className ?? "none",
+          };
+        });
+        expect(hit.inScroller, `Control must scroll into the root at ${size.height}px`).toBe(true);
+        expect(hit.receivesPointer, `Control is covered by ${hit.hit} at ${size.height}px`).toBe(true);
+      }
+      // Real pointer action at both heights, with Playwright's hit testing intact.
+      await allow.click();
+      await test.info().attach(`live-permission-${size.height}px.png`, {
+        body: await page.screenshot(),
+        contentType: "image/png",
+      });
+    }
+    await setWindowSize(1200, 800);
     await expect(answer).toBeEnabled();
     await expect(card.getByRole("button", { name: "Always allow", exact: true })).toBeEnabled();
     await card.focus();
@@ -762,6 +805,7 @@ test("a connected live permission expires without dispatching a stale answer", a
     });
   } finally {
     if (live && !cancelled) await live.cancel();
+    await setWindowSize(1200, 800);
     await page.evaluate(() => {
       const target = window as unknown as SmokeWindow;
       target.liveInputProbe?.stop();

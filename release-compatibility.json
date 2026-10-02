@@ -4,5 +4,13 @@
     "major": 1,
     "minor": 10
   },
-  "capabilities": ["runs.read", "runs.control", "runs.subscribe", "plan.read", "plan.write", "workflows.validateInputs"]
+  "capabilities": [
+    "runs.read",
+    "runs.control",
+    "runs.subscribe",
+    "plan.read",
+    "plan.write",
+    "workflows.validateInputs",
+    "inputs.live"
+  ]
 }

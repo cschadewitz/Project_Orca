@@ -1,7 +1,8 @@
 /** Durable exact root ownership, merged under a cross-process mutex for daemon and local Request admissions. */
-import { readFileSync, mkdirSync, openSync, fsyncSync, closeSync } from "node:fs";
+import { readFileSync, mkdirSync, openSync, fsyncSync, closeSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
+import { OrcaError } from "@orca/core";
 import { withFileLock } from "@orca/store";
 import { writePrivateFile } from "./credentials.js";
 const OwnershipFileSchema = z.object({ version: z.literal(1), runs: z.record(z.string(), z.string()) });
@@ -14,6 +15,8 @@ export class OwnershipStore {
   private readonly runs = new Map<string, string>();
   private writing: Promise<void> = Promise.resolve();
   private readonly pending = new Map<string, Change>();
+  private readonly writes = new Map<string, Promise<void>>();
+  private diskCache: { stamp: string; runs: Map<string, string> } | undefined;
   constructor(private readonly file?: string) {
     if (file) for (const [run, owner] of this.readDisk()) this.runs.set(run, owner);
   }
@@ -38,11 +41,11 @@ export class OwnershipStore {
     if (!this.file) return;
     const file = this.file;
     this.pending.set(change.runId, change);
-    this.writing = this.writing
+    const write = this.writing
       .then(async () => {
         mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
         await withFileLock(`${file}.lock`, async () => {
-          const current = this.readDisk();
+          const current = this.readDisk(true);
           if (change.remove) {
             if (current.get(change.runId) === change.principalId) current.delete(change.runId);
           } else if (!current.has(change.runId)) current.set(change.runId, change.principalId);
@@ -61,6 +64,7 @@ export class OwnershipStore {
               closeSync(directory);
             }
           }
+          this.diskCache = undefined;
           this.runs.clear();
           for (const [run, owner] of current) this.runs.set(run, owner);
           if (this.pending.get(change.runId) === change) this.pending.delete(change.runId);
@@ -69,14 +73,33 @@ export class OwnershipStore {
       })
       .catch((e: unknown) => {
         this.lastError = e;
+        throw e;
       });
+    this.writes.set(change.runId, write);
+    void write.then(
+      () => {
+        if (this.writes.get(change.runId) === write) this.writes.delete(change.runId);
+      },
+      () => {},
+    );
+    // A failed attribution must not poison later independent writes. The exact
+    // write remains rejecting for flush(runId), with a handler installed now.
+    this.writing = write.catch(() => undefined);
   }
-  private readDisk(): Map<string, string> {
+  private readDisk(force = false): Map<string, string> {
     if (!this.file) return new Map(this.runs);
     try {
-      return new Map(Object.entries(OwnershipFileSchema.parse(JSON.parse(readFileSync(this.file, "utf8"))).runs));
+      const stat = statSync(this.file, { bigint: true });
+      const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+      if (!force && this.diskCache?.stamp === stamp) return new Map(this.diskCache.runs);
+      const runs = new Map(Object.entries(OwnershipFileSchema.parse(JSON.parse(readFileSync(this.file, "utf8"))).runs));
+      this.diskCache = { stamp, runs };
+      return new Map(runs);
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+        this.diskCache = undefined;
+        return new Map();
+      }
       throw e;
     }
   }
@@ -87,8 +110,16 @@ export class OwnershipStore {
     this.runs.delete(rootRunId);
     this.persist({ runId: rootRunId, principalId, remove: true });
   }
-  async flush(): Promise<void> {
+  async flush(runId?: string): Promise<void> {
+    if (runId !== undefined) {
+      try {
+        await this.writes.get(runId);
+      } catch {
+        throw new OrcaError("STORE_WRITE", "run ownership could not be persisted");
+      }
+      return;
+    }
+    // Snapshot this barrier. Changes queued later are not failures of these writes.
     await this.writing;
-    if (this.pending.size && !this.lastError) this.lastError = new Error("ownership changes remain unpersisted");
   }
 }

@@ -22,7 +22,7 @@
  * restart, and it is why `inputs.answer` is a write to a log and a re-drive rather than the
  * resolution of a promise.
  */
-import type { LiveAnswerAuthority } from "@orca/engine";
+import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
 import {
   OrcaError,
   isOrcaError,
@@ -293,6 +293,26 @@ export class ControlModel {
       ...(params.runId ? { runId: params.runId } : {}),
       ...(params.note ? { note: params.note } : {}),
       resume: params.resume,
+      resumeWith: async (runId) => {
+        try {
+          return this.orc.liveInput?.withResumeAuthority
+            ? await this.orc.liveInput.withResumeAuthority(runId, undefined, () => this.orc.resume(runId))
+            : await this.orc.resume(runId);
+        } catch (error) {
+          if (isOrcaError(error, "RUN_STATE") && error.details?.executionResumeRequired)
+            throw new OrcaError(
+              "RUN_STATE",
+              "answer recorded; resume the run explicitly with current launch authority",
+              {
+                ...error.details,
+                runId,
+                requestId: params.requestId,
+                answerRecorded: true,
+              },
+            );
+          throw error;
+        }
+      },
       ...(params.always
         ? {
             afterAnswer: async (request: HumanInputRequest, state: RunState) => {
@@ -378,7 +398,7 @@ export class ControlModel {
    * engine's own, and it can be taken *away* while the run is being driven, and both come back
    * as an engine `RUN_LEASED` that a screen cannot branch on until it is a `ProtocolFault`.
    */
-  async resumeRun(params: RunsResumeParams): Promise<RunsResumeResult> {
+  async resumeRun(params: RunsResumeParams, authority?: ExecutionResumeAuthority): Promise<RunsResumeResult> {
     const state = await this.orc.getState(params.runId);
     if (isFinished(state))
       throw new ProtocolFault("RUN_NOT_WAITING", `run ${params.runId} is ${state.run.status}: it has finished`, {
@@ -386,7 +406,11 @@ export class ControlModel {
         status: state.run.status,
       });
     await refuseIfLeasedElsewhere(this.orc, params.runId);
-    await leased(params.runId, () => this.orc.resume(params.runId));
+    await leased(params.runId, () =>
+      this.orc.liveInput?.withResumeAuthority
+        ? this.orc.liveInput.withResumeAuthority(params.runId, authority, () => this.orc.resume(params.runId))
+        : this.orc.resume(params.runId),
+    );
     return { run: await this.runView(params.runId), asOf: this.clock.isoNow() };
   }
 

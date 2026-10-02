@@ -5,7 +5,7 @@ persistent workspace identity. [318-daemon-connection-integration.patch](patches
 is a historical handoff against preparation baseline
 `7abc2342aa672ee9d2f10d565ca4f8eb546184df`. Its wiring is reconciled here; do not
 reapply it. See [integration review status](runtime-next-integration.md#review-status-and-final-reconciliation)
-for outstanding defects at reviewed head `27411de9`.
+for the remaining combined validation gates.
 
 ## Connecting
 
@@ -26,11 +26,9 @@ the read-only store banner's **Connect to a daemon** action returns to the exact
 launch-pinned environment target through the same authenticated probe and all-window
 draft check as other connection changes. A failed, incompatible or cancelled return
 keeps the store client, stream and read-only daemon running. This return does not change
-the saved endpoint or allow another target to override the environment. At `27411de9`,
-the banner discards rejected `connectLive()` promises, so failed returns have no visible
-inline error. This is an unresolved UI review finding. The dialog also prefills the
-bundled daemon's ephemeral URL, which can accidentally be saved as an external target;
-avoid saving that temporary endpoint. These defects need verification after the app fixes.
+the saved endpoint or allow another target to override the environment. Refusals are shown in the store banner, including interrupted IPC; stale errors from a
+previous target are discarded. The dialog prefills only saved/environment endpoints,
+and the main process refuses to save a current or parked bundled daemon's temporary URL.
 Returning to bundled clears
 the saved endpoint only after its handshake succeeds. A previously active bundled
 daemon remains alive when switching to an external endpoint, and is reused on
@@ -46,10 +44,10 @@ HTTPS; redirects are refused. Automatically discovered local-owner credentials
 are never forwarded to remote hosts. The UI has no token input and never reports
 raw credential-file or candidate transport errors. Credential refresh remains
 bounded to one retry per authentication refusal. Refreshing a client's credential does
-not replace the credential pinned in a run's execution actor or a long-lived local ACP
-submission authority. At `27411de9`, daemon restart revokes the previous bootstrap
-credential, so those execution paths can remain refused; credential-rotation recovery
-is an unresolved runtime finding.
+not itself replace a run's execution actor. A new local ACP submission intent can refresh
+its existing same-principal credential; historical daemon execution instead uses the
+explicit current-authority `runs.resume` boundary documented in
+[live input continuity](live-input-continuity.md#expiration-reconnect-and-other-processes).
 
 ## Target identity and drafts
 

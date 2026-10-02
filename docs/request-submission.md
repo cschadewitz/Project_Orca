@@ -114,15 +114,20 @@ lost the initial response. `requests.admission {admissionId}` inspects one.
 `requests.reconcile {admissionId}` reconciles that **original** admission and queues an
 accepted root for execution. No command values can be replaced during recovery.
 
-These are daemon RPC methods, registered only with token-mode ownership and a wired
-submission provider. At reviewed head `27411de9`, there is no CLI command, ACP slash
-command or app action for admission list/inspect/reconcile, despite error messages
-asking users to reconcile. A standalone OS-user admission cannot be recovered by a
-later daemon's different `local-owner` principal. Do not submit again as a recovery
-substitute: a new submit creates another admission. A supported local recovery surface
-remains outstanding; the table below describes service behavior, not available CLI commands.
-Listing can also fail if any admission's workflow is no longer authorized, rather than
-returning the remaining accessible records; see the final reconciliation checklist.
+Daemon recovery RPCs require token-mode ownership and a wired submission provider.
+Standalone admissions keep their original OS-user principal; a later daemon cannot
+impersonate it. Use the local recovery surface from the original workspace:
+
+- `orca admissions list` discovers prepared, accepted and recoverable admissions.
+- `orca admissions inspect <id>` reads the original safe receipt.
+- `orca admissions reconcile <id>` repairs its original admission without starting
+  execution; an accepted receipt prints the explicit `orca resume <runId>` next step.
+- Configured ACP clients expose `/admissions list`, `/admissions inspect <id>` and
+  `/admissions reconcile <id>` with the same receipt-only recovery semantics.
+
+No app recovery form is supplied. Do not submit anew as a recovery substitute: that
+creates another admission. Listings omit workflows outside the caller's current scope;
+revocation and unavailable authority still fail the entire operation.
 
 | Failure boundary | What survives | Reconciliation |
 | --- | --- | --- |
@@ -148,18 +153,17 @@ new v2 admissions never inject it.
 An unreadable/ambiguous scan or multiple roots carrying that exact correlation fails closed.
 Older incomplete admissions without the correlation version require explicit repair when
 both root links are missing; recovery never guesses or silently creates a replacement.
-Scanning in the missing-link case is linear in the number of runs; there is no second
-client retry index. At reviewed head `27411de9`, fresh submissions also scan the store:
-an unrelated unreadable run can strand new admissions. This is an unresolved
-[review finding](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374801),
-not a recovery guarantee. Missing/corrupt protected material is a
-`RUN_STATE` refusal. If the original generation cannot be captured after restart,
-reconciliation remains recoverable; it never silently chooses the latest configuration.
+Only uncertain missing-link recovery scans linearly over the run store; a newly prepared,
+mutex-held admission with its original capture does not scan unrelated runs. Its created
+root is still verified directly before acceptance. An unreadable or ambiguous recovery
+scan remains fail-closed. Missing/corrupt protected material is a `RUN_STATE` refusal;
+reconciliation never silently substitutes the latest generation.
 Restoring generation material is the #332 provider's responsibility.
 
 Public failure text is fixed and never contains a raw exception, secret or path. If the
 failure-marker write itself fails, the prior prepared state remains the recovery handle.
-Acceptance requires the callback to have flushed ownership durably. The integrated ownership store
+Acceptance requires the callback to have flushed the exact run ownership change durably.
+A later queued attribution cannot become a false failure of an earlier successful write. The integrated ownership store
 adds ownership write retries and fsync of the owner file and directory to the existing
 store; it does not create a second ownership map. The file admission index likewise
 flushes its directory entry before acknowledgment.
@@ -190,7 +194,11 @@ The configured `ProgramService.submit` delegates to this service and preserves i
 retain their existing completion behavior. The CLI prints admitted Request/run/
 admission IDs before following execution, preserving existing exit status and work-item
 output. ACP emits Request/admission IDs before its usual run updates and completion;
-its long-lived `session/prompt` contract still streams until the turn ends. `/run` and a
+its long-lived `session/prompt` contract still streams until the turn ends. A new prompt
+or explicit recovery command may reload the existing configured local token, but only
+for the same principal/workspace. The resulting authority is captured for that intent
+and retained through admission/execution; rotation does not revive an older admission
+or silently change an in-flight actor. `/run` and a
 selected direct workflow remain direct runs. ACP session labels never supply authority.
 
 The old three-argument embedded `ProgramService` constructor remains a legacy

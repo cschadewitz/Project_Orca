@@ -2,8 +2,8 @@
 import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { parseOrcaConfig, RequestSchema, silentLogger } from "@orca/core";
+import { afterEach, expect, it, vi } from "vitest";
+import { parseOrcaConfig, RequestSchema, silentLogger, OrcaError } from "@orca/core";
 import { bootstrap } from "../src/bootstrap.js";
 
 const dirs: string[] = [];
@@ -291,4 +291,128 @@ it("refuses incomplete recorded Kepler context rather than falling back to curre
     snapshot: { ...material.snapshot, workspaceInputs: { configDir: opts.configDir } },
   };
   expect(() => app.orchestrator.generationWorkspaceProvider!(incomplete)).toThrow(/recorded Kepler workspace inputs/);
+});
+
+it("boots a same-version edit, restores old runs, and rejects only an ambiguous new launch", async () => {
+  const opts = await fixture("");
+  const config = parseOrcaConfig({ ...opts.config, plugins: [] });
+  const first = await bootstrap({ ...opts, config });
+  const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
+  const id = await launch.startRun({});
+  await writeFile(join(opts.configDir, "flow.yaml"), tiny.replace("name: Tiny", "name: Edited"));
+  const second = await bootstrap({ ...opts, config });
+  await expect(second.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" })).rejects.toMatchObject({
+    code: "WORKFLOW_INVALID",
+  });
+  expect((await second.orchestrator.run(id)).run.status).toBe("completed");
+  expect((await second.generations.restore(launch.generationId)).workflows.get("tiny").name).toBe("Tiny");
+  const explicit = await second.generations.captureLaunch({
+    purpose: "workflow",
+    workflowId: "tiny",
+    workflowVersion: launch.workflow.version,
+  });
+  expect((await second.orchestrator.run(await explicit.startRun({}))).run.status).toBe("completed");
+  const result = await second.generations.apply(
+    config,
+    "changed",
+    second.generations.current.snapshot.id,
+    false,
+    async () => {},
+  );
+  expect(result).toMatchObject({ outcome: "invalid", validation: { errors: [{ path: "workflows.tiny.version" }] } });
+});
+
+it("unrelated workflows can launch and recover while another current workflow has a version collision", async () => {
+  const opts = await fixture("");
+  await writeFile(join(opts.configDir, "other.yaml"), tiny.replace("id: tiny", "id: other"));
+  const config = parseOrcaConfig({ ...opts.config, plugins: [], workflows: ["flow.yaml", "other.yaml"] });
+  const first = await bootstrap({ ...opts, config });
+  await (await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" })).startRun({});
+  await writeFile(join(opts.configDir, "flow.yaml"), tiny.replace("name: Tiny", "name: Edited"));
+  const second = await bootstrap({ ...opts, config });
+  const launch = await second.generations.captureLaunch({ purpose: "workflow", workflowId: "other" });
+  const id = await launch.startRun({});
+  const third = await bootstrap({ ...opts, config });
+  expect((await third.orchestrator.run(id)).run.status).toBe("completed");
+});
+
+it.each([
+  'api.agents.host("local").exec = async () => ({ code: 0, stdout: "changed", stderr: "" });',
+  'api.executors.get("end").execute = async () => ({ kind: "completed", result: { artifactIds: [] } });',
+  "api.plan.addSignalExtractor(() => []);",
+])("refuses old no-plugin generations before newly installed executable behavior can run: %s", async (plugin) => {
+  const opts = await fixture(plugin);
+  const first = await bootstrap({ ...opts, config: parseOrcaConfig({ ...opts.config, plugins: [] }) });
+  const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
+  const id = await launch.startRun({});
+  const second = await bootstrap(opts);
+  await expect(second.generations.restore(launch.generationId)).rejects.toMatchObject({ code: "RUN_STATE" });
+  await expect(second.orchestrator.run(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+  await expect(second.orchestrator.startRun({ workflowId: "tiny" }, first.generations.current)).rejects.toMatchObject({
+    code: "RUN_STATE",
+  });
+  expect(await second.orchestrator.stores.events.listRuns()).toEqual([id]);
+  expect((await second.orchestrator.getState(id)).run.status).toBe("created");
+});
+
+it("still restores no-plugin generations under a newly installed declarative plugin", async () => {
+  const opts = await fixture('api.agents.mapRole("worker-role", "worker");');
+  const config = parseOrcaConfig({ ...opts.config, agents: [{ id: "worker", command: "unused" }] });
+  const first = await bootstrap({ ...opts, config: { ...config, plugins: [] } });
+  const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
+  const id = await launch.startRun({});
+  const second = await bootstrap({ ...opts, config });
+  expect((await second.orchestrator.run(id)).run.status).toBe("completed");
+});
+
+it("uses the JSON loader for startup rechecks of JSON-only syntax", async () => {
+  const opts = await fixture("");
+  const path = join(opts.configDir, "orca.config.json");
+  await writeFile(path, '{"workflows":[],"templates":[],"storeDir":"ignored","storeDir":".orca"}');
+  const app = await bootstrap({ configPath: path, logger: silentLogger });
+  expect(app.config.storeDir).toBe(".orca");
+  expect(app.generations.current.snapshot.savedRevision).toMatch(/^[a-f0-9]{64}$/);
+});
+
+it.each(["local", "git-worktree"] as const)("refuses missing recorded %s configuration directory", async (provider) => {
+  const opts = await fixture("");
+  const config = parseOrcaConfig({
+    ...opts.config,
+    plugins: [],
+    workspace: provider === "local" ? { provider } : { provider, repo: "." },
+  });
+  const app = await bootstrap({ ...opts, config });
+  const snapshot = structuredClone(app.generations.current.snapshot);
+  delete snapshot.workspaceInputs;
+  snapshot.id = "missing-workspace-context";
+  await app.orchestrator.stores.execution.putGeneration(snapshot.id, snapshot);
+  const material = await app.generations.restore(snapshot.id);
+  expect(() => app.orchestrator.generationWorkspaceProvider!(material)).toThrow(
+    /recorded workspace configuration directory/,
+  );
+});
+
+it("does not retain a removed plugin's built-in executor mutations in a later bootstrap", async () => {
+  const opts = await fixture(
+    'api.executors.get("end").execute = async () => ({ kind: "completed", result: { artifactIds: [], data: {} } });',
+  );
+  const first = await bootstrap(opts);
+  const historical = first.generations.current.snapshot.id;
+  const second = await bootstrap({ ...opts, config: parseOrcaConfig({ ...opts.config, plugins: [] }) });
+  await expect(second.generations.restore(historical)).rejects.toMatchObject({ code: "RUN_STATE" });
+  const launch = await second.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
+  expect((await second.orchestrator.run(await launch.startRun({}))).run.status).toBe("completed");
+});
+
+it("rejects unavailable provider reconstruction before writing a run-specific private input record", async () => {
+  const opts = await fixture("");
+  const app = await bootstrap({ ...opts, config: parseOrcaConfig({ ...opts.config, plugins: [] }) });
+  const launch = await app.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
+  const put = vi.spyOn(app.orchestrator.stores.execution, "putInputs");
+  app.orchestrator.generationWorkspaceProvider = () => {
+    throw new OrcaError("RUN_STATE", "provider unavailable");
+  };
+  await expect(launch.startRun({})).rejects.toMatchObject({ code: "RUN_STATE" });
+  expect(put).not.toHaveBeenCalled();
+  expect(await app.orchestrator.listRuns()).toEqual([]);
 });

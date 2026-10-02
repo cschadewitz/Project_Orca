@@ -68,14 +68,64 @@ export function launchProvenance(
   };
 }
 
-/** Configured literals are known to the execution boundary; ambient/resolved credentials are not captured. */
+/**
+ * Defense-in-depth needles for identifiable configured credentials. A command argument or
+ * env value is not inherently secret: treating `acp`, `mcp` or FORCE_COLOR=1 as a needle
+ * destroys unrelated public history. Explicit sensitive workflow inputs are collected by
+ * protectExecutionInputs separately; all config bytes stay in protected generation storage.
+ * This is not arbitrary-secret discovery or taint tracking. Credential-named fields/options
+ * and recognizable credential syntax cover configured literals without guessing by entropy.
+ */
 export function configuredGenerationSecrets(material: GenerationMaterial): string[] {
-  return material.agents
-    .listAgents()
-    .flatMap((agent) => [
-      ...Object.values(agent.env),
-      ...agent.args,
-      ...agent.mcpServers.flatMap((server) => [...Object.values(server.env), ...server.args]),
-    ])
-    .filter((value) => value.length > 0);
+  const secrets = new Set<string>();
+  const add = (value: string) => {
+    if (value) secrets.add(value);
+  };
+  const inspect = (value: string): void => {
+    // Common standalone credential formats, including a literal supplied positionally.
+    for (const match of value.matchAll(
+      /(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/g,
+    ))
+      add(match[0]);
+    for (const match of value.matchAll(/(?:Bearer|Basic)\s+([^\s"']+)/gi)) add(match[1]!);
+    const header = /^([^:]+):\s*(.+)$/.exec(value);
+    if (header && credentialKey(header[1]!)) add(header[2]!);
+    try {
+      const url = new URL(value);
+      if (url.password) {
+        add(value);
+        add(url.password);
+        add(decodeURIComponent(url.password));
+      }
+      for (const [key, item] of url.searchParams) {
+        if (!credentialKey(key)) continue;
+        add(value);
+        add(item);
+        add(encodeURIComponent(item));
+      }
+    } catch {
+      // Most command arguments are not URLs.
+    }
+  };
+  for (const agent of material.agents.listAgents()) {
+    for (const spec of [agent, ...agent.mcpServers]) {
+      for (const [key, value] of Object.entries(spec.env)) {
+        if (credentialKey(key)) add(value);
+        inspect(value);
+      }
+      for (const [index, value] of spec.args.entries()) {
+        const assignment = /^([^=]+)=(.*)$/s.exec(value);
+        if (assignment && credentialKey(assignment[1]!)) add(assignment[2]!);
+        else if (/^-/.test(value) && credentialKey(value) && spec.args[index + 1] !== undefined)
+          add(spec.args[index + 1]!);
+        inspect(value);
+      }
+    }
+  }
+  return [...secrets];
+}
+function credentialKey(key: string): boolean {
+  return /(?:^|[^a-z0-9])(?:api[-_]?key|access[-_]?key|private[-_]?key|client[-_]?secret|token|secret|password|passwd|pass|pwd|credential|credentials|authorization|auth|bearer)(?:$|[^a-z0-9])/i.test(
+    key.replace(/([a-z])([A-Z])/g, "$1_$2"),
+  );
 }

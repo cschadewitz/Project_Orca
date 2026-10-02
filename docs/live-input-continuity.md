@@ -59,20 +59,33 @@ shutdown and revoked execution authority invalidate callbacks. A rejected host
 response arriving after expiration cannot cancel the next prompt. Losing a lease
 prevents any further execution write, including answer acceptance.
 
-Production `prepareExecution` walks each run's authenticated creation lineage to
-reconstruct its protected root actor, then binds that actor for the executing run.
-It does not call `LiveExecutionAuthorities.inherit`; children and resumed runs use the
-same reconstruction path. Credentials are rechecked while no responder is present.
-Unreadable authority fails closed. Its lifecycle is independent of UI
-connections. Disconnecting a UI neither approves nor cancels work. Reconnect uses
-an authorized `inputs.list`; current callbacks remain pending, while callbacks
-whose lease has lapsed are expired. Durable workflow gates retain their existing
-restart recovery, subject to generation restoration and current authorization.
-At `27411de9`, daemon startup rotates the local bootstrap credential, but execution
-checks still require the original actor credential to be current. Later live tool
-permissions can therefore be cancelled after restart even if an authorized caller
-can answer a durable gate. Durable-answer acceptance is not proof of successful
-continued execution; credential continuity remains unresolved.
+Production `prepareExecution` walks authenticated creation lineage and verifies the
+original root principal and durable ownership before execution. Without an explicit
+renewal, the original credential must remain current. Revoked/missing authority fails
+before attaching an interpreter; the execution lifetime is independent of UI sockets.
+
+After bootstrap credential rotation, `runs.resume` is the explicit renewal boundary.
+The server supplies a separate attachment capability: the current credential must
+represent the original protected principal and durable root owner, retain workflow
+scope plus `runs.control` and `runs.start`, and retain `plan.write` for a Request root.
+The capability is rechecked under the acquired execution lease and applies to that
+authenticated tree. It cannot replace an already attached interpreter, select another
+principal's credential, change `run.created`, restore a prior callback or grant a tool.
+A same-boot renewed binding can continue through later durable pauses while current
+grants/revocation are still checked; process restart requires explicit renewal again.
+
+Answering a durable gate never supplies renewal authority. If its answer is recorded
+but automatic continuation needs renewal, the response is `RUN_STATE` with
+`answerRecorded: true` and `executionResumeRequired: true`. Resume explicitly rather
+than answering the same gate again. The new execution opens a new session/invocation;
+a fresh tool permission requires its own exact new one-time answer. An agent offering
+only remembered permission kinds is cancelled immediately rather than publishing an
+impossible-to-answer live card. Existing dead callbacks remain expired.
+
+Disconnecting a UI neither approves nor cancels work. Reconnect uses an authorized
+`inputs.list`; current callbacks remain pending while lapsed callbacks are expired.
+Durable gates remain recoverable subject to historical generation restoration and
+current authorization.
 
 Cross-process forwarding is deliberately not implemented. A process without the
 callback returns `RUN_STATE` with `details.liveInputState: "owner-unavailable"`
@@ -130,8 +143,9 @@ protocol exports and approval UI use the same owner-local port. `RUN_STATE` carr
 
 The daemon constructs one `LiveHumanInput` from its boot identity and one
 `LiveExecutionAuthorities` checker using current credentials and durable ownership.
-Before execution it reconstructs the sealed root actor for each run, including children
-and resumed runs, and binds that actor. Detachment forgets the binding. The orchestrator
+Before execution it reconstructs the sealed root actor for each run, including children,
+and applies only a separately verified explicit renewal when one exists. Detachment
+forgets the active callback binding; eligible same-boot renewal remains current-checked. The orchestrator
 receives the port and execution signal as server dependencies, never client parameters
 or captured generation data. Read and control models share that orchestrator; answer
 authority revalidates credentials and exact run scope inside acceptance. Daemon shutdown

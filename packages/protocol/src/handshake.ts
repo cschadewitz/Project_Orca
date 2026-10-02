@@ -9,7 +9,7 @@ import { ProtocolVersionSchema } from "./version.js";
 import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
-import { CONFIG_GET_METHOD, CONFIG_SET_METHOD } from "./config.js";
+import { CONFIG_GET_METHOD, CONFIG_SET_METHOD, CONFIG_APPLY_METHOD } from "./config.js";
 import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import {
@@ -42,8 +42,6 @@ export const HELLO_METHOD = "hello";
  * none of it.
  */
 export const READ_METHODS = [
-  "requests.admission",
-  "requests.admissions",
   RUNS_LIST_METHOD,
   RUNS_GET_METHOD,
   RUNS_EVENTS_METHOD,
@@ -106,6 +104,10 @@ export const PLAN_READ_METHODS = [
 export const CONTROL_METHODS = [
   "requests.submit",
   "requests.reconcile",
+  // Admission inspection requires the same authenticated control service as submission.
+  "requests.admission",
+  "requests.admissions",
+  CONFIG_APPLY_METHOD,
   INPUTS_ANSWER_METHOD,
   RUNS_RESUME_METHOD,
   RUNS_CANCEL_METHOD,

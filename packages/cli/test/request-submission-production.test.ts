@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { parseOrcaConfig, silentLogger } from "@orca/core";
 import { bootstrapLocalOwner, openAuthDirectory } from "@orca/daemon";
 import { bootstrap } from "../src/bootstrap.js";
-import { localSubmissionAuthority } from "../src/local-submission-authority.js";
+import { localSubmissionAuthority, authorityForNewLocalIntent } from "../src/local-submission-authority.js";
 const dirs: string[] = [];
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -112,4 +112,28 @@ edges: [{from: s, to: e}]
     app.program.submit({ title: "Bad", body: "", vars: { itemWorkflow: "undeclared" } }),
   ).rejects.toMatchObject({ code: "WORKFLOW_INPUT_INVALID" });
   expect((await app.program.runSubmitted(admitted)).run.status).toBe("completed");
+});
+
+it("refreshes only a new local intent after bootstrap rotation without reviving captured execution", async () => {
+  const f = await fixture();
+  const auth = openAuthDirectory(join(f.dir, "auth"));
+  const old = await bootstrapLocalOwner(auth);
+  const app = await bootstrap({ ...f.options, submissionAuthority: localSubmissionAuthority });
+  const initial = app.submissionAuthority!;
+  const nextIntent = authorityForNewLocalIntent(app, initial);
+  const admitted = await app.program.submit({ title: "before rotation", body: "" });
+  const replacement = await bootstrapLocalOwner(auth);
+  expect(replacement.credentialId).not.toBe(old.credentialId);
+  await expect(app.program.runSubmitted(admitted, initial)).rejects.toBeTruthy();
+  const current = await nextIntent();
+  expect(current.actor).toMatchObject({
+    principalId: initial.actor.principalId,
+    credentialId: replacement.credentialId,
+  });
+  const fresh = await app.program.submissions!.submit({ title: "new intent", body: "" }, current);
+  expect(fresh.state).toBe("accepted");
+  if (fresh.state !== "accepted") throw new Error("not accepted");
+  expect((await app.program.runSubmitted(fresh, current)).run.status).toBe("completed");
+  await auth.credentials.revoke(replacement.credentialId);
+  await expect(nextIntent()).rejects.toMatchObject({ code: "RUN_STATE" });
 });

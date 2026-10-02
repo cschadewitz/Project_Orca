@@ -2,14 +2,13 @@
 import { isCompatible, PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import { authenticationCode } from "../client/auth.js";
 import type { DaemonClient } from "../client/daemon-client.js";
-import { daemonEndpoint, type DaemonIdentity } from "../daemon-connection.js";
+import { daemonEndpoint } from "../daemon-connection.js";
 
-export type IdentifiedHello = HelloResult & { identity?: DaemonIdentity | undefined };
 export interface ConnectionCandidate {
   client: DaemonClient;
   check?: () => void;
   /** Synchronous publication: no await between persistence and activation. */
-  activate(hello: IdentifiedHello): void;
+  activate(hello: HelloResult): void;
   dispose(): Promise<void>;
 }
 export function connectionFailure(error: unknown): string {

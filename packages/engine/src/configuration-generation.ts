@@ -10,6 +10,7 @@ import {
   PromptTemplateSchema,
   TemplateRegistry,
   WorkflowRegistry,
+  WorkflowDefinitionSchema,
   validateWorkflow,
   type OrcaConfig,
   type PromptTemplate,
@@ -51,10 +52,13 @@ export const GenerationSnapshotSchema = z.object({
   savedRevision: z.string(),
   config: OrcaConfigSchema,
   workflows: z.array(WorkflowIdentitySchema),
+  /** Protected definitions avoid reserving every loaded version merely by booting. */
+  workflowDefinitions: z.array(WorkflowDefinitionSchema).optional(),
   templates: z.array(PromptTemplateSchema),
   workspaceInputs: z.object({ configDir: z.string(), keplerTaskDir: z.string().optional() }).optional(),
   runtimeBinding: z.string().optional(),
   runtimeFingerprint: z.string().optional(),
+  runtimeBootstrapBound: z.boolean().optional(),
   runtimeHosts: z.array(z.string()).optional(),
   effectiveAgents: z.array(AgentSpecSchema).optional(),
   effectiveRoles: z.record(z.string(), z.string()).optional(),
@@ -75,6 +79,8 @@ export interface GenerationAssets {
    * boot reports the same digest; absent, plugin-bound material never outlives this provider.
    */
   runtimeFingerprint?: string;
+  /** Current executable mutations must also reject older unbound generations. */
+  runtimeBootstrapBound?: boolean;
   workflows: WorkflowDefinition[];
   templates: PromptTemplate[];
 }
@@ -142,7 +148,12 @@ export class ConfigurationGenerations {
   /** Boot adopts the saved config. Old runs restore their own recorded generation, never this one. */
   async initialize(config: OrcaConfig, savedRevision: string, assets?: GenerationAssets): Promise<void> {
     if (this.active) throw new OrcaError("CONFIG_INVALID", "configuration generations are already initialized");
-    const material = await this.prepare(OrcaConfigSchema.parse(OrcaConfigSchema.parse(config)), savedRevision, assets);
+    const material = await this.prepare(
+      OrcaConfigSchema.parse(OrcaConfigSchema.parse(config)),
+      savedRevision,
+      assets,
+      false,
+    );
     await this.persist(material);
     this.active = material;
     this.boot = material.snapshot;
@@ -301,6 +312,11 @@ export class ConfigurationGenerations {
         : ((await this.options.workflows.get(id, selection.workflowVersion)) ??
           (live?.version === selection.workflowVersion ? live : undefined));
     if (!definition) throw new OrcaError("WORKFLOW_VERSION_NOT_FOUND", "selected workflow version is unavailable");
+    if (selection.workflowVersion === undefined) {
+      const kept = await this.options.workflows.get(definition.id, definition.version);
+      if (kept && workflowRevision(kept) !== workflowRevision(definition))
+        throw new OrcaError("WORKFLOW_INVALID", "recorded workflow version has different content; bump its version");
+    }
     const workflow = frozen({ id: definition.id, version: definition.version, revision: workflowRevision(definition) });
     if (selection.expectedWorkflowRevision !== undefined && selection.expectedWorkflowRevision !== workflow.revision)
       throw new OrcaError("WORKFLOW_INVALID", "workflow changed; validate inputs again before launching");
@@ -343,17 +359,26 @@ export class ConfigurationGenerations {
     });
   }
 
-  /** No fallback to current. Validate protected material and every reused workflow pin on each restore. */
+  /** No fallback to current. Validate protected definitions, or legacy version-store pins, on each restore. */
   async restore(id: string): Promise<GenerationMaterial> {
     const parsed = GenerationSnapshotSchema.safeParse(await this.options.store.getGeneration(id));
     if (!parsed.success || parsed.data.id !== id) throw unavailable();
+    const recorded = parsed.data.workflowDefinitions;
+    if (recorded && recorded.length !== parsed.data.workflows.length) throw unavailable();
     const definitions = await Promise.all(
-      parsed.data.workflows.map(async (identity) => {
-        const def = await this.options.workflows.get(identity.id, identity.version);
-        if (!def || workflowRevision(def) !== identity.revision) throw unavailable();
+      parsed.data.workflows.map(async (identity, index) => {
+        const def = recorded?.[index] ?? (await this.options.workflows.get(identity.id, identity.version));
+        if (
+          !def ||
+          def.id !== identity.id ||
+          def.version !== identity.version ||
+          workflowRevision(def) !== identity.revision
+        )
+          throw unavailable();
         return def;
       }),
     );
+    if (new Set(definitions.map((def) => def.id)).size !== definitions.length) throw unavailable();
     return this.material(parsed.data, definitions);
   }
   /**
@@ -379,6 +404,9 @@ export class ConfigurationGenerations {
     return this.runtimeBindings.get(boot.runtimeBinding);
   }
   private material(snapshot: GenerationSnapshot, definitions: WorkflowDefinition[]): GenerationMaterial {
+    // Compatibility is symmetric: an older unbound generation must not pick up newly
+    // installed executors, host mutations or plan callbacks from the current bootstrap.
+    if (this.boot?.runtimeBootstrapBound && snapshot.runtimeBinding !== this.boot.runtimeBinding) throw unavailable();
     const runtimeAgents = snapshot.runtimeBinding ? this.runtimeAgents(snapshot) : undefined;
     if (snapshot.config.plugins.length && !snapshot.runtimeBinding) throw unavailable();
     if (snapshot.runtimeBinding && (!runtimeAgents || !snapshot.effectiveAgents || !snapshot.effectiveRoles))
@@ -407,6 +435,7 @@ export class ConfigurationGenerations {
     config: OrcaConfig,
     savedRevision: string,
     supplied?: GenerationAssets,
+    rejectVersionCollisions = true,
   ): Promise<GenerationMaterial> {
     const loaded = supplied ?? (await this.options.loadAssets(config));
     const assets = structuredClone({ workflows: loaded.workflows, templates: loaded.templates });
@@ -431,6 +460,7 @@ export class ConfigurationGenerations {
               runtimeBinding,
               runtimeHosts,
               ...(loaded.runtimeFingerprint ? { runtimeFingerprint: loaded.runtimeFingerprint } : {}),
+              ...(loaded.runtimeBootstrapBound ? { runtimeBootstrapBound: true } : {}),
               effectiveAgents: structuredClone(loaded.agents.listAgents()),
               effectiveRoles: loaded.agents.listRoles(),
             }
@@ -440,6 +470,7 @@ export class ConfigurationGenerations {
           version: def.version,
           revision: workflowRevision(def),
         })),
+        workflowDefinitions: assets.workflows,
         templates: assets.templates,
       },
       assets.workflows,
@@ -450,7 +481,12 @@ export class ConfigurationGenerations {
     }
     for (const def of assets.workflows) {
       const kept = await this.options.workflows.get(def.id, def.version);
-      if (kept && workflowRevision(kept) !== workflowRevision(def))
+      const active = this.active?.workflows.has(def.id) ? this.active.workflows.get(def.id) : undefined;
+      if (
+        rejectVersionCollisions &&
+        ((kept && workflowRevision(kept) !== workflowRevision(def)) ||
+          (active?.version === def.version && workflowRevision(active) !== workflowRevision(def)))
+      )
         candidateInvalid(
           `workflows.${def.id}.version`,
           "recorded workflow version has different content; bump its version",
@@ -467,12 +503,6 @@ export class ConfigurationGenerations {
     return material;
   }
   private async persist(material: GenerationMaterial): Promise<void> {
-    for (const def of material.workflows.list()) {
-      await this.options.workflows.put(def);
-      const kept = await this.options.workflows.get(def.id, def.version);
-      if (!kept || workflowRevision(kept) !== workflowRevision(def))
-        throw new OrcaError("WORKFLOW_INVALID", "recorded workflow versions are immutable");
-    }
     await this.options.store.putGeneration(material.snapshot.id, material.snapshot);
   }
 }

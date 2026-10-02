@@ -81,9 +81,24 @@ export async function localSubmissionAuthority(app: {
       const existing = ownership.owner(runId);
       if (existing && existing !== principalId) throw new OrcaError("RUN_STATE", "run ownership changed");
       ownership.record(runId, principalId);
-      await ownership.flush();
-      if (ownership.lastError || ownership.owner(runId) !== principalId)
+      await ownership.flush(runId);
+      if (ownership.owner(runId) !== principalId)
         throw new OrcaError("STORE_WRITE", "Request ownership could not be persisted");
     },
+  };
+}
+
+/** Reload configured credentials only for a new local submission/recovery intent.
+ * Previously admitted execution retains its captured authority; this is not renewal.
+ */
+export function authorityForNewLocalIntent(
+  app: Parameters<typeof localSubmissionAuthority>[0],
+  initial: SubmissionAuthority,
+): () => Promise<SubmissionAuthority> {
+  return async () => {
+    const current = await localSubmissionAuthority(app);
+    if (current.workspaceId !== initial.workspaceId || current.actor.principalId !== initial.actor.principalId)
+      throw new OrcaError("RUN_STATE", "local submission principal changed; restart the client");
+    return current;
   };
 }

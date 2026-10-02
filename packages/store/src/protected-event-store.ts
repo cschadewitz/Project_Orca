@@ -222,13 +222,18 @@ export class ProtectedEventStore implements EventStore {
 
 /** Only the interpreter calls this. Public readers and subscriptions always use the public log. */
 export async function executionEvents(events: OrcaEvent[], execution: ExecutionStore): Promise<OrcaEvent[]> {
-  return Promise.all(
-    events.map(async (event) => {
-      if (!event.executionPayloadRef) return event;
-      const payload = await execution.getPayload(event.runId, event.executionPayloadRef, event.type);
-      const restored = OrcaEventSchema.safeParse({ ...event, payload });
-      if (!restored.success) throw unavailable();
-      return restored.data;
-    }),
+  const references = events.flatMap((event) =>
+    event.executionPayloadRef ? [{ runId: event.runId, ref: event.executionPayloadRef, type: event.type }] : [],
   );
+  const payloads = execution.getPayloads
+    ? await execution.getPayloads(references)
+    : await Promise.all(references.map(({ runId, ref, type }) => execution.getPayload(runId, ref, type)));
+  if (payloads.length !== references.length) throw unavailable();
+  let index = 0;
+  return events.map((event) => {
+    if (!event.executionPayloadRef) return event;
+    const restored = OrcaEventSchema.safeParse({ ...event, payload: payloads[index++] });
+    if (!restored.success) throw unavailable();
+    return restored.data;
+  });
 }

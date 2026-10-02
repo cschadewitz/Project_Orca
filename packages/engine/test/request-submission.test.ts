@@ -639,3 +639,35 @@ it("recovers an existing v1 admission from its protected legacy marker", async (
   });
   expect(await f.orc.listRuns()).toEqual([runId]);
 });
+
+it("admits fresh work without scanning an unrelated unreadable protected run", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orca-unrelated-run-"));
+  dirs.push(dir);
+  const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
+  const unrelated = await f.orc.startRun({ workflowId: "program", vars: { token: "unrelated-secret" } });
+  const created = (await f.stores.events.readRange(unrelated, { limit: 1 }))[0]!;
+  expect(created.executionPayloadRef).toBeDefined();
+  await rm(join(dir, "private-execution", `${created.executionPayloadRef}.payload.json`));
+  await expect(f.stores.events.readRange(unrelated, { limit: 1 })).rejects.toThrow();
+  const scan = vi.spyOn(f.orc, "listRuns");
+  const accepted = await f.service.submit(command, f.authority);
+  expect(accepted.state).toBe("accepted");
+  expect(scan).not.toHaveBeenCalled();
+  // Known correlation recovery still checks its own authenticated root.
+  expect(await f.service.reconcile(accepted.admissionId, f.authority)).toEqual(accepted);
+});
+
+it("filters admissions no longer in workflow scope but propagates current-authority failures", async () => {
+  const f = submissionFixture();
+  const accepted = await f.service.submit(command, f.authority);
+  const record = (await f.admissions.records.get(accepted.admissionId))!;
+  await f.admissions.records.put({ ...record, id: "hidden-admission", workflowId: "hidden" });
+  vi.mocked(f.authority.authorize).mockImplementation(async (candidate) => {
+    if (candidate.workflowId === "hidden") throw new OrcaError("WORKFLOW_NOT_FOUND", "unavailable");
+  });
+  expect(await f.service.list(f.authority)).toEqual([accepted]);
+  vi.mocked(f.authority.authorize).mockImplementation(async (candidate) => {
+    if (candidate.workflowId) throw new Error("authority unavailable");
+  });
+  await expect(f.service.list(f.authority)).rejects.toThrow("authority unavailable");
+});

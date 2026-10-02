@@ -29,9 +29,9 @@ One daemon boot identity is shared by hello and live callbacks. The interpreter
 restores the initiating actor and child lineage from authenticated creation. Current
 credential/workflow grants and durable ownership govern live callback authority;
 a responder cannot substitute their identity. Revocation expires live callbacks,
-while durable gate answering uses current responder authority. This does not prove
-continued execution after credential rotation: the original execution credential is
-still required at the reviewed head (see below).
+while durable gate answering uses current responder authority. An expired execution credential requires an explicit
+`runs.resume` attachment using the original principal's current launch/control grants,
+checked again under the lease. Gate answering never supplies that renewal.
 UI disconnection is not execution revocation.
 
 The ephemeral exact-target `input.invalidated` notification is authorized per reader,
@@ -46,8 +46,8 @@ Custom executors, plan callbacks and plugin provider/host closures with unrecord
 bind the entire generation to its original bootstrap lifetime, even for workflows that
 never call them. Same-process operation and UI reconnects to that process can continue;
 restarting the engine process crosses the restoration boundary. No-op and declarative-only
-plugins can restore if compatibility checks succeed. The reverse-direction gap (old
-unbound generation, new plugin overriding a built-in executor) remains unresolved.
+plugins can restore if compatibility checks succeed. A bootstrap with executable mutations also rejects older unbound generations rather
+than substituting its new callbacks. Built-in executor objects are isolated per bootstrap.
 See [configuration generations](configuration-generations.md#reloadability),
 [#394](https://github.com/cschadewitz/Project_Orca/issues/394),
 [#395](https://github.com/cschadewitz/Project_Orca/issues/395) and
@@ -63,48 +63,44 @@ Runner prerequisite/runtime-library failure is blocked, never a pass.
 Regression coverage includes crash recovery across generation changes, strict
 correlation, local authority/revocation, concurrent ownership, plugin wrong-workspace
 and unchanged-plugin controls, original actor/child lineage, durable gate answering,
-connected callback expiry and connection epochs. These fixtures do not establish full
-credential-rotation recovery or eliminate the review findings below. The PR records
+connected callback expiry and connection epochs. New regression fixtures also reconstruct memory/file-backed runtime state across
+bootstrap rotation and exercise explicit renewal through authenticated HTTP. This is
+not a substitute for actual process/window acceptance at the final head. The PR records
 current commands/counts, exact CI runs and any blocked checks. After an environment
 reset, pre-reset check results are historical evidence only; recovered code is revalidated.
 
 ## Review status and final reconciliation
 
-This documentation pass is checked against `27411de95ad31f014097f31e8c8ff44f65769549`,
-not against later runtime fixes. The [PR #397 review](https://github.com/cschadewitz/Project_Orca/pull/397#pullrequestreview-5388884922)
-reported passing typechecks and 471 focused tests, but CI #341 failed its Node 22 demo
-time bound. That is not a passing combined acceptance result or proof of performance repair.
+The [review at `27411de95ad31f014097f31e8c8ff44f65769549`](https://github.com/cschadewitz/Project_Orca/pull/397#pullrequestreview-5388884922)
+identified runtime, connection, documentation and performance gaps. #400 reconciled the
+docs and #404 corrected connection handling. The subsequent runtime corrections include:
 
-Cal must reconcile these passages with the final implementation and new evidence:
+- Fresh Request admission skips unrelated-store scans; historical ambiguous recovery
+  remains fail-closed. Scope-filtered discovery and exact per-run ownership flushes have
+  corrupt-store and concurrency regressions. CLI/ACP expose local receipt recovery.
+- Encrypted generations retain their workflow catalog without reserving unused versions
+  at boot; actual launch pins remain immutable. Plugin compatibility is symmetric,
+  provider construction requires recorded inputs, and ordinary config literals are no
+  longer global redaction needles.
+- Explicit current-authority resume preserves the original principal and immutable
+  creation record while opening fresh permission invocations. ACP refreshes credentials
+  only at a new intent boundary. Remembered-only asks do not create unanswerable cards.
+- Run-summary parsing preserves safe provenance. Protocol inventories classify activation
+  and admission inspection under their control service; release metadata includes
+  `inputs.live`. No grant is expanded by method discovery.
+- The Attention waiting section retains its intrinsic height instead of hiding its
+  controls under Failed runs; real-window hit-testing at normal and short heights is
+  part of the combined smoke regression.
 
-- **Request submission — durable boundary/recovery:** fresh-submit full-store scans can
-  fail on unrelated unreadable runs; workflow-scope changes can break admission listing;
-  concurrent ownership flushes can report failure after creating a run. CLI/ACP/app have
-  no admission inspection/reconciliation surface, and daemon recovery cannot impersonate
-  a standalone OS-user principal. See [scan](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374801),
-  [listing](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374805),
-  [ownership](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374814) and
-  [recovery surface](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374833).
-- **Configuration generations — saving/activation, reloadability and secrets:** verify
-  same-version workflow-edit startup behavior, generation-wide plugin restoration in
-  both directions, missing `workspaceInputs` fallback, and the final redaction policy.
-  See [startup](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374816),
-  [redaction](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374810) and
-  [bootstrap](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374868).
-- **Live continuity and daemon connections:** test daemon credential rotation with
-  app-started runs and long-lived ACP submission authorities, distinguishing durable
-  gate acceptance from subsequent live tool permission. Verify behavior when an agent
-  offers only remembered permission options (the reviewed code leaves an empty ask).
-  See [empty options](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374828).
-- **Daemon connections — connecting and target identity:** reconcile dialog URL handling,
-  banner errors, no-window store opening, malformed environment URLs and epoch races with
-  the app fixes. See [dialog](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374843),
-  [main process](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374850) and
-  [epochs](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374854).
-- **Verification and release claims:** rerun combined gates, including performance and
-  real App smoke. At this head generation-launched runs protect every event; repeated
-  restoration and synchronous ownership reads also add cost. See the
-  [performance finding](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374822).
-  The review's `RunSummarySchema` provenance omission, protocol method inventories and
-  missing `inputs.live` release capability require code/metadata owner fixes outside
-  this documentation scope. Do not treat this pass as resolving those findings.
+Protected events remain encrypted and durable. Replay batches authenticate inputs and
+sensitivity overlays once per run per call. Bounded reuse of ciphertext/key bytes still
+checks current file/directory identity, permissions and nanosecond modification metadata;
+every payload is authenticated and decoded. Deletion, replacement, tampering and missing
+sensitivity material still fail closed, and write/fsync ordering is unchanged.
+
+Three same-machine compiled-demo comparisons measured median elapsed times of 6.07 s
+on main `7abc2342`, 13.58 s on the reviewed integration and 8.95 s after the corrections.
+The correction improves the reviewed candidate by about 34%, but retains about 47%
+overhead versus main; do not describe that as performance parity. These are local
+measurements, not CI deadlines. Exact-head Node 22/24 CI, coverage, native App smoke and
+independent re-review remain required. The former 60 s demo bounds are unchanged.

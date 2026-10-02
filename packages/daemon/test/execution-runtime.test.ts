@@ -157,7 +157,7 @@ it("children and grandchildren inherit the sealed root actor, owner, workflow sc
   expect(pending.emitOwned).not.toHaveBeenCalled();
 });
 it.each(["revoked", "other owner", "missing owner", "wrong principal", "wrong scope", "missing start grant"])(
-  "keeps durable execution available but refuses fresh live callbacks with %s",
+  "refuses execution attachment and fresh live callbacks with %s",
   async (reason) => {
     const f = await fixture(
       reason === "wrong scope"
@@ -172,7 +172,7 @@ it.each(["revoked", "other owner", "missing owner", "wrong principal", "wrong sc
       f.ownership.forget(id, "alice");
       if (reason === "other owner") f.ownership.record(id, "bob");
     }
-    await expect(f.runtime.prepareExecution(id)).resolves.toBeUndefined();
+    await expect(f.runtime.prepareExecution(id)).rejects.toMatchObject({ code: "RUN_STATE" });
     expect(f.runtime.executionSignal(id).aborted).toBe(true);
     const refused = liveAsk(f, id);
     expect(await refused.result).toBeUndefined();
@@ -242,7 +242,7 @@ it("requires plan.write only for Request-admitted origins, restoring the protect
     requestAdmissionId: "admission",
   });
   f.ownership.record(requestRun, "alice");
-  await f.runtime.prepareExecution(requestRun);
+  await expect(f.runtime.prepareExecution(requestRun)).rejects.toMatchObject({ code: "RUN_STATE" });
   expect(f.runtime.executionSignal(requestRun).aborted).toBe(true);
   const operator = await fixture({ permissions: ["runs.start", "plan.write"], scope: { workflows: "*", runs: "all" } });
   await operator.stores.requests.put(request);
@@ -296,9 +296,15 @@ it("prepares under the real lease, releases after parking, and recovers a durabl
   const resumedActor = { principalId: "alice", credentialId: next.credentialId };
   expect((await runner.events(id)).some((event) => event.type === "human.answered")).toBe(false);
   const control = new ControlModel({ orchestrator: runner, reads: new ReadModel({ orchestrator: runner }) });
-  await control.answerInput({ runId: id, requestId: gate!.id, optionId: "yes", resume: true }, resumedActor);
+  await expect(
+    control.answerInput({ runId: id, requestId: gate!.id, optionId: "yes", resume: true }, resumedActor),
+  ).rejects.toMatchObject({ code: "RUN_STATE", details: { answerRecorded: true, executionResumeRequired: true } });
+  expect((await runner.getState(id)).run.status).toBe("paused");
+  const authorize = vi.fn(async () => {});
+  await control.resumeRun({ runId: id }, { actor: resumedActor, authorize });
+  expect(authorize).toHaveBeenCalledTimes(2);
   expect((await runner.getState(id)).run.status).toBe("completed");
-  expect(signals).toEqual([false, true]);
+  expect(signals).toEqual([false, false]);
   expect(prepareExecution).toHaveBeenCalledTimes(2);
   expect(releaseExecution).toHaveBeenCalledTimes(2);
   expect(await runner.listLeases()).toEqual([]);

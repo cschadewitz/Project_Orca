@@ -2,8 +2,9 @@
  * CLI command implementations. Each command receives parsed positionals and
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
+import { admissionsCommand } from "./admissions.js";
 import { workspaceIdentity } from "@orca/store";
-import { localSubmissionAuthority } from "../local-submission-authority.js";
+import { localSubmissionAuthority, authorityForNewLocalIntent } from "../local-submission-authority.js";
 import { releaseAssets } from "../bootstrap.js";
 
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
@@ -458,6 +459,11 @@ export const commands: Record<string, Command> = {
     },
   },
 
+  admissions: {
+    help: "admissions [list|inspect <id>|reconcile <id>]  Inspect or recover original local Request admissions without starting execution.",
+    run: admissionsCommand,
+  },
+
   submit: {
     help: 'submit "<title>" [--body text | --body-file f] [--var k=v] [--item-workflow id] [--agent role=id]... [--model [agent=]model]...  Submit a request to the program workflow and follow it.',
     async run(ctx) {
@@ -644,7 +650,12 @@ export const commands: Record<string, Command> = {
       await serveAcpFacade({
         orchestrator: app.orchestrator,
         program: app.program,
-        ...(app.submissionAuthority ? { submissionAuthority: app.submissionAuthority } : {}),
+        ...(app.submissionAuthority
+          ? {
+              submissionAuthority: app.submissionAuthority,
+              authorityForNewIntent: authorityForNewLocalIntent(app, app.submissionAuthority),
+            }
+          : {}),
       });
       return 0;
     },

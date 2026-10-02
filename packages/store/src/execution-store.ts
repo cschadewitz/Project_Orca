@@ -31,7 +31,15 @@ export interface ExecutionStore {
   putInputs(inputs: ExecutionInputs): Promise<void>;
   addSensitivity(runId: string, sensitivity: ExecutionSensitivity): Promise<void>;
   getPayload(runId: string, ref: string, type: string): Promise<OrcaEventInput["payload"]>;
+  /** Authenticate one replay batch with fresh inputs/sensitivity per run, never caller-supplied state. */
+  getPayloads?(references: readonly ExecutionPayloadReference[]): Promise<OrcaEventInput["payload"][]>;
   putPayload(ref: string, input: OrcaEventInput): Promise<void>;
+}
+
+export interface ExecutionPayloadReference {
+  runId: string;
+  ref: string;
+  type: string;
 }
 
 function mergeSensitivity(
@@ -167,13 +175,33 @@ export class FileExecutionStore implements ExecutionStore {
       throw unavailable();
   }
   async getPayload(runId: string, ref: string, type: string): Promise<OrcaEventInput["payload"]> {
-    const value = await readPrivateJson(this.dir, `${encodeURIComponent(ref)}.payload.json`);
-    const result = PayloadSchema.safeParse(value);
-    if (!result.success || result.data.runId !== runId || result.data.type !== type) throw unavailable();
-    const inputs = await this.getInputs(runId);
-    if (!inputs || result.data.sensitivityRefs.some((expected) => !inputs.sensitivityRefs?.includes(expected)))
-      throw unavailable();
-    return result.data.payload;
+    return (await this.getPayloads([{ runId, ref, type }]))[0]!;
+  }
+  async getPayloads(references: readonly ExecutionPayloadReference[]): Promise<OrcaEventInput["payload"][]> {
+    const records = await Promise.all(
+      references.map(async ({ runId, ref, type }) => {
+        const value = await readPrivateJson(this.dir, `${encodeURIComponent(ref)}.payload.json`);
+        const result = PayloadSchema.safeParse(value);
+        if (!result.success || result.data.runId !== runId || result.data.type !== type) throw unavailable();
+        return result.data;
+      }),
+    );
+    // Read after the payloads, so an overlay removed while replay is being loaded cannot
+    // be vouched for by an earlier input snapshot. This state lives only for this call.
+    const inputs = new Map(
+      await Promise.all(
+        [...new Set(records.map((record) => record.runId))].map(async (runId) => {
+          const value = await this.getInputs(runId);
+          if (!value) throw unavailable();
+          return [runId, value] as const;
+        }),
+      ),
+    );
+    return records.map((record) => {
+      const current = inputs.get(record.runId)!;
+      if (record.sensitivityRefs.some((expected) => !current.sensitivityRefs?.includes(expected))) throw unavailable();
+      return record.payload;
+    });
   }
 }
 

@@ -130,7 +130,7 @@ export async function loadConfig(
   const file = configPath ?? (await findConfig(cwd));
   if (!file) return { config: parseOrcaConfig({}), configDir: resolve(cwd) };
   const text = await readFile(file, "utf8");
-  const raw = file.endsWith(".json") ? JSON.parse(text) : parseYaml(text);
+  const raw = parseConfigFile(file, text);
   try {
     // The path travels with the parsed config: `config.get`/`config.set` serve the file
     // itself, and rediscovering it in the daemon could find a different one (#174).
@@ -138,6 +138,11 @@ export async function loadConfig(
   } catch (e) {
     throw new OrcaError("CONFIG_INVALID", `${file}: ${(e as Error).message}`, {}, { cause: e });
   }
+}
+
+/** Match the initial loader when checking startup bytes too (JSON permits duplicate keys). */
+function parseConfigFile(file: string, text: string): unknown {
+  return file.endsWith(".json") ? JSON.parse(text) : parseYaml(text);
 }
 
 export function makeWorkspaceProvider(
@@ -210,6 +215,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const templates = await loadTemplates(assets.templates, configDir);
   const workflows = await loadWorkflows(assets.workflows, configDir);
   const executors = builtinExecutors();
+  // Built-ins are module-level objects. Give plugins bootstrap-local registrations so an
+  // in-place callback replacement cannot contaminate another app in this same process.
+  for (const type of executors.types()) executors.register({ ...executors.get(type)! });
   let humanInput = opts.humanInput ?? makeHumanInput(config);
   let explicitHumanInput = opts.humanInput !== undefined;
   const workspaceInputs = {
@@ -358,7 +366,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   });
   // Verify bytes still represent the config bootstrap loaded before labelling them active.
   const saved = configFile ? await readFile(configFile, "utf8") : "";
-  if (configFile && JSON.stringify(parseOrcaConfig(parseYaml(saved))) !== JSON.stringify(config))
+  if (configFile && JSON.stringify(parseOrcaConfig(parseConfigFile(configFile, saved))) !== JSON.stringify(config))
     throw new OrcaError("CONFIG_STALE", "configuration changed during startup; restart bootstrap");
   await generations.initialize(config, configFile ? createHash("sha256").update(saved).digest("hex") : "", {
     workflows: workflows.list(),
@@ -366,6 +374,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     workspaceInputs,
     ...(config.plugins.length ? { agents } : {}),
     ...(config.plugins.length && runtimeFingerprint ? { runtimeFingerprint } : {}),
+    ...(bootstrapBound ? { runtimeBootstrapBound: true } : {}),
   });
   orchestrator.generations = generations;
   // Explicit embedder/plugin ports and later facade replacements stay live. Only the
@@ -386,11 +395,13 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       return workspaceProvider;
     }
     const inputs = generation.snapshot.workspaceInputs;
-    if (generation.snapshot.config.workspace.provider === "kepler" && !inputs?.keplerTaskDir)
+    if (!inputs?.configDir)
+      throw new OrcaError("RUN_STATE", "recorded workspace configuration directory is unavailable");
+    if (generation.snapshot.config.workspace.provider === "kepler" && !inputs.keplerTaskDir)
       throw new OrcaError("RUN_STATE", "recorded Kepler workspace inputs are unavailable");
     return makeWorkspaceProvider(
       generation.snapshot.config,
-      inputs?.configDir ?? configDir,
+      inputs.configDir,
       generation.agents,
       inputs?.keplerTaskDir,
     );

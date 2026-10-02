@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { reduceRun, reduceRunSummary, runSummary, RUN_SUMMARY_EVENT_TYPES, type OrcaEvent } from "@orca/core";
+import {
+  RunSummarySchema,
+  reduceRun,
+  reduceRunSummary,
+  runSummary,
+  RUN_SUMMARY_EVENT_TYPES,
+  type OrcaEvent,
+} from "@orca/core";
 
 let seq = 0;
 const ev = (type: OrcaEvent["type"], payload: unknown): OrcaEvent =>
@@ -224,4 +231,23 @@ describe("reduceRunSummary", () => {
   it("rejects logs that do not start with run.created", () => {
     expect(() => reduceRunSummary([ev("run.started", {})])).toThrow(/run.created/);
   });
+});
+
+it("preserves safe configuration provenance through summary schema parsing", () => {
+  const provenance = {
+    configGeneration: "generation-a",
+    workflow: { id: "wf", version: "1", revision: "digest" },
+    inputs: [{ name: "token", source: "caller", value: "[REDACTED]" }],
+    selections: [],
+  };
+  const summary = reduceRunSummary([
+    ev("run.created", {
+      workflowId: "wf",
+      workflowVersion: "1",
+      workspace: { hostId: "local", cwd: "/w" },
+      vars: {},
+      provenance,
+    }),
+  ]);
+  expect(RunSummarySchema.parse(summary).provenance).toEqual(provenance);
 });

@@ -171,6 +171,7 @@ export const RunSummarySchema = RunSchema.pick({
   workItemId: true,
   parentRunId: true,
   overrides: true,
+  provenance: true,
   createdAt: true,
   startedAt: true,
   completedAt: true,

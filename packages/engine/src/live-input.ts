@@ -28,6 +28,19 @@ export interface LiveInputBinding {
   emitOwned(event: Omit<OrcaEventInput, "runId">): Promise<unknown>;
 }
 
+/** Explicit execution attachment, distinct from one-time input-answer authority. */
+export interface ExecutionResumeOrigin {
+  rootId: string;
+  workflowId: string;
+  request: boolean;
+  actor: MutationActor;
+}
+export interface ExecutionResumeAuthority {
+  actor: MutationActor;
+  /** Server-owned capability; rechecked inside the acquired execution lease. */
+  authorize(origin: ExecutionResumeOrigin): Promise<void>;
+}
+
 export interface LiveAnswerAuthority {
   /** Server-verified actor; not a field in the answer command. */
   actor: MutationActor;

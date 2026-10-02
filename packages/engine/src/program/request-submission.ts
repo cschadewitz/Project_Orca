@@ -4,6 +4,7 @@ import { redactExecutionValue } from "@orca/store";
 import {
   newId,
   OrcaError,
+  isOrcaError,
   OrcaEventSchema,
   RequestSchema,
   SubmissionCommandSchema,
@@ -146,7 +147,14 @@ export class RequestSubmissionService implements SubmissionService {
       });
     const results: SubmissionResult[] = [];
     for (const record of records) {
-      await authority.authorize({ title: "", body: "", workflowId: record.workflowId });
+      try {
+        await authority.authorize({ title: "", body: "", workflowId: record.workflowId });
+      } catch (error) {
+        // A narrowed workflow scope hides that admission, not the other owned ones.
+        // Revocation and infrastructure failures still fail the entire operation.
+        if (isOrcaError(error, "WORKFLOW_NOT_FOUND")) continue;
+        throw error;
+      }
       results.push(result(record));
     }
     return results;
@@ -272,7 +280,9 @@ export class RequestSubmissionService implements SubmissionService {
     const { orchestrator: orc, admissions } = this.opts;
     let current = record;
     try {
-      let runId = await this.findRoot(record);
+      // Only this freshly prepared, mutex-held admission owns a capture. It cannot
+      // have an earlier root. Historical/uncertain admission still scans fail-closed.
+      let runId = captured ? undefined : await this.findRoot(record);
       await authority.authorize({ ...command, workflowId: record.workflowId });
       if (!runId) {
         const launch =

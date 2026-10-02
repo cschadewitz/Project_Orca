@@ -47,7 +47,13 @@ edges:
 const config = (agent = "a") =>
   parseOrcaConfig({
     agents: [
-      { id: "a", command: "unused", args: ["1"], env: { TOKEN: "credential-canary" } },
+      {
+        id: "a",
+        command: "unused",
+        args: ["acp", "--api-key=arg-credential-canary"],
+        env: { TOKEN: "credential-canary", FORCE_COLOR: "1" },
+        mcpServers: [{ name: "tools", command: "unused", args: ["mcp", "--token", "mcp-credential-canary"] }],
+      },
       { id: "b", command: "unused" },
     ],
     roles: { builder: agent },
@@ -63,7 +69,16 @@ async function make(stores: Stores, role = "a", body = "old template") {
     type: "custom:trace",
     execute: async (ctx) => {
       traces.push(`${ctx.agents.resolve({ role: "builder" }).agent.id}:${ctx.templates.get("prompt").body}`);
-      await ctx.emit({ type: "vars.set", payload: { vars: { output: "credential-canary" } } });
+      await ctx.emit({
+        type: "vars.set",
+        payload: {
+          vars: {
+            output: "credential-canary",
+            ordinary: "acp mcp 1",
+            configuredArgs: "arg-credential-canary mcp-credential-canary",
+          },
+        },
+      });
       return completed();
     },
   });
@@ -130,5 +145,9 @@ it("configured literals protect public history even without sensitive launch inp
   const id = await launch.startRun({});
   await orc.run(id);
   expect(JSON.stringify(await stores.events.read(id))).not.toContain("credential-canary");
-  expect((await orc.getState(id)).run.vars.output).toBe("[REDACTED]");
+  expect((await orc.getState(id)).run.vars).toMatchObject({
+    output: "[REDACTED]",
+    ordinary: "acp mcp 1",
+    configuredArgs: "[REDACTED] [REDACTED]",
+  });
 });

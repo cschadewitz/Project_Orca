@@ -88,7 +88,7 @@ import {
 import { PlanService } from "./plan/service.js";
 import { recoverReleasedWorkItem } from "./program/work-items.js";
 import { RunContext } from "./run-context.js";
-import type { LiveHumanInput } from "./live-input.js";
+import type { LiveHumanInput, ExecutionResumeAuthority } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
@@ -108,6 +108,11 @@ export interface OrchestratorOptions {
     executionSignal(runId: string): AbortSignal;
     prepareExecution?(runId: string): Promise<void>;
     releaseExecution?(runId: string): void;
+    withResumeAuthority?(
+      runId: string,
+      authority: ExecutionResumeAuthority | undefined,
+      operation: () => Promise<RunState>,
+    ): Promise<RunState>;
   };
   workspaceProvider?: WorkspaceProvider;
   sessionFactory?: SessionFactory;
@@ -362,6 +367,13 @@ export class Orchestrator {
     const parentInputs = opts.parentRunId ? await this.stores.execution.getInputs(opts.parentRunId) : undefined;
     if (parentFirst?.type === "run.created" && parentFirst.payload.executionInputsStored && !parentInputs)
       throw unavailable();
+    // Resolve the historical provider before committing any run-specific private input.
+    // An unavailable reconstruction is an admission refusal, not an orphaned run record.
+    const selectedWorkspaceProvider = opts.workspace
+      ? undefined
+      : generation && this.generationWorkspaceProvider
+        ? this.generationWorkspaceProvider(generation)
+        : this.workspaceProvider;
     // Record only after every admission/inherited-integrity check, before public run creation.
     const workflowStored = await this.recordDefinition(def);
     let protectedInputs = protectExecutionInputs(runId, def, vars, parentInputs);
@@ -386,11 +398,7 @@ export class Orchestrator {
     const workItem = opts.workItemId ? await this.stores.workItems.get(opts.workItemId) : undefined;
     const workspace =
       opts.workspace ??
-      (await (
-        generation && this.generationWorkspaceProvider
-          ? this.generationWorkspaceProvider(generation)
-          : this.workspaceProvider
-      ).provision({
+      (await selectedWorkspaceProvider!.provision({
         runId,
         workflowId: def.id,
         request,
@@ -701,9 +709,9 @@ export class Orchestrator {
   async resume(runId: string): Promise<RunState> {
     let id = runId;
     for (;;) {
-      const state = await this.getState(id);
+      const state = await this.executionState(id);
       if (!state.run.parentRunId) break;
-      if ((await this.getState(state.run.parentRunId)).run.status !== "paused") break;
+      if ((await this.executionState(state.run.parentRunId)).run.status !== "paused") break;
       id = state.run.parentRunId;
     }
     return this.run(id);
@@ -1732,6 +1740,10 @@ export class Orchestrator {
                   emitOwned: (event: Parameters<RunContext["emitOwned"]>[0]) => rc.emitOwned(event),
                 }
               : undefined;
+          const offered = req.options.filter((o) => !live || o.kind === "allow_once" || o.kind === "reject_once");
+          // A remembered-only ask has no supported one-time decision. Do not park an
+          // impossible-to-answer live card until its turn eventually times out.
+          if (live && offered.length === 0) return undefined;
           return askHumanInput({
             port: live ? this.liveInput!.port : humanInput,
             ...(live ? { live } : {}),
@@ -1745,9 +1757,7 @@ export class Orchestrator {
             // with, `name` is what the host shows. Keep them apart here too.
             // ACP remembered choices grant policy inside the agent. Live responses only
             // offer one-time choices; ORCA standing rules use the separately authorized writer.
-            options: req.options
-              .filter((o) => !live || o.kind === "allow_once" || o.kind === "reject_once")
-              .map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
+            options: offered.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
             // Whose turn is being held open (#248). It is recorded here because here is
             // where it is known: an attention card has to name the agent, and the push that
             // opens the card is a pure function of the event it comes from.

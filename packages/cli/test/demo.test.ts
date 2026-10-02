@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { fileStores } from "@orca/store";
 import { parseOrcaConfig } from "@orca/core";
 import { commands, type CommandContext } from "../src/commands/index.js";
 
@@ -45,8 +46,30 @@ const exists = (p: string) =>
     () => false,
   );
 
-// The program spawns many scripted ACP processes; measured 25–27s per test locally
-// and 35s on CI (#228). Keep this allowance local to the subprocess integration test.
+/** Keep the command's captured diagnostics when its workflow returns a failure code. */
+async function successfulDemo(c: ReturnType<typeof ctx>): Promise<void> {
+  const code = await commands.demo!.run(c);
+  const diagnostics = [...c.lines, ...c.errs];
+  if (code !== 0) {
+    const line = c.errs.find((value) => value.startsWith("demo workspace: "));
+    const directory = line?.slice("demo workspace: ".length);
+    if (directory && (await exists(join(directory, ".orca")))) {
+      const stores = fileStores(join(directory, ".orca"));
+      for (const runId of await stores.events.listRuns()) {
+        try {
+          const failures = await stores.events.readTypes(runId, ["run.failed", "step.failed", "run.completed"]);
+          diagnostics.push(JSON.stringify({ runId, failures }));
+        } catch {
+          diagnostics.push(`Failure history unavailable for ${runId}`);
+        }
+      }
+    }
+  }
+  expect(code, diagnostics.join("\n")).toBe(0);
+}
+
+// The program spawns many real scripted ACP processes. Keep the existing local
+// integration bound; performance fixes must create margin rather than raise it.
 describe("orca demo", { timeout: 60_000 }, () => {
   describe("the reusable demo workspace", () => {
     let dir: string;
@@ -56,7 +79,7 @@ describe("orca demo", { timeout: 60_000 }, () => {
     beforeAll(async () => {
       dir = await mkdtemp(join(tmpdir(), "orca-demo-test-"));
       dirs.push(dir);
-      expect(await commands.demo!.run(ctx(dir, [], { dir }))).toBe(0);
+      await successfulDemo(ctx(dir, [], { dir }));
       configPath = join(dir, "orca.config.yaml");
     }, 60_000);
 
@@ -96,7 +119,7 @@ describe("orca demo", { timeout: 60_000 }, () => {
 
   it("removes its temp workspace afterwards by default", async () => {
     const c = ctx(tmpdir(), []);
-    expect(await commands.demo!.run(c)).toBe(0);
+    await successfulDemo(c);
     const dir = announcedDir(c);
     dirs.push(dir);
     expect(dir.startsWith(join(tmpdir(), "orca-demo-"))).toBe(true);
@@ -107,7 +130,7 @@ describe("orca demo", { timeout: 60_000 }, () => {
 
   it("keeps the temp workspace with --keep and says where it is", async () => {
     const c = ctx(tmpdir(), [], { keep: true });
-    expect(await commands.demo!.run(c)).toBe(0);
+    await successfulDemo(c);
     const dir = announcedDir(c);
     dirs.push(dir);
     expect(await exists(join(dir, "orca.config.yaml"))).toBe(true);

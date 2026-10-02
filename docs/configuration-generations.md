@@ -4,9 +4,8 @@ The integrated runtime provides generation capture, restoration, config apply an
 launch provenance. [332-runtime-integration.patch](patches/332-runtime-integration.patch)
 is a historical handoff against preparation commit
 `7abc2342aa672ee9d2f10d565ca4f8eb546184df`; its wiring is already reconciled here.
-Do not reapply it. This document records behavior at reviewed head `27411de9`;
-[remaining review findings](runtime-next-integration.md#review-status-and-final-reconciliation)
-need reconciliation against the final runtime fixes.
+Do not reapply it. The post-review corrections are described here; [combined validation](runtime-next-integration.md#review-status-and-final-reconciliation)
+remains a separate release gate.
 
 ## Saving and activation
 
@@ -36,16 +35,17 @@ workflow version/revision. A concurrent apply cannot mix their choices. Failures
 leave the old active pointer intact. A crash before activation can leave unused
 protected records or workflow pins; there is no automatic deletion of resume data.
 
-A boot validates and activates the saved configuration for new work. At reviewed head
-`27411de9`, initialization pins every loaded workflow and refuses startup with
-`CONFIG_INVALID` if an already pinned version has different content, even when that
-workflow was never run. This also prevents unrelated resume/answer commands from
-bootstrapping. Restore the original workflow bytes or give the edited workflow a new
-version; do not delete historical pins. This broader startup refusal is an unresolved
-review finding, not evidence that workflow-edit startup compatibility is fixed.
+A boot validates and activates the saved configuration for new work without reserving
+all loaded workflow versions in the global version store. Each protected generation
+retains its validated workflow catalog. Editing an unused workflow at the same version
+therefore does not prevent boot or recovery of unrelated work. Actual launch still
+pins `(id, version)` immutably: if that version was already run with different content,
+a fresh unversioned launch is refused and the workflow must receive a new version.
+An explicit recorded version resolves the historical definition. `config.apply` still
+rejects same-version content changes against active or stored definitions.
 Previously admitted runs restore their recorded generation. Missing or corrupt
 material is `RUN_STATE`, never permission to use today's configuration. A missing
-workflow pin or different digest also fails closed.
+legacy workflow pin or a different recorded digest also fails closed.
 
 Request-written/run-missing recovery uses the separate trusted `restoreLaunch`
 callback, with the durable admission's generation, exact workflow identity and
@@ -97,10 +97,10 @@ running daemon does not cross that boundary; quitting an app that stops its bund
 daemon does. No-op or declarative-only plugins can restore when the compatibility checks
 above succeed.
 
-There is also an unresolved reverse-direction gap at `27411de9`: a historical generation
-without a runtime binding can restore into a boot that adds a plugin replacing a built-in
-executor. Executors are process-global, so that path can substitute new callbacks. The
-current checks do not establish a universal fail-closed restoration guarantee.
+The compatibility check works in both directions: a historical unbound generation
+cannot restore into a bootstrap that installs executable plugin mutations. Built-in
+executor registration objects are also copied per bootstrap, so removing a plugin cannot
+retain its in-place callback mutation in another app in the same process.
 In-place host/executor and nested filesystem callback edits are behavior-bearing too.
 The shipped JEV example registers custom executors and is therefore bootstrap-bound:
 finish its admitted work before restarting. Do not delete protected records or start a
@@ -112,9 +112,9 @@ real restart/operator acceptance in [#396](https://github.com/cschadewitz/Projec
 
 Built-in providers record their resolved bootstrap directory and Kepler task directory
 inside the protected generation. Historical launch restoration does not reread the current
-`KEPLER_TASK_DIR`; a missing recorded Kepler context fails closed. Bootstrap still falls
-back to the current `configDir` when recorded `workspaceInputs` are absent; this legacy
-path must not be described as restoring every historical environment input.
+`KEPLER_TASK_DIR`; a missing recorded Kepler context fails closed. A missing recorded configuration directory also fails closed for local and git providers;
+restoration does not borrow the current `configDir`. Provider reconstruction is checked
+before writing run-specific private inputs or provisioning a workspace.
 
 Apply also rejects removal of a previously resolvable program or item-workflow
 default, even when its configured name has not changed. Unconfigured bundled
@@ -146,17 +146,23 @@ record their own selections when their child run is admitted. Agent-selected
 models remain in the existing session-open/update records; an absent launch model
 does not claim ORCA chose an external agent's default.
 
-The protected generation record contains parsed configuration and templates, plus
-references to the existing encrypted workflow pins and effective plugin agent/role data. It uses `private-execution/`
-and its existing key, atomic publication and authenticated encryption. It does not
-create another workflow store or key lifecycle. Configured literals stay encrypted;
-ambient process environment, resolved credentials and live sessions are never
-captured. Configured environment and argument literals also enter the existing execution redactor,
-so copied values are hidden in public history and logs. At `27411de9` this includes ordinary
-short arguments such as `acp` or `1`, which can corrupt otherwise useful public text.
-That over-redaction remains a review finding; the final redaction policy is not settled. Structural identity fields remain
-metadata even when a short secret happens to match them. No RPC serves the private material. Back up the complete protected store
-and keys as documented in `protected-execution-storage.md`.
+The protected generation record contains parsed configuration, templates, full validated
+workflow definitions and effective plugin agent/role data. Legacy generation snapshots
+without embedded definitions retain their existing encrypted workflow-pin lookup. It
+uses `private-execution/` and its existing key, atomic publication and authenticated
+encryption, without a second key lifecycle. Configured bytes stay encrypted; ambient
+process environment, resolved credentials and live sessions are not captured except for
+the explicitly resolved built-in provider directories above.
+
+Public launch provenance withholds every input value. Explicitly sensitive workflow
+inputs remain protected. Defense-in-depth literal redaction additionally recognizes
+credential-named environment fields/options, authorization headers, credential-bearing
+URLs and common token formats. Ordinary `acp`, `mcp` and `FORCE_COLOR=1` values are not
+global secret needles. This is not arbitrary-secret discovery or taint tracking: use
+sensitive input declarations and avoid embedding credentials in unlabeled free text.
+Structural identity fields remain metadata even when a declared secret matches them.
+No RPC serves private generation material. Back up the complete protected store and
+keys as documented in `protected-execution-storage.md`.
 
 The integration serves provenance only through the existing authorized run reads
 and events. `config.apply` requires current `config.write` authority before

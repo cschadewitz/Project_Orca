@@ -3,6 +3,7 @@ import {
   ARTIFACT_TEXT_LIMIT_BYTES,
   ArtifactsGetParamsSchema,
   CONFIG_CHANGED,
+  CONFIG_APPLY_METHOD,
   CONFIG_GET_METHOD,
   CONFIG_SET_METHOD,
   CONTROL_ERROR_CODES,
@@ -218,4 +219,17 @@ describe("artifacts", () => {
     expect(ArtifactsGetParamsSchema.safeParse({ runId: "r" }).success).toBe(false);
     expect(ArtifactsGetParamsSchema.safeParse({ artifactId: "a", runId: "r", name: "spec" }).success).toBe(false);
   });
+});
+
+it("classifies generation activation and admission recovery with the authenticated control service", () => {
+  for (const method of [
+    CONFIG_APPLY_METHOD,
+    "requests.submit",
+    "requests.reconcile",
+    "requests.admission",
+    "requests.admissions",
+  ]) {
+    expect(CONTROL_METHODS).toContain(method);
+    expect(READ_METHODS).not.toContain(method);
+  }
 });

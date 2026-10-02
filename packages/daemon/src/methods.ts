@@ -29,7 +29,7 @@ import {
   RequestsAdmissionsParamsSchema,
 } from "@orca/protocol";
 import type { RequestSubmissionModel } from "./request-submission.js";
-import type { LiveAnswerAuthority } from "@orca/engine";
+import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
 import type { Maintenance } from "./maintenance.js";
 import { OrcaError, type MutationActor } from "@orca/core";
 import {
@@ -177,6 +177,7 @@ import type { LiveInputChangeSource } from "./live-input-notifications.js";
 export interface MethodContext {
   liveInputs?: LiveInputChangeSource | undefined;
   liveAnswerAuthority?: LiveAnswerAuthority;
+  executionResumeAuthority?: ExecutionResumeAuthority;
   requestSubmissions?: RequestSubmissionModel | undefined;
   submissionWorkspaceId?: string | undefined;
   requestSubmissionAuthority?: ((ctx: MethodContext) => Promise<SubmissionAuthority>) | undefined;
@@ -464,7 +465,7 @@ export const inputsAnswer: Method<InputsAnswerParams, InputsAnswerResult> = {
 /** `runs.resume`: re-drive a parked run here until it parks again or finishes. */
 export const runsResume: Method<RunsResumeParams, RunsResumeResult> = {
   params: RunsResumeParamsSchema,
-  handle: (params, ctx) => control(ctx).resumeRun(params),
+  handle: (params, ctx) => control(ctx).resumeRun(params, ctx.executionResumeAuthority),
 };
 
 /** `runs.cancel`: close a run and the children it is waiting on. */
