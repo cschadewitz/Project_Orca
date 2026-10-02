@@ -175,7 +175,6 @@ export async function askHumanInput(opts: {
     context: opts.context ?? {},
     ...(opts.live ? { live: opts.live } : {}),
   };
-  if (opts.live) query.context = { ...query.context, liveDecision: opts.live.identity };
   // Register before publishing input.opened, but fence acceptance until both opening
   // events are durable. A subscriber can immediately read/answer without seeing an
   // "expired" callback or recording human.answered before human.requested.
@@ -212,6 +211,7 @@ export async function askHumanInput(opts: {
         options: query.options,
         ...(opts.agent ? { agent: opts.agent } : {}),
         context: query.context,
+        ...(opts.live ? { liveDecision: opts.live.identity } : {}),
       },
     });
     requested = true;

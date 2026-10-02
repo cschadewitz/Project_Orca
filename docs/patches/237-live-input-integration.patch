@@ -52,10 +52,18 @@ index 81bfc3d..d23ca48 100644
            optionId: request.optionId,
            ...(request.note ? { note: request.note } : {}),
 diff --git a/packages/core/src/events/events.ts b/packages/core/src/events/events.ts
-index b4fc691..ef137d2 100644
+index b4fc691..6cc32e1 100644
 --- a/packages/core/src/events/events.ts
 +++ b/packages/core/src/events/events.ts
-@@ -165,6 +165,13 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
+@@ -10,6 +10,7 @@ import {
+   BranchSkipReasonSchema,
+   ErrorInfoSchema,
+   GateOptionSchema,
++  HumanInputLiveIdentitySchema,
+   RunOutcomeSchema,
+   RunOverridesSchema,
+   RunStatusSchema,
+@@ -165,6 +166,13 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
    base(
      "agent.session.opened",
      z.object({
@@ -69,6 +77,14 @@ index b4fc691..ef137d2 100644
        stepRunId: z.string(),
        sessionId: z.string(),
        agentId: z.string(),
+@@ -292,6 +300,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
+        * for those logs from the session scan, which is why the read path does not use it.
+        */
+       agent: z.object({ id: z.string(), hostId: z.string() }).optional(),
++      liveDecision: HumanInputLiveIdentitySchema.optional(),
+       context: z.record(z.string(), z.unknown()).default({}),
+     }),
+   ),
 diff --git a/packages/daemon/src/auth/guard.ts b/packages/daemon/src/auth/guard.ts
 index 0dcffd4..853a91d 100644
 --- a/packages/daemon/src/auth/guard.ts
@@ -296,7 +312,7 @@ index a725fb0..154c73c 100644
  
  /** `runs.resume`: re-drive a parked run here until it parks again or finishes. */
 diff --git a/packages/daemon/src/read-model.ts b/packages/daemon/src/read-model.ts
-index 373344c..2a4f777 100644
+index 373344c..0828b07 100644
 --- a/packages/daemon/src/read-model.ts
 +++ b/packages/daemon/src/read-model.ts
 @@ -44,6 +44,7 @@ import type { Orchestrator, PlanService } from "@orca/engine";
@@ -311,7 +327,7 @@ index 373344c..2a4f777 100644
    }
  
    private async inputView(pass: Pass, request: HumanInputRequest, state: RunState): Promise<OpenInputView> {
-+    const identity = LiveDecisionIdentitySchema.safeParse(request.context["liveDecision"]);
++    const identity = LiveDecisionIdentitySchema.safeParse(request.liveDecision);
 +    const target = identity.success
 +      ? { ...identity.data, runId: request.runId, stepRunId: request.stepRunId, requestId: request.id }
 +      : undefined;
@@ -652,10 +668,10 @@ index 9f48294..df7fff0 100644
    return `${v.major}.${v.minor}`;
 diff --git a/packages/daemon/test/live-input-integration.test.ts b/packages/daemon/test/live-input-integration.test.ts
 new file mode 100644
-index 0000000..14a2516
+index 0000000..aa89ccf
 --- /dev/null
 +++ b/packages/daemon/test/live-input-integration.test.ts
-@@ -0,0 +1,362 @@
+@@ -0,0 +1,422 @@
 +/** Applied with the shared #237 patch: the real interpreter, lease, read and control paths agree. */
 +import WebSocket from "ws";
 +import { CredentialStore, OwnershipStore, orchestratorResolver } from "../src/auth/index.js";
@@ -674,9 +690,9 @@ index 0000000..14a2516
 +import { ControlModel, ReadModel, startDaemon } from "@orca/daemon";
 +import { LiveExecutionAuthorities } from "../src/live-input-authority.js";
 +
-+async function fixture(isCurrent = () => true) {
++async function fixture(isCurrent = () => true, protectedSecret?: string) {
 +  const stores = memoryStores();
-+  const port = new LiveHumanInput("boot");
++  const port = new LiveHumanInput("boot-a");
 +  const executions = new LiveExecutionAuthorities(isCurrent, 60_000);
 +  const answers: (string | undefined)[] = [];
 +  let opens = 0;
@@ -708,7 +724,7 @@ index 0000000..14a2516
 +        const answer = await opts.askPermission!(
 +          {
 +            sessionId: id,
-+            toolCall: { toolCallId: "same-tool", title: "Execute?", kind: "execute" },
++            toolCall: { toolCallId: "same-tool", title: "Execute a?", kind: "execute", rawInput: { data: "a" } },
 +            options: [
 +              { optionId: "allow", name: "Allow", kind: "allow_once" },
 +              { optionId: "deny", name: "Deny", kind: "reject_once" },
@@ -718,8 +734,8 @@ index 0000000..14a2516
 +          },
 +          {
 +            sessionId: id,
-+            turnId: randomUUID(),
-+            invocationId: randomUUID(),
++            turnId: `turn-a-${randomUUID()}`,
++            invocationId: `invocation-a-${randomUUID()}`,
 +            signal: AbortSignal.any([abort.signal, ...(options?.signal ? [options.signal] : [])]),
 +          },
 +        );
@@ -736,6 +752,7 @@ index 0000000..14a2516
 +    parseWorkflow(`
 +id: live
 +name: live
++${protectedSecret === undefined ? "" : "inputSchema: {fields: {secret: {type: string, sensitive: true}}}"}
 +start: s
 +nodes:
 +  s: {type: start}
@@ -756,7 +773,10 @@ index 0000000..14a2516
 +  });
 +  const reads = new ReadModel({ orchestrator: orc });
 +  const control = new ControlModel({ orchestrator: orc, reads });
-+  const runId = await orc.startRun({ workflowId: "live" });
++  const runId = await orc.startRun({
++    workflowId: "live",
++    ...(protectedSecret === undefined ? {} : { vars: { secret: protectedSecret } }),
++  });
 +  executions.bind(runId, { principalId: "alice" });
 +  const done = orc.run(runId);
 +  void done.catch(() => undefined);
@@ -812,6 +832,62 @@ index 0000000..14a2516
 +  } finally {
 +    await f.close();
 +  }
++});
++
++it("preserves live identity through protected projection without exempting context", async () => {
++  const f = await fixture(() => true, "a");
++  try {
++    const requested = (await f.orc.events(f.runId)).find((event) => event.type === "human.requested")!;
++    expect(requested.type).toBe("human.requested");
++    if (requested.type !== "human.requested") throw new Error("missing request");
++    expect(requested.payload.liveDecision).toEqual({
++      instanceId: f.params.live.instanceId,
++      sessionId: f.params.live.sessionId,
++      turnId: f.params.live.turnId,
++      invocationId: f.params.live.invocationId,
++    });
++    expect(JSON.stringify(requested.payload.context)).toContain("[REDACTED]");
++    expect(requested.payload.question).toBe("Execute [REDACTED]?");
++    expect(f.port.inspect(f.params.live)).toBe("pending");
++    await f.control.answerInput(f.params, f.authority.actor, f.authority);
++    expect((await f.done).run.status).toBe("completed");
++    expect(f.answers).toEqual(["allow"]);
++  } finally {
++    await f.close();
++  }
++});
++
++it("projects only the four structural identifiers, never lookalikes or extra context", async () => {
++  const stores = memoryStores();
++  await stores.execution.putInputs({
++    runId: "run",
++    workflowId: "live",
++    workflowVersion: "1",
++    vars: { secret: "a" },
++    sensitiveNames: ["secret"],
++    secrets: ["a"],
++  });
++  const identity = { instanceId: "a", sessionId: "a", turnId: "a", invocationId: "a" };
++  const event = await stores.events.append({
++    runId: "run",
++    type: "human.requested",
++    payload: {
++      stepRunId: "step",
++      requestId: "input",
++      kind: "permission",
++      question: "a",
++      options: [],
++      liveDecision: { ...identity, ...{ extra: "a" } },
++      context: { liveDecision: { instanceId: "a" }, value: "a" },
++    },
++  });
++  if (event.type !== "human.requested") throw new Error("wrong event");
++  expect(event.payload.liveDecision).toEqual(identity);
++  expect(event.payload.context).toEqual({
++    liveDecision: { "inst[REDACTED]nceId": "[REDACTED]" },
++    "v[REDACTED]lue": "[REDACTED]",
++  });
++  expect(event.payload.question).toBe("[REDACTED]");
 +});
 +
 +it("rechecks the initiating credential at acceptance before the idle revocation poll", async () => {
@@ -1018,3 +1094,72 @@ index 0000000..14a2516
 +    await f.close();
 +  }
 +});
+diff --git a/packages/core/src/model/run.ts b/packages/core/src/model/run.ts
+index bae5c97..8f0e01a 100644
+--- a/packages/core/src/model/run.ts
++++ b/packages/core/src/model/run.ts
+@@ -212,6 +212,14 @@ export function toGateOption(option: GateOptionInput): GateOption {
+ 
+ export const GateOptionSchema = z.union([z.string().transform(toGateOption), GateOptionObjectSchema]);
+ 
++/** Runtime correlation only; these four identifiers survive protected public projection. */
++export const HumanInputLiveIdentitySchema = z.object({
++  instanceId: z.string().min(1),
++  sessionId: z.string().min(1),
++  turnId: z.string().min(1),
++  invocationId: z.string().min(1),
++});
++
+ export const HumanInputRequestSchema = z.object({
+   id: z.string(),
+   runId: z.string(),
+@@ -220,6 +228,7 @@ export const HumanInputRequestSchema = z.object({
+   question: z.string(),
+   options: z.array(GateOptionSchema).default([]),
+   context: z.record(z.string(), z.unknown()).default({}),
++  liveDecision: HumanInputLiveIdentitySchema.optional(),
+   answer: z.string().optional(),
+   requestedAt: z.string(),
+   answeredAt: z.string().optional(),
+diff --git a/packages/core/src/events/reduce.ts b/packages/core/src/events/reduce.ts
+index b351227..61b214c 100644
+--- a/packages/core/src/events/reduce.ts
++++ b/packages/core/src/events/reduce.ts
+@@ -218,6 +218,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
+         question: e.payload.question,
+         options: e.payload.options,
+         context: e.payload.context,
++        ...(e.payload.liveDecision ? { liveDecision: e.payload.liveDecision } : {}),
+         requestedAt: e.at,
+       };
+       state.humanInputs[r.id] = r;
+diff --git a/packages/store/src/protected-event-store.ts b/packages/store/src/protected-event-store.ts
+index 903a208..7eb5900 100644
+--- a/packages/store/src/protected-event-store.ts
++++ b/packages/store/src/protected-event-store.ts
+@@ -1,6 +1,13 @@
+ /** Public event facade: save secret-bearing originals privately before publishing a scrubbed durable event. */
+ import { randomUUID } from "node:crypto";
+-import { OrcaError, sensitiveInputNames, OrcaEventSchema, type OrcaEvent, type OrcaEventInput } from "@orca/core";
++import {
++  OrcaError,
++  sensitiveInputNames,
++  OrcaEventSchema,
++  HumanInputLiveIdentitySchema,
++  type OrcaEvent,
++  type OrcaEventInput,
++} from "@orca/core";
+ import type { WorkflowVersionStore } from "./workflow-store.js";
+ import type { EventFilter, EventListener, EventRange, EventStore } from "./event-store.js";
+ import { publicInputVars, redactExecutionValue, unavailable, type ExecutionStore } from "./execution-store.js";
+@@ -122,6 +129,10 @@ export class ProtectedEventStore implements EventStore {
+     }
+     if (input.type === "human.requested") {
+       publicPayload.kind = input.payload.kind;
++      // Only the typed runtime identity is structural. Never restore arbitrary
++      // context (including context.liveDecision) or extra properties from this object.
++      if (input.payload.liveDecision)
++        publicPayload.liveDecision = HumanInputLiveIdentitySchema.parse(input.payload.liveDecision);
+       if (input.payload.agent) publicPayload.agent = input.payload.agent;
+       const options = publicPayload.options as Record<string, unknown>[];
+       input.payload.options.forEach((option, index) => {

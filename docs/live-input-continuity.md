@@ -23,6 +23,11 @@ Turn/invocation IDs are newly allocated even when the agent reuses its tool-call
 ID. Identity is correlation, never authority. Config changes and client target
 switches cannot replace or settle it.
 
+The event and reduced request carry the four live identifiers in the typed
+`liveDecision` field, outside free-form `context`. Protected projection preserves
+only those four structural fields; context lookalikes, extra properties and
+ordinary secret-bearing text retain their existing redaction rules.
+
 The interpreter remains attached and its existing lease keeper renews normally.
 A live answer uses `RunContext.withOwnership` and `emitOwned` under the existing
 lease mutex; it never acquires a second answer lease or starts another
@@ -35,6 +40,13 @@ the owner mutex. The callback's exact identity and offered option must match.
 Only one responder can claim it. `human.answered` records the verified actor before
 any standing write or callback delivery. A duplicate, stale, wrong-generation,
 unauthorized, expired or owner-unavailable response never writes policy.
+
+The offered live choices contain only ACP `allow_once` and `reject_once` options.
+Agent-side remembered options (`allow_always` and `reject_always`) are not offered
+or accepted, even if their IDs are guessed. ORCA's explicit standing-rule action
+remains a separate authorized write. Acceptance also rechecks the initiating
+actor's execution authority inside the original lease mutex; the background poll
+continues to expire idle asks when no responder arrives.
 
 Standing rules require distinct `permissions.grant` authority. Their write occurs
 after accepted input under the same lease. Failure reports `answerRecorded: true`
@@ -147,6 +159,13 @@ Real application smoke and cross-platform checks must run at the final combined
 head as required by the frozen contract. No completion percentage, ETA or agent
 cost is introduced.
 
+The PR review also identified a required combined UI check: an already-connected
+Attention/inline permission card must be invalidated on callback timeout,
+owner/agent death and execution-authority revocation, without requiring a
+reconnect. Expiration does not emit `input.answered`, so the integration must
+provide an expiry/invalidation path and test that the card stops offering answers.
+The feature slice and its current reserved patch do not claim this UI gate passes.
+
 Verification on this implementation (2026-10-02): the unpatched feature tree
 passed `pnpm test` (198 files, 2,386 tests; one skipped), `typecheck`, `lint`,
 `format:check`, `design:check` and `build`. The final integration patch passed
@@ -161,3 +180,14 @@ That regression was fixed by recording continuity on `agent.session.opened` and
 its test passes in the final focused run. The full combined suite is not claimed
 as passing. App smoke is not executed here; it remains required at the combined
 production-wired head.
+
+PR #383 review corrections: automatic upstream fallback no longer answers an
+already-open durable gate after disconnect or target replacement; unbound runs
+retain their fallback. The revised reserved patch rejects agent-remembered
+options, checks execution authority at acceptance, and preserves typed live
+identity through protected storage. Its focused regression suite passed 63 tests
+across six files, including HTTP/WebSocket remembered-option refusals, immediate
+credential revocation before polling, and protected projection with a one-character
+secret. Typecheck passed on the applied patch. The revised feature tree passed
+the full suite (2,387 tests passed, one skipped), typecheck, lint and format check.
+These results do not replace the combined-suite and App smoke requirements above.
