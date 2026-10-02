@@ -27,6 +27,9 @@ export const RequestSourceSchema = z.discriminatedUnion("kind", [
 ]);
 export type RequestSource = z.infer<typeof RequestSourceSchema>;
 
+/** Internal launch correlation, never a caller-controlled submission variable or authority. */
+export const SUBMISSION_CORRELATION_VAR = "__orcaAdmissionId";
+
 /** A new Request, never a caller-selected association or execution identity. */
 export const SubmissionCommandSchema = z.strictObject({
   title: z.string().trim().min(1),
@@ -39,8 +42,8 @@ export const SubmissionCommandSchema = z.strictObject({
   expectedConfigGeneration: z.string().min(1).optional(),
   vars: z
     .record(z.string(), z.unknown())
-    .refine((vars) => !Object.hasOwn(vars, "request"), {
-      message: "request is supplied by the submission service",
+    .refine((vars) => !Object.hasOwn(vars, "request") && !Object.hasOwn(vars, SUBMISSION_CORRELATION_VAR), {
+      message: "request and admission correlation are supplied by the submission service",
     })
     .optional(),
   overrides: RunOverridesSchema.optional(),

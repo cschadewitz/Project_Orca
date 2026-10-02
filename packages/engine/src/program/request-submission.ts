@@ -1,11 +1,12 @@
 /** One durable admission lifecycle; client retry keys deliberately belong to #331. */
 import { randomUUID } from "node:crypto";
-import { redactExecutionValue } from "@orca/store";
+import { executionEvents, redactExecutionValue } from "@orca/store";
 import {
   newId,
   OrcaError,
   RequestSchema,
   SubmissionCommandSchema,
+  SUBMISSION_CORRELATION_VAR,
   type Request,
   type SubmissionAuthority,
   type SubmissionCommand,
@@ -74,7 +75,7 @@ export class RequestSubmissionService implements SubmissionService {
       createdAt: this.opts.orchestrator.clock.isoNow(),
       updatedAt: this.opts.orchestrator.clock.isoNow(),
     });
-    const options = this.options(command, request, authority);
+    const options = this.options(command, request, authority, id);
     await captured.validateStartRun(options);
     await authority.authorize(resolved);
     const record: Admission = {
@@ -88,6 +89,7 @@ export class RequestSubmissionService implements SubmissionService {
       generationId: captured.generationId,
       createdAt: request.createdAt,
       state: "prepared",
+      correlationVersion: 1,
     };
     // Seal first. The discoverable index never contains title/body, vars, source or overrides.
     // Reuse protected-execution-v2 key handling and immutable authenticated records.
@@ -175,6 +177,7 @@ export class RequestSubmissionService implements SubmissionService {
       admission.data.workspaceId !== record.workspaceId ||
       admission.data.principalId !== record.principalId ||
       admission.data.generationId !== record.generationId ||
+      admission.data.correlationVersion !== record.correlationVersion ||
       admission.data.workflowRevision !== record.workflowRevision ||
       sealed.workflowId !== record.workflowId ||
       sealed.workflowVersion !== record.workflowVersion
@@ -183,13 +186,67 @@ export class RequestSubmissionService implements SubmissionService {
     return { command: command.data, request: request.data };
   }
 
-  private options(command: SubmissionCommand, request: Request, authority: SubmissionAuthority): BoundLaunchOptions {
+  private options(
+    command: SubmissionCommand,
+    request: Request,
+    authority: SubmissionAuthority,
+    admissionId: string,
+  ): BoundLaunchOptions {
     return {
       requestId: request.id,
-      vars: { ...command.vars, request },
+      vars: { ...command.vars, request, [SUBMISSION_CORRELATION_VAR]: admissionId },
       actor: authority.actor,
       ...(command.overrides ? { overrides: command.overrides } : {}),
     };
+  }
+
+  /** Request associations are many-to-one; only the admission's program root is recoverable here. */
+  private async findRoot(record: Admission): Promise<string | undefined> {
+    const orc = this.opts.orchestrator;
+    const request = await orc.stores.requests.get(record.requestId);
+    if (record.runId && request?.programRunId && record.runId !== request.programRunId) throw unavailable();
+    const recorded = record.runId ?? request?.programRunId;
+    const readRoot = async (runId: string) => {
+      const first = (await orc.stores.events.readRange(runId, { limit: 1 }))[0];
+      if (!first || first.type !== "run.created") throw unavailable();
+      // The correlation can coincide with a sensitive value. Recovery reads the sealed
+      // original, never treats a redacted public variable as absence of a durable root.
+      const [original] = await executionEvents([first], orc.stores.execution);
+      if (original?.type !== "run.created") throw unavailable();
+      return original.payload;
+    };
+    const verify = (root: Awaited<ReturnType<typeof readRoot>>) => {
+      if (
+        root.requestId !== record.requestId ||
+        root.parentRunId ||
+        root.workflowId !== record.workflowId ||
+        root.workflowVersion !== record.workflowVersion ||
+        root.actor?.principalId !== record.principalId ||
+        (record.correlationVersion === 1 && root.vars[SUBMISSION_CORRELATION_VAR] !== record.id)
+      )
+        throw unavailable();
+    };
+    if (recorded) {
+      verify(await readRoot(recorded));
+      return recorded;
+    }
+    // Old incomplete admissions have no unambiguous correlation. Fail closed rather than
+    // guessing which associated run was the root or launching a duplicate.
+    if (record.correlationVersion !== 1) throw unavailable();
+    const roots: string[] = [];
+    for (const runId of await orc.listRuns()) {
+      const root = await readRoot(runId);
+      if (
+        root.parentRunId ||
+        root.requestId !== record.requestId ||
+        root.vars[SUBMISSION_CORRELATION_VAR] !== record.id
+      )
+        continue;
+      verify(root);
+      roots.push(runId);
+    }
+    if (roots.length > 1) throw unavailable();
+    return roots[0];
   }
 
   private async admit(
@@ -202,27 +259,7 @@ export class RequestSubmissionService implements SubmissionService {
     const { orchestrator: orc, admissions } = this.opts;
     let current = record;
     try {
-      // Search even when the preceding process died after run.created but before saving runId.
-      // An unreadable log is not proof of absence; propagate it, never create a replacement.
-      const roots: string[] = [];
-      for (const runId of await orc.listRuns()) {
-        const first = (await orc.stores.events.readRange(runId, { limit: 1 }))[0];
-        if (
-          first?.type === "run.created" &&
-          first.payload.requestId === record.requestId &&
-          !first.payload.parentRunId
-        ) {
-          if (
-            first.payload.workflowId !== record.workflowId ||
-            first.payload.workflowVersion !== record.workflowVersion ||
-            first.payload.actor?.principalId !== record.principalId
-          )
-            throw unavailable();
-          roots.push(runId);
-        }
-      }
-      if (roots.length > 1 || (record.runId && roots[0] !== record.runId)) throw unavailable();
-      let runId = roots[0];
+      let runId = await this.findRoot(record);
       await authority.authorize({ ...command, workflowId: record.workflowId });
       if (!runId) {
         const launch =
@@ -241,7 +278,7 @@ export class RequestSubmissionService implements SubmissionService {
           launch.workflow.revision !== record.workflowRevision
         )
           throw unavailable();
-        const options = this.options(command, request, authority);
+        const options = this.options(command, request, authority, record.id);
         await launch.validateStartRun(options);
         // Request persistence is retried only before a root exists; never overwrite settlement.
         // Until startRun has persisted its authoritative sensitivity overlay we cannot know

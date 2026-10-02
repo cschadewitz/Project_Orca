@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OrcaError, type SubmissionCommand } from "@orca/core";
+import { OrcaError, parseWorkflow, SUBMISSION_CORRELATION_VAR, type SubmissionCommand } from "@orca/core";
 import { fileStores } from "@orca/store";
 import { ProgramService } from "@orca/engine";
 import { RequestSubmissionService } from "../src/program/request-submission.js";
@@ -41,6 +41,7 @@ it("admits linked, owned work without executing it; explicit runs remain Request
 it.each([
   { title: "" },
   { vars: { request: { id: "forged" } } },
+  { vars: { [SUBMISSION_CORRELATION_VAR]: "forged" } },
   { requestId: "missing" },
   { workItemId: "missing" },
   { principalId: "other" },
@@ -335,4 +336,77 @@ it.each(["submitAndRun", "split CLI"])("rechecks authority after acceptance befo
   const [record] = await f.admissions.records.list();
   expect(record?.state).toBe("accepted");
   expect((await f.stores.events.read(record!.runId!)).map((event) => event.type)).toEqual(["run.created"]);
+});
+
+it.each(["recorded", "request-link", "neither-link"])(
+  "recovers the original root with %s while other direct runs share its Request",
+  async (links) => {
+    const f = submissionFixture();
+    f.orc.workflows.register(
+      parseWorkflow(`id: direct-followup\nname: Followup\nstart: e\nnodes: { e: { type: end } }\nedges: []`),
+    );
+    const start = f.orc.startRun.bind(f.orc);
+    let rootId: string | undefined;
+    if (links === "neither-link") {
+      vi.spyOn(f.orc, "startRun").mockImplementationOnce(async (options) => {
+        rootId = await start(options);
+        throw new Error("crash after run.created");
+      });
+    }
+    const initial = await f.service.submit(command, f.authority);
+    const record = (await f.admissions.records.get(initial.admissionId))!;
+    rootId ??= record.runId;
+    if (links === "request-link") {
+      const { runId: _runId, ...withoutRoot } = record;
+      await f.admissions.records.put(withoutRoot);
+    }
+    // Both a different workflow and another invocation of the same one are valid associations.
+    for (const workflowId of ["direct-followup", "program"])
+      await start({ workflowId, requestId: initial.requestId, actor: f.authority.actor });
+    const recovered = await f.service.reconcile(initial.admissionId, f.authority);
+    expect(recovered).toEqual({
+      state: "accepted",
+      admissionId: initial.admissionId,
+      requestId: initial.requestId,
+      runId: rootId,
+    });
+    expect((await f.stores.requests.get(initial.requestId))?.programRunId).toBe(rootId);
+    expect(await f.orc.listRuns()).toHaveLength(3);
+  },
+);
+
+it("recovers an unlinked root using protected correlation after file-store restart", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orca-root-correlation-"));
+  dirs.push(dir);
+  const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
+  const start = f.orc.startRun.bind(f.orc);
+  let rootId = "";
+  vi.spyOn(f.orc, "startRun").mockImplementationOnce(async (options) => {
+    // A sensitive value can match the correlation: public vars must not drive recovery.
+    rootId = await start({ ...options, vars: { ...options.vars, token: options.vars![SUBMISSION_CORRELATION_VAR] } });
+    throw new Error("crash after root publication");
+  });
+  const initial = await f.service.submit(command, f.authority);
+  expect(initial.state).toBe("recoverable-failure");
+  const [created] = await f.stores.events.read(rootId);
+  expect(created).toMatchObject({ payload: { vars: { [SUBMISSION_CORRELATION_VAR]: "[REDACTED]" } } });
+  await start({ workflowId: "program", requestId: initial.requestId, actor: f.authority.actor });
+  const reopened = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
+  expect(await reopened.service.reconcile(initial.admissionId, reopened.authority)).toMatchObject({
+    state: "accepted",
+    runId: rootId,
+  });
+  expect(await reopened.orc.listRuns()).toHaveLength(2);
+});
+
+it("never replaces a recorded root whose protected inputs are missing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orca-root-missing-inputs-"));
+  dirs.push(dir);
+  const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
+  const initial = await f.service.submit(command, f.authority);
+  if (initial.state !== "accepted") throw new Error("not accepted");
+  await rm(join(dir, "private-execution", `${encodeURIComponent(initial.runId)}.inputs.json`));
+  const reopened = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
+  expect((await reopened.service.reconcile(initial.admissionId, reopened.authority)).state).toBe("recoverable-failure");
+  expect(await reopened.orc.listRuns()).toEqual([initial.runId]);
 });

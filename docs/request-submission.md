@@ -22,7 +22,7 @@ Program item-workflow defaults must also be seeded by that generation's bound ca
 not by a mutable configuration read after capture.
 
 Caller-selected `requestId`, `workItemId`, `programRunId`, `admissionId`, `actor`,
-`principalId` and `vars.request` are rejected. This contract submits **new** Requests;
+`principalId`, `vars.request` and `vars.__orcaAdmissionId` are rejected. This contract submits **new** Requests;
 it does not attach a new program root to arbitrary existing documents. The shared
 orchestrator patch separately validates associations on explicit `runs.start`: missing
 Requests, missing work items, missing work-item Requests and mismatched pairs fail before
@@ -97,14 +97,20 @@ accepted root for execution. No command values can be replaced during recovery.
 | Before durable index publication | No Request or run; an unreferenced encrypted record may remain | No work was accepted; submitting anew is safe only after inspecting for an uncertain index write |
 | Index written, Request absent | `prepared` index and protected original input | Restore the Request, then admit |
 | Request written, root absent | Index and provisional Request | Restore the same generation/version/digest; create its root |
-| Root written, ID/link absent | `run.created` names the unique server-owned Request | Find that root, restore ownership/link; never create another |
+| Root written, ID/link absent | `run.created` retains the service-injected admission correlation | Find that root, restore ownership/link; never create another |
 | Ownership/link/acceptance write fails | Existing root and admission correlation | Repeat durable ownership/link writes; preserve original IDs |
 | Accepted, worker never starts/client disconnects | Durable accepted IDs and ownership | Inspect/read, then reconcile or use authorized run resumption |
 
 A per-admission file mutex serializes the **entire** recovery sequence across processes.
-The engine run log is scanned before any new root is created. An unreadable/ambiguous
-scan or multiple associated roots fails closed. Scanning is linear in the number of
-runs; there is no second client retry index. Missing/corrupt protected material is a
+A recorded admission run ID (or the Request's program root link) is verified directly.
+Other top-level runs may legitimately associate with the same Request, even with the
+same workflow, without becoming candidates for that admission. When neither link survived,
+recovery scans for the service-injected `vars.__orcaAdmissionId`, using protected original
+payloads when the public value was redacted. That marker is correlation, not authority.
+An unreadable/ambiguous scan or multiple roots carrying that exact correlation fails closed.
+Older incomplete admissions without the correlation version require explicit repair when
+both root links are missing; recovery never guesses or silently creates a replacement.
+Scanning in the missing-link case is linear in the number of runs; there is no second client retry index. Missing/corrupt protected material is a
 `RUN_STATE` refusal. If the original generation cannot be captured after restart,
 reconciliation remains recoverable; it never silently chooses the latest configuration.
 Restoring generation material is the #332 provider's responsibility.

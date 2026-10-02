@@ -15,6 +15,8 @@ export const AdmissionSchema = z.object({
   workflowRevision: z.string(),
   generationId: z.string(),
   createdAt: z.string(),
+  /** Absent only on admissions prepared before explicit root correlation was introduced. */
+  correlationVersion: z.literal(1).optional(),
   state: z.enum(["prepared", "accepted", "recoverable-failure"]),
   runId: z.string().optional(),
 });
