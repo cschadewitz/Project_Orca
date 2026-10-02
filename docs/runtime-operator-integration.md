@@ -264,3 +264,47 @@ on Node 22 and Node 24. The unchanged original reproduction against the correcte
 compiled engine refuses replacement with `RUN_STATE` / `revision-publication-uncertain`
 and the original operation correlation before any second send. This is implementation
 and regression evidence; independent re-review is still open.
+
+## Native acceptance and Windows synchronization correction
+
+On `aaad75db105f6392d8cf7f9c40be955f9b2d3a86`, CI #365 passed both supported
+Node versions, including coverage/build/compiled smoke. App smoke #76 verified
+that exact checkout and workflow definition: functional smoke passed 24/24, and
+all three platform type proofs passed 6/6. Native encrypted restart acceptance
+failed before it was established. macOS reported readiness and encryption
+availability but failed literal profile-path equality; its second test failed in
+full demo setup. Windows failed during demo Request admission before Electron.
+None of those failures proves encryption unavailable.
+
+The dedicated native fixture now uses one agent-free start/end workflow served
+by the real compiled daemon, with real credentials, stores, direct admission and
+receipt inspection. It avoids unrelated demo/ACP prerequisites without replacing
+the production admission path. Profile checks compare canonical paths and physical
+directory identity, report separate sanitized booleans, and keep actual encryption
+and full-process restart mandatory. A real ownership persistence probe reports
+only a stage and allowlisted error code on failure, never paths, credentials or
+file contents. Native execution of this correction remains required.
+
+Windows `FlushFileBuffers` requires a write-capable handle
+([Microsoft API contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers));
+[libuv forwards that operation](https://github.com/libuv/libuv/blob/v1.x/src/win/fs.c#L2186).
+Ownership publication
+and existing-marker synchronization previously opened a read-only handle before
+fsync. Their Windows path now uses non-creating, non-truncating `r+` solely to
+synchronize; other platforms retain `r`. Locks, validation, sync failures and
+missing-marker refusal remain unchanged. Synchronization writes no content and
+creates no absent record. This does not add Windows directory-entry power-loss
+guarantees or change store permissions. The ownership implementation predates
+this integration: its original blob `e6852109f14955e87262b48d98798e1091693817`
+matches frozen base `9058fa8935ae4c999293727c005031eec93114be`. The original
+Windows demo's swallowed exception remains unobserved, so the observed API
+incompatibility is not presented as a confirmed diagnosis of that exception.
+
+A separate deterministic reproduction confirms a pre-existing lost-update defect
+in the scripted demo agent's shared counter file: concurrent instances can
+replace a newer test-report count with an older snapshot, making a later report
+repeat its initial false result. Source blob `b9b14987e7b49eae4b40663d70caab17e3e5c2c0`
+also matches the frozen base. This is consistent with the macOS demo's repeated
+false reports, but retained CI counter state is unavailable and the specific run's
+cause is unproven. The helper is unchanged; its defect is separate from native
+acceptance and is not resolved by fixture isolation.

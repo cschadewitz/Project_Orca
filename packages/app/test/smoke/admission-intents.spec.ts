@@ -2,17 +2,22 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RunsListResultSchema } from "@orca/protocol";
 import type { OrcaBridge } from "../../src/bridge.js";
-import { FIXTURE, startDemoDaemon, type Daemon } from "./daemon.js";
+import {
+  ADMISSION_WORKFLOW,
+  profileDirectoryEvidence,
+  startAdmissionDaemon,
+  type AdmissionDaemon,
+} from "./admission-daemon.js";
 
 const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const clientModule = join(appDir, "dist/client/daemon-client.js");
-const workflowId = FIXTURE.failure.workflowId;
+const workflowId = ADMISSION_WORKFLOW;
 const phaseTimeout = 30_000;
 
 interface IntentWindow {
@@ -80,7 +85,7 @@ async function closeApp(app: ElectronApplication, requireGraceful = false): Prom
     );
 }
 
-async function launch(daemon: Daemon, profile: string): Promise<{ app: ElectronApplication; page: Page }> {
+async function launch(daemon: AdmissionDaemon, profile: string): Promise<{ app: ElectronApplication; page: Page }> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && !["ELECTRON_RUN_AS_NODE", "ORCA_RENDERER_URL", "ORCA_DAEMON_TOKEN"].includes(key))
@@ -169,27 +174,27 @@ async function observation(app: ElectronApplication): Promise<Observation> {
 }
 
 async function storageStatus(app: ElectronApplication, profile: string) {
-  return bounded(
-    app.evaluate(
-      ({ app, safeStorage }, expectedProfile) => ({
-        platform: process.platform,
-        electronVersion: process.versions.electron,
-        ready: app.isReady(),
-        sameProfile: app.getPath("userData") === expectedProfile,
-        encryptionAvailable: safeStorage.isEncryptionAvailable(),
-        // This API is Linux-only; the provider label below is explicitly platform-derived.
-        selectedStorageBackend: process.platform === "linux" ? safeStorage.getSelectedStorageBackend() : null,
-        platformProvider:
-          process.platform === "darwin"
-            ? "macOS Keychain"
-            : process.platform === "win32"
-              ? "Windows DPAPI"
-              : "Linux secret service",
-      }),
-      profile,
-    ),
+  const { userDataPath, ...status } = await bounded(
+    app.evaluate(({ app, safeStorage }) => ({
+      platform: process.platform,
+      electronVersion: process.versions.electron,
+      ready: app.isReady(),
+      userDataPath: app.getPath("userData"),
+      encryptionAvailable: safeStorage.isEncryptionAvailable(),
+      // This API is Linux-only; the provider label below is explicitly platform-derived.
+      selectedStorageBackend: process.platform === "linux" ? safeStorage.getSelectedStorageBackend() : null,
+      platformProvider:
+        process.platform === "darwin"
+          ? "macOS Keychain"
+          : process.platform === "win32"
+            ? "Windows DPAPI"
+            : "Linux secret service",
+    })),
     "querying native safeStorage",
   );
+  // Chromium canonicalizes its profile path. Compare the actual main-process path
+  // with the requested physical directory, then discard both path strings from evidence.
+  return { ...status, ...profileDirectoryEvidence(profile, userDataPath) };
 }
 
 async function journalEvidence(profile: string, knownPublicStrings: string[]) {
@@ -209,7 +214,7 @@ async function journalEvidence(profile: string, knownPublicStrings: string[]) {
   };
 }
 
-async function runIds(daemon: Daemon): Promise<string[]> {
+async function runIds(daemon: AdmissionDaemon): Promise<string[]> {
   const ids: string[] = [];
   for (;;) {
     const page = RunsListResultSchema.parse(await daemon.rpc("runs.list", { offset: ids.length, limit: 100 }));
@@ -234,7 +239,7 @@ async function finish(
   name: string,
   evidence: Record<string, unknown>,
   app: ElectronApplication | undefined,
-  daemon: Daemon | undefined,
+  daemon: AdmissionDaemon | undefined,
   profile: string,
 ): Promise<void> {
   try {
@@ -256,22 +261,32 @@ async function finish(
 }
 
 test("native encrypted intent recovers one server admission after a complete Electron restart", async () => {
-  const profile = await mkdtemp(join(tmpdir(), "orca-native-intent-"));
+  const requestedProfile = await mkdtemp(join(tmpdir(), "orca-native-intent-"));
+  const profile = await realpath(requestedProfile);
   const evidence: Record<string, unknown> = {
     encryption: "unmodified Electron safeStorage",
     restart: "full process exit and relaunch",
+    profileInputWasCanonical: requestedProfile === profile,
+    daemonFixture: "real CLI serve; agent-free start-to-end workflow",
   };
-  let daemon: Daemon | undefined;
+  let daemon: AdmissionDaemon | undefined;
   let app: ElectronApplication | undefined;
   try {
-    daemon = await startDemoDaemon();
+    daemon = await startAdmissionDaemon((probe) => {
+      evidence.ownershipProbe = probe;
+    });
     const before = await runIds(daemon);
     let launched = await launch(daemon, profile);
     app = launched.app;
     const firstPid = app.process().pid;
     const firstStorage = await storageStatus(app, profile);
     evidence.firstStorage = firstStorage;
-    expect(firstStorage.ready && firstStorage.sameProfile).toBe(true);
+    expect(firstStorage.ready, "Electron must be ready before native acceptance").toBe(true);
+    expect(firstStorage.canonicalProfileMatches, "Electron must use the requested canonical profile").toBe(true);
+    expect(firstStorage.directoryIdentityAvailable, "A meaningful filesystem directory identity is required").toBe(
+      true,
+    );
+    expect(firstStorage.sameDirectoryIdentity, "Electron must use the same physical profile directory").toBe(true);
     expect(
       firstStorage.encryptionAvailable,
       "Native secure storage is unavailable; positive acceptance is blocked, never skipped",
@@ -312,7 +327,11 @@ test("native encrypted intent recovers one server admission after a complete Ele
     expect(evidence.newProcess).toBe(true);
     const secondStorage = await storageStatus(app, profile);
     evidence.secondStorage = secondStorage;
-    expect(secondStorage.ready && secondStorage.sameProfile && secondStorage.encryptionAvailable).toBe(true);
+    expect(secondStorage.ready).toBe(true);
+    expect(secondStorage.canonicalProfileMatches).toBe(true);
+    expect(secondStorage.directoryIdentityAvailable).toBe(true);
+    expect(secondStorage.sameDirectoryIdentity).toBe(true);
+    expect(secondStorage.encryptionAvailable).toBe(true);
     expect(secondStorage.selectedStorageBackend).not.toBe("basic_text");
     const reopened = await bounded(
       launched.page.evaluate(() => (window as unknown as IntentWindow).orca.admissionIntents!.list()),
@@ -344,14 +363,17 @@ test("native encrypted intent recovers one server admission after a complete Ele
 });
 
 test("actual app refuses admission when the availability check is false", async () => {
-  const profile = await mkdtemp(join(tmpdir(), "orca-unavailable-intent-"));
+  const profile = await realpath(await mkdtemp(join(tmpdir(), "orca-unavailable-intent-")));
   const evidence: Record<string, unknown> = {
     negativeFault: "process-local availability-only injection; no OS settings changed",
+    daemonFixture: "real CLI serve; agent-free start-to-end workflow",
   };
-  let daemon: Daemon | undefined;
+  let daemon: AdmissionDaemon | undefined;
   let app: ElectronApplication | undefined;
   try {
-    daemon = await startDemoDaemon();
+    daemon = await startAdmissionDaemon((probe) => {
+      evidence.ownershipProbe = probe;
+    });
     const before = await runIds(daemon);
     const launched = await launch(daemon, profile);
     app = launched.app;
@@ -364,6 +386,13 @@ test("actual app refuses admission when the availability check is false", async 
       }),
       "injecting unavailable storage in the disposable process",
     );
+    const negativeStorage = await storageStatus(app, profile);
+    evidence.storageAfterFault = negativeStorage;
+    expect(negativeStorage.ready).toBe(true);
+    expect(negativeStorage.canonicalProfileMatches).toBe(true);
+    expect(negativeStorage.directoryIdentityAvailable).toBe(true);
+    expect(negativeStorage.sameDirectoryIdentity).toBe(true);
+    expect(negativeStorage.encryptionAvailable).toBe(false);
     const result = await bounded(
       launched.page.evaluate((id) => (window as unknown as IntentWindow).orca.admissionIntents!.start(id), workflowId),
       "checking unavailable-storage refusal",

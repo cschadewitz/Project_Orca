@@ -485,13 +485,29 @@ the measured width of the declared glyphs — if it does not, the faces were nev
 ### Native encrypted admission-intent acceptance
 
 `pnpm run build && pnpm run app:admission-intents` runs the production Electron app and
-built authenticated daemon with disposable data. It starts a run through the real preload
+built authenticated daemon with disposable data. Its dedicated `admission-daemon.ts` fixture
+starts the real CLI's `serve` command over one agent-free start-to-end workflow. It does not
+depend on the separate `orca demo` program, scripted agents or request-submission seeding;
+failures in those broader demo paths are independent failures, not fixed by this fixture.
+Before starting the daemon, a separate synthetic ownership file exercises the real compiled
+`OwnershipStore.record` and `flush` methods. Its evidence contains only a passed stage or an
+allowlisted errno from `lastError` (otherwise `UNKNOWN`), never a raw cause, message or path.
+This identifies persistence failures in the current native run; it does not establish the
+cause of an earlier demo-seeding failure.
+It starts a run through the real preload
 bridge and `operator.discover`, closes the entire Electron process, then reopens the same
 profile and recovers the same retained intent and server admission. Native Electron
 `safeStorage` encryption and decryption are never substituted in the positive test. Public
 receipt identifiers, an authenticated `admissions.get` read and the server run count establish
 that replay recovers the original work. This covers restart after acceptance; it does not
 claim a separate crash-before-acknowledgement test.
+
+The temporary profile is canonicalized before Electron starts. On each process, the test
+requires matching canonical paths and matching, meaningful filesystem directory identities;
+raw string equality is recorded separately because platform path aliases can spell the same
+directory differently. Readiness, profile identity and native encryption are separate
+assertions. Missing/unreliable directory identity never counts as a match. Reports contain
+only these comparison booleans, not absolute profile paths or directory contents.
 
 The `admission-intents` Playwright project runs on the existing macOS and Windows type-proof
 runners in `app-smoke.yml`, after the independent type-proof report is uploaded. It needs a

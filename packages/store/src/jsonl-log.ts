@@ -222,8 +222,10 @@ export class JsonlLogDir {
       withFileLock(
         `${this.file(key)}.lock`,
         async () => {
-          // Do not initialize the directory or use a creating/write-capable file mode.
-          const handle = await open(this.file(key), "r");
+          // Do not initialize the directory or create/truncate a missing marker.
+          // Windows FlushFileBuffers requires a writable handle, but r+ does not
+          // create or truncate a file and this confirmation never writes through it.
+          const handle = await open(this.file(key), process.platform === "win32" ? "r+" : "r");
           try {
             const bytes = await handle.readFile();
             if (bytes.length > 0 && bytes[bytes.length - 1] !== NEWLINE)

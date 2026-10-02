@@ -50,7 +50,9 @@ export class OwnershipStore {
             if (current.get(change.runId) === change.principalId) current.delete(change.runId);
           } else if (!current.has(change.runId)) current.set(change.runId, change.principalId);
           writePrivateFile(file, `${JSON.stringify({ version: 1, runs: Object.fromEntries(current) })}\n`);
-          const fd = openSync(file, "r");
+          // Windows FlushFileBuffers requires a writable handle. r+ neither creates
+          // nor truncates the ownership file; this handle only synchronizes it.
+          const fd = openSync(file, process.platform === "win32" ? "r+" : "r");
           try {
             fsyncSync(fd);
           } finally {
