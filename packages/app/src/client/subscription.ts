@@ -30,6 +30,7 @@ import {
   type SubscribeParams,
 } from "@orca/protocol";
 
+import type { DaemonIdentity } from "../daemon-connection.js";
 import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
 
 /** What the subscription needs of an open connection. */
@@ -101,6 +102,7 @@ export interface DaemonSubscriptionOptions {
   onState?: ((state: SubscriptionState, retries: RetryCount) => void) | undefined;
   socket?: SocketFactory | undefined;
   backoffMs?: readonly number[] | undefined;
+  verify?: () => Promise<DaemonIdentity | undefined>;
   auth?: { tokens: DaemonTokenSource; verify: () => Promise<void> };
 }
 
@@ -120,6 +122,9 @@ export class DaemonSubscription {
   private done = false;
   private authRetried = false;
   private epoch = 0;
+  private identity: DaemonIdentity | undefined;
+  private verified = false;
+  private resetCursor = false;
 
   constructor(opts: DaemonSubscriptionOptions) {
     this.opts = opts;
@@ -168,10 +173,24 @@ export class DaemonSubscription {
   private connect(): void {
     if (this.done) return;
     const epoch = ++this.epoch;
-    if (this.opts.auth) {
-      void this.opts.auth.verify().then(
-        () => {
-          if (!this.done && this.epoch === epoch) this.openSocket(epoch);
+    const verify = this.opts.verify ?? this.opts.auth?.verify;
+    if (verify) {
+      void verify().then(
+        (identity) => {
+          if (this.done || this.epoch !== epoch) return;
+          if (
+            this.verified &&
+            (!identity ||
+              !this.identity ||
+              identity.workspaceId !== this.identity.workspaceId ||
+              identity.instanceId !== this.identity.instanceId)
+          ) {
+            this.cursor = undefined;
+            this.resetCursor = true;
+          }
+          this.identity = identity || undefined;
+          this.verified = true;
+          this.openSocket(epoch);
         },
         (error: unknown) => {
           if (this.done || this.epoch !== epoch) return;
@@ -231,10 +250,10 @@ export class DaemonSubscription {
     this.pendingSubscribe = ++this.requestId;
     // Resume where the stream got to. A cursor is a sequence number within one run, so it
     // only goes out when the subscription is for one run (the protocol refuses it otherwise).
+    const base = { ...this.opts.params };
+    if (this.resetCursor) delete base.since;
     const params: SubscribeParams =
-      this.opts.params.runId !== undefined && this.cursor !== undefined
-        ? { ...this.opts.params, since: this.cursor }
-        : this.opts.params;
+      this.opts.params.runId !== undefined && this.cursor !== undefined ? { ...base, since: this.cursor } : base;
     this.handle?.send(JSON.stringify({ kind: "request", id: this.pendingSubscribe, method: SUBSCRIBE_METHOD, params }));
   }
 

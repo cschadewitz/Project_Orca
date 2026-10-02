@@ -7,6 +7,7 @@
  * without a bundler and cannot resolve `zod`.
  */
 import { z } from "zod";
+import { daemonEndpoint } from "../daemon-connection.js";
 import type { Density, ThemeId } from "@orca/design";
 
 /** `system` follows the OS; the two named themes are the ones `tokens.css` declares. */
@@ -82,7 +83,16 @@ export const PaneSizeSchema = z
     message: "a pane size is a whole number of px, or a fraction of its container below 1",
   });
 
+const DaemonUrlSchema = z.string().refine((value) => {
+  try {
+    return daemonEndpoint(value) === value;
+  } catch {
+    return false;
+  }
+}, "Invalid daemon endpoint");
+
 export const PreferencesSchema = z.object({
+  daemonUrl: DaemonUrlSchema.optional(),
   theme: ThemePreferenceSchema.default("system"),
   /** Density per surface id (`data-surface`), so the run tree can be compact while the config form stays comfortable. */
   density: z.record(z.string(), DensitySchema).default({}),
@@ -135,6 +145,7 @@ function mergePanes(
 
 export function mergePreferences(current: Preferences, patch: PreferencesPatch): Preferences {
   return {
+    ...(current.daemonUrl ? { daemonUrl: current.daemonUrl } : {}),
     theme: patch.theme ?? current.theme,
     density: { ...current.density, ...(patch.density ?? {}) },
     panes: mergePanes(current.panes, patch.panes),

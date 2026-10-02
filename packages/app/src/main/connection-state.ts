@@ -255,6 +255,12 @@ export class ConnectionMachine {
       return;
     }
     if (this.done || token !== this.handshake) return;
+    this.acceptHello(result);
+  }
+
+  /** A verified reconnect probe can report mismatch before the socket subscribes. */
+  acceptHello(result: HelloResult): void {
+    if (this.done) return;
     this.orcaVersion = result.orcaVersion;
     this.daemonProtocol = formatProtocolVersion(result.protocol);
     this.capabilities = result.capabilities;

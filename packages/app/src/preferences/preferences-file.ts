@@ -5,6 +5,7 @@
  * choice is a shrug, refusing to open the window is not.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { daemonEndpoint } from "../daemon-connection.js";
 import { dirname } from "node:path";
 import {
   DEFAULT_PREFERENCES,
@@ -27,21 +28,32 @@ export class PreferencesFile {
     try {
       const parsed = PreferencesSchema.safeParse(JSON.parse(text));
       if (parsed.success) return parsed.data;
-      console.warn(`ignoring ${this.path}: ${parsed.error.message}`);
-    } catch (e) {
-      console.warn(`ignoring ${this.path}: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn("Ignoring invalid app preferences");
+    } catch {
+      console.warn("Ignoring invalid app preferences");
     }
     return DEFAULT_PREFERENCES;
+  }
+
+  /** Main-process only: the renderer's generic preference patch cannot change targets. */
+  saveDaemonUrl(url: string | null): void {
+    const next = { ...this.read() };
+    if (url === null) delete next.daemonUrl;
+    else next.daemonUrl = daemonEndpoint(url);
+    this.persist(next);
+  }
+
+  private persist(next: Preferences): void {
+    mkdirSync(dirname(this.path), { recursive: true });
+    const tmp = `${this.path}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
+    renameSync(tmp, this.path);
   }
 
   /** Validate the patch, merge it over what is on disk, write the result, return it. */
   write(patch: unknown): Preferences {
     const next = mergePreferences(this.read(), PreferencesPatchSchema.parse(patch));
-    mkdirSync(dirname(this.path), { recursive: true });
-    // Write beside, then rename: a crash mid-write leaves the old file, not half of a new one.
-    const tmp = `${this.path}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
-    renameSync(tmp, this.path);
+    this.persist(next);
     return next;
   }
 }

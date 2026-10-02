@@ -1,0 +1,4 @@
+/* Preserve the fixed window grid inside the connection scope. */
+.orca-connection-root {
+  display: contents;
+}
