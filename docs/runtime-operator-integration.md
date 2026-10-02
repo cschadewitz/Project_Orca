@@ -523,3 +523,18 @@ defect, not evidence that the original mutation remains running. Native timing
 isolation does not repair it. Existing ambiguous claims must not be discarded or
 replayed automatically; prospective fence-before-claim correction is tracked
 separately from the test synchronization.
+
+The prospective composition correction wraps revision retries with the runtime's
+existing internal run fence before the shared facility can claim a key. Journal
+prepare/recovery and accepted-receipt verification reuse that held internal
+context. No caller can supply a lease; no guard, marker or execution authority is
+weakened. A refused read-owned lease therefore leaves a new key unclaimed, allowing
+the same retained intent to be submitted once after contention ends. Authenticated
+HTTP/WebSocket regressions verify zero claim calls on refusal and one committed
+revision across subsequent acceptance and replay.
+
+This fence alone does not prevent later deterministic prebinding validation
+failures (stale CAS, missing destination or invalid declared payload) from consuming
+a new key. That remaining gap requires fresh-only validation before publication;
+unconditional preflight would incorrectly reject accepted replay after the
+boundary advances. Existing unbound records remain ambiguous and are not repaired.

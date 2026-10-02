@@ -185,7 +185,7 @@ edges:
   const retries = new RegisteredRetryClaims(claims, faults);
   const services = createRevisionInputServices({
     journal: adapter.journal,
-    retries,
+    retries: adapter.fenceRetries(retries),
     stale: () => new OrcaError("REVISION_STALE", "stale"),
   });
   services.register(retries);
@@ -245,7 +245,7 @@ edges:
     );
     const restoredServices = createRevisionInputServices({
       journal: restoredAdapter.journal,
-      retries: restoredRetries,
+      retries: restoredAdapter.fenceRetries(restoredRetries),
       stale: () => new OrcaError("REVISION_STALE", "stale"),
     });
     restoredServices.register(restoredRetries);
@@ -323,6 +323,7 @@ edges:
     bob,
     adapter,
     services,
+    claims,
     readBoundaries,
     placeholder,
     daemon,
@@ -919,5 +920,45 @@ it.each(["credential", "ownership"] as const)(
     // A visibility change after enrichment starts refuses the whole response, including
     // already-projected input restrictions, pending metadata and omission counts.
     else expect(response).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });
+  },
+);
+
+it.each(["http", "ws"] as const)(
+  "keeps retry keys unclaimed during protected-read contention over %s",
+  async (transport) => {
+    const f = await fixture();
+    const call = transport === "http" ? f.http : await f.socket();
+    const claim = vi.spyOn(f.claims, "claim");
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let resume!: () => void;
+    const released = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const release = f.stores.leases.release.bind(f.stores.leases);
+    vi.spyOn(f.stores.leases, "release").mockImplementationOnce(async (lease) => {
+      entered();
+      await released;
+      await release(lease);
+    });
+    const reading = f.adapter.readBoundaries("owned");
+    await held;
+    try {
+      expect(await call("inputs.revise", f.params)).toMatchObject({ ok: false, error: { code: "RUN_LEASED" } });
+      expect(claim).not.toHaveBeenCalled();
+    } finally {
+      resume();
+      await reading;
+    }
+    expect(await f.stores.leases.get("run:owned")).toBeUndefined();
+    const accepted = resolved(await call("inputs.revise", f.params));
+    const replay = resolved(await call("inputs.revise", f.params));
+    expect(replay.operationId).toBe(accepted.operationId);
+    expect(replay.result).toEqual(accepted.result);
+    expect(replay.replayed).toBe(true);
+    const events = await f.stores.events.read("owned");
+    expect(events.filter((event) => event.type === "revision.recorded" && event.payload.decision)).toHaveLength(1);
   },
 );

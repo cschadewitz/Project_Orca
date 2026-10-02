@@ -196,7 +196,7 @@ edges:
   expect((await app.orchestrator.run(runId)).run.status).toBe("paused");
   const services = createRevisionInputServices({
     journal: runtime!.journal,
-    retries: app.retryClaims!,
+    retries: runtime!.fenceRetries(app.retryClaims!),
     stale: () => new OrcaError("REVISION_STALE", "stale"),
   });
   services.register(app.retryClaims!);

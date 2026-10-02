@@ -22,11 +22,14 @@ import { RevisionDelivery, type RevisionDeliveryTarget, type RevisionHandoff } f
 import {
   RunRevisionJournal,
   revisionCanonical,
+  validateRevisionCommand,
   type RevisionBoundary,
   type RevisionJournalEntry,
   type RevisionLog,
   type RevisionRecord,
+  type RetryClaims,
 } from "./revision-input.js";
+import type { RegisteredRetryClaims } from "./admission-retry.js";
 import type { RunContext } from "./run-context.js";
 import type { OrchestratorOptions } from "./orchestrator.js";
 
@@ -751,6 +754,26 @@ export function createRevisionRuntime(options: RevisionRuntimeOptions) {
   return {
     journal,
     runtime,
+    /** Fresh-claim validation may only reuse an already-held fence, never acquire one. */
+    assertRetryFence: ensureOwned,
+    /** Trusted composition only: a refused run fence must not allocate a retry claim. */
+    fenceRetries: (claims: Pick<RegisteredRetryClaims, "execute">): RetryClaims => ({
+      execute: async (operation, command, retry, authority) => {
+        if (operation.kind !== "revision.submit" && operation.kind !== "revision.replace")
+          throw new OrcaError("RUN_STATE", "Retry operation is unavailable");
+        // Snapshot intent before asynchronous authorization or lease acquisition. The
+        // original registered operation instance is retained for the shared registry.
+        const snapshot = validateRevisionCommand(command, operation.kind === "revision.replace") as typeof command;
+        const { target } = snapshot as { target: { runId: string } };
+        await authority.authorize(snapshot);
+        return withRun(target.runId, async () => {
+          await authority.authorize(snapshot);
+          // prepare/recover/accepted-receipt verification re-enter this same internal
+          // ownership context. No caller-supplied lease or alternate receipt is used.
+          return claims.execute(operation, snapshot, retry, authority);
+        });
+      },
+    }),
     /** Caller supplies authenticated read scope; this is not a public endpoint. */ readBoundaries: (runId: string) =>
       withRun(runId, async () => {
         const out: RevisionBoundary[] = [];
