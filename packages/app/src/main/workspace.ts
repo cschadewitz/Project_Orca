@@ -146,8 +146,10 @@ export class Workspace {
   }
 
   /** Prepare without stopping the current daemon or opening a replacement stream. */
-  async prepareConnection(url: string | null): Promise<ConnectionCandidate> {
+  async prepareConnection(url: string | null, source: "saved" | "env" = "saved"): Promise<ConnectionCandidate> {
     if (this.updating || this.closed || this.pending) throw new Error("Workspace is busy");
+    if (source === "env" && (!this.deps.explicitUrl || url !== daemonEndpoint(this.deps.explicitUrl)))
+      throw new Error("The environment return must use the launch-pinned daemon");
     const epoch = this.epoch;
     let daemon: BundledDaemon | undefined;
     const path = this.deps.defaultPath();
@@ -208,9 +210,9 @@ export class Workspace {
         this.stream = undefined;
         this.clientNow = client;
         this.daemon = daemon;
-        this.savedUrl = url ?? undefined;
-        this.source = url ? "saved" : daemon ? "bundled" : "development";
-        this.target = { path, readOnly: false, source: "default" };
+        if (source === "saved") this.savedUrl = url ?? undefined;
+        this.source = source === "env" ? "env" : url ? "saved" : daemon ? "bundled" : "development";
+        this.target = { path, readOnly: false, source: source === "env" ? "env" : "default" };
         this.identity = hello.identity;
         this.epoch += 1;
         this.deps.onSwitch(false);

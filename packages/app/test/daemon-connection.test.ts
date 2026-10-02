@@ -110,6 +110,21 @@ describe("authenticated daemon connection transaction", () => {
       await expect(manager.connect(url)).rejects.toThrow("ORCA_DAEMON_URL");
     expect(r.deps.prepare).not.toHaveBeenCalled();
   });
+  it("authenticates the pinned environment return without saving a preference", async () => {
+    const r = rig();
+    const manager = new ConnectionTarget({ ...r.deps, explicitUrl: "http://localhost:9/" });
+    await manager.returnToEnvironment();
+    expect(r.deps.prepare).toHaveBeenCalledWith("http://localhost:9", "env");
+    expect(r.guard).toHaveBeenCalledOnce();
+    expect(r.activate).toHaveBeenCalledWith(hello);
+    expect(r.save).not.toHaveBeenCalled();
+    expect(r.release).toHaveBeenCalledOnce();
+  });
+  it("refuses an environment return when no endpoint was pinned at launch", async () => {
+    const r = rig();
+    await expect(r.manager.returnToEnvironment()).rejects.toThrow("No environment daemon");
+    expect(r.deps.prepare).not.toHaveBeenCalled();
+  });
   it("round trips the saved URL through restart and clears it for bundled return", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-connection-"));
     dirs.push(dir);
@@ -211,6 +226,27 @@ it("uses environment > saved > bundled at startup", async () => {
     expect(r.workspace.connectionTarget.source).toBe(expected);
     await r.workspace.close();
   }
+});
+it("stages environment return without closing the store, and publishes its source only on commit", async () => {
+  const r = workspaceRig("http://localhost:1", "http://localhost:2");
+  await r.workspace.connect();
+  await r.workspace.open("/archive");
+  const oldClient = r.workspace.client;
+  const oldStream = r.workspace.subscription;
+  const oldTarget = r.workspace.connectionTarget;
+  await expect(r.workspace.prepareConnection("http://localhost:2", "env")).rejects.toThrow("launch-pinned");
+  await expect(r.workspace.prepareConnection(null, "env")).rejects.toThrow("launch-pinned");
+  const candidate = await r.workspace.prepareConnection("http://localhost:1", "env");
+  expect(r.workspace.client).toBe(oldClient);
+  expect(r.workspace.subscription).toBe(oldStream);
+  expect(r.workspace.connectionTarget).toEqual(oldTarget);
+  expect(r.stop).not.toHaveBeenCalled();
+  candidate.check?.();
+  candidate.activate(await candidate.client.hello("test"));
+  expect(r.workspace.connectionTarget).toMatchObject({ source: "env", url: "http://localhost:1" });
+  expect(r.workspace.snapshot).toMatchObject({ readOnly: false, source: "env" });
+  expect(r.stop).toHaveBeenCalledOnce();
+  await r.workspace.close();
 });
 it("replaces even a disconnected old daemon and rejects old epochs; bundled return clears the saved source", async () => {
   const r = workspaceRig(undefined, "http://localhost:1");

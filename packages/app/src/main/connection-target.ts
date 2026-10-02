@@ -41,7 +41,7 @@ export class ConnectionTarget {
   constructor(
     private readonly deps: {
       explicitUrl?: string | undefined;
-      prepare(url: string | null): Promise<ConnectionCandidate>;
+      prepare(url: string | null, source: "saved" | "env"): Promise<ConnectionCandidate>;
       save(url: string | null): void;
       guard(): Promise<boolean>;
       release(): void;
@@ -51,9 +51,17 @@ export class ConnectionTarget {
     this.attempt += 1;
   }
   async connect(input: string | null): Promise<void> {
-    if (this.committing) throw new ConnectionRefusal("A connection change is already being committed.");
     if (this.deps.explicitUrl)
       throw new ConnectionRefusal("ORCA_DAEMON_URL controls this launch. Unset it and restart to change the daemon.");
+    return this.change(input, "saved");
+  }
+  /** Return only to the launch-pinned endpoint; it is never a saved preference. */
+  async returnToEnvironment(): Promise<void> {
+    if (!this.deps.explicitUrl) throw new ConnectionRefusal("No environment daemon is configured for this launch.");
+    return this.change(this.deps.explicitUrl, "env");
+  }
+  private async change(input: string | null, source: "saved" | "env"): Promise<void> {
+    if (this.committing) throw new ConnectionRefusal("A connection change is already being committed.");
     let url: string | null;
     try {
       url = input === null ? null : daemonEndpoint(input);
@@ -65,7 +73,7 @@ export class ConnectionTarget {
     let activated = false;
     let guarded = false;
     try {
-      candidate = await this.deps.prepare(url);
+      candidate = await this.deps.prepare(url, source);
       // Fetch is abortable and bounded in DaemonClient; cancellation also fences its result.
       const hello = await candidate.client.hello("orca-app/connection");
       if (!isCompatible(PROTOCOL_VERSION, hello.protocol))
@@ -82,7 +90,7 @@ export class ConnectionTarget {
         throw new ConnectionRefusal("Save or discard pending edits before changing daemons.");
       if (attempt !== this.attempt) throw new ConnectionRefusal("Connection cancelled.");
       candidate.check?.();
-      this.deps.save(url);
+      if (source === "saved") this.deps.save(url);
       candidate.activate(hello);
       activated = true;
     } finally {

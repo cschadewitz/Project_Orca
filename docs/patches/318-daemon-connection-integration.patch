@@ -105,7 +105,7 @@ index a3e0bd0..fe062cf 100644
        mac ? { role: "close" } : { role: "quit" },
      ],
 diff --git a/packages/app/src/main/index.ts b/packages/app/src/main/index.ts
-index 7855a6d..ac0e4f5 100644
+index 7855a6d..97bf0f8 100644
 --- a/packages/app/src/main/index.ts
 +++ b/packages/app/src/main/index.ts
 @@ -2,7 +2,7 @@
@@ -207,7 +207,7 @@ index 7855a6d..ac0e4f5 100644
    explicitUrl: process.env.ORCA_DAEMON_URL,
    defaultUrl: DEFAULT_DAEMON_URL,
    defaultPath: () => process.env.ORCA_WORKSPACE ?? app.getPath("home"),
-@@ -290,11 +310,74 @@ async function openStore(path?: string): Promise<WorkspaceSnapshot> {
+@@ -290,11 +310,73 @@ async function openStore(path?: string): Promise<WorkspaceSnapshot> {
      chosen = result.filePaths[0];
      if (chosen === undefined) return workspace.snapshot;
    }
@@ -229,11 +229,10 @@ index 7855a6d..ac0e4f5 100644
 +  // Returning from a store to the launch-pinned target does not override the environment.
 +  if (workspace.connectionTarget.environmentOverride) {
 +    try {
-+      if (!(await guardConnectionDrafts()))
-+        throw new Error("Save or discard pending edits before returning to the configured daemon");
-+      return await workspace.connectLive();
-+    } finally {
-+      send("orca:update.prepare", null);
++      await targets.returnToEnvironment();
++      return workspace.snapshot;
++    } catch (error) {
++      throw new Error(connectionFailure(error), { cause: error });
 +    }
 +  }
 +  send("orca:daemon.show", null);
@@ -262,7 +261,7 @@ index 7855a6d..ac0e4f5 100644
 +}
 +const targets = new ConnectionTarget({
 +  explicitUrl: process.env.ORCA_DAEMON_URL,
-+  prepare: (url) => workspace.prepareConnection(url),
++  prepare: (url, source) => workspace.prepareConnection(url, source),
 +  save: (url) => preferences.saveDaemonUrl(url),
 +  guard: guardConnectionDrafts,
 +  release: () => send("orca:update.prepare", null),
@@ -284,7 +283,7 @@ index 7855a6d..ac0e4f5 100644
  
  /* Updates use their own IPC and never wait on daemon readiness to check/download. */
  const updates = new Updates(
-@@ -451,7 +534,9 @@ const alerts = createAlerts(
+@@ -451,7 +533,9 @@ const alerts = createAlerts(
    () => preferences.read().alerts,
  );
  
@@ -295,7 +294,7 @@ index 7855a6d..ac0e4f5 100644
  
  app.on("browser-window-focus", () => alerts.focusChanged(true));
  app.on("browser-window-blur", () => alerts.focusChanged(false));
-@@ -534,7 +619,7 @@ if (!primary) {
+@@ -534,7 +618,7 @@ if (!primary) {
          appMenuTemplate(
            process.platform,
            app.getName(),
@@ -304,7 +303,7 @@ index 7855a6d..ac0e4f5 100644
            rendererUrl !== undefined,
          ),
        ),
-@@ -555,6 +640,7 @@ app.on("window-all-closed", () => {
+@@ -555,6 +639,7 @@ app.on("window-all-closed", () => {
  
  // Stop pushing at a process that is going.
  app.on("before-quit", () => {
@@ -521,17 +520,18 @@ index 071c8f6..67ac645 100644
 +export { workspaceIdentity, renewWorkspaceIdentity } from "./workspace-identity.js";
 diff --git a/packages/app/test/daemon-connection-integration.test.ts b/packages/app/test/daemon-connection-integration.test.ts
 new file mode 100644
-index 0000000..38a2dd5
+index 0000000..0706d3a
 --- /dev/null
 +++ b/packages/app/test/daemon-connection-integration.test.ts
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,202 @@
 +/** Applied-patch regression: invoke the real main IPC handlers with Electron at the boundary. */
 +import { EventEmitter } from "node:events";
 +import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
 +import { afterEach, expect, it, vi } from "vitest";
-+import { DaemonClient } from "../src/client/daemon-client.js";
++import { PROTOCOL_VERSION } from "@orca/protocol";
++import { DaemonClient, DaemonClientError } from "../src/client/daemon-client.js";
 +import type { Workspace } from "../src/main/workspace.js";
 +import { DaemonSubscription } from "../src/client/subscription.js";
 +import type { BridgeResult, WorkspaceSnapshot } from "../src/bridge.js";
@@ -648,13 +648,61 @@ index 0000000..38a2dd5
 +  const store = readTarget();
 +  expect(store).toMatchObject({ source: "store", environmentOverride: true });
 +
++  const oldClient = workspace.client;
++  const oldStream = workspace.subscription;
++  const closeStream = vi.spyOn(oldStream!, "close");
++  const hello: Awaited<ReturnType<DaemonClient["hello"]>> = {
++    protocol: PROTOCOL_VERSION,
++    orcaVersion: "test",
++    capabilities: ["runs.read", "runs.subscribe"],
++  };
++  const probe = vi.spyOn(DaemonClient.prototype, "hello").mockResolvedValue(hello);
++  const expectStorePreserved = async () => {
++    expect(workspace.client).toBe(oldClient);
++    expect(workspace.subscription).toBe(oldStream);
++    expect(readTarget()).toEqual(store);
++    expect(workspace.snapshot).toMatchObject({ path: "/archive", readOnly: true });
++    expect(closeStream).not.toHaveBeenCalled();
++    expect(shell.stop).not.toHaveBeenCalled();
++    expect(await readFile(preferences, "utf8")).toBe(saved);
++  };
++  for (const code of ["AUTH_REQUIRED", "AUTH_INVALID", "AUTH_FORBIDDEN"] as const) {
++    probe.mockRejectedValueOnce(new DaemonClientError({ code, message: "private credential detail" }));
++    const result = await invoke("orca:workspace.connectLive");
++    expect(result).toMatchObject({ ok: false });
++    expect(JSON.stringify(result)).not.toContain("private credential detail");
++    await expectStorePreserved();
++  }
++  probe.mockResolvedValueOnce({ ...hello, protocol: { major: PROTOCOL_VERSION.major + 1, minor: 0 } });
++  expect(await invoke("orca:workspace.connectLive")).toMatchObject({
++    ok: false,
++    error: { message: expect.stringContaining("protocol mismatch") },
++  });
++  await expectStorePreserved();
++  probe.mockResolvedValueOnce({ ...hello, capabilities: [] });
++  expect(await invoke("orca:workspace.connectLive")).toMatchObject({ ok: false });
++  await expectStorePreserved();
++
++  let finish!: (value: typeof hello) => void;
++  probe.mockImplementationOnce(
++    () =>
++      new Promise((resolve) => {
++        finish = resolve;
++      }),
++  );
++  const cancelled = invoke("orca:workspace.connectLive");
++  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
++  shell.events!.emit("orca:daemon.cancel");
++  finish(hello);
++  expect(await cancelled).toMatchObject({ ok: false, error: { message: "Connection cancelled." } });
++  await expectStorePreserved();
++
 +  shell.ready = false;
 +  expect(await invoke("orca:workspace.connectLive")).toMatchObject({
 +    ok: false,
-+    error: { message: "Save or discard pending edits before returning to the configured daemon" },
++    error: { message: "Save or discard pending edits before changing daemons." },
 +  });
-+  expect(readTarget()).toEqual(store);
-+  expect(shell.stop).not.toHaveBeenCalled();
++  await expectStorePreserved();
 +  expect(shell.sent).toHaveBeenLastCalledWith("orca:update.prepare", null);
 +
 +  // Environment precedence still rejects both arbitrary targets and bundled return.
@@ -670,6 +718,10 @@ index 0000000..38a2dd5
 +  expect(readTarget()).toMatchObject({ source: "env", url: "http://localhost:9999", environmentOverride: true });
 +  expect(readTarget().epoch).toBeGreaterThan(store.epoch);
 +  expect(shell.stop).toHaveBeenCalledTimes(1);
++  expect(closeStream).toHaveBeenCalledTimes(1);
++  expect(
++    probe.mock.contexts.every((client) => client instanceof DaemonClient && client.url === "http://localhost:9999"),
++  ).toBe(true);
 +  expect(shell.sent).toHaveBeenLastCalledWith("orca:update.prepare", null);
 +  expect(shell.sent.mock.calls.some(([channel]) => channel === "orca:daemon.show")).toBe(false);
 +  expect(await readFile(preferences, "utf8")).toBe(saved);
