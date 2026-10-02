@@ -1,7 +1,7 @@
 # Launch the desktop app in a real Electron window: once against a real daemon, and once
 # more on each platform at `#type` to check the bundled faces by machine. Release and manual
 # runs verify the full matrix against their supplied ref. Native macOS/Windows also prove
-# encrypted admission-intent recovery across a complete Electron process restart.
+# encrypted admission-intent recovery and the real-UI revision workflow across process restart.
 #
 # Separate from ci.yml on purpose. That workflow sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1` —
 # it typechecks, lints and builds the app but never runs it, and skipping the ~100 MB
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "The branch or commit to smoke-test, type-proof and verify native intent encryption"
+        description: "The branch or commit to smoke-test, type-proof and verify native intent/revision acceptance"
         required: true
         type: string
         default: main
@@ -264,7 +264,7 @@ jobs:
       # Preserve the independent type verdict/report first. A type-baseline failure must
       # not suppress native acceptance, and a native failure must not erase type evidence.
       # Reuse these hosted runners; never install a Linux keyring or change host security.
-      - name: Build the native admission-intent acceptance app and daemon
+      - name: Build the native acceptance app and daemon
         id: native-intent-build
         if: ${{ !cancelled() && runner.os != 'Linux' && steps.native-electron.outcome == 'success' }}
         run: pnpm run build
@@ -284,5 +284,25 @@ jobs:
           path: |
             test-results/admission-intents/
             playwright-report-admission-intents/
+          retention-days: ${{ inputs.ref && 14 || 7 }}
+          if-no-files-found: ignore
+
+      # Independent of the encrypted-storage verdict: preserve its report above, then
+      # exercise actual revision controls and protected prompt delivery on the same build.
+      - name: Native revision workflow acceptance
+        if: ${{ !cancelled() && runner.os != 'Linux' && steps.native-intent-build.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-revision-workflow
+        run: pnpm run app:revision-workflow
+
+      - name: Upload native revision workflow acceptance evidence
+        if: ${{ !cancelled() && runner.os != 'Linux' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: revision-workflow-${{ matrix.os }}
+          path: |
+            test-results/revision-workflow/
+            playwright-report-revision-workflow/
           retention-days: ${{ inputs.ref && 14 || 7 }}
           if-no-files-found: ignore

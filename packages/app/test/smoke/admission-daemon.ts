@@ -21,6 +21,12 @@ export interface AdmissionDaemon {
   stop(): Promise<void>;
 }
 
+/** Optional bounded fixture; the native-encryption tests keep the original agent-free default. */
+export interface AdmissionFixture {
+  workflow: { id: string } & Record<string, unknown>;
+  agents: (dir: string) => Record<string, unknown>[];
+}
+
 export type OwnershipProbeEvidence =
   { stage: "ownership.flush"; outcome: "passed" } | { stage: "ownership.flush"; code: string };
 
@@ -104,6 +110,7 @@ async function terminate(child: ChildProcess): Promise<void> {
  */
 export async function startAdmissionDaemon(
   reportProbe: (evidence: OwnershipProbeEvidence) => void = () => {},
+  fixture?: AdmissionFixture,
 ): Promise<AdmissionDaemon> {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "orca-admission-daemon-")));
   let child: ChildProcess | undefined;
@@ -111,14 +118,16 @@ export async function startAdmissionDaemon(
     await probeOwnershipFlush(join(dir, "ownership-probe.json"), reportProbe);
     await writeFile(
       join(dir, "intent.yaml"),
-      JSON.stringify({
-        id: ADMISSION_WORKFLOW,
-        name: "Native intent acceptance",
-        version: "1",
-        start: "start",
-        nodes: { start: { type: "start" }, done: { type: "end", outcome: "success" } },
-        edges: [{ from: "start", to: "done" }],
-      }),
+      JSON.stringify(
+        fixture?.workflow ?? {
+          id: ADMISSION_WORKFLOW,
+          name: "Native intent acceptance",
+          version: "1",
+          start: "start",
+          nodes: { start: { type: "start" }, done: { type: "end", outcome: "success" } },
+          edges: [{ from: "start", to: "done" }],
+        },
+      ),
     );
     const configPath = join(dir, "orca.config.json");
     await writeFile(
@@ -127,8 +136,11 @@ export async function startAdmissionDaemon(
         storeDir: ".orca",
         workflows: ["intent.yaml"],
         templates: [],
-        agents: [],
-        program: { workflow: ADMISSION_WORKFLOW, itemWorkflow: ADMISSION_WORKFLOW },
+        agents: fixture?.agents(dir) ?? [],
+        program: {
+          workflow: fixture?.workflow.id ?? ADMISSION_WORKFLOW,
+          itemWorkflow: fixture?.workflow.id ?? ADMISSION_WORKFLOW,
+        },
         workspace: { provider: "local", root: dir, hostId: "local" },
       }),
     );

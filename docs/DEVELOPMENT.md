@@ -542,6 +542,48 @@ new workflow steps and cannot establish this acceptance. Verify the run's workfl
 ref/SHA and the checked-out test SHA; the native job prints both before testing. Release
 verification likewise requires the intended workflow definition and tested commit.
 
+### Native revision workflow acceptance
+
+`pnpm run build && pnpm run app:revision-workflow` runs the built Electron app against
+an authenticated compiled CLI daemon with disposable data. It is a separate acceptance
+project on the existing macOS/Windows jobs, with its own result directory and artifact;
+the encrypted admission-intent tests and their verdict remain independent and unchanged.
+Select the integration branch as the workflow definition and the exact test SHA as `ref`,
+using the workflow/checkout identity evidence described above.
+
+The test uses actual renderer controls through production preload/IPC to preview the
+workflow-declared destination, Request changes, refresh and replace a reviewed correction,
+resume the run from the command palette, and answer an ordinary gate with a rationale.
+It verifies that one protected journal commit contains both the first correction and its
+exact gate decision, then exits the entire app and relaunches the same physical/canonical
+profile to recover pending protected text. It does not claim a daemon restart here.
+A second authenticated client wins a replacement CAS while the app's original request is
+held at a test-only transport timing barrier. The original request then reaches the daemon
+unchanged and receives a real `REVISION_STALE`; the UI must retain its unsent draft. A
+second timing barrier holds a real protected read during refresh, proving the checking
+state disables replacement without losing the draft. Releasing it restores the current
+correction and requires explicit review before replacement. Neither barrier fabricates
+errors, responses, identities, credentials, payloads or retry keys.
+
+One compiled ScriptedAgent receives the designated attempt. It has no state file and no
+deliverables: its prompt-recording early return precedes all counter load/save operations.
+There is no demo seed, shared read-modify-write counter, external agent or model service.
+The final prompt must contain the exact final text once, the exact revision ID and human
+provenance, and no superseded correction. Protected history must confirm that exact
+attempt once; the UI shows Delivered and disallows late replacement. A second sequential
+run sends an ordinary gate rationale and proves it remains in the decision history while
+being absent from the agent prompt and workflow values. It also verifies that the first
+run received no additional prompt.
+
+Read-only compiled store inspection runs only after the corresponding writes settle.
+Raw protected entries, prompt logs, config and credentials stay inside the disposable
+fixture. Only synthetic public IDs, digests, counts and booleans are attached. Traces,
+screenshots and videos are disabled. Profile identity evidence contains comparisons,
+never absolute paths. The same bounded process cleanup and prohibition on OS prompt
+approval, security changes or runner provisioning apply as for native intent acceptance.
+Local source/static/fixture checks cannot establish this native UI acceptance; the exact-head
+macOS and Windows steps must actually pass.
+
 ### Screenshot baselines
 
 Two specs take screenshots and they mean opposite things, which is worth being explicit

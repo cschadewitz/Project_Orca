@@ -1,5 +1,5 @@
 /**
- * Playwright's config for the Electron smoke, type and native-encryption acceptance specs.
+ * Playwright's config for the Electron smoke, type and native acceptance specs.
  *
  * It lives here rather than at the repo root so that the root TypeScript project, whose
  * `include` already reaches every package's test folder, typechecks and lints it along
@@ -21,6 +21,9 @@
  * - **`admission-intents`** launches the built app twice against one authenticated daemon
  *   and one disposable profile. Native safeStorage must encrypt and decrypt its retained
  *   intent across process exit. The existing macOS/Windows jobs run this independent gate.
+ *
+ * - **`revision-workflow`** uses real UI controls and a protected daemon for revision
+ *   save/restart/CAS/review/delivery acceptance, on those same macOS/Windows runners.
  *
  * Separate projects in one config let the workflow say `--project=<name>`
  * and lets `toHaveScreenshot` put the project's name in a baseline's filename, beside the
@@ -95,6 +98,13 @@ export default defineConfig({
       outputDir: here("../../../../test-results/admission-intents"),
       // Only allowlisted evidence is attached. Never archive a profile, daemon store,
       // token file, protected journal, main-process arguments or network payloads.
+      use: { trace: "off", screenshot: "off", video: "off" },
+    },
+    {
+      name: "revision-workflow",
+      testMatch: "revision-workflow.spec.ts",
+      outputDir: here("../../../../test-results/revision-workflow"),
+      // Synthetic public IDs, hashes, booleans and counts only; no protected content.
       use: { trace: "off", screenshot: "off", video: "off" },
     },
   ],
