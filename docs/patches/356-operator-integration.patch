@@ -1,0 +1,640 @@
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -23,3 +23,5 @@
+ export * from "./util/jsonl.js";
+
+ export * from "./model/run-provenance.js";
++
++export * from "./model/revision-input.js";
+diff --git a/packages/core/src/schemas.ts b/packages/core/src/schemas.ts
+--- a/packages/core/src/schemas.ts
++++ b/packages/core/src/schemas.ts
+@@ -27,3 +27,5 @@
+ export * from "./events/reduce.js";
+
+ export * from "./model/run-provenance.js";
++
++export * from "./model/revision-input.js";
+diff --git a/packages/protocol/src/index.ts b/packages/protocol/src/index.ts
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -28,3 +28,5 @@
+ export * from "./request-submission.js";
+
+ export * from "./live-input.js";
++
++export * from "./revision-input.js";
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -19,3 +19,6 @@
+ export * from "./program/submission-store.js";
+
+ export * from "./live-input.js";
++
++export * from "./revision-input.js";
++export * from "./revision-delivery.js";
+diff --git a/packages/daemon/src/index.ts b/packages/daemon/src/index.ts
+--- a/packages/daemon/src/index.ts
++++ b/packages/daemon/src/index.ts
+@@ -34,3 +34,5 @@
+
+ export * from "./daemon-identity.js";
+ export * from "./execution-runtime.js";
++
++export * from "./revision-input.js";
+diff --git a/packages/core/src/errors.ts b/packages/core/src/errors.ts
+--- a/packages/core/src/errors.ts
++++ b/packages/core/src/errors.ts
+@@ -29,6 +29,8 @@
+   | "WORKFLOW_VERSION_NOT_FOUND"
+   | "RUN_NOT_FOUND"
+   | "RUN_STATE"
++  /** Expected revision/destination/attempt no longer accepts this mutation. */
++  | "REVISION_STALE"
+   /** Another interpreter holds the run's single-writer lease; see store/lease-store.ts. */
+   | "RUN_LEASED"
+   | "CLAIM_NOT_FOUND"
+diff --git a/packages/core/src/model/workflow.ts b/packages/core/src/model/workflow.ts
+--- a/packages/core/src/model/workflow.ts
++++ b/packages/core/src/model/workflow.ts
+@@ -11,6 +11,7 @@
+  * node type appear inside any container.
+  */
+ import { z } from "zod";
++import { RevisionCapabilitySchema } from "./revision-input.js";
+ import { AgentSelectorSchema } from "./agent.js";
+ import { ArtifactRefSchema, ArtifactSpecSchema } from "./artifact.js";
+ import { GateOptionSchema } from "./run.js";
+@@ -114,6 +115,7 @@
+ export type DecisionSource = z.infer<typeof DecisionSourceSchema>;
+
+ export const DecisionNodeSchema = NodeBaseSchema.extend({
++  revision: RevisionCapabilitySchema.optional(),
+   type: z.literal("decision"),
+   source: DecisionSourceSchema,
+   /**
+@@ -135,6 +137,7 @@
+
+ /** Sugar for a human decision (approval gate). */
+ export const GateNodeSchema = NodeBaseSchema.extend({
++  revision: RevisionCapabilitySchema.optional(),
+   type: z.literal("gate"),
+   question: z.string(),
+   /**
+diff --git a/packages/core/src/workflow/validate.ts b/packages/core/src/workflow/validate.ts
+--- a/packages/core/src/workflow/validate.ts
++++ b/packages/core/src/workflow/validate.ts
+@@ -2,6 +2,7 @@
+  * Static validation of workflow definitions. Runs at load time and from
+  * `orca validate` so authoring mistakes surface before any agent is spawned.
+  */
++import { validateRevisionCapability } from "../model/revision-input.js";
+ import { checkExpression } from "../expr/index.js";
+ import type { NodeDef, WorkflowDefinition, WorkflowGraph } from "../model/workflow.js";
+ import { checkTemplate } from "../template/render.js";
+@@ -67,6 +68,10 @@
+   const err = (p: string, message: string) => errors.push({ path: p, message });
+   const warn = (p: string, message: string) => warnings.push({ path: p, message });
+   const ids = Object.keys(graph.nodes);
++  for (const [id, node] of Object.entries(graph.nodes)) {
++    if ((node.type === "gate" || node.type === "decision") && node.revision)
++      errors.push(...validateRevisionCapability(graph, id, node.revision).errors);
++  }
+
+   const start = graph.nodes[graph.start];
+   if (!start) err(`${path}.start`, `start node '${graph.start}' does not exist`);
+diff --git a/packages/core/src/events/events.ts b/packages/core/src/events/events.ts
+--- a/packages/core/src/events/events.ts
++++ b/packages/core/src/events/events.ts
+@@ -309,6 +309,20 @@
+       context: z.record(z.string(), z.unknown()).default({}),
+     }),
+   ),
++  // The single commit marker projects both revision acceptance and its gate answer.
++  // entry is authoritative protected material, absent from the public projection.
++  base(
++    "revision.recorded",
++    z.object({
++      destinationId: z.string(),
++      revisionId: z.string().optional(),
++      state: z.enum(["pending", "delivered", "rejected", "superseded"]).optional(),
++      decision: z
++        .object({ requestId: z.string(), stepRunId: z.string(), answer: z.string(), actor: MutationActorSchema })
++        .optional(),
++      entry: z.record(z.string(), z.unknown()).optional(),
++    }),
++  ),
+   base(
+     "human.answered",
+     z.object({
+diff --git a/packages/core/src/events/reduce.ts b/packages/core/src/events/reduce.ts
+--- a/packages/core/src/events/reduce.ts
++++ b/packages/core/src/events/reduce.ts
+@@ -225,6 +225,17 @@
+       state.humanInputs[r.id] = r;
+       break;
+     }
++    case "revision.recorded": {
++      const decision = e.payload.decision;
++      if (decision) {
++        const input = state.humanInputs[decision.requestId];
++        if (!input || input.stepRunId !== decision.stepRunId || input.answer !== undefined)
++          throw new OrcaError("RUN_STATE", "revision gate decision does not match its boundary");
++        input.answer = decision.answer;
++        input.answeredAt = e.at;
++      }
++      break;
++    }
+     case "human.answered": {
+       const r = state.humanInputs[e.payload.requestId];
+       if (r) {
+diff --git a/packages/store/src/protected-event-store.ts b/packages/store/src/protected-event-store.ts
+--- a/packages/store/src/protected-event-store.ts
++++ b/packages/store/src/protected-event-store.ts
+@@ -64,6 +64,15 @@
+
+   async append(input: OrcaEventInput): Promise<OrcaEvent> {
+     const inputs = await this.execution.getInputs(input.runId);
++    if (input.type === "revision.recorded") {
++      // Revision material is always private, including on otherwise non-sensitive runs.
++      // Runtime boundary setup must promote inputs through the existing protected store.
++      if (!inputs || !input.payload.entry) throw unavailable();
++      const executionPayloadRef = randomUUID();
++      await this.execution.putPayload(executionPayloadRef, input);
++      const { entry: _entry, ...metadata } = input.payload;
++      return this.publicEvents.append({ ...input, payload: metadata, executionPayloadRef });
++    }
+     if (!inputs) {
+       if (!this.publicOnlyRuns.has(input.runId)) {
+         await this.requireSafeLegacy(input.runId, input);
+diff --git a/packages/daemon/src/notifications.ts b/packages/daemon/src/notifications.ts
+--- a/packages/daemon/src/notifications.ts
++++ b/packages/daemon/src/notifications.ts
+@@ -111,6 +111,16 @@
+         ...(error ? { error: { code: error.code, message: error.message } } : {}),
+       },
+     });
++  } else if (event.type === "revision.recorded" && event.payload.decision) {
++    out.push({
++      method: INPUT_ANSWERED,
++      params: {
++        ...at,
++        requestId: event.payload.decision.requestId,
++        stepRunId: event.payload.decision.stepRunId,
++        answer: event.payload.decision.answer,
++      },
++    });
+   } else if (event.type === "human.requested") {
+     out.push({
+       method: INPUT_OPENED,
+diff --git a/packages/protocol/src/inputs.ts b/packages/protocol/src/inputs.ts
+--- a/packages/protocol/src/inputs.ts
++++ b/packages/protocol/src/inputs.ts
+@@ -22,6 +22,7 @@
+  * agent's question.
+  */
+ import { z } from "zod";
++import { RevisionBoundaryViewSchema } from "./revision-input.js";
+ import { LiveInputViewSchema } from "./live-input.js";
+ // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
+ import { GateOptionSchema } from "@orca/core/schemas";
+@@ -52,6 +53,7 @@
+ export type InputAgent = z.infer<typeof InputAgentSchema>;
+
+ export const OpenInputViewSchema = z.object({
++  revision: RevisionBoundaryViewSchema.optional(),
+   /** Absent for durable workflow gates; expired permission asks cannot be answered. */
+   live: LiveInputViewSchema.optional(),
+   id: z.string(),
+diff --git a/packages/daemon/src/auth/operations.ts b/packages/daemon/src/auth/operations.ts
+--- a/packages/daemon/src/auth/operations.ts
++++ b/packages/daemon/src/auth/operations.ts
+@@ -62,6 +62,10 @@
+   "runs.list": { permission: "runs.read", resource: "run-list" },
+   "runs.get": { permission: "runs.read", resource: "run" },
+   "runs.events": { permission: "runs.read", resource: "run" },
++  // Exact target checks live in the authenticated revision service, including after the input closes.
++  "inputs.revise": { permission: "inputs.answer", resource: "none", audit: "decision" },
++  "inputs.replaceRevision": { permission: "inputs.answer", resource: "none", audit: "mutation" },
++  "inputs.revisionPending": { permission: "runs.read", resource: "none" },
+   "inputs.list": { permission: "runs.read", resource: "input-list" },
+   "claims.list": { permission: "runs.read", resource: "claim-list" },
+   "artifacts.list": { permission: "artifacts.read", resource: "artifact-list" },
+diff --git a/packages/daemon/src/auth/guard.ts b/packages/daemon/src/auth/guard.ts
+--- a/packages/daemon/src/auth/guard.ts
++++ b/packages/daemon/src/auth/guard.ts
+@@ -166,6 +166,13 @@
+       this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", "request-submission-not-permitted");
+       throw authForbidden();
+     }
++    if (
++      (method === "inputs.revise" || method === "inputs.replaceRevision") &&
++      (!holds(principal, "inputs.answer") || !holds(principal, "runs.control"))
++    ) {
++      this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", "revision-not-permitted");
++      throw authForbidden();
++    }
+     const spec = OPERATIONS[method];
+     if (!spec) {
+       if (!exists) return;
+@@ -185,7 +192,8 @@
+       return (
+         spec !== undefined &&
+         (!spec.permission || holds(principal, spec.permission)) &&
+-        (!name.startsWith("requests.") || holds(principal, "runs.start"))
++        (!name.startsWith("requests.") || holds(principal, "runs.start")) &&
++        (!(name === "inputs.revise" || name === "inputs.replaceRevision") || holds(principal, "runs.control"))
+       );
+     });
+   }
+@@ -414,6 +422,9 @@
+       // The store's path on disk is the configuration's business.
+       ...(storeDir !== undefined && holds(principal, "config.read") ? { storeDir } : {}),
+       capabilities: result.capabilities.filter((c) => {
++        if (c === "inputs.revise" || c === "inputs.replaceRevision")
++          return holds(principal, "inputs.answer") && holds(principal, "runs.control");
++        if (c === "inputs.revisionPending") return holds(principal, "runs.read");
+         const needs = CAPABILITY_PERMISSIONS[c];
+         return needs ? needs.some((p) => holds(principal, p)) : everything;
+       }),
+diff --git a/packages/daemon/src/methods.ts b/packages/daemon/src/methods.ts
+--- a/packages/daemon/src/methods.ts
++++ b/packages/daemon/src/methods.ts
+@@ -22,6 +22,13 @@
+   type ConfigApplyResult,
+ } from "@orca/protocol";
+
++import {
++  InputsReviseParamsSchema,
++  InputsReplaceRevisionParamsSchema,
++  InputsRevisionPendingParamsSchema,
++} from "@orca/protocol";
++import type { RevisionInputService, RevisionAccess } from "@orca/engine";
++import { revisionAuthority } from "./revision-input.js";
+ import type { SubmissionAuthority } from "@orca/core";
+ import {
+   RequestsSubmitParamsSchema,
+@@ -175,6 +182,15 @@
+ import type { LiveInputChangeSource } from "./live-input-notifications.js";
+
+ export interface MethodContext {
++  /** Only install after protected journal, #331 claims, exact attempt dispatch and live auth are wired. */
++  revisionInputs?:
++    | ((
++        invocation: MethodContext,
++      ) => Promise<{
++        service: Pick<RevisionInputService, "submit" | "readPending" | "replacePending">;
++        access: RevisionAccess;
++      }>)
++    | undefined;
+   liveInputs?: LiveInputChangeSource | undefined;
+   liveAnswerAuthority?: LiveAnswerAuthority;
+   executionResumeAuthority?: ExecutionResumeAuthority;
+@@ -312,7 +328,16 @@
+       ...(ctx.identity ? { identity: ctx.identity } : {}),
+       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
+       capabilities: [
+-        ...ctx.capabilities.filter((c) => c !== "workflows.validateInputs" && c !== "inputs.live"),
++        ...ctx.capabilities.filter(
++          (c) =>
++            c !== "workflows.validateInputs" &&
++            c !== "inputs.live" &&
++            c !== "inputs.revise" &&
++            c !== "inputs.revisionPending" &&
++            c !== "inputs.replaceRevision",
++        ),
++        ...(ctx.revisionInputs ? ["inputs.revisionPending" as const] : []),
++        ...(ctx.revisionInputs && ctx.control ? ["inputs.revise" as const, "inputs.replaceRevision" as const] : []),
+         ...(ctx.control?.supportsLiveInputs ? ["inputs.live" as const] : []),
+         ...(ctx.workflowInputs ? ["workflows.validateInputs" as const] : []),
+       ],
+@@ -686,6 +711,29 @@
+       },
+     } satisfies MethodTable);
+   }
++  if (ctx.revisionInputs) {
++    const authenticated = ctx.revisionInputs;
++    table["inputs.revisionPending"] = {
++      params: InputsRevisionPendingParamsSchema,
++      handle: async (params, invocation) => (await authenticated(invocation)).service.readPending(params.target),
++    };
++    if (ctx.control) {
++      table["inputs.revise"] = {
++        params: InputsReviseParamsSchema,
++        handle: async (params, invocation) => {
++          const { service, access } = await authenticated(invocation);
++          return service.submit(params.command, params.retry, revisionAuthority(access));
++        },
++      };
++      table["inputs.replaceRevision"] = {
++        params: InputsReplaceRevisionParamsSchema,
++        handle: async (params, invocation) => {
++          const { service, access } = await authenticated(invocation);
++          return service.replacePending(params.command, params.retry, revisionAuthority(access));
++        },
++      };
++    }
++  }
+   if (ctx.workflowInputs) table[WORKFLOWS_VALIDATE_INPUTS_METHOD] = workflowsValidateInputs;
+   if (ctx.planControl) Object.assign(table, planControlMethods);
+   if (ctx.agents) Object.assign(table, agentMethods);
+diff --git a/packages/engine/src/executors/types.ts b/packages/engine/src/executors/types.ts
+--- a/packages/engine/src/executors/types.ts
++++ b/packages/engine/src/executors/types.ts
+@@ -38,6 +38,16 @@
+
+ /** Everything an executor may need. Kept as an interface so tests can stub it. */
+ export interface StepContext {
++  /** Runtime binds these to the exact durable gate and reserved destination step under its lease. */
++  declareRevision?: (query: import("../human-input.js").HumanInputQuery) => Promise<void>;
++  revisionInput?: {
++    claim(
++      render: (slot: import("../revision-delivery.js").RevisionSlot) => Promise<string>,
++    ): Promise<import("../revision-delivery.js").RevisionHandoff>;
++    beforeSend(handoff: import("../revision-delivery.js").RevisionHandoff): Promise<void>;
++    confirm(handoff: import("../revision-delivery.js").RevisionHandoff): Promise<void>;
++    uncertain(handoff: import("../revision-delivery.js").RevisionHandoff): Promise<void>;
++  };
+   readonly run: RunContext;
+   readonly step: StepRun;
+   readonly nodeId: string;
+diff --git a/packages/engine/src/human-input.ts b/packages/engine/src/human-input.ts
+--- a/packages/engine/src/human-input.ts
++++ b/packages/engine/src/human-input.ts
+@@ -160,7 +160,7 @@
+   agent?: { id: string; hostId: string };
+   context?: Record<string, unknown>;
+   live?: LiveInputBinding;
+-  onRequested?: (query: HumanInputQuery) => void;
++  onRequested?: (query: HumanInputQuery) => void | Promise<void>;
+   onSettled?: (query: HumanInputQuery) => Promise<void> | void;
+ }): Promise<string | undefined> {
+   const { emit, stepRunId } = opts;
+@@ -215,7 +215,7 @@
+       },
+     });
+     requested = true;
+-    opts.onRequested?.(query);
++    await opts.onRequested?.(query);
+     await emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
+     publish();
+     const answer = await (waiting ?? opts.port.ask(query));
+diff --git a/packages/engine/src/executors/basic.ts b/packages/engine/src/executors/basic.ts
+--- a/packages/engine/src/executors/basic.ts
++++ b/packages/engine/src/executors/basic.ts
+@@ -52,7 +52,11 @@
+ ): Promise<string | undefined> {
+   const recorded = answerFromPreviousAttempt(ctx);
+   if (recorded !== undefined) return recorded;
++  const revision = (ctx.node.type === "gate" || ctx.node.type === "decision") && ctx.node.revision;
++  if (revision && !ctx.declareRevision)
++    throw new OrcaError("NOT_SUPPORTED", "revision-enabled gates require the protected revision runtime");
+   return askHumanInput({
++    ...(revision && ctx.declareRevision ? { onRequested: ctx.declareRevision } : {}),
+     port: ctx.humanInput,
+     emit: (e) => ctx.emit(e),
+     clock: ctx.clock,
+diff --git a/packages/engine/src/executors/agent-step.ts b/packages/engine/src/executors/agent-step.ts
+--- a/packages/engine/src/executors/agent-step.ts
++++ b/packages/engine/src/executors/agent-step.ts
+@@ -297,12 +297,14 @@
+   // The run's template pack (#191), when it chose one: `<pack>/<id>` wins over `<id>`.
+   const pack = ctx.run.state.run.overrides?.templatePack;
+   const body = spec.template ? ctx.templates.get(spec.template, pack ? { pack } : {}).body : (spec.prompt ?? "");
+-  const basePrompt =
+-    (await ctx.render(body, { ...extra, deliverables })).trim() +
++  const renderPrompt = async (revision?: import("../revision-delivery.js").RevisionSlot) =>
++    (await ctx.render(body, { ...extra, deliverables, ...(revision ? { revision } : {}) })).trim() +
+     "\n\nUse only the explicitly supplied input artifacts as prior workflow context. Files in .orca/work, " +
+     ".orca/program or .orca-attempts from other runs or attempts are not inputs; do not explore or copy them. " +
+     "Write this attempt's outputs only to the exact deliverable paths below.\n\n" +
+     renderDeliverablesBlock(deliverables);
++  const revisionHandoff = await ctx.revisionInput?.claim(renderPrompt);
++  const basePrompt = revisionHandoff?.prompt ?? (await renderPrompt());
+
+   await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "agent-turn" } });
+   const { session, release } = await ctx.openSession(spec.agent);
+@@ -321,7 +323,7 @@
+           stepRunId: ctx.step.id,
+           sessionId: session.id,
+           promptHash: sha256(prompt),
+-          promptPreview: prompt.slice(0, 400),
++          promptPreview: revisionHandoff ? "[REDACTED]" : prompt.slice(0, 400),
+           followUp,
+         },
+       });
+@@ -340,7 +342,12 @@
+           : undefined;
+       let stopReason: string;
+       try {
+-        const turn = await session.prompt(prompt, { signal: ctx.signal, timeoutMs });
++        if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.beforeSend(revisionHandoff);
++        const turn = await session.prompt(prompt, { signal: ctx.signal, timeoutMs }).catch(async (error: unknown) => {
++          if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.uncertain(revisionHandoff);
++          throw error;
++        });
++        if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.confirm(revisionHandoff);
+         stopReason = turn.stopReason;
+         await recorder.flush();
+         await ctx.emit({
+diff --git a/packages/app/src/bridge.ts b/packages/app/src/bridge.ts
+--- a/packages/app/src/bridge.ts
++++ b/packages/app/src/bridge.ts
+@@ -233,6 +233,15 @@
+     resume: (params: RunsResumeParams) => Promise<BridgeResult<RunsResumeResult>>;
+   };
+   inputs: {
++    revise?: (
++      params: import("@orca/protocol").InputsReviseParams,
++    ) => Promise<BridgeResult<import("@orca/protocol").RevisionResult>>;
++    revisionPending?: (
++      params: import("@orca/protocol").InputsRevisionPendingParams,
++    ) => Promise<BridgeResult<import("@orca/protocol").PendingRevisionView>>;
++    replaceRevision?: (
++      params: import("@orca/protocol").InputsReplaceRevisionParams,
++    ) => Promise<BridgeResult<import("@orca/protocol").RevisionResult>>;
+     /** The gates and permission asks waiting on a person. */
+     list: (params?: Params<InputsListParams>) => Promise<BridgeResult<InputsListResult>>;
+     /**
+diff --git a/packages/app/src/preload/index.cts b/packages/app/src/preload/index.cts
+--- a/packages/app/src/preload/index.cts
++++ b/packages/app/src/preload/index.cts
+@@ -102,6 +102,9 @@
+     start: (params) => call("orca:runs.start", params),
+   },
+   inputs: {
++    revise: (params) => call("orca:inputs.revise", params),
++    revisionPending: (params) => call("orca:inputs.revisionPending", params),
++    replaceRevision: (params) => call("orca:inputs.replaceRevision", params),
+     list: (params = {}) => call("orca:inputs.list", params),
+     answer: (params) => call("orca:inputs.answer", params),
+   },
+diff --git a/packages/app/src/client/daemon-client.ts b/packages/app/src/client/daemon-client.ts
+--- a/packages/app/src/client/daemon-client.ts
++++ b/packages/app/src/client/daemon-client.ts
+@@ -9,6 +9,7 @@
+  * hands back a stream that reconnects and resumes on its own. Both halves are the same
+  * daemon on the same port; a client that only reads never opens a socket.
+  */
++import { RevisionResultSchema, PendingRevisionViewSchema } from "@orca/protocol";
+ import { MaintenanceResultSchema, type MaintenanceParams, type MaintenanceResult } from "@orca/protocol";
+
+ import {
+@@ -285,6 +286,15 @@
+     return this.call(RUNS_EVENTS_METHOD, params, RunsEventsResultSchema);
+   }
+
++  inputsRevise(params: import("@orca/protocol").InputsReviseParams) {
++    return this.call("inputs.revise", params, RevisionResultSchema);
++  }
++  inputsRevisionPending(params: import("@orca/protocol").InputsRevisionPendingParams) {
++    return this.call("inputs.revisionPending", params, PendingRevisionViewSchema);
++  }
++  inputsReplaceRevision(params: import("@orca/protocol").InputsReplaceRevisionParams) {
++    return this.call("inputs.replaceRevision", params, RevisionResultSchema);
++  }
+   inputsList(params: Params<InputsListParams> = {}): Promise<InputsListResult> {
+     return this.call(INPUTS_LIST_METHOD, params, InputsListResultSchema);
+   }
+diff --git a/packages/app/src/main/index.ts b/packages/app/src/main/index.ts
+--- a/packages/app/src/main/index.ts
++++ b/packages/app/src/main/index.ts
+@@ -127,6 +127,13 @@
+ // reads do; what makes them different is on the other two sides - the daemon refuses them
+ // without the run's lease, and the renderer asks `useWritability()` before offering the
+ // control at all. `runs.start` needs no lease: there is no run to hold one yet.
++handle("orca:inputs.revise", (params: Parameters<DaemonClient["inputsRevise"]>[0]) => client().inputsRevise(params));
++handle("orca:inputs.revisionPending", (params: Parameters<DaemonClient["inputsRevisionPending"]>[0]) =>
++  client().inputsRevisionPending(params),
++);
++handle("orca:inputs.replaceRevision", (params: Parameters<DaemonClient["inputsReplaceRevision"]>[0]) =>
++  client().inputsReplaceRevision(params),
++);
+ handle("orca:inputs.answer", (params: Parameters<DaemonClient["inputsAnswer"]>[0]) => client().inputsAnswer(params));
+ handle("orca:runs.cancel", (params: Parameters<DaemonClient["runsCancel"]>[0]) => client().runsCancel(params));
+ handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) => client().runsResume(params));
+diff --git a/packages/engine/src/orchestrator.ts b/packages/engine/src/orchestrator.ts
+--- a/packages/engine/src/orchestrator.ts
++++ b/packages/engine/src/orchestrator.ts
+@@ -96,6 +96,11 @@
+ export type SessionFactory = (options: OpenSessionOptions) => Promise<AgentSession>;
+
+ export interface OrchestratorOptions {
++  revisionRuntime?: {
++    /** Reserve exactly the declared next attempt before scheduling; refuse ambiguous replay. */
++    reserveStep(rc: RunContext, nodeId: string): Promise<string | undefined>;
++    forStep(rc: RunContext, step: StepRun): Pick<StepContext, "declareRevision" | "revisionInput">;
++  };
+   stores: Stores;
+   agents: AgentRegistry;
+   workflows: WorkflowRegistry;
+@@ -261,6 +266,7 @@
+   private readonly leaseTtlMs: number;
+   private readonly leaseRenewMs: number | undefined;
+
++  private readonly revisionRuntime: OrchestratorOptions["revisionRuntime"];
+   private readonly live = new Map<string, RunContext>();
+   private readonly running = new Map<string, Promise<RunState>>();
+   /**
+@@ -277,6 +283,7 @@
+   private readonly sessionOpenedListeners = new Set<AgentSessionOpenedListener>();
+
+   constructor(o: OrchestratorOptions) {
++    this.revisionRuntime = o.revisionRuntime;
+     this.stores = {
+       ...o.stores,
+       events:
+@@ -668,6 +675,10 @@
+     // An answer is an option's id, never its label: a label may be reworded, and what
+     // is recorded here is compared against the options again when the run is re-driven.
+     const ids = request.options.map((o) => o.id);
++    const definition = await this.definitionFor(state.run.workflowId, state.run.workflowVersion);
++    const source = definition.nodes[state.steps[request.stepRunId]?.nodeId ?? ""];
++    if ((source?.type === "gate" || source?.type === "decision") && source.revision?.actionId === answer)
++      throw new OrcaError("NOT_SUPPORTED", "Use Request changes with explicit corrective input for this branch");
+     if (ids.length && !ids.includes(answer)) {
+       const protectedInputs = await this.stores.execution.getInputs(runId);
+       throw new OrcaError(
+@@ -1279,7 +1290,7 @@
+         if (rc.abort.signal.aborted) throw new OrcaError("CANCELLED", String(rc.abort.signal.reason ?? "cancelled"));
+         const node = def.nodes[nodeId];
+         if (!node) throw new OrcaError("WORKFLOW_INVALID", `node '${nodeId}' not found in ${def.id}`);
+-        const stepRunId = newId("step", this.clock.now());
++        const stepRunId = (await this.revisionRuntime?.reserveStep(rc, nodeId)) ?? newId("step", this.clock.now());
+         await rc.emit({
+           type: "step.scheduled",
+           payload: {
+@@ -1414,6 +1425,7 @@
+   private stepContext(rc: RunContext, step: StepRun, node: NodeDef): StepContext {
+     const self = this;
+     const ctx: StepContext = {
++      ...this.revisionRuntime?.forStep(rc, step),
+       run: rc,
+       step,
+       nodeId: step.nodeId,
+diff --git a/packages/protocol/src/handshake.ts b/packages/protocol/src/handshake.ts
+--- a/packages/protocol/src/handshake.ts
++++ b/packages/protocol/src/handshake.ts
+@@ -147,6 +147,9 @@
+ /** What a daemon can do; a client checks these rather than the ORCA version. */
+ export const DAEMON_CAPABILITIES = [
+   "inputs.live",
++  "inputs.revise",
++  "inputs.revisionPending",
++  "inputs.replaceRevision",
+   "runs.read",
+   "runs.subscribe",
+   "runs.control",
+diff --git a/packages/app/renderer/src/runs/timeline/timeline-entries.ts b/packages/app/renderer/src/runs/timeline/timeline-entries.ts
+--- a/packages/app/renderer/src/runs/timeline/timeline-entries.ts
++++ b/packages/app/renderer/src/runs/timeline/timeline-entries.ts
+@@ -295,6 +295,8 @@
+
+     case "human.requested":
+       return `${subject} asked, ${event.payload.question}`;
++    case "revision.recorded":
++      return `Correction ${event.payload.state ?? "boundary recorded"}`;
+     case "human.answered":
+       return `${subject} answered ${event.payload.answer}`;
+   }
+diff --git a/docs/daemon-security.md b/docs/daemon-security.md
+--- a/docs/daemon-security.md
++++ b/docs/daemon-security.md
+@@ -166,6 +166,9 @@
+ | `runs.start` | `runs.start` | the workflow; the new run is attributed to the caller | mutation |
+ | `runs.resume` | `runs.control` | the run | mutation |
+ | `runs.cancel` | `runs.control` | the run | mutation |
++| `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
++| `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
++| `inputs.revisionPending` | `runs.read` | exact run; payload also requires `inputs.answer` and `runs.control` | — |
+ | `inputs.answer` | `inputs.answer` | the exact open gate and its run; `always` also needs `permissions.grant` | decision |
+ | `claims.release` | `claims.release` | the claim's owning run | mutation |
+ | `config.get` | `config.read` | workspace-wide | — |
+diff --git a/packages/protocol/test/protocol.test.ts b/packages/protocol/test/protocol.test.ts
+--- a/packages/protocol/test/protocol.test.ts
++++ b/packages/protocol/test/protocol.test.ts
+@@ -101,6 +101,9 @@
+     expect(CONTROL_METHODS).toContain(CONFIG_SET_METHOD);
+     expect(DAEMON_CAPABILITIES).toEqual([
+       "inputs.live",
++      "inputs.revise",
++      "inputs.revisionPending",
++      "inputs.replaceRevision",
+       "runs.read",
+       "runs.subscribe",
+       "runs.control",
+diff --git a/packages/daemon/test/auth-operations.test.ts b/packages/daemon/test/auth-operations.test.ts
+--- a/packages/daemon/test/auth-operations.test.ts
++++ b/packages/daemon/test/auth-operations.test.ts
+@@ -48,6 +48,9 @@
+     orcaVersion: "0.0.0",
+     capabilities: [],
+     maintenance: new Maintenance(),
++    revisionInputs: async () => {
++      throw new Error("inventory fixture must not execute");
++    },
+     reads: { plans: present } as never,
+     source: present,
+     control: present,
