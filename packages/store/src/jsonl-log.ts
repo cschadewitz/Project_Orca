@@ -29,8 +29,9 @@
  * lets a page of a multi-megabyte `agent.update` log cost a page's worth of reading.
  */
 import { mkdir, open, readdir, readFile, stat, truncate, type FileHandle } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
+  OrcaError,
   anyJson,
   appendJsonl,
   parseJsonlLine,
@@ -47,6 +48,17 @@ export interface JsonlLogDirOptions {
   /** Where torn tails, corrupt lines and broken locks are reported. Silent by default. */
   logger?: Logger;
   lock?: FileLockOptions;
+}
+
+/** Internal persistence callbacks, never a wire API. Caller holds the run execution fence. */
+export interface DurableUniqueAppend<T> {
+  /** Next sequence observed at the authorized boundary. Checked only for a new correlation. */
+  expectedSeq: number;
+  stale?: () => Error;
+  /** Return a validated, equivalent existing record or undefined. Conflicts must throw. */
+  findExisting(record: unknown): T | undefined | Promise<T | undefined>;
+  /** May seal private execution material before returning the public marker. */
+  build(seq: number): T | Promise<T>;
 }
 
 interface Tail {
@@ -98,6 +110,119 @@ export class JsonlLogDir {
   append<T>(key: string, build: (seq: number) => T): Promise<T> {
     const prev = this.chains.get(key) ?? Promise.resolve();
     const next = prev.then(() => this.appendLocked(key, build));
+    this.chains.set(
+      key,
+      next.catch(() => undefined),
+    );
+    return next;
+  }
+
+  /**
+   * Opt-in durable CAS append. Ordinary append retains its existing behavior. A complete
+   * marker left by a lost acknowledgement is re-synced rather than appended twice. A
+   * partial final line cannot be a commit and is repaired under the ordinary log mutex.
+   * Complete corruption/gaps fail closed instead of silently rewriting run history.
+   * The caller must also hold the run fence: a log lock alone is not execution authority.
+   */
+  appendDurableUnique<T>(key: string, options: DurableUniqueAppend<T>): Promise<{ record: T; fresh: boolean }> {
+    if (!Number.isSafeInteger(options.expectedSeq) || options.expectedSeq < 0)
+      return Promise.reject(new OrcaError("RUN_STATE", "Invalid durable journal boundary"));
+    const prev = this.chains.get(key) ?? Promise.resolve();
+    const next = prev.then(async () => {
+      await this.init();
+      const file = this.file(key);
+      return withFileLock(
+        `${file}.lock`,
+        async () => {
+          const handle = await open(file, "a+");
+          try {
+            const bytes = await handle.readFile();
+            const end = bytes.lastIndexOf(NEWLINE) + 1;
+            let nextSeq = 0;
+            let existing: T | undefined;
+            for (const line of splitJsonlLines(bytes.toString("utf8", 0, end))) {
+              let raw: unknown;
+              try {
+                raw = JSON.parse(line) as unknown;
+              } catch {
+                throw new OrcaError("RUN_STATE", "Durable journal contains an invalid complete record");
+              }
+              if ((raw as { seq?: unknown } | null)?.seq !== nextSeq++)
+                throw new OrcaError("RUN_STATE", "Durable journal sequence is inconsistent");
+              const match = await options.findExisting(raw);
+              if (match !== undefined) {
+                if (existing !== undefined)
+                  throw new OrcaError("RUN_STATE", "Durable journal contains duplicate correlations");
+                existing = match;
+              }
+            }
+            // A complete JSON marker can survive a short write that omitted only its
+            // newline. Preserve its stable correlation rather than manufacture another
+            // marker/private reference. An actually incomplete JSON tail is repairable.
+            let finishExistingLine = false;
+            if (end !== bytes.length) {
+              let tail: unknown;
+              try {
+                tail = JSON.parse(bytes.toString("utf8", end)) as unknown;
+              } catch {
+                // Incomplete final JSON is not a record.
+              }
+              if (tail !== undefined) {
+                const match = await options.findExisting(tail);
+                if (match === undefined)
+                  throw new OrcaError("RUN_STATE", "A complete unrelated journal tail requires explicit recovery");
+                if (match !== undefined) {
+                  const sequence = typeof tail === "object" && tail !== null && "seq" in tail ? tail.seq : undefined;
+                  if (existing !== undefined || sequence !== nextSeq)
+                    throw new OrcaError("RUN_STATE", "Durable journal trailing correlation is inconsistent");
+                  existing = match;
+                  finishExistingLine = true;
+                }
+              }
+            }
+            if (existing === undefined && nextSeq !== options.expectedSeq)
+              throw options.stale?.() ?? new OrcaError("RUN_STATE", "Durable journal boundary changed");
+            let record = existing;
+            if (record === undefined) {
+              record = await options.build(nextSeq);
+              if ((record as { seq?: unknown } | null)?.seq !== nextSeq)
+                throw new OrcaError("RUN_STATE", "Durable journal record has an invalid sequence");
+              // Prepare completely before touching a torn tail or extending the journal.
+              const serialized = JSON.stringify(record) + "\n";
+              if (end !== bytes.length) await handle.truncate(end);
+              await handle.writeFile(serialized);
+            }
+            if (finishExistingLine) await handle.writeFile("\n");
+            // Even an existing marker might follow a previous sync failure. Never infer
+            // durability merely because its complete bytes can currently be read.
+            await handle.sync();
+            if (process.platform !== "win32") {
+              // Include the containing directory and its ancestry on first creation.
+              // Syncing every time also retries any earlier uncertain directory sync.
+              let dir = this.dir;
+              for (;;) {
+                const directory = await open(dir, "r");
+                try {
+                  await directory.sync();
+                } finally {
+                  await directory.close();
+                }
+                const parent = dirname(dir);
+                if (parent === dir) break;
+                dir = parent;
+              }
+            }
+            this.tails.delete(key);
+            return { record, fresh: existing === undefined };
+          } finally {
+            // A failed write/sync must not leave an ordinary append trusting an old tail.
+            this.tails.delete(key);
+            await handle.close();
+          }
+        },
+        this.lock,
+      );
+    });
     this.chains.set(
       key,
       next.catch(() => undefined),

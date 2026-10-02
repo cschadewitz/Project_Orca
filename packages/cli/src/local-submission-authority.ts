@@ -16,13 +16,17 @@ import {
   OWNERSHIP_FILE,
   readLocalToken,
   submissionAuthority,
+  directAdmissionAuthority,
   orchestratorResolver,
 } from "@orca/daemon";
-export async function localSubmissionAuthority(app: {
-  config: OrcaConfig;
-  configDir: string;
-  orchestrator: Orchestrator;
-}): Promise<SubmissionAuthority> {
+export async function localSubmissionAuthority(
+  app: {
+    config: OrcaConfig;
+    configDir: string;
+    orchestrator: Orchestrator;
+  },
+  mode: "request" | "direct" = "request",
+): Promise<SubmissionAuthority> {
   const storeDir = resolve(app.configDir, app.config.storeDir);
   await mkdir(storeDir, { recursive: true });
   const workspaceId = await workspaceIdentity(storeDir);
@@ -39,7 +43,8 @@ export async function localSubmissionAuthority(app: {
       throw new OrcaError("RUN_STATE", "a current local client credential is required");
     const principal = authenticated.principal;
     const credentialId = principal.credentialId!;
-    return submissionAuthority({
+    const factory = mode === "request" ? submissionAuthority : directAdmissionAuthority;
+    const authority = factory({
       workspaceId,
       actor: { principalId: principal.id, credentialId },
       authorizer: new Authorizer({ resolver: orchestratorResolver(app.orchestrator), ownership }),
@@ -49,6 +54,13 @@ export async function localSubmissionAuthority(app: {
         return current.principal;
       },
     });
+    return {
+      ...authority,
+      authorize: (command) =>
+        authority.authorize(
+          command as import("@orca/core").SubmissionCommand & import("@orca/core").DirectAdmissionCommand,
+        ),
+    };
   }
   const localUser = userInfo();
   const principalId = `os-user-${createHash("sha256")
@@ -101,4 +113,11 @@ export function authorityForNewLocalIntent(
       throw new OrcaError("RUN_STATE", "local submission principal changed; restart the client");
     return current;
   };
+}
+
+export async function localDirectAdmissionAuthority(
+  app: Parameters<typeof localSubmissionAuthority>[0],
+): Promise<import("@orca/core").DirectAdmissionAuthority> {
+  const authority = await localSubmissionAuthority(app, "direct");
+  return { ...authority, authorize: (command) => authority.authorize({ title: "", body: "", ...command }) };
 }

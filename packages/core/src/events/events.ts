@@ -20,6 +20,14 @@ import {
   WorkspaceSchema,
 } from "../model/run.js";
 
+/** Safe stable correlation for atomic journal publication; never a client retry key. */
+export const EventJournalCorrelationSchema = z.strictObject({
+  kind: z.enum(["continuation", "revision"]),
+  id: z.string().min(1).max(128),
+  revision: z.number().int().nonnegative(),
+});
+export type EventJournalCorrelation = z.infer<typeof EventJournalCorrelationSchema>;
+
 const base = <T extends string, P extends z.ZodTypeAny>(type: T, payload: P) =>
   z.object({
     id: z.string(),
@@ -31,6 +39,7 @@ const base = <T extends string, P extends z.ZodTypeAny>(type: T, payload: P) =>
     payload,
     /** Opaque reference to a private authoritative payload; never a public retrieval capability. */
     executionPayloadRef: z.string().optional(),
+    journal: EventJournalCorrelationSchema.optional(),
   });
 
 /** Verified server-side actor; never accepted from workflow vars or caller-supplied RPC fields. */
@@ -117,6 +126,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       requestId: z.string().optional(),
       /** Server-owned recovery correlation, authenticated in the private creation payload. */
       requestAdmissionId: z.string().optional(),
+      directAdmissionId: z.string().optional(),
       workItemId: z.string().optional(),
       parentRunId: z.string().optional(),
       parentStepRunId: z.string().optional(),
@@ -309,6 +319,33 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       context: z.record(z.string(), z.unknown()).default({}),
     }),
   ),
+  // One durable marker records the exact decision and accepted dispatch intent together.
+  base(
+    "continuation.recorded",
+    z.object({
+      continuationId: z.string(),
+      state: z.enum(["prepared", "accepted", "blocked", "settled"]),
+      decision: z
+        .object({ requestId: z.string(), stepRunId: z.string(), answer: z.string(), actor: MutationActorSchema })
+        .optional(),
+      /** Versioned authoritative record is encrypted and omitted from public projections. */
+      entry: z.record(z.string(), z.unknown()).optional(),
+    }),
+  ),
+  // The single commit marker projects both revision acceptance and its gate answer.
+  // entry is authoritative protected material, absent from the public projection.
+  base(
+    "revision.recorded",
+    z.object({
+      destinationId: z.string(),
+      revisionId: z.string().optional(),
+      state: z.enum(["pending", "delivered", "rejected", "superseded"]).optional(),
+      decision: z
+        .object({ requestId: z.string(), stepRunId: z.string(), answer: z.string(), actor: MutationActorSchema })
+        .optional(),
+      entry: z.record(z.string(), z.unknown()).optional(),
+    }),
+  ),
   base(
     "human.answered",
     z.object({
@@ -342,5 +379,6 @@ export type OrcaEventInput = {
     runId: string;
     payload: OrcaEventPayload<T>;
     executionPayloadRef?: string | undefined;
+    journal?: EventJournalCorrelation | undefined;
   };
 }[OrcaEventType];

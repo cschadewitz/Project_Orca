@@ -13,6 +13,10 @@
     "./jev-eval": {
       "types": "./dist/jev/plugin.d.ts",
       "import": "./dist/jev/plugin.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
     }
   },
   "files": [
@@ -24,6 +28,8 @@
     "@orca/agents": "workspace:*",
     "@orca/engine": "workspace:*",
     "@agentclientprotocol/sdk": "^1.5.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "@orca/protocol": "workspace:*",
+    "@modelcontextprotocol/server": "2.2.0"
   }
 }

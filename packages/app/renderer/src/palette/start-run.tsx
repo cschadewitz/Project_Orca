@@ -19,7 +19,8 @@
  * resolver every link, crumb and palette row goes through — and the sentence goes in the
  * app's one live region for anybody who did not see the screen change.
  */
-import { useMemo, type JSX } from "react";
+import { newAdmissionIntent } from "@orca/protocol";
+import { useRef, useMemo, type JSX } from "react";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { runUrl } from "../route-table.js";
 import { usePaletteWrites, type PaletteWrite } from "./use-write-actions.js";
@@ -32,6 +33,7 @@ export interface PaletteStartRunProps {
 /** Nothing to render: this component *is* one registration. */
 export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element | null {
   const announce = useAnnounce();
+  const intents = useRef(new Map<string, ReturnType<typeof newAdmissionIntent>>());
 
   const rows = useMemo(
     (): readonly PaletteWrite[] => [
@@ -57,11 +59,14 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
             }));
           },
           choose: (workflowId) => {
-            void window.orca.runs.start({ workflowId }).then((result) => {
+            const intent = intents.current.get(workflowId) ?? newAdmissionIntent();
+            intents.current.set(workflowId, intent);
+            void window.orca.runs.start({ workflowId, ...intent }).then((result) => {
               if (!result.ok) {
                 announce(`The run did not start: ${result.error.message}`);
                 return;
               }
+              if (intents.current.get(workflowId) === intent) intents.current.delete(workflowId);
               announce(`${result.result.run.name} is running.`);
               onOpen(runUrl(result.result.runId));
             });

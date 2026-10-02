@@ -168,7 +168,7 @@ describe("starting a run", () => {
     fireEvent.click(items[0]!);
     await waitFor(() => expect(callsTo("runs.start")).toHaveLength(1));
     // No vars: the run takes the workflow's own (the form for them is specified nowhere).
-    expect(callsTo("runs.start")[0]).toEqual({ workflowId: WORKFLOWS[0]!.id });
+    expect(callsTo("runs.start")[0]).toEqual({ workflowId: WORKFLOWS[0]!.id, idempotencyKey: expect.any(String) });
 
     /* And the app went to the run, through the route table — which is visible as the Runs
        surface reading the run that has just been started. */

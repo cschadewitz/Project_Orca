@@ -19,6 +19,8 @@ export const AdmissionSchema = z.object({
   correlationVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   state: z.enum(["prepared", "accepted", "recoverable-failure"]),
   runId: z.string().optional(),
+  /** Reserved root identity for bounded retry reconciliation (never a wire input). */
+  reservedRunId: z.string().optional(),
 });
 export type Admission = z.infer<typeof AdmissionSchema>;
 

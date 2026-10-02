@@ -435,6 +435,13 @@ export class ControlModel {
    * by the orchestrator before admission. It never creates a Request; requests.submit is
    * the separate application service for decomposition/program admission.
    */
+  async settleAdmitted(runId: string): Promise<RunsStartResult> {
+    const state = await this.orc.getState(runId);
+    if (state.run.status === "created" || state.run.status === "running")
+      await leased(runId, () => this.orc.run(runId));
+    return { runId, run: await this.runView(runId), asOf: this.clock.isoNow() };
+  }
+
   async startRun(
     params: RunsStartParams,
     attributeStartedRun?: (runId: string) => void | Promise<void>,

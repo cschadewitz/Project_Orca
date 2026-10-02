@@ -9,7 +9,7 @@ import {
   type OrcaEventInput,
 } from "@orca/core";
 import type { WorkflowVersionStore } from "./workflow-store.js";
-import type { EventFilter, EventListener, EventRange, EventStore } from "./event-store.js";
+import type { DurableEventAppend, EventFilter, EventListener, EventRange, EventStore } from "./event-store.js";
 import { publicInputVars, redactExecutionValue, unavailable, type ExecutionStore } from "./execution-store.js";
 
 export class ProtectedEventStore implements EventStore {
@@ -62,8 +62,43 @@ export class ProtectedEventStore implements EventStore {
       throw unavailable();
   }
 
+  /** Only journal adapters under the run fence may publish an authoritative acceptance marker. */
+  async appendDurableUnique(input: OrcaEventInput, options: DurableEventAppend): Promise<OrcaEvent> {
+    if (!this.publicEvents.appendDurableUnique)
+      throw new OrcaError("NOT_SUPPORTED", "this event store has no durable journal publication");
+    if (input.type !== "revision.recorded" && input.type !== "continuation.recorded")
+      throw new OrcaError("NOT_SUPPORTED", "durable journal publication requires a journal event");
+    const inputs = await this.execution.getInputs(input.runId);
+    if (!inputs || !input.payload.entry) throw unavailable();
+    await this.requireSafeLegacy(input.runId);
+    await this.requireIntegrity(input.runId);
+    const executionPayloadRef = randomUUID();
+    await this.execution.putPayload(executionPayloadRef, input);
+    const { entry: _entry, ...metadata } = input.payload;
+    return this.publicEvents.appendDurableUnique(
+      { ...input, payload: metadata, executionPayloadRef } as OrcaEventInput,
+      {
+        ...options,
+        equivalent: async (existing) => {
+          if (!existing.executionPayloadRef || existing.type !== input.type) return false;
+          const [restored] = await executionEvents([existing], this.execution);
+          return restored !== undefined && (await options.equivalent(restored));
+        },
+      },
+    );
+  }
+
   async append(input: OrcaEventInput): Promise<OrcaEvent> {
     const inputs = await this.execution.getInputs(input.runId);
+    if (input.type === "revision.recorded" || input.type === "continuation.recorded") {
+      // Revision material is always private, including on otherwise non-sensitive runs.
+      // Runtime boundary setup must promote inputs through the existing protected store.
+      if (!inputs || !input.payload.entry) throw unavailable();
+      const executionPayloadRef = randomUUID();
+      await this.execution.putPayload(executionPayloadRef, input);
+      const { entry: _entry, ...metadata } = input.payload;
+      return this.publicEvents.append({ ...input, payload: metadata, executionPayloadRef } as OrcaEventInput);
+    }
     if (!inputs) {
       if (!this.publicOnlyRuns.has(input.runId)) {
         await this.requireSafeLegacy(input.runId, input);

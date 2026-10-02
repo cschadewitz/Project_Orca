@@ -100,9 +100,20 @@ describe("hello", () => {
     expect(READ_METHODS).toContain(CONFIG_GET_METHOD);
     expect(CONTROL_METHODS).toContain(CONFIG_SET_METHOD);
     expect(DAEMON_CAPABILITIES).toEqual([
+      "operator.discover",
+      "operator.page",
+      "operator.config",
+      "operator.preflight",
+      "operator.artifact",
       "inputs.live",
+      "inputs.revise",
+      "inputs.revisionPending",
+      "inputs.replaceRevision",
       "runs.read",
       "runs.subscribe",
+      "runs.admit",
+      "admissions.get",
+      "admissions.reconcile",
       "runs.control",
       "plan.read",
       "plan.write",

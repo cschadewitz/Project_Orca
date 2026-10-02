@@ -252,6 +252,31 @@ admission to reopen. All runtime parts and shipped assets move together.
 
 ### Recovery and store compatibility
 
+The operator-runtime integration uses **protocol 2.0** and **store epoch
+`operator-journals-v4`**, replacing protocol 1.10 / `config-generations-v3`.
+Upgrade clients and daemons together. Old hello capability schemas are closed, and
+`revision.recorded` adds an event old event schemas cannot parse; these are not
+backward-compatible wire additions. Optional operator, admission and revision methods
+remain conditional on installed providers and caller authority, not new globally required
+release capabilities.
+
+The epoch check belongs to the **managed release updater**, which refuses activation and
+recovery across different epochs. Direct CLI and daemon startup do **not** enforce
+`release-compatibility.json`; successfully starting an old binary is not proof it can read
+or safely write an upgraded store. Old full-schema event readers throw on a valid but
+unknown event such as `revision.recorded`; filtered readers may bypass that event and
+appear to work. Neither outcome is a supported downgrade or a compatibility guarantee.
+
+Before the first upgraded writer runs, stop admission, finish active work, stop every
+writer and take a complete, consistent pre-upgrade backup of both stores and all associated
+state listed below. Retain the matching old binary and pinned toolchain and validate the
+restore offline. The backup must include private/protected event payloads and all admission,
+continuation and revision journals, not merely public event logs. Do not mix individual
+files from old and upgraded stores. Rollback requires restoring that entire matching
+backup before starting the old binary; writes made after the backup require separate
+reconciliation and are not recovered by switching binaries. A direct in-place downgrade
+of an upgraded store is unsupported.
+
 `release-compatibility.json` carries the store epoch. Changing any writer so old binaries
 cannot safely read its writes requires changing that epoch and a store changelog fragment.
 Automatic activation across epochs is refused. Do not edit the marker to bypass the check.

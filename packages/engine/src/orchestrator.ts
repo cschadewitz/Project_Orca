@@ -96,6 +96,11 @@ import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/prov
 export type SessionFactory = (options: OpenSessionOptions) => Promise<AgentSession>;
 
 export interface OrchestratorOptions {
+  revisionRuntime?: {
+    /** Reserve exactly the declared next attempt before scheduling; refuse ambiguous replay. */
+    reserveStep(rc: RunContext, nodeId: string): Promise<string | undefined>;
+    forStep(rc: RunContext, step: StepRun): Pick<StepContext, "declareRevision" | "revisionInput">;
+  };
   stores: Stores;
   agents: AgentRegistry;
   workflows: WorkflowRegistry;
@@ -161,6 +166,9 @@ export type AgentSessionOpenedListener = (info: { runId: string; agentId: string
 export interface StartRunOptions {
   /** Server-owned Request admission metadata; never part of workflow vars or wire launch params. */
   requestAdmissionId?: string;
+  /** Trusted admission journal only; never accepted by wire schemas. */
+  admissionRunId?: string;
+  directAdmissionId?: string;
   /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
   actor?: MutationActor;
   workflowId?: string;
@@ -261,6 +269,7 @@ export class Orchestrator {
   private readonly leaseTtlMs: number;
   private readonly leaseRenewMs: number | undefined;
 
+  private readonly revisionRuntime: OrchestratorOptions["revisionRuntime"];
   private readonly live = new Map<string, RunContext>();
   private readonly running = new Map<string, Promise<RunState>>();
   /**
@@ -277,6 +286,7 @@ export class Orchestrator {
   private readonly sessionOpenedListeners = new Set<AgentSessionOpenedListener>();
 
   constructor(o: OrchestratorOptions) {
+    this.revisionRuntime = o.revisionRuntime;
     this.stores = {
       ...o.stores,
       events:
@@ -358,7 +368,22 @@ export class Orchestrator {
       if (!this.generations) throw unavailable();
       await this.generations.restore(generation.snapshot.id);
     }
-    const runId = newId("run", this.clock.now());
+    if (
+      opts.admissionRunId &&
+      (!/^run_[a-f0-9-]{36}$/.test(opts.admissionRunId) ||
+        !opts.actor ||
+        opts.parentRunId ||
+        (!opts.directAdmissionId && !opts.requestAdmissionId) ||
+        (opts.directAdmissionId && opts.requestAdmissionId))
+    )
+      throw new OrcaError("RUN_STATE", "Invalid reserved admission identity");
+    const runId = opts.admissionRunId ?? newId("run", this.clock.now());
+    if (
+      opts.admissionRunId &&
+      ((await this.stores.events.readRange(runId, { limit: 1 })).length ||
+        (await this.stores.execution.getInputs(runId)))
+    )
+      throw new OrcaError("RUN_STATE", "Reserved admission was already prepared; reconcile its original receipt");
     // A child with an explicit workspace still has to validate its parent's sealed
     // sensitivity state before copying vars. Missing overlays must never downgrade it.
     const parentFirst = opts.parentRunId
@@ -427,7 +452,9 @@ export class Orchestrator {
     await this.stores.events.append(
       opts.requestAdmissionId
         ? await correlateRequestAdmission(created, opts.requestAdmissionId, this.stores.execution)
-        : created,
+        : opts.directAdmissionId
+          ? { ...created, payload: { ...created.payload, directAdmissionId: opts.directAdmissionId } }
+          : created,
     );
     return runId;
   }
@@ -485,7 +512,8 @@ export class Orchestrator {
         );
       try {
         await this.stores.leases.withOwnership(lease, async () => {
-          const fresh = reduceRun(await executionEvents(await this.stores.events.read(runId), this.stores.execution));
+          const events = await executionEvents(await this.stores.events.read(runId), this.stores.execution);
+          const fresh = reduceRun(events);
           if (isTerminal(fresh)) return;
           for (const s of openSteps(fresh))
             await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
@@ -651,7 +679,8 @@ export class Orchestrator {
     actor?: MutationActor,
   ): Promise<HumanInputRequest> {
     // Read the durable log under ownership; a cached paused context may precede another answer.
-    const fresh = reduceRun(await executionEvents(await this.stores.events.read(runId), this.stores.execution));
+    const events = await executionEvents(await this.stores.events.read(runId), this.stores.execution);
+    const fresh = reduceRun(events);
     const request = pendingHumanInputs(fresh).find((h) => h.id === requestId);
     if (!request) throw new OrcaError("RUN_STATE", `no pending human input '${requestId}'`, { requestId });
     const state = fresh;
@@ -668,6 +697,16 @@ export class Orchestrator {
     // An answer is an option's id, never its label: a label may be reworded, and what
     // is recorded here is compared against the options again when the run is re-driven.
     const ids = request.options.map((o) => o.id);
+    const created = events.find((event) => event.type === "run.created");
+    // Preserve pre-versioning restoration; a missing recorded definition refuses before answering.
+    const definition = await this.definitionFor(
+      state.run.workflowId,
+      state.run.workflowVersion,
+      created?.type === "run.created" && created.payload.workflowStored === true,
+    );
+    const source = definition.nodes[state.steps[request.stepRunId]?.nodeId ?? ""];
+    if ((source?.type === "gate" || source?.type === "decision") && source.revision?.actionId === answer)
+      throw new OrcaError("NOT_SUPPORTED", "Use Request changes with explicit corrective input for this branch");
     if (ids.length && !ids.includes(answer)) {
       const protectedInputs = await this.stores.execution.getInputs(runId);
       throw new OrcaError(
@@ -1279,7 +1318,7 @@ export class Orchestrator {
         if (rc.abort.signal.aborted) throw new OrcaError("CANCELLED", String(rc.abort.signal.reason ?? "cancelled"));
         const node = def.nodes[nodeId];
         if (!node) throw new OrcaError("WORKFLOW_INVALID", `node '${nodeId}' not found in ${def.id}`);
-        const stepRunId = newId("step", this.clock.now());
+        const stepRunId = (await this.revisionRuntime?.reserveStep(rc, nodeId)) ?? newId("step", this.clock.now());
         await rc.emit({
           type: "step.scheduled",
           payload: {
@@ -1414,6 +1453,7 @@ export class Orchestrator {
   private stepContext(rc: RunContext, step: StepRun, node: NodeDef): StepContext {
     const self = this;
     const ctx: StepContext = {
+      ...this.revisionRuntime?.forStep(rc, step),
       run: rc,
       step,
       nodeId: step.nodeId,

@@ -127,6 +127,13 @@ handle("orca:journal.list", (params: Parameters<DaemonClient["journalList"]>[0])
 // reads do; what makes them different is on the other two sides - the daemon refuses them
 // without the run's lease, and the renderer asks `useWritability()` before offering the
 // control at all. `runs.start` needs no lease: there is no run to hold one yet.
+handle("orca:inputs.revise", (params: Parameters<DaemonClient["inputsRevise"]>[0]) => client().inputsRevise(params));
+handle("orca:inputs.revisionPending", (params: Parameters<DaemonClient["inputsRevisionPending"]>[0]) =>
+  client().inputsRevisionPending(params),
+);
+handle("orca:inputs.replaceRevision", (params: Parameters<DaemonClient["inputsReplaceRevision"]>[0]) =>
+  client().inputsReplaceRevision(params),
+);
 handle("orca:inputs.answer", (params: Parameters<DaemonClient["inputsAnswer"]>[0]) => client().inputsAnswer(params));
 handle("orca:runs.cancel", (params: Parameters<DaemonClient["runsCancel"]>[0]) => client().runsCancel(params));
 handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) => client().runsResume(params));

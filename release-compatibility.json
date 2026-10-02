@@ -1,8 +1,8 @@
 {
-  "storeEpoch": "config-generations-v3",
+  "storeEpoch": "operator-journals-v4",
   "protocol": {
-    "major": 1,
-    "minor": 10
+    "major": 2,
+    "minor": 0
   },
   "capabilities": [
     "runs.read",
@@ -14,6 +14,7 @@
     "inputs.live"
   ],
   "notes": [
-    "Generation snapshots embed workflowDefinitions without pinning unlaunched workflows. Older binaries that ignore this field cannot restore a generation when any catalog workflow lacks a pin, even if both builds report config-generations-v3. Snapshot compatibility is one-way; epoch equality does not establish rollback compatibility. Retain a complete pre-upgrade store backup and its matching binary."
+    "Generation snapshots embed workflowDefinitions without pinning unlaunched workflows. Older binaries that ignore this field cannot restore a generation when any catalog workflow lacks a pin, even if both builds report config-generations-v3. Snapshot compatibility is one-way; epoch equality does not establish rollback compatibility. Retain a complete pre-upgrade store backup and its matching binary.",
+    "Operator journals and revision.recorded establish the operator-journals-v4 store boundary. Upgrade protocol 2.0 clients and daemons together. Managed activation and recovery refuse differing store epochs; direct CLI/daemon startup does not enforce this release marker. Direct downgrade is unsupported: restore a complete consistent pre-upgrade store backup with its matching binary before reopening work."
   ]
 }

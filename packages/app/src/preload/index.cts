@@ -102,6 +102,9 @@ const bridge: OrcaBridge = {
     start: (params) => call("orca:runs.start", params),
   },
   inputs: {
+    revise: (params) => call("orca:inputs.revise", params),
+    revisionPending: (params) => call("orca:inputs.revisionPending", params),
+    replaceRevision: (params) => call("orca:inputs.replaceRevision", params),
     list: (params = {}) => call("orca:inputs.list", params),
     answer: (params) => call("orca:inputs.answer", params),
   },

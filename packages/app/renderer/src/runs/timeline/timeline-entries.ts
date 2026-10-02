@@ -295,6 +295,10 @@ export function summarise(event: OrcaEvent, subject: string): string {
 
     case "human.requested":
       return `${subject} asked, ${event.payload.question}`;
+    case "revision.recorded":
+      return `Correction ${event.payload.state ?? "boundary recorded"}`;
+    case "continuation.recorded":
+      return `Continuation ${event.payload.state}`;
     case "human.answered":
       return `${subject} answered ${event.payload.answer}`;
   }

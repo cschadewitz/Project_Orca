@@ -106,7 +106,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * daemon workspace/boot identity, and owner-local live input fields and invalidation.
  * Methods and inputs.live remain conditional on wired providers and current authority.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 10 };
+/**
+ * 2.0 is the operator-runtime integration boundary. Protocol 1.10 clients validate
+ * hello capabilities and event payloads with closed schemas: new operator/admission/
+ * revision capabilities and `revision.recorded` are not safely ignorable additions.
+ * Upgrade clients and daemons together. Optional feature methods still depend on
+ * installed providers and caller authority; the major bump does not require them.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 0 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
   return `${v.major}.${v.minor}`;

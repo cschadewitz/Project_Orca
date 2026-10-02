@@ -70,7 +70,11 @@ export interface SubmissionAuthority {
 }
 
 export interface SubmissionService {
-  submit(command: SubmissionCommand, authority: SubmissionAuthority): Promise<SubmissionResult>;
+  submit(
+    command: SubmissionCommand,
+    authority: SubmissionAuthority,
+    retry?: import("./admission-retry.js").RetryOptions,
+  ): Promise<SubmissionResult>;
   reconcile(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
   inspect(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
   list(authority: SubmissionAuthority): Promise<SubmissionResult[]>;

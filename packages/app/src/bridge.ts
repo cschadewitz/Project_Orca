@@ -233,6 +233,15 @@ export interface OrcaBridge {
     resume: (params: RunsResumeParams) => Promise<BridgeResult<RunsResumeResult>>;
   };
   inputs: {
+    revise?: (
+      params: import("@orca/protocol").InputsReviseParams,
+    ) => Promise<BridgeResult<import("@orca/protocol").RevisionResult>>;
+    revisionPending?: (
+      params: import("@orca/protocol").InputsRevisionPendingParams,
+    ) => Promise<BridgeResult<import("@orca/protocol").PendingRevisionView>>;
+    replaceRevision?: (
+      params: import("@orca/protocol").InputsReplaceRevisionParams,
+    ) => Promise<BridgeResult<import("@orca/protocol").RevisionResult>>;
     /** The gates and permission asks waiting on a person. */
     list: (params?: Params<InputsListParams>) => Promise<BridgeResult<InputsListResult>>;
     /**

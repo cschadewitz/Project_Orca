@@ -29,6 +29,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       strict: true,
       options: {
         config: { type: "string" },
+        endpoint: { type: "string" },
+        "token-env": { type: "string" },
         cwd: { type: "string" },
         var: { type: "string", multiple: true },
         "var-json": { type: "string", multiple: true },
@@ -48,6 +50,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         "template-pack": { type: "string" },
         body: { type: "string" },
         "body-file": { type: "string" },
+        "idempotency-key": { type: "string" },
         dir: { type: "string" },
         "log-level": { type: "string" },
         note: { type: "string" },

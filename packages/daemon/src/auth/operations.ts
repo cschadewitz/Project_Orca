@@ -58,10 +58,20 @@ export const WORKFLOWS_VALIDATE_INPUTS_OPERATION = "workflows.validateInputs";
 
 export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   hello: { permission: null, resource: "none" },
+  "operator.discover": { permission: null, resource: "none" },
+  // The closed collection discriminant selects a grant; OperatorReadModel checks it before diagnostics.
+  "operator.page": { permission: null, resource: "none" },
+  "operator.config": { permission: "config.read", resource: "none" },
+  "operator.preflight": { permission: "runs.start", resource: "none" },
+  "operator.artifact": { permission: "artifacts.read", resource: "run" },
 
   "runs.list": { permission: "runs.read", resource: "run-list" },
   "runs.get": { permission: "runs.read", resource: "run" },
   "runs.events": { permission: "runs.read", resource: "run" },
+  // Exact target checks live in the authenticated revision service, including after the input closes.
+  "inputs.revise": { permission: "inputs.answer", resource: "none", audit: "decision" },
+  "inputs.replaceRevision": { permission: "inputs.answer", resource: "none", audit: "mutation" },
+  "inputs.revisionPending": { permission: "runs.read", resource: "none" },
   "inputs.list": { permission: "runs.read", resource: "input-list" },
   "claims.list": { permission: "runs.read", resource: "claim-list" },
   "artifacts.list": { permission: "artifacts.read", resource: "artifact-list" },
@@ -79,6 +89,9 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "requests.reconcile": { permission: "plan.write", resource: "none", audit: "mutation" },
   "requests.admission": { permission: "plan.write", resource: "none" },
   "requests.admissions": { permission: "plan.write", resource: "none" },
+  "runs.admit": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
+  "admissions.get": { permission: "runs.start", resource: "none" },
+  "admissions.reconcile": { permission: "runs.start", resource: "none", audit: "mutation" },
   "runs.start": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
   "runs.resume": { permission: "runs.control", resource: "run", audit: "mutation" },
   "runs.cancel": { permission: "runs.control", resource: "run", audit: "mutation" },
@@ -122,6 +135,17 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
  * and to nobody else.
  */
 export const CAPABILITY_PERMISSIONS: Readonly<Record<string, readonly Permission[]>> = {
+  "operator.discover": ["runs.read", "artifacts.read", "workflows.read", "runs.start", "config.read", "plan.read"],
+  "operator.page": ["runs.read", "artifacts.read", "workflows.read", "config.read", "plan.read"],
+  "operator.config": ["config.read"],
+  "operator.preflight": ["runs.start"],
+  "operator.artifact": ["artifacts.read"],
+  "inputs.revise": ["inputs.answer"],
+  "inputs.replaceRevision": ["inputs.answer"],
+  "inputs.revisionPending": ["runs.read"],
+  "runs.admit": ["runs.start"],
+  "admissions.get": ["runs.start"],
+  "admissions.reconcile": ["runs.start"],
   "inputs.live": ["inputs.answer"],
   "runs.read": ["runs.read"],
   "runs.subscribe": ["runs.read"],

@@ -5,7 +5,14 @@
  * and `at`, persist atomically per append, and fan out to subscribers *after*
  * the event is durable.
  */
-import { newId, type Clock, systemClock, type OrcaEvent, type OrcaEventInput } from "@orca/core";
+import {
+  newId,
+  type Clock,
+  systemClock,
+  type OrcaEvent,
+  type OrcaEventInput,
+  type EventJournalCorrelation,
+} from "@orca/core";
 
 export interface EventFilter {
   runId?: string;
@@ -40,7 +47,18 @@ export interface EventRange {
   match?: ((event: OrcaEvent) => boolean) | undefined;
 }
 
+/** Journal publication under the caller-held run fence and the store's append lock. */
+export interface DurableEventAppend {
+  /** Current last sequence, or -1 for an empty run. Existing correlation is checked first. */
+  expectedSeq: number;
+  correlation: EventJournalCorrelation;
+  /** Compare authenticated private command material before replaying an existing marker. */
+  equivalent(existing: OrcaEvent): boolean | Promise<boolean>;
+}
+
 export interface EventStore {
+  /** Optional: production journal services refuse stores without durable unique publication. */
+  appendDurableUnique?(input: OrcaEventInput, options: DurableEventAppend): Promise<OrcaEvent>;
   append(input: OrcaEventInput): Promise<OrcaEvent>;
   read(runId: string): Promise<OrcaEvent[]>;
   /**
@@ -119,6 +137,12 @@ export abstract class BaseEventStore implements EventStore {
       seq,
       at: this.clock.isoNow(),
     }));
+    this.publish(event);
+    return event;
+  }
+
+  /** Notify only after the concrete append has reached its promised durability boundary. */
+  protected publish(event: OrcaEvent): void {
     for (const { listener, filter } of this.listeners) {
       if (filter?.runId && filter.runId !== event.runId) continue;
       if (filter?.types && !filter.types.includes(event.type)) continue;
@@ -128,7 +152,6 @@ export abstract class BaseEventStore implements EventStore {
         /* listeners must not break the log */
       }
     }
-    return event;
   }
 
   subscribe(listener: EventListener, filter?: EventFilter): () => void {

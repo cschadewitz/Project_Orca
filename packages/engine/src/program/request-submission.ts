@@ -1,4 +1,14 @@
-/** One durable admission lifecycle; client retry keys deliberately belong to #331. */
+/** One durable Request admission lifecycle, optionally reserved by the shared retry ledger. */
+import { AsyncLocalStorage } from "node:async_hooks";
+import { z } from "zod";
+import type {
+  JsonValue,
+  RetryContext,
+  RetryOperation,
+  RetryOptions,
+  RetryResult,
+} from "../../../core/src/model/admission-retry.js";
+import { canonicalJson, type RegisteredRetryClaims } from "../admission-retry.js";
 import { randomUUID } from "node:crypto";
 import { redactExecutionValue } from "@orca/store";
 import {
@@ -39,6 +49,7 @@ export interface RequestSubmissionOptions {
   admissions: AdmissionStore;
   captureLaunch: CaptureLaunch;
   restoreLaunch?: RestoreLaunch;
+  retries?: RegisteredRetryClaims;
 }
 
 const unavailable = () => new OrcaError("RUN_STATE", "request admission is unavailable");
@@ -49,9 +60,117 @@ const failure = {
 } as const;
 
 export class RequestSubmissionService implements SubmissionService {
-  constructor(private readonly opts: RequestSubmissionOptions) {}
+  private readonly authorities = new AsyncLocalStorage<SubmissionAuthority>();
+  private readonly operation: RetryOperation<SubmissionCommand, SubmissionResult> | undefined;
+  constructor(private readonly opts: RequestSubmissionOptions) {
+    this.operation = opts.retries?.register(
+      {
+        kind: "request.submit",
+        canonicalize: (input: SubmissionCommand) => {
+          const parsed = SubmissionCommandSchema.safeParse(input);
+          if (!parsed.success) throw new OrcaError("WORKFLOW_INPUT_INVALID", "Invalid Request submission");
+          // Detect unknown nested source/override fields stripped by legacy schemas.
+          const original = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined));
+          const normalized = Object.fromEntries(Object.entries(parsed.data).filter(([, v]) => v !== undefined));
+          if (canonicalJson({ ...original, title: parsed.data.title }, false) !== canonicalJson(normalized, false))
+            throw new OrcaError("WORKFLOW_INPUT_INVALID", "Unknown Request submission fields");
+          return JSON.parse(
+            canonicalJson({ ...normalized, title: input.title, vars: parsed.data.vars ?? {} }, false),
+          ) as JsonValue;
+        },
+        prepare: async (command, context) => {
+          const binding = {
+            admissionId: `admission_${randomUUID()}`,
+            requestId: newId("req", this.opts.orchestrator.clock.now()),
+          };
+          await context.bind(binding);
+          return this.prepare(command, this.authority(), { ...binding, context });
+        },
+        recover: async (_command, context) => this.recoverReserved(context),
+      },
+      async (command, binding) => {
+        await this.authority().authorize(command);
+        if (typeof binding?.admissionId === "string") {
+          const record = await this.opts.admissions.records.get(binding.admissionId);
+          if (record) {
+            if (
+              record.principalId !== this.authority().actor.principalId ||
+              record.workspaceId !== this.authority().workspaceId
+            )
+              throw unavailable();
+            await this.authority().authorize({ ...command, workflowId: record.workflowId });
+          }
+        }
+      },
+    );
+  }
+  private authority(): SubmissionAuthority {
+    const authority = this.authorities.getStore();
+    if (!authority) throw unavailable();
+    return authority;
+  }
+  withRetryAuthority<T>(authority: SubmissionAuthority, action: () => Promise<T>): Promise<T> {
+    return this.authorities.run(authority, action);
+  }
+  async submitRetry(
+    command: SubmissionCommand,
+    retry: RetryOptions,
+    authority: SubmissionAuthority,
+  ): Promise<RetryResult<SubmissionResult>> {
+    if (!this.opts.retries || !this.operation)
+      throw new OrcaError("NOT_SUPPORTED", "Retry admission is not configured");
+    return this.withRetryAuthority(authority, () =>
+      this.opts.retries!.execute(this.operation!, command, retry, {
+        principalId: authority.actor.principalId,
+        workspaceId: authority.workspaceId,
+        authorize: (value) => authority.authorize(value),
+      }),
+    );
+  }
+  private async recoverReserved(context: RetryContext): Promise<SubmissionResult> {
+    const binding = z.object({ admissionId: z.string(), requestId: z.string() }).parse(await context.readBinding());
+    const authority = this.authority();
+    return this.opts.admissions.lock(binding.admissionId, async () => {
+      let record = await this.opts.admissions.records.get(binding.admissionId);
+      if (!record) {
+        const sealed = await this.opts.orchestrator.stores.execution.getInputs(binding.admissionId);
+        if (!sealed) return { state: "recoverable-failure", ...binding, failure };
+        record = AdmissionSchema.parse(sealed.vars.admission);
+        if (
+          record.id !== binding.admissionId ||
+          record.requestId !== binding.requestId ||
+          record.principalId !== authority.actor.principalId ||
+          record.workspaceId !== authority.workspaceId
+        )
+          throw unavailable();
+        await this.opts.admissions.records.put(record);
+      }
+      const { command, request } = await this.material(record);
+      await context.reauthorize();
+      await authority.authorize({ ...command, workflowId: record.workflowId });
+      return this.admit(record, command, request, authority);
+    });
+  }
 
-  async submit(input: SubmissionCommand, authority: SubmissionAuthority): Promise<SubmissionResult> {
+  async submit(
+    input: SubmissionCommand,
+    authority: SubmissionAuthority,
+    retry: RetryOptions = {},
+  ): Promise<SubmissionResult> {
+    if (this.opts.retries) {
+      const response = await this.submitRetry(input, retry, authority);
+      if (response.state === "in-progress")
+        throw new OrcaError("RUN_STATE", "Request admission is in progress", { ...response });
+      return response.result;
+    }
+    if (retry.idempotencyKey !== undefined) throw new OrcaError("NOT_SUPPORTED", "Retry admission is not configured");
+    return this.prepare(input, authority);
+  }
+  private async prepare(
+    input: SubmissionCommand,
+    authority: SubmissionAuthority,
+    reservation?: { admissionId: string; requestId: string; context: RetryContext },
+  ): Promise<SubmissionResult> {
     // Operation/resource authority precedes schema diagnostics. Never accept authority from input.
     await authority.authorize(input);
     const parsed = SubmissionCommandSchema.safeParse(input);
@@ -65,9 +184,9 @@ export class RequestSubmissionService implements SubmissionService {
     const resolved = { ...command, workflowId: captured.workflow.id };
     await authority.authorize(resolved);
     this.requireCorrelation(captured);
-    const id = `admission_${randomUUID()}`;
+    const id = reservation?.admissionId ?? `admission_${randomUUID()}`;
     const request = RequestSchema.parse({
-      id: newId("req", this.opts.orchestrator.clock.now()),
+      id: reservation?.requestId ?? newId("req", this.opts.orchestrator.clock.now()),
       title: command.title,
       body: command.body,
       source: command.source,
@@ -76,7 +195,9 @@ export class RequestSubmissionService implements SubmissionService {
       createdAt: this.opts.orchestrator.clock.isoNow(),
       updatedAt: this.opts.orchestrator.clock.isoNow(),
     });
-    const options = this.options(command, request, authority, id);
+    const reservedRunId =
+      "admissionRunIds" in captured && captured.admissionRunIds === true ? `run_${randomUUID()}` : undefined;
+    const options = this.options(command, request, authority, id, reservedRunId);
     await captured.validateStartRun(options);
     await authority.authorize(resolved);
     const record: Admission = {
@@ -91,10 +212,12 @@ export class RequestSubmissionService implements SubmissionService {
       createdAt: request.createdAt,
       state: "prepared",
       correlationVersion: 2,
+      ...(reservedRunId ? { reservedRunId } : {}),
     };
     // Seal first. The discoverable index never contains title/body, vars, source or overrides.
     // Reuse protected-execution-v2 key handling and immutable authenticated records.
     try {
+      await reservation?.context.reauthorize();
       await this.opts.orchestrator.stores.execution.putInputs({
         runId: id,
         workflowId: record.workflowId,
@@ -186,6 +309,7 @@ export class RequestSubmissionService implements SubmissionService {
       admission.data.principalId !== record.principalId ||
       admission.data.generationId !== record.generationId ||
       admission.data.correlationVersion !== record.correlationVersion ||
+      admission.data.reservedRunId !== record.reservedRunId ||
       admission.data.workflowRevision !== record.workflowRevision ||
       sealed.workflowId !== record.workflowId ||
       sealed.workflowVersion !== record.workflowVersion
@@ -204,11 +328,13 @@ export class RequestSubmissionService implements SubmissionService {
     request: Request,
     authority: SubmissionAuthority,
     admissionId: string,
-  ): BoundLaunchOptions {
+    admissionRunId?: string,
+  ): BoundLaunchOptions & { admissionRunId?: string } {
     return {
       requestId: request.id,
       vars: { ...command.vars, request },
       requestAdmissionId: admissionId,
+      ...(admissionRunId ? { admissionRunId } : {}),
       actor: authority.actor,
       ...(command.overrides ? { overrides: command.overrides } : {}),
     };
@@ -256,6 +382,12 @@ export class RequestSubmissionService implements SubmissionService {
       verify(await readRoot(recorded));
       return recorded;
     }
+    if (record.reservedRunId) {
+      const first = (await orc.stores.events.readRange(record.reservedRunId, { limit: 1 }))[0];
+      if (!first) return undefined;
+      verify(await readRoot(record.reservedRunId));
+      return record.reservedRunId;
+    }
     // Old incomplete admissions have no unambiguous correlation. Fail closed rather than
     // guessing which associated run was the root or launching a duplicate.
     if (!record.correlationVersion) throw unavailable();
@@ -285,6 +417,9 @@ export class RequestSubmissionService implements SubmissionService {
       let runId = captured ? undefined : await this.findRoot(record);
       await authority.authorize({ ...command, workflowId: record.workflowId });
       if (!runId) {
+        // Private preparation may already have provisioned a workspace. Never repeat an
+        // uncertain external effect when no authenticated creation event was published.
+        if (record.reservedRunId && (await orc.stores.execution.getInputs(record.reservedRunId))) throw unavailable();
         const launch =
           captured ??
           (this.opts.restoreLaunch
@@ -308,7 +443,7 @@ export class RequestSubmissionService implements SubmissionService {
           launch.workflow.revision !== record.workflowRevision
         )
           throw unavailable();
-        const options = this.options(command, request, authority, record.id);
+        const options = this.options(command, request, authority, record.id, record.reservedRunId);
         await launch.validateStartRun(options);
         // Request persistence is retried only before a root exists; never overwrite settlement.
         // Until startRun has persisted its authoritative sensitivity overlay we cannot know
@@ -317,6 +452,7 @@ export class RequestSubmissionService implements SubmissionService {
         await orc.stores.requests.put(publicRequest(request));
         await authority.authorize({ ...command, workflowId: record.workflowId });
         runId = await launch.startRun(options);
+        if (record.reservedRunId && runId !== record.reservedRunId) throw unavailable();
       }
       current = { ...record, runId };
       await admissions.records.put(current);

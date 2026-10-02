@@ -9,6 +9,7 @@
  * hands back a stream that reconnects and resumes on its own. Both halves are the same
  * daemon on the same port; a client that only reads never opens a socket.
  */
+import { RevisionResultSchema, PendingRevisionViewSchema } from "@orca/protocol";
 import { MaintenanceResultSchema, type MaintenanceParams, type MaintenanceResult } from "@orca/protocol";
 
 import {
@@ -285,6 +286,15 @@ export class DaemonClient {
     return this.call(RUNS_EVENTS_METHOD, params, RunsEventsResultSchema);
   }
 
+  inputsRevise(params: import("@orca/protocol").InputsReviseParams) {
+    return this.call("inputs.revise", params, RevisionResultSchema);
+  }
+  inputsRevisionPending(params: import("@orca/protocol").InputsRevisionPendingParams) {
+    return this.call("inputs.revisionPending", params, PendingRevisionViewSchema);
+  }
+  inputsReplaceRevision(params: import("@orca/protocol").InputsReplaceRevisionParams) {
+    return this.call("inputs.replaceRevision", params, RevisionResultSchema);
+  }
   inputsList(params: Params<InputsListParams> = {}): Promise<InputsListResult> {
     return this.call(INPUTS_LIST_METHOD, params, InputsListResultSchema);
   }

@@ -52,6 +52,12 @@ export const OrcaConfigSchema = z.object({
   version: z.literal(1).default(1),
   /** Where event logs, artifacts and indexes are stored (relative to the config file). */
   storeDir: z.string().default(".orca"),
+  admissionRetry: z
+    .object({
+      maxClaimsPerWorkspace: z.number().int().positive().default(100_000),
+      maxClaimsPerPrincipal: z.number().int().positive().default(10_000),
+    })
+    .optional(),
   hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),
   agents: z.array(AgentSpecSchema).default([]),
   /** Explicit role -> agent id mapping. Falls back to the first agent listing the role. */

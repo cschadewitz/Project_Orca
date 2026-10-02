@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+  OPERATOR_METHODS,
   AGENT_METHODS,
   CONTROL_METHODS,
   HELLO_METHOD,
@@ -48,6 +49,9 @@ function everyAnsweredMethod(): string[] {
     orcaVersion: "0.0.0",
     capabilities: [],
     maintenance: new Maintenance(),
+    revisionInputs: async () => {
+      throw new Error("inventory fixture must not execute");
+    },
     reads: { plans: present } as never,
     source: present,
     control: present,
@@ -62,6 +66,10 @@ describe("the operation inventory", () => {
   it("covers every method the protocol declares and the daemon answers, and nothing else", () => {
     const declared = new Set<string>([
       HELLO_METHOD,
+      ...OPERATOR_METHODS,
+      "runs.admit",
+      "admissions.get",
+      "admissions.reconcile",
       ...READ_METHODS,
       ...PLAN_READ_METHODS,
       ...CONTROL_METHODS,

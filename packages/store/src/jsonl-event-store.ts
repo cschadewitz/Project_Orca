@@ -7,8 +7,16 @@
  * with the plan journal.
  */
 import { join } from "node:path";
-import { OrcaEventSchema, type Clock, type Logger, type OrcaEvent } from "@orca/core";
-import { BaseEventStore, matchesRange, type EventRange } from "./event-store.js";
+import {
+  newId,
+  OrcaError,
+  OrcaEventSchema,
+  type Clock,
+  type Logger,
+  type OrcaEvent,
+  type OrcaEventInput,
+} from "@orca/core";
+import { BaseEventStore, matchesRange, type EventRange, type DurableEventAppend } from "./event-store.js";
 import { JsonlLogDir } from "./jsonl-log.js";
 
 export class JsonlEventStore extends BaseEventStore {
@@ -22,6 +30,44 @@ export class JsonlEventStore extends BaseEventStore {
   protected write(runId: string, build: (seq: number) => OrcaEvent): Promise<OrcaEvent> {
     return this.logs.append(runId, build);
   }
+  /** Caller holds the run fence; the shared journal lock supplies sequence CAS and deduplication. */
+  async appendDurableUnique(input: OrcaEventInput, options: DurableEventAppend): Promise<OrcaEvent> {
+    const snapshot = structuredClone(input);
+    const correlation = structuredClone(options.correlation);
+    const { record, fresh } = await this.logs.appendDurableUnique(snapshot.runId, {
+      expectedSeq: options.expectedSeq + 1,
+      stale: () =>
+        new OrcaError(
+          correlation.kind === "continuation" ? "CONTINUATION_STALE" : "REVISION_STALE",
+          "The durable journal boundary changed",
+        ),
+      findExisting: async (raw) => {
+        const event = OrcaEventSchema.parse(raw);
+        const journal = event.journal;
+        if (
+          !journal ||
+          journal.kind !== correlation.kind ||
+          journal.id !== correlation.id ||
+          journal.revision !== correlation.revision
+        )
+          return undefined;
+        if (event.runId !== snapshot.runId || event.type !== snapshot.type || !(await options.equivalent(event)))
+          throw new OrcaError("RETRY_CONFLICT", "The durable journal correlation has different material");
+        return event;
+      },
+      build: (seq) =>
+        OrcaEventSchema.parse({
+          ...snapshot,
+          journal: correlation,
+          id: newId("evt", this.clock.now()),
+          seq,
+          at: this.clock.isoNow(),
+        }),
+    });
+    if (fresh) this.publish(record);
+    return record;
+  }
+
   read(runId: string): Promise<OrcaEvent[]> {
     return this.logs.read(runId, OrcaEventSchema);
   }

@@ -2,6 +2,10 @@
  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
  * The CLI, the ACP facade and embedders all go through here.
  */
+import { admissionRetryFaults } from "@orca/core";
+import { FileRetryClaimStore } from "@orca/store";
+import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
+
 import { createHash, randomUUID } from "node:crypto";
 
 import { readFile, stat, realpath } from "node:fs/promises";
@@ -96,6 +100,9 @@ export interface OrcaApp {
   configFile?: string | undefined;
   orchestrator: Orchestrator;
   program: ProgramService;
+  retrySafeAdmissions?: RetrySafeAdmissionService | undefined;
+  retryClaims?: RegisteredRetryClaims | undefined;
+  directAdmissions?: DirectAdmissionService | undefined;
   submissionAuthority?: SubmissionAuthority | undefined;
   plan: PlanService;
   workflows: WorkflowRegistry;
@@ -408,7 +415,27 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   };
   const provided = await opts.requestSubmission?.({ orchestrator, config, configDir });
   const authority = provided?.authority ?? (await opts.submissionAuthority?.({ orchestrator, config, configDir }));
+  const retryClaims = opts.ephemeral
+    ? undefined
+    : new RegisteredRetryClaims(
+        new FileRetryClaimStore({
+          storeDir: resolve(configDir, config.storeDir),
+          execution: orchestrator.stores.execution,
+          faults: admissionRetryFaults,
+          limits: config.admissionRetry ?? {},
+        }),
+        admissionRetryFaults,
+      );
+  const directAdmissions = retryClaims
+    ? new DirectAdmissionService({
+        orchestrator,
+        retries: retryClaims,
+        captureLaunch: generations.captureLaunch,
+        restoreLaunch: generations.restoreDirectLaunch,
+      })
+    : undefined;
   const submission = {
+    ...(retryClaims ? { retries: retryClaims } : {}),
     admissions: opts.ephemeral
       ? new MemoryAdmissionStore()
       : new FileAdmissionStore(resolve(configDir, config.storeDir)),
@@ -417,14 +444,21 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     ...provided,
     ...(authority ? { authority } : {}),
   };
+  const program = new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission);
   return {
     config,
     generations,
     submissionAuthority: submission?.authority,
+    retryClaims,
+    directAdmissions,
+    retrySafeAdmissions:
+      directAdmissions && program.submissions
+        ? new RetrySafeAdmissionService({ requests: program.submissions, direct: directAdmissions })
+        : undefined,
     configDir,
     ...(configFile ? { configFile } : {}),
     orchestrator,
-    program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission),
+    program,
     plan,
     workflows,
     templates,

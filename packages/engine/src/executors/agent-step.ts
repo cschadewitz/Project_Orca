@@ -297,12 +297,14 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
   // The run's template pack (#191), when it chose one: `<pack>/<id>` wins over `<id>`.
   const pack = ctx.run.state.run.overrides?.templatePack;
   const body = spec.template ? ctx.templates.get(spec.template, pack ? { pack } : {}).body : (spec.prompt ?? "");
-  const basePrompt =
-    (await ctx.render(body, { ...extra, deliverables })).trim() +
+  const renderPrompt = async (revision?: import("../revision-delivery.js").RevisionSlot) =>
+    (await ctx.render(body, { ...extra, deliverables, ...(revision ? { revision } : {}) })).trim() +
     "\n\nUse only the explicitly supplied input artifacts as prior workflow context. Files in .orca/work, " +
     ".orca/program or .orca-attempts from other runs or attempts are not inputs; do not explore or copy them. " +
     "Write this attempt's outputs only to the exact deliverable paths below.\n\n" +
     renderDeliverablesBlock(deliverables);
+  const revisionHandoff = await ctx.revisionInput?.claim(renderPrompt);
+  const basePrompt = revisionHandoff?.prompt ?? (await renderPrompt());
 
   await ctx.emit({ type: "step.waiting", payload: { stepRunId: ctx.step.id, on: "agent-turn" } });
   const { session, release } = await ctx.openSession(spec.agent);
@@ -321,7 +323,7 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
           stepRunId: ctx.step.id,
           sessionId: session.id,
           promptHash: sha256(prompt),
-          promptPreview: prompt.slice(0, 400),
+          promptPreview: revisionHandoff ? "[REDACTED]" : prompt.slice(0, 400),
           followUp,
         },
       });
@@ -340,7 +342,12 @@ export async function runAgentTurn(ctx: StepContext, spec: AgentTurnSpec): Promi
           : undefined;
       let stopReason: string;
       try {
-        const turn = await session.prompt(prompt, { signal: ctx.signal, timeoutMs });
+        if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.beforeSend(revisionHandoff);
+        const turn = await session.prompt(prompt, { signal: ctx.signal, timeoutMs }).catch(async (error: unknown) => {
+          if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.uncertain(revisionHandoff);
+          throw error;
+        });
+        if (followUp === 0 && revisionHandoff) await ctx.revisionInput!.confirm(revisionHandoff);
         stopReason = turn.stopReason;
         await recorder.flush();
         await ctx.emit({

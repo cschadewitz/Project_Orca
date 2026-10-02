@@ -1,3 +1,15 @@
+/** Authenticated HTTP and WebSocket daemon composition. */
+import { randomBytes } from "node:crypto";
+import { PROTOCOL_VERSION } from "@orca/protocol";
+import {
+  OperatorReadModel,
+  operatorEventCollections,
+  operatorGenerationCollections,
+  operatorLinkedDocumentCollections,
+  operatorPinnedGraph,
+  type OperatorReadOptions,
+} from "./operator-read-model.js";
+import type { EventStore, LeaseStore } from "@orca/store";
 /**
  * The daemon's HTTP surface: `POST /rpc` takes one request envelope and answers with one
  * response envelope; `GET /health` is for process supervisors.
@@ -30,6 +42,9 @@ import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
 import { Maintenance } from "./maintenance.js";
 import { attachSocket } from "./socket.js";
 import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
+import { directAdmissionAuthority } from "./admission-retry.js";
+import { holds } from "./auth/principal.js";
+import { authForbidden } from "./auth/errors.js";
 import { submissionAuthority } from "./request-submission.js";
 import { authInvalid, authRequired } from "./auth/errors.js";
 import { OwnershipStore } from "./auth/ownership.js";
@@ -37,6 +52,14 @@ import type { ResourceResolver } from "./auth/resources.js";
 import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
 
 export interface DaemonOptions extends MethodContext {
+  /** Explicit read projection sources, independent of the legacy unbounded read model. */
+  operatorSources?: Pick<OperatorReadOptions, "generations" | "configStatus" | "artifact" | "artifactRun"> & {
+    events: EventStore;
+    leases?: LeaseStore;
+    documents?: Parameters<typeof operatorLinkedDocumentCollections>[0];
+    definitionFor?: Parameters<typeof operatorPinnedGraph>[0]["definitionFor"];
+  };
+
   /** Persistent store identity initialized by the owner at bootstrap. */
   workspaceId?: string;
   /**
@@ -178,6 +201,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     reads: opts.reads,
     workflowInputs: opts.workflowInputs,
     requestSubmissions: auth.mode === "token" ? opts.requestSubmissions : undefined,
+    admissionRetries: auth.mode === "token" ? opts.admissionRetries : undefined,
     submissionWorkspaceId: opts.submissionWorkspaceId,
     source: opts.source,
     liveInputs: opts.liveInputs,
@@ -228,6 +252,85 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           return current.principal;
         },
       });
+    };
+  }
+  if (ctx.admissionRetries && ctx.submissionWorkspaceId && auth.mode === "token") {
+    const workspaceId = ctx.submissionWorkspaceId;
+    ctx.admissionAuthorities = async (invocation) => {
+      const bound = principalOf(invocation);
+      // Read calls have no mutationActor, so bind a verified actor from the authenticated context.
+      if (!bound?.principal.credentialId) throw authRequired();
+      const credentialId = bound.principal.credentialId;
+      const actor = { principalId: bound.principal.id, credentialId };
+      const principal = async () => {
+        const current = auth.credentials.current(credentialId);
+        if (!current.ok) throw authInvalid();
+        return current.principal;
+      };
+      return {
+        principalId: actor.principalId,
+        workspaceId,
+        executionAuthority: invocation.executionResumeAuthority,
+        check: async () => {
+          if (!holds(await principal(), "runs.start")) throw authForbidden();
+        },
+        request: async () => submissionAuthority({ workspaceId, actor, authorizer, principal }),
+        direct: async () => directAdmissionAuthority({ workspaceId, actor, authorizer, principal }),
+      };
+    };
+  }
+  if (opts.operatorSources && identity && auth.mode === "token") {
+    const sources = opts.operatorSources;
+    const cursorKey = randomBytes(32);
+    const names = [
+      "operator.discover",
+      "operator.page",
+      ...(sources.generations ? ["operator.preflight"] : []),
+      ...(sources.configStatus ? ["operator.config"] : []),
+      ...(sources.artifact && sources.artifactRun ? ["operator.artifact"] : []),
+    ];
+    ctx.operatorReads = {
+      methods: names,
+      async model(invocation) {
+        const binding = principalOf(invocation);
+        const credentialId = binding?.principal.credentialId;
+        if (!credentialId) throw authRequired();
+        const current = async () => {
+          const check = auth.credentials.current(credentialId);
+          if (!check.ok) throw authInvalid();
+          return check.principal;
+        };
+        return new OperatorReadModel({
+          ...sources,
+          cursorKey,
+          target: identity,
+          protocol: PROTOCOL_VERSION,
+          orcaVersion: opts.orcaVersion,
+          current,
+          allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
+          collections: {
+            ...operatorEventCollections({
+              events: sources.events,
+              ...(sources.leases ? { leases: sources.leases } : {}),
+              allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
+            }),
+            ...(sources.generations ? operatorGenerationCollections(sources.generations) : {}),
+            ...(sources.documents ? operatorLinkedDocumentCollections(sources.documents) : {}),
+            ...(sources.definitionFor
+              ? {
+                  graph: operatorPinnedGraph({
+                    events: sources.events,
+                    definitionFor: sources.definitionFor,
+                    ...(sources.generations
+                      ? { active: operatorGenerationCollections(sources.generations).graph! }
+                      : {}),
+                  }),
+                }
+              : {}),
+          },
+          operations: (principal) => authorizer.permittedMethods(principal, names),
+        });
+      },
     };
   }
   const gate = new TransportGate(auth, host, authorizer);

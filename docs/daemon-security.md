@@ -98,6 +98,9 @@ A credential holds a list of these permissions:
 | `workflows.read`     | Workflow definitions; `workflows.changed`.                                 |
 | `runs.start`         | Start runs; the reserved launch-input preflight.                           |
 | `runs.control`       | Resume and cancel runs.                                                    |
+| `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
+| `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
+| `inputs.revisionPending` | `runs.read` | exact run; payload also requires `inputs.answer` and `runs.control` | — |
 | `inputs.answer`      | Answer one open gate or permission ask, once.                              |
 | `permissions.grant`  | Answer a permission ask with `always`, which writes a standing rule.       |
 | `claims.release`     | Release a work-item claim.                                                 |
@@ -148,6 +151,11 @@ that the two match. A method that is missing from the table is refused with
 
 | Method | Permission | Resource check | Audited |
 | --- | --- | --- | --- |
+| `operator.discover` | any authenticated principal | Credential-only safe target and implemented operation discovery. | — |
+| `operator.page` | any authenticated principal | Closed collection selects its grant in OperatorReadModel before validation; resource filtering precedes pagination. | — |
+| `operator.config` | `config.read` | Allowlisted generation status only. | — |
+| `operator.preflight` | `runs.start` | Authorized workflow and captured generation; no side effects. | — |
+| `operator.artifact` | `artifacts.read` | Exact run/artifact relation, plus runs.read; bounded sensitive-content projection. | — |
 | `hello` | any authenticated principal | `methods` and `capabilities` are filtered to what the principal may use; `storeDir` needs `config.read` | — |
 | `runs.list` | `runs.read` | filtered to visible runs; `total` and paging recomputed | — |
 | `runs.get` | `runs.read` | the run | — |
@@ -164,6 +172,9 @@ that the two match. A method that is missing from the table is refused with
 | `requests.admission` | `plan.write` | plus `runs.start`; own admission in this workspace | — |
 | `requests.admissions` | `plan.write` | plus `runs.start`; own admissions in this workspace | — |
 | `runs.start` | `runs.start` | the workflow; the new run is attributed to the caller | mutation |
+| `runs.admit` | `runs.start` | the workflow and authorized associations; prompt durable receipt | mutation |
+| `admissions.get` | `runs.start` | own operation, original grants and resources; Request also needs `plan.write` | — |
+| `admissions.reconcile` | `runs.start` | own operation, original grants/resources; attachment requires current execution authority | mutation |
 | `runs.resume` | `runs.control` | the run | mutation |
 | `runs.cancel` | `runs.control` | the run | mutation |
 | `inputs.answer` | `inputs.answer` | the exact open gate and its run; `always` also needs `permissions.grant` | decision |

@@ -22,6 +22,7 @@
  * agent's question.
  */
 import { z } from "zod";
+import { RevisionBoundaryViewSchema } from "./revision-input.js";
 import { LiveInputViewSchema } from "./live-input.js";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
 import { GateOptionSchema } from "@orca/core/schemas";
@@ -52,6 +53,7 @@ export const InputAgentSchema = z.object({
 export type InputAgent = z.infer<typeof InputAgentSchema>;
 
 export const OpenInputViewSchema = z.object({
+  revision: RevisionBoundaryViewSchema.optional(),
   /** Absent for durable workflow gates; expired permission asks cannot be answered. */
   live: LiveInputViewSchema.optional(),
   id: z.string(),

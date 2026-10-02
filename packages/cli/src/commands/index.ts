@@ -2,9 +2,17 @@
  * CLI command implementations. Each command receives parsed positionals and
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
+import { mcpCommand } from "./mcp.js";
+import { AdmissionRetryModel, neverAttached } from "@orca/daemon";
+import { admissionRetryOptions } from "./admission-retry.js";
+
 import { admissionsCommand } from "./admissions.js";
 import { workspaceIdentity } from "@orca/store";
-import { localSubmissionAuthority, authorityForNewLocalIntent } from "../local-submission-authority.js";
+import {
+  localSubmissionAuthority,
+  localDirectAdmissionAuthority,
+  authorityForNewLocalIntent,
+} from "../local-submission-authority.js";
 import { releaseAssets } from "../bootstrap.js";
 
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
@@ -246,6 +254,20 @@ interface Command {
   run: (ctx: CommandContext) => Promise<number>;
 }
 export const commands: Record<string, Command> = {
+  mcp: {
+    help: "mcp [--endpoint <url>] [--token-env <name>]",
+    usage: "Authenticated MCP over stdio. Requires an explicitly supplied daemon credential; does not start a daemon.",
+    async run(ctx) {
+      const ended = new Promise<void>((resolve) => process.stdin.once("end", resolve));
+      const handle = await mcpCommand({
+        ...(typeof ctx.flags.endpoint === "string" ? { endpoint: ctx.flags.endpoint } : {}),
+        ...(typeof ctx.flags["token-env"] === "string" ? { tokenEnv: ctx.flags["token-env"] } : {}),
+      });
+      await ended;
+      await handle.close();
+      return 0;
+    },
+  },
   auth: {
     help: "auth [issue <principal>|list|rotate <credentialId>|revoke <credentialId>]  Manage this workspace's daemon credentials.",
     usage:
@@ -445,6 +467,25 @@ export const commands: Record<string, Command> = {
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
         const workspace = ctx.flags.cwd ? { hostId: "local", cwd: String(ctx.flags.cwd) } : undefined;
+        if (app.directAdmissions && !workspace && !overrides) {
+          const retry = admissionRetryOptions(ctx.flags["idempotency-key"] as string | undefined);
+          if (ctx.flags["idempotency-key"] === undefined) ctx.err(`Retry key: ${retry.idempotencyKey}`);
+          const authority = await localDirectAdmissionAuthority(app);
+          const response = await app.directAdmissions.admitRun(
+            { workflowId, vars, ...workflowGuards(ctx) },
+            retry,
+            authority,
+          );
+          if (response.state !== "resolved" || response.result.state !== "accepted")
+            throw new OrcaError("RUN_STATE", "Run admission requires reconciliation", { ...response });
+          await authority.authorize({ workflowId });
+          return await finish(app, ctx, await app.orchestrator.run(response.result.runId));
+        }
+        if (ctx.flags["idempotency-key"] !== undefined)
+          throw new OrcaError(
+            "NOT_SUPPORTED",
+            "Keyed direct admission does not support explicit workspace or selection overrides",
+          );
         const state = await app.orchestrator.startAndRun({
           workflowId,
           vars,
@@ -487,13 +528,18 @@ export const commands: Record<string, Command> = {
       });
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
-        const admitted = await app.program.submit({
-          title,
-          body,
-          vars,
-          ...workflowGuards(ctx),
-          ...(overrides ? { overrides } : {}),
-        });
+        const retry = admissionRetryOptions(ctx.flags["idempotency-key"] as string | undefined);
+        if (ctx.flags["idempotency-key"] === undefined) ctx.err(`Retry key: ${retry.idempotencyKey}\n`);
+        const admitted = await app.program.submit(
+          {
+            title,
+            body,
+            vars,
+            ...workflowGuards(ctx),
+            ...(overrides ? { overrides } : {}),
+          },
+          retry,
+        );
         ctx.out(
           `request ${admitted.request.id}; run ${admitted.runId}${admitted.admissionId ? `; admission ${admitted.admissionId}` : ""}`,
         );
@@ -754,6 +800,7 @@ export const commands: Record<string, Command> = {
         !readOnly && authDir && app.program.submissions
           ? new RequestSubmissionModel({
               service: app.program.submissions,
+              shouldDispatch: (id) => neverAttached(app.orchestrator, id),
               checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
               execute: async (id, authority) => {
                 const state = liveRuntime
@@ -764,7 +811,38 @@ export const commands: Record<string, Command> = {
               executionFailed: (id) => app.logger.error("Request execution requires recovery", { runId: id }),
             })
           : undefined;
+      const admissionRetries =
+        !readOnly && authDir && app.retryClaims && app.directAdmissions && app.program.submissions
+          ? new AdmissionRetryModel({
+              claims: app.retryClaims,
+              direct: app.directAdmissions,
+              requests: app.program.submissions,
+              orchestrator: app.orchestrator,
+              checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
+              execute: async (id, authority) => {
+                if (liveRuntime) await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id));
+                else await app.orchestrator.run(id);
+              },
+              executionFailed: (id) => app.logger.error("Run admission requires recovery", { runId: id }),
+            })
+          : undefined;
       const daemon = await startDaemon({
+        operatorSources: {
+          events: app.orchestrator.stores.events,
+          leases: app.orchestrator.stores.leases,
+          generations: app.generations,
+          documents: {
+            events: app.orchestrator.stores.events,
+            requests: app.orchestrator.stores.requests,
+            items: app.orchestrator.stores.workItems,
+          },
+          definitionFor: (id, version, stored) => app.orchestrator.definitionFor(id, version, stored),
+          configStatus: () => config.operatorStatus(),
+          artifactRun: async (id) => (await app.orchestrator.stores.artifacts.get(id))?.producedBy.runId,
+          artifact: (_runId, artifactId, maxBytes) => reads.artifactsGet({ artifactId, maxBytes }),
+        },
+
+        admissionRetries,
         requestSubmissions,
         submissionWorkspaceId: workspaceId,
         identity,
@@ -795,6 +873,7 @@ export const commands: Record<string, Command> = {
         // over a store with no plan advertised a capability whose nine methods `hello` did
         // not list, and a client hid nothing on the strength of it.
         capabilities: [
+          ...(admissionRetries ? (["runs.admit", "admissions.get", "admissions.reconcile"] as const) : []),
           "runs.read",
           "runs.subscribe",
           "workflows.validateInputs",

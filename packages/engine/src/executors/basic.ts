@@ -52,7 +52,11 @@ export async function askHuman(
 ): Promise<string | undefined> {
   const recorded = answerFromPreviousAttempt(ctx);
   if (recorded !== undefined) return recorded;
+  const revision = (ctx.node.type === "gate" || ctx.node.type === "decision") && ctx.node.revision;
+  if (revision && !ctx.declareRevision)
+    throw new OrcaError("NOT_SUPPORTED", "revision-enabled gates require the protected revision runtime");
   return askHumanInput({
+    ...(revision && ctx.declareRevision ? { onRequested: ctx.declareRevision } : {}),
     port: ctx.humanInput,
     emit: (e) => ctx.emit(e),
     clock: ctx.clock,

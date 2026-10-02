@@ -166,6 +166,13 @@ export class Authorizer {
       this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", "request-submission-not-permitted");
       throw authForbidden();
     }
+    if (
+      (method === "inputs.revise" || method === "inputs.replaceRevision") &&
+      (!holds(principal, "inputs.answer") || !holds(principal, "runs.control"))
+    ) {
+      this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", "revision-not-permitted");
+      throw authForbidden();
+    }
     const spec = OPERATIONS[method];
     if (!spec) {
       if (!exists) return;
@@ -185,7 +192,9 @@ export class Authorizer {
       return (
         spec !== undefined &&
         (!spec.permission || holds(principal, spec.permission)) &&
-        (!name.startsWith("requests.") || holds(principal, "runs.start"))
+        (name !== "operator.artifact" || holds(principal, "runs.read")) &&
+        (!name.startsWith("requests.") || holds(principal, "runs.start")) &&
+        (!(name === "inputs.revise" || name === "inputs.replaceRevision") || holds(principal, "runs.control"))
       );
     });
   }
@@ -286,6 +295,8 @@ export class Authorizer {
               this.deny(principal, meta, name, params, code ?? "AUTH_FORBIDDEN", e.reason);
               throw e.error;
             }
+            if (name.startsWith("operator.") && ["AUTH_REQUIRED", "AUTH_INVALID", "AUTH_FORBIDDEN"].includes(codeOf(e)))
+              this.deny(principal, meta, name, params, codeOf(e), "operator-authority-refused");
             if (spec.audit) this.operation(principal, meta, name, params, "failed", codeOf(e));
             throw e;
           }
@@ -369,7 +380,7 @@ export class Authorizer {
       case "workflow": {
         // Linked documents are workspace resources, not made visible by owning a new run.
         // Work-item execution may settle the plan, so reading it alone is insufficient.
-        if (name === "runs.start") {
+        if (name === "runs.start" || name === "runs.admit") {
           if (params.requestId !== undefined && !holds(principal, "plan.read"))
             throw new Denied(authForbidden(), "linked-request-not-permitted");
           if (params.workItemId !== undefined && (!holds(principal, "plan.read") || !holds(principal, "plan.write")))
@@ -414,6 +425,10 @@ export class Authorizer {
       // The store's path on disk is the configuration's business.
       ...(storeDir !== undefined && holds(principal, "config.read") ? { storeDir } : {}),
       capabilities: result.capabilities.filter((c) => {
+        if (c === "inputs.revise" || c === "inputs.replaceRevision")
+          return holds(principal, "inputs.answer") && holds(principal, "runs.control");
+        if (c === "operator.artifact") return holds(principal, "artifacts.read") && holds(principal, "runs.read");
+        if (c === "inputs.revisionPending") return holds(principal, "runs.read");
         const needs = CAPABILITY_PERMISSIONS[c];
         return needs ? needs.some((p) => holds(principal, p)) : everything;
       }),
