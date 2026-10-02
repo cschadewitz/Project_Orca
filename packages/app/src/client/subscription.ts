@@ -103,7 +103,7 @@ export interface DaemonSubscriptionOptions {
   socket?: SocketFactory | undefined;
   backoffMs?: readonly number[] | undefined;
   verify?: () => Promise<DaemonIdentity | undefined>;
-  auth?: { tokens: DaemonTokenSource; verify: () => Promise<void> };
+  auth?: { tokens: DaemonTokenSource; verify?: () => Promise<void> };
 }
 
 export class DaemonSubscription {

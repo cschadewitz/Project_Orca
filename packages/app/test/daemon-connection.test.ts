@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient, DaemonClientError } from "../src/client/daemon-client.js";
 import { ConnectionTarget, connectionFailure, callInConnection } from "../src/main/connection-target.js";
+import { DEFAULT_PREFERENCES, PreferencesSchema } from "../src/preferences/schema.js";
 import { PreferencesFile } from "../src/preferences/preferences-file.js";
 import { daemonEndpoint } from "../src/daemon-connection.js";
 import { Workspace, type WorkspaceDeps } from "../src/main/workspace.js";
@@ -122,6 +123,41 @@ describe("authenticated daemon connection transaction", () => {
     prefs.saveDaemonUrl(null);
     expect(new PreferencesFile(path).read().daemonUrl).toBeUndefined();
   });
+  it("rejects a malformed URL with a safe diagnostic", () => {
+    const supplied = "not-a-url-with-private-token";
+    expect(() => daemonEndpoint(supplied)).toThrow("Enter an HTTP or HTTPS daemon URL");
+    try {
+      daemonEndpoint(supplied);
+    } catch (error) {
+      expect(String(error)).not.toContain(supplied);
+    }
+  });
+  it.each(["not-a-url-with-private-token", "https://owner:private-token@host"])(
+    "rejects an invalid saved endpoint without disclosing it in diagnostics",
+    async (daemonUrl) => {
+      const parsed = PreferencesSchema.safeParse({ daemonUrl });
+      expect(parsed.success).toBe(false);
+      if (parsed.success) throw new Error("Expected invalid preferences to be refused");
+      expect(parsed.error.issues).toEqual([
+        { code: "custom", path: ["daemonUrl"], message: "Invalid daemon endpoint" },
+      ]);
+      expect(parsed.error.message).not.toContain(daemonUrl);
+      expect(parsed.error.message).not.toContain("private-token");
+
+      const dir = await mkdtemp(join(tmpdir(), "orca-connection-"));
+      dirs.push(dir);
+      const path = join(dir, "preferences.json");
+      await writeFile(path, JSON.stringify({ daemonUrl }));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        expect(new PreferencesFile(path).read()).toEqual(DEFAULT_PREFERENCES);
+        expect(warn).toHaveBeenCalledExactlyOnceWith("Ignoring invalid app preferences");
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("private-token");
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
   it.each(["ftp://host", "http://owner:secret@host", "http://host?token=secret", "http://host/#secret"])(
     "rejects unsafe endpoint without echoing it",
     (url) => {

@@ -479,7 +479,7 @@ export class DaemonClient {
         }
         return hello.identity;
       },
-      ...(this.options.auth ? { auth: { tokens: this.options.auth, verify: async () => {} } } : {}),
+      ...(this.options.auth ? { auth: { tokens: this.options.auth } } : {}),
     });
   }
 }
