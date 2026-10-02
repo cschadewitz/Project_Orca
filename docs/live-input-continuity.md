@@ -1,14 +1,11 @@
 # Live permission callbacks (#237)
 
-Implementation base: `7abc2342aa672ee9d2f10d565ca4f8eb546184df` (the reviewed
-preparation merge). This story follows the
-[frozen parallel contract](runtime-next-parallel-contract.md). The owned modules
-are implemented here; the reserved integration edits are supplied separately in
-[237-live-input-integration.patch](patches/237-live-input-integration.patch).
-Applying the patch enables the integration fixtures. Production activation is
-part of Cal's combined wiring with #318/#329/#332, not a capability this feature
-branch advertises on its own. No peer branch or invented configuration generation
-is required to compile or test the owned modules.
+The combined runtime wires owner-local live permissions through engine, daemon and app.
+[237-live-input-integration.patch](patches/237-live-input-integration.patch) is retained
+as a historical handoff against preparation baseline
+`7abc2342aa672ee9d2f10d565ca4f8eb546184df`, reconciled with the other feature heads.
+Do not apply it to the integrated tree. Historical feature checks below are not final
+combined acceptance.
 
 ## Two lifetimes
 
@@ -62,13 +59,20 @@ shutdown and revoked execution authority invalidate callbacks. A rejected host
 response arriving after expiration cannot cancel the next prompt. Losing a lease
 prevents any further execution write, including answer acceptance.
 
-`LiveExecutionAuthorities` binds a verified actor to an admitted root, lets child
-runs inherit that lifetime, and rechecks credentials while no responder is
-present. Unreadable authority fails closed. Its lifecycle is independent of UI
+Production `prepareExecution` walks each run's authenticated creation lineage to
+reconstruct its protected root actor, then binds that actor for the executing run.
+It does not call `LiveExecutionAuthorities.inherit`; children and resumed runs use the
+same reconstruction path. Credentials are rechecked while no responder is present.
+Unreadable authority fails closed. Its lifecycle is independent of UI
 connections. Disconnecting a UI neither approves nor cancels work. Reconnect uses
 an authorized `inputs.list`; current callbacks remain pending, while callbacks
 whose lease has lapsed are expired. Durable workflow gates retain their existing
-restart recovery.
+restart recovery, subject to generation restoration and current authorization.
+At `27411de9`, daemon startup rotates the local bootstrap credential, but execution
+checks still require the original actor credential to be current. Later live tool
+permissions can therefore be cancelled after restart even if an authorized caller
+can answer a durable gate. Durable-answer acceptance is not proof of successful
+continued execution; credential continuity remains unresolved.
 
 Cross-process forwarding is deliberately not implemented. A process without the
 callback returns `RUN_STATE` with `details.liveInputState: "owner-unavailable"`
@@ -101,8 +105,8 @@ The disabled record and daemon waiting count remain; invalidation never calls an
 cancel or resume. Replacement invocations are distinct and reconnect reconciles via
 an authorized `inputs.list` snapshot.
 
-Wire the same port as `MethodContext.liveInputs`, preserving it through the server's
-context construction. Socket unsubscription detaches only the observer, never the port.
+The server passes the same port as `MethodContext.liveInputs` through context
+construction. Socket unsubscription detaches only the observer, never the port.
 Focused coverage includes authenticated sockets, stale reads, exact identities, client
 connection epochs, lease-fenced refusal and durable gate recovery. Final app smoke
 still belongs to the production-wired integration head.
@@ -112,62 +116,34 @@ still belongs to the production-wired integration head.
 `openAcpSession` accepts an explicit `resumeSessionId`. It checks the agent's
 `loadSession` capability before sending `session/load`. Unsupported/failed loads
 open a fresh session and report `SessionContinuity` as `fresh` with the reason;
-a successful load reports `loaded`. The integration patch records this on
+a successful load reports `loaded`. The integrated engine records this on
 `agent.session.opened.continuity`. Default engine restart behavior
 remains fresh; automatic persisted session selection is not implemented.
 Loading conversation context does not restore a tool callback, authorize a tool,
 move an agent process between hosts, or inject text into an active turn.
 
-## Integration handoff
+## Integrated wiring
 
-Apply the patch to this feature head, then consolidate its reserved edits with
-the other stories. It includes orchestrator/run-context, authenticated answer
-control, read projection, protocol schemas/exports, version/capability, approval
-UI and dedicated integration tests. No core error enum additions: `RUN_STATE`
-carries `liveInputState`; existing `RUN_LEASED`, `NOT_SUPPORTED`,
-`HUMAN_INPUT_PENDING` and `INTERNAL` retain their meanings.
+The integrated orchestrator/run context, authenticated answer control, read projection,
+protocol exports and approval UI use the same owner-local port. `RUN_STATE` carries
+`liveInputState`; no core error enum is added.
 
-Constructor dependencies to wire at the combined daemon composition root:
-
-1. Construct one `LiveHumanInput(identity.instanceId)` from #318's single boot
-   identity. Do not allocate a different identity per transport or per run.
-2. Construct `LiveExecutionAuthorities(isCurrentActor)` using the active
-   credential store and explicit trusted-local authority where appropriate.
-   Bind a root only after its exact ownership is durable; inherit that binding
-   for children before executing them. On authorized resume, bind the resumed
-   tree before interpreter attachment. Forget entries when execution detaches.
-3. Pass `{ port, executionSignal: id => authorities.signalFor(id) }` as
-   `OrchestratorOptions.liveInput`. The normal input port defaults to this port;
-   custom upstream ports must retain it as their live fallback. The options are
-   server dependencies, never client parameters or captured config generations.
-4. Close both lifetime owners at daemon shutdown, before releasing execution
-   resources. UI socket close must call neither. Keep authorization and sidecar
-   rereads live across #332 configuration activation.
-5. Serve the same orchestrator through `ReadModel` and `ControlModel`. The patched
-   auth guard supplies a per-call authority that revalidates credentials and
-   exact run scope inside acceptance. Do not call `answerInput` for live inputs
-   with only an audit actor.
+The daemon constructs one `LiveHumanInput` from its boot identity and one
+`LiveExecutionAuthorities` checker using current credentials and durable ownership.
+Before execution it reconstructs the sealed root actor for each run, including children
+and resumed runs, and binds that actor. Detachment forgets the binding. The orchestrator
+receives the port and execution signal as server dependencies, never client parameters
+or captured generation data. Read and control models share that orchestrator; answer
+authority revalidates credentials and exact run scope inside acceptance. Daemon shutdown
+closes the lifetime owners; UI socket closure does not. Permission sidecar reads remain live.
 
 The additive wire fields are `OpenInputView.live: {target, state}` and
 `InputsAnswerParams.live: target`. A live answer requires that complete identity;
 `resume: false` is refused because delivery continues the original turn.
 `inputs.live` is advertised only for a wired control model and authorized
-responders. The candidate protocol minor is 1.10; consolidate that increment with
-the other stories once, at integration. The app forwards the exact identity and
-disables expired/unavailable cards. `input.invalidated` updates connected cards directly;
-open/reconnect notifications retain their scoped reads. No client polling or second
-gate engine is added.
+responders. The combined protocol version is 1.10.
 
-Required existing-test updates belong to Cal: fixtures that synthesize parked
-permission callbacks must instead use live invocations or assert refusal;
-permission-card fixtures that expect enabled answers must supply `live.state:
-"pending"` and its target. The exact remaining fixtures are `daemon/test/runtime-integration.test.ts`
-(three parked-permission cases), `app/renderer/test/attention-surface.test.tsx`
-(three permission-card cases), `app/renderer/test/inline-asks.test.tsx` (one case),
-and `protocol/test/protocol.test.ts` (one capability inventory snapshot).
-Version snapshots, if pinned, move with the combined protocol increment. Durable workflow-gate fixtures must stay unchanged.
-
-## Validation
+## Historical feature validation
 
 Owned tests cover exact identity mismatches, concurrent responders, authority
 rechecks/revocation, sidecar ordering/failure, lease loss, cancellation/expiration,
@@ -175,7 +151,7 @@ reconnect reads, process/restart boundaries, upstream target replacement, and a
 real ACP subprocess through multiple turns, cancel, timeout, process death,
 late-host failure, and capability-checked session loading.
 
-The separate integration test in the patch exercises the real interpreter,
+The historical patch included an integration test exercising the real interpreter,
 renewed lease, second-interpreter refusal, read/control models, accepted standing
 write failure followed by fresh resume, and authenticated HTTP/WebSocket answers
 and reconnects. A feature-only result does not establish cross-story acceptance.
@@ -194,11 +170,12 @@ Verification on this implementation (2026-10-02): the unpatched feature tree
 passed `pnpm test` (198 files, 2,386 tests; one skipped), `typecheck`, `lint`,
 `format:check`, `design:check` and `build`. The final integration patch passed
 61 focused tests across seven files, including the durable-gate and streaming
-append-failure regressions, plus typecheck. `git apply --check` verifies the
-handoff patch against the feature tree.
+append-failure regressions, plus typecheck. The handoff was checked against its original
+feature tree; that is not an
+instruction to apply it to this integrated tree.
 
 An earlier full candidate-integration run had 2,381 passes and nine failures:
-eight are the existing fixture/capability updates named above; the ninth exposed
+eight concerned fixture/capability updates on that historical candidate; the ninth exposed
 session-continuity metadata interfering with the output-write failure fixture.
 That regression was fixed by recording continuity on `agent.session.opened` and
 its test passes in the final focused run. The full combined suite is not claimed

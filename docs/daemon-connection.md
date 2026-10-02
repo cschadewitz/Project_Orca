@@ -1,23 +1,21 @@
 # Authenticated daemon connections (#318)
 
-This story starts from preparation `7abc2342aa672ee9d2f10d565ca4f8eb546184df`.
-The owned implementation and tests are committed directly. Shared application,
-protocol, CLI bootstrap and export wiring is supplied separately in
-[`patches/318-daemon-connection-integration.patch`](patches/318-daemon-connection-integration.patch),
-as required by the [parallel integration contract](runtime-next-parallel-contract.md).
-Apply that patch before testing the complete UI. This feature branch alone does
-not advertise the new UI or hello field as shipped, and does not close the
-combined configuration-studio acceptance gate.
+The combined runtime includes the connection UI, authenticated target switching and
+persistent workspace identity. [318-daemon-connection-integration.patch](patches/318-daemon-connection-integration.patch)
+is a historical handoff against preparation baseline
+`7abc2342aa672ee9d2f10d565ca4f8eb546184df`. Its wiring is reconciled here; do not
+reapply it. See [integration review status](runtime-next-integration.md#review-status-and-final-reconciliation)
+for outstanding defects at reviewed head `27411de9`.
 
 ## Connecting
 
-After integration, **File ▸ Connect to a daemon…**, the status-bar action, and
+**File ▸ Connect to a daemon…**, the status-bar action, and
 Config's connection header open the same dialog. Enter the local end of the
 supported SSH tunnel, such as `http://127.0.0.1:6722`. A successful authenticated
 `hello` must advertise read and subscription capabilities before the app changes
 its saved endpoint or detaches the current stream. Failed, cancelled, incompatible
 or unauthorized probes leave the previous connection and preference intact.
-Errors are shown inline, with authentication required, invalid/revoked credentials,
+Dialog probe errors are shown inline, with authentication required, invalid/revoked credentials,
 access refusal, protocol mismatch and unreachability distinguished.
 
 Precedence at launch is **ORCA_DAEMON_URL > saved endpoint > bundled daemon >
@@ -28,7 +26,11 @@ the read-only store banner's **Connect to a daemon** action returns to the exact
 launch-pinned environment target through the same authenticated probe and all-window
 draft check as other connection changes. A failed, incompatible or cancelled return
 keeps the store client, stream and read-only daemon running. This return does not change
-the saved endpoint or allow another target to override the environment.
+the saved endpoint or allow another target to override the environment. At `27411de9`,
+the banner discards rejected `connectLive()` promises, so failed returns have no visible
+inline error. This is an unresolved UI review finding. The dialog also prefills the
+bundled daemon's ephemeral URL, which can accidentally be saved as an external target;
+avoid saving that temporary endpoint. These defects need verification after the app fixes.
 Returning to bundled clears
 the saved endpoint only after its handshake succeeds. A previously active bundled
 daemon remains alive when switching to an external endpoint, and is reused on
@@ -43,7 +45,11 @@ query strings and fragments. Remote targets require an explicit credential and
 HTTPS; redirects are refused. Automatically discovered local-owner credentials
 are never forwarded to remote hosts. The UI has no token input and never reports
 raw credential-file or candidate transport errors. Credential refresh remains
-bounded to one retry per authentication refusal.
+bounded to one retry per authentication refusal. Refreshing a client's credential does
+not replace the credential pinned in a run's execution actor or a long-lived local ACP
+submission authority. At `27411de9`, daemon restart revokes the previous bootstrap
+credential, so those execution paths can remain refused; credential-rotation recovery
+is an unresolved runtime finding.
 
 ## Target identity and drafts
 
@@ -86,7 +92,8 @@ await renewWorkspaceIdentity(cloneStoreDirectory);
 ```
 
 For a source checkout, the same function is exported by
-`packages/store/dist/index.js` after applying the integration patch and building.
+`packages/store/dist/index.js` after building the source checkout. This is an offline
+administration API, not a shipped CLI identity-repair command.
 It changes identity metadata only, preserving run IDs, protected data and keys.
 Do not independently serve two writable copies of the same identity.
 
@@ -98,18 +105,15 @@ is the repair path when a new identity is intended. Deleting both the marker and
 directory destroys all evidence of prior initialization and is not a repair method.
 First upgrade of a never-identified store initializes the metadata once.
 
-## Integration handoff
+## Integrated wiring and checks
 
-Apply the supplied patch with `git apply --check` followed by `git apply` on the
-reviewed story tree. It wires CLI identity initialization, daemon hello identity,
-the store export, main-process target manager, epoch-bound preload RPC/notifications,
-renderer boundary, File menu, Config source header and status-bar action. It also
-updates the exact native-menu and smoke bridge inventories. No new RPC method,
-capability or error enum is introduced; hello identity is additive. The integration
-owner chooses the combined protocol minor version with the other stories.
+CLI identity initialization, daemon hello identity, store exports, the main-process target
+manager, epoch-bound preload RPC/notifications, renderer boundary, File menu, Config
+header and status action are wired in this tree. Hello identity is additive and the
+combined protocol minor is 1.10; this feature adds no RPC method or capability class.
 
-The patch includes `packages/app/test/daemon-connection-integration.test.ts`.
-After applying it, run `pnpm exec vitest run daemon-connection packages/app/test/workspace.test.ts`.
+`packages/app/test/daemon-connection-integration.test.ts` exercises the integrated IPC
+wiring. Run `pnpm exec vitest run daemon-connection packages/app/test/workspace.test.ts`.
 The integration regression loads the actual main-process IPC registrations with an
 Electron shell fixture and checks environment → read-only store → environment,
 failed authentication, incompatible protocol, missing read/subscription authority,
@@ -121,9 +125,8 @@ This IPC regression does not claim real-window or platform smoke coverage.
 Dedicated tests cover transaction failures/cancel, saved restart and precedence,
 bundled return without cancelling execution, pending edits, old epoch results,
 same URL/new workspace, boot changes/rewind, legacy identity, clone and repair.
-The current Config and gate drafts use `useUpdateDraft`; future launch/editor forms
-from the parallel stories must register with this same guard and remain inside the
-connection boundary. The frozen preparation has no launch-vars or workflow editor
-to test yet. Existing auth tests cover revoked credentials, bounded file refresh, remote TLS,
-redirects and local-owner credential isolation. Shared patch validation results
-and remaining platform smoke requirements are recorded in the PR.
+Config and gate drafts use `useUpdateDraft`; additional editor forms must register with
+that guard and remain inside the connection boundary. Existing auth tests cover revoked
+credentials, bounded file refresh, remote TLS, redirects and local-owner credential
+isolation. Historical feature validation does not resolve the combined review findings;
+final runtime and platform smoke evidence must be recorded in the PR.

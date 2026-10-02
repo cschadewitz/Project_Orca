@@ -1,11 +1,12 @@
 # Configuration generations and launch provenance (#332)
 
-This story implements the generation provider, config model, protocol shapes and
-focused tests. `docs/patches/332-runtime-integration.patch` supplies the exact
-reserved-path wiring against preparation commit
-`7abc2342aa672ee9d2f10d565ca4f8eb546184df`. Per the parallel contract, Cal applies
-that patch together with the other stories. The feature branch alone does not
-advertise `config.apply` or claim combined runtime acceptance.
+The integrated runtime provides generation capture, restoration, config apply and
+launch provenance. [332-runtime-integration.patch](patches/332-runtime-integration.patch)
+is a historical handoff against preparation commit
+`7abc2342aa672ee9d2f10d565ca4f8eb546184df`; its wiring is already reconciled here.
+Do not reapply it. This document records behavior at reviewed head `27411de9`;
+[remaining review findings](runtime-next-integration.md#review-status-and-final-reconciliation)
+need reconciliation against the final runtime fixes.
 
 ## Saving and activation
 
@@ -35,7 +36,13 @@ workflow version/revision. A concurrent apply cannot mix their choices. Failures
 leave the old active pointer intact. A crash before activation can leave unused
 protected records or workflow pins; there is no automatic deletion of resume data.
 
-A boot validates and activates the saved configuration for new work, as before.
+A boot validates and activates the saved configuration for new work. At reviewed head
+`27411de9`, initialization pins every loaded workflow and refuses startup with
+`CONFIG_INVALID` if an already pinned version has different content, even when that
+workflow was never run. This also prevents unrelated resume/answer commands from
+bootstrapping. Restore the original workflow bytes or give the edited workflow a new
+version; do not delete historical pins. This broader startup refusal is an unresolved
+review finding, not evidence that workflow-edit startup compatibility is fixed.
 Previously admitted runs restore their recorded generation. Missing or corrupt
 material is `RUN_STATE`, never permission to use today's configuration. A missing
 workflow pin or different digest also fails closed.
@@ -44,7 +51,7 @@ Request-written/run-missing recovery uses the separate trusted `restoreLaunch`
 callback, with the durable admission's generation, exact workflow identity and
 Request ID. It binds that Request ID and validates the protected material and
 workflow digest; it never falls back to the current generation. The #329 caller
-must authorize recovery and read this record from the durable Request rather than
+must authorize recovery and read this binding from the durable admission rather than
 accept historical choices from the RPC caller. Ordinary `captureLaunch` continues
 to reject a noncurrent `expectedConfigGeneration`, including after restart.
 
@@ -82,7 +89,18 @@ can reconstruct those inputs. Their private fingerprint includes a fresh lifetim
 nonce, without raw configuration or secret values. A historical launch or resume in
 a later bootstrap fails closed with `RUN_STATE`, before workspace provisioning.
 Captured launches within the original bootstrap retain their provider/host objects.
-This is not a blanket restart refusal for no-op or declarative-only plugins.
+The refusal is generation-wide: registering a custom executor or other behavior-bearing
+callback binds the whole generation, including runs that never invoke that callback.
+Same-bootstrap launches and resumes remain distinct from restoration after restarting
+the engine process (daemon, standalone CLI or embedder). Reconnecting a UI to the same
+running daemon does not cross that boundary; quitting an app that stops its bundled
+daemon does. No-op or declarative-only plugins can restore when the compatibility checks
+above succeed.
+
+There is also an unresolved reverse-direction gap at `27411de9`: a historical generation
+without a runtime binding can restore into a boot that adds a plugin replacing a built-in
+executor. Executors are process-global, so that path can substitute new callbacks. The
+current checks do not establish a universal fail-closed restoration guarantee.
 In-place host/executor and nested filesystem callback edits are behavior-bearing too.
 The shipped JEV example registers custom executors and is therefore bootstrap-bound:
 finish its admitted work before restarting. Do not delete protected records or start a
@@ -93,8 +111,10 @@ the JEV adapter in [#395](https://github.com/cschadewitz/Project_Orca/issues/395
 real restart/operator acceptance in [#396](https://github.com/cschadewitz/Project_Orca/issues/396).
 
 Built-in providers record their resolved bootstrap directory and Kepler task directory
-inside the protected generation. Historical launch restoration never rereads the current
-`KEPLER_TASK_DIR`; a missing recorded Kepler context fails closed.
+inside the protected generation. Historical launch restoration does not reread the current
+`KEPLER_TASK_DIR`; a missing recorded Kepler context fails closed. Bootstrap still falls
+back to the current `configDir` when recorded `workspaceInputs` are absent; this legacy
+path must not be described as restoring every historical environment input.
 
 Apply also rejects removal of a previously resolvable program or item-workflow
 default, even when its configured name has not changed. Unconfigured bundled
@@ -132,7 +152,9 @@ and its existing key, atomic publication and authenticated encryption. It does n
 create another workflow store or key lifecycle. Configured literals stay encrypted;
 ambient process environment, resolved credentials and live sessions are never
 captured. Configured environment and argument literals also enter the existing execution redactor,
-so copied values are hidden in public history and logs. Structural identity fields remain
+so copied values are hidden in public history and logs. At `27411de9` this includes ordinary
+short arguments such as `acp` or `1`, which can corrupt otherwise useful public text.
+That over-redaction remains a review finding; the final redaction policy is not settled. Structural identity fields remain
 metadata even when a short secret happens to match them. No RPC serves the private material. Back up the complete protected store
 and keys as documented in `protected-execution-storage.md`.
 
@@ -157,9 +179,8 @@ reapply that historical handoff. The integrated wiring includes:
 - Core provenance exports, event/run projection and protocol run inspection.
 - Protected execution-store generation methods, reusing the existing private directory.
 - Orchestrator admission/context/child binding and bootstrap construction.
-- Direct daemon admission through `CaptureLaunch`; #329 should inject this same provider
-  into Request admission without importing a peer branch, and inject `restoreLaunch`
-  separately for authorized recovery of the original durable admission.
+- Direct daemon and Request admission through the same `CaptureLaunch` provider, with
+  separate `restoreLaunch` for authorized recovery of the original durable admission.
 - Apply registration/authorization, conditional method discovery, notifications,
   active workflow discovery, protocol minor 1.10, release compatibility metadata and the security matrix update.
 - Dedicated integration tests, the operation-inventory fixture update, and the existing
@@ -168,9 +189,12 @@ reapply that historical handoff. The integrated wiring includes:
 No new error enum is introduced: `CONFIG_STALE`, `CONFIG_INVALID`, `RUN_STATE`,
 `NOT_SUPPORTED` and existing workflow errors retain their meanings. There is no
 new capability class; method discovery advertises apply only when writable and
-wired. At combined integration, consolidate the protocol bump with the other stories. The
-release store epoch advances to `config-generations-v3`: deployment rollback to a
-binary that ignores generation-bound execution is incompatible. The protected v2
+wired. The combined protocol version is 1.10. The release store epoch advances to
+`config-generations-v3`. The managed Debian updater compares release metadata and refuses
+automatic activation/rollback across different epochs. Direct daemon/CLI startup does
+not enforce that epoch, and manually selecting an older binary does not migrate the
+store or guarantee a refusal. Treat rollback to a binary ignoring recorded generations
+as unsupported; retain a complete pre-upgrade store backup and matching binary. The protected v2
 encryption, keys and records remain intact; there is no data migration or key rotation.
 
 Focused tests cover save/apply separation, validation/refusal, concurrent saves

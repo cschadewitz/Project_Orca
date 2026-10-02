@@ -101,6 +101,11 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * a 1.7 client reads a 1.8 daemon as before.
  */
 /** 1.9 adds authorized typed-input preflight, pinned launch guards, and authenticated local clients. */
+/**
+ * 1.10 combines durable Request admission/recovery, configuration generations and apply,
+ * daemon workspace/boot identity, and owner-local live input fields and invalidation.
+ * Methods and inputs.live remain conditional on wired providers and current authority.
+ */
 export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 10 };
 
 export function formatProtocolVersion(v: ProtocolVersion): string {
