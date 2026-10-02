@@ -52,6 +52,8 @@ export const GenerationSnapshotSchema = z.object({
   workflows: z.array(WorkflowIdentitySchema),
   templates: z.array(PromptTemplateSchema),
   runtimeBinding: z.string().optional(),
+  runtimeFingerprint: z.string().optional(),
+  runtimeHosts: z.array(z.string()).optional(),
   effectiveAgents: z.array(AgentSpecSchema).optional(),
   effectiveRoles: z.record(z.string(), z.string()).optional(),
 });
@@ -61,8 +63,14 @@ export interface GenerationStore {
   putGeneration(id: string, snapshot: GenerationSnapshot): Promise<void>;
 }
 export interface GenerationAssets {
-  /** Executable plugin hosts are retained only within this provider lifetime. */
+  /** Executable plugin hosts are held by this provider, never written to the snapshot. */
   agents?: AgentRegistry;
+  /**
+   * The trusted loader's digest of the executable runtime behind `agents` (plugin modules,
+   * plugin-supplied ports). A later provider stands in for this one's hosts only when its own
+   * boot reports the same digest; absent, plugin-bound material never outlives this provider.
+   */
+  runtimeFingerprint?: string;
   workflows: WorkflowDefinition[];
   templates: PromptTemplate[];
 }
@@ -114,6 +122,7 @@ const unavailable = () => new OrcaError("RUN_STATE", "recorded configuration gen
 
 export class ConfigurationGenerations {
   private active: GenerationMaterial | undefined;
+  private boot: GenerationSnapshot | undefined;
   private readonly runtimeBindings = new Map<string, AgentRegistry>();
   private readonly listeners = new Set<(status: GenerationStatus, workflows: WorkflowChange[]) => void>();
   constructor(
@@ -132,6 +141,7 @@ export class ConfigurationGenerations {
     const material = await this.prepare(OrcaConfigSchema.parse(OrcaConfigSchema.parse(config)), savedRevision, assets);
     await this.persist(material);
     this.active = material;
+    this.boot = material.snapshot;
   }
   effectiveConfig(): OrcaConfig {
     return this.current.snapshot.config;
@@ -337,8 +347,30 @@ export class ConfigurationGenerations {
     );
     return this.material(parsed.data, definitions);
   }
+  /**
+   * Plugin restoration contract. A binding from this provider's lifetime is used as is. Another
+   * provider's binding is restored onto this boot's hosts only when the loader reported the same
+   * runtime digest and the plugin list, configured hosts and host ids all match; agent specs and
+   * role mappings still come from the recorded snapshot. Anything else is not restorable.
+   */
+  private runtimeAgents(snapshot: GenerationSnapshot): AgentRegistry | undefined {
+    const own = this.runtimeBindings.get(snapshot.runtimeBinding!);
+    if (own) return own;
+    const boot = this.boot;
+    if (
+      !boot?.runtimeBinding ||
+      !boot.runtimeFingerprint ||
+      !boot.runtimeHosts ||
+      snapshot.runtimeFingerprint !== boot.runtimeFingerprint ||
+      !isDeepStrictEqual(snapshot.runtimeHosts, boot.runtimeHosts) ||
+      !isDeepStrictEqual(snapshot.config.plugins, boot.config.plugins) ||
+      !isDeepStrictEqual(snapshot.config.hosts, boot.config.hosts)
+    )
+      return undefined;
+    return this.runtimeBindings.get(boot.runtimeBinding);
+  }
   private material(snapshot: GenerationSnapshot, definitions: WorkflowDefinition[]): GenerationMaterial {
-    const runtimeAgents = snapshot.runtimeBinding ? this.runtimeBindings.get(snapshot.runtimeBinding) : undefined;
+    const runtimeAgents = snapshot.runtimeBinding ? this.runtimeAgents(snapshot) : undefined;
     if (snapshot.config.plugins.length && !snapshot.runtimeBinding) throw unavailable();
     if (snapshot.runtimeBinding && (!runtimeAgents || !snapshot.effectiveAgents || !snapshot.effectiveRoles))
       throw unavailable();
@@ -370,6 +402,10 @@ export class ConfigurationGenerations {
     const loaded = supplied ?? (await this.options.loadAssets(config));
     const assets = structuredClone({ workflows: loaded.workflows, templates: loaded.templates });
     const runtimeBinding = loaded.agents ? randomUUID() : undefined;
+    const runtimeHosts = loaded.agents
+      ?.listHosts()
+      .map((host) => host.id)
+      .sort();
     if (loaded.agents && runtimeBinding) {
       const runtimeAgents = new AgentRegistry();
       for (const host of loaded.agents.listHosts()) runtimeAgents.addHost(host);
@@ -383,6 +419,8 @@ export class ConfigurationGenerations {
         ...(loaded.agents
           ? {
               runtimeBinding,
+              runtimeHosts,
+              ...(loaded.runtimeFingerprint ? { runtimeFingerprint: loaded.runtimeFingerprint } : {}),
               effectiveAgents: structuredClone(loaded.agents.listAgents()),
               effectiveRoles: loaded.agents.listRoles(),
             }

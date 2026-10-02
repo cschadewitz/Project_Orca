@@ -34,10 +34,15 @@ const config = () =>
     roles: { builder: "a" },
     program: { workflow: "flow", itemWorkflow: "flow" },
   });
-async function fixture(agents?: AgentRegistry) {
+async function fixture(agents?: AgentRegistry, runtimeFingerprint?: string) {
   const records = new Map<string, GenerationSnapshot>();
   const workflows = new InMemoryWorkflowVersionStore();
-  let assets: GenerationAssets = { workflows: [definition()], templates: [], ...(agents ? { agents } : {}) };
+  let assets: GenerationAssets = {
+    workflows: [definition()],
+    templates: [],
+    ...(agents ? { agents } : {}),
+    ...(runtimeFingerprint ? { runtimeFingerprint } : {}),
+  };
   const calls: { options: unknown; generation: GenerationMaterial }[] = [];
   const writes = vi.fn(async (id: string, value: GenerationSnapshot) => {
     records.set(id, structuredClone(value));
@@ -338,4 +343,31 @@ it("retains effective registry registrations and refuses restoration by another 
   const saved = records.get(id)!;
   delete saved.effectiveAgents;
   await expect(generations.restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+});
+
+it("restores plugin-bound material in a later provider only for the same described runtime", async () => {
+  const { generations, restart, setAssets } = await fixture(AgentRegistry.fromConfig(config()), "plugins-a");
+  const id = generations.current.snapshot.id;
+  const later = (runtimeFingerprint?: string, agents = AgentRegistry.fromConfig(config())) => {
+    setAssets({
+      workflows: [definition()],
+      templates: [],
+      agents,
+      ...(runtimeFingerprint ? { runtimeFingerprint } : {}),
+    });
+    return restart();
+  };
+  const same = AgentRegistry.fromConfig(config());
+  same.mapRole("builder", "b");
+  const restored = await (await later("plugins-a", same)).restore(id);
+  // Executable hosts come from the matching boot; recorded specs and roles still win.
+  expect(restored.agents.resolve({ role: "builder" }).agent.id).toBe("a");
+  expect(restored.agents.host("local")).toBe(same.host("local"));
+  await expect((await later("plugins-b")).restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+  await expect((await later()).restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+  const extra = AgentRegistry.fromConfig(config());
+  const host = Object.create(extra.host("local")) as ReturnType<AgentRegistry["host"]>;
+  Object.defineProperty(host, "id", { value: "plugin-host" });
+  extra.addHost(host);
+  await expect((await later("plugins-a", extra)).restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
 });

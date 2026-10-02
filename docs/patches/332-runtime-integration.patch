@@ -20,7 +20,7 @@ index 4eebcd8..d7abd3f 100644
  | `plan.get` | `plan.read` | workspace-wide | — |
  | `items.list` | `plan.read` | workspace-wide | — |
 diff --git a/packages/cli/src/bootstrap.ts b/packages/cli/src/bootstrap.ts
-index 51c6dfb..76e3344 100644
+index 51c6dfb..b9acbc4 100644
 --- a/packages/cli/src/bootstrap.ts
 +++ b/packages/cli/src/bootstrap.ts
 @@ -2,6 +2,8 @@
@@ -58,7 +58,7 @@ index 51c6dfb..76e3344 100644
    const stores = opts.ephemeral
      ? memoryStores()
      : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
-@@ -206,8 +212,14 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
+@@ -206,10 +212,23 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
      workflows,
      agents,
      plan,
@@ -73,9 +73,18 @@ index 51c6dfb..76e3344 100644
 +      workspaceProvider = p;
 +    },
    };
++  const pluginEntries = await pluginEntryDigests(config, configDir);
    await loadPlugins(config, configDir, api, logger);
++  // The restoration contract for plugin-bound generations: what a later bootstrap must match.
++  const runtimeFingerprint = pluginEntries
++    ? createHash("sha256")
++        .update(JSON.stringify({ plugins: pluginEntries, workspaceProvider: pluginWorkspaceProvider }))
++        .digest("hex")
++    : undefined;
  
-@@ -242,11 +254,63 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
+   const problems: string[] = [];
+   for (const def of workflows.list()) {
+@@ -242,11 +261,68 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
      // An ephemeral bootstrap deliberately gets none: it is a one-shot over in-memory stores
      // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
      // durable workspace state of exactly the kind `ephemeral` means to leave alone.
@@ -117,6 +126,7 @@ index 51c6dfb..76e3344 100644
 +    workflows: workflows.list(),
 +    templates: templates.list(),
 +    ...(config.plugins.length ? { agents } : {}),
++    ...(config.plugins.length && runtimeFingerprint ? { runtimeFingerprint } : {}),
 +  });
 +  orchestrator.generations = generations;
 +  // Explicit embedder/plugin ports and later facade replacements stay live. Only the
@@ -128,8 +138,12 @@ index 51c6dfb..76e3344 100644
 +  const bootGeneration = generations.current.snapshot.id;
 +  orchestrator.generationWorkspaceProvider = (generation) => {
 +    if (pluginWorkspaceProvider) {
-+      if (generation.snapshot.id !== bootGeneration)
-+        throw new OrcaError("RUN_STATE", "plugin workspace provider cannot be restored across bootstrap");
++      // Restoring a plugin-bound generation already matched this boot's runtime fingerprint,
++      // which covers the plugin entry modules and that a plugin supplied the provider.
++      const sameRuntime =
++        runtimeFingerprint !== undefined && generation.snapshot.runtimeFingerprint === runtimeFingerprint;
++      if (generation.snapshot.id !== bootGeneration && !sameRuntime)
++        throw new OrcaError("RUN_STATE", "plugin workspace provider cannot be restored for a different plugin runtime");
 +      return workspaceProvider;
 +    }
 +    return makeWorkspaceProvider(generation.snapshot.config, configDir, generation.agents);
@@ -140,6 +154,53 @@ index 51c6dfb..76e3344 100644
      configDir,
      ...(configFile ? { configFile } : {}),
      orchestrator,
+@@ -271,8 +347,7 @@ export async function loadPlugins(
+   logger: Logger,
+ ): Promise<void> {
+   for (const spec of config.plugins) {
+-    const url = spec.startsWith(".") || isAbsolute(spec) ? pathToFileURL(resolve(configDir, spec)).href : spec;
+-    const mod = (await import(url)) as { default?: OrcaPlugin };
++    const mod = (await import(pluginSpecifier(spec, configDir))) as { default?: OrcaPlugin };
+     if (!mod.default?.register)
+       throw new OrcaError("CONFIG_INVALID", `plugin ${spec} has no default OrcaPlugin export`);
+     await mod.default.register(api);
+@@ -280,6 +355,36 @@ export async function loadPlugins(
+   }
+ }
+ 
++function pluginSpecifier(spec: string, configDir: string): string {
++  return spec.startsWith(".") || isAbsolute(spec) ? pathToFileURL(resolve(configDir, spec)).href : spec;
++}
++
++/**
++ * The resolved entry module and its SHA-256 for each plugin, read before import. Plugin code
++ * is not snapshotted; this only lets a later bootstrap prove it loads the same entry bytes.
++ * A plugin that does not resolve to a local file yields none, so its generations stay
++ * bound to the bootstrap that admitted them.
++ */
++async function pluginEntryDigests(
++  config: OrcaConfig,
++  configDir: string,
++): Promise<{ spec: string; url: string; digest: string }[] | undefined> {
++  const entries: { spec: string; url: string; digest: string }[] = [];
++  for (const spec of config.plugins) {
++    let url: URL;
++    try {
++      url = new URL(import.meta.resolve(pluginSpecifier(spec, configDir)));
++    } catch {
++      return undefined;
++    }
++    if (url.protocol !== "file:") return undefined;
++    const bytes = await readFile(url).catch(() => undefined);
++    if (!bytes) return undefined;
++    entries.push({ spec, url: url.href, digest: createHash("sha256").update(bytes).digest("hex") });
++  }
++  return entries;
++}
++
+ function stripUndefined<T extends object>(o: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as {
+     [K in keyof T]?: Exclude<T[K], undefined>;
 diff --git a/packages/cli/src/commands/index.ts b/packages/cli/src/commands/index.ts
 index 488cc7b..60b1b25 100644
 --- a/packages/cli/src/commands/index.ts
@@ -1089,12 +1150,12 @@ index 0000000..a2675c0
 +  });
 diff --git a/packages/cli/test/config-generation-bootstrap.test.ts b/packages/cli/test/config-generation-bootstrap.test.ts
 new file mode 100644
-index 0000000..f3960d7
+index 0000000..d3463be
 --- /dev/null
 +++ b/packages/cli/test/config-generation-bootstrap.test.ts
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,159 @@
 +/** Reserved integration regressions: exercise the production bootstrap composition. */
-+import { mkdtemp, rm, writeFile } from "node:fs/promises";
++import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
 +import { afterEach, expect, it } from "vitest";
@@ -1122,7 +1183,10 @@ index 0000000..f3960d7
 +  const config = parseOrcaConfig({ workflows: ["flow.yaml"], templates: [], plugins: ["./plugin.mjs"] });
 +  return { config, configDir: dir, logger: silentLogger };
 +}
-+it("retains the plugin workspace provider and refuses historical substitution after bootstrap", async () => {
++// Same registrations, different entry bytes: the module cache would even keep running the old
++// code in this process, so only the recorded digest can tell the runtimes apart.
++const changePlugin = (dir: string) => appendFile(join(dir, "plugin.mjs"), "\n// changed\n");
++it("retains the plugin workspace provider for the same plugin runtime and refuses a changed one", async () => {
 +  const opts = await fixture(`api.setWorkspaceProvider({ name: "sandbox", async provision() {
 +    return { cwd: "/tmp/plugin-sandbox", hostId: "local", provider: "sandbox" };
 +  } });`);
@@ -1134,7 +1198,36 @@ index 0000000..f3960d7
 +    provider: "sandbox",
 +  });
 +  const second = await bootstrap(opts);
-+  await expect(second.orchestrator.startRun({ workflowId: "tiny" }, first.generations.current)).rejects.toMatchObject({
++  const restored = await second.orchestrator.startRun({ workflowId: "tiny" }, first.generations.current);
++  expect((await second.orchestrator.getState(restored)).run.workspace).toMatchObject({ provider: "sandbox" });
++  await changePlugin(opts.configDir);
++  const changed = await bootstrap(opts);
++  await expect(changed.orchestrator.startRun({ workflowId: "tiny" }, first.generations.current)).rejects.toMatchObject({
++    code: "RUN_STATE",
++  });
++});
++it("resumes a parked run across bootstrap with an unchanged plugin and fails closed once it changes", async () => {
++  const opts = await fixture(
++    "",
++    tiny
++      .replace("  done:", "  gate: { type: gate, question: Go?, options: [go] }\n  done:")
++      .replace("  - { from: s, to: done }", "  - { from: s, to: gate }\n  - { from: gate, to: done }"),
++  );
++  const config = parseOrcaConfig({ ...opts.config, humanInput: { mode: "pause" } });
++  const first = await bootstrap({ ...opts, config });
++  const id = await (await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" })).startRun({});
++  expect((await first.orchestrator.run(id)).run.status).toBe("paused");
++  const input = (await first.orchestrator.pendingInputs(id))[0]!;
++  const second = await bootstrap({ ...opts, config });
++  await second.orchestrator.answer(input.id, "go", id);
++  expect((await second.orchestrator.resume(id)).run.status).toBe("completed");
++
++  const parked = await (
++    await second.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" })
++  ).startRun({});
++  expect((await second.orchestrator.run(parked)).run.status).toBe("paused");
++  await changePlugin(opts.configDir);
++  await expect((await bootstrap({ ...opts, config })).orchestrator.resume(parked)).rejects.toMatchObject({
 +    code: "RUN_STATE",
 +  });
 +});
@@ -1171,7 +1264,16 @@ index 0000000..f3960d7
 +    source: "plugin.roles",
 +  });
 +  const second = await bootstrap(opts);
-+  await expect(second.generations.restore(generation.snapshot.id)).rejects.toMatchObject({ code: "RUN_STATE" });
++  second.orchestrator.agents.mapRole("plugin-role", "missing");
++  const restored = await second.generations.restore(generation.snapshot.id);
++  expect(restored.agents.resolve({ role: "plugin-role" })).toMatchObject({
++    agent: { id: "plugin-agent" },
++    host: { id: "plugin-host" },
++  });
++  expect(restored.agents.host("plugin-host")).toBe(second.agents.host("plugin-host"));
++  await changePlugin(opts.configDir);
++  const changed = await bootstrap(opts);
++  await expect(changed.generations.restore(generation.snapshot.id)).rejects.toMatchObject({ code: "RUN_STATE" });
 +});
 +it.each(["configured", "explicit", "replaced"] as const)(
 +  "restores admitted gate policy while retaining %s callback behavior",
