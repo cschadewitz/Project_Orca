@@ -17,7 +17,6 @@ export const RunProvenanceSchema = z.object({
       template: ChoiceSchema.optional(),
     }),
   ),
-  itemWorkflow: ChoiceSchema,
   templatePack: ChoiceSchema.optional(),
 });
 export type RunProvenance = z.infer<typeof RunProvenanceSchema>;

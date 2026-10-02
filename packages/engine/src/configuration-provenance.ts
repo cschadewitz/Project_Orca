@@ -59,10 +59,6 @@ export function launchProvenance(
       value: "[REDACTED]" as const,
     })),
     selections,
-    itemWorkflow: {
-      value: overrides?.itemWorkflow ?? config.program.itemWorkflow,
-      source: overrides?.itemWorkflow ? "run.overrides.itemWorkflow" : "config.program.itemWorkflow",
-    },
     ...(overrides?.templatePack
       ? { templatePack: { value: overrides.templatePack, source: "run.overrides.templatePack" } }
       : {}),

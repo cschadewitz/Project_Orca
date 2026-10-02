@@ -231,6 +231,7 @@ export class ConfigurationGenerations {
   }
 
   readonly captureLaunch: CaptureLaunch = async (selection) => {
+    selection = { ...selection };
     const material = this.current; // Capture before the first await.
     if (selection.expectedConfigGeneration !== undefined && selection.expectedConfigGeneration !== material.snapshot.id)
       throw new OrcaError("CONFIG_STALE", "active configuration changed; refresh before launching");
@@ -249,7 +250,11 @@ export class ConfigurationGenerations {
       throw new OrcaError("WORKFLOW_INVALID", "workflow changed; validate inputs again before launching");
     // Explicit whitelist prevents JavaScript callers from smuggling inline/workflow/generation substitutions.
     const bound = (options: BoundLaunchOptions): StartRunOptions => {
-      const { actor, vars, workspace, requestId, workItemId, parentRunId, parentStepRunId, overrides } = options;
+      const { actor, workspace, requestId, workItemId, parentRunId, parentStepRunId, overrides } = options;
+      const vars =
+        selection.purpose === "request"
+          ? { itemWorkflow: material.snapshot.config.program.itemWorkflow, ...options.vars }
+          : options.vars;
       return {
         workflowId: workflow.id,
         workflowVersion: workflow.version,

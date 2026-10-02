@@ -45,7 +45,7 @@ workflow pin or different digest also fails closed.
 | Settings | Apply behavior |
 | --- | --- |
 | `roles` | New launches use the new mapping. |
-| `program` | New captures with purpose `request` use the new default workflow. |
+| `program` | New Request captures use the workflow and item-workflow defaults; explicit vars still win. |
 | `workflows` | Reload and validate definitions, preserving existing immutable versions. |
 | `templates` | Reload templates; admitted runs retain captured bodies and partials. |
 | `agents`, including models, commands, environment, session options and permissions | Restart required. Per-run selection overrides remain supported. |

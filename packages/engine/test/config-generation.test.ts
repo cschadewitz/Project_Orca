@@ -180,6 +180,14 @@ describe("configuration generations", () => {
     expect(calls[0]?.options).not.toHaveProperty("inline");
     expect(calls[0]?.options).toHaveProperty("workflowId", "flow");
   });
+  it("captures Request item-workflow defaults while preserving explicit vars", async () => {
+    const { generations, calls } = await fixture();
+    const captured = await generations.captureLaunch({ purpose: "request" });
+    await captured.startRun({});
+    await captured.startRun({ vars: { itemWorkflow: "caller-choice" } });
+    expect(calls[0]?.options).toMatchObject({ vars: { itemWorkflow: "flow" } });
+    expect(calls[1]?.options).toMatchObject({ vars: { itemWorkflow: "caller-choice" } });
+  });
   it("two concurrent apply operations have one activation winner", async () => {
     const { generations } = await fixture();
     const id = generations.current.snapshot.id;
