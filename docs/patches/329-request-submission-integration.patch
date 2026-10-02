@@ -11,7 +11,7 @@
 +++ b/packages/protocol/src/index.ts
 @@ -24,3 +24,5 @@
  export * from "./plan-control.js";
- 
+
  export * from "./maintenance.js";
 +
 +export * from "./request-submission.js";
@@ -26,7 +26,7 @@
 --- a/packages/engine/src/orchestrator.ts
 +++ b/packages/engine/src/orchestrator.ts
 @@ -296,6 +296,15 @@
- 
+
    /** Create a run (emits run.created) without executing it. */
    async startRun(opts: StartRunOptions): Promise<string> {
 +    // Linked resources must exist and agree before any definition/workspace/run is written.
@@ -59,7 +59,7 @@
  import {
 @@ -158,6 +165,9 @@
  import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
- 
+
  export interface MethodContext {
 +  requestSubmissions?: RequestSubmissionModel | undefined;
 +  submissionWorkspaceId?: string | undefined;
@@ -101,7 +101,7 @@
 @@ -75,6 +75,10 @@
      reserved: true,
    },
- 
+
 +  "requests.submit": { permission: "plan.write", resource: "none", audit: "mutation" },
 +  "requests.reconcile": { permission: "plan.write", resource: "none", audit: "mutation" },
 +  "requests.admission": { permission: "plan.write", resource: "none" },
@@ -134,7 +134,7 @@
 +      );
      });
    }
- 
+
 @@ -195,6 +203,7 @@
            // transport is refused, never treated as local.
            if (!bound) throw authRequired();
@@ -211,7 +211,7 @@
  import { fileStores, memoryStores } from "@orca/store";
 @@ -42,6 +44,12 @@
  export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
- 
+
  export interface BootstrapOptions {
 +  /** Bound by integration to #332 CaptureLaunch, durable admissions and verified local authority. */
 +  requestSubmission?: (app: {
@@ -341,7 +341,7 @@
 +import { dirname } from "node:path";
  import { z } from "zod";
  import { writePrivateFile } from "./credentials.js";
- 
+
 @@ -41,7 +42,10 @@
     * after. The first owner wins: a run is never re-attributed.
     */
@@ -524,7 +524,7 @@
  // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
 @@ -147,24 +146,10 @@
  // ------------------------------------------------------------------- runs.start
- 
+
  /**
 - * `runs.start` - a workflow and its vars, and deliberately nothing else.
 - *
