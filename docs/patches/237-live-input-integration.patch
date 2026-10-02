@@ -384,7 +384,7 @@ index 44c7451..1c6df3e 100644
 +
 +export * from "./live-input.js";
 diff --git a/packages/engine/src/orchestrator.ts b/packages/engine/src/orchestrator.ts
-index 967bed8..c1b6e49 100644
+index 967bed8..d1e4e6e 100644
 --- a/packages/engine/src/orchestrator.ts
 +++ b/packages/engine/src/orchestrator.ts
 @@ -83,6 +83,7 @@ import {
@@ -475,7 +475,20 @@ index 967bed8..c1b6e49 100644
              emit: (e) => rc.emit(e),
              clock: this.clock,
              runId: rc.id,
-@@ -1628,17 +1656,23 @@ export class Orchestrator {
+@@ -1609,7 +1637,11 @@ export class Orchestrator {
+             question: req.toolCall.title ?? "Allow tool call?",
+             // ACP already separates the two: `optionId` is what the agent is answered
+             // with, `name` is what the host shows. Keep them apart here too.
+-            options: req.options.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
++            // ACP remembered choices grant policy inside the agent. Live responses only
++            // offer one-time choices; ORCA standing rules use the separately authorized writer.
++            options: req.options
++              .filter((o) => !live || o.kind === "allow_once" || o.kind === "reject_once")
++              .map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
+             // Whose turn is being held open (#248). It is recorded here because here is
+             // where it is known: an attention card has to name the agent, and the push that
+             // opens the card is a pure function of the event it comes from.
+@@ -1628,17 +1660,23 @@ export class Orchestrator {
              },
            });
          },
@@ -510,7 +523,7 @@ index 967bed8..c1b6e49 100644
        });
      } catch (e) {
        handshake.failed(e);
-@@ -1664,6 +1698,7 @@ export class Orchestrator {
+@@ -1664,6 +1702,7 @@ export class Orchestrator {
          hostId: host.id,
          cwd: rc.workspace.cwd,
          ...(applied !== undefined ? { model: applied } : {}),
@@ -630,10 +643,10 @@ index 9f48294..df7fff0 100644
    return `${v.major}.${v.minor}`;
 diff --git a/packages/daemon/test/live-input-integration.test.ts b/packages/daemon/test/live-input-integration.test.ts
 new file mode 100644
-index 0000000..6438f47
+index 0000000..8dc8ca7
 --- /dev/null
 +++ b/packages/daemon/test/live-input-integration.test.ts
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,341 @@
 +/** Applied with the shared #237 patch: the real interpreter, lease, read and control paths agree. */
 +import WebSocket from "ws";
 +import { CredentialStore, OwnershipStore, orchestratorResolver } from "../src/auth/index.js";
@@ -690,6 +703,8 @@ index 0000000..6438f47
 +            options: [
 +              { optionId: "allow", name: "Allow", kind: "allow_once" },
 +              { optionId: "deny", name: "Deny", kind: "reject_once" },
++              { optionId: "remember-allow", name: "Always allow", kind: "allow_always" },
++              { optionId: "remember-deny", name: "Always deny", kind: "reject_always" },
 +            ],
 +          },
 +          {
@@ -853,6 +868,7 @@ index 0000000..6438f47
 +    const credentials = new CredentialStore();
 +    const owner = await credentials.issue({ principal: "owner", preset: "owner" });
 +    const viewer = await credentials.issue({ principal: "viewer", preset: "viewer" });
++    const operator = await credentials.issue({ principal: "operator", preset: "operator" });
 +    const daemon = await startDaemon({
 +      orcaVersion: "test",
 +      capabilities: ["runs.read", "runs.control", "runs.subscribe"],
@@ -894,6 +910,16 @@ index 0000000..6438f47
 +      return response;
 +    };
 +    try {
++      expect(f.input.options.map((option) => option.id)).toEqual(["allow", "deny"]);
++      for (const optionId of ["remember-allow", "remember-deny"]) {
++        expect(await call(operator.token, "inputs.answer", { ...f.params, optionId })).toMatchObject({
++          ok: false,
++          error: { code: "RUN_STATE" },
++        });
++        expect(f.port.inspect(f.params.live)).toBe("pending");
++        expect(f.answers).toEqual([]);
++        expect((await f.orc.events(f.runId)).filter((event) => event.type === "human.answered")).toHaveLength(0);
++      }
 +      expect(await call(viewer.token, "inputs.answer", f.params)).toMatchObject({
 +        ok: false,
 +        error: { code: "AUTH_FORBIDDEN" },
