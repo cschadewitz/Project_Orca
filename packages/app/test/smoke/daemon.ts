@@ -54,7 +54,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
-import { InputsListResultSchema, type OpenInputView } from "@orca/protocol";
+import { PROTOCOL_VERSION, InputsListResultSchema, type OpenInputView } from "@orca/protocol";
 
 const run = promisify(execFile);
 
@@ -173,7 +173,7 @@ async function waitForHello(url: string, tokenFile: string, timeoutMs = 30_000):
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      await rpc(url, tokenFile, "hello", { client: "orca-smoke/0", protocol: { major: 1, minor: 0 } });
+      await rpc(url, tokenFile, "hello", { client: "orca-smoke/0", protocol: PROTOCOL_VERSION });
       return;
     } catch {
       // Not listening yet.

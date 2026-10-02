@@ -26,6 +26,7 @@ import {
 } from "@orca/core";
 import { LocalWorkspaceProvider, Orchestrator, PausingHumanInput, runLeaseResource } from "@orca/engine";
 import {
+  PROTOCOL_VERSION,
   AgentsListResultSchema,
   AgentsPingResultSchema,
   CLAIMS_RELEASE_METHOD,
@@ -428,7 +429,7 @@ describe("runs.start", () => {
 describe("hello", () => {
   it("advertises runs.control and the control methods when the daemon drives runs", async () => {
     const h = harness();
-    const res = await call(h.ctx, "hello", { client: "test/1", protocol: { major: 1, minor: 4 } });
+    const res = await call(h.ctx, "hello", { client: "test/1", protocol: PROTOCOL_VERSION });
     const hello = HelloResultSchema.parse(res.result);
     expect(hello.capabilities).toContain("runs.control");
     // The four that drive runs. `CONTROL_METHODS` also holds the plan writes as of #169, and
@@ -448,7 +449,7 @@ describe("hello", () => {
   it("serves claims.release without a plan, because runs.control is what it is behind", async () => {
     const h = harness();
     const hello = HelloResultSchema.parse(
-      (await call(h.ctx, "hello", { client: "t", protocol: { major: 1, minor: 7 } })).result,
+      (await call(h.ctx, "hello", { client: "t", protocol: PROTOCOL_VERSION })).result,
     );
     expect(h.ctx.planControl).toBeUndefined();
     expect(hello.methods).toContain(CLAIMS_RELEASE_METHOD);
@@ -469,7 +470,7 @@ describe("hello", () => {
   it("advertises no plan capability when the daemon has no plan behind it", async () => {
     const h = harness();
     const hello = HelloResultSchema.parse(
-      (await call(h.ctx, "hello", { client: "t", protocol: { major: 1, minor: 7 } })).result,
+      (await call(h.ctx, "hello", { client: "t", protocol: PROTOCOL_VERSION })).result,
     );
     const table = Object.keys(methodsFor(h.ctx));
     expect((hello.methods ?? []).slice().sort()).toEqual(table.slice().sort());
@@ -484,7 +485,7 @@ describe("hello", () => {
     const ctx: MethodContext = { ...h.ctx, control: undefined, capabilities: ["runs.read", "runs.subscribe"] };
 
     const hello = HelloResultSchema.parse(
-      (await call(ctx, "hello", { client: "t", protocol: { major: 1, minor: 4 } })).result,
+      (await call(ctx, "hello", { client: "t", protocol: PROTOCOL_VERSION })).result,
     );
     expect(hello.capabilities).not.toContain("runs.control");
     for (const m of CONTROL_METHODS) expect(hello.methods).not.toContain(m);

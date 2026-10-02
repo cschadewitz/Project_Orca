@@ -3,6 +3,7 @@
  * bind with no TLS-terminating proxy. Behind a proxy, only that proxy may connect, it must say
  * the request was https, and forwarded headers from anyone else are ignored.
  */
+import { PROTOCOL_VERSION } from "@orca/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon, type DaemonHandle } from "@orca/daemon";
 import {
@@ -69,7 +70,7 @@ describe("behind a trusted proxy", () => {
         kind: "request",
         id: 1,
         method: "hello",
-        params: { client: "t", protocol: { major: 1, minor: 0 } },
+        params: { client: "t", protocol: PROTOCOL_VERSION },
       }),
     });
 

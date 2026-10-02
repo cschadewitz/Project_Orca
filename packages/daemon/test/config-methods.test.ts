@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { recordAlwaysDecision, readPermissionPolicyFile } from "@orca/agents";
 import { DEFAULT_PERMISSION_POLICY, FakeClock } from "@orca/core";
 import {
+  PROTOCOL_VERSION,
   CONFIG_CHANGED,
   CONFIG_GET_METHOD,
   CONFIG_SET_METHOD,
@@ -524,7 +525,7 @@ describe("the method table", () => {
                 kind: "request",
                 id: 1,
                 method: "hello",
-                params: { client: "test", protocol: { major: 1, minor: 7 } },
+                params: { client: "test", protocol: PROTOCOL_VERSION },
               }),
               methodsFor(context),
               context,

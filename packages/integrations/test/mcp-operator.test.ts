@@ -1,4 +1,5 @@
 /** Reference MCP transport clients and frozen lifecycle consumer fixtures. */
+import { PROTOCOL_VERSION } from "@orca/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
@@ -24,7 +25,7 @@ const stamp = "2026-10-02T12:00:00.000Z";
 const discovery = (): OperatorDiscovery => ({
   target,
   orcaVersion: "fixture",
-  protocol: { major: 1, minor: 10 },
+  protocol: PROTOCOL_VERSION,
   principalId: "verified-caller",
   authentication: "credential",
   scope: { runs: "all", workflows: "*", permissions: ["runs.read", "runs.start", "inputs.answer"] },
