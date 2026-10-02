@@ -1,5 +1,5 @@
 /**
- * Playwright's config for the two Electron specs.
+ * Playwright's config for the Electron smoke, type and native-encryption acceptance specs.
  *
  * It lives here rather than at the repo root so that the root TypeScript project, whose
  * `include` already reaches every package's test folder, typechecks and lints it along
@@ -9,7 +9,7 @@
  * `playwright install`: the binary under test is the workspace's own `electron`
  * dependency. One worker, because there is one app, one daemon and one X display.
  *
- * ## Two projects, because they are two jobs
+ * ## Separate projects for independent checks
  *
  * - **`smoke`** (`pnpm run app:smoke`) launches the *built* app against a real daemon and
  *   audits every surface. It runs on Linux only: what it is about is the app coming up at
@@ -18,8 +18,11 @@
  *   `#type` and diffs committed per-platform screenshots. It runs on all three runners,
  *   because "do the bundled faces render the same on Linux, macOS and Windows" is a
  *   question only three machines can answer (#213).
+ * - **`admission-intents`** launches the built app twice against one authenticated daemon
+ *   and one disposable profile. Native safeStorage must encrypt and decrypt its retained
+ *   intent across process exit. The existing macOS/Windows jobs run this independent gate.
  *
- * Two projects rather than two config files is what lets the workflow say `--project=<name>`
+ * Separate projects in one config let the workflow say `--project=<name>`
  * and lets `toHaveScreenshot` put the project's name in a baseline's filename, beside the
  * platform it already puts there.
  *
@@ -85,6 +88,14 @@ export default defineConfig({
     {
       name: "type-proof",
       testMatch: "type-proof.spec.ts",
+    },
+    {
+      name: "admission-intents",
+      testMatch: "admission-intents.spec.ts",
+      outputDir: here("../../../../test-results/admission-intents"),
+      // Only allowlisted evidence is attached. Never archive a profile, daemon store,
+      // token file, protected journal, main-process arguments or network payloads.
+      use: { trace: "off", screenshot: "off", video: "off" },
     },
   ],
 });

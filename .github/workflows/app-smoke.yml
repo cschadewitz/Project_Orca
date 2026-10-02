@@ -1,6 +1,7 @@
 # Launch the desktop app in a real Electron window: once against a real daemon, and once
 # more on each platform at `#type` to check the bundled faces by machine. Release and manual
-# runs verify the full matrix against their supplied ref.
+# runs verify the full matrix against their supplied ref. Native macOS/Windows also prove
+# encrypted admission-intent recovery across a complete Electron process restart.
 #
 # Separate from ci.yml on purpose. That workflow sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1` —
 # it typechecks, lints and builds the app but never runs it, and skipping the ~100 MB
@@ -15,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "The branch or commit to smoke-test and type-proof"
+        description: "The branch or commit to smoke-test, type-proof and verify native intent encryption"
         required: true
         type: string
         default: main
@@ -158,16 +159,16 @@ jobs:
           retention-days: ${{ inputs.ref && 14 || 7 }}
           if-no-files-found: ignore
 
-  # The second job, and deliberately not a wider first one: it launches `#type` and nothing
-  # else, on the three platforms ORCA ships to, and diffs committed per-platform baselines
+  # The second job diffs `#type` on the three platforms ORCA ships to. Its existing native
+  # macOS/Windows runners also run an independent built-app safeStorage acceptance test.
   # (#213). The `smoke` job above stays on Linux alone, because what it is about is the app
   # coming up at all and three runners would buy one answer three times.
   #
   # `#type` is dev-only — `renderer/src/routes.tsx` gates it behind `import.meta.env.DEV` so
   # it never reaches a shipped bundle — so the spec starts a Vite dev server and points the
   # main process at it with `ORCA_RENDERER_URL`, exactly as `packages/app/scripts/dev.js`
-  # does. There is no `pnpm run build` step here: the spec compiles main and preload itself
-  # (`tsc -b packages/app/tsconfig.preload.json`) and the renderer is served, not built.
+  # does. The type spec compiles main and preload itself; the separate native-intent step
+  # builds the actual production renderer and CLI after preserving the type-proof report.
   type-proof:
     name: type proof (${{ matrix.os }})
     needs: changes
@@ -189,6 +190,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
+
+      - name: Record workflow and checked-out revision
+        shell: bash
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          TEST_REF: ${{ inputs.ref || github.sha }}
+        run: |
+          echo "workflow definition: $WORKFLOW_REF @ $WORKFLOW_SHA"
+          echo "requested test ref: $TEST_REF"
+          echo "checked-out test SHA: $(git rev-parse HEAD)"
 
       - uses: pnpm/action-setup@v6
 
@@ -216,6 +228,7 @@ jobs:
       # is strict, so the root has no `electron` to resolve and the first attempt at this step
       # failed with MODULE_NOT_FOUND.
       - name: Put the Electron binary on disk, rather than inside a test's timeout
+        id: native-electron
         shell: bash
         working-directory: packages/app
         run: node -e "console.log(require('electron'))"
@@ -245,5 +258,31 @@ jobs:
             test-results/
             playwright-report/
           # Release calls supply a ref; PR and standalone outputs only need one week.
+          retention-days: ${{ inputs.ref && 14 || 7 }}
+          if-no-files-found: ignore
+
+      # Preserve the independent type verdict/report first. A type-baseline failure must
+      # not suppress native acceptance, and a native failure must not erase type evidence.
+      # Reuse these hosted runners; never install a Linux keyring or change host security.
+      - name: Build the native admission-intent acceptance app and daemon
+        id: native-intent-build
+        if: ${{ !cancelled() && runner.os != 'Linux' && steps.native-electron.outcome == 'success' }}
+        run: pnpm run build
+
+      - name: Native encrypted admission-intent restart acceptance
+        if: ${{ !cancelled() && runner.os != 'Linux' && steps.native-intent-build.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-admission-intents
+        run: pnpm run app:admission-intents
+
+      - name: Upload native admission-intent acceptance evidence
+        if: ${{ !cancelled() && runner.os != 'Linux' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: admission-intents-${{ matrix.os }}
+          path: |
+            test-results/admission-intents/
+            playwright-report-admission-intents/
           retention-days: ${{ inputs.ref && 14 || 7 }}
           if-no-files-found: ignore

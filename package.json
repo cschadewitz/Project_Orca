@@ -16,6 +16,7 @@
     "test:coverage": "vitest run --coverage",
     "app:smoke": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=smoke",
     "app:type-proof": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=type-proof",
+    "app:admission-intents": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=admission-intents",
     "app:type-proof:update": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=type-proof --update-snapshots",
     "lint": "eslint . && pnpm run lint:css",
     "lint:css": "node tools/eslint-config/bin/check-css-tokens.js packages/app/renderer packages/design/css/components.css",

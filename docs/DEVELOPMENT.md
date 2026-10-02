@@ -482,6 +482,50 @@ way.** Alongside the pictures it makes two assertions that need no baseline at a
 bundled `@font-face` ended at `error`, and that flipping the bundled-faces toggle changes
 the measured width of the declared glyphs — if it does not, the faces were never on.
 
+### Native encrypted admission-intent acceptance
+
+`pnpm run build && pnpm run app:admission-intents` runs the production Electron app and
+built authenticated daemon with disposable data. It starts a run through the real preload
+bridge and `operator.discover`, closes the entire Electron process, then reopens the same
+profile and recovers the same retained intent and server admission. Native Electron
+`safeStorage` encryption and decryption are never substituted in the positive test. Public
+receipt identifiers, an authenticated `admissions.get` read and the server run count establish
+that replay recovers the original work. This covers restart after acceptance; it does not
+claim a separate crash-before-acknowledgement test.
+
+The `admission-intents` Playwright project runs on the existing macOS and Windows type-proof
+runners in `app-smoke.yml`, after the independent type-proof report is uploaded. It needs a
+full build because the type proof alone only builds main/preload and serves a development
+renderer. A type-proof failure does not suppress native acceptance, and neither result is
+made optional. Reports use separate output directories and artifacts.
+
+The positive test requires genuine native secure storage. It records `isEncryptionAvailable`,
+the Electron version, and a platform-derived Keychain/DPAPI provider label. The Linux-only
+`getSelectedStorageBackend` result is not invented on macOS or Windows. Missing storage,
+encryption/decryption failure or a blocked native permission prompt fails acceptance; a skip
+or the separate negative test cannot establish a pass. The negative test changes only the
+availability function inside its disposable Electron process and verifies that the production
+bridge refuses before any `runs.admit` call or journal creation.
+
+Do not unlock/create a keychain, change ACLs, disable a sandbox, force a plaintext backend or
+automatically approve an OS permission prompt to make this gate pass. A watchdog outside
+Electron bounds native calls and can terminate only the disposable child if a prompt blocks
+graceful shutdown. Any necessary OS permission or credential entry requires human approval.
+No OS storage provisioning is part of this workflow.
+
+Evidence is allowlisted: method names/counts, public discovery and receipt identifiers,
+availability, hashes and boolean checks. The observer forwards the real client call unchanged.
+Never log request parameters, retry keys, tokens or credentials, and never upload a profile,
+daemon store, protected journal or key material. This project disables automatic traces,
+screenshots and video; it attaches only its sanitized JSON evidence and normal test report.
+
+For manual verification of a branch adding or changing this gate, select that branch as the
+workflow **definition** ref as well as supplying the desired exact checkout SHA in the `ref`
+input. Running an old `main` workflow definition with a newer checkout input does not execute
+new workflow steps and cannot establish this acceptance. Verify the run's workflow definition
+ref/SHA and the checked-out test SHA; the native job prints both before testing. Release
+verification likewise requires the intended workflow definition and tested commit.
+
 ### Screenshot baselines
 
 Two specs take screenshots and they mean opposite things, which is worth being explicit
