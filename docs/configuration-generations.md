@@ -88,6 +88,9 @@ The shipped JEV example registers custom executors and is therefore bootstrap-bo
 finish its admitted work before restarting. Do not delete protected records or start a
 replacement run under new callbacks to bypass a refusal. Cross-bootstrap recovery for
 such plugins needs an explicit restoration contract; this release does not provide one.
+Track that work in [#394](https://github.com/cschadewitz/Project_Orca/issues/394),
+the JEV adapter in [#395](https://github.com/cschadewitz/Project_Orca/issues/395), and
+real restart/operator acceptance in [#396](https://github.com/cschadewitz/Project_Orca/issues/396).
 
 Built-in providers record their resolved bootstrap directory and Kepler task directory
 inside the protected generation. Historical launch restoration never rereads the current

@@ -386,7 +386,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
       return workspaceProvider;
     }
     const inputs = generation.snapshot.workspaceInputs;
-    if (!inputs && generation.snapshot.config.workspace.provider === "kepler")
+    if (generation.snapshot.config.workspace.provider === "kepler" && !inputs?.keplerTaskDir)
       throw new OrcaError("RUN_STATE", "recorded Kepler workspace inputs are unavailable");
     return makeWorkspaceProvider(
       generation.snapshot.config,

@@ -58,6 +58,13 @@ import { join, resolve } from "node:path";
 // against the source of truth rather than against a second list of glyphs written here
 // (RULES.md rule 3). This resolves to the built `dist`, which `pnpm run build` produces.
 import { CONNECTION_PRESENTATION, STATUS_PRESENTATION, type RunStatus } from "@orca/design";
+import {
+  ArtifactsListResultSchema,
+  InputInvalidatedParamsSchema,
+  RunsEventsResultSchema,
+  type InputsAnswerParams,
+  type NotificationMessage,
+} from "@orca/protocol";
 import { FIXTURE, startDemoDaemon, type Daemon } from "./daemon.js";
 
 /**
@@ -70,7 +77,26 @@ interface SmokeWindow {
     hello: () => Promise<{ ok: true; result: { capabilities: string[] } } | { ok: false; error: unknown }>;
     /** Only the part the pane-boundary test reads back: the sizes a drag left behind (#276). */
     preferences: { read: () => { panes: Record<string, number> } };
+    connection: {
+      read: () => SmokeConnection;
+      subscribe: (listener: (snapshot: SmokeConnection) => void) => () => void;
+    };
+    notifications: { subscribe: (listener: (message: NotificationMessage) => void) => () => void };
+    inputs: {
+      answer: (params: InputsAnswerParams) => Promise<{ ok: true; result: unknown } | { ok: false; error: unknown }>;
+    };
   };
+  liveInputProbe?: {
+    notifications: NotificationMessage[];
+    connections: SmokeConnection[];
+    stop: () => void;
+  };
+}
+
+interface SmokeConnection {
+  state: string;
+  generation?: number;
+  since: string;
 }
 
 /** The app directory Electron is pointed at; its `main` field is `dist/main/index.js`. */
@@ -617,3 +643,129 @@ for (const theme of THEMES) {
     }
   });
 }
+
+test("a connected live permission expires without dispatching a stale answer", async () => {
+  // Last: the visual audits retain their original durable-gate/failed-run fixture.
+  const attention = await gotoSurface("attention", 1);
+  const before = await page.evaluate(() => {
+    const target = window as unknown as SmokeWindow;
+    const orca = target.orca!;
+    const snapshot = orca.connection.read();
+    const notifications: NotificationMessage[] = [];
+    const connections = [snapshot];
+    const offNotifications = orca.notifications.subscribe((message) => notifications.push(message));
+    const offConnection = orca.connection.subscribe((next) => connections.push(next));
+    target.liveInputProbe = {
+      notifications,
+      connections,
+      stop: () => {
+        offNotifications();
+        offConnection();
+      },
+    };
+    return snapshot;
+  });
+  expect(before.state).toBe("live");
+  expect(before.generation).toBeGreaterThan(0);
+
+  let live: Awaited<ReturnType<Daemon["startLivePermission"]>> | undefined;
+  let cancelled = false;
+  try {
+    live = await daemon.startLivePermission();
+    const { input } = live;
+    expect(input.kind).toBe("permission");
+    expect(input.live?.state).toBe("pending");
+    expect(input.live?.target).toMatchObject({
+      runId: input.runId,
+      stepRunId: input.stepRunId,
+      requestId: input.id,
+    });
+    expect(input.question).toContain(FIXTURE.live.subject);
+    const card = attention.locator(`[id="attention-card-${input.id}"]`);
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(input.question);
+    const allow = card.getByRole("button", { name: /^1\s*Allow$/ });
+    const answer = card.getByRole("button", { name: "Answer", exact: true });
+    await expect(allow).toBeEnabled();
+    await allow.click();
+    await expect(answer).toBeEnabled();
+    await expect(card.getByRole("button", { name: "Always allow", exact: true })).toBeEnabled();
+    await card.focus();
+    await expect(card).toBeFocused();
+    await test.info().attach("live-permission-pending.png", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
+
+    // Cancel at the owning daemon while leaving the window and socket alone. Awaiting
+    // the original runs.start also proves its interpreter has finished, not just that
+    // the read model has briefly painted an expired state.
+    await live.cancel();
+    cancelled = true;
+    await expect(answer).toBeDisabled();
+    await expect(answer).toHaveAttribute("title", /callback is expired/);
+    await expect(allow).toBeDisabled();
+    await expect(card.getByRole("button", { name: "Always allow", exact: true })).toBeDisabled();
+    await expect(card.getByRole("button", { name: "Always deny", exact: true })).toBeDisabled();
+
+    const pushed = () =>
+      page.evaluate(() => {
+        const probe = (window as unknown as SmokeWindow).liveInputProbe!;
+        return probe.notifications.filter((message) => message.method === "input.invalidated");
+      });
+    await expect.poll(async () => (await pushed()).length).toBe(1);
+    const invalidation = (await pushed())[0]!;
+    expect(InputInvalidatedParamsSchema.parse(invalidation.params).target).toEqual(input.live!.target);
+    expect(invalidation.params).not.toHaveProperty("seq");
+
+    // The disabled control remains keyboard-focusable to explain its reason. Exercise
+    // both handlers anyway: neither may turn the stale selection into an approval.
+    await answer.click({ force: true });
+    await card.focus();
+    await page.keyboard.press("Enter");
+    // Even a caller retaining the complete old identity cannot deliver to the agent.
+    const stale = await page.evaluate((params) => (window as unknown as SmokeWindow).orca!.inputs.answer(params), {
+      runId: input.runId,
+      requestId: input.id,
+      optionId: "allow",
+      live: input.live!.target,
+      resume: true,
+    });
+    expect(stale).toMatchObject({ ok: false, error: { code: "RUN_STATE", details: { liveInputState: "expired" } } });
+
+    const events = RunsEventsResultSchema.parse(
+      await daemon.rpc("runs.events", { runId: input.runId, limit: 500 }),
+    ).events;
+    expect(events.filter((event) => event.type === "human.requested")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "human.answered")).toEqual([]);
+    expect(events.filter((event) => event.type === "run.cancelled")).toHaveLength(1);
+    expect(
+      events.filter((event) => event.type === "agent.permission" && String(event.payload.decision).includes("allow")),
+    ).toEqual([]);
+    expect(
+      ArtifactsListResultSchema.parse(await daemon.rpc("artifacts.list", { runId: input.runId })).artifacts,
+    ).toEqual([]);
+    const connections = await page.evaluate(() => (window as unknown as SmokeWindow).liveInputProbe!.connections);
+    expect(
+      connections.every((snapshot) => snapshot.state === "live" && snapshot.generation === before.generation),
+    ).toBe(true);
+    await expect(page.locator(".orca-statusbar .orca-conn--live")).toBeVisible();
+    const gate = attention.getByRole("region", { name: `gate, ${FIXTURE.gate.question}`, exact: true });
+    await expect(gate.getByRole("button", { name: "Answer", exact: true })).toBeEnabled();
+    await expect(answer).toBeDisabled();
+    // A disabled-click/keyboard regression would expose its rejected dispatch here;
+    // the direct stale bridge call above deliberately does not invoke card handlers.
+    await expect(card.locator('.orca-card__hint[role="status"]')).toHaveCount(0);
+    await test.info().attach("live-permission-expired.png", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
+  } finally {
+    if (live && !cancelled) await live.cancel();
+    await page.evaluate(() => {
+      const target = window as unknown as SmokeWindow;
+      target.liveInputProbe?.stop();
+      delete target.liveInputProbe;
+    });
+  }
+});

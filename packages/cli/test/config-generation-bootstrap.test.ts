@@ -278,3 +278,17 @@ it("pins the resolved Kepler task directory across ambient changes and restart",
     else process.env.KEPLER_TASK_DIR = previous;
   }
 });
+
+it("refuses incomplete recorded Kepler context rather than falling back to current environment", async () => {
+  const opts = await fixture("");
+  const app = await bootstrap({
+    ...opts,
+    config: parseOrcaConfig({ ...opts.config, plugins: [], workspace: { provider: "kepler" } }),
+  });
+  const material = app.generations.current;
+  const incomplete = {
+    ...material,
+    snapshot: { ...material.snapshot, workspaceInputs: { configDir: opts.configDir } },
+  };
+  expect(() => app.orchestrator.generationWorkspaceProvider!(incomplete)).toThrow(/recorded Kepler workspace inputs/);
+});
