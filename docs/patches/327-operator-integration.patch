@@ -1,0 +1,607 @@
+--- a/package.json
++++ b/package.json
+@@ -40,6 +40,8 @@
+     "prettier": "^3.9.9",
+     "tsx": "^4.23.15",
+     "typescript": "^7.0.2",
+-    "vitest": "^5.0.2"
++    "vitest": "^5.0.2",
++    "@modelcontextprotocol/client": "2.2.0",
++    "@modelcontextprotocol/core": "2.2.0"
+   }
+ }
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -169,6 +169,12 @@
+       '@axe-core/playwright':
+         specifier: ^4.13.0
+         version: 4.13.0(playwright-core@1.63.0)
++      '@modelcontextprotocol/client':
++        specifier: 2.2.0
++        version: 2.2.0
++      '@modelcontextprotocol/core':
++        specifier: 2.2.0
++        version: 2.2.0
+       '@orca/eslint-config':
+         specifier: workspace:*
+         version: link:tools/eslint-config
+@@ -354,6 +360,9 @@
+       '@agentclientprotocol/sdk':
+         specifier: ^1.5.0
+         version: 1.5.0(zod@4.6.5)
++      '@modelcontextprotocol/server':
++        specifier: 2.2.0
++        version: 2.2.0
+       '@orca/agents':
+         specifier: workspace:*
+         version: link:../agents
+@@ -363,6 +372,9 @@
+       '@orca/engine':
+         specifier: workspace:*
+         version: link:../engine
++      '@orca/protocol':
++        specifier: workspace:*
++        version: link:../protocol
+       '@orca/store':
+         specifier: workspace:*
+         version: link:../store
+@@ -802,6 +814,18 @@
+     resolution: {integrity: sha512-9QOtNffcOF/c1seMCDnjckb3R9WHcG34tky+FHpNKKCW0wc/scYLwMtO+ptyGUfMW0/b/n4qRiALlaFHc9Oj7Q==}
+     engines: {node: '>= 10.0.0'}
+
++  '@modelcontextprotocol/client@2.2.0':
++    resolution: {integrity: sha512-LxCou/CSYQ6dwEnjhLZY0KnEuc8V4UJ3IEQCl/uR2yHobSQIEdJKUlKLRYRF5i5FqRGHy1eK7une3aAWDHLtig==}
++    engines: {node: '>=20'}
++
++  '@modelcontextprotocol/core@2.2.0':
++    resolution: {integrity: sha512-iLhmprRmWI8EcosOA3wVvww22z02NkgqhV4fBH6f/odQBsi7xnJc0HGmi21yWO+/iKw2yzqVE127Zhna5/+JXw==}
++    engines: {node: '>=20'}
++
++  '@modelcontextprotocol/server@2.2.0':
++    resolution: {integrity: sha512-qFnltjus6Gk8Lx6J1w2RXmr3YPN22MNT6qD6zjAkaiWIlFIFxWClz0rXHNuJF/KSUyn5YGhkSvXkWDbQHVLFEQ==}
++    engines: {node: '>=20'}
++
+   '@noble/hashes@1.4.0':
+     resolution: {integrity: sha512-V1JJ1WTRUqHHrOSh597hURcMqVKVGL/ea3kv0gSnEdsEZ0/+VyPghM1lMNGc00z7CIQorSvbKpuJkxvuHbvdbg==}
+     engines: {node: '>= 16'}
+@@ -1674,6 +1698,14 @@
+     resolution: {integrity: sha512-kVscqXk4OCp68SZ0dkgEKVi6/8ij300KBWTJq32P/dYeWTSwK41WyTxalN1eRmA5Z9UU/LX9D7FWSmV9SAYx6g==}
+     engines: {node: '>=0.10.0'}
+
++  eventsource-parser@3.1.1:
++    resolution: {integrity: sha512-EKN1vKAMcZ8MlYMpaNuxN6R9yakzH6uajHcHVTqWJzvu5pWw9DyhbP35HH8MVBQ+dZjAfDxk+A8NiR9KWaXiyQ==}
++    engines: {node: '>=18.0.0'}
++
++  eventsource@3.0.7:
++    resolution: {integrity: sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA==}
++    engines: {node: '>=18.0.0'}
++
+   expect-type@1.4.0:
+     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
+     engines: {node: '>=12.0.0'}
+@@ -1927,6 +1959,9 @@
+     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
+     hasBin: true
+
++  jose@6.2.12:
++    resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
++
+   js-tokens@10.0.0:
+     resolution: {integrity: sha512-lM/UBzQmfJRo9ABXbPWemivdCW8V2G8FHaHdypQaIy523snUjog0W71ayWXTjiR+ixeMyVHN2XcpnTd/liPg/Q==}
+
+@@ -2231,6 +2266,10 @@
+   picomatch@4.0.7:
+     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
+     engines: {node: '>=12'}
++
++  pkce-challenge@5.0.1:
++    resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
++    engines: {node: '>=16.20.0'}
+
+   pkijs@3.4.0:
+     resolution: {integrity: sha512-emEcLuomt2j03vxD54giVB4SxTjnsqkU692xZOZXHDVoYyypEm+b3jpiTcc+Cf+myooc+/Ly0z01jqeNHVgJGw==}
+@@ -3082,6 +3121,25 @@
+       tmp-promise: 3.0.3
+     transitivePeerDependencies:
+       - supports-color
++
++  '@modelcontextprotocol/client@2.2.0':
++    dependencies:
++      '@modelcontextprotocol/core': 2.2.0
++      cross-spawn: 7.0.6
++      eventsource: 3.0.7
++      eventsource-parser: 3.1.1
++      jose: 6.2.12
++      pkce-challenge: 5.0.1
++      zod: 4.6.5
++
++  '@modelcontextprotocol/core@2.2.0':
++    dependencies:
++      zod: 4.6.5
++
++  '@modelcontextprotocol/server@2.2.0':
++    dependencies:
++      '@modelcontextprotocol/core': 2.2.0
++      zod: 4.6.5
+
+   '@noble/hashes@1.4.0': {}
+
+@@ -3991,6 +4049,12 @@
+
+   esutils@2.0.3: {}
+
++  eventsource-parser@3.1.1: {}
++
++  eventsource@3.0.7:
++    dependencies:
++      eventsource-parser: 3.1.1
++
+   expect-type@1.4.0: {}
+
+   exponential-backoff@3.1.3: {}
+@@ -4275,6 +4339,8 @@
+       picocolors: 1.1.1
+
+   jiti@2.7.0: {}
++
++  jose@6.2.12: {}
+
+   js-tokens@10.0.0: {}
+
+@@ -4524,6 +4590,8 @@
+   picocolors@1.1.1: {}
+
+   picomatch@4.0.7: {}
++
++  pkce-challenge@5.0.1: {}
+
+   pkijs@3.4.0:
+     dependencies:
+--- a/packages/integrations/package.json
++++ b/packages/integrations/package.json
+@@ -13,6 +13,10 @@
+     "./jev-eval": {
+       "types": "./dist/jev/plugin.d.ts",
+       "import": "./dist/jev/plugin.js"
++    },
++    "./mcp": {
++      "types": "./dist/mcp/index.d.ts",
++      "import": "./dist/mcp/index.js"
+     }
+   },
+   "files": [
+@@ -24,6 +28,8 @@
+     "@orca/agents": "workspace:*",
+     "@orca/engine": "workspace:*",
+     "@agentclientprotocol/sdk": "^1.5.0",
+-    "zod": "^4.6.5"
++    "zod": "^4.6.5",
++    "@orca/protocol": "workspace:*",
++    "@modelcontextprotocol/server": "2.2.0"
+   }
+ }
+--- a/packages/integrations/tsconfig.json
++++ b/packages/integrations/tsconfig.json
+@@ -1,6 +1,25 @@
+ {
+   "extends": "../../tsconfig.base.json",
+-  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "dist"
++  },
+   "include": ["src/**/*.ts"],
+-  "references": [{ "path": "../core" }, { "path": "../store" }, { "path": "../agents" }, { "path": "../engine" }]
++  "references": [
++    {
++      "path": "../core"
++    },
++    {
++      "path": "../store"
++    },
++    {
++      "path": "../agents"
++    },
++    {
++      "path": "../engine"
++    },
++    {
++      "path": "../protocol"
++    }
++  ]
+ }
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -28,3 +28,5 @@
+ export * from "./request-submission.js";
+
+ export * from "./live-input.js";
++
++export * from "./operator-reads.js";
+--- a/packages/protocol/src/handshake.ts
++++ b/packages/protocol/src/handshake.ts
+@@ -5,6 +5,7 @@
+  * (read-only, no subscriptions, …) instead of failing on the first real call.
+  */
+ import { z } from "zod";
++import { OPERATOR_METHODS } from "./operator-reads.js";
+ import { ProtocolVersionSchema } from "./version.js";
+ import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD } from "./agents.js";
+ import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
+@@ -146,6 +147,7 @@
+
+ /** What a daemon can do; a client checks these rather than the ORCA version. */
+ export const DAEMON_CAPABILITIES = [
++  ...OPERATOR_METHODS,
+   "inputs.live",
+   "runs.read",
+   "runs.subscribe",
+--- a/packages/protocol/test/protocol.test.ts
++++ b/packages/protocol/test/protocol.test.ts
+@@ -94,12 +94,17 @@
+     expect(READ_METHODS).toContain("artifacts.get");
+   });
+
+-  it("puts config.get with the reads and config.set with the writes, and mints no capability", () => {
++  it("puts config.get with the reads and config.set with the writes, without config capabilities", () => {
+     // Reading what a daemon is configured with is not a different class of thing from
+     // reading what it has run; writing it is a write, and `--read-only` omits it (#174).
+     expect(READ_METHODS).toContain(CONFIG_GET_METHOD);
+     expect(CONTROL_METHODS).toContain(CONFIG_SET_METHOD);
+     expect(DAEMON_CAPABILITIES).toEqual([
++      "operator.discover",
++      "operator.page",
++      "operator.config",
++      "operator.preflight",
++      "operator.artifact",
+       "inputs.live",
+       "runs.read",
+       "runs.subscribe",
+--- a/packages/daemon/src/index.ts
++++ b/packages/daemon/src/index.ts
+@@ -34,3 +34,5 @@
+
+ export * from "./daemon-identity.js";
+ export * from "./execution-runtime.js";
++
++export * from "./operator-read-model.js";
+--- a/packages/daemon/src/methods.ts
++++ b/packages/daemon/src/methods.ts
+@@ -1,3 +1,13 @@
++/** Typed daemon dispatch, including opt-in authenticated operator projections. */
++import { z } from "zod";
++import type { OperatorReadModel } from "./operator-read-model.js";
++import {
++  OPERATOR_METHODS,
++  OperatorTargetSchema,
++  OperatorPreflightParamsSchema,
++  OperatorArtifactParamsSchema,
++  type OperatorPageParams,
++} from "@orca/protocol";
+ /**
+  * The method table: one entry per protocol method, each validating its params with the
+  * schema the protocol package publishes and returning a result the same package types.
+@@ -175,6 +185,9 @@
+ import type { LiveInputChangeSource } from "./live-input-notifications.js";
+
+ export interface MethodContext {
++  /** Constructed from the original authenticated invocation; absent without token auth. */
++  operatorReads?: { methods: readonly string[]; model(ctx: MethodContext): Promise<OperatorReadModel> };
++
+   liveInputs?: LiveInputChangeSource | undefined;
+   liveAnswerAuthority?: LiveAnswerAuthority;
+   executionResumeAuthority?: ExecutionResumeAuthority;
+@@ -312,6 +325,7 @@
+       ...(ctx.identity ? { identity: ctx.identity } : {}),
+       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
+       capabilities: [
++        ...OPERATOR_METHODS.filter((name) => ctx.operatorReads?.methods.includes(name)),
+         ...ctx.capabilities.filter((c) => c !== "workflows.validateInputs" && c !== "inputs.live"),
+         ...(ctx.control?.supportsLiveInputs ? ["inputs.live" as const] : []),
+         ...(ctx.workflowInputs ? ["workflows.validateInputs" as const] : []),
+@@ -656,7 +670,34 @@
+  * daemon will not answer is a method it does not advertise.
+  */
+ export function methodsFor(ctx: MethodContext): MethodTable {
++  const operator = ctx.operatorReads;
+   const table: MethodTable = ctx.reads ? { ...methods } : { [HELLO_METHOD]: hello };
++  if (operator) {
++    const available: MethodTable = {
++      "operator.discover": {
++        params: z.strictObject({}),
++        handle: async (_p, call) => (await operator.model(call)).discover(),
++      },
++      // Collection routing is authorized inside the model BEFORE its schema diagnostics.
++      "operator.page": {
++        params: z.unknown(),
++        handle: async (p, call) => (await operator.model(call)).page(p as OperatorPageParams),
++      },
++      "operator.config": {
++        params: z.strictObject({ target: OperatorTargetSchema }),
++        handle: async (p, call) => (await operator.model(call)).config(p.target),
++      },
++      "operator.preflight": {
++        params: OperatorPreflightParamsSchema,
++        handle: async (p, call) => (await operator.model(call)).preflight(p),
++      },
++      "operator.artifact": {
++        params: OperatorArtifactParamsSchema,
++        handle: async (p, call) => (await operator.model(call)).artifact(p),
++      },
++    };
++    for (const name of operator.methods) if (available[name]) table[name] = available[name]!;
++  }
+   if (ctx.reads?.plans) Object.assign(table, planMethods);
+   if (ctx.source) {
+     table[SUBSCRIBE_METHOD] = subscribe;
+--- a/packages/daemon/src/server.ts
++++ b/packages/daemon/src/server.ts
+@@ -1,3 +1,15 @@
++/** Authenticated HTTP and WebSocket daemon composition. */
++import { randomBytes } from "node:crypto";
++import { PROTOCOL_VERSION } from "@orca/protocol";
++import {
++  OperatorReadModel,
++  operatorEventCollections,
++  operatorGenerationCollections,
++  operatorLinkedDocumentCollections,
++  operatorPinnedGraph,
++  type OperatorReadOptions,
++} from "./operator-read-model.js";
++import type { EventStore, LeaseStore } from "@orca/store";
+ /**
+  * The daemon's HTTP surface: `POST /rpc` takes one request envelope and answers with one
+  * response envelope; `GET /health` is for process supervisors.
+@@ -37,6 +49,14 @@
+ import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
+
+ export interface DaemonOptions extends MethodContext {
++  /** Explicit read projection sources, independent of the legacy unbounded read model. */
++  operatorSources?: Pick<OperatorReadOptions, "generations" | "configStatus" | "artifact" | "artifactRun"> & {
++    events: EventStore;
++    leases?: LeaseStore;
++    documents?: Parameters<typeof operatorLinkedDocumentCollections>[0];
++    definitionFor?: Parameters<typeof operatorPinnedGraph>[0]["definitionFor"];
++  };
++
+   /** Persistent store identity initialized by the owner at bootstrap. */
+   workspaceId?: string;
+   /**
+@@ -228,6 +248,60 @@
+           return current.principal;
+         },
+       });
++    };
++  }
++  if (opts.operatorSources && identity && auth.mode === "token") {
++    const sources = opts.operatorSources;
++    const cursorKey = randomBytes(32);
++    const names = [
++      "operator.discover",
++      "operator.page",
++      ...(sources.generations ? ["operator.preflight"] : []),
++      ...(sources.configStatus ? ["operator.config"] : []),
++      ...(sources.artifact && sources.artifactRun ? ["operator.artifact"] : []),
++    ];
++    ctx.operatorReads = {
++      methods: names,
++      async model(invocation) {
++        const binding = principalOf(invocation);
++        const credentialId = binding?.principal.credentialId;
++        if (!credentialId) throw authRequired();
++        const current = async () => {
++          const check = auth.credentials.current(credentialId);
++          if (!check.ok) throw authInvalid();
++          return check.principal;
++        };
++        return new OperatorReadModel({
++          ...sources,
++          cursorKey,
++          target: identity,
++          protocol: PROTOCOL_VERSION,
++          orcaVersion: opts.orcaVersion,
++          current,
++          allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
++          collections: {
++            ...operatorEventCollections({
++              events: sources.events,
++              ...(sources.leases ? { leases: sources.leases } : {}),
++              allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
++            }),
++            ...(sources.generations ? operatorGenerationCollections(sources.generations) : {}),
++            ...(sources.documents ? operatorLinkedDocumentCollections(sources.documents) : {}),
++            ...(sources.definitionFor
++              ? {
++                  graph: operatorPinnedGraph({
++                    events: sources.events,
++                    definitionFor: sources.definitionFor,
++                    ...(sources.generations
++                      ? { active: operatorGenerationCollections(sources.generations).graph! }
++                      : {}),
++                  }),
++                }
++              : {}),
++          },
++          operations: (principal) => authorizer.permittedMethods(principal, names),
++        });
++      },
+     };
+   }
+   const gate = new TransportGate(auth, host, authorizer);
+--- a/packages/daemon/src/config-model.ts
++++ b/packages/daemon/src/config-model.ts
+@@ -188,6 +188,13 @@
+    * reports saved versus active state; the effective policy uses active config plus the
+    * current sidecar. A saved draft must never masquerade as the running permission policy.
+    */
++  /** Allowlisted operator projection: never constructs the raw config editor response. */
++  async operatorStatus(): Promise<ConfigGenerationStatus> {
++    if (!this.generations) throw new OrcaError("NOT_SUPPORTED", "configuration generations are unavailable");
++    const config = await this.read("config");
++    return this.generations.status(configurationValue(config), config.revision);
++  }
++
+   async get(): Promise<ConfigGetResult> {
+     const config = await this.read("config");
+     const permissions = await this.read("permissions");
+--- a/packages/daemon/src/auth/operations.ts
++++ b/packages/daemon/src/auth/operations.ts
+@@ -58,6 +58,12 @@
+
+ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
+   hello: { permission: null, resource: "none" },
++  "operator.discover": { permission: null, resource: "none" },
++  // The closed collection discriminant selects a grant; OperatorReadModel checks it before diagnostics.
++  "operator.page": { permission: null, resource: "none" },
++  "operator.config": { permission: "config.read", resource: "none" },
++  "operator.preflight": { permission: "runs.start", resource: "none" },
++  "operator.artifact": { permission: "artifacts.read", resource: "run" },
+
+   "runs.list": { permission: "runs.read", resource: "run-list" },
+   "runs.get": { permission: "runs.read", resource: "run" },
+@@ -122,6 +128,11 @@
+  * and to nobody else.
+  */
+ export const CAPABILITY_PERMISSIONS: Readonly<Record<string, readonly Permission[]>> = {
++  "operator.discover": ["runs.read", "artifacts.read", "workflows.read", "runs.start", "config.read", "plan.read"],
++  "operator.page": ["runs.read", "artifacts.read", "workflows.read", "config.read", "plan.read"],
++  "operator.config": ["config.read"],
++  "operator.preflight": ["runs.start"],
++  "operator.artifact": ["artifacts.read"],
+   "inputs.live": ["inputs.answer"],
+   "runs.read": ["runs.read"],
+   "runs.subscribe": ["runs.read"],
+--- a/packages/daemon/src/auth/guard.ts
++++ b/packages/daemon/src/auth/guard.ts
+@@ -286,6 +286,8 @@
+               this.deny(principal, meta, name, params, code ?? "AUTH_FORBIDDEN", e.reason);
+               throw e.error;
+             }
++            if (name.startsWith("operator.") && ["AUTH_REQUIRED", "AUTH_INVALID", "AUTH_FORBIDDEN"].includes(codeOf(e)))
++              this.deny(principal, meta, name, params, codeOf(e), "operator-authority-refused");
+             if (spec.audit) this.operation(principal, meta, name, params, "failed", codeOf(e));
+             throw e;
+           }
+--- a/packages/daemon/test/auth-operations.test.ts
++++ b/packages/daemon/test/auth-operations.test.ts
+@@ -9,6 +9,7 @@
+ import { describe, expect, it, vi } from "vitest";
+ import { z } from "zod";
+ import {
++  OPERATOR_METHODS,
+   AGENT_METHODS,
+   CONTROL_METHODS,
+   HELLO_METHOD,
+@@ -62,6 +63,7 @@
+   it("covers every method the protocol declares and the daemon answers, and nothing else", () => {
+     const declared = new Set<string>([
+       HELLO_METHOD,
++      ...OPERATOR_METHODS,
+       ...READ_METHODS,
+       ...PLAN_READ_METHODS,
+       ...CONTROL_METHODS,
+--- a/packages/cli/src/main.ts
++++ b/packages/cli/src/main.ts
+@@ -29,6 +29,8 @@
+       strict: true,
+       options: {
+         config: { type: "string" },
++        endpoint: { type: "string" },
++        "token-env": { type: "string" },
+         cwd: { type: "string" },
+         var: { type: "string", multiple: true },
+         "var-json": { type: "string", multiple: true },
+--- a/packages/cli/src/commands/index.ts
++++ b/packages/cli/src/commands/index.ts
+@@ -1,3 +1,5 @@
++/** CLI command implementations, including credential-bound MCP stdio. */
++import { mcpCommand } from "./mcp.js";
+ /**
+  * CLI command implementations. Each command receives parsed positionals and
+  * flags and an output sink; `main.ts` handles argument parsing and errors.
+@@ -246,6 +248,20 @@
+   run: (ctx: CommandContext) => Promise<number>;
+ }
+ export const commands: Record<string, Command> = {
++  mcp: {
++    help: "mcp [--endpoint <url>] [--token-env <name>]",
++    usage: "Authenticated MCP over stdio. Requires an explicitly supplied daemon credential; does not start a daemon.",
++    async run(ctx) {
++      const ended = new Promise<void>((resolve) => process.stdin.once("end", resolve));
++      const handle = await mcpCommand({
++        ...(typeof ctx.flags.endpoint === "string" ? { endpoint: ctx.flags.endpoint } : {}),
++        ...(typeof ctx.flags["token-env"] === "string" ? { tokenEnv: ctx.flags["token-env"] } : {}),
++      });
++      await ended;
++      await handle.close();
++      return 0;
++    },
++  },
+   auth: {
+     help: "auth [issue <principal>|list|rotate <credentialId>|revoke <credentialId>]  Manage this workspace's daemon credentials.",
+     usage:
+@@ -765,6 +781,20 @@
+             })
+           : undefined;
+       const daemon = await startDaemon({
++        operatorSources: {
++          events: app.orchestrator.stores.events,
++          leases: app.orchestrator.stores.leases,
++          generations: app.generations,
++          documents: {
++            events: app.orchestrator.stores.events,
++            requests: app.orchestrator.stores.requests,
++            items: app.orchestrator.stores.workItems,
++          },
++          definitionFor: (id, version, stored) => app.orchestrator.definitionFor(id, version, stored),
++          configStatus: () => config.operatorStatus(),
++          artifactRun: async (id) => (await app.orchestrator.stores.artifacts.get(id))?.producedBy.runId,
++          artifact: (_runId, artifactId, maxBytes) => reads.artifactsGet({ artifactId, maxBytes }),
++        },
+         requestSubmissions,
+         submissionWorkspaceId: workspaceId,
+         identity,
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -11,6 +11,7 @@
+       "@orca/agents": ["./packages/agents/src/index.ts"],
+       "@orca/engine": ["./packages/engine/src/index.ts"],
+       "@orca/testing": ["./packages/testing/src/index.ts"],
++      "@orca/integrations/mcp": ["./packages/integrations/src/mcp/index.ts"],
+       "@orca/integrations": ["./packages/integrations/src/index.ts"],
+       "@orca/cli": ["./packages/cli/src/index.ts"],
+       "@orca/protocol": ["./packages/protocol/src/index.ts"],
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -18,6 +18,7 @@
+       "@orca/agents": pkg("agents"),
+       "@orca/engine": pkg("engine"),
+       "@orca/testing": pkg("testing"),
++      "@orca/integrations/mcp": src("integrations", "mcp/index"),
+       "@orca/integrations": pkg("integrations"),
+       "@orca/protocol": pkg("protocol"),
+       "@orca/daemon": pkg("daemon"),
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -427,3 +427,7 @@
+ Request admission and recovery are described in [Request submission](request-submission.md).
+ The admission lifecycle is shared by daemon, configured ProgramService/CLI and ACP;
+ `runs.start` remains an explicit workflow launch.
++
++The inbound MCP operator adapter uses authenticated daemon projections and shared admission
++services; see [MCP operator handoff](mcp-operator.md) for the bounded read contract and
++production mutation/actual-client acceptance boundaries.
+--- a/docs/daemon-security.md
++++ b/docs/daemon-security.md
+@@ -148,6 +148,11 @@
+
+ | Method | Permission | Resource check | Audited |
+ | --- | --- | --- | --- |
++| `operator.discover` | any authenticated principal | Credential-only safe target and implemented operation discovery. | — |
++| `operator.page` | any authenticated principal | Closed collection selects its grant in OperatorReadModel before validation; resource filtering precedes pagination. | — |
++| `operator.config` | `config.read` | Allowlisted generation status only. | — |
++| `operator.preflight` | `runs.start` | Authorized workflow and captured generation; no side effects. | — |
++| `operator.artifact` | `artifacts.read` | Exact run/artifact relation, plus runs.read; bounded sensitive-content projection. | — |
+ | `hello` | any authenticated principal | `methods` and `capabilities` are filtered to what the principal may use; `storeDir` needs `config.read` | — |
+ | `runs.list` | `runs.read` | filtered to visible runs; `total` and paging recomputed | — |
+ | `runs.get` | `runs.read` | the run | — |
