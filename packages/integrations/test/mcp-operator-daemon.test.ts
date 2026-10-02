@@ -43,6 +43,20 @@ it("inspects a pre-existing run, pages public history, reads final artifacts and
     });
     return { backend, client };
   };
+  // Exercise production discovery with each single grant, not a fixture inventory.
+  for (const permissions of [["artifacts.read"], ["runs.read"], ["artifacts.read", "runs.read"]] as const) {
+    const credential = await credentials.issue({
+      principal: "discovery-test",
+      permissions,
+      scope: { runs: "all", workflows: "*" },
+    });
+    const connection = await connect(credential.token);
+    const expected = permissions.length === 2;
+    const discovery = await connection.backend.call("discover", {});
+    expect(discovery.operations.includes("operator.artifact")).toBe(expected);
+    expect(discovery.collections.includes("artifacts")).toBe(expected);
+    expect((await connection.client.listTools()).tools.some((tool) => tool.name === "get_artifact")).toBe(expected);
+  }
   const { backend, client } = await connect(viewer.token);
   const { target } = await backend.call("discover", {});
   const listed = await client.listTools();

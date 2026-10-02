@@ -9,7 +9,10 @@ export const RevisionCapabilitySchema = z.strictObject({
   actionId: z.string().min(1),
   destinationNodeId: z.string().min(1),
   payload: z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("text"), maxBytes: z.number().int().positive().max(65536) }),
+    z.strictObject({
+      kind: z.literal("text"),
+      maxBytes: z.number().int().positive().max(65536),
+    }),
     z.strictObject({
       kind: z.literal("values"),
       inputSchema: WorkflowInputSchemaSchema,
@@ -91,6 +94,14 @@ export function validateRevisionCapability(
       fail("revision requires a durable human gate or decision");
     else if (!node.options.some((option) => option.id === capability.actionId))
       fail("revision action must be an existing option");
+    // Match gateExecutor's nullish fallback exactly; no automatic route can
+    // collect the explicit correction required by the revision action.
+    if (
+      node?.type === "gate" &&
+      node.autoApproveWhen !== undefined &&
+      (node.autoOption ?? node.options[0]?.id) === capability.actionId
+    )
+      fail("revision action cannot be selected automatically");
     if (graph.nodes[capability.destinationNodeId]?.type !== "agent")
       fail("revision destination must be an agent in the same graph");
     const choices = new Map<string, string>();

@@ -29,12 +29,18 @@ contention. A recorded result can itself be `prepared` or `recoverable-failure`;
 only its inner `accepted` state promises durable work admission. Admission is not
 completion, execution attachment, or exactly-once external tool effects.
 
-`requests.submit` preserves its existing Request response. The proposed wire
-`runs.admit` response is the direct receipt plus `operationId`, so it can be used
-with `admissions.get/reconcile`. **Integrator review is required for this additive
-field:** the frozen structural direct receipt did not expose the operation ID
-required by the frozen inspection interface. Internal shared signatures remain
-unchanged. Legacy `runs.start` keeps its settled response and waits separately.
+`requests.submit` preserves its existing Request response. The approved wire
+`runs.admit` response is `DirectAdmissionResult & { operationId: string }`.
+Every prepared/accepted/recoverable-failure receipt includes that stable authorized
+reference for `admissions.get/reconcile`. In-progress remains a typed `RUN_STATE`
+error carrying operation ID and `inspect-or-retry`, never fabricated acceptance.
+No raw client key is returned. Internal direct signatures and legacy `runs.start`'s
+settled response remain unchanged.
+
+Optional `runs.admit.expectedScope` contains verified `principalId` and persistent
+`workspaceId`. The daemon checks current authority and compares both before any
+admission effect. It is a guard, not authority, and is removed before canonical
+intent comparison. Credential IDs and transient daemon instance IDs are excluded.
 
 ## Comparison and limits
 
@@ -152,10 +158,36 @@ Keyed Request provenance uses a stable API source, so reconnecting with a new AC
 session does not change the command. Unkeyed prompts keep legacy session provenance.
 The frozen direct command cannot represent ACP session workspace/selection; keyed
 ACP direct prompts explicitly report unsupported and point to `runs.admit`.
-The app palette patch retains one key per selected workflow after failure and
-clears it after success; connection-boundary remount prevents sending old intent
-to a switched target. Persisted app restart recovery and a distinct explicit
-abandon/new-intent action after ambiguous failure still need integrator review.
+The app palette uses a main-process encrypted journal, persisted and flushed before
+admission. It consumes the already-defined `operator.discover` authenticated
+principal/workspace projection; this standalone feature supplies only structural
+consumer fixtures and its reserved wiring, with no peer-branch import. Main captures
+the client and fences connection epochs before and after discovery/admission. The
+server also checks `expectedScope` before effects. Endpoint, stable principal and
+workspace scope survive credential rotation, renderer loss and daemon restarts;
+bundled targets use their stable local workspace identity rather than a temporary port.
+
+Only workflow ID, local intent ID, random retry key, stable scope and retained/abandoned
+state are saved. No credential, arbitrary workflow vars, or secret command payload is
+saved. Electron safeStorage encrypts the journal; unavailable keychains, Linux
+`basic_text`, corruption and decryption errors refuse admission, with no plaintext or
+in-memory fallback. No key is auto-expired or silently replaced. The 1,000-record
+local bound refuses further allocation; abandoned tombstones remain for conservative
+recovery. Full app-data plus matching OS keychain recovery is required if lost.
+
+“Start or recover a run” always reuses a retained intent, including after an accepted
+response, so crashing before the renderer opens the run does not create new work.
+“Abandon retained run intent” asks for explicit native confirmation that the original
+run may still exist/running, is not cancelled, and the next start creates separate work.
+Cancelling preserves the old intent. Confirmation rechecks current authentication and
+scope; generation fencing prevents a previously queued retry from becoming new work
+after abandonment or a late result navigating away from a newer intent. The journal
+is owned by the single-instance Electron main process, never renderer localStorage.
+
+Headless Linux without a secure keyring and macOS with an unavailable keychain have a
+tested blocked state; no runner image/security settings are changed. Electron end-to-end
+smoke must distinguish that refusal from successful durable admission, and remains a
+combined-head integration gate.
 MCP production consumption, revisions and continuations belong to #327/#356 and
 the parent integration task, not this branch.
 
@@ -187,3 +219,37 @@ passed 2,762 tests but timed out in demo setup/tests and the 10,000-event timeli
 test. Neither broad invocation is a clean full-suite gate, and no coverage pass
 is claimed. Electron smoke was not run. The integrator must rerun the required
 checks on the combined head, including these timing-sensitive tests.
+
+## Review correction validation
+
+The review correction adds secure durable palette intent retention, an explicit
+abandon/new-intent boundary, authenticated scope fencing and receipt result schemas.
+Focused tests cover reconstructed process/renderer ownership, lost acknowledgement,
+concurrent retries, credential rotation/revocation, changed principal/workspace/target,
+corruption, missing secure storage, Linux plaintext-backend refusal, cancellation,
+confirmation-time authority changes and delayed-discovery/abandon races.
+
+Validation is performed in an isolated exact-head checkout with the reserved patch
+applied, then the shared-file edits are removed from the published feature source.
+The feature source contains the approved new app helper and prefixed tests; shared
+main/preload/bridge/palette/auth/exports remain only in the reserved patch. Actual
+OS-keychain encryption and real Electron launch are not claimed by injected-backend
+unit tests. Final combined-head CI and Electron smoke remain integrator requirements.
+
+Local correction checks: patched focused Node 22 and Node 24 each passed 57 tests;
+app/protocol/HTTP wiring passed 315 tests; unpatched feature tests passed 37 with the
+two wiring-only cases intentionally skipped. Root/renderer typechecks, TypeScript
+build, patched Vite renderer build, ESLint/CSS, formatting and design checks passed.
+The patched app-only Node coverage run passed existing gates at 99.37% statements,
+99.16% branches and 100% functions/lines (269 tests). Main-process files are excluded
+by the repository's existing coverage configuration, so this is not a journal coverage
+percentage. A full coverage attempt encountered sandbox Unix-socket EPERM in ACP
+subprocess tests; no full-suite coverage pass is claimed.
+
+Real encrypted Linux smoke requires an available/unlocked supported secret-service
+backend in the runner's desktop session, after Electron ready. A display alone is
+insufficient; `basic_text` or `--password-store=basic` must not be accepted. Real macOS
+smoke requires accessible Keychain and consistent app identity. Preserve the same app
+user-data and keychain between restart attempts. Existing daemon-RPC smoke fixtures
+bypass the palette journal and cannot substitute for that explicit scenario. See
+[Electron safeStorage](https://www.electronjs.org/docs/latest/api/safe-storage).

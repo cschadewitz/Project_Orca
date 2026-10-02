@@ -53,3 +53,33 @@ it("automatic admission dispatch only attaches a never-started, unleased run", a
   await f.orc.run(admitted.runId);
   expect(await neverAttached(f.orc, admitted.runId)).toBe(false);
 });
+
+it("checks current admission scope before effects without binding to a credential or daemon instance", async () => {
+  const { checkAdmissionScope } = await import("../src/admission-retry.js");
+  let current = true;
+  const authorities = {
+    principalId: "alice",
+    workspaceId: "workspace",
+    check: async () => {
+      if (!current) throw new Error("AUTH_INVALID");
+    },
+    direct: async () => {
+      throw new Error("not called");
+    },
+    request: async () => {
+      throw new Error("not called");
+    },
+  };
+  await checkAdmissionScope({ principalId: "alice", workspaceId: "workspace" }, authorities);
+  await checkAdmissionScope(undefined, authorities); // additive; existing clients remain compatible
+  await expect(
+    checkAdmissionScope({ principalId: "bob", workspaceId: "workspace" }, authorities),
+  ).rejects.toMatchObject({ code: "AUTH_FORBIDDEN" });
+  await expect(checkAdmissionScope({ principalId: "alice", workspaceId: "other" }, authorities)).rejects.toMatchObject({
+    code: "AUTH_FORBIDDEN",
+  });
+  current = false;
+  await expect(checkAdmissionScope({ principalId: "alice", workspaceId: "workspace" }, authorities)).rejects.toThrow(
+    "AUTH_INVALID",
+  );
+});

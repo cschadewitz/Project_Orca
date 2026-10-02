@@ -349,7 +349,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
                 }
               : {}),
           },
-          operations: (principal) => authorizer.permittedMethods(principal, names),
+          // Discover actual installed RPCs, not only this bounded read projection.
+          // MCP mutation aliases remain absent until their real adapters are installed.
+          operations: (principal) => authorizer.permittedMethods(principal, Object.keys(methods)),
         });
       },
     };

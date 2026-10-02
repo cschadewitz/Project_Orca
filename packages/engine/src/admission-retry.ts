@@ -75,6 +75,12 @@ export function canonicalJson(value: unknown, bounded = true): string {
 interface Registered {
   instance: object;
   authorize?(command: unknown, binding: Record<string, JsonValue> | undefined): Promise<void>;
+  verifyAccepted?(
+    command: unknown,
+    binding: Record<string, JsonValue> | undefined,
+    result: unknown,
+    operationId: string,
+  ): Promise<void>;
   canonicalize(command: unknown): JsonValue;
   prepare(command: unknown, context: RetryContext): Promise<unknown>;
   recover(command: unknown, context: RetryContext): Promise<unknown>;
@@ -89,6 +95,12 @@ export class RegisteredRetryClaims implements RetryClaims {
   register<C, R>(
     operation: RetryOperation<C, R>,
     authorize?: (command: C, binding: Record<string, JsonValue> | undefined) => Promise<void>,
+    verifyAccepted?: (
+      command: C,
+      binding: Record<string, JsonValue> | undefined,
+      result: unknown,
+      operationId: string,
+    ) => Promise<void>,
   ): RetryOperation<C, R> {
     if (this.operations.has(operation.kind))
       throw new OrcaError("CONFIG_INVALID", "Retry operation is already registered");
@@ -102,6 +114,16 @@ export class RegisteredRetryClaims implements RetryClaims {
         ? {
             authorize: (command: unknown, binding: Record<string, JsonValue> | undefined) =>
               authorize(command as C, binding),
+          }
+        : {}),
+      ...(verifyAccepted
+        ? {
+            verifyAccepted: (
+              command: unknown,
+              binding: Record<string, JsonValue> | undefined,
+              result: unknown,
+              operationId: string,
+            ) => verifyAccepted(command as C, binding, result, operationId),
           }
         : {}),
       canonicalize: (command) => canonicalize(command as C),
@@ -174,9 +196,11 @@ export class RegisteredRetryClaims implements RetryClaims {
   /** Trusted dispatcher chooses authority by the sealed kind; IDs never select callbacks. */
   async inspect(operationId: string, authority: RetryAuthority<unknown>): Promise<RetryResult<unknown>> {
     const record = await this.owned(operationId, authority);
-    return record.phase === "accepted"
-      ? { state: "resolved", operationId, replayed: true, result: structuredClone(record.result) }
-      : this.pending(operationId);
+    if (record.phase !== "accepted") return this.pending(operationId);
+    await this.operations
+      .get(record.kind)!
+      .verifyAccepted?.(record.command, record.binding, record.result, operationId);
+    return { state: "resolved", operationId, replayed: true, result: structuredClone(record.result) };
   }
   async reconcile(operationId: string, authority: RetryAuthority<unknown>): Promise<RetryResult<unknown>> {
     const record = await this.owned(operationId, authority);
@@ -213,6 +237,10 @@ export class RegisteredRetryClaims implements RetryClaims {
       return await this.store.lock(initial.operationId, async () => {
         entered = true;
         let record = await this.owned(initial.operationId, authority);
+        // A cached receipt is only a projection. Some operations must recheck their
+        // authoritative marker, including before an explicit recovery can run.
+        if (record.phase === "accepted")
+          await operation.verifyAccepted?.(record.command, record.binding, record.result, record.operationId);
         if (record.phase === "accepted" && !reconcile)
           return {
             state: "resolved",

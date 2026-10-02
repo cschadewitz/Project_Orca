@@ -57,7 +57,10 @@ review:
 V1 conservatively requires unique direct `choice == 'option'` branches to a declared
 agent in the same graph. Ambiguous expressions, indirect routes, live permissions,
 cross-child targets and other node types are unsupported. Ordinary answering cannot
-select the revision branch without the correction commit. A runtime lacking revision
+select the revision branch without the correction commit. A gate with `autoApproveWhen`
+must select a non-revision option: `autoOption`, or the first option when omitted,
+cannot equal `revision.actionId`. This is checked conservatively at declaration
+validation, even for a condition that is currently false. A runtime lacking revision
 support refuses a revision-enabled gate rather than silently dropping the declaration.
 
 A `values` declaration uses `inputSchema` from the existing workflow-input validator.
@@ -115,12 +118,12 @@ its execution lease. The runtime must never move the handoff to another step.
 
 Internal delivery metadata is separate from the four public states:
 
-| Internal state | Public state | Replacement |
-| --- | --- | --- |
-| unclaimed | pending | authorized CAS only |
-| claimed | pending, handoff unconfirmed | refused |
-| confirmed | delivered | refused |
-| uncertain | pending, handoff unconfirmed | refused |
+| Internal state | Public state                 | Replacement         |
+| -------------- | ---------------------------- | ------------------- |
+| unclaimed      | pending                      | authorized CAS only |
+| claimed        | pending, handoff unconfirmed | refused             |
+| confirmed      | delivered                    | refused             |
+| uncertain      | pending, handoff unconfirmed | refused             |
 
 Confirmation requires evidence from the original external turn. Process death or an
 ambiguous transport failure is not evidence of delivery: the claim remains inspectable

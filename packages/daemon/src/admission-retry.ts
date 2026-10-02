@@ -162,3 +162,16 @@ export async function neverAttached(orchestrator: Orchestrator, runId: string): 
   if (events.length !== 1 || events[0]?.type !== "run.created") return false;
   return !(await orchestrator.stores.leases.get(`run:${runId}`));
 }
+
+/** A client guard, never authority; reject before admission and exclude from intent comparison. */
+export async function checkAdmissionScope(
+  expected: { principalId: string; workspaceId: string } | undefined,
+  authorities: AdmissionAuthorities,
+): Promise<void> {
+  await authorities.check();
+  if (
+    expected &&
+    (expected.principalId !== authorities.principalId || expected.workspaceId !== authorities.workspaceId)
+  )
+    throw authForbidden();
+}

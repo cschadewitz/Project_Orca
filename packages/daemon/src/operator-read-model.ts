@@ -9,7 +9,7 @@ import {
   type WorkflowDefinition,
 } from "@orca/core";
 import { lapsed, type EventStore, type LeaseStore } from "@orca/store";
-import type { ConfigurationGenerations, GenerationStatus } from "@orca/engine";
+import { workflowRevision, type ConfigurationGenerations, type GenerationStatus } from "@orca/engine";
 import { ProtocolFault, displayStatusForRun, type ArtifactsGetResult } from "@orca/protocol";
 import {
   OperatorArtifactParamsSchema,
@@ -239,8 +239,8 @@ export class OperatorReadModel {
       params.workflowId ?? (params.purpose === "request" ? material.snapshot.config.program.workflow : undefined);
     if (!workflowId || !workflowAllowed(p.scope, workflowId))
       throw new OrcaError("WORKFLOW_NOT_FOUND", "Workflow is unavailable");
-    // Capture validates same-version collisions and selected historical content. Guarding the
-    // generation keeps a concurrent apply from mixing a validator with another generation.
+    // Capture may select stored content before the active definition for an explicit version.
+    // The generation guard alone therefore does not prove that our validation uses that content.
     const launch = await generations.captureLaunch({
       purpose: params.purpose,
       workflowId,
@@ -250,7 +250,8 @@ export class OperatorReadModel {
     const definition = material.snapshot.workflowDefinitions?.find(
       (d) => d.id === launch.workflow.id && d.version === launch.workflow.version,
     );
-    if (!definition) throw unsupported(); // no raw historical fallback from another generation
+    if (!definition || workflowRevision(definition) !== launch.workflow.revision)
+      throw new OrcaError("NOT_SUPPORTED", "The captured workflow definition is unavailable for preflight validation");
     const { validation } = validateWorkflowInputs(definition, params.vars);
     await this.unchanged(p, "runs.start");
     return {

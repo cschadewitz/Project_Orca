@@ -117,6 +117,19 @@ not the client key or an MCP session ID. Mutation failures preserve the stable b
 but suppress free-form backend messages/details. Admission failure messages are omitted from the
 public projection; code and recovery instruction remain.
 
+`operator.admitRun` consumes the shared service's `RetryResult`, with correlation in the
+outer `operationId`. It is not an alias for `runs.admit`: that wire endpoint returns a flat
+`DirectAdmissionResult` with `operationId`, and reports in-progress through typed non-success
+details. Neither correlation form exposes the raw idempotency key or grants authority.
+
+Preflight only returns validation when the protected active definition's content revision
+exactly matches the definition selected by capture. Explicit stored versions can differ
+from the active catalog, including edited content with the same id/version. If the exact
+captured definition is unavailable to this read projection, preflight fails closed with
+`NOT_SUPPORTED`; it never pairs active-schema validation with a stored-definition digest.
+This limitation also applies to an older stored version when a newer version is active: a
+valid stored version may remain launchable through admission while unavailable to preflight.
+
 ## Bounds, freshness and non-secret projections
 
 Page default: **50**, maximum **100**. Each MCP tool result, including text and structured

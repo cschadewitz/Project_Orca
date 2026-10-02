@@ -93,6 +93,26 @@ Older `docs/patches/` files describe historical handoffs; do not reapply them.
 
 ## Shared seam A: durable retries and prompt run admission
 
+### Coordinated review clarification
+
+The new wire `RunsAdmitResult` is `DirectAdmissionResult & { operationId: string }`.
+Prepared, accepted and recoverable-failure receipts carry that stable authorized
+reference; in-progress remains a typed `RUN_STATE` failure with operation ID and
+recovery metadata. No raw client key is exposed and legacy `runs.start` stays unchanged.
+
+Optional `runs.admit.expectedScope` contains `{ principalId, workspaceId }`, checked
+against current authenticated authority before effects and stripped before intent
+comparison. It is not authority. Neither credentials nor transient instance IDs
+participate in this fence or durable intent scope. The app consumes the existing
+`operator.discover` authenticated projection; no second discovery RPC is introduced.
+
+#331 additionally owns `packages/app/src/main/admission-intents.ts` and
+`packages/app/test/admission-retry*.test.ts`. Existing app wiring remains integrator
+owned through the reserved patch. The journal uses main-process OS-backed encryption,
+refuses unavailable or plaintext backends and requires an explicit confirmed
+abandon/new-intent action; renderer and process loss retain the original key.
+
+
 ### Ownership and compatibility
 
 **#331 owns the common durable retry mechanism and a deliberate nonblocking

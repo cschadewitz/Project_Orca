@@ -52,7 +52,7 @@ import {
   RequestsAdmissionsParamsSchema,
 } from "@orca/protocol";
 import { RunsAdmitParamsSchema, AdmissionsGetParamsSchema, AdmissionsReconcileParamsSchema } from "@orca/protocol";
-import type { AdmissionRetryModel, AdmissionAuthorities } from "./admission-retry.js";
+import { checkAdmissionScope, type AdmissionRetryModel, type AdmissionAuthorities } from "./admission-retry.js";
 import type { RequestSubmissionModel } from "./request-submission.js";
 import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
 import type { Maintenance } from "./maintenance.js";
@@ -811,12 +811,10 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     table["runs.admit"] = {
       params: RunsAdmitParamsSchema,
       handle: async (params, invocation) => {
-        const { idempotencyKey, ...command } = params;
-        return model.admit(
-          command,
-          idempotencyKey === undefined ? {} : { idempotencyKey },
-          await (await authorities(invocation)).direct(),
-        );
+        const { idempotencyKey, expectedScope, ...command } = params;
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(expectedScope, authority);
+        return model.admit(command, idempotencyKey === undefined ? {} : { idempotencyKey }, await authority.direct());
       },
     };
     table["admissions.get"] = {

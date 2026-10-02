@@ -1,7 +1,9 @@
 /** Fenced revision service. Bootstrap supplies the shared retry claims and protected run journal; no fallback store. */
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isDeepStrictEqual } from "node:util";
 import { OrcaError, validateWorkflowInputs, type MutationActor } from "@orca/core";
+import type { RegisteredRetryClaims } from "./admission-retry.js";
 import type {
   RevisionBoundaryView,
   RevisionCapability,
@@ -486,6 +488,47 @@ export class RunRevisionJournal implements RevisionJournal {
   }
 }
 
+/** Internal composition seam: cached claims never substitute for the authoritative revision commit. */
+export function registerRevisionInputOperation<C extends RevisionCommand | ReplacePendingRevisionCommand>(
+  claims: Pick<RegisteredRetryClaims, "register">,
+  operation: RetryOperation<C, RevisionReceipt>,
+  journal: RevisionJournal,
+  authorize?: (command: C, binding: Record<string, JsonValue> | undefined) => Promise<void>,
+): RetryOperation<C, RevisionReceipt> {
+  claims.register(operation, authorize, (command, binding, result, operationId) =>
+    journal.withRun(command.target.runId, async (tx) => {
+      // The journal acquires run ownership and synchronizes its public markers before
+      // exposing committed receipts. Recheck live grants after waiting for that fence.
+      await authorize?.(command, binding);
+      const receipt = await tx.committed(operationId);
+      if (
+        !receipt ||
+        !isDeepStrictEqual(receipt, result) ||
+        !isDeepStrictEqual(binding, {
+          revisionId: receipt.revisionId,
+          expectedRevision: receipt.expectedRevision,
+          attemptId: receipt.attemptId,
+          destinationId: receipt.target.destinationId,
+        }) ||
+        receipt.state !== "pending" ||
+        receipt.currentRevisionId !== receipt.revisionId ||
+        receipt.target.runId !== command.target.runId ||
+        receipt.target.destinationId !== command.target.destinationId ||
+        ("actionId" in command
+          ? !isDeepStrictEqual(receipt.target, command.target)
+          : receipt.target.expectedRevision !== command.expectedRevision ||
+            receipt.attemptId !== command.target.attemptId)
+      )
+        throw new OrcaError(
+          "RUN_STATE",
+          "Revision receipt is uncertain; its authoritative marker is unavailable or inconsistent",
+          { reason: "revision-publication-uncertain", operationId },
+        );
+    }),
+  );
+  return operation;
+}
+
 /** One trusted registration per operation kind, with request-scoped live authority. Background recovery must enter forAccess too. */
 export function createRevisionInputServices(options: Omit<RevisionServiceOptions, "access">) {
   const scope = new AsyncLocalStorage<RevisionAccess>();
@@ -510,6 +553,11 @@ export function createRevisionInputServices(options: Omit<RevisionServiceOptions
   });
   return {
     operations: [service.submitOperation, service.replaceOperation] as const,
+    register: (claims: Pick<RegisteredRetryClaims, "register">): void => {
+      const authorize = (command: { target: { runId: string } }) => current().mutate(command.target.runId);
+      registerRevisionInputOperation(claims, service.submitOperation, options.journal, authorize);
+      registerRevisionInputOperation(claims, service.replaceOperation, options.journal, authorize);
+    },
     forAccess: (access: RevisionAccess): Pick<RevisionInputService, "submit" | "readPending" | "replacePending"> => ({
       submit: (command, retry, authority) => scope.run(access, () => service.submit(command, retry, authority)),
       replacePending: (command, retry, authority) =>

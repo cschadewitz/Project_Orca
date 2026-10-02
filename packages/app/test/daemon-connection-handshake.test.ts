@@ -21,6 +21,7 @@ vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
   shell.events = new EventEmitter();
   return {
+    safeStorage: { isEncryptionAvailable: () => false },
     app: {
       getPath: () => shell.directory,
       requestSingleInstanceLock: () => true,

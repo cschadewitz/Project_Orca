@@ -194,6 +194,12 @@ export interface AlertActivation {
 }
 
 export interface OrcaBridge {
+  /** Durable palette intent ownership lives in main, never renderer memory or localStorage. */
+  admissionIntents?: {
+    start(workflowId: string): Promise<BridgeResult<{ runId: string }>>;
+    list(): Promise<BridgeResult<{ id: string; workflowId: string }[]>>;
+    abandon(id: string): Promise<BridgeResult<{ abandoned: boolean }>>;
+  };
   daemonConnection?: DaemonConnectionBridge;
   updates: {
     read(): UpdateSnapshot;

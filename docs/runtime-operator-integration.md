@@ -50,7 +50,7 @@ continuation receipt methods.
 
 MCP mutation discovery remains disabled pending its bounded boundary projection
 and real adapter composition. Durable Request/direct startup dispatch, production
-revision delivery, author fixes, Electron, independent review and actual Cal
+revision delivery activation, Electron, independent review and actual Cal
 acceptance remain open; continuation completion does not close those gates.
 
 ## Source ancestry and ownership
@@ -68,9 +68,23 @@ bootstrap collisions were consolidated rather than applying one branch's whole
 version over another. Historical integration patches were not reapplied.
 
 The integration owner changes reserved seams and dedicated continuation files.
-The authors retain their feature-owned fixes. At this checkpoint their outstanding
-review findings are revision auto-selection, restart-persistent palette intent,
-MCP captured-definition preflight consistency and artifact discovery grant conjunction.
+Owner-authorized takeover corrections are incorporated from these immutable heads:
+
+- #412 `b50785233253940d56f5de2d426cbdc27c9ebc38`: reject explicit or implicit
+  automatic selection of the corrective branch.
+- #413 `9f9669b1e08e6b5a1afb6671828e688cdb781aa5`: retain encrypted app admission
+  intents across restart, scoped to verified principal/workspace/target, with an
+  explicit abandon confirmation and an expected-scope fence before admission.
+- #414 `b5a2c8f926135e14005cd57ddcf55020e6316322`: refuse preflight when the
+  protected active definition differs from the captured revision, and require
+  both artifact and run grants for artifact discovery.
+
+The replacement #331 reserved patch was incorporated as an old-to-new three-way
+merge, preserving the other features and continuation wiring. The #414 current
+peer fixtures retain the integration's shared `PROTOCOL_VERSION`; explicit old
+peer rejection remains unchanged. Historical preflight support is intentionally
+limited: an admissible stored definition can still return `NOT_SUPPORTED` from
+preflight when its exact trusted validation projection is unavailable.
 The shared daemon's artifact method/capability discovery independently requires both
 `runs.read` and `artifacts.read`.
 
@@ -167,3 +181,86 @@ build/compiled smoke. Its sole failure was app Node-side coverage for three newl
 wired revision client methods. The follow-up adds 15 focused tests covering those
 exact RPC methods; thresholds and exclusions are unchanged. Fresh complete-suite
 coverage remains required on the next published head.
+
+
+## Protected revision adapter checkpoint
+
+Integration owns `packages/engine/src/revision-runtime.ts` and its dedicated
+`revision-runtime*.test.ts` coverage, plus the shared claim verification seam.
+The adapter reuses the protected run journal and held execution lease. Its
+versioned private entries support atomic gate-plus-correction publication, exact
+future attempt reservation, sensitivity promotion, replacement CAS and conservative
+claim/send accounting. This checkpoint does not yet advertise or mount revision
+mutation capabilities: production authority, transport and delivery composition
+must pass before activation.
+
+Before each publication attempt, a correlation-only guard is durably written via
+the existing protected execution store. It is not acceptance. If that guard exists
+but its authoritative marker is absent, recovery is uncertain and refuses to
+recreate the answer or deliver the correction. A bound claim with no attempted
+publication can still retry. Existing markers must be authenticated and synced
+before a cached receipt can be returned, including inspection and reconciliation.
+No second authoritative journal or encryption key lifecycle is introduced.
+
+These checks use available local evidence. Coordinated rollback of all guards,
+claims and journal records cannot always be detected. They do not establish a
+universal exactly-once guarantee; full-store backup and matching-binary rollback
+requirements still apply.
+
+The app journal rejects unavailable encryption and Linux `basic_text`; ordinary
+Electron launch smoke does not prove encrypted intent restart. Acceptance requires
+a usable unlocked OS key store, the same app user-data across restart, recovery of
+the same server run, and explicit refusal when encryption is unavailable. Mock
+safeStorage tests only establish control behavior.
+
+CI #361 on `3b8910a1b24bfe6ca3b63467cf796fa8c221ddfe` passed both Node jobs,
+including Node 24 aggregate coverage and both build/compiled smoke stages. This
+is evidence for that preceding checkpoint only. The corrected combined source
+passed 303 app tests, 70 focused admission/MCP tests and the separately enabled
+`ORCA_RETRY_INTEGRATION=1` HTTP/WebSocket test. Opt-in tests skipped by the default
+suite are not counted as acceptance evidence. Fresh exact-head CI and Electron
+validation remain required after publication.
+
+The combined review caught and fixed an app/discovery mismatch: authenticated
+`operator.discover` now reports the actual installed RPC table filtered by current
+grants, including `runs.admit` only when available. Unimplemented MCP mutation
+aliases remain absent. The enabled HTTP/WebSocket regression drives discovery,
+real admission, retained intent recovery after controller reconstruction, and
+viewer omission. The separately enabled ACP retry integration test also passes.
+
+The pre-correction local Node 24 complete-suite coverage attempt ran 3,041 passing tests,
+34 failures and 3 skips. Failures remain in source-scripted-agent/demo subprocess
+paths with observed tsx Unix-socket `EPERM`; this run is not a coverage gate pass.
+Root/renderer typecheck, repository lint/format/design and compiled build/demo
+smoke pass. Remote exact-head CI must establish the complete subprocess and
+aggregate coverage result.
+
+### Revision delivery ambiguity correction
+
+The first adapter checkpoint (`744c488` local review snapshot) had a reproduced
+rewind gap: after a delivered R1's transition markers were removed, replacing the
+restored unclaimed R1 with R2 could bypass a revision-specific claim guard. That
+snapshot was not activated or published as a branch head.
+
+The corrected guard uses one consumed boundary-version identity across submission,
+replacement and delivery transitions. Version-2 metadata binds the run, opaque
+destination, current version, exact attempt, configuration generation and workflow
+revision. Strict replay checks both consumed historical versions and the current
+frontier. Surviving attempt evidence without its advancing marker makes reads,
+replacement, reservation and delivery uncertain; it cannot be turned into a new
+revision or advertised as safely replaceable. Valid historical advancement remains
+usable. Read-only validation of prior version-1 evidence fails closed on malformed
+or mismatched metadata; this does not imply a deployed migration history.
+
+Regression evidence covers the confirmed-delivery/rewind/replacement sequence,
+including earlier refusal from pending reads, old delivery hooks and conflicting
+historical markers. Independent re-review remains an open gate. The runtime and
+its current-bound-actor authorization seam remain unmounted until the production
+composition and transport checks are complete.
+
+
+The corrected adapter's 34 runtime, 18 service and 29 receipt-recovery tests pass
+on Node 22 and Node 24. The unchanged original reproduction against the corrected
+compiled engine refuses replacement with `RUN_STATE` / `revision-publication-uncertain`
+and the original operation correlation before any second send. This is implementation
+and regression evidence; independent re-review is still open.

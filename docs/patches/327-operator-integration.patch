@@ -473,7 +473,15 @@
    "runs.subscribe": ["runs.read"],
 --- a/packages/daemon/src/auth/guard.ts
 +++ b/packages/daemon/src/auth/guard.ts
-@@ -286,6 +286,8 @@
+@@ -185,6 +185,7 @@ export class Authorizer {
+       return (
+         spec !== undefined &&
+         (!spec.permission || holds(principal, spec.permission)) &&
++        (name !== "operator.artifact" || holds(principal, "runs.read")) &&
+         (!name.startsWith("requests.") || holds(principal, "runs.start"))
+       );
+     });
+@@ -286,6 +287,8 @@ export class Authorizer {
                this.deny(principal, meta, name, params, code ?? "AUTH_FORBIDDEN", e.reason);
                throw e.error;
              }
@@ -482,6 +490,14 @@
              if (spec.audit) this.operation(principal, meta, name, params, "failed", codeOf(e));
              throw e;
            }
+@@ -414,6 +417,7 @@ export class Authorizer {
+       // The store's path on disk is the configuration's business.
+       ...(storeDir !== undefined && holds(principal, "config.read") ? { storeDir } : {}),
+       capabilities: result.capabilities.filter((c) => {
++        if (c === "operator.artifact") return holds(principal, "artifacts.read") && holds(principal, "runs.read");
+         const needs = CAPABILITY_PERMISSIONS[c];
+         return needs ? needs.some((p) => holds(principal, p)) : everything;
+       }),
 --- a/packages/daemon/test/auth-operations.test.ts
 +++ b/packages/daemon/test/auth-operations.test.ts
 @@ -9,6 +9,7 @@

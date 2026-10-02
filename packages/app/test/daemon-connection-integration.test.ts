@@ -44,6 +44,7 @@ vi.mock("electron", async () => {
     },
   };
   return {
+    safeStorage: { isEncryptionAvailable: () => false },
     app: {
       getPath: (name: string) => (name === "userData" ? shell.userData : "/launch-workspace"),
       requestSingleInstanceLock: () => true,

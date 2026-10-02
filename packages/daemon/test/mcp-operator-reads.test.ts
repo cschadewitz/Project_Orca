@@ -263,6 +263,48 @@ it("preflights invalid and valid vars against one captured generation without ad
   expect(startRun).not.toHaveBeenCalled();
 });
 
+it.each(["1", "2"])("refuses preflight when captured stored v1 differs from active v%s", async (activeVersion) => {
+  const { parseOrcaConfig } = await import("@orca/core");
+  const { ConfigurationGenerations, workflowRevision } = await import("@orca/engine");
+  const { InMemoryWorkflowVersionStore, InMemoryExecutionStore } = await import("@orca/store");
+  const stored = WorkflowDefinitionSchema.parse({
+    id: "wf",
+    name: "Stored workflow",
+    version: "1",
+    start: "start",
+    nodes: { start: { type: "start" }, end: { type: "end" } },
+    edges: [{ from: "start", to: "end" }],
+    inputSchema: { fields: { count: { type: "integer", required: true } } },
+  });
+  const active = WorkflowDefinitionSchema.parse({
+    ...stored,
+    version: activeVersion,
+    inputSchema: { fields: { count: { type: "string", required: true } } },
+  });
+  const workflows = new InMemoryWorkflowVersionStore();
+  await workflows.put(stored);
+  const validateStartRun = vi.fn(async () => {});
+  const startRun = vi.fn(async () => "should-not-start");
+  const generations = new ConfigurationGenerations({
+    store: new InMemoryExecutionStore(),
+    workflows,
+    loadAssets: async () => ({ workflows: [active], templates: [] }),
+    admission: { validateStartRun, startRun },
+  });
+  await generations.initialize(parseOrcaConfig({}), "saved");
+  // Both are valid explicit captures, but the protected active snapshot cannot validate them.
+  const captured = await generations.captureLaunch({ purpose: "workflow", workflowId: "wf", workflowVersion: "1" });
+  expect(captured.workflow.revision).toBe(workflowRevision(stored));
+  expect(captured.workflow.revision).not.toBe(workflowRevision(active));
+  const f = fixture([], { generations });
+  for (const count of [2, "active-only"])
+    await expect(
+      f.model.preflight({ target, purpose: "workflow", workflowId: "wf", workflowVersion: "1", vars: { count } }),
+    ).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+  expect(validateStartRun).not.toHaveBeenCalled();
+  expect(startRun).not.toHaveBeenCalled();
+});
+
 it("preserves input identity without plan permissions and rejects expired legacy permissions", async () => {
   const { operatorEventCollections } = await import("../src/operator-read-model.js");
   const events = new InMemoryEventStore();

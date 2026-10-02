@@ -12,7 +12,8 @@ import {
   orchestratorResolver,
   startDaemon,
 } from "@orca/daemon";
-import type { ResponseMessage } from "@orca/protocol";
+import { OperatorDiscoverySchema, RunsAdmitResultSchema, type ResponseMessage } from "@orca/protocol";
+import { AdmissionIntents, AdmissionIntentController } from "../../app/src/main/admission-intents.js";
 import { AdmissionRetryModel } from "../../daemon/src/admission-retry.js";
 import { RequestSubmissionModel } from "../../daemon/src/request-submission.js";
 import type { DirectAdmissionService } from "../../engine/src/direct-admission.js";
@@ -55,13 +56,15 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       });
       const options = {
         orcaVersion: "test",
+        workspaceId: "00000000-0000-4000-8000-000000000001",
+        operatorSources: { events: app.orchestrator.stores.events },
         capabilities: [] as [],
         reads,
         control: new ControlModel({ orchestrator: app.orchestrator, reads }),
         source: app.orchestrator,
         admissionRetries,
         requestSubmissions: new RequestSubmissionModel({ service: requestService, execute, executionFailed: vi.fn() }),
-        submissionWorkspaceId: "w",
+        submissionWorkspaceId: "00000000-0000-4000-8000-000000000001",
         auth: { mode: "token" as const, credentials, ownership, resolver: orchestratorResolver(app.orchestrator) },
       };
       const daemon = await startDaemon(options);
@@ -84,7 +87,12 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
         socket!.addEventListener("error", () => reject(new Error("socket failed")), { once: true });
       });
       const command = { workflowId: "program", idempotencyKey: "direct-intent" };
-      const first = await http("runs.admit", command);
+      const expectedScope = { principalId: "alice", workspaceId: options.submissionWorkspaceId };
+      expect(
+        await http("runs.admit", { ...command, expectedScope: { ...expectedScope, principalId: "bob" } }),
+      ).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });
+      expect(await app.orchestrator.listRuns()).toHaveLength(0);
+      const first = await http("runs.admit", { ...command, expectedScope });
       expect(first).toMatchObject({ ok: true, result: { state: "accepted" } });
       if (!first.ok) throw new Error("not admitted");
       const receipt = first.result as { runId: string; operationId: string };
@@ -114,6 +122,40 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
         ok: false,
         error: { code: "RETRY_CONFLICT" },
       });
+      // Real discovery is the app's scope handshake. Mock encryption here proves
+      // routing/restart control only; OS-keychain acceptance is a separate Electron gate.
+      const discover = async (token = owner.token) => {
+        const response = await http("operator.discover", {}, token);
+        if (!response.ok) throw new Error("discovery refused");
+        return OperatorDiscoverySchema.parse(response.result);
+      };
+      const found = await discover();
+      expect(found.operations).toContain("runs.admit");
+      expect(found.operations).not.toContain("operator.admitRun");
+      expect((await discover(viewer.token)).operations).not.toContain("runs.admit");
+      const encryption = {
+        isEncryptionAvailable: () => true,
+        getSelectedStorageBackend: () => "test-only-mock",
+        encryptString: (value: string) => Buffer.from(value),
+        decryptString: (value: Buffer) => value.toString(),
+      };
+      const controller = () =>
+        new AdmissionIntentController(new AdmissionIntents(join(dir, "test-intents.enc"), encryption), async () => {
+          const current = await discover();
+          if (!current.operations.includes("runs.admit")) throw new Error("admission unavailable");
+          return {
+            scope: { target: daemon.url, principalId: current.principalId, workspaceId: current.target.workspaceId },
+            assertCurrent: () => {},
+            admit: async (params) => {
+              const response = await http("runs.admit", params);
+              if (!response.ok) throw new Error(response.error.message);
+              return RunsAdmitResultSchema.parse(response.result);
+            },
+          };
+        });
+      const palette = await controller().start("program");
+      expect(await controller().start("program")).toEqual(palette);
+      expect(await controller().list()).toHaveLength(1);
       await credentials.revoke(owner.credential.id);
       expect(await http("admissions.get", { operationId: receipt.operationId })).toMatchObject({
         ok: false,
