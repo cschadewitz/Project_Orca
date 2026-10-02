@@ -294,25 +294,31 @@ export class RequestSubmissionService implements SubmissionService {
       await authority.onRunAdmitted(runId);
       const stored = await orc.stores.requests.get(record.requestId);
       if (stored?.programRunId && stored.programRunId !== runId) throw unavailable();
-      const inputs = await orc.stores.execution.getInputs(runId);
-      const projected = inputs?.sensitiveNames.includes("request")
-        ? publicRequest(request)
-        : {
-            ...request,
-            ...redactExecutionValue(
-              { title: request.title, body: request.body, source: request.source, labels: request.labels },
-              inputs?.secrets ?? [],
-            ),
-          };
-      // Source kind is a structural enum, like event types; coincidental secret matches
-      // must not turn an otherwise valid Request into an unreadable document.
-      projected.source.kind = inputs?.sensitiveNames.includes("request") ? "manual" : request.source.kind;
-      await orc.stores.requests.put({
-        ...projected,
-        status: stored?.status ?? request.status,
-        updatedAt: stored?.updatedAt ?? request.updatedAt,
-        programRunId: runId,
-      });
+      // The projection and root link are published together, before execution is
+      // accepted. Settlement requires that link. Once linked, this service must not
+      // rewrite the Request: even preserving a read status races a concurrent settle.
+      // The admission mutex serializes all first-link writers, including recovery.
+      if (!stored?.programRunId) {
+        const inputs = await orc.stores.execution.getInputs(runId);
+        const projected = inputs?.sensitiveNames.includes("request")
+          ? publicRequest(request)
+          : {
+              ...request,
+              ...redactExecutionValue(
+                { title: request.title, body: request.body, source: request.source, labels: request.labels },
+                inputs?.secrets ?? [],
+              ),
+            };
+        // Source kind is a structural enum, like event types; coincidental secret matches
+        // must not turn an otherwise valid Request into an unreadable document.
+        projected.source.kind = inputs?.sensitiveNames.includes("request") ? "manual" : request.source.kind;
+        await orc.stores.requests.put({
+          ...projected,
+          status: stored?.status ?? request.status,
+          updatedAt: stored?.updatedAt ?? request.updatedAt,
+          programRunId: runId,
+        });
+      }
       current = { ...current, state: "accepted" };
       await admissions.records.put(current);
       // Execution is the adapter's responsibility, only after this durable boundary.

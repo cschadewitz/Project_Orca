@@ -84,8 +84,12 @@ Request is passed to the workflow in the service-owned `vars.request`. After adm
 public Request fields are projected using the engine's recorded sensitivity, preserving
 structural source tags. A workspace provider inspecting the provisional Request during
 provisioning sees redacted text; it must use the Request ID for identity. Normal public
-metadata is restored before execution. Request settlement preserves completion/failure
-status when an accepted admission is reconciled again.
+metadata and the program root link are published together before execution. Recovery
+writes this projection only while the root link is missing, with first-link writers
+serialized by the admission mutex. Settlement requires the root link; once it exists,
+reconciliation leaves the Request document untouched. This preserves concurrent completion,
+failure or cancellation and its timestamp, without a stale read-and-replace write racing
+`ProgramService.settle`.
 
 `requests.admissions {}` lists the caller's recovery states, including work whose client
 lost the initial response. `requests.admission {admissionId}` inspects one.

@@ -410,3 +410,45 @@ it("never replaces a recorded root whose protected inputs are missing", async ()
   expect((await reopened.service.reconcile(initial.admissionId, reopened.authority)).state).toBe("recoverable-failure");
   expect(await reopened.orc.listRuns()).toEqual([initial.runId]);
 });
+
+it.each(["completed", "failed", "cancelled"] as const)(
+  "preserves concurrent %s settlement across file-store reconciliation and restart",
+  async (status) => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-reconcile-settlement-"));
+    dirs.push(dir);
+    const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
+    const workflow = parseWorkflow(
+      `id: settlement-program\nname: Settlement\nstart: e\nnodes: { e: { type: end, outcome: ${status === "failed" ? "failure" : "success"} } }\nedges: []`,
+    );
+    f.orc.workflows.register(workflow);
+    const admitted = await f.service.submit({ ...command, workflowId: workflow.id }, f.authority);
+    if (admitted.state !== "accepted") throw new Error("not accepted");
+    const peer = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
+    peer.orc.workflows.register(workflow);
+    const program = new ProgramService(peer.orc);
+    if (status === "cancelled") await peer.orc.cancel(admitted.runId, "operator cancelled");
+    else await peer.orc.run(admitted.runId);
+    const terminal = await peer.orc.getState(admitted.runId);
+    vi.spyOn(peer.orc.clock, "isoNow").mockReturnValue("2030-01-01T00:00:00.000Z");
+    const get = f.stores.requests.get.bind(f.stores.requests);
+    let settled: Awaited<ReturnType<typeof program.settle>>;
+    // Pause recovery at its projection read; another store instance settles the run
+    // before recovery receives its stale Request snapshot.
+    vi.mocked(f.authority.onRunAdmitted).mockImplementationOnce(async () => {
+      vi.spyOn(f.stores.requests, "get").mockImplementationOnce(async (id) => {
+        const stale = await get(id);
+        expect(stale?.status).toBe("decomposing");
+        settled = await program.settle(terminal);
+        return stale;
+      });
+    });
+    expect(await f.service.reconcile(admitted.admissionId, f.authority)).toEqual(admitted);
+    expect(settled).toMatchObject({ status, updatedAt: "2030-01-01T00:00:00.000Z" });
+    const restarted = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
+    expect(await restarted.stores.requests.get(admitted.requestId)).toEqual(settled);
+    // Repeated recovery after settlement must leave the same document intact too.
+    expect(await restarted.service.reconcile(admitted.admissionId, restarted.authority)).toEqual(admitted);
+    expect(await fileStores(dir).requests.get(admitted.requestId)).toEqual(settled);
+    expect(await restarted.orc.listRuns()).toEqual([admitted.runId]);
+  },
+);
