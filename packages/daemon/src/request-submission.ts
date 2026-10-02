@@ -6,6 +6,7 @@ import {
   type SubmissionResult,
   type SubmissionService,
 } from "@orca/core";
+import { executeAcceptedSubmission } from "@orca/engine";
 import { authForbidden, workflowNotFound } from "./auth/errors.js";
 import { holds, workflowAllowed, type Principal } from "./auth/principal.js";
 import type { Authorizer } from "./auth/guard.js";
@@ -73,10 +74,13 @@ export class RequestSubmissionModel {
       // Queue after returning admission. A failed/restarted client can use authorized run reads
       // and reconcile the admission to resume an accepted root whose worker never started.
       setImmediate(() => {
-        void this.opts.service
-          .inspect(result.admissionId, authority)
-          .then(() => this.opts.execute(result.runId))
-          .catch(() => this.opts.executionFailed(result.runId));
+        void executeAcceptedSubmission(
+          this.opts.service,
+          result.admissionId,
+          result.runId,
+          authority,
+          this.opts.execute,
+        ).catch(() => this.opts.executionFailed(result.runId));
       });
     }
     return result;

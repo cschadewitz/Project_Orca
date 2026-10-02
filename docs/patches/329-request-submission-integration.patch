@@ -271,7 +271,7 @@
 +        ctx.out(
 +          `request ${admitted.request.id}; run ${admitted.runId}${admitted.admissionId ? `; admission ${admitted.admissionId}` : ""}`,
 +        );
-+        const state = await app.orchestrator.run(admitted.runId);
++        const state = await app.program.runSubmitted(admitted);
 +        const request = (await app.program.settle(state)) ?? admitted.request;
          ctx.out(`request ${request.id}: ${request.status}`);
          const code = await finish(app, ctx, state);

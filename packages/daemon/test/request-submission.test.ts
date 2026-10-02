@@ -103,3 +103,20 @@ it("uses live verified permissions and exact ownership; caller source is never i
   await expect(f.service.inspect(result.admissionId, authority)).rejects.toMatchObject({ code: "AUTH_FORBIDDEN" });
   expect(RequestsSubmitParamsSchema.safeParse({ ...command, principalId: "owner" }).success).toBe(false);
 });
+
+it("the daemon worker also refuses authority revoked during acceptance", async () => {
+  const f = submissionFixture();
+  const put = f.admissions.records.put.bind(f.admissions.records);
+  vi.spyOn(f.admissions.records, "put").mockImplementation(async (record) => {
+    await put(record);
+    if (record.state === "accepted")
+      vi.mocked(f.authority.authorize).mockRejectedValue(new Error("revoked after acceptance"));
+  });
+  const execute = vi.fn(async () => {});
+  const executionFailed = vi.fn();
+  const model = new RequestSubmissionModel({ service: f.service, execute, executionFailed });
+  const result = await model.submit(command, f.authority);
+  expect(result.state).toBe("accepted");
+  await vi.waitFor(() => expect(executionFailed).toHaveBeenCalledOnce());
+  expect(execute).not.toHaveBeenCalled();
+});

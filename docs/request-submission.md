@@ -132,6 +132,11 @@ external effects or replay safety for arbitrary workflow steps.
 | Missing/foreign admission or missing protected recovery material | `RUN_STATE`, generic unavailable message |
 | Failure after prepared admission | `recoverable-failure` with stable IDs and safe `RUN_STATE` recovery information |
 
+All configured submission workers (ACP, ProgramService/CLI and daemon) pass through
+`executeAcceptedSubmission`: it inspects the admission with current authority, verifies
+the accepted run ID, and only then invokes execution. Revocation after durable acceptance
+leaves the accepted work inspectable by authorized callers without starting a workflow.
+
 The configured `ProgramService.submit` delegates to this service and preserves its
 `{request, runId}` result, adding optional `admissionId`. `submitAndRun` and settlement
 retain their existing completion behavior. The CLI patch prints admitted Request/run/

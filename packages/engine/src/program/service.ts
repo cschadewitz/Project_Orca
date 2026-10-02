@@ -102,9 +102,23 @@ export class ProgramService {
   }
 
   async submitAndRun(input: SubmitRequestInput): Promise<{ request: Request; state: RunState }> {
-    const { request, runId } = await this.submit(input);
-    const state = await this.orchestrator.run(runId);
+    const admitted = await this.submit(input);
+    const { request } = admitted;
+    const state = await this.runSubmitted(admitted);
     return { request: (await this.settle(state)) ?? request, state };
+  }
+
+  /** Execute an admitted Request only after rechecking current authority at the worker boundary. */
+  async runSubmitted(
+    admitted: { runId: string; admissionId?: string },
+    authority: SubmissionAuthority | undefined = this.submission?.authority,
+  ): Promise<RunState> {
+    if (!this.submissions) return this.orchestrator.run(admitted.runId);
+    if (!authority || !admitted.admissionId)
+      throw new OrcaError("NOT_SUPPORTED", "Request execution requires its admission and explicit authority");
+    return executeAcceptedSubmission(this.submissions, admitted.admissionId, admitted.runId, authority, (runId) =>
+      this.orchestrator.run(runId),
+    );
   }
 
   /** Continue a parked run tree (see Orchestrator.resume) and record the outcome on its Request. */
@@ -124,4 +138,18 @@ export class ProgramService {
     await this.orchestrator.stores.requests.put(updated);
     return updated;
   }
+}
+
+/** Shared live authority boundary for daemon workers, ProgramService/CLI and configured ACP. */
+export async function executeAcceptedSubmission<T>(
+  service: SubmissionService,
+  admissionId: string,
+  runId: string,
+  authority: SubmissionAuthority,
+  execute: (runId: string) => Promise<T>,
+): Promise<T> {
+  const current = await service.inspect(admissionId, authority);
+  if (current.state !== "accepted" || current.runId !== runId)
+    throw new OrcaError("RUN_STATE", "Request admission is not accepted for this run");
+  return execute(runId);
 }

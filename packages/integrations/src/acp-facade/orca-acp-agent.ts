@@ -266,6 +266,7 @@ export class OrcaAcpAgent {
       ...(overrides ? { overrides } : {}),
     };
     let runId: string;
+    let admissionId: string | undefined;
     if (command === "run" && runWorkflowId) {
       const vars: Record<string, unknown> = {};
       for (const kv of runArgs) {
@@ -297,6 +298,7 @@ export class OrcaAcpAgent {
           return { stopReason: "end_turn" };
         }
         runId = submitted.runId;
+        admissionId = submitted.admissionId;
       } else {
         runId = (await this.opts.program.submit(command)).runId;
       }
@@ -319,7 +321,9 @@ export class OrcaAcpAgent {
       forwarding = forwarding.then(() => this.forward(ctx, session, runId, e)).catch(() => undefined);
     });
     try {
-      const final = await orchestrator.run(runId);
+      const final = admissionId
+        ? await this.opts.program.runSubmitted({ runId, admissionId }, this.opts.submissionAuthority)
+        : await orchestrator.run(runId);
       await this.opts.program.settle(final);
       await forwarding;
       await this.sendPlan(ctx, session, def, final);

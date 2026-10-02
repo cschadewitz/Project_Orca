@@ -311,3 +311,28 @@ it("authenticates the recovery binding and refuses missing protected input inste
   await expect(f.service.reconcile(result.admissionId, f.authority)).rejects.toMatchObject({ code: "RUN_STATE" });
   expect(await f.orc.listRuns()).toHaveLength(1);
 });
+
+it.each(["submitAndRun", "split CLI"])("rechecks authority after acceptance before %s execution", async (adapter) => {
+  const f = submissionFixture();
+  const program = new ProgramService(f.orc, "program", undefined, {
+    admissions: f.admissions,
+    captureLaunch: f.capture,
+    authority: f.authority,
+  });
+  const put = f.admissions.records.put.bind(f.admissions.records);
+  vi.spyOn(f.admissions.records, "put").mockImplementation(async (record) => {
+    await put(record);
+    if (record.state === "accepted")
+      vi.mocked(f.authority.authorize).mockRejectedValue(new Error("revoked after acceptance"));
+  });
+  const run = vi.spyOn(f.orc, "run");
+  const execute =
+    adapter === "submitAndRun"
+      ? program.submitAndRun(command)
+      : program.submit(command).then((admitted) => program.runSubmitted(admitted));
+  await expect(execute).rejects.toThrow("revoked after acceptance");
+  expect(run).not.toHaveBeenCalled();
+  const [record] = await f.admissions.records.list();
+  expect(record?.state).toBe("accepted");
+  expect((await f.stores.events.read(record!.runId!)).map((event) => event.type)).toEqual(["run.created"]);
+});
