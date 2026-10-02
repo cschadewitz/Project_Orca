@@ -61,7 +61,7 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
         source: app.orchestrator,
         admissionRetries,
         requestSubmissions: new RequestSubmissionModel({ service: requestService, execute, executionFailed: vi.fn() }),
-        submissionWorkspaceId: "w",
+        submissionWorkspaceId: "00000000-0000-4000-8000-000000000001",
         auth: { mode: "token" as const, credentials, ownership, resolver: orchestratorResolver(app.orchestrator) },
       };
       const daemon = await startDaemon(options);
@@ -84,7 +84,12 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
         socket!.addEventListener("error", () => reject(new Error("socket failed")), { once: true });
       });
       const command = { workflowId: "program", idempotencyKey: "direct-intent" };
-      const first = await http("runs.admit", command);
+      const expectedScope = { principalId: "alice", workspaceId: options.submissionWorkspaceId };
+      expect(
+        await http("runs.admit", { ...command, expectedScope: { ...expectedScope, principalId: "bob" } }),
+      ).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });
+      expect(await app.orchestrator.listRuns()).toHaveLength(0);
+      const first = await http("runs.admit", { ...command, expectedScope });
       expect(first).toMatchObject({ ok: true, result: { state: "accepted" } });
       if (!first.ok) throw new Error("not admitted");
       const receipt = first.result as { runId: string; operationId: string };
