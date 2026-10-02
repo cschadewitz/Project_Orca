@@ -13,12 +13,19 @@ export function ConnectionBoundary({
   children: ReactNode;
 }): JSX.Element {
   const [target, setTarget] = useState(() => bridge.read());
-  const [active, setActive] = useState(target.epoch);
+  const [active, setActive] = useState<number>();
   const [open, setOpen] = useState(false);
   const [replace, setReplace] = useState(false);
   const old = useRef<HTMLDivElement>(null);
   const notice = useRef<HTMLDivElement>(null);
-  const changed = target.epoch !== active;
+  const changed = active !== undefined && target.epoch !== active;
+  // Synchronize preload before mounting any resource effects, including layout effects.
+  useLayoutEffect(() => {
+    if (active === undefined) {
+      bridge.activate(target.epoch);
+      setActive(target.epoch);
+    }
+  }, [active, bridge, target.epoch]);
   useEffect(() => {
     const off = bridge.subscribe(setTarget);
     const show = bridge.onShow(() => setOpen(true));
@@ -46,7 +53,7 @@ export function ConnectionBoundary({
   }, [changed, replace]);
   return (
     <>
-      {!replace && (
+      {active !== undefined && !replace && (
         <div ref={old} key={active} className="orca-connection-root">
           {children}
         </div>

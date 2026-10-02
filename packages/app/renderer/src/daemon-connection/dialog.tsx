@@ -13,7 +13,7 @@ export function ConnectionDialog({
   target: DaemonTargetSnapshot;
   close(this: void): void;
 }): JSX.Element {
-  const [url, setUrl] = useState(target.url);
+  const [url, setUrl] = useState(target.source === "saved" || target.source === "env" ? target.url : "");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);

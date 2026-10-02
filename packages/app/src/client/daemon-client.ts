@@ -54,6 +54,7 @@ import {
   ScheduleExplainResultSchema,
   ScheduleGetResultSchema,
   HelloResultSchema,
+  type HelloResult,
   INPUTS_ANSWER_METHOD,
   INPUTS_LIST_METHOD,
   InputsAnswerResultSchema,
@@ -141,8 +142,7 @@ import {
   type WorkflowsListParams,
   type WorkflowsListResult,
 } from "@orca/protocol";
-import { z, type ZodType } from "zod";
-import type { IdentifiedHello } from "../main/connection-target.js";
+import { type ZodType } from "zod";
 import { assertCredentialDestination, authenticationCode, type DaemonTokenSource } from "./auth.js";
 import { DaemonSubscription, type DaemonSubscriptionOptions } from "./subscription.js";
 
@@ -168,7 +168,7 @@ export interface DaemonClientOptions {
   /** Ordinary RPC failures. Hello owners publish failures after checking their lifetime. */
   onAuthFailure?: () => void;
   /** Current subscription verification only; ordinary hello probes never publish. */
-  onHello?: (hello: IdentifiedHello) => void;
+  onHello?: (hello: HelloResult) => void;
 }
 
 export class DaemonClient {
@@ -260,13 +260,13 @@ export class DaemonClient {
     }
   }
 
-  async hello(client: string, retryAuth = true): Promise<IdentifiedHello> {
+  async hello(client: string, retryAuth = true): Promise<HelloResult> {
     // The caller owns the lifetime of a probe or post-subscribe handshake. Publishing here
     // would let a late reply mutate connection state before that caller checks its epoch.
     return this.call(
       HELLO_METHOD,
       { client, protocol: PROTOCOL_VERSION },
-      HelloResultSchema.extend({ identity: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }).optional() }),
+      HelloResultSchema,
       retryAuth,
       AbortSignal.timeout(10_000),
       false,

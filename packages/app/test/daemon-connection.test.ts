@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION } from "@orca/protocol";
+import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,7 +14,7 @@ import { DaemonSubscription } from "../src/client/subscription.js";
 const hello = {
   protocol: PROTOCOL_VERSION,
   orcaVersion: "test",
-  capabilities: ["runs.read", "runs.subscribe"],
+  capabilities: ["runs.read", "runs.subscribe"] as HelloResult["capabilities"],
   identity: { workspaceId: "2c7bf988-cf11-4f6d-9b36-77a4a7bf714f", instanceId: "44112345-b16c-44ba-831d-a66f44488f66" },
 };
 const reply = (result: unknown) => new Response(JSON.stringify({ kind: "response", id: 1, ok: true, result }));
@@ -324,4 +324,71 @@ it("does not dispatch an old queued write, and discards a late result without re
   finish("old response");
   await expect(late).rejects.toThrow("Old target");
   expect(dispatched).toHaveBeenCalledTimes(1);
+});
+
+it("never saves a current or parked bundled daemon URL as an external target", async () => {
+  const r = workspaceRig();
+  await r.workspace.connect();
+  const local = r.workspace.connectionTarget;
+  const save = vi.fn();
+  const manager = new ConnectionTarget({
+    prepare: (url, source) => r.workspace.prepareConnection(url, source),
+    save,
+    guard: async () => true,
+    release: () => {},
+  });
+  await expect(manager.connect(`${local.url}/`)).rejects.toThrow("temporary URL");
+  expect(r.workspace.connectionTarget).toEqual(local);
+  expect(save).not.toHaveBeenCalled();
+  await manager.connect("http://localhost:2");
+  save.mockClear();
+  const external = r.workspace.connectionTarget;
+  await expect(manager.connect(local.url)).rejects.toThrow("temporary URL");
+  expect(r.workspace.connectionTarget).toEqual(external);
+  expect(save).not.toHaveBeenCalled();
+  await manager.connect(null);
+  expect(r.workspace.connectionTarget.source).toBe("bundled");
+  expect(save).toHaveBeenCalledWith(null);
+  await r.workspace.close();
+});
+
+it("keeps the first verified hello in the startup/store epoch, then fences boot changes", async () => {
+  const r = workspaceRig();
+  for (const open of [() => r.workspace.connect(), () => r.workspace.open("/archive")]) {
+    await open();
+    const epoch = r.workspace.connectionTarget.epoch;
+    r.workspace.observeHello(r.workspace.client, hello);
+    expect(r.workspace.connectionTarget).toMatchObject({ epoch, identity: hello.identity });
+    r.workspace.observeHello(r.workspace.client, hello);
+    expect(r.workspace.connectionTarget.epoch).toBe(epoch);
+    r.workspace.observeHello(r.workspace.client, { ...hello, identity: { ...hello.identity, instanceId: "restart" } });
+    expect(r.workspace.connectionTarget.epoch).toBe(epoch + 1);
+  }
+  await r.workspace.close();
+});
+
+it("seeds a legacy startup once and still invalidates later unidentifiable connections", async () => {
+  const r = workspaceRig();
+  await r.workspace.connect();
+  const epoch = r.workspace.connectionTarget.epoch;
+  const legacy = { protocol: hello.protocol, orcaVersion: hello.orcaVersion, capabilities: hello.capabilities };
+  r.workspace.observeHello(r.workspace.client, legacy);
+  expect(r.workspace.connectionTarget.epoch).toBe(epoch);
+  r.workspace.observeHello(r.workspace.client, legacy);
+  expect(r.workspace.connectionTarget.epoch).toBe(epoch + 1);
+  await r.workspace.close();
+});
+
+it("does not invalidate a deliberate legacy switch again on its first subscription verification", async () => {
+  const r = workspaceRig();
+  await r.workspace.connect();
+  const candidate = await r.workspace.prepareConnection("http://localhost:2");
+  const legacy = { protocol: hello.protocol, orcaVersion: hello.orcaVersion, capabilities: hello.capabilities };
+  candidate.activate(legacy);
+  const epoch = r.workspace.connectionTarget.epoch;
+  r.workspace.observeHello(candidate.client, legacy);
+  expect(r.workspace.connectionTarget.epoch).toBe(epoch);
+  r.workspace.observeHello(candidate.client, legacy);
+  expect(r.workspace.connectionTarget.epoch).toBe(epoch + 1);
+  await r.workspace.close();
 });

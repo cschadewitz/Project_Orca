@@ -11,7 +11,8 @@
  * nonsecret target snapshot. Electron-free so the transitions can be tested directly.
  */
 import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
-import type { ConnectionCandidate, IdentifiedHello } from "./connection-target.js";
+import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
+import type { HelloResult } from "@orca/protocol";
 import type { WorkspaceSnapshot, WorkspaceSource } from "../bridge.js";
 import type { DaemonClient } from "../client/daemon-client.js";
 import type { DaemonSubscription } from "../client/subscription.js";
@@ -108,7 +109,8 @@ export class Workspace {
   private closed = false;
   private updating = false;
   private epoch = 0;
-  private identity: IdentifiedHello["identity"];
+  private identity: HelloResult["identity"];
+  private observedHello = false;
   private source: DaemonTargetSnapshot["source"] = "development";
   private savedUrl: string | undefined;
   /** Keep a live bundled daemon running when the UI leaves it; switching is not cancellation. */
@@ -118,11 +120,20 @@ export class Workspace {
   get connectionTarget(): DaemonTargetSnapshot {
     return {
       epoch: this.epoch,
-      url: daemonEndpoint(this.clientNow.url),
+      url: this.endpoint(),
       source: this.source,
       environmentOverride: Boolean(this.deps.explicitUrl),
       ...(this.identity ? { identity: this.identity } : {}),
     };
+  }
+
+  private endpoint(): string {
+    try {
+      return daemonEndpoint(this.clientNow.url);
+    } catch {
+      // A malformed launch override must not throw through synchronous preload IPC.
+      return "";
+    }
   }
 
   assertEpoch(epoch: number): void {
@@ -130,9 +141,17 @@ export class Workspace {
   }
 
   /** Every boot boundary also resets scopes: a restored history may have rewound. */
-  observeHello(client: DaemonClient, hello: IdentifiedHello): void {
+  observeHello(client: DaemonClient, hello: HelloResult): void {
     if (client !== this.clientNow) return;
     const next = hello.identity;
+    if (!this.observedHello) {
+      // The switch already fenced the old target. Its first verified identity enriches
+      // that same epoch; later boot/identity changes still invalidate outstanding work.
+      this.observedHello = true;
+      this.identity = next;
+      this.deps.onTarget?.(this.connectionTarget);
+      return;
+    }
     if (
       !next ||
       !this.identity ||
@@ -150,6 +169,12 @@ export class Workspace {
     if (this.updating || this.closed || this.pending) throw new Error("Workspace is busy");
     if (source === "env" && (!this.deps.explicitUrl || url !== daemonEndpoint(this.deps.explicitUrl)))
       throw new Error("The environment return must use the launch-pinned daemon");
+    if (
+      source === "saved" &&
+      url !== null &&
+      [this.daemon, this.parkedDefault].some((daemon) => daemon && daemonEndpoint(daemon.url) === daemonEndpoint(url))
+    )
+      throw new ConnectionRefusal("Use the bundled daemon button instead of saving its temporary URL.");
     const epoch = this.epoch;
     let daemon: BundledDaemon | undefined;
     const path = this.deps.defaultPath();
@@ -214,6 +239,7 @@ export class Workspace {
         this.source = source === "env" ? "env" : url ? "saved" : daemon ? "bundled" : "development";
         this.target = { path, readOnly: false, source: source === "env" ? "env" : "default" };
         this.identity = hello.identity;
+        this.observedHello = hello.identity !== undefined;
         this.epoch += 1;
         this.deps.onSwitch(false);
         this.deps.onTarget?.(this.connectionTarget);
@@ -266,6 +292,7 @@ export class Workspace {
   constructor(deps: WorkspaceDeps) {
     this.deps = deps;
     this.savedUrl = deps.savedUrl;
+    this.source = deps.explicitUrl ? "env" : deps.savedUrl ? "saved" : "development";
     this.target = { path: deps.defaultPath(), readOnly: false, source: deps.explicitUrl ? "env" : "default" };
     this.clientNow = deps.client(deps.explicitUrl ?? deps.savedUrl ?? deps.defaultUrl, {
       workspace: this.target.path,
@@ -432,8 +459,17 @@ export class Workspace {
             ? "bundled"
             : "development";
     this.identity = undefined;
+    this.observedHello = false;
     this.epoch += 1;
     this.deps.onTarget?.(this.connectionTarget);
+    if (!this.endpoint()) {
+      const reason =
+        "Invalid daemon URL. Set ORCA_DAEMON_URL to an HTTP or HTTPS URL without credentials, query parameters or fragments and restart.";
+      this.deps.onError?.(reason, undefined);
+      this.deps.onDaemonGone(reason);
+      this.deps.onSnapshot(this.snapshot);
+      return;
+    }
     this.stream = this.deps.subscribe(this.clientNow);
     this.deps.onSnapshot(this.snapshot);
   }
