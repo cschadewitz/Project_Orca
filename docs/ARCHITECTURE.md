@@ -256,6 +256,17 @@ Decisions then read front matter (`source: { kind: artifact, artifact: review,
 field: verdict }`), so a reviewer's `verdict: changes-requested` routes the graph
 back to `build` with the review as an extra input. That *is* the hand‑off.
 
+## Live permission continuity
+
+Supported permission callbacks can use `LiveHumanInput` while their owning
+interpreter retains its execution lease. Acceptance names exact run/step/input,
+daemon boot, session, turn and invocation, revalidates the responder's authority,
+and records the actor before delivering once to the original callback. Workflow
+gates keep their durable parked lifecycle. Expired callbacks cannot be replayed;
+other processes report owner-unavailable rather than taking a live session over.
+See [live permission continuity](live-input-continuity.md) for the two lifetimes,
+standing-write failure ordering, resumption fallbacks and integration requirements.
+
 ## The level above (program)
 
 `workflows/program.yaml` + `packages/engine/src/program/` + `packages/engine/src/plan/`:
@@ -412,3 +423,7 @@ Recorded as ADRs in `docs/adr/`:
 - 0008 Daemon, protocol package and desktop app in one workspace; the app sees only the protocol
 - 0009 "Allow always" writes to a workspace sidecar, layered under the configured rules —
   and, since #140, over the built‑in default rules, which are the last layer of the three
+
+Request admission and recovery are described in [Request submission](request-submission.md).
+The admission lifecycle is shared by daemon, configured ProgramService/CLI and ACP;
+`runs.start` remains an explicit workflow launch.

@@ -1,8 +1,19 @@
 {
-  "storeEpoch": "protected-execution-v2",
+  "storeEpoch": "config-generations-v3",
   "protocol": {
     "major": 1,
-    "minor": 9
+    "minor": 10
   },
-  "capabilities": ["runs.read", "runs.control", "runs.subscribe", "plan.read", "plan.write", "workflows.validateInputs"]
+  "capabilities": [
+    "runs.read",
+    "runs.control",
+    "runs.subscribe",
+    "plan.read",
+    "plan.write",
+    "workflows.validateInputs",
+    "inputs.live"
+  ],
+  "notes": [
+    "Generation snapshots embed workflowDefinitions without pinning unlaunched workflows. Older binaries that ignore this field cannot restore a generation when any catalog workflow lacks a pin, even if both builds report config-generations-v3. Snapshot compatibility is one-way; epoch equality does not establish rollback compatibility. Retain a complete pre-upgrade store backup and its matching binary."
+  ]
 }

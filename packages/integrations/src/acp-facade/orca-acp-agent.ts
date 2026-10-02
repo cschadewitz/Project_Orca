@@ -34,6 +34,7 @@ import {
   type RunState,
   type SessionConfigOption,
   type WorkflowDefinition,
+  type SubmissionAuthority,
 } from "@orca/core";
 import type { Orchestrator, ProgramService } from "@orca/engine";
 import {
@@ -48,6 +49,10 @@ import { UpstreamHumanInput } from "./upstream-human-input.js";
 export interface OrcaAcpAgentOptions {
   orchestrator: Orchestrator;
   program: ProgramService;
+  /** Verified local authority from the composition root, never from the ACP session label. */
+  submissionAuthority?: SubmissionAuthority;
+  /** Explicit local composition-root refresh at a new intent boundary, never mid-admission. */
+  authorityForNewIntent?: () => Promise<SubmissionAuthority>;
   /** Where ORCA's workspace provider is ignored and the client's cwd is used instead (default true). */
   useClientCwd?: boolean;
   humanInput?: UpstreamHumanInput;
@@ -68,7 +73,7 @@ interface FacadeSession {
 }
 
 /** The facade's slash commands, as ACP advertises them. */
-export function facadeCommands(defaultWorkflowId?: string): acp.AvailableCommand[] {
+export function facadeCommands(defaultWorkflowId?: string, recovery = false): acp.AvailableCommand[] {
   return [
     {
       name: "run",
@@ -76,11 +81,20 @@ export function facadeCommands(defaultWorkflowId?: string): acp.AvailableCommand
       input: { hint: `${defaultWorkflowId ?? "<workflowId>"} [key=value ...]` },
     },
     { name: "status", description: "Summarise the runs started in this session" },
+    ...(recovery
+      ? [
+          {
+            name: "admissions",
+            description: "Inspect or reconcile original Request admissions without executing them",
+            input: { hint: "list | inspect <id> | reconcile <id>" },
+          },
+        ]
+      : []),
   ];
 }
 
-const commandList = (defaultWorkflowId?: string): string =>
-  facadeCommands(defaultWorkflowId)
+const commandList = (defaultWorkflowId?: string, recovery = false): string =>
+  facadeCommands(defaultWorkflowId, recovery)
     .map((c) => `- /${c.name}${c.input && "hint" in c.input ? ` ${c.input.hint}` : ""}: ${c.description}`)
     .join("\n");
 
@@ -175,7 +189,7 @@ export class OrcaAcpAgent {
       sessionId: session.id,
       update: {
         sessionUpdate: "available_commands_update",
-        availableCommands: facadeCommands(session.selection.workflow),
+        availableCommands: facadeCommands(session.selection.workflow, this.opts.program.submissions !== undefined),
       },
     });
   }
@@ -241,6 +255,38 @@ export class OrcaAcpAgent {
       return { stopReason: "end_turn" };
     }
 
+    if (text === "/admissions" || text.startsWith("/admissions ")) {
+      const [, action = "list", id, ...extra] = text.split(/\s+/);
+      if (
+        !["list", "inspect", "reconcile"].includes(action) ||
+        extra.length ||
+        (action === "list" ? id !== undefined : !id)
+      ) {
+        await say("Use /admissions list, /admissions inspect <id>, or /admissions reconcile <id>.\n");
+        return { stopReason: "end_turn" };
+      }
+      const service = this.opts.program.submissions;
+      const authority = this.opts.authorityForNewIntent
+        ? await this.opts.authorityForNewIntent()
+        : this.opts.submissionAuthority;
+      if (!service || !authority) {
+        await say("Admission recovery is not supported by this configured adapter.\n");
+        return { stopReason: "end_turn" };
+      }
+      const result =
+        action === "list"
+          ? { admissions: await service.list(authority) }
+          : action === "inspect"
+            ? await service.inspect(id!, authority)
+            : await service.reconcile(id!, authority);
+      await say(`${JSON.stringify(result, null, 2)}\n`);
+      if (action === "reconcile" && "state" in result && result.state === "accepted")
+        await say(
+          `Admission is durable; execution was not started. Continue explicitly with orca resume ${result.runId}.\n`,
+        );
+      return { stopReason: "end_turn" };
+    }
+
     const command = /^\/(\S+)/.exec(text)?.[1];
     // `/run k=v` (no id) falls back to the session's selected workflow, when there is one.
     const runArgs = command === "run" ? text.split(/\s+/).slice(1) : [];
@@ -248,7 +294,7 @@ export class OrcaAcpAgent {
     const runWorkflowId = named ?? session.selection.workflow;
     if (command !== undefined && (command !== "run" || !runWorkflowId)) {
       await say(
-        `${command === "run" ? "/run needs a workflow id." : `Unknown command /${command}.`} Available commands:\n${commandList(session.selection.workflow)}\n`,
+        `${command === "run" ? "/run needs a workflow id." : `Unknown command /${command}.`} Available commands:\n${commandList(session.selection.workflow, this.opts.program.submissions !== undefined)}\n`,
       );
       return { stopReason: "end_turn" };
     }
@@ -263,6 +309,8 @@ export class OrcaAcpAgent {
       ...(overrides ? { overrides } : {}),
     };
     let runId: string;
+    let admissionId: string | undefined;
+    let admissionAuthority: SubmissionAuthority | undefined;
     if (command === "run" && runWorkflowId) {
       const vars: Record<string, unknown> = {};
       for (const kv of runArgs) {
@@ -278,13 +326,29 @@ export class OrcaAcpAgent {
       });
     } else {
       const [title, ...body] = text.split("\n");
-      const submitted = await this.opts.program.submit({
+      const command = {
         title: title || "Untitled request",
         body: body.join("\n").trim(),
-        source: { kind: "acp-session", sessionId: session.id },
+        source: { kind: "acp-session" as const, sessionId: session.id },
         ...(overrides ? { overrides } : {}),
-      });
-      runId = submitted.runId;
+      };
+      if (this.opts.program.submissions) {
+        admissionAuthority = this.opts.authorityForNewIntent
+          ? await this.opts.authorityForNewIntent()
+          : this.opts.submissionAuthority;
+        if (!admissionAuthority)
+          throw acp.RequestError.invalidParams({ reason: "Request submission authority is unavailable" });
+        const submitted = await this.opts.program.submissions.submit(command, admissionAuthority);
+        await say(`Request ${submitted.requestId}; admission ${submitted.admissionId}: ${submitted.state}\n`);
+        if (submitted.state !== "accepted") {
+          await say(`Use /admissions reconcile ${submitted.admissionId} before starting another Request.\n`);
+          return { stopReason: "end_turn" };
+        }
+        runId = submitted.runId;
+        admissionId = submitted.admissionId;
+      } else {
+        runId = (await this.opts.program.submit(command)).runId;
+      }
     }
     session.runIds.push(runId);
     session.active = { runId };
@@ -304,7 +368,9 @@ export class OrcaAcpAgent {
       forwarding = forwarding.then(() => this.forward(ctx, session, runId, e)).catch(() => undefined);
     });
     try {
-      const final = await orchestrator.run(runId);
+      const final = admissionId
+        ? await this.opts.program.runSubmitted({ runId, admissionId }, admissionAuthority)
+        : await orchestrator.run(runId);
       await this.opts.program.settle(final);
       await forwarding;
       await this.sendPlan(ctx, session, def, final);

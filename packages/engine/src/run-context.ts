@@ -159,13 +159,18 @@ export class RunContext {
   async emit(input: Omit<OrcaEventInput, "runId">, prepare?: () => Promise<void>): Promise<OrcaEvent> {
     return this.withOwnership(async () => {
       await prepare?.();
-      const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
-      // The returned event is public; the interpreter keeps its exact authoritative payload.
-      applyEvent(this.state, { ...e, payload: input.payload } as OrcaEvent);
-      applyEvent(this.publicProjection, e);
-      if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItemsOwned();
-      return e;
+      return this.emitOwned(input);
     });
+  }
+
+  /** Only within withOwnership: live answers and their standing write share one mutex. */
+  async emitOwned(input: Omit<OrcaEventInput, "runId">): Promise<OrcaEvent> {
+    const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
+    // The returned event is public; the interpreter keeps its exact authoritative payload.
+    applyEvent(this.state, { ...e, payload: input.payload } as OrcaEvent);
+    applyEvent(this.publicProjection, e);
+    if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItemsOwned();
+    return e;
   }
 
   /**

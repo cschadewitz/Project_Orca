@@ -1,32 +1,18 @@
 /**
- * Which store the app is looking at, and everything that has to change when that answer
- * changes.
+ * Owns the app's daemon clients, streams and bundled processes. Startup and read-only
+ * store opening retain the existing fallback behavior; ConnectionTarget stages live URL
+ * replacements through prepareConnection without detaching the current stream.
  *
- * `src/main/index.ts` used to connect once, from `whenReady`, into a module-level `client`
- * that was reassigned exactly one time. Its comment said #164 "changes the argument passed
- * here, not the mechanism"; that was wrong. Re-pointing a *running* app at a store a person
- * chose means stopping the daemon this process started, starting one with `--read-only` on
- * the new directory, building another `DaemonClient`, tearing the push stream down and
- * opening it again, and resetting the connection machine — and every bridge call in flight
- * has to end up at the new URL rather than at the old one.
- *
- * That is five things that must happen in one order, so they are one object with one entry
- * point (`switchTo`) rather than five statements in an event handler. Two properties follow
- * and both are load-bearing:
- *
- * - **`ready()` is the gate every bridge call waits on.** It resolves when no switch is in
- *   flight, so a call that arrives mid-switch is answered by the daemon the app is *going*
- *   to be talking to. Reading `client` before awaiting it would send a read to a process
- *   that is being killed.
- * - **File mode is not a second store path.** ADR 0008 forbids the renderer reading a store
- *   directly, so "open an event log" is `orca serve --read-only` over the chosen workspace
- *   and the control methods missing from `hello` — the same client, the same protocol, one
- *   flag. `daemon-process.ts` already has the `args` seam that flag goes through.
- *
- * Electron-free on purpose, like `daemon-process.ts` beside it: the dialog, the menu and
- * the windows are `index.ts`'s, and everything this needs arrives as a dependency so the
- * whole switch can be driven by a plain test.
+ * ready() gates startup/file-mode transitions. Resource IPC also validates the caller's
+ * connection epoch before dispatch and after completion, so a queued write or late reply
+ * cannot cross onto another target. Identity changes and daemon boots advance that epoch.
+ * Bundled execution stays alive while the user views an external daemon and is reused on
+ * return. Credentials and lifecycle dependencies stay in main; the renderer sees only the
+ * nonsecret target snapshot. Electron-free so the transitions can be tested directly.
  */
+import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
+import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
+import type { HelloResult } from "@orca/protocol";
 import type { WorkspaceSnapshot, WorkspaceSource } from "../bridge.js";
 import type { DaemonClient } from "../client/daemon-client.js";
 import type { DaemonSubscription } from "../client/subscription.js";
@@ -78,6 +64,8 @@ export interface WorkspaceDeps {
    */
   explicitUrl?: string | undefined;
   /** The default URL to look for when nothing is bundled and nothing was said. */
+  savedUrl?: string | undefined;
+  onTarget?: (target: DaemonTargetSnapshot) => void;
   defaultUrl: string;
   /**
    * The workspace the bundled daemon serves by default: `ORCA_WORKSPACE`, or the user's
@@ -120,6 +108,149 @@ export class Workspace {
   private pending: Promise<void> | undefined;
   private closed = false;
   private updating = false;
+  private epoch = 0;
+  private identity: HelloResult["identity"];
+  private observedHello = false;
+  private source: DaemonTargetSnapshot["source"] = "development";
+  private savedUrl: string | undefined;
+  /** Keep a live bundled daemon running when the UI leaves it; switching is not cancellation. */
+  private parkedDefault: BundledDaemon | undefined;
+  private candidates = new Set<BundledDaemon>();
+
+  get connectionTarget(): DaemonTargetSnapshot {
+    return {
+      epoch: this.epoch,
+      url: this.endpoint(),
+      source: this.source,
+      environmentOverride: Boolean(this.deps.explicitUrl),
+      ...(this.identity ? { identity: this.identity } : {}),
+    };
+  }
+
+  private endpoint(): string {
+    try {
+      return daemonEndpoint(this.clientNow.url);
+    } catch {
+      // A malformed launch override must not throw through synchronous preload IPC.
+      return "";
+    }
+  }
+
+  assertEpoch(epoch: number): void {
+    if (epoch !== this.epoch) throw new Error("The daemon changed. This operation belongs to the previous connection.");
+  }
+
+  /** Every boot boundary also resets scopes: a restored history may have rewound. */
+  observeHello(client: DaemonClient, hello: HelloResult): void {
+    if (client !== this.clientNow) return;
+    const next = hello.identity;
+    if (!this.observedHello) {
+      // The switch already fenced the old target. Its first verified identity enriches
+      // that same epoch; later boot/identity changes still invalidate outstanding work.
+      this.observedHello = true;
+      this.identity = next;
+      this.deps.onTarget?.(this.connectionTarget);
+      return;
+    }
+    if (
+      !next ||
+      !this.identity ||
+      next.workspaceId !== this.identity.workspaceId ||
+      next.instanceId !== this.identity.instanceId
+    ) {
+      this.identity = next;
+      this.epoch += 1;
+      this.deps.onTarget?.(this.connectionTarget);
+    }
+  }
+
+  /** Prepare without stopping the current daemon or opening a replacement stream. */
+  async prepareConnection(url: string | null, source: "saved" | "env" = "saved"): Promise<ConnectionCandidate> {
+    if (this.updating || this.closed || this.pending) throw new Error("Workspace is busy");
+    if (source === "env" && (!this.deps.explicitUrl || url !== daemonEndpoint(this.deps.explicitUrl)))
+      throw new Error("The environment return must use the launch-pinned daemon");
+    if (
+      source === "saved" &&
+      url !== null &&
+      [this.daemon, this.parkedDefault].some((daemon) => daemon && daemonEndpoint(daemon.url) === daemonEndpoint(url))
+    )
+      throw new ConnectionRefusal("Use the bundled daemon button instead of saving its temporary URL.");
+    const epoch = this.epoch;
+    let daemon: BundledDaemon | undefined;
+    const path = this.deps.defaultPath();
+    const reuse = url === null ? (this.source === "bundled" ? this.daemon : this.parkedDefault) : undefined;
+    let client: DaemonClient;
+    if (reuse) {
+      daemon = reuse;
+      client =
+        this.daemon === reuse
+          ? this.clientNow
+          : this.deps.client(reuse.url, {
+              workspace: path,
+              bundled: true,
+              ...(reuse.tokenFile ? { tokenFile: reuse.tokenFile } : {}),
+            });
+    } else if (url === null) {
+      const entry = this.deps.findEntry();
+      if (entry)
+        daemon = await this.deps.start({
+          entry,
+          cwd: path,
+          readOnly: false,
+          onExit: () => {
+            if (this.daemon === daemon) this.daemonExited();
+            if (this.parkedDefault === daemon) this.parkedDefault = undefined;
+          },
+        });
+      if (daemon) {
+        if (this.closed) {
+          await daemon.stop();
+          throw new Error("Workspace closed");
+        }
+        this.candidates.add(daemon);
+      }
+      client = this.deps.client(daemon?.url ?? this.deps.defaultUrl, {
+        workspace: path,
+        bundled: Boolean(daemon),
+        ...(daemon?.tokenFile ? { tokenFile: daemon.tokenFile } : {}),
+      });
+    } else client = this.deps.client(url, { workspace: path, bundled: false });
+    return {
+      client,
+      check: () => {
+        this.assertEpoch(epoch);
+        if (this.closed || this.updating || this.pending) throw new Error("Workspace changed while connecting");
+      },
+      dispose: async () => {
+        if (daemon) this.candidates.delete(daemon);
+        if (!reuse) await daemon?.stop();
+      },
+      activate: (hello) => {
+        if (daemon) this.candidates.delete(daemon);
+        const old = this.daemon;
+        const oldSource = this.source;
+        if (daemon === this.parkedDefault) this.parkedDefault = undefined;
+        if (old && old !== daemon && oldSource === "bundled") this.parkedDefault = old;
+        this.stream?.close();
+        this.stream = undefined;
+        this.clientNow = client;
+        this.daemon = daemon;
+        if (source === "saved") this.savedUrl = url ?? undefined;
+        this.source = source === "env" ? "env" : url ? "saved" : daemon ? "bundled" : "development";
+        this.target = { path, readOnly: false, source: source === "env" ? "env" : "default" };
+        this.identity = hello.identity;
+        this.observedHello = hello.identity !== undefined;
+        this.epoch += 1;
+        this.deps.onSwitch(false);
+        this.deps.onTarget?.(this.connectionTarget);
+        this.stream = this.deps.subscribe(client);
+        this.deps.onSnapshot(this.snapshot);
+        if (old && old !== daemon && oldSource !== "bundled")
+          void old.stop().catch(() => this.deps.onError?.("Previous bundled daemon did not stop", undefined));
+      },
+    };
+  }
+
   private updateStopped = false;
 
   async stopForUpdate(): Promise<void> {
@@ -132,6 +263,7 @@ export class Workspace {
   }
 
   async prepareUpdate(token: string): Promise<void> {
+    if (this.parkedDefault) throw new Error("Return to the bundled daemon before updating the app");
     this.updating = true;
     try {
       await this.ready();
@@ -159,8 +291,13 @@ export class Workspace {
 
   constructor(deps: WorkspaceDeps) {
     this.deps = deps;
+    this.savedUrl = deps.savedUrl;
+    this.source = deps.explicitUrl ? "env" : deps.savedUrl ? "saved" : "development";
     this.target = { path: deps.defaultPath(), readOnly: false, source: deps.explicitUrl ? "env" : "default" };
-    this.clientNow = deps.client(deps.explicitUrl ?? deps.defaultUrl, { workspace: this.target.path, bundled: false });
+    this.clientNow = deps.client(deps.explicitUrl ?? deps.savedUrl ?? deps.defaultUrl, {
+      workspace: this.target.path,
+      bundled: false,
+    });
   }
 
   /** The client every bridge handler reads, at call time and after `ready()`. */
@@ -221,6 +358,11 @@ export class Workspace {
     const daemon = this.daemon;
     this.daemon = undefined;
     await daemon?.stop();
+    const parked = this.parkedDefault;
+    this.parkedDefault = undefined;
+    if (parked !== daemon) await parked?.stop();
+    await Promise.all([...this.candidates].map((candidate) => candidate.stop()));
+    this.candidates.clear();
   }
 
   /**
@@ -267,17 +409,24 @@ export class Workspace {
     this.daemon = undefined;
     await stopping;
 
-    const entry = this.deps.explicitUrl && !target.readOnly ? undefined : this.deps.findEntry();
-    let url = this.deps.explicitUrl ?? this.deps.defaultUrl;
+    const override = this.deps.explicitUrl ?? this.savedUrl;
+    const entry = override && !target.readOnly ? undefined : this.deps.findEntry();
+    let url = override ?? this.deps.defaultUrl;
     if (entry) {
       try {
-        this.daemon = await this.deps.start({
+        const starting: { daemon?: BundledDaemon } = {};
+        const started = await this.deps.start({
           entry,
           cwd: target.path,
           readOnly: target.readOnly,
-          onExit: () => this.daemonExited(),
+          onExit: () => {
+            if (starting.daemon && this.daemon === starting.daemon) this.daemonExited();
+            if (starting.daemon === this.parkedDefault) this.parkedDefault = undefined;
+          },
         });
-        url = this.daemon.url;
+        starting.daemon = started;
+        this.daemon = started;
+        url = started.url;
       } catch (e) {
         if (target.readOnly) {
           const reason = `the store at ${target.path} could not be opened: the bundled daemon did not start`;
@@ -300,6 +449,27 @@ export class Workspace {
       bundled: this.daemon !== undefined,
       ...(this.daemon?.tokenFile ? { tokenFile: this.daemon.tokenFile } : {}),
     });
+    this.source = target.readOnly
+      ? "store"
+      : this.deps.explicitUrl
+        ? "env"
+        : this.savedUrl
+          ? "saved"
+          : this.daemon
+            ? "bundled"
+            : "development";
+    this.identity = undefined;
+    this.observedHello = false;
+    this.epoch += 1;
+    this.deps.onTarget?.(this.connectionTarget);
+    if (!this.endpoint()) {
+      const reason =
+        "Invalid daemon URL. Set ORCA_DAEMON_URL to an HTTP or HTTPS URL without credentials, query parameters or fragments and restart.";
+      this.deps.onError?.(reason, undefined);
+      this.deps.onDaemonGone(reason);
+      this.deps.onSnapshot(this.snapshot);
+      return;
+    }
     this.stream = this.deps.subscribe(this.clientNow);
     this.deps.onSnapshot(this.snapshot);
   }
@@ -311,5 +481,6 @@ export class Workspace {
    */
   private daemonExited(): void {
     this.daemon = undefined;
+    this.deps.onDaemonGone("The bundled daemon exited");
   }
 }

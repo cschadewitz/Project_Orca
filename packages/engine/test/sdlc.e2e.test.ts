@@ -7,6 +7,7 @@
 import { rm } from "node:fs/promises";
 import { afterAll, describe, expect, it } from "vitest";
 import { harness } from "./helpers.js";
+import { RequestSchema, WorkItemSchema } from "@orca/core";
 
 const dirs: string[] = [];
 afterAll(async () => {
@@ -49,7 +50,10 @@ describe("ai-sdlc workflow (e2e with scripted ACP agent)", () => {
       },
     });
     dirs.push(h.dir);
-    await h.orchestrator.stores.workItems.put(workItem as never);
+    await h.orchestrator.stores.requests.put(
+      RequestSchema.parse({ id: workItem.requestId, title: "Auth request", body: "", createdAt: "t", updatedAt: "t" }),
+    );
+    await h.orchestrator.stores.workItems.put(WorkItemSchema.parse(workItem));
     const state = await h.orchestrator.startAndRun({ workflowId: "ai-sdlc", workItemId: "wi_1", vars: { workItem } });
 
     expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");

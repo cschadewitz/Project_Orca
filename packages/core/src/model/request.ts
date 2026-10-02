@@ -6,6 +6,9 @@
  * driven through an SDLC workflow run.
  */
 import { z } from "zod";
+import { RunOverridesSchema } from "./run.js";
+import type { MutationActor } from "../events/events.js";
+import type { OrcaErrorCode } from "../errors.js";
 import {
   DecisionInputSchema,
   DependencyRefSchema,
@@ -23,6 +26,55 @@ export const RequestSourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("api"), clientId: z.string().optional() }),
 ]);
 export type RequestSource = z.infer<typeof RequestSourceSchema>;
+
+/** Legacy v1 correlation name, reserved against caller spoofing; new launches use out-of-band metadata. */
+export const SUBMISSION_CORRELATION_VAR = "__orcaAdmissionId";
+
+/** A new Request, never a caller-selected association or execution identity. */
+export const SubmissionCommandSchema = z.strictObject({
+  title: z.string().trim().min(1),
+  body: z.string(),
+  source: RequestSourceSchema.optional(),
+  labels: z.array(z.string()).optional(),
+  workflowId: z.string().min(1).optional(),
+  workflowVersion: z.string().min(1).optional(),
+  expectedWorkflowRevision: z.string().min(1).optional(),
+  expectedConfigGeneration: z.string().min(1).optional(),
+  vars: z
+    .record(z.string(), z.unknown())
+    .refine((vars) => !Object.hasOwn(vars, "request") && !Object.hasOwn(vars, SUBMISSION_CORRELATION_VAR), {
+      message: "request and admission correlation are supplied by the submission service",
+    })
+    .optional(),
+  overrides: RunOverridesSchema.optional(),
+});
+export type SubmissionCommand = z.infer<typeof SubmissionCommandSchema>;
+
+export type SubmissionResult =
+  | { state: "prepared"; admissionId: string; requestId: string }
+  | { state: "accepted"; admissionId: string; requestId: string; runId: string }
+  | {
+      state: "recoverable-failure";
+      admissionId: string;
+      requestId: string;
+      runId?: string;
+      failure: { code: OrcaErrorCode; message: string; recovery: "reconcile" };
+    };
+
+/** Verified server-side authority. Rechecks must consult live grants/revocation. */
+export interface SubmissionAuthority {
+  readonly workspaceId: string;
+  readonly actor: MutationActor;
+  authorize(this: void, command: SubmissionCommand): Promise<void>;
+  onRunAdmitted(this: void, runId: string): Promise<void>;
+}
+
+export interface SubmissionService {
+  submit(command: SubmissionCommand, authority: SubmissionAuthority): Promise<SubmissionResult>;
+  reconcile(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
+  inspect(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
+  list(authority: SubmissionAuthority): Promise<SubmissionResult[]>;
+}
 
 export const RequestStatusSchema = z.enum([
   "new",

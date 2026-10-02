@@ -99,4 +99,16 @@ export const PERMISSION_ASK: OpenInputView = {
   requestedAt: at(30),
   waitingMs: 30_000,
   artifacts: [],
+  live: {
+    state: "pending",
+    target: {
+      instanceId: "boot",
+      sessionId: "session-build",
+      turnId: "turn-build",
+      invocationId: "invocation-build",
+      runId: "run-1",
+      stepRunId: "s-build",
+      requestId: "ask-1",
+    },
+  },
 };

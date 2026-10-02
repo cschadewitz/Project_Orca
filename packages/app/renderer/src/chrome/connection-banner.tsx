@@ -41,6 +41,29 @@ export interface ConnectionBannerProps {
 export function ConnectionBanner({ connection }: ConnectionBannerProps): JSX.Element | null {
   const { state, versions } = connection;
   const workspace = useWorkspace();
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const attempt = useRef(0);
+  useEffect(() => {
+    setError(undefined);
+    setBusy(false);
+    return () => {
+      attempt.current += 1;
+    };
+  }, [state, workspace.path]);
+  const connect = async () => {
+    const current = ++attempt.current;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const result = await window.orca.workspace.connectLive();
+      if (current === attempt.current && !result.ok) setError(result.error.message);
+    } catch {
+      if (current === attempt.current) setError("The connection request was interrupted. Try again.");
+    } finally {
+      if (current === attempt.current) setBusy(false);
+    }
+  };
 
   /* File mode is "a genuinely different product mode, not a degraded one, and the design
      says so": the bar names the store being replayed and offers the way back
@@ -53,7 +76,8 @@ export function ConnectionBanner({ connection }: ConnectionBannerProps): JSX.Ele
         <Text style="caption">Read-only replay of</Text>
         <span className={`orca-mono ${textClass("mono-id")}`}>{workspace.path}</span>
         <span className="orca-spacer" />
-        <Button size="sm" onClick={() => void window.orca.workspace.connectLive()}>
+        {error && <Text style="caption">{error}</Text>}
+        <Button size="sm" disabled={busy} disabledReason="Checking the daemon" onClick={() => void connect()}>
           Connect to a daemon
         </Button>
       </div>

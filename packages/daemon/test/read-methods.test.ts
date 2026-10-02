@@ -533,7 +533,8 @@ describe("hello", () => {
     // `config.get` is a read, but it needs a config directory rather than a store, and this
     // fixture is a store alone. A method this daemon will not answer is a method it does not
     // advertise, which is the whole of `methodsFor` (#174).
-    expect(r.methods).toEqual(["hello", ...READ_METHODS.filter((m) => m !== CONFIG_GET_METHOD)]);
+    const absent: readonly string[] = [CONFIG_GET_METHOD];
+    expect(r.methods).toEqual(["hello", ...READ_METHODS.filter((m) => !absent.includes(m))]);
     expect(r.storeDir).toBe("/work/orca/.orca");
   });
 

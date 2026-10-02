@@ -75,6 +75,10 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
     reserved: true,
   },
 
+  "requests.submit": { permission: "plan.write", resource: "none", audit: "mutation" },
+  "requests.reconcile": { permission: "plan.write", resource: "none", audit: "mutation" },
+  "requests.admission": { permission: "plan.write", resource: "none" },
+  "requests.admissions": { permission: "plan.write", resource: "none" },
   "runs.start": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
   "runs.resume": { permission: "runs.control", resource: "run", audit: "mutation" },
   "runs.cancel": { permission: "runs.control", resource: "run", audit: "mutation" },
@@ -83,6 +87,7 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "claims.release": { permission: "claims.release", resource: "claim", audit: "mutation" },
 
   "config.get": { permission: "config.read", resource: "none" },
+  "config.apply": { permission: "config.write", resource: "none", audit: "mutation" },
   "config.set": { permission: "config.write", resource: "none", audit: "mutation" },
 
   "plans.list": { permission: "plan.read", resource: "none" },
@@ -117,6 +122,7 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
  * and to nobody else.
  */
 export const CAPABILITY_PERMISSIONS: Readonly<Record<string, readonly Permission[]>> = {
+  "inputs.live": ["inputs.answer"],
   "runs.read": ["runs.read"],
   "runs.subscribe": ["runs.read"],
   // The app derives "can write" from this one capability (`useWritability`), so it is shown

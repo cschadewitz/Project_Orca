@@ -9,7 +9,7 @@ import { ProtocolVersionSchema } from "./version.js";
 import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
-import { CONFIG_GET_METHOD, CONFIG_SET_METHOD } from "./config.js";
+import { CONFIG_GET_METHOD, CONFIG_SET_METHOD, CONFIG_APPLY_METHOD } from "./config.js";
 import { INPUTS_ANSWER_METHOD, RUNS_CANCEL_METHOD, RUNS_RESUME_METHOD, RUNS_START_METHOD } from "./control.js";
 import { INPUTS_LIST_METHOD } from "./inputs.js";
 import {
@@ -102,6 +102,12 @@ export const PLAN_READ_METHODS = [
  * draw one disabled state would eventually get a different answer to each.
  */
 export const CONTROL_METHODS = [
+  "requests.submit",
+  "requests.reconcile",
+  // Admission inspection requires the same authenticated control service as submission.
+  "requests.admission",
+  "requests.admissions",
+  CONFIG_APPLY_METHOD,
   INPUTS_ANSWER_METHOD,
   RUNS_RESUME_METHOD,
   RUNS_CANCEL_METHOD,
@@ -140,6 +146,7 @@ export type HelloParams = z.infer<typeof HelloParamsSchema>;
 
 /** What a daemon can do; a client checks these rather than the ORCA version. */
 export const DAEMON_CAPABILITIES = [
+  "inputs.live",
   "runs.read",
   "runs.subscribe",
   "runs.control",
@@ -151,6 +158,7 @@ export const DaemonCapabilitySchema = z.enum(DAEMON_CAPABILITIES);
 export type DaemonCapability = z.infer<typeof DaemonCapabilitySchema>;
 
 export const HelloResultSchema = z.object({
+  identity: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }).optional(),
   protocol: ProtocolVersionSchema,
   orcaVersion: z.string(),
   /** Local supervisors bind health/admission to the process they actually own. Protocol 1.8. */

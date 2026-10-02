@@ -12,7 +12,7 @@
  *   a person, but they are not something a person is being *asked*, so they are under the
  *   fold and out of the count.
  */
-import type { OpenInputView, RunSummaryView } from "@orca/protocol";
+import type { LiveDecisionTarget, OpenInputView, RunSummaryView } from "@orca/protocol";
 import type { AlertItem } from "../../../src/bridge.js";
 
 /** Tier 1 or tier 2. The kinds are the engine's; the tiers are the design's. */
@@ -35,6 +35,24 @@ export function orderWaits(inputs: readonly OpenInputView[]): readonly OpenInput
 export function mergeInput(inputs: readonly OpenInputView[], input: OpenInputView): readonly OpenInputView[] {
   const without = inputs.filter((i) => i.id !== input.id);
   return orderWaits([...without, input]);
+}
+
+/** Correlation includes the whole invocation, never a reusable input/tool-call id alone. */
+export function liveInputKey(target: LiveDecisionTarget): string {
+  return JSON.stringify([
+    target.instanceId,
+    target.sessionId,
+    target.turnId,
+    target.invocationId,
+    target.runId,
+    target.stepRunId,
+    target.requestId,
+  ]);
+}
+/** Keep the recoverable record visible, but never offer an answer to an expired callback. */
+export function invalidateLiveInput(input: OpenInputView, invalidated: ReadonlySet<string>): OpenInputView {
+  if (input.kind !== "permission" || !input.live || !invalidated.has(liveInputKey(input.live.target))) return input;
+  return { ...input, live: { ...input.live, state: "expired" } };
 }
 
 /**

@@ -2,7 +2,7 @@
  * Electron main process. Owns the daemon connection, the preferences file, the application
  * menu and the window; the renderer only sees what the preload bridge exposes.
  *
- * Which daemon, in order: `ORCA_DAEMON_URL` if it is set, then the daemon bundled inside a
+ * Which daemon, in order: `ORCA_DAEMON_URL`, then the saved endpoint, then the daemon inside a
  * packaged app (`./daemon-process.ts`, spawned here and stopped on quit), then the default
  * local `orca serve` — which is the development case, where a developer is running one in
  * a terminal. This is the only file that knows all three; `daemon-process.ts` is Electron-
@@ -18,6 +18,7 @@
  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
  * server for hot reload (scripts/dev.js).
  */
+import { ConnectionTarget, connectionFailure, callInConnection } from "./connection-target.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates } from "./updates.js";
 import { updateDriver } from "./update-driver.js";
@@ -28,7 +29,8 @@ import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
 import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
-import { LocalDaemonToken } from "../client/auth.js";
+import { daemonEndpoint } from "../daemon-connection.js";
+import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
 import { appMenuTemplate } from "./app-menu.js";
@@ -71,9 +73,14 @@ deepLinks.offer(urlFromArgv(process.argv));
  * runs, so "which daemon" has a new answer each time rather than a settled one.
  */
 function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
-  ipcMain.handle(channel, async (_event, params: P): Promise<BridgeResult<R>> => {
+  ipcMain.handle(channel, async (_event, params: P, epoch: number): Promise<BridgeResult<R>> => {
     try {
+      if (!channel.startsWith("orca:workspace.")) {
+        return { ok: true, result: await callInConnection(workspace, epoch, () => run(params)) };
+      }
+      workspace.assertEpoch(epoch);
       await workspace.ready();
+      workspace.assertEpoch(epoch);
       return { ok: true, result: await run(params) };
     } catch (e) {
       if (e instanceof DaemonClientError) return { ok: false, error: e.error };
@@ -145,7 +152,7 @@ handle("orca:claims.release", (params: Parameters<DaemonClient["claimsRelease"]>
 /** Everything the main process pushes goes out the same way: every window, none destroyed. */
 function send(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(channel, payload);
+    if (!win.isDestroyed()) win.webContents.send(channel, payload, workspace.connectionTarget.epoch);
   }
 }
 
@@ -174,6 +181,11 @@ function broadcast(notification: NotificationMessage): void {
  */
 const connection = new ConnectionMachine({
   hello: () => client().hello(`orca-app/${app.getVersion()}`),
+  onHello: (hello) => {
+    // Legacy replies acquire their distinct scope in subscription verification. An
+    // identified post-subscribe reply may reveal a boot change, but only after fencing.
+    if (hello.identity) workspace.observeHello(workspace.client, hello);
+  },
   onChange: (snapshot) => send("orca:connection", snapshot),
 });
 
@@ -183,6 +195,8 @@ ipcMain.on("orca:connection.read", (event) => {
 });
 
 /* ---------- the workspace ---------- */
+
+let alertsEpoch = 0;
 
 /**
  * The store on screen, and the daemon serving it. Everything Electron knows and the module
@@ -211,12 +225,19 @@ const workspace = new Workspace({
         // The socket will go on retrying, but a daemon this process started and then
         // watched exit is not coming back on its own: that is `disconnected`, not
         // `reconnecting`, and the difference is the whole of what the status bar says.
-        connection.daemonExited();
         onExit(exit);
       },
     }),
-  client: (url, options) =>
-    new DaemonClient(url, fetch, {
+  client: (url, options) => {
+    try {
+      url = daemonEndpoint(url);
+    } catch {
+      // An inert client keeps IPC installed; Workspace publishes disconnected without
+      // subscribing or falling back to a different store. Never retain the invalid input.
+      return new DaemonClient("");
+    }
+    const candidate = new DaemonClient(url, fetch, {
+      requireAuthentication: !isLoopbackDaemon(url),
       auth: new LocalDaemonToken({
         url,
         workspace: options.workspace,
@@ -225,8 +246,17 @@ const workspace = new Workspace({
         // belongs to the explicitly connected daemon, never to a newly opened local store.
         ...(options.bundled ? { env: {} } : {}),
       }),
-      onAuthFailure: () => connection.authenticationFailed(),
-    }),
+      onAuthFailure: () => {
+        if (workspace.client === candidate) connection.authenticationFailed();
+      },
+      onHello: (hello) => {
+        if (workspace.client !== candidate) return;
+        workspace.observeHello(candidate, hello);
+        connection.acceptHello(hello);
+      },
+    });
+    return candidate;
+  },
   subscribe: (daemonClient) =>
     daemonClient.subscribe({
       params: {},
@@ -254,6 +284,16 @@ const workspace = new Workspace({
     // you it has no daemon.
     console.error(message);
     console.error(cause instanceof Error ? cause.message : String(cause));
+  },
+  savedUrl: preferences.read().daemonUrl,
+  onTarget: (target) => {
+    // The first verified hello enriches the current epoch. It must not erase alerts
+    // already supplied by that epoch's renderer while verification was in flight.
+    if (target.epoch !== alertsEpoch) {
+      alertsEpoch = target.epoch;
+      alerts.update({ waiting: 0, items: [] });
+    }
+    send("orca:daemon.target", target);
   },
   explicitUrl: process.env.ORCA_DAEMON_URL,
   defaultUrl: DEFAULT_DAEMON_URL,
@@ -290,11 +330,80 @@ async function openStore(path?: string): Promise<WorkspaceSnapshot> {
     chosen = result.filePaths[0];
     if (chosen === undefined) return workspace.snapshot;
   }
-  return workspace.open(storeRoot(chosen));
+  if (!(await guardConnectionDrafts())) {
+    send("orca:update.prepare", null);
+    throw new Error("Save or discard pending edits before opening a store");
+  }
+  try {
+    const snapshot = await workspace.open(storeRoot(chosen));
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    return snapshot;
+  } finally {
+    send("orca:update.prepare", null);
+  }
 }
 
 handle("orca:workspace.open", (params: { path?: string }) => openStore(params.path));
-handle("orca:workspace.connectLive", () => workspace.connectLive());
+handle("orca:workspace.connectLive", async () => {
+  // Returning from a store to the launch-pinned target does not override the environment.
+  if (workspace.connectionTarget.environmentOverride) {
+    try {
+      await targets.returnToEnvironment();
+      return workspace.snapshot;
+    } catch (error) {
+      throw new Error(connectionFailure(error), { cause: error });
+    }
+  }
+  send("orca:daemon.show", null);
+  return workspace.snapshot;
+});
+
+async function guardConnectionDrafts(): Promise<boolean> {
+  const ids = BrowserWindow.getAllWindows()
+    .filter((win) => !win.isDestroyed())
+    .map((win) => win.webContents.id);
+  // No renderer means no drafts. Update preparation deliberately has a different rule.
+  if (ids.length === 0) return true;
+  try {
+    await prepareDrafts({
+      ids,
+      send: (nonce) => send("orca:update.prepare", nonce),
+      listen: (callback) => {
+        const listener = (event: Electron.IpcMainEvent, value: unknown) => {
+          if (event.senderFrame === event.sender.mainFrame) callback(event.sender.id, value);
+        };
+        ipcMain.on("orca:update.prepared", listener);
+        return () => {
+          ipcMain.off("orca:update.prepared", listener);
+        };
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const targets = new ConnectionTarget({
+  explicitUrl: process.env.ORCA_DAEMON_URL,
+  prepare: (url, source) => workspace.prepareConnection(url, source),
+  save: (url) => preferences.saveDaemonUrl(url),
+  guard: guardConnectionDrafts,
+  release: () => send("orca:update.prepare", null),
+});
+ipcMain.on("orca:daemon.read", (event) => {
+  event.returnValue = workspace.connectionTarget;
+});
+ipcMain.on("orca:daemon.show", () => send("orca:daemon.show", null));
+ipcMain.on("orca:daemon.cancel", () => targets.cancel());
+ipcMain.handle("orca:daemon.connect", async (_event, url: unknown) => {
+  if (url !== null && typeof url !== "string") return { ok: false, message: "Invalid daemon URL" };
+  try {
+    await targets.connect(url);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: connectionFailure(error) };
+  }
+});
 
 /* Updates use their own IPC and never wait on daemon readiness to check/download. */
 const updates = new Updates(
@@ -451,7 +560,9 @@ const alerts = createAlerts(
   () => preferences.read().alerts,
 );
 
-ipcMain.on("orca:alerts.update", (_event, update: AlertsUpdate) => alerts.update(update));
+ipcMain.on("orca:alerts.update", (_event, update: AlertsUpdate, epoch: number) => {
+  if (epoch === workspace.connectionTarget.epoch) alerts.update(update);
+});
 
 app.on("browser-window-focus", () => alerts.focusChanged(true));
 app.on("browser-window-blur", () => alerts.focusChanged(false));
@@ -534,7 +645,16 @@ if (!primary) {
         appMenuTemplate(
           process.platform,
           app.getName(),
-          { openStore: () => void openStore(), connectLive: () => void workspace.connectLive() },
+          {
+            openStore: () =>
+              void openStore().catch((error: unknown) => {
+                dialog.showErrorBox(
+                  "Store could not be opened",
+                  error instanceof Error ? error.message : "Try opening the store again.",
+                );
+              }),
+            connectLive: () => send("orca:daemon.show", null),
+          },
           rendererUrl !== undefined,
         ),
       ),
@@ -555,6 +675,7 @@ app.on("window-all-closed", () => {
 
 // Stop pushing at a process that is going.
 app.on("before-quit", () => {
+  targets.cancel();
   connection.close();
   alerts.close();
 });

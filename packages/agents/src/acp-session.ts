@@ -8,6 +8,7 @@
  * permission sidecars say at that moment, then the defaults (ADR 0009, #271).
  */
 import { isAbsolute, relative } from "node:path";
+import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
 import {
   newId,
@@ -39,7 +40,10 @@ export interface OpenSessionOptions {
   logger?: Logger;
   clock?: Clock;
   /** Human/upstream escalation for `ask` permissions. */
-  askPermission?: (req: acp.RequestPermissionRequest) => Promise<string | undefined>;
+  askPermission?: (req: acp.RequestPermissionRequest, invocation?: PermissionInvocation) => Promise<string | undefined>;
+  /** Explicit opt-in only. Loading context never restores a pending tool callback. */
+  resumeSessionId?: string;
+  onSessionContinuity?: (state: SessionContinuity) => void;
   /**
    * Permission sidecars to layer under the agent's configured rules (ADR 0009), in
    * precedence order: the workspace `orca.permissions.json` first, a user-scoped one after
@@ -54,6 +58,18 @@ export interface OpenSessionOptions {
    * treated as wedged and its process killed. Overrides `agent.cancelGraceMs`.
    */
   cancelGraceMs?: number;
+}
+
+export interface PermissionInvocation {
+  sessionId: string;
+  turnId: string;
+  invocationId: string;
+  signal: AbortSignal;
+}
+
+export interface SessionContinuity {
+  mode: "fresh" | "loaded";
+  reason: "new" | "load-supported" | "load-unsupported" | "load-failed";
 }
 
 export const ORCA_CLIENT_INFO = { name: "orca", version: "0.1.0" } as const;
@@ -73,6 +89,8 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   let acpSessionId = "";
   let configOptions: SessionConfigOption[] = [];
+  const id = newId("sess", clock.now());
+  let activeTurn: ActiveTurn | undefined;
   /** Sidecars already reported as unreadable; one warn per file per session, not per ask. */
   const warnedSidecars = new Set<string>();
 
@@ -123,9 +141,40 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       for (const l of listeners) l(e);
     })
     .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
+      const turn = activeTurn;
+      // A session id alone is insufficient: asks outside this exact live prompt are stale.
+      if (!turn || turn.abort.signal.aborted || ctx.params.sessionId !== acpSessionId)
+        return { outcome: { outcome: "cancelled" } };
+      const invocation: PermissionInvocation = {
+        sessionId: id,
+        turnId: turn.id,
+        invocationId: randomUUID(),
+        signal: turn.abort.signal,
+      };
       const { response, decision } = await resolvePermission(await policyForAsk(), {
         request: ctx.params,
-        ...(opts.askPermission ? { ask: opts.askPermission } : {}),
+        signal: invocation.signal,
+        ...(opts.askPermission
+          ? {
+              ask: async (request: acp.RequestPermissionRequest) => {
+                try {
+                  return await opts.askPermission!(request, invocation);
+                } catch (error) {
+                  if (activeTurn !== turn || turn.abort.signal.aborted) return undefined;
+                  // A host-side persistence/parking error must reach the prompt unchanged;
+                  // sending only a JSON-RPC error would let the agent continue or retry it.
+                  const failure =
+                    error instanceof Error
+                      ? error
+                      : new OrcaError("INTERNAL", "permission callback failed", {}, { cause: error });
+                  turn.failure = failure;
+                  turn.fail(failure);
+                  requestCancel("permission callback failed");
+                  throw error;
+                }
+              },
+            }
+          : {}),
         // Rules ORCA writes are workspace-relative, so that a grant made in one git worktree
         // still fires in the next one; without the workspace to resolve them against, none
         // of them could ever match the absolute paths an agent reports (ADR 0009).
@@ -163,6 +212,8 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
 
   const conn = app.connect(proc.stream);
   const closed = conn.closed.then(() => undefined);
+  void closed.then(() => activeTurn?.abort.abort("agent connection closed"));
+  void proc.exited.then(() => activeTurn?.abort.abort("agent process exited"));
   const handshakeTimeout = opts.handshakeTimeoutMs ?? 30_000;
 
   const withTimeout = <T>(p: Promise<T>, ms: number, what: string): Promise<T> =>
@@ -212,13 +263,36 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       })),
     };
     if (opts.additionalDirectories) newSession.additionalDirectories = opts.additionalDirectories;
-    const created = await withTimeout(
-      conn.agent.request(acp.methods.agent.session.new, newSession),
-      handshakeTimeout,
-      "session/new",
-    );
-    acpSessionId = created.sessionId;
-    configOptions = normalizeSessionConfig(created);
+    let loaded = false;
+    let continuity: SessionContinuity = { mode: "fresh", reason: "new" };
+    if (opts.resumeSessionId) {
+      continuity = { mode: "fresh", reason: "load-unsupported" };
+      if (init.agentCapabilities?.loadSession) {
+        try {
+          const restored = await withTimeout(
+            conn.agent.request(acp.methods.agent.session.load, { ...newSession, sessionId: opts.resumeSessionId }),
+            handshakeTimeout,
+            "session/load",
+          );
+          acpSessionId = opts.resumeSessionId;
+          configOptions = normalizeSessionConfig(restored);
+          loaded = true;
+          continuity = { mode: "loaded", reason: "load-supported" };
+        } catch {
+          continuity = { mode: "fresh", reason: "load-failed" };
+        }
+      }
+    }
+    if (!loaded) {
+      const created = await withTimeout(
+        conn.agent.request(acp.methods.agent.session.new, newSession),
+        handshakeTimeout,
+        "session/new",
+      );
+      acpSessionId = created.sessionId;
+      configOptions = normalizeSessionConfig(created);
+    }
+    opts.onSessionContinuity?.(continuity);
   } catch (e) {
     proc.kill();
     conn.close(e);
@@ -231,19 +305,20 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     );
   }
 
-  const id = newId("sess", clock.now());
   const cancelGraceMs = opts.cancelGraceMs ?? opts.agent.cancelGraceMs;
 
   /** The in-flight prompt turn, if any. */
   interface ActiveTurn {
+    id: string;
+    abort: AbortController;
+    failure?: Error;
     /** Why cancellation was requested; set once, by the first requester. */
     cancelReason?: string;
     /** Armed when `session/cancel` is sent; fires if the agent never ends the turn. */
     grace?: ReturnType<typeof setTimeout>;
     /** Rejects the turn from outside the ACP request (the agent is wedged). */
-    fail: (e: OrcaError) => void;
+    fail: (e: Error) => void;
   }
-  let activeTurn: ActiveTurn | undefined;
 
   /**
    * Tear the session down: close the connection (which rejects the in-flight
@@ -253,6 +328,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   let terminating: Promise<void> | undefined;
   const terminate = (reason?: unknown): Promise<void> => {
     if (terminating) return terminating;
+    activeTurn?.abort.abort("session closed");
     terminating = (async () => {
       try {
         conn.close(reason);
@@ -284,6 +360,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     const turn = activeTurn;
     if (!turn || turn.cancelReason) return;
     turn.cancelReason = reason;
+    turn.abort.abort(reason);
     logger.debug("cancelling turn", { reason, graceMs: cancelGraceMs });
     void conn.agent
       .notify(acp.methods.agent.session.cancel, { sessionId: acpSessionId })
@@ -314,8 +391,8 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
       const blocks: acp.ContentBlock[] = typeof input === "string" ? [{ type: "text", text: input }] : input;
       const started = clock.now();
       // Settles the turn when the agent is wedged and the ACP request itself will never answer.
-      let wedged: OrcaError | undefined;
-      const turn: ActiveTurn = { fail: () => undefined };
+      let wedged: Error | undefined;
+      const turn: ActiveTurn = { id: randomUUID(), abort: new AbortController(), fail: () => undefined };
       const failed = new Promise<never>((_, reject) => {
         turn.fail = (e) => {
           wedged = e;
@@ -336,6 +413,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
         ]);
         return { stopReason: res.stopReason, durationMs: clock.now() - started };
       } catch (e) {
+        if (turn.failure) throw turn.failure;
         if (wedged) throw wedged;
         throw new OrcaError(
           "AGENT_PROTOCOL",
@@ -344,6 +422,7 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
           { cause: e },
         );
       } finally {
+        turn.abort.abort("turn ended");
         if (timer) clearTimeout(timer);
         if (turn.grace) clearTimeout(turn.grace);
         options.signal?.removeEventListener("abort", onAbort);

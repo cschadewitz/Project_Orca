@@ -4,7 +4,14 @@
  */
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
+import {
+  FakeClock,
+  parseWorkflow,
+  RequestSchema,
+  WorkItemSchema,
+  TemplateRegistry,
+  WorkflowRegistry,
+} from "@orca/core";
 import {
   LocalWorkspaceProvider,
   Orchestrator,
@@ -61,10 +68,31 @@ nodes:
 edges: [{ from: s, to: fan }, { from: fan, to: e }]
 `;
 
-function make(overrides: Partial<OrchestratorOptions> = {}) {
+async function make(overrides: Partial<OrchestratorOptions> = {}) {
   const workflows = new WorkflowRegistry().register(parseWorkflow(dispatch));
   const executors = builtinExecutors();
   const stores = overrides.stores ?? memoryStores();
+  if (!(await stores.requests.get("req_1")))
+    await stores.requests.put(
+      RequestSchema.parse({
+        id: "req_1",
+        title: "Request",
+        body: "",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  for (const item of items)
+    if (!(await stores.workItems.get(item.id)))
+      await stores.workItems.put(
+        WorkItemSchema.parse({
+          ...item,
+          requestId: "req_1",
+          title: item.slug,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
   void definePlugin({
     name: "test",
     register: (api) => {
@@ -126,9 +154,9 @@ const skips = (state: {
 describe("work item claims", () => {
   it("two runs dispatching the same work items launch each item exactly once", async () => {
     gate = { wait: Promise.resolve(), release: () => {} };
-    const first = make();
+    const first = await make();
     // The second dispatcher is a different run in a different orchestrator, over the same store.
-    const second = make({ stores: first.stores });
+    const second = await make({ stores: first.stores });
     openGate();
     const runs = [
       first.orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } }),
@@ -152,7 +180,7 @@ describe("work item claims", () => {
   it("a claimed item leaves the work item's status to the run that owns it", async () => {
     gate = { wait: Promise.resolve(), release: () => {} };
     const now = "2026-01-01T00:00:00.000Z";
-    const { orchestrator, stores } = make();
+    const { orchestrator, stores } = await make();
     for (const item of items) {
       await stores.workItems.put({
         id: item.id,
@@ -183,14 +211,14 @@ describe("work item claims", () => {
 
   it("a resumed run re-claims the items it already owns", async () => {
     gate = { wait: Promise.resolve(), release: () => {} };
-    const first = make();
+    const first = await make();
     openGate();
     const runId = await first.orchestrator.startRun({ workflowId: "dispatch", vars: { items } });
     void first.orchestrator.run(runId).catch(() => undefined);
     await bothEntered;
 
     // The process "dies" mid fan-out; a new one resumes the same run from its log.
-    const second = make({ stores: first.stores });
+    const second = await make({ stores: first.stores });
     gate = { wait: Promise.resolve(), release: () => {} };
     // The "dead" interpreter is really this process and still heartbeats, so its run lease is
     // taken the way an operator would; a real crash lapses it without anyone asking.
@@ -238,6 +266,15 @@ describe("work item claims: plan-dispatch", () => {
   const setup = async () => {
     gate = { wait: Promise.resolve(), release: () => {} };
     const stores = memoryStores();
+    await stores.requests.put(
+      RequestSchema.parse({
+        id: "req_1",
+        title: "Request",
+        body: "",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
     const plan = new PlanService({ stores, defaults: { planKey: "roadmap", planName: "Roadmap" } });
     const p = await plan.ensurePlan({ requestId: "req_1" }, { kind: "human", actor: "test" });
     await plan.registerWorkItems(
@@ -343,11 +380,11 @@ describe("work item claims: plan-dispatch", () => {
 describe("work item claims: release", () => {
   it("a finished run's claim can be released, and the next dispatcher launches the item", async () => {
     gate = { wait: Promise.resolve(), release: () => {} };
-    const { orchestrator, stores } = make();
+    const { orchestrator, stores } = await make();
     const owner = await orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } });
     expect(owner.run.status).toBe("completed");
     // The claims survive the run: a second dispatcher gets nothing.
-    const again = await make({ stores }).orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } });
+    const again = await (await make({ stores })).orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } });
     expect(skips(again)).toEqual(["api:claimed", "ui:claimed"]);
 
     const held = await orchestrator.listClaims();
@@ -363,7 +400,7 @@ describe("work item claims: release", () => {
     await expect(orchestrator.releaseClaim("wi_api")).rejects.toMatchObject({ code: "CLAIM_NOT_FOUND" });
 
     // Only the released item is launched again; the other is still the first run's.
-    const third = await make({ stores }).orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } });
+    const third = await (await make({ stores })).orchestrator.startAndRun({ workflowId: "dispatch", vars: { items } });
     expect(skips(third)).toEqual(["ui:claimed"]);
     expect(await launched(stores)).toEqual(["wi_api", "wi_api", "wi_ui"]);
     expect((await stores.claims.get("wi_api"))?.runId).toBe(third.run.id);
@@ -371,7 +408,7 @@ describe("work item claims: release", () => {
 
   it("a live run's claim is refused unless forced", async () => {
     gate = { wait: Promise.resolve(), release: () => {} };
-    const { orchestrator } = make();
+    const { orchestrator } = await make();
     openGate();
     const runId = await orchestrator.startRun({ workflowId: "dispatch", vars: { items } });
     const running = orchestrator.run(runId);
@@ -395,7 +432,7 @@ describe("work item claims: release", () => {
   });
 
   it("a claim whose run's log is gone counts as dead", async () => {
-    const { orchestrator, stores } = make();
+    const { orchestrator, stores } = await make();
     await stores.claims.claim({
       workItemId: "wi_api",
       runId: "run_rolled_back",

@@ -11,3 +11,5 @@ export * from "./plan-store.js";
 export * from "./workflow-store.js";
 export * from "./execution-store.js";
 export * from "./protected-event-store.js";
+
+export { workspaceIdentity, renewWorkspaceIdentity } from "./workspace-identity.js";

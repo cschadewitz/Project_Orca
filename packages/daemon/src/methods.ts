@@ -15,6 +15,21 @@
  * and `hello.methods` does not list them. "Absent" and "present but refusing" are different
  * promises, and a client that has to hide a button needs the first one.
  */
+import {
+  CONFIG_APPLY_METHOD,
+  ConfigApplyParamsSchema,
+  type ConfigApplyParams,
+  type ConfigApplyResult,
+} from "@orca/protocol";
+
+import type { SubmissionAuthority } from "@orca/core";
+import {
+  RequestsSubmitParamsSchema,
+  RequestsAdmissionParamsSchema,
+  RequestsAdmissionsParamsSchema,
+} from "@orca/protocol";
+import type { RequestSubmissionModel } from "./request-submission.js";
+import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
 import type { Maintenance } from "./maintenance.js";
 import { OrcaError, type MutationActor } from "@orca/core";
 import {
@@ -157,7 +172,16 @@ import type { PlanModel } from "./plan-model.js";
 import type { ReadModel } from "./read-model.js";
 import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 
+import type { LiveInputChangeSource } from "./live-input-notifications.js";
+
 export interface MethodContext {
+  liveInputs?: LiveInputChangeSource | undefined;
+  liveAnswerAuthority?: LiveAnswerAuthority;
+  executionResumeAuthority?: ExecutionResumeAuthority;
+  requestSubmissions?: RequestSubmissionModel | undefined;
+  submissionWorkspaceId?: string | undefined;
+  requestSubmissionAuthority?: ((ctx: MethodContext) => Promise<SubmissionAuthority>) | undefined;
+  identity?: { workspaceId: string; instanceId: string };
   /** Set only by the authenticating guard, never read from RPC params. */
   mutationActor?: MutationActor | undefined;
   /** Side-effect-free launch preflight, using the same resolver as admission. */
@@ -285,9 +309,11 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
       protocol: PROTOCOL_VERSION,
       orcaVersion: ctx.orcaVersion,
       ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
+      ...(ctx.identity ? { identity: ctx.identity } : {}),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
       capabilities: [
-        ...ctx.capabilities.filter((c) => c !== "workflows.validateInputs"),
+        ...ctx.capabilities.filter((c) => c !== "workflows.validateInputs" && c !== "inputs.live"),
+        ...(ctx.control?.supportsLiveInputs ? ["inputs.live" as const] : []),
         ...(ctx.workflowInputs ? ["workflows.validateInputs" as const] : []),
       ],
       methods: Object.keys(methodsFor(ctx)),
@@ -356,7 +382,7 @@ export const workflowsGet: Method<Parameters<ReadModel["workflowsGet"]>[0], Work
  * A read, so a `--read-only` daemon answers it. **It redacts nothing**: `config.text` is the
  * bytes of `orca.config.yaml`, ssh hosts, command lines and environment names included. A
  * form that edits a file has to show the file, and a redacted text written back would
- * destroy what it hid. The port is loopback and unauthenticated either way.
+ * destroy what it hid. This read requires current config.read authority.
  */
 export const configGet: Method<ConfigGetParams, ConfigGetResult> = {
   params: ConfigGetParamsSchema,
@@ -433,13 +459,13 @@ export const workflowsValidateInputs: Method<WorkflowsValidateInputsParams, Work
 /** `inputs.answer`: record a person's answer to an open gate or permission ask, and continue. */
 export const inputsAnswer: Method<InputsAnswerParams, InputsAnswerResult> = {
   params: InputsAnswerParamsSchema,
-  handle: (params, ctx) => control(ctx).answerInput(params, ctx.mutationActor),
+  handle: (params, ctx) => control(ctx).answerInput(params, ctx.mutationActor, ctx.liveAnswerAuthority),
 };
 
 /** `runs.resume`: re-drive a parked run here until it parks again or finishes. */
 export const runsResume: Method<RunsResumeParams, RunsResumeResult> = {
   params: RunsResumeParamsSchema,
-  handle: (params, ctx) => control(ctx).resumeRun(params),
+  handle: (params, ctx) => control(ctx).resumeRun(params, ctx.executionResumeAuthority),
 };
 
 /** `runs.cancel`: close a run and the children it is waiting on. */
@@ -461,12 +487,14 @@ export const runsStart: Method<RunsStartParams, RunsStartResult> = {
  * event: a configuration file is not a run, and a `config.set` while a run is in flight
  * disturbs nothing.
  *
- * **The daemon goes on serving the configuration it booted with.** Agents, hosts, workflows
- * and the store were wired at `bootstrap`; nothing here rewires them, so a run started a
- * moment after a successful write still uses the old config, and the new one takes effect on
- * the next `orca serve`. Reloading a live orchestrator is its own piece of work and not a
- * side effect of a form being saved.
+ * Saving does not activate the document. An explicitly wired config.apply validates and
+ * installs a generation for future launches; existing runs keep their admitted choices.
  */
+export const configApply: Method<ConfigApplyParams, ConfigApplyResult> = {
+  params: ConfigApplyParamsSchema,
+  handle: (params, ctx) => config(ctx).apply(params),
+};
+
 export const configSet: Method<ConfigSetParams, ConfigSetResult> = {
   params: ConfigSetParamsSchema,
   handle: (params, ctx) => config(ctx).set(params),
@@ -635,6 +663,29 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     table[UNSUBSCRIBE_METHOD] = unsubscribe;
   }
   if (ctx.control) Object.assign(table, controlMethods);
+  if (ctx.control && ctx.requestSubmissions && ctx.requestSubmissionAuthority) {
+    const model = ctx.requestSubmissions;
+    const authority = ctx.requestSubmissionAuthority;
+    Object.assign(table, {
+      "requests.submit": {
+        params: RequestsSubmitParamsSchema,
+        handle: async (params, invocation) => model.submit(params, await authority(invocation)),
+      },
+      "requests.reconcile": {
+        params: RequestsAdmissionParamsSchema,
+        handle: async (params, invocation) =>
+          model.reconcile(params.admissionId, await authority(invocation), invocation.executionResumeAuthority),
+      },
+      "requests.admission": {
+        params: RequestsAdmissionParamsSchema,
+        handle: async (params, invocation) => model.inspect(params.admissionId, await authority(invocation)),
+      },
+      "requests.admissions": {
+        params: RequestsAdmissionsParamsSchema,
+        handle: async (_params, invocation) => model.list(await authority(invocation)),
+      },
+    } satisfies MethodTable);
+  }
   if (ctx.workflowInputs) table[WORKFLOWS_VALIDATE_INPUTS_METHOD] = workflowsValidateInputs;
   if (ctx.planControl) Object.assign(table, planControlMethods);
   if (ctx.agents) Object.assign(table, agentMethods);
@@ -642,7 +693,10 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     Object.assign(table, configMethods);
     // Reading the configuration is a read; writing it is a write, and a read-only daemon
     // has no `control`. Two facts, one `if`, so the two can never drift apart.
-    if (ctx.control) Object.assign(table, configControlMethods);
+    if (ctx.control) {
+      Object.assign(table, configControlMethods);
+      if (ctx.config.canApply) table[CONFIG_APPLY_METHOD] = configApply;
+    }
   }
   return ctx.maintenance ? ctx.maintenance.wrap(table) : table;
 }

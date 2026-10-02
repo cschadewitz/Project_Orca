@@ -15,6 +15,7 @@ import {
   type GateOptionInput,
   type OrcaEventInput,
 } from "@orca/core";
+import type { LiveInputBinding } from "./live-input.js";
 
 export interface HumanInputQuery {
   runId: string;
@@ -35,11 +36,15 @@ export interface HumanInputQuery {
    * request and reject with `CANCELLED`; the engine stops waiting either way.
    */
   signal?: AbortSignal;
+  /** In-process lifetime and ownership; never persisted or accepted from a client. */
+  live?: LiveInputBinding;
 }
 
 export interface HumanInputPort {
   /** Resolve with the chosen option / free text, or undefined to cancel. */
   ask(query: HumanInputQuery): Promise<string | undefined>;
+  /** A live port records acceptance under the interpreter's lease before delivering it. */
+  recordsAnswer?(query: HumanInputQuery): boolean;
 }
 
 /** The error a port should reject with once `query.signal` has fired. */
@@ -76,6 +81,7 @@ export function autoHumanInput(option?: string): HumanInputPort {
  */
 export function abortableHumanInput(port: HumanInputPort, signal: AbortSignal): HumanInputPort {
   return {
+    recordsAnswer: (query) => port.recordsAnswer?.(query) ?? false,
     ask(query) {
       if (signal.aborted) return Promise.reject(humanInputCancelled(signal));
       return new Promise((resolve, reject) => {
@@ -153,6 +159,7 @@ export async function askHumanInput(opts: {
    */
   agent?: { id: string; hostId: string };
   context?: Record<string, unknown>;
+  live?: LiveInputBinding;
   onRequested?: (query: HumanInputQuery) => void;
   onSettled?: (query: HumanInputQuery) => Promise<void> | void;
 }): Promise<string | undefined> {
@@ -166,26 +173,60 @@ export async function askHumanInput(opts: {
     // Normalised before the event is emitted, so nothing written from here on is a bare string.
     options: opts.options.map(toGateOption),
     context: opts.context ?? {},
+    ...(opts.live ? { live: opts.live } : {}),
   };
-  await emit({
-    type: "human.requested",
-    payload: {
-      stepRunId,
-      requestId: query.requestId,
-      kind: query.kind,
-      question: query.question,
-      options: query.options,
-      ...(opts.agent ? { agent: opts.agent } : {}),
-      context: query.context,
-    },
+  // Register before publishing input.opened, but fence acceptance until both opening
+  // events are durable. A subscriber can immediately read/answer without seeing an
+  // "expired" callback or recording human.answered before human.requested.
+  let publish!: () => void;
+  let refusePublication!: (error: unknown) => void;
+  const published = new Promise<void>((resolve, reject) => {
+    publish = resolve;
+    refusePublication = reject;
   });
-  opts.onRequested?.(query);
-  await emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
+  void published.catch(() => undefined);
+  const opening = new AbortController();
+  const live = query.live;
+  if (live && opts.port.recordsAnswer?.(query)) {
+    query.live = {
+      ...live,
+      signal: AbortSignal.any([live.signal, opening.signal]),
+      withOwnership: async (write) => {
+        await published;
+        return live.withOwnership(write);
+      },
+    };
+  }
+  const waiting = query.live && opts.port.recordsAnswer?.(query) ? opts.port.ask(query) : undefined;
+  void waiting?.catch(() => undefined);
+  let requested = false;
   try {
-    const answer = await opts.port.ask(query);
-    await emit({ type: "human.answered", payload: { stepRunId, requestId: query.requestId, answer: answer ?? "" } });
+    await emit({
+      type: "human.requested",
+      payload: {
+        stepRunId,
+        requestId: query.requestId,
+        kind: query.kind,
+        question: query.question,
+        options: query.options,
+        ...(opts.agent ? { agent: opts.agent } : {}),
+        context: query.context,
+        ...(opts.live ? { liveDecision: opts.live.identity } : {}),
+      },
+    });
+    requested = true;
+    opts.onRequested?.(query);
+    await emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
+    publish();
+    const answer = await (waiting ?? opts.port.ask(query));
+    if (!opts.port.recordsAnswer?.(query))
+      await emit({ type: "human.answered", payload: { stepRunId, requestId: query.requestId, answer: answer ?? "" } });
     return answer;
+  } catch (error) {
+    refusePublication(error);
+    opening.abort("input opening failed");
+    throw error;
   } finally {
-    await opts.onSettled?.(query);
+    if (requested) await opts.onSettled?.(query);
   }
 }

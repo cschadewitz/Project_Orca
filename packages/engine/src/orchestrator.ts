@@ -5,6 +5,9 @@
  * Concurrency comes from `parallel` nodes, which spawn child runs. Every state
  * transition is an event; a run can be resumed from its log at any time.
  */
+import { ConfigurationGenerations, type GenerationMaterial } from "./configuration-generation.js";
+import { configuredGenerationSecrets, launchProvenance } from "./configuration-provenance.js";
+
 import { AgentRegistry, openAcpSession, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
@@ -39,6 +42,7 @@ import {
   type MutationActor,
   type NodeDef,
   type OrcaEvent,
+  type OrcaEventInput,
   type RunState,
   type RunSummary,
   type StepResult,
@@ -65,6 +69,7 @@ import {
   type Stores,
   type WorkItemClaim,
 } from "@orca/store";
+import { correlateRequestAdmission } from "./program/request-admission-event.js";
 import { builtinExecutors } from "./executors/index.js";
 import {
   NodeExecutorRegistry,
@@ -83,6 +88,7 @@ import {
 import { PlanService } from "./plan/service.js";
 import { recoverReleasedWorkItem } from "./program/work-items.js";
 import { RunContext } from "./run-context.js";
+import type { LiveHumanInput, ExecutionResumeAuthority } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
@@ -96,6 +102,18 @@ export interface OrchestratorOptions {
   templates: TemplateRegistry;
   executors?: NodeExecutorRegistry;
   humanInput?: HumanInputPort;
+  /** Daemon-owned callbacks; execution authority lifetime is independent of any UI connection. */
+  liveInput?: {
+    port: LiveHumanInput;
+    executionSignal(runId: string): AbortSignal;
+    prepareExecution?(runId: string): Promise<void>;
+    releaseExecution?(runId: string): void;
+    withResumeAuthority?(
+      runId: string,
+      authority: ExecutionResumeAuthority | undefined,
+      operation: () => Promise<RunState>,
+    ): Promise<RunState>;
+  };
   workspaceProvider?: WorkspaceProvider;
   sessionFactory?: SessionFactory;
   /** Planning layer; created over `stores` when omitted. */
@@ -141,6 +159,8 @@ export type HeldClaim = WorkItemClaim & { owner: RunSummary["status"] | "missing
 export type AgentSessionOpenedListener = (info: { runId: string; agentId: string; session: AgentSession }) => void;
 
 export interface StartRunOptions {
+  /** Server-owned Request admission metadata; never part of workflow vars or wire launch params. */
+  requestAdmissionId?: string;
   /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
   actor?: MutationActor;
   workflowId?: string;
@@ -202,12 +222,31 @@ function canonicalJson(value: unknown): string {
 }
 
 export class Orchestrator {
+  generations: ConfigurationGenerations | undefined;
+  generationHumanInput: ((generation: GenerationMaterial) => HumanInputPort) | undefined;
+  generationWorkspaceProvider: ((generation: GenerationMaterial) => WorkspaceProvider) | undefined;
+  private readonly contextGenerations = new WeakMap<RunContext, GenerationMaterial>();
+  private async admissionGeneration(
+    opts: StartRunOptions,
+    supplied?: GenerationMaterial,
+  ): Promise<GenerationMaterial | undefined> {
+    const selected = supplied ?? this.generations?.current;
+    if (!opts.parentRunId) return selected;
+    const first = (await this.stores.events.readRange(opts.parentRunId, { limit: 1 }))[0];
+    const id = first?.type === "run.created" ? first.payload.provenance?.configGeneration : undefined;
+    if (!id) return supplied;
+    if (!this.generations) throw unavailable();
+    if (supplied && supplied.snapshot.id !== id)
+      throw new OrcaError("CONFIG_STALE", "child generation differs from parent");
+    return this.generations.restore(id);
+  }
   readonly stores: Stores;
   readonly agents: AgentRegistry;
   readonly workflows: WorkflowRegistry;
   readonly templates: TemplateRegistry;
   readonly executors: NodeExecutorRegistry;
   humanInput: HumanInputPort;
+  liveInput: OrchestratorOptions["liveInput"];
   workspaceProvider: WorkspaceProvider;
   sessionFactory: SessionFactory;
   readonly plan: PlanService;
@@ -249,7 +288,8 @@ export class Orchestrator {
     this.workflows = o.workflows;
     this.templates = o.templates;
     this.executors = o.executors ?? builtinExecutors();
-    this.humanInput = o.humanInput ?? autoHumanInput();
+    this.liveInput = o.liveInput;
+    this.humanInput = o.humanInput ?? o.liveInput?.port ?? autoHumanInput();
     this.workspaceProvider = o.workspaceProvider ?? new LocalWorkspaceProvider(process.cwd());
     this.sessionFactory = o.sessionFactory ?? openAcpSession;
     this.clock = o.clock ?? systemClock;
@@ -268,19 +308,26 @@ export class Orchestrator {
   /** Side-effect-free admission used by Request submission before its first persistent write. */
   async validateStartRun(
     opts: StartRunOptions,
-  ): Promise<{ definition: WorkflowDefinition; vars: Record<string, unknown> }> {
+    supplied?: GenerationMaterial,
+  ): Promise<{ definition: WorkflowDefinition; vars: Record<string, unknown>; generation?: GenerationMaterial }> {
+    if (
+      opts.requestAdmissionId !== undefined &&
+      (!opts.requestAdmissionId || !opts.requestId || !opts.actor || opts.parentRunId)
+    )
+      throw new OrcaError("RUN_STATE", "request admission correlation is unavailable");
+    const generation = await this.admissionGeneration(opts, supplied);
     // Admission (#330): select, check the preflight revision, check the selection and the
     // launch vars - all before anything is written, provisioned or appended, so a refused
     // launch leaves no definition, workspace, run, agent or child behind.
     const def = opts.inline
       ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1")
-      : await this.selectDefinition(opts.workflowId!, opts.workflowVersion);
+      : await this.selectDefinition(opts.workflowId!, opts.workflowVersion, generation?.workflows);
     if (opts.expectedWorkflowRevision !== undefined && opts.expectedWorkflowRevision !== workflowRevision(def))
       throw new OrcaError(
         "WORKFLOW_INVALID",
         `workflow '${def.id}' changed since its inputs were validated; validate them again before starting`,
       );
-    if (opts.overrides) this.validateOverrides(def, opts.overrides);
+    if (opts.overrides) this.validateOverrides(def, opts.overrides, generation?.agents);
     const inputs = validateWorkflowInputs(def, opts.vars ?? {});
     if (!inputs.validation.ok) {
       const { errors, warnings } = inputs.validation;
@@ -291,12 +338,26 @@ export class Orchestrator {
         { errors, warnings },
       );
     }
-    return { definition: def, vars: inputs.vars };
+    return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}) };
   }
 
   /** Create a run (emits run.created) without executing it. */
-  async startRun(opts: StartRunOptions): Promise<string> {
-    const { definition: def, vars } = await this.validateStartRun(opts);
+  async startRun(opts: StartRunOptions, supplied?: GenerationMaterial): Promise<string> {
+    const associatedRequest = opts.requestId ? await this.stores.requests.get(opts.requestId) : undefined;
+    const item = opts.workItemId ? await this.stores.workItems.get(opts.workItemId) : undefined;
+    if (opts.requestId && !associatedRequest) throw new OrcaError("RUN_STATE", "associated Request is unavailable");
+    if (opts.workItemId && (!item || !(await this.stores.requests.get(item.requestId))))
+      throw new OrcaError("RUN_STATE", "associated work item is unavailable");
+    if (associatedRequest && item && item.requestId !== associatedRequest.id)
+      throw new OrcaError("RUN_STATE", "Request and work item associations do not match");
+    const { definition: def, vars, generation } = await this.validateStartRun(opts, supplied);
+    const provenance = generation
+      ? launchProvenance(generation, def, vars, opts.vars ?? {}, opts.overrides)
+      : undefined;
+    if (generation) {
+      if (!this.generations) throw unavailable();
+      await this.generations.restore(generation.snapshot.id);
+    }
     const runId = newId("run", this.clock.now());
     // A child with an explicit workspace still has to validate its parent's sealed
     // sensitivity state before copying vars. Missing overlays must never downgrade it.
@@ -306,28 +367,52 @@ export class Orchestrator {
     const parentInputs = opts.parentRunId ? await this.stores.execution.getInputs(opts.parentRunId) : undefined;
     if (parentFirst?.type === "run.created" && parentFirst.payload.executionInputsStored && !parentInputs)
       throw unavailable();
+    // Resolve the historical provider before committing any run-specific private input.
+    // An unavailable reconstruction is an admission refusal, not an orphaned run record.
+    const selectedWorkspaceProvider = opts.workspace
+      ? undefined
+      : generation && this.generationWorkspaceProvider
+        ? this.generationWorkspaceProvider(generation)
+        : this.workspaceProvider;
     // Record only after every admission/inherited-integrity check, before public run creation.
     const workflowStored = await this.recordDefinition(def);
-    const protectedInputs = protectExecutionInputs(runId, def, vars, parentInputs);
+    let protectedInputs = protectExecutionInputs(runId, def, vars, parentInputs);
+    const configuredSecrets = generation ? configuredGenerationSecrets(generation) : [];
+    if (configuredSecrets.length)
+      protectedInputs = {
+        ...(protectedInputs ?? { runId, workflowId: def.id, workflowVersion: def.version, vars, sensitiveNames: [] }),
+        secrets: [...(protectedInputs?.secrets ?? []), ...configuredSecrets],
+      };
+    // Authenticate actor and lineage even for public application inputs.
+    if (!protectedInputs && (opts.actor || opts.parentRunId || generation))
+      protectedInputs = {
+        runId,
+        workflowId: def.id,
+        workflowVersion: def.version,
+        vars,
+        sensitiveNames: [],
+        secrets: [],
+      };
     if (protectedInputs) await this.stores.execution.putInputs(protectedInputs);
     const request = opts.requestId ? await this.stores.requests.get(opts.requestId) : undefined;
     const workItem = opts.workItemId ? await this.stores.workItems.get(opts.workItemId) : undefined;
     const workspace =
       opts.workspace ??
-      (await this.workspaceProvider.provision({
+      (await selectedWorkspaceProvider!.provision({
         runId,
         workflowId: def.id,
         request,
         workItem,
         parent: opts.parentRunId ? (await this.executionState(opts.parentRunId)).run.workspace : undefined,
       }));
-    await this.stores.events.append({
+    const created: Extract<OrcaEventInput, { type: "run.created" }> = {
       type: "run.created",
       runId,
       payload: {
         ...(opts.actor ? { actor: opts.actor } : {}),
         workflowId: def.id,
         workflowVersion: def.version,
+        ...(provenance ? { provenance } : {}),
         workspace,
         vars,
         ...(protectedInputs ? { executionInputsStored: true as const } : {}),
@@ -338,7 +423,12 @@ export class Orchestrator {
         ...(opts.overrides ? { overrides: opts.overrides } : {}),
         ...(workflowStored ? { workflowStored: true as const } : {}),
       },
-    });
+    };
+    await this.stores.events.append(
+      opts.requestAdmissionId
+        ? await correlateRequestAdmission(created, opts.requestAdmissionId, this.stores.execution)
+        : created,
+    );
     return runId;
   }
 
@@ -565,6 +655,10 @@ export class Orchestrator {
     const request = pendingHumanInputs(fresh).find((h) => h.id === requestId);
     if (!request) throw new OrcaError("RUN_STATE", `no pending human input '${requestId}'`, { requestId });
     const state = fresh;
+    if (request.kind === "permission")
+      throw new OrcaError("RUN_STATE", "tool permission callbacks cannot be answered from a parked log", {
+        liveInputState: "expired",
+      });
     if (state.run.status !== "paused")
       throw new OrcaError(
         "RUN_STATE",
@@ -615,9 +709,9 @@ export class Orchestrator {
   async resume(runId: string): Promise<RunState> {
     let id = runId;
     for (;;) {
-      const state = await this.getState(id);
+      const state = await this.executionState(id);
       if (!state.run.parentRunId) break;
-      if ((await this.getState(state.run.parentRunId)).run.status !== "paused") break;
+      if ((await this.executionState(state.run.parentRunId)).run.status !== "paused") break;
       id = state.run.parentRunId;
     }
     return this.run(id);
@@ -847,8 +941,9 @@ export class Orchestrator {
 
   /** Inline graphs get ids like `parent::loopNode` or `parent::parallelNode::branch`. */
   resolveDefinition(workflowId: string): WorkflowDefinition {
-    if (!workflowId.includes(INLINE_SEP)) return this.workflows.get(workflowId);
-    return this.walkInline(this.workflows.get(workflowId.split(INLINE_SEP)[0]!), workflowId);
+    const workflows = this.generations?.current.workflows ?? this.workflows;
+    if (!workflowId.includes(INLINE_SEP)) return workflows.get(workflowId);
+    return this.walkInline(workflows.get(workflowId.split(INLINE_SEP)[0]!), workflowId);
   }
 
   /**
@@ -889,15 +984,19 @@ export class Orchestrator {
    * that kept the version is `WORKFLOW_INVALID` here rather than a new run silently starting
    * on a definition its resume would not find.
    */
-  async selectDefinition(workflowId: string, version?: string): Promise<WorkflowDefinition> {
+  async selectDefinition(
+    workflowId: string,
+    version?: string,
+    workflows = this.generations?.current.workflows ?? this.workflows,
+  ): Promise<WorkflowDefinition> {
     if (version !== undefined) {
-      const live = this.workflows.has(workflowId) ? this.workflows.get(workflowId) : undefined;
+      const live = workflows.has(workflowId) ? workflows.get(workflowId) : undefined;
       const def =
         (await this.stores.workflows.get(workflowId, version)) ?? (live?.version === version ? live : undefined);
       if (!def) throw await this.versionNotFound(workflowId, version, live);
       return def;
     }
-    const live = this.workflows.get(workflowId);
+    const live = workflows.get(workflowId);
     const kept = await this.stores.workflows.get(live.id, live.version);
     if (kept && workflowRevision(kept) !== workflowRevision(live)) throw versionCollision(live);
     return live;
@@ -974,9 +1073,9 @@ export class Orchestrator {
    * configured, and every role the workflow's own nodes ask for must be filled under it -
    * rather than failing on the first step that needs the agent.
    */
-  private validateOverrides(def: WorkflowDefinition, overrides: RunOverrides): void {
-    this.agents.validateOverrides(overrides);
-    const scoped = this.agents.withOverrides(overrides);
+  private validateOverrides(def: WorkflowDefinition, overrides: RunOverrides, agents = this.agents): void {
+    agents.validateOverrides(overrides);
+    const scoped = agents.withOverrides(overrides);
     for (const node of Object.values(def.nodes)) {
       const selector = (node as { agent?: unknown }).agent;
       if (selector && typeof selector === "object" && "role" in selector) scoped.resolve(selector as AgentSelector);
@@ -997,7 +1096,7 @@ export class Orchestrator {
     if (!first || first.type !== "run.created") throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
     if (
       first.payload.workflowStored &&
-      (await this.stores.execution.getInputs(runId)) &&
+      (first.payload.provenance || (await this.stores.execution.getInputs(runId))) &&
       !(await this.stores.workflows.get(first.payload.workflowId.split(INLINE_SEP)[0]!, first.payload.workflowVersion))
     )
       throw new OrcaError(
@@ -1016,6 +1115,12 @@ export class Orchestrator {
       loadState: (id) => this.executionState(id),
       plan: this.plan,
     });
+    if (first.payload.provenance) {
+      if (!this.generations) throw unavailable();
+      const generation = await this.generations.restore(first.payload.provenance.configGeneration);
+      if (workflowRevision(def) !== first.payload.provenance.workflow.revision) throw unavailable();
+      this.contextGenerations.set(rc, generation);
+    }
     this.live.set(runId, rc);
     return rc;
   }
@@ -1057,8 +1162,10 @@ export class Orchestrator {
       }
       // Terminal again only if it finished between the summary and here; releasing is enough.
       if (isTerminal(rc.state)) return rc.state;
+      await this.liveInput?.prepareExecution?.(runId);
       return await this.execute(rc);
     } finally {
+      this.liveInput?.releaseExecution?.(runId);
       await held.release();
     }
   }
@@ -1317,10 +1424,15 @@ export class Orchestrator {
       logger: rc.logger.child({ step: step.nodeId }),
       clock: this.clock,
       stores: this.stores,
-      agents: this.agents.withOverrides(rc.state.run.overrides),
-      templates: this.templates,
-      workflows: this.workflows,
-      humanInput: abortableHumanInput(this.humanInput, rc.abort.signal),
+      agents: (this.contextGenerations.get(rc)?.agents ?? this.agents).withOverrides(rc.state.run.overrides),
+      templates: this.contextGenerations.get(rc)?.templates ?? this.templates,
+      workflows: this.contextGenerations.get(rc)?.workflows ?? this.workflows,
+      humanInput: abortableHumanInput(
+        this.contextGenerations.has(rc) && this.generationHumanInput
+          ? this.generationHumanInput(this.contextGenerations.get(rc)!)
+          : this.humanInput,
+        rc.abort.signal,
+      ),
       plan: this.plan,
 
       async emit(event) {
@@ -1342,7 +1454,7 @@ export class Orchestrator {
         return evaluateExpression(expr, await ctx.evalContext(extra));
       },
       async render(body, extra) {
-        return renderTemplate(body, await ctx.evalContext(extra), { partials: self.templates.partials });
+        return renderTemplate(body, await ctx.evalContext(extra), { partials: ctx.templates.partials });
       },
       async resolveInputs(refs) {
         const resolved = await self.resolveInputs(rc, refs);
@@ -1546,7 +1658,9 @@ export class Orchestrator {
     step: StepRun,
     selector: AgentSelector,
   ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
-    const { agent, host } = this.agents.withOverrides(rc.state.run.overrides).resolve(selector);
+    const { agent, host } = (this.contextGenerations.get(rc)?.agents ?? this.agents)
+      .withOverrides(rc.state.run.overrides)
+      .resolve(selector);
     const key = `${rc.id}:${agent.id}`;
     const model = selectedModel(rc.state.run.overrides, agent);
     const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
@@ -1587,6 +1701,7 @@ export class Orchestrator {
     // Nothing polls - health only ever reflects work a run asked for (#222).
     const handshake = this.agents.health.begin(agent.id);
     let session: AgentSession;
+    let continuity: Parameters<NonNullable<OpenSessionOptions["onSessionContinuity"]>>[0] | undefined;
     try {
       session = await this.sessionFactory({
         host,
@@ -1594,13 +1709,44 @@ export class Orchestrator {
         cwd: rc.workspace.cwd,
         logger: rc.logger,
         clock: this.clock,
+        onSessionContinuity: (state) => {
+          continuity = state;
+        },
         // Each `ask` permission is its own human-input request: an agent may block on
         // several tool calls at once, and every one must be listed, answerable and
         // logged independently (one id per session made concurrent asks collide).
-        askPermission: async (req) => {
+        askPermission: async (req, invocation) => {
           const stepRunId = current.step.id;
+          const live =
+            this.liveInput && invocation
+              ? {
+                  identity: {
+                    instanceId: this.liveInput.port.instanceId,
+                    sessionId: invocation.sessionId,
+                    turnId: invocation.turnId,
+                    invocationId: invocation.invocationId,
+                  },
+                  signal: AbortSignal.any([rc.abort.signal, invocation.signal, this.liveInput.executionSignal(rc.id)]),
+                  withOwnership: <T>(operation: () => Promise<T>) =>
+                    rc.withOwnership(async () => {
+                      // Polling expires idle asks; acceptance must also check the initiating
+                      // actor now, after acquiring the original interpreter's lease mutex.
+                      if (this.liveInput!.executionSignal(rc.id).aborted)
+                        throw new OrcaError("RUN_STATE", "live execution authority expired", {
+                          liveInputState: "expired",
+                        });
+                      return operation();
+                    }),
+                  emitOwned: (event: Parameters<RunContext["emitOwned"]>[0]) => rc.emitOwned(event),
+                }
+              : undefined;
+          const offered = req.options.filter((o) => !live || o.kind === "allow_once" || o.kind === "reject_once");
+          // A remembered-only ask has no supported one-time decision. Do not park an
+          // impossible-to-answer live card until its turn eventually times out.
+          if (live && offered.length === 0) return undefined;
           return askHumanInput({
-            port: humanInput,
+            port: live ? this.liveInput!.port : humanInput,
+            ...(live ? { live } : {}),
             emit: (e) => rc.emit(e),
             clock: this.clock,
             runId: rc.id,
@@ -1609,7 +1755,9 @@ export class Orchestrator {
             question: req.toolCall.title ?? "Allow tool call?",
             // ACP already separates the two: `optionId` is what the agent is answered
             // with, `name` is what the host shows. Keep them apart here too.
-            options: req.options.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
+            // ACP remembered choices grant policy inside the agent. Live responses only
+            // offer one-time choices; ORCA standing rules use the separately authorized writer.
+            options: offered.map((o) => ({ id: o.optionId, label: o.name || o.optionId })),
             // Whose turn is being held open (#248). It is recorded here because here is
             // where it is known: an attention card has to name the agent, and the push that
             // opens the card is a pure function of the event it comes from.
@@ -1628,17 +1776,23 @@ export class Orchestrator {
             },
           });
         },
-        onPermission: (info) =>
-          void rc.emit({
-            type: "agent.permission",
-            payload: {
-              stepRunId: current.step.id,
-              sessionId: session.id,
-              title: info.title,
-              decision: info.decision,
-              ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
-            },
-          }),
+        onPermission: (info) => {
+          if (rc.abort.signal.aborted) return;
+          void rc
+            .emit({
+              type: "agent.permission",
+              payload: {
+                stepRunId: current.step.id,
+                sessionId: session.id,
+                title: info.title,
+                decision: info.decision,
+                ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
+              },
+            })
+            .catch((error: unknown) =>
+              rc.logger.warn("permission audit append failed", { error: describeError(error) }),
+            );
+        },
       });
     } catch (e) {
       handshake.failed(e);
@@ -1664,6 +1818,7 @@ export class Orchestrator {
         hostId: host.id,
         cwd: rc.workspace.cwd,
         ...(applied !== undefined ? { model: applied } : {}),
+        ...(continuity ? { continuity } : {}),
       },
     });
     for (const listener of this.sessionOpenedListeners) {

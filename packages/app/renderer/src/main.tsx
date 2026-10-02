@@ -10,6 +10,8 @@
  * Appearance is installed before `render`, not in an effect: an effect runs after the first
  * commit, and a window opened in dark would paint the OS theme for a frame first.
  */
+import { ConnectionBoundary } from "./daemon-connection/boundary.js";
+import "./daemon-connection/connection.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@orca/design/css/tokens.css";
@@ -49,7 +51,13 @@ createRoot(root).render(
           <NotificationProvider value={notifications}>
             <AppearanceProvider value={appearance}>
               <AnnouncementsProvider value={announcements}>
-                <Routes />
+                {window.orca.daemonConnection ? (
+                  <ConnectionBoundary bridge={window.orca.daemonConnection}>
+                    <Routes />
+                  </ConnectionBoundary>
+                ) : (
+                  <Routes />
+                )}
               </AnnouncementsProvider>
             </AppearanceProvider>
           </NotificationProvider>

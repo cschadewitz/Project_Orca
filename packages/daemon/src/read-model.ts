@@ -44,6 +44,7 @@ import type { Orchestrator, PlanService } from "@orca/engine";
 import { redactExecutionValue, type WorkItemClaim } from "@orca/store";
 import {
   INLINE_WORKFLOW_SEPARATOR,
+  LiveDecisionIdentitySchema,
   displayStatusForRun,
   displayStatusForStep,
   isTextMediaType,
@@ -447,6 +448,7 @@ export class ReadModel {
     return {
       // Pinned only against a version that is on disk: an unregistered workflow has nothing newer.
       run: { ...run, workflowPinned: onDisk !== undefined && onDisk !== state.run.workflowVersion },
+      ...(state.run.provenance ? { provenance: state.run.provenance } : {}),
       workspace: state.run.workspace,
       vars: state.run.vars,
       steps,
@@ -645,7 +647,7 @@ export class ReadModel {
    */
   workflowsList(_params: WorkflowsListParams): WorkflowsListResult {
     const asOf = this.clock.isoNow();
-    const workflows = this.orc.workflows.list().map(workflowSummaryView);
+    const workflows = (this.orc.generations?.current.workflows ?? this.orc.workflows).list().map(workflowSummaryView);
     workflows.sort((a, b) => a.id.localeCompare(b.id));
     return { workflows, asOf };
   }
@@ -735,7 +737,9 @@ export class ReadModel {
   /** The version of the file on disk for this workflow (or the root of a nested id), if it is registered. */
   private versionOnDisk(workflowId: string): string | undefined {
     const rootId = workflowId.split(INLINE_WORKFLOW_SEPARATOR)[0]!;
-    return this.orc.workflows.has(rootId) ? this.orc.workflows.get(rootId).version : undefined;
+    return (this.orc.generations?.current.workflows ?? this.orc.workflows).has(rootId)
+      ? (this.orc.generations?.current.workflows ?? this.orc.workflows).get(rootId).version
+      : undefined;
   }
 
   /** `stepRunId -> {agentId, model?}`, from the only event that records which agent worked a step. */
@@ -809,7 +813,19 @@ export class ReadModel {
   }
 
   private async inputView(pass: Pass, request: HumanInputRequest, state: RunState): Promise<OpenInputView> {
+    const identity = LiveDecisionIdentitySchema.safeParse(request.liveDecision);
+    const target = identity.success
+      ? { ...identity.data, runId: request.runId, stepRunId: request.stepRunId, requestId: request.id }
+      : undefined;
     const facts = factsFromState(state, new Map());
+    const live = target
+      ? {
+          target,
+          state: (await pass.leaseLapsed(facts.summary))
+            ? ("expired" as const)
+            : (this.orc.liveInput?.port.inspect(target) ?? ("owner-unavailable" as const)),
+        }
+      : undefined;
     const { name, workItem } = await pass.naming(facts.summary);
     const step = state.steps[request.stepRunId];
     // What the asking step had in hand: the artifacts the answer is about.
@@ -827,6 +843,7 @@ export class ReadModel {
     const hostType = session && registry.hasHost(session.hostId) ? registry.host(session.hostId).spec.type : undefined;
     return {
       id: request.id,
+      ...(live ? { live } : {}),
       kind: request.kind,
       question: request.question,
       // The whole `GateOption` travels as of protocol 1.4 (#161): the id is what

@@ -1,0 +1,711 @@
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -11,3 +11,6 @@
+ export * from "./program/service.js";
+ export * from "./plan/service.js";
+ export * from "./plan/executors.js";
++
++export * from "./program/request-submission.js";
++export * from "./program/submission-store.js";
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -24,3 +24,5 @@
+ export * from "./plan-control.js";
+
+ export * from "./maintenance.js";
++
++export * from "./request-submission.js";
+--- a/packages/daemon/src/index.ts
++++ b/packages/daemon/src/index.ts
+@@ -26,3 +26,5 @@
+ export * from "./server.js";
+ export * from "./auth/index.js";
+ export * from "./workflow-inputs.js";
++
++export * from "./request-submission.js";
+--- a/packages/engine/src/orchestrator.ts
++++ b/packages/engine/src/orchestrator.ts
+@@ -39,6 +39,7 @@
+   type MutationActor,
+   type NodeDef,
+   type OrcaEvent,
++  type OrcaEventInput,
+   type RunState,
+   type RunSummary,
+   type StepResult,
+@@ -65,6 +66,7 @@
+   type Stores,
+   type WorkItemClaim,
+ } from "@orca/store";
++import { correlateRequestAdmission } from "./program/request-admission-event.js";
+ import { builtinExecutors } from "./executors/index.js";
+ import {
+   NodeExecutorRegistry,
+@@ -141,6 +143,8 @@
+ export type AgentSessionOpenedListener = (info: { runId: string; agentId: string; session: AgentSession }) => void;
+
+ export interface StartRunOptions {
++  /** Server-owned Request admission metadata; never part of workflow vars or wire launch params. */
++  requestAdmissionId?: string;
+   /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
+   actor?: MutationActor;
+   workflowId?: string;
+@@ -269,6 +273,11 @@
+   async validateStartRun(
+     opts: StartRunOptions,
+   ): Promise<{ definition: WorkflowDefinition; vars: Record<string, unknown> }> {
++    if (
++      opts.requestAdmissionId !== undefined &&
++      (!opts.requestAdmissionId || !opts.requestId || !opts.actor || opts.parentRunId)
++    )
++      throw new OrcaError("RUN_STATE", "request admission correlation is unavailable");
+     // Admission (#330): select, check the preflight revision, check the selection and the
+     // launch vars - all before anything is written, provisioned or appended, so a refused
+     // launch leaves no definition, workspace, run, agent or child behind.
+@@ -296,6 +305,15 @@
+
+   /** Create a run (emits run.created) without executing it. */
+   async startRun(opts: StartRunOptions): Promise<string> {
++    // Linked resources must exist and agree before any definition/workspace/run is written.
++    const associatedRequest = opts.requestId ? await this.stores.requests.get(opts.requestId) : undefined;
++    const item = opts.workItemId ? await this.stores.workItems.get(opts.workItemId) : undefined;
++    if (opts.requestId && !associatedRequest) throw new OrcaError("RUN_STATE", "associated Request is unavailable");
++    if (opts.workItemId && (!item || !(await this.stores.requests.get(item.requestId))))
++      throw new OrcaError("RUN_STATE", "associated work item is unavailable");
++    if (associatedRequest && item && item.requestId !== associatedRequest.id)
++      throw new OrcaError("RUN_STATE", "Request and work item associations do not match");
++
+     const { definition: def, vars } = await this.validateStartRun(opts);
+     const runId = newId("run", this.clock.now());
+     // A child with an explicit workspace still has to validate its parent's sealed
+@@ -321,7 +339,7 @@
+         workItem,
+         parent: opts.parentRunId ? (await this.executionState(opts.parentRunId)).run.workspace : undefined,
+       }));
+-    await this.stores.events.append({
++    const created: Extract<OrcaEventInput, { type: "run.created" }> = {
+       type: "run.created",
+       runId,
+       payload: {
+@@ -338,7 +356,12 @@
+         ...(opts.overrides ? { overrides: opts.overrides } : {}),
+         ...(workflowStored ? { workflowStored: true as const } : {}),
+       },
+-    });
++    };
++    await this.stores.events.append(
++      opts.requestAdmissionId
++        ? await correlateRequestAdmission(created, opts.requestAdmissionId, this.stores.execution)
++        : created,
++    );
+     return runId;
+   }
+
+--- a/packages/daemon/src/methods.ts
++++ b/packages/daemon/src/methods.ts
+@@ -15,6 +15,13 @@
+  * and `hello.methods` does not list them. "Absent" and "present but refusing" are different
+  * promises, and a client that has to hide a button needs the first one.
+  */
++import type { SubmissionAuthority } from "@orca/core";
++import {
++  RequestsSubmitParamsSchema,
++  RequestsAdmissionParamsSchema,
++  RequestsAdmissionsParamsSchema,
++} from "@orca/protocol";
++import type { RequestSubmissionModel } from "./request-submission.js";
+ import type { Maintenance } from "./maintenance.js";
+ import { OrcaError, type MutationActor } from "@orca/core";
+ import {
+@@ -158,6 +165,9 @@
+ import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
+
+ export interface MethodContext {
++  requestSubmissions?: RequestSubmissionModel | undefined;
++  submissionWorkspaceId?: string | undefined;
++  requestSubmissionAuthority?: ((ctx: MethodContext) => Promise<SubmissionAuthority>) | undefined;
+   /** Set only by the authenticating guard, never read from RPC params. */
+   mutationActor?: MutationActor | undefined;
+   /** Side-effect-free launch preflight, using the same resolver as admission. */
+@@ -635,6 +645,28 @@
+     table[UNSUBSCRIBE_METHOD] = unsubscribe;
+   }
+   if (ctx.control) Object.assign(table, controlMethods);
++  if (ctx.control && ctx.requestSubmissions && ctx.requestSubmissionAuthority) {
++    const model = ctx.requestSubmissions;
++    const authority = ctx.requestSubmissionAuthority;
++    Object.assign(table, {
++      "requests.submit": {
++        params: RequestsSubmitParamsSchema,
++        handle: async (params, invocation) => model.submit(params, await authority(invocation)),
++      },
++      "requests.reconcile": {
++        params: RequestsAdmissionParamsSchema,
++        handle: async (params, invocation) => model.reconcile(params.admissionId, await authority(invocation)),
++      },
++      "requests.admission": {
++        params: RequestsAdmissionParamsSchema,
++        handle: async (params, invocation) => model.inspect(params.admissionId, await authority(invocation)),
++      },
++      "requests.admissions": {
++        params: RequestsAdmissionsParamsSchema,
++        handle: async (_params, invocation) => model.list(await authority(invocation)),
++      },
++    } satisfies MethodTable);
++  }
+   if (ctx.workflowInputs) table[WORKFLOWS_VALIDATE_INPUTS_METHOD] = workflowsValidateInputs;
+   if (ctx.planControl) Object.assign(table, planControlMethods);
+   if (ctx.agents) Object.assign(table, agentMethods);
+--- a/packages/daemon/src/auth/operations.ts
++++ b/packages/daemon/src/auth/operations.ts
+@@ -75,6 +75,10 @@
+     reserved: true,
+   },
+
++  "requests.submit": { permission: "plan.write", resource: "none", audit: "mutation" },
++  "requests.reconcile": { permission: "plan.write", resource: "none", audit: "mutation" },
++  "requests.admission": { permission: "plan.write", resource: "none" },
++  "requests.admissions": { permission: "plan.write", resource: "none" },
+   "runs.start": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
+   "runs.resume": { permission: "runs.control", resource: "run", audit: "mutation" },
+   "runs.cancel": { permission: "runs.control", resource: "run", audit: "mutation" },
+--- a/packages/daemon/src/auth/guard.ts
++++ b/packages/daemon/src/auth/guard.ts
+@@ -156,6 +156,10 @@
+    * refused, because that is the bypass deny-by-default exists to stop.
+    */
+   checkOperation(principal: Principal, method: string, exists: boolean, meta: RequestMeta): void {
++    if (method.startsWith("requests.") && (!holds(principal, "runs.start") || !holds(principal, "plan.write"))) {
++      this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", "request-submission-not-permitted");
++      throw authForbidden();
++    }
+     const spec = OPERATIONS[method];
+     if (!spec) {
+       if (!exists) return;
+@@ -172,7 +176,11 @@
+   permittedMethods(principal: Principal, names: readonly string[]): string[] {
+     return names.filter((name) => {
+       const spec = OPERATIONS[name];
+-      return spec !== undefined && (!spec.permission || holds(principal, spec.permission));
++      return (
++        spec !== undefined &&
++        (!spec.permission || holds(principal, spec.permission)) &&
++        (!name.startsWith("requests.") || holds(principal, "runs.start"))
++      );
+     });
+   }
+
+@@ -195,6 +203,7 @@
+           // transport is refused, never treated as local.
+           if (!bound) throw authRequired();
+           const { principal, meta } = bound;
++          this.checkOperation(principal, name, true, meta);
+           if (!spec) {
+             this.deny(principal, meta, name, params, "AUTH_FORBIDDEN", "operation-not-inventoried");
+             throw authForbidden();
+--- a/packages/daemon/src/server.ts
++++ b/packages/daemon/src/server.ts
+@@ -27,7 +27,9 @@
+ import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
+ import { Maintenance } from "./maintenance.js";
+ import { attachSocket } from "./socket.js";
+-import { Authorizer, bindPrincipal } from "./auth/guard.js";
++import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
++import { submissionAuthority } from "./request-submission.js";
++import { authInvalid, authRequired } from "./auth/errors.js";
+ import { OwnershipStore } from "./auth/ownership.js";
+ import type { ResourceResolver } from "./auth/resources.js";
+ import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
+@@ -167,6 +169,8 @@
+     capabilities: opts.capabilities,
+     reads: opts.reads,
+     workflowInputs: opts.workflowInputs,
++    requestSubmissions: auth.mode === "token" ? opts.requestSubmissions : undefined,
++    submissionWorkspaceId: opts.submissionWorkspaceId,
+     source: opts.source,
+     planSource: opts.planSource,
+     control: opts.control,
+@@ -186,6 +190,25 @@
+         }
+       : { resolver: NO_RESOURCES, ownership: new OwnershipStore(), audit: auth.audit, admissions: ctx.source },
+   );
++  if (ctx.requestSubmissions && ctx.submissionWorkspaceId && auth.mode === "token") {
++    const workspaceId = ctx.submissionWorkspaceId;
++    ctx.requestSubmissionAuthority = async (invocation) => {
++      const bound = principalOf(invocation);
++      const actor = invocation.mutationActor;
++      if (!bound || !actor || !bound.principal.credentialId) throw authRequired();
++      const credentialId = bound.principal.credentialId;
++      return submissionAuthority({
++        workspaceId,
++        actor,
++        authorizer,
++        principal: async () => {
++          const current = auth.credentials.current(credentialId);
++          if (!current.ok) throw authInvalid();
++          return current.principal;
++        },
++      });
++    };
++  }
+   const gate = new TransportGate(auth, host, authorizer);
+   // The guard is outermost: a caller is authorized before maintenance admission is consulted,
+   // so an unauthorized caller cannot even learn that an update is in progress.
+--- a/packages/cli/src/bootstrap.ts
++++ b/packages/cli/src/bootstrap.ts
+@@ -18,6 +18,7 @@
+   type OrcaConfig,
+   type TemplateRegistry,
+   type WorkflowRegistry,
++  type SubmissionAuthority,
+ } from "@orca/core";
+ import {
+   autoHumanInput,
+@@ -34,6 +35,7 @@
+   type RunLeaseOptions,
+   type SessionFactory,
+   type WorkspaceProvider,
++  type RequestSubmissionOptions,
+ } from "@orca/engine";
+ import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
+ import { fileStores, memoryStores } from "@orca/store";
+@@ -42,6 +44,12 @@
+ export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
+
+ export interface BootstrapOptions {
++  /** Bound by integration to #332 CaptureLaunch, durable admissions and verified local authority. */
++  requestSubmission?: (app: {
++    orchestrator: Orchestrator;
++    config: OrcaConfig;
++    configDir: string;
++  }) => Promise<Omit<RequestSubmissionOptions, "orchestrator"> & { authority: SubmissionAuthority }>;
+   cwd?: string;
+   configPath?: string;
+   /** Use in-memory stores (demo/tests). */
+@@ -76,6 +84,7 @@
+   configFile?: string | undefined;
+   orchestrator: Orchestrator;
+   program: ProgramService;
++  submissionAuthority?: SubmissionAuthority | undefined;
+   plan: PlanService;
+   workflows: WorkflowRegistry;
+   templates: TemplateRegistry;
+@@ -245,12 +254,14 @@
+     ...(opts.ephemeral ? {} : { sessionFactory: makeSessionFactory(configDir) }),
+     ...(opts.lease ? { lease: opts.lease } : {}),
+   });
++  const submission = await opts.requestSubmission?.({ orchestrator, config, configDir });
+   return {
+     config,
+     configDir,
++    submissionAuthority: submission?.authority,
+     ...(configFile ? { configFile } : {}),
+     orchestrator,
+-    program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow),
++    program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission),
+     plan,
+     workflows,
+     templates,
+--- a/packages/cli/src/commands/index.ts
++++ b/packages/cli/src/commands/index.ts
+@@ -55,6 +55,7 @@
+ import { stringify as stringifyYaml } from "yaml";
+ import { PausingHumanInput, PlanService, autoHumanInput, builtinExecutors } from "@orca/engine";
+ import { AgentRegistry } from "@orca/agents";
++import { RequestSubmissionModel } from "@orca/daemon";
+ import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
+ import { memoryStores } from "@orca/store";
+ import { scriptedAgentSpec } from "@orca/testing";
+@@ -472,13 +473,18 @@
+       });
+       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
+       try {
+-        const { request, state } = await app.program.submitAndRun({
++        const admitted = await app.program.submit({
+           title,
+           body,
+           vars,
+           ...workflowGuards(ctx),
+           ...(overrides ? { overrides } : {}),
+         });
++        ctx.out(
++          `request ${admitted.request.id}; run ${admitted.runId}${admitted.admissionId ? `; admission ${admitted.admissionId}` : ""}`,
++        );
++        const state = await app.program.runSubmitted(admitted);
++        const request = (await app.program.settle(state)) ?? admitted.request;
+         ctx.out(`request ${request.id}: ${request.status}`);
+         const code = await finish(app, ctx, state);
+         const items = await app.orchestrator.stores.workItems.list((w) => w.requestId === request.id);
+@@ -626,7 +632,11 @@
+         ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+         logger: consoleLogger((ctx.flags["log-level"] as never) ?? "info"),
+       });
+-      await serveAcpFacade({ orchestrator: app.orchestrator, program: app.program });
++      await serveAcpFacade({
++        orchestrator: app.orchestrator,
++        program: app.program,
++        ...(app.submissionAuthority ? { submissionAuthority: app.submissionAuthority } : {}),
++      });
+       return 0;
+     },
+   },
+@@ -707,8 +717,20 @@
+           };
+       // Refuse an unsafe bind before rotating the credential local clients already use.
+       validateDeployment(auth, (ctx.flags.host as string | undefined) ?? "127.0.0.1");
++      const requestSubmissions =
++        !readOnly && authDir && app.program.submissions && app.submissionAuthority
++          ? new RequestSubmissionModel({
++              service: app.program.submissions,
++              execute: async (id) => {
++                await app.program.settle(await app.orchestrator.run(id));
++              },
++              executionFailed: (id) => app.logger.error("Request execution requires recovery", { runId: id }),
++            })
++          : undefined;
+       const daemon = await startDaemon({
+         auth,
++        requestSubmissions,
++        submissionWorkspaceId: app.submissionAuthority?.workspaceId,
+         maintenanceToken: process.env.ORCA_MAINTENANCE_TOKEN,
+         admissionFile: process.env.ORCA_ADMISSION_FILE,
+         host: ctx.flags.host as string | undefined,
+--- a/packages/protocol/src/handshake.ts
++++ b/packages/protocol/src/handshake.ts
+@@ -42,6 +42,8 @@
+  * none of it.
+  */
+ export const READ_METHODS = [
++  "requests.admission",
++  "requests.admissions",
+   RUNS_LIST_METHOD,
+   RUNS_GET_METHOD,
+   RUNS_EVENTS_METHOD,
+@@ -102,6 +104,8 @@
+  * draw one disabled state would eventually get a different answer to each.
+  */
+ export const CONTROL_METHODS = [
++  "requests.submit",
++  "requests.reconcile",
+   INPUTS_ANSWER_METHOD,
+   RUNS_RESUME_METHOD,
+   RUNS_CANCEL_METHOD,
+--- a/packages/daemon/src/auth/ownership.ts
++++ b/packages/daemon/src/auth/ownership.ts
+@@ -8,7 +8,8 @@
+  * was started by a CLI: those have no owner, and only an `all`-scoped principal sees them.
+  * Missing ownership always narrows access; it never widens it.
+  */
+-import { readFileSync } from "node:fs";
++import { readFileSync, openSync, fsyncSync, closeSync } from "node:fs";
++import { dirname } from "node:path";
+ import { z } from "zod";
+ import { writePrivateFile } from "./credentials.js";
+
+@@ -41,7 +42,10 @@
+    * after. The first owner wins: a run is never re-attributed.
+    */
+   record(rootRunId: string, principalId: string): void {
+-    if (this.runs.has(rootRunId)) return;
++    if (this.runs.has(rootRunId)) {
++      if (this.runs.get(rootRunId) === principalId && this.lastError) this.persist();
++      return;
++    }
+     this.runs.set(rootRunId, principalId);
+     this.persist();
+   }
+@@ -55,6 +59,20 @@
+     this.writing = this.writing
+       .then(() => {
+         writePrivateFile(file, `${snapshot}\n`);
++        const fd = openSync(file, "r");
++        try {
++          fsyncSync(fd);
++        } finally {
++          closeSync(fd);
++        }
++        if (process.platform !== "win32") {
++          const directory = openSync(dirname(file), "r");
++          try {
++            fsyncSync(directory);
++          } finally {
++            closeSync(directory);
++          }
++        }
+         this.lastError = undefined;
+       })
+       .catch((e: unknown) => {
+--- a/docs/daemon-security.md
++++ b/docs/daemon-security.md
+@@ -159,6 +159,10 @@
+ | `workflows.list` | `workflows.read` | filtered to the workflow scope | — |
+ | `workflows.get` | `workflows.read` | the workflow (by root id) | — |
+ | `workflows.validateInputs` | `runs.start` | the selected workflow, before any schema or input diagnostic (reserved for #330) | — |
++| `requests.submit` | `plan.write` | plus `runs.start`; workspace Request admission | mutation |
++| `requests.reconcile` | `plan.write` | plus `runs.start`; own admission in this workspace | mutation |
++| `requests.admission` | `plan.write` | plus `runs.start`; own admission in this workspace | — |
++| `requests.admissions` | `plan.write` | plus `runs.start`; own admissions in this workspace | — |
+ | `runs.start` | `runs.start` | the workflow; the new run is attributed to the caller | mutation |
+ | `runs.resume` | `runs.control` | the run | mutation |
+ | `runs.cancel` | `runs.control` | the run | mutation |
+@@ -438,3 +442,10 @@
+ `packages/app/test/daemon-client.test.ts`, `packages/app/test/notifications.test.ts`, and
+ `packages/daemon/test/maintenance.test.ts`) still need Cal's ownership reconciliation;
+ the review fixes do not expand those edits.
++
++
++Request admission methods require both `runs.start` and workspace-scoped `plan.write`.
++`requests.submit` and `requests.reconcile` are audited mutations; `requests.admission`
++and `requests.admissions` expose only this principal's admissions in this workspace.
++They are registered only with the submission provider and durable token-mode ownership.
++See [Request submission](request-submission.md) for recovery and discovery.
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -412,3 +412,7 @@
+ - 0008 Daemon, protocol package and desktop app in one workspace; the app sees only the protocol
+ - 0009 "Allow always" writes to a workspace sidecar, layered under the configured rules —
+   and, since #140, over the built‑in default rules, which are the last layer of the three
++
++Request admission and recovery are described in [Request submission](request-submission.md).
++The admission lifecycle is shared by daemon, configured ProgramService/CLI and ACP;
++`runs.start` remains an explicit workflow launch.
+--- a/packages/daemon/test/request-submission-wiring.test.ts
++++ b/packages/daemon/test/request-submission-wiring.test.ts
+@@ -0,0 +1,96 @@
++/** Executed with the reserved integration patch applied; no production-generation substitute. */
++import { afterEach, expect, it, vi } from "vitest";
++import {
++  ControlModel,
++  CredentialStore,
++  OwnershipStore,
++  orchestratorResolver,
++  ReadModel,
++  startDaemon,
++} from "@orca/daemon";
++import type { ResponseMessage } from "@orca/protocol";
++import type { SubmissionResult } from "@orca/core";
++import { submissionFixture } from "../../engine/test/request-submission-fixture.js";
++import { RequestSubmissionModel } from "../src/request-submission.js";
++
++const closers: (() => Promise<unknown>)[] = [];
++afterEach(async () => {
++  for (const close of closers.splice(0).reverse()) await close();
++});
++it("wires authenticated HTTP and socket admission, denies before validation, and preserves direct runs", async () => {
++  const f = submissionFixture();
++  const credentials = new CredentialStore();
++  const owner = await credentials.issue({ principal: "owner", preset: "owner" });
++  const viewer = await credentials.issue({ principal: "viewer", preset: "viewer" });
++  const ownership = new OwnershipStore();
++  const reads = new ReadModel({ orchestrator: f.orc });
++  const execute = vi.fn(async () => {});
++  const daemon = await startDaemon({
++    orcaVersion: "test",
++    capabilities: ["runs.read", "runs.control", "runs.subscribe"],
++    reads,
++    control: new ControlModel({ orchestrator: f.orc, reads }),
++    source: f.orc,
++    requestSubmissions: new RequestSubmissionModel({ service: f.service, execute, executionFailed: vi.fn() }),
++    submissionWorkspaceId: "workspace-test",
++    auth: { mode: "token", credentials, ownership, resolver: orchestratorResolver(f.orc) },
++  });
++  closers.push(daemon.close);
++  const http = async (method: string, params: unknown, token = owner.token): Promise<ResponseMessage> => {
++    const response = await fetch(`${daemon.url}/rpc`, {
++      method: "POST",
++      headers: { authorization: `Bearer ${token}` },
++      body: JSON.stringify({ kind: "request", id: 1, method, params }),
++    });
++    return (await response.json()) as ResponseMessage;
++  };
++  expect(await http("requests.submit", { nonsense: 1 }, viewer.token)).toMatchObject({
++    ok: false,
++    error: { code: "AUTH_FORBIDDEN" },
++  });
++  expect(await f.admissions.records.list()).toEqual([]);
++  expect(await http("requests.submit", { title: "Request", body: "", requestId: "forged" })).toMatchObject({
++    ok: false,
++    error: { code: "PROTOCOL_MESSAGE" },
++  });
++  expect(await http("runs.start", { workflowId: "program", requestId: "missing" })).toMatchObject({
++    ok: false,
++    error: { code: "RUN_STATE" },
++  });
++  expect(await f.orc.listRuns()).toEqual([]);
++  const command = { title: "Request", body: "Task" };
++  const first = await http("requests.submit", command);
++  expect(first.ok).toBe(true);
++  if (!first.ok) throw new Error("not accepted");
++  const admitted = first.result as SubmissionResult;
++  if (admitted.state !== "accepted") throw new Error("not accepted");
++  expect(ownership.owner(admitted.runId)).toBe("owner");
++  expect(await http("requests.admission", { admissionId: admitted.admissionId })).toMatchObject({
++    ok: true,
++    result: admitted,
++  });
++  const socket = new WebSocket(daemon.socketUrl!, ["orca.v1", `orca.bearer.${owner.token}`]);
++  await new Promise<void>((resolve, reject) => {
++    socket.addEventListener("open", () => resolve(), { once: true });
++    socket.addEventListener("error", () => reject(new Error("socket failed")), { once: true });
++  });
++  closers.push(async () => {
++    socket.close();
++  });
++  const second = await new Promise<ResponseMessage>((resolve) => {
++    socket.addEventListener("message", (event) => {
++      const frame = JSON.parse(String(event.data)) as ResponseMessage;
++      if (frame.kind === "response" && frame.id === 2) resolve(frame);
++    });
++    socket.send(JSON.stringify({ kind: "request", id: 2, method: "requests.submit", params: command }));
++  });
++  expect(second).toMatchObject({ ok: true, result: { state: "accepted" } });
++  await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
++  expect(await http("runs.start", { workflowId: "program" })).toMatchObject({ ok: true });
++  expect(await f.stores.requests.list()).toHaveLength(2);
++  await credentials.revoke(owner.credential.id);
++  expect(await http("requests.reconcile", { admissionId: admitted.admissionId })).toMatchObject({
++    ok: false,
++    error: { code: "AUTH_INVALID" },
++  });
++});
+--- a/packages/protocol/src/control.ts
++++ b/packages/protocol/src/control.ts
+@@ -19,9 +19,8 @@
+  *   own option ids and guess that `allow_always` means allow: those ids are the agent's, a
+  *   standing permission grant is the last place to guess, and the result says exactly what
+  *   was written so a button can promise it honestly.
+- * - **`runs.start` writes no documents.** Not because it cannot any more - the store became
+- *   multi-process safe in #196 - but because submitting a request is a different method,
+- *   still to be designed. See its schema.
++ * - **`runs.start` writes no Request documents.** Request submission is the separate
++ *   `requests.submit` application service. Supplied associations are validated before launch.
+  */
+ import { z } from "zod";
+ // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
+@@ -147,24 +146,10 @@
+ // ------------------------------------------------------------------- runs.start
+
+ /**
+- * `runs.start` - a workflow and its vars, and deliberately nothing else.
+- *
+- * The reason this shape was chosen has since been fixed: `JsonFileDocumentStore` re-reads a
+- * collection under a lock before every write (#196), so a daemon and a CLI writing documents
+- * beside each other no longer clobber one another and the store is multi-process safe.
+- *
+- * The narrow method is kept anyway, by decision rather than by constraint. Submitting a
+- * *request* and decomposing it into *work items* is `orca submit`'s job - a workflow, an
+- * agent and an artifact, not a record insert - and growing this method into it would settle
+- * that design by accident, in the schema of a method whose job is "run this workflow". When
+- * a `requests.submit` method is designed it goes beside this one, with its own shape.
+- *
+- * So `requestId` and `workItemId` are accepted and passed through: they are recorded on
+- * `run.created` and travel out on the `run.changed` notification, so a client that already
+- * knows a work item can start a run against it and find the run again. Neither id is read
+- * back from a document store and neither document is created. A run naming itself after a
+- * work item the daemon has not got simply falls back to the workflow id, which is the
+- * fallback chain `ReadModel` has always had.
++ * Explicit workflow launch, independent of Request submission. No Request is created.
++ * Optional Request/work-item associations must exist and agree before admission; the
++ * daemon authorizes those workspace resources before their validation diagnostics.
++ * `requests.submit` is the separate program/decomposition admission operation.
+  */
+ export const RunsStartParamsSchema = z.object({
+   workflowId: z.string().min(1),
+@@ -174,12 +159,11 @@
+   workflowVersion: z.string().min(1).optional(),
+   expectedWorkflowRevision: z.string().min(1).optional(),
+   /**
+-   * Recorded on `run.created` and carried into the `run.changed` notification, so a client
+-   * that started the run can find it. **No request document is written or read** - see the
+-   * block above for why that is still true now that the store is multi-process safe (#196).
++   * An existing Request to associate with this run. Validated before admission and recorded
++   * on run.created; this operation never creates or decomposes a Request.
+    */
+   requestId: z.string().min(1).optional(),
+-  /** The same, for a work item. No work-item document is written or read. */
++  /** An existing work item; its Request must agree with requestId when both are supplied. */
+   workItemId: z.string().min(1).optional(),
+ });
+ export type RunsStartParams = z.infer<typeof RunsStartParamsSchema>;
+--- a/packages/daemon/src/control.ts
++++ b/packages/daemon/src/control.ts
+@@ -337,11 +337,9 @@
+   /**
+    * `runs.start`: create a run and drive it here until it parks or finishes.
+    *
+-   * A workflow and its vars, and no documents - not because the store could not take them
+-   * (#196 made it multi-process safe) but because submitting a request is a method still to
+-   * be designed. `RunsStartParamsSchema` says the rest.
+-   * `requestId` and `workItemId` travel onto `run.created` and out on the `run.changed`
+-   * notification; neither is read back from a document store.
++   * A workflow and its vars, with optional existing Request/work-item associations checked
++   * by the orchestrator before admission. It never creates a Request; requests.submit is
++   * the separate application service for decomposition/program admission.
+    */
+   async startRun(
+     params: RunsStartParams,
+--- a/packages/core/src/events/events.ts
++++ b/packages/core/src/events/events.ts
+@@ -112,6 +112,8 @@
+       workflowId: z.string(),
+       workflowVersion: z.string(),
+       requestId: z.string().optional(),
++      /** Server-owned recovery correlation, authenticated in the private creation payload. */
++      requestAdmissionId: z.string().optional(),
+       workItemId: z.string().optional(),
+       parentRunId: z.string().optional(),
+       parentStepRunId: z.string().optional(),
+--- /dev/null
++++ b/packages/engine/test/request-submission-correlation-integration.test.ts
+@@ -0,0 +1,51 @@
++/** Strict Request input validation through the actual reserved orchestrator correlation wiring. */
++import { mkdtemp, rm } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { expect, it, vi } from "vitest";
++import { fileStores } from "@orca/store";
++import { FileAdmissionStore } from "../src/program/submission-store.js";
++import { submissionFixture } from "./request-submission-fixture.js";
++
++it.each(["initial", "before-root", "after-root"])(
++  "uses native correlation for strict %s admission",
++  async (boundary) => {
++    const dir = await mkdtemp(join(tmpdir(), "orca-native-correlation-"));
++    try {
++      const options = {
++        nativeCorrelation: true,
++        strictInputs: true,
++        sensitiveInputs: false,
++      };
++      const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), options);
++      const start = f.orc.startRun.bind(f.orc);
++      let rootId: string | undefined;
++      if (boundary !== "initial") {
++        vi.spyOn(f.orc, "startRun").mockImplementationOnce(async (launch) => {
++          if (boundary === "after-root") rootId = await start(launch);
++          throw new Error("crash at root publication");
++        });
++      }
++      const result = await f.service.submit(
++        { title: "Strict", body: "Request", vars: { token: "valid" } },
++        f.authority,
++      );
++      expect(result.state).toBe(boundary === "initial" ? "accepted" : "recoverable-failure");
++      const peer = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), options);
++      const recovered = await peer.service.reconcile(result.admissionId, peer.authority);
++      expect(recovered.state).toBe("accepted");
++      if (recovered.state !== "accepted") throw new Error("not accepted");
++      if (rootId) expect(recovered.runId).toBe(rootId);
++      expect(await peer.orc.listRuns()).toEqual([recovered.runId]);
++      const [created] = await peer.orc.stores.events.read(recovered.runId);
++      expect(created).toMatchObject({
++        payload: { requestAdmissionId: result.admissionId },
++      });
++      expect(created?.executionPayloadRef).toBeDefined();
++      expect((await peer.stores.execution.getInputs(recovered.runId))?.vars).not.toHaveProperty("__orcaAdmissionId");
++    } finally {
++      vi.restoreAllMocks();
++      await rm(dir, { recursive: true, force: true });
++    }
++  },
++);

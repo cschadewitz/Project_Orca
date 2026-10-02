@@ -35,7 +35,7 @@ export const localFileSystem: HostFileSystem = {
 
 /** Runs agents as child processes on this machine. */
 export class LocalHost implements AgentHost {
-  readonly fs = localFileSystem;
+  readonly fs = { ...localFileSystem };
   constructor(readonly spec: LocalHostSpec) {}
   get id(): string {
     return this.spec.id;

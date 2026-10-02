@@ -67,6 +67,14 @@ export function PermissionCard({ input, ...rest }: PermissionCardProps): JSX.Ele
       options={input.options}
       offerAlways
       {...rest}
+      cannotWrite={
+        rest.cannotWrite ??
+        (!input.live
+          ? "Permission callback is unavailable."
+          : input.live.state !== "pending"
+            ? `Permission callback is ${input.live.state}; this answer cannot be delivered.`
+            : undefined)
+      }
     />
   );
 }

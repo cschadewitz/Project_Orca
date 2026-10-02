@@ -39,10 +39,10 @@
  * fixture must not pass and which would take `runs.start` away with it. So a gate with no
  * `autoApproveWhen` lands on `inputs.list` and stays there until somebody answers it.
  *
- * Measured against a real daemon, not inferred: with the three additions below, `inputs.list`
- * answers `waiting: 1` with the gate's question and both its options, `runs.list` answers
- * seven runs across `waiting`, `failed` and `succeeded`, and `agents.list` answers two agents
- * on two hosts, both at `unknown` health.
+ * A separate local scripted agent is configured for the final live-input smoke. It is
+ * started lazily, after the visual audits, so those audits still have one parked gate and
+ * the same waiting/failed/succeeded runs. Its callback is cancelled without an approval;
+ * no fixture contacts an external agent or service.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
@@ -54,6 +54,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
+import { InputsListResultSchema, type OpenInputView } from "@orca/protocol";
 
 const run = promisify(execFile);
 
@@ -107,6 +108,12 @@ export const FIXTURE = {
    * `smoke-failure`.
    */
   failure: { workflowId: "smoke-failure", title: "Nightly regression suite" },
+  /** Started only by the live-input smoke, after the existing visual audits finish. */
+  live: {
+    workflowId: "smoke-live-permission",
+    agentId: "smoke-permission-agent",
+    subject: "smoke-live-permission.md",
+  },
 } as const;
 
 export interface Daemon {
@@ -116,6 +123,10 @@ export interface Daemon {
   dir: string;
   /** The fixture-only credential path; the token stays in its private file. */
   tokenFile: string;
+  /** Authenticated fixture calls; credentials never enter the renderer. */
+  rpc: (method: string, params?: unknown) => Promise<Record<string, unknown>>;
+  /** A real ACP callback, with cancellation awaited through its original interpreter. */
+  startLivePermission: () => Promise<{ input: OpenInputView; cancel: () => Promise<void> }>;
   stop: () => Promise<void>;
 }
 
@@ -183,7 +194,7 @@ async function until(what: string, check: () => Promise<boolean>, timeoutMs = 30
 }
 
 /**
- * The two fixture workflows, as YAML in the workspace rather than as objects here: they are
+ * The durable-gate and failure workflows, as YAML rather than objects here: they are
  * loaded by the same glob and validated by the same schema as any workflow a person writes,
  * so a change to the workflow model breaks this fixture visibly instead of silently.
  *
@@ -237,6 +248,25 @@ edges:
   - { from: start, to: failed }
 `;
 
+const LIVE_WORKFLOW = `# Disposable permission callback, never an external agent or API.
+id: ${FIXTURE.live.workflowId}
+name: Live permission smoke
+version: "1"
+start: start
+nodes:
+  start: { type: start }
+  write:
+    type: agent
+    agent: ${FIXTURE.live.agentId}
+    prompt: "Write the smoke note only if its permission callback is approved."
+    produces:
+      - { kind: smoke-note, path: "${FIXTURE.live.subject}" }
+  done: { type: end, outcome: success }
+edges:
+  - { from: start, to: write }
+  - { from: write, to: done }
+`;
+
 /**
  * The config `orca serve` is given: the demo's, plus a second host and the fixture's
  * workflows.
@@ -260,6 +290,7 @@ async function writeSmokeConfig(dir: string): Promise<string> {
   await mkdir(workflowDir, { recursive: true });
   await writeFile(join(workflowDir, "gate.yaml"), GATE_WORKFLOW, "utf8");
   await writeFile(join(workflowDir, "failure.yaml"), FAILURE_WORKFLOW, "utf8");
+  await writeFile(join(workflowDir, "live-input.yaml"), LIVE_WORKFLOW, "utf8");
 
   const config = {
     ...demo,
@@ -280,6 +311,24 @@ async function writeSmokeConfig(dir: string): Promise<string> {
         command: "claude-code-acp",
         hostId: FIXTURE.host.id,
         roles: ["reviewer"],
+      },
+      {
+        id: FIXTURE.live.agentId,
+        name: "Live permission fixture",
+        command: process.execPath,
+        args: [join(repoRoot, "packages/testing/dist/scripted-agent/main.js")],
+        // This takes precedence over inherited playbook paths and test settings.
+        env: {
+          ORCA_PLAYBOOK_JSON: JSON.stringify({
+            default: { askPermission: true, permissionPath: FIXTURE.live.subject },
+          }),
+        },
+        hostId: "local",
+        roles: [],
+        permissions: { default: "ask", rules: [] },
+        // A hard outer bound if the test fails before it can cancel the owning run.
+        turnTimeoutMs: 60_000,
+        cancelGraceMs: 500,
       },
     ],
     workflows: [...demo.workflows, join(workflowDir, "*.yaml").replaceAll("\\", "/")],
@@ -353,6 +402,34 @@ export async function startDemoDaemon(): Promise<Daemon> {
     url,
     dir,
     tokenFile,
+    rpc: (method, params) => rpc(url, tokenFile, method, params),
+    startLivePermission: async () => {
+      // runs.start keeps its response open while the original interpreter owns the
+      // callback. Start it concurrently, then observe only the public read model.
+      let startFailure: Error | undefined;
+      const started = rpc(url, tokenFile, "runs.start", { workflowId: FIXTURE.live.workflowId, vars: {} }).catch(
+        (error: unknown) => {
+          startFailure = error instanceof Error ? error : new Error("the live smoke run failed", { cause: error });
+        },
+      );
+      let input: OpenInputView | undefined;
+      await until("the scripted agent's live permission", async () => {
+        if (startFailure) throw startFailure;
+        const snapshot = InputsListResultSchema.parse(await rpc(url, tokenFile, "inputs.list"));
+        input = snapshot.inputs.find((candidate) => candidate.agent?.id === FIXTURE.live.agentId);
+        return input?.live?.state === "pending";
+      });
+      if (!input) throw new Error("the scripted agent's live permission disappeared");
+      const runId = input.runId;
+      return {
+        input,
+        cancel: async () => {
+          await rpc(url, tokenFile, "runs.cancel", { runId, reason: "End the disposable live-permission smoke" });
+          await started;
+          if (startFailure) throw startFailure;
+        },
+      };
+    },
     stop: async () => {
       const exited = serve.exitCode === null && serve.signalCode === null ? once(serve, "exit") : undefined;
       serve.kill("SIGTERM");

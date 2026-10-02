@@ -310,7 +310,8 @@ describe("orca submit", () => {
   it("creates a request and follows the program workflow", async () => {
     const c = ctx(dir, ["Add", "authentication"], { body: "Users log in." });
     expect(await commands.submit!.run(c)).toBe(0);
-    expect(c.lines[0]).toMatch(/^request req_\S+: (decomposing|completed)$/);
+    expect(c.lines[0]).toMatch(/^request req_\S+; run run_\S+; admission admission_\S+$/);
+    expect(c.lines.join("\n")).toMatch(/request req_\S+: completed/);
     expect(c.lines.join("\n")).toMatch(/workflow=program@1 +status=completed\/success/);
     // No work items came out of this program workflow, so no section for them.
     expect(c.lines.join("\n")).not.toContain("work items:");

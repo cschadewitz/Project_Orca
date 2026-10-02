@@ -75,6 +75,7 @@ export function useControls({ onAnswered }: ControlsOptions): Controls {
       run(input.id, async () => {
         const result = await window.orca.inputs.answer({
           requestId: input.id,
+          ...(input.live ? { live: input.live.target } : {}),
           runId: input.runId,
           optionId: request.optionId,
           ...(request.note ? { note: request.note } : {}),

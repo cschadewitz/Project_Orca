@@ -2,12 +2,14 @@
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseWorkflow } from "@orca/core";
 import {
   FileExecutionStore,
   FileWorkflowVersionStore,
+  InMemoryEventStore,
   InMemoryExecutionStore,
+  executionEvents,
   type ExecutionInputs,
 } from "@orca/store";
 
@@ -46,6 +48,61 @@ for (const backend of ["memory", "file"] as const) {
 }
 
 describe("authenticated private storage", () => {
+  it("authenticates replay inputs once per run and refreshes them for every batch", async () => {
+    const directory = await dir();
+    const store = new FileExecutionStore(directory);
+    const publicEvents = new InMemoryEventStore();
+    await store.putInputs(inputs());
+    await store.putInputs(inputs("run-2"));
+    await publicEvents.append({ type: "run.started", runId: "run-1", payload: {} });
+    for (let index = 0; index < 12; index++) {
+      const input = {
+        type: "vars.set" as const,
+        runId: index % 2 ? "run-1" : "run-2",
+        payload: { vars: { echoed: SECRET, index } },
+      };
+      const ref = `event-${index}`;
+      await store.putPayload(ref, input);
+      await publicEvents.append({ ...input, payload: { vars: {} }, executionPayloadRef: ref });
+    }
+    const events = [...(await publicEvents.read("run-1")), ...(await publicEvents.read("run-2"))];
+    const getInputs = vi.spyOn(store, "getInputs");
+    const restored = await executionEvents(events, store);
+    expect(getInputs).toHaveBeenCalledTimes(2);
+    expect(restored[0]).toEqual(events[0]);
+    expect(restored.filter((event) => event.type === "vars.set").map((event) => event.payload.vars.echoed)).toEqual(
+      Array<string>(12).fill(SECRET),
+    );
+    await executionEvents(events, store);
+    expect(getInputs).toHaveBeenCalledTimes(4);
+    await rm(privatePath(directory, "run-1.inputs.json"));
+    await expect(executionEvents(events, store)).rejects.toMatchObject({ code: "RUN_STATE" });
+  });
+
+  it("checks every batched payload identity, type and sealed sensitivity overlay", async () => {
+    const directory = await dir();
+    const store = new FileExecutionStore(directory);
+    await store.putInputs(inputs());
+    await store.addSensitivity("run-1", { sensitiveNames: ["next"], secrets: ["next-secret"] });
+    for (const ref of ["first", "second"])
+      await store.putPayload(ref, { type: "vars.set", runId: "run-1", payload: { vars: { ref } } });
+    const references = ["first", "second"].map((ref) => ({ runId: "run-1", ref, type: "vars.set" }));
+    expect(await store.getPayloads(references)).toEqual([{ vars: { ref: "first" } }, { vars: { ref: "second" } }]);
+    for (const invalid of [{ runId: "wrong" }, { type: "run.started" }, { ref: "missing" }])
+      await expect(store.getPayloads([references[0]!, { ...references[1]!, ...invalid }])).rejects.toMatchObject({
+        code: "RUN_STATE",
+      });
+    // Remove a previously authenticated overlay during the batch, before the fresh
+    // input/sensitivity read. A previous call's success must not authorize this one.
+    const getInputs = store.getInputs.bind(store);
+    vi.spyOn(store, "getInputs").mockImplementationOnce(async (runId) => {
+      const overlay = (await readdir(privatePath(directory, ""))).find((name) => name.includes(".sensitivity."))!;
+      await rm(privatePath(directory, overlay));
+      return getInputs(runId);
+    });
+    await expect(store.getPayloads(references)).rejects.toMatchObject({ code: "RUN_STATE" });
+  });
+
   it("encrypts inputs and payloads, with owner-only records/key and fresh-store restart", async () => {
     const directory = await dir();
     const store = new FileExecutionStore(directory);

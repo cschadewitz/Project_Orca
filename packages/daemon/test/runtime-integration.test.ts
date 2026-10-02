@@ -2,17 +2,25 @@
 import { mkdtemp, readFile, rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { AgentRegistry } from "@orca/agents";
+import { AgentRegistry, LocalHost, type AgentSession } from "@orca/agents";
 import {
   OrcaError,
+  AgentSpecSchema,
   TemplateRegistry,
   WorkflowRegistry,
   WorkflowDefinitionSchema,
   type WorkflowDefinition,
 } from "@orca/core";
-import { Orchestrator, PausingHumanInput, LocalWorkspaceProvider, runLeaseResource } from "@orca/engine";
+import {
+  Orchestrator,
+  PausingHumanInput,
+  LocalWorkspaceProvider,
+  LiveHumanInput,
+  runLeaseResource,
+} from "@orca/engine";
 import { memoryStores } from "@orca/store";
 import {
   ControlModel,
@@ -55,13 +63,21 @@ async function fixture() {
   const stores = memoryStores();
   const workflows = new WorkflowRegistry().register(definition()).register(definition("hidden"));
   const workspaceProvider = new LocalWorkspaceProvider(dir);
+  const livePort = new LiveHumanInput("integration-boot");
+  const execution = new AbortController();
+  cleanup.push(async () => {
+    livePort.close();
+  });
   const orchestrator = new Orchestrator({
     stores,
     workflows,
-    agents: new AgentRegistry(),
+    agents: new AgentRegistry()
+      .addHost(new LocalHost({ id: "local", type: "local" }))
+      .addAgent(AgentSpecSchema.parse({ id: "builder", command: "unused", permissions: { default: "ask" } })),
     templates: new TemplateRegistry(),
     workspaceProvider,
     humanInput: new PausingHumanInput(),
+    liveInput: { port: livePort, executionSignal: () => execution.signal },
   });
   const reads = new ReadModel({ orchestrator });
   const permissionsFile = join(dir, "orca.permissions.json");
@@ -85,6 +101,7 @@ async function fixture() {
     control,
     workflowInputs,
     source: orchestrator,
+    liveInputs: livePort,
     auth: { mode: "token", credentials, ownership, resolver: orchestratorResolver(orchestrator) },
   });
   cleanup.push(() => daemon.close());
@@ -117,6 +134,7 @@ async function fixture() {
     client,
     daemon,
     rpc,
+    livePort,
   };
 }
 
@@ -266,34 +284,78 @@ describe("authorized typed launch admission", () => {
 });
 
 async function permissionGate(h: Awaited<ReturnType<typeof fixture>>) {
-  const state = await h.orchestrator.startAndRun({ workflowId: "typed", vars: { count: 3 } });
-  const runId = state.run.id;
-  const request = (await h.orchestrator.pendingInputs(runId))[0]!;
-  const stepRunId = request.stepRunId;
-  const requestId = request.id;
-  await h.stores.events.append({
-    type: "agent.session.opened",
-    runId,
-    payload: { stepRunId, sessionId: "session", agentId: "builder", hostId: "local", cwd: h.dir },
-  });
-  await h.stores.events.append({
-    type: "human.requested",
-    runId,
-    payload: {
-      stepRunId,
-      requestId,
-      kind: "permission",
-      question: "Edit?",
-      options: [
-        { id: "allow", label: "Allow" },
-        { id: "deny", label: "Deny" },
-      ],
-      context: {
-        toolCall: { toolCallId: "tool", title: "Edit a.ts", kind: "edit", locations: [{ path: join(h.dir, "a.ts") }] },
+  h.workflows.register(
+    WorkflowDefinitionSchema.parse({
+      id: "permission",
+      name: "Permission",
+      start: "work",
+      nodes: { work: { type: "agent", agent: "builder", prompt: "Edit a.ts" }, end: { type: "end" } },
+      edges: [{ from: "work", to: "end" }],
+    }),
+  );
+  const answers: (string | undefined)[] = [];
+  h.orchestrator.sessionFactory = async (options) => {
+    const id = randomUUID();
+    const lifetime = new AbortController();
+    let closed!: () => void;
+    const session: AgentSession = {
+      id,
+      agentId: options.agent.id,
+      hostId: options.host.id,
+      cwd: options.cwd,
+      acpSessionId: id,
+      configOptions: [],
+      setConfigOption: async () => [],
+      onUpdate: () => () => {},
+      closed: new Promise<void>((resolve) => {
+        closed = resolve;
+      }),
+      cancel: async () => {
+        lifetime.abort();
       },
-    },
+      close: async () => {
+        lifetime.abort();
+        closed();
+      },
+      prompt: async (_prompt, control) => {
+        const answer = await options.askPermission!(
+          {
+            sessionId: id,
+            toolCall: {
+              toolCallId: "tool",
+              title: "Edit a.ts",
+              kind: "edit",
+              locations: [{ path: join(h.dir, "a.ts") }],
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "deny", name: "Deny", kind: "reject_once" },
+            ],
+          },
+          {
+            sessionId: id,
+            turnId: randomUUID(),
+            invocationId: randomUUID(),
+            signal: AbortSignal.any([lifetime.signal, ...(control?.signal ? [control.signal] : [])]),
+          },
+        );
+        answers.push(answer);
+        return { stopReason: "end_turn", durationMs: 1 };
+      },
+    };
+    return session;
+  };
+  const runId = await h.orchestrator.startRun({ workflowId: "permission" });
+  const done = h.orchestrator.run(runId);
+  void done.catch(() => undefined);
+  cleanup.push(async () => {
+    h.livePort.close();
+    await done.catch(() => undefined);
   });
-  return { runId, requestId };
+  await vi.waitFor(async () => expect((await h.reads.inputsList({ runId })).inputs).toHaveLength(1));
+  const input = (await h.reads.inputsList({ runId })).inputs[0]!;
+  expect(input.live?.state).toBe("pending");
+  return { params: { runId, requestId: input.id, live: input.live!.target }, done, answers };
 }
 const sidecar = async (path: string) =>
   readFile(path, "utf8").catch((e: unknown) => {
@@ -304,54 +366,87 @@ const sidecar = async (path: string) =>
 describe("standing permission acceptance", () => {
   it("does not grant for an invalid option, stale gate, wrong run or foreign lease", async () => {
     const h = await fixture();
-    const gate = await permissionGate(h);
-    const params = { ...gate, optionId: "allow", always: { decision: "allow" }, resume: false };
-    expect((await h.rpc(h.owner, "inputs.answer", { ...params, optionId: "wrong" })).error?.code).toBe(
-      "INPUT_OPTION_UNKNOWN",
-    );
-    expect(await sidecar(h.permissionsFile)).toBeUndefined();
-    const foreign = await h.stores.leases.acquire({ resource: runLeaseResource(gate.runId), holder: "foreign" });
-    expect((await h.rpc(h.owner, "inputs.answer", params)).error?.code).toBe("RUN_LEASED_ELSEWHERE");
-    expect(await sidecar(h.permissionsFile)).toBeUndefined();
-    await h.stores.leases.release(foreign);
-    await h.orchestrator.answer(gate.requestId, "deny", gate.runId);
-    expect((await h.rpc(h.owner, "inputs.answer", params)).error?.code).toBe("INPUT_ANSWERED");
+    const live = await permissionGate(h);
+    const gate = live.params;
+    const params = { ...gate, optionId: "allow", always: { decision: "allow" }, resume: true };
+    expect((await h.rpc(h.owner, "inputs.answer", { ...params, optionId: "wrong" })).error?.code).toBe("RUN_STATE");
     expect(await sidecar(h.permissionsFile)).toBeUndefined();
     expect((await h.rpc(h.owner, "inputs.answer", { ...params, runId: "wrong-run" })).ok).toBe(false);
+    expect(h.livePort.inspect(gate.live)).toBe("pending");
+    // This is the original interpreter's lease, not a synthetic parked permission gate.
+    await h.stores.leases.forceRelease(runLeaseResource(gate.runId));
+    const foreign = await h.stores.leases.acquire({ resource: runLeaseResource(gate.runId), holder: "foreign" });
+    const before = await h.orchestrator.events(gate.runId);
+    expect((await h.rpc(h.owner, "inputs.answer", params)).error?.code).toBe("RUN_LEASED");
+    await live.done.catch(() => undefined);
+    expect(h.livePort.inspect(gate.live)).toBe("expired");
+    expect(await h.orchestrator.events(gate.runId)).toEqual(before);
+    expect(await sidecar(h.permissionsFile)).toBeUndefined();
+    await h.stores.leases.release(foreign);
+    const next = await permissionGate(h);
+    expect((await h.rpc(h.owner, "inputs.answer", { ...next.params, optionId: "deny" })).ok).toBe(true);
+    await next.done;
+    expect((await h.rpc(h.owner, "inputs.answer", { ...params, ...next.params })).error).toMatchObject({
+      code: "RUN_STATE",
+      details: { liveInputState: "expired" },
+    });
     expect(await sidecar(h.permissionsFile)).toBeUndefined();
   });
-
+  it("refuses no-resume for a live callback without consuming the ask or writing a standing grant", async () => {
+    const h = await fixture();
+    const live = await permissionGate(h);
+    expect(
+      (
+        await h.rpc(h.owner, "inputs.answer", {
+          ...live.params,
+          optionId: "allow",
+          always: { decision: "allow" },
+          resume: false,
+        })
+      ).error?.code,
+    ).toBe("NOT_SUPPORTED");
+    expect(h.livePort.inspect(live.params.live)).toBe("pending");
+    expect(live.answers).toEqual([]);
+    expect((await h.orchestrator.events(live.params.runId)).some((event) => event.type === "human.answered")).toBe(
+      false,
+    );
+    expect(await sidecar(h.permissionsFile)).toBeUndefined();
+  });
   it("persists only the accepted decision when concurrent always answers race", async () => {
     const h = await fixture();
-    const gate = await permissionGate(h);
-    const accept = h.orchestrator.answer.bind(h.orchestrator);
+    const live = await permissionGate(h);
+    const gate = live.params;
+    const accept = h.livePort.answer.bind(h.livePort);
     let arrivals = 0;
     let release!: () => void;
     const together = new Promise<void>((resolve) => {
       release = resolve;
     });
-    vi.spyOn(h.orchestrator, "answer").mockImplementation(async (...args) => {
-      arrivals++;
-      if (arrivals === 2) release();
+    vi.spyOn(h.livePort, "answer").mockImplementation(async (...args) => {
+      if (++arrivals === 2) release();
       await together;
       return accept(...args);
     });
     const replies = await Promise.all(
       ["allow", "deny"].map((decision) =>
-        h.rpc(h.owner, "inputs.answer", { ...gate, optionId: decision, always: { decision }, resume: false }),
+        h.rpc(h.owner, "inputs.answer", { ...gate, optionId: decision, always: { decision }, resume: true }),
       ),
     );
-    expect(replies.filter((r) => r.ok)).toHaveLength(1);
-    const winner = replies.find((r) => r.ok)!.result!.answer as string;
+    expect(replies.filter((reply) => reply.ok)).toHaveLength(1);
+    const winner = replies.find((reply) => reply.ok)!.result!.answer as string;
     const saved = JSON.parse((await sidecar(h.permissionsFile))!) as { agents: Record<string, unknown> };
     expect(JSON.stringify(saved)).toContain(`"decision":"${winner}"`);
     expect(JSON.stringify(saved)).not.toContain(`"decision":"${winner === "allow" ? "deny" : "allow"}"`);
-    expect((await h.orchestrator.getState(gate.runId)).run.status).toBe("paused");
+    expect((await live.done).run.status).toBe("completed");
+    expect(live.answers).toEqual([winner]);
+    expect((await h.orchestrator.events(gate.runId)).filter((event) => event.type === "human.answered")).toMatchObject([
+      { payload: { answer: winner, actor: { principalId: "owner" } } },
+    ]);
   });
-
   it("does not grant if the accepted-answer log write fails", async () => {
     const h = await fixture();
-    const gate = await permissionGate(h);
+    const live = await permissionGate(h);
+    const gate = live.params;
     const append = h.orchestrator.stores.events.append.bind(h.orchestrator.stores.events);
     vi.spyOn(h.orchestrator.stores.events, "append").mockImplementation(async (event) => {
       if (event.type === "human.answered") throw new Error("fixture append failed");
@@ -362,9 +457,13 @@ describe("standing permission acceptance", () => {
     expect(reply.ok).toBe(false);
     expect(await sidecar(h.permissionsFile)).toBeUndefined();
     expect(resume).not.toHaveBeenCalled();
-    expect((await h.orchestrator.pendingInputs(gate.runId)).map((r) => r.id)).toContain(gate.requestId);
+    expect((await live.done).run.status).toBe("failed");
+    expect(live.answers).toEqual([]);
+    expect(h.livePort.inspect(gate.live)).toBe("expired");
+    expect((await h.orchestrator.events(gate.runId)).some((event) => event.type === "human.answered")).toBe(false);
+    expect((await h.orchestrator.getState(gate.runId)).humanInputs[gate.requestId]?.answer).toBeUndefined();
+    expect(await h.orchestrator.pendingInputs(gate.runId)).toEqual([]);
   });
-
   it("does not consume a non-permission gate when always is invalid", async () => {
     const h = await fixture();
     const state = await h.orchestrator.startAndRun({ workflowId: "typed", vars: { count: 3 } });
@@ -377,21 +476,23 @@ describe("standing permission acceptance", () => {
     });
     expect(reply.error?.code).toBe("NOT_SUPPORTED");
     expect(await sidecar(h.permissionsFile)).toBeUndefined();
-    expect((await h.orchestrator.pendingInputs(state.run.id)).map((r) => r.id)).toContain(gate.id);
+    expect((await h.orchestrator.pendingInputs(state.run.id)).map((request) => request.id)).toContain(gate.id);
   });
-
   it("leaves a durably accepted one-time answer parked if the standing grant cannot be saved", async () => {
     const h = await fixture();
-    const gate = await permissionGate(h);
+    const live = await permissionGate(h);
+    const gate = live.params;
     await mkdir(h.permissionsFile);
     const resume = vi.spyOn(h.orchestrator, "resume");
     const reply = await h.rpc(h.owner, "inputs.answer", { ...gate, optionId: "allow", always: { decision: "allow" } });
     expect(reply.ok).toBe(false);
     expect(reply.error?.details).toMatchObject({ answerRecorded: true });
     expect(resume).not.toHaveBeenCalled();
-    const state = await h.orchestrator.getState(gate.runId);
+    const state = await live.done;
     expect(state.run.status).toBe("paused");
     expect(state.humanInputs[gate.requestId]?.answer).toBe("allow");
+    expect(live.answers).toEqual([]);
+    expect(h.livePort.inspect(gate.live)).toBe("expired");
   });
 });
 
@@ -401,9 +502,7 @@ it("recovers from an ownership persistence failure after a later durable write s
   const file = join(directory, "ownership.json");
   const ownership = new OwnershipStore(file);
   await mkdir(file);
-  ownership.record("first", "owner");
-  await ownership.flush();
-  expect(ownership.lastError).toBeDefined();
+  expect(() => ownership.record("first", "owner")).toThrow();
   await rm(file, { recursive: true });
   ownership.record("second", "owner");
   await ownership.flush();

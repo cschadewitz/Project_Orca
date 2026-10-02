@@ -58,6 +58,13 @@ import { join, resolve } from "node:path";
 // against the source of truth rather than against a second list of glyphs written here
 // (RULES.md rule 3). This resolves to the built `dist`, which `pnpm run build` produces.
 import { CONNECTION_PRESENTATION, STATUS_PRESENTATION, type RunStatus } from "@orca/design";
+import {
+  ArtifactsListResultSchema,
+  InputInvalidatedParamsSchema,
+  RunsEventsResultSchema,
+  type InputsAnswerParams,
+  type NotificationMessage,
+} from "@orca/protocol";
 import { FIXTURE, startDemoDaemon, type Daemon } from "./daemon.js";
 
 /**
@@ -70,16 +77,36 @@ interface SmokeWindow {
     hello: () => Promise<{ ok: true; result: { capabilities: string[] } } | { ok: false; error: unknown }>;
     /** Only the part the pane-boundary test reads back: the sizes a drag left behind (#276). */
     preferences: { read: () => { panes: Record<string, number> } };
+    connection: {
+      read: () => SmokeConnection;
+      subscribe: (listener: (snapshot: SmokeConnection) => void) => () => void;
+    };
+    notifications: { subscribe: (listener: (message: NotificationMessage) => void) => () => void };
+    inputs: {
+      answer: (params: InputsAnswerParams) => Promise<{ ok: true; result: unknown } | { ok: false; error: unknown }>;
+    };
   };
+  liveInputProbe?: {
+    notifications: NotificationMessage[];
+    connections: SmokeConnection[];
+    stop: () => void;
+  };
+}
+
+interface SmokeConnection {
+  state: string;
+  generation?: number;
+  since: string;
 }
 
 /** The app directory Electron is pointed at; its `main` field is `dist/main/index.js`. */
 const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
 /**
- * The OS-level Chromium sandbox needs unprivileged user namespaces, which a plain container
- * usually does not have — hence the opt-out for a local run. It is *not* set in CI, where
- * the workflow clears the AppArmor restriction instead and the real sandbox stays on.
+ * On Linux, Chromium's OS-level sandbox needs unprivileged user namespaces. The
+ * workflow checks that prerequisite and xvfb availability; it does not change host
+ * security policy or set this local-only opt-out. A passing application smoke test
+ * is not an attestation of the host's complete sandbox/security configuration.
  *
  * This is unrelated to `webPreferences.sandbox: true`, which is the renderer's isolation
  * from Node and stays on everywhere; the smoke test would be pointless without it, since
@@ -184,6 +211,7 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     // viewer draws (#177). Written down here, in the PR that widened `src/bridge.ts`.
     "config",
     "connection",
+    "daemonConnection",
     "deepLink",
     "hello",
     "inputs",
@@ -430,6 +458,7 @@ async function setWindowSize(width: number, height: number): Promise<void> {
   await browserWindow.evaluate((win, size) => win.setContentSize(size.width, size.height), { width, height });
   // Within a couple of pixels: a window manager may round, and the point is "short", not "340".
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(height + 4);
+  await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeGreaterThanOrEqual(height - 4);
 }
 
 test.describe("a window too short for what is in it", () => {
@@ -616,3 +645,172 @@ for (const theme of THEMES) {
     }
   });
 }
+
+test("a connected live permission expires without dispatching a stale answer", async () => {
+  // Last: the visual audits retain their original durable-gate/failed-run fixture.
+  const attention = await gotoSurface("attention", 1);
+  const before = await page.evaluate(() => {
+    const target = window as unknown as SmokeWindow;
+    const orca = target.orca!;
+    const snapshot = orca.connection.read();
+    const notifications: NotificationMessage[] = [];
+    const connections = [snapshot];
+    const offNotifications = orca.notifications.subscribe((message) => notifications.push(message));
+    const offConnection = orca.connection.subscribe((next) => connections.push(next));
+    target.liveInputProbe = {
+      notifications,
+      connections,
+      stop: () => {
+        offNotifications();
+        offConnection();
+      },
+    };
+    return snapshot;
+  });
+  expect(before.state).toBe("live");
+  expect(before.generation).toBeGreaterThan(0);
+
+  let live: Awaited<ReturnType<Daemon["startLivePermission"]>> | undefined;
+  let cancelled = false;
+  try {
+    live = await daemon.startLivePermission();
+    const { input } = live;
+    expect(input.kind).toBe("permission");
+    expect(input.live?.state).toBe("pending");
+    expect(input.live?.target).toMatchObject({
+      runId: input.runId,
+      stepRunId: input.stepRunId,
+      requestId: input.id,
+    });
+    expect(input.question).toContain(FIXTURE.live.subject);
+    // Focus/Enter belong to the inner card body, not its non-focusable alert shell.
+    const card = attention.locator(`.orca-attn__card-body[id="attention-card-${input.id}"]`);
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(input.question);
+    const allow = card.getByRole("button", { name: /^1\s*Allow$/ });
+    const answer = card.getByRole("button", { name: "Answer", exact: true });
+    await expect(allow).toBeEnabled();
+    // The waiting section must contain its cards at both heights. A shrinkable flex
+    // section can leave them visible outside its box while Failed runs intercepts
+    // every click. Visibility/scroll arithmetic alone cannot detect that overlap.
+    for (const size of [{ width: 1200, height: 800 }, SHORT_WINDOW]) {
+      await setWindowSize(size.width, size.height);
+      const geometry = await attention.locator('.orca-attn__section[aria-label="Waiting"]').evaluate((section) => {
+        const waiting = section.getBoundingClientRect();
+        const cards = section.querySelector(".orca-attn__cards")!.getBoundingClientRect();
+        const failures = section.parentElement!.querySelector(".orca-attn__failures")!.getBoundingClientRect();
+        return { waitingBottom: waiting.bottom, cardsBottom: cards.bottom, failuresTop: failures.top };
+      });
+      expect(geometry.waitingBottom, `Waiting must contain its cards at ${size.height}px`).toBeGreaterThanOrEqual(
+        geometry.cardsBottom - 1,
+      );
+      expect(geometry.failuresTop, `Failed runs must follow the cards at ${size.height}px`).toBeGreaterThanOrEqual(
+        geometry.cardsBottom,
+      );
+      for (const control of [allow, answer]) {
+        await control.scrollIntoViewIfNeeded();
+        const hit = await control.evaluate((button) => {
+          const rect = button.getBoundingClientRect();
+          const root = button.closest(".orca-attn-surface")!.getBoundingClientRect();
+          const x = rect.left + rect.width / 2;
+          const y = rect.top + rect.height / 2;
+          const target = document.elementFromPoint(x, y);
+          return {
+            inScroller: x >= root.left && x < root.right && y >= root.top && y < root.bottom,
+            receivesPointer: target !== null && button.contains(target),
+            hit: target?.className ?? "none",
+          };
+        });
+        expect(hit.inScroller, `Control must scroll into the root at ${size.height}px`).toBe(true);
+        expect(hit.receivesPointer, `Control is covered by ${hit.hit} at ${size.height}px`).toBe(true);
+      }
+      // Real pointer action at both heights, with Playwright's hit testing intact.
+      await allow.click();
+      await test.info().attach(`live-permission-${size.height}px.png`, {
+        body: await page.screenshot(),
+        contentType: "image/png",
+      });
+    }
+    await setWindowSize(1200, 800);
+    await expect(answer).toBeEnabled();
+    await expect(card.getByRole("button", { name: "Always allow", exact: true })).toBeEnabled();
+    await card.focus();
+    await expect(card).toBeFocused();
+    await test.info().attach("live-permission-pending.png", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
+
+    // Cancel at the owning daemon while leaving the window and socket alone. Awaiting
+    // the original runs.start also proves its interpreter has finished, not just that
+    // the read model has briefly painted an expired state.
+    await live.cancel();
+    cancelled = true;
+    await expect(answer).toBeDisabled();
+    await expect(answer).toHaveAttribute("title", /callback is expired/);
+    await expect(allow).toBeDisabled();
+    await expect(card.getByRole("button", { name: "Always allow", exact: true })).toBeDisabled();
+    await expect(card.getByRole("button", { name: "Always deny", exact: true })).toBeDisabled();
+
+    const pushed = () =>
+      page.evaluate(() => {
+        const probe = (window as unknown as SmokeWindow).liveInputProbe!;
+        return probe.notifications.filter((message) => message.method === "input.invalidated");
+      });
+    await expect.poll(async () => (await pushed()).length).toBe(1);
+    const invalidation = (await pushed())[0]!;
+    expect(InputInvalidatedParamsSchema.parse(invalidation.params).target).toEqual(input.live!.target);
+    expect(invalidation.params).not.toHaveProperty("seq");
+
+    // The disabled control remains keyboard-focusable to explain its reason. Exercise
+    // both handlers anyway: neither may turn the stale selection into an approval.
+    await answer.click({ force: true });
+    await card.focus();
+    await page.keyboard.press("Enter");
+    // Even a caller retaining the complete old identity cannot deliver to the agent.
+    const stale = await page.evaluate((params) => (window as unknown as SmokeWindow).orca!.inputs.answer(params), {
+      runId: input.runId,
+      requestId: input.id,
+      optionId: "allow",
+      live: input.live!.target,
+      resume: true,
+    });
+    expect(stale).toMatchObject({ ok: false, error: { code: "RUN_STATE", details: { liveInputState: "expired" } } });
+
+    const events = RunsEventsResultSchema.parse(
+      await daemon.rpc("runs.events", { runId: input.runId, limit: 500 }),
+    ).events;
+    expect(events.filter((event) => event.type === "human.requested")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "human.answered")).toEqual([]);
+    expect(events.filter((event) => event.type === "run.cancelled")).toHaveLength(1);
+    expect(
+      events.filter((event) => event.type === "agent.permission" && String(event.payload.decision).includes("allow")),
+    ).toEqual([]);
+    expect(
+      ArtifactsListResultSchema.parse(await daemon.rpc("artifacts.list", { runId: input.runId })).artifacts,
+    ).toEqual([]);
+    const connections = await page.evaluate(() => (window as unknown as SmokeWindow).liveInputProbe!.connections);
+    expect(
+      connections.every((snapshot) => snapshot.state === "live" && snapshot.generation === before.generation),
+    ).toBe(true);
+    await expect(page.locator(".orca-statusbar .orca-conn--live")).toBeVisible();
+    const gate = attention.getByRole("region", { name: `gate, ${FIXTURE.gate.question}`, exact: true });
+    await expect(gate.getByRole("button", { name: "Answer", exact: true })).toBeEnabled();
+    await expect(answer).toBeDisabled();
+    // A disabled-click/keyboard regression would expose its rejected dispatch here;
+    // the direct stale bridge call above deliberately does not invoke card handlers.
+    await expect(card.locator('.orca-card__hint[role="status"]')).toHaveCount(0);
+    await test.info().attach("live-permission-expired.png", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
+  } finally {
+    if (live && !cancelled) await live.cancel();
+    await setWindowSize(1200, 800);
+    await page.evaluate(() => {
+      const target = window as unknown as SmokeWindow;
+      target.liveInputProbe?.stop();
+      delete target.liveInputProbe;
+    });
+  }
+});

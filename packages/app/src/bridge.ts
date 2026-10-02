@@ -14,6 +14,7 @@
  * says so. `alerts.update` is the one call in the other direction with nothing to answer:
  * it states what is waiting, and the main process has no verdict to give back.
  */
+import type { DaemonConnectionBridge } from "./daemon-connection.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 
 import type { ConnectionState } from "@orca/design";
@@ -193,6 +194,7 @@ export interface AlertActivation {
 }
 
 export interface OrcaBridge {
+  daemonConnection?: DaemonConnectionBridge;
   updates: {
     read(): UpdateSnapshot;
     act(action: UpdateAction): Promise<BridgeResult<UpdateSnapshot>>;

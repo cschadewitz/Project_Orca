@@ -32,6 +32,10 @@
 .orca-attn__section {
   display: flex;
   flex-direction: column;
+  /* Waiting cards keep their intrinsic height inside the root scroller. Shrinking
+     this section lets the later failures list paint over still-visible controls.
+     The bounded virtual lists below opt back into flexing with their own floor. */
+  flex-shrink: 0;
   gap: var(--space-2);
   min-height: 0;
 }

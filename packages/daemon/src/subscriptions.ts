@@ -21,11 +21,14 @@
  * the same run is sent, so a client appending as frames arrive sees the run's log in
  * sequence order - agent output never lands after the `step.completed` that ended it.
  */
+import type { ConfigGenerationStatus } from "@orca/protocol";
+
 import type { OrcaEvent } from "@orca/core";
 import {
   AGENT_CHANGED,
   AGENT_UPDATE,
   CONFIG_CHANGED,
+  WORKFLOWS_CHANGED,
   PLAN_CHANGED,
   type AgentView,
   type ConfigDocument,
@@ -34,6 +37,7 @@ import {
   type SubscribeParams,
 } from "@orca/protocol";
 import { notificationsFor, planChangeKindsFor, wants } from "./notifications.js";
+import { liveInputInvalidated, type LiveInputChangeSource } from "./live-input-notifications.js";
 
 /** At most one `agent.update` notification per step per this many milliseconds. */
 export const AGENT_BATCH_MS = 100;
@@ -70,7 +74,15 @@ export interface AgentChangeSource {
  */
 export interface ConfigChangeSource {
   onChange(
-    listener: (change: { document: ConfigDocument; revision: string; path: string; at: string }) => void,
+    listener: (change: {
+      document: ConfigDocument;
+      revision: string;
+      path: string;
+      at: string;
+      kind?: "saved" | "activated";
+      generation?: ConfigGenerationStatus;
+      workflows?: { id: string; version: string; removed?: boolean }[];
+    }) => void,
   ): () => void;
 }
 
@@ -122,6 +134,8 @@ export interface SubscriptionOptions {
    * it, so a run screen would only be woken by work it is not showing.
    */
   plans?: PlanChangeSource | undefined;
+  /** Owner-local expiry, scoped and authorized like other run notifications. */
+  liveInputs?: LiveInputChangeSource | undefined;
   /** Overridable so a test can hold the batch window open or close it by hand. */
   batchMs?: number | undefined;
 }
@@ -151,6 +165,7 @@ export class Subscription {
   private detachAgents: (() => void) | undefined;
   private detachConfig: (() => void) | undefined;
   private detachPlans: (() => void) | undefined;
+  private detachLiveInputs: (() => void) | undefined;
   /** Events that arrived while the replay was still reading the log. */
   private buffered: OrcaEvent[] | undefined;
   private stopped = false;
@@ -165,6 +180,12 @@ export class Subscription {
   /** Attach, replay from the cursor if there is one, and return how many frames the replay sent. */
   async start(): Promise<number> {
     const { runId, since } = this.params;
+    // Attach before replay: exact identities fence even an in-flight inputs.list result.
+    if (this.opts.liveInputs)
+      this.detachLiveInputs = this.opts.liveInputs.onInvalidated((target) => {
+        if (this.stopped || (runId !== undefined && runId !== target.runId)) return;
+        this.emit(liveInputInvalidated(target, this.id));
+      });
     // Buffer from the first live event: attaching after the read would lose the gap.
     this.buffered = [];
     this.detach = this.opts.source.subscribe(
@@ -199,11 +220,18 @@ export class Subscription {
           params: {
             subscriptionId: this.id,
             document: change.document,
+            ...(change.kind ? { kind: change.kind } : {}),
+            ...(change.generation ? { generation: change.generation } : {}),
             revision: change.revision,
             path: change.path,
             at: change.at,
           },
         });
+        for (const workflow of change.workflows ?? [])
+          this.emit({
+            method: WORKFLOWS_CHANGED,
+            params: { subscriptionId: this.id, ...workflow, at: change.at },
+          });
       });
 
     // A plan is not a run either, so the same rule: store-wide subscriptions only. There is
@@ -256,6 +284,8 @@ export class Subscription {
     this.detachConfig = undefined;
     this.detachPlans?.();
     this.detachPlans = undefined;
+    this.detachLiveInputs?.();
+    this.detachLiveInputs = undefined;
   }
 
   /** Route one event, returning how many frames it produced. */

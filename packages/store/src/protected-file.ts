@@ -1,13 +1,37 @@
 /** Authenticated, owner-only, write-once execution records. Public history never contains their plaintext. */
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { OrcaError } from "@orca/core";
 
 const KEY_FILE = ".execution-key";
 const syncedDirectories = new Set<string>();
+// Immutable ciphertext bytes only; callers still authenticate and parse every record.
+// Keys are always reread: same-size in-place rewrites can share a kernel timestamp tick.
+// Every hit revalidates the current path, owner-only mode and nanosecond change metadata.
+const byteCache = new Map<string, { directory: string; file: string; bytes: Buffer }>();
+const MAX_CACHED_BYTES = 8 * 1024 * 1024;
+let cachedBytes = 0;
+const directoryIdentity = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.mode}:${info.uid}:${info.gid}`;
+const fileIdentity = (info: BigIntStats) =>
+  `${directoryIdentity(info)}:${info.nlink}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+
+function forgetBytes(path: string): void {
+  const previous = byteCache.get(path);
+  if (previous) cachedBytes -= previous.bytes.length;
+  byteCache.delete(path);
+}
+
+function rememberBytes(path: string, directory: string, file: string, bytes: Buffer): void {
+  forgetBytes(path);
+  if (bytes.length > MAX_CACHED_BYTES) return;
+  while (byteCache.size >= 256 || cachedBytes + bytes.length > MAX_CACHED_BYTES)
+    forgetBytes(byteCache.keys().next().value!);
+  byteCache.set(path, { directory, file, bytes });
+  cachedBytes += bytes.length;
+}
 const EnvelopeSchema = z.strictObject({
   version: z.literal(1),
   algorithm: z.literal("aes-256-gcm"),
@@ -45,19 +69,37 @@ export async function privateDirectory(dir: string): Promise<void> {
 }
 
 async function privateBytes(dir: string, name: string): Promise<Buffer | undefined> {
+  const path = join(dir, name);
   try {
-    const directory = await lstat(dir);
-    if (!directory.isDirectory() || (process.platform !== "win32" && (directory.mode & 0o077) !== 0))
+    const directory = await lstat(dir, { bigint: true });
+    if (!directory.isDirectory() || (process.platform !== "win32" && (directory.mode & 0o077n) !== 0n))
       throw unreadable();
-    const handle = await open(join(dir, name), constants.O_RDONLY | constants.O_NOFOLLOW);
+    const info = await lstat(path, { bigint: true });
+    if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077n) !== 0n)) throw unreadable();
+    const directoryStamp = directoryIdentity(directory);
+    const fileStamp = fileIdentity(info);
+    const cacheable = name !== KEY_FILE;
+    const cached = cacheable ? byteCache.get(path) : undefined;
+    if (cached?.directory === directoryStamp && cached.file === fileStamp) return cached.bytes;
+    forgetBytes(path);
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
-      const info = await handle.stat();
-      if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077) !== 0)) throw unreadable();
-      return await handle.readFile();
+      // Never cache a record replaced between the path check/open, or changed while
+      // reading. Publication can legitimately change nlink/ctime when its temporary
+      // hard link is removed, so those reads use the open file but do not seed reuse.
+      const opened = await handle.stat({ bigint: true });
+      if (!opened.isFile() || (process.platform !== "win32" && (opened.mode & 0o077n) !== 0n)) throw unreadable();
+      const bytes = await handle.readFile();
+      const after = await handle.stat({ bigint: true });
+      if (!after.isFile() || (process.platform !== "win32" && (after.mode & 0o077n) !== 0n)) throw unreadable();
+      if (cacheable && fileIdentity(opened) === fileStamp && fileIdentity(after) === fileStamp)
+        rememberBytes(path, directoryStamp, fileStamp, bytes);
+      return bytes;
     } finally {
       await handle.close();
     }
   } catch (error) {
+    forgetBytes(path);
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw unreadable();
   }
@@ -146,6 +188,74 @@ export async function readPrivateJson(dir: string, name: string): Promise<unknow
     return decodeRecord(dir, name, bytes, await keyFor(dir, false));
   } catch {
     // Parse and authentication failures must never include source bytes or underlying exceptions.
+    throw unreadable();
+  }
+}
+
+/** A fresh, stable key observation for one replay call; never enters the ciphertext cache. */
+async function replayKey(dir: string): Promise<{ bytes: Buffer; directory: string; file: string }> {
+  const path = join(dir, KEY_FILE);
+  const directory = await lstat(dir, { bigint: true });
+  const info = await lstat(path, { bigint: true });
+  if (
+    !directory.isDirectory() ||
+    !info.isFile() ||
+    (process.platform !== "win32" && ((directory.mode | info.mode) & 0o077n) !== 0n)
+  )
+    throw unreadable();
+  const directoryStamp = directoryIdentity(directory);
+  const fileStamp = fileIdentity(info);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (fileIdentity(opened) !== fileStamp) throw unreadable();
+    const bytes = await handle.readFile();
+    const after = await handle.stat({ bigint: true });
+    const current = await lstat(path, { bigint: true });
+    const currentDirectory = await lstat(dir, { bigint: true });
+    if (
+      bytes.length !== 32 ||
+      fileIdentity(after) !== fileStamp ||
+      fileIdentity(current) !== fileStamp ||
+      directoryIdentity(currentDirectory) !== directoryStamp
+    )
+      throw unreadable();
+    return { bytes, directory: directoryStamp, file: fileStamp };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Internal multi-record replay boundary. Authenticate every record with the entry key,
+ * validate current inputs/sensitivity, then require the same fresh key bytes and identities
+ * before returning any plaintext. No authority survives this call or authorizes a write.
+ * These are entry/terminal observations, not proof against every transient A -> B -> A edit.
+ */
+export async function readPrivateJsonBatch<T>(
+  dir: string,
+  names: readonly string[],
+  validate: (records: unknown[]) => Promise<T>,
+): Promise<T> {
+  try {
+    const entry = await replayKey(dir);
+    const records = await Promise.all(
+      names.map(async (name) => {
+        const bytes = await privateBytes(dir, name);
+        if (!bytes) throw unreadable();
+        return decodeRecord(dir, name, bytes, entry.bytes);
+      }),
+    );
+    const result = await validate(records);
+    const terminal = await replayKey(dir);
+    if (
+      entry.directory !== terminal.directory ||
+      entry.file !== terminal.file ||
+      !timingSafeEqual(entry.bytes, terminal.bytes)
+    )
+      throw unreadable();
+    return result;
+  } catch {
     throw unreadable();
   }
 }

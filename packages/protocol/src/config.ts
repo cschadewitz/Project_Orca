@@ -92,12 +92,8 @@ export const ConfigDocumentViewSchema = z.object({
   /**
    * The bytes, verbatim - comments and formatting included.
    *
-   * **Nothing here is redacted.** A config may name an ssh host, a command line or an
-   * environment variable that a reader would call a secret, and `config.get` hands all of it
-   * over. That is deliberate: a form that edits a file has to show the file, and a redacted
-   * `text` written back would destroy what it hid. The daemon's port is loopback and
-   * unauthenticated (see `orca serve --help`), so anything running as this user can already
-   * read the file directly; this method adds no exposure that a `cat` did not have.
+   * Unredacted editor bytes. Requires current config.read authority; ordinary run readers
+   * cannot access this method. Saving a redacted document would destroy hidden values.
    */
   text: z.string(),
   /**
@@ -194,11 +190,36 @@ export type ConfigEffectivePolicy = z.infer<typeof ConfigEffectivePolicySchema>;
 export const ConfigGetParamsSchema = z.object({});
 export type ConfigGetParams = z.infer<typeof ConfigGetParamsSchema>;
 
+export const CONFIG_APPLY_METHOD = "config.apply";
+export const ConfigGenerationStatusSchema = z.object({
+  savedRevision: z.string(),
+  activeGeneration: z.string(),
+  activeRevision: z.string(),
+  state: z.enum(["active", "pending", "restart-required", "invalid"]),
+  restartRequired: z.array(z.string()),
+});
+export type ConfigGenerationStatus = z.infer<typeof ConfigGenerationStatusSchema>;
+export const ConfigApplyParamsSchema = z
+  .object({
+    expectedRevision: z.string(),
+    expectedGeneration: z.string().min(1),
+    validateOnly: z.boolean().optional(),
+  })
+  .strict();
+export type ConfigApplyParams = z.infer<typeof ConfigApplyParamsSchema>;
+export const ConfigApplyResultSchema = z.object({
+  outcome: z.enum(["applied", "unchanged", "validated", "restart-required", "invalid"]),
+  status: ConfigGenerationStatusSchema,
+  validation: z.object({ errors: z.array(z.object({ path: z.string(), message: z.string() })) }),
+});
+export type ConfigApplyResult = z.infer<typeof ConfigApplyResultSchema>;
+
 export const ConfigGetResultSchema = z.object({
   config: ConfigDocumentViewSchema,
   permissions: ConfigDocumentViewSchema,
   schema: ConfigSchemaDescriptionSchema,
   effective: ConfigEffectivePolicySchema,
+  generation: ConfigGenerationStatusSchema.optional(),
   asOf: z.string(),
 });
 export type ConfigGetResult = z.infer<typeof ConfigGetResultSchema>;
@@ -264,6 +285,7 @@ export const ConfigSetResultSchema = z.object({
   document: ConfigDocumentViewSchema,
   /** Written to disk. False under `validateOnly`, and only then. */
   written: z.boolean(),
+  generation: ConfigGenerationStatusSchema.optional(),
   /**
    * Present under `validateOnly`. A write that would fail raises `CONFIG_INVALID` instead;
    * this is the same information, reported rather than thrown, for a form that asks as the

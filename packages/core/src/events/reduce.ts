@@ -22,6 +22,7 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
       ...(first.payload.parentRunId ? { parentRunId: first.payload.parentRunId } : {}),
       ...(first.payload.parentStepRunId ? { parentStepRunId: first.payload.parentStepRunId } : {}),
       ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
+      ...(first.payload.provenance ? { provenance: first.payload.provenance } : {}),
     },
     steps: {},
     stepOrder: [],
@@ -218,6 +219,7 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
         question: e.payload.question,
         options: e.payload.options,
         context: e.payload.context,
+        ...(e.payload.liveDecision ? { liveDecision: e.payload.liveDecision } : {}),
         requestedAt: e.at,
       };
       state.humanInputs[r.id] = r;
@@ -330,6 +332,7 @@ export function reduceRunSummary(events: readonly OrcaEvent[]): RunSummary {
     ...(first.payload.workItemId ? { workItemId: first.payload.workItemId } : {}),
     ...(first.payload.parentRunId ? { parentRunId: first.payload.parentRunId } : {}),
     ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
+    ...(first.payload.provenance ? { provenance: first.payload.provenance } : {}),
   };
   for (let i = 1; i < events.length; i++) {
     const e = events[i]!;

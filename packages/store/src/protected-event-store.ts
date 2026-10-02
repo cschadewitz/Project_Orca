@@ -1,6 +1,13 @@
 /** Public event facade: save secret-bearing originals privately before publishing a scrubbed durable event. */
 import { randomUUID } from "node:crypto";
-import { OrcaError, sensitiveInputNames, OrcaEventSchema, type OrcaEvent, type OrcaEventInput } from "@orca/core";
+import {
+  OrcaError,
+  sensitiveInputNames,
+  OrcaEventSchema,
+  HumanInputLiveIdentitySchema,
+  type OrcaEvent,
+  type OrcaEventInput,
+} from "@orca/core";
 import type { WorkflowVersionStore } from "./workflow-store.js";
 import type { EventFilter, EventListener, EventRange, EventStore } from "./event-store.js";
 import { publicInputVars, redactExecutionValue, unavailable, type ExecutionStore } from "./execution-store.js";
@@ -85,6 +92,8 @@ export class ProtectedEventStore implements EventStore {
       "actor",
       "workflowId",
       "workflowVersion",
+      // Provenance is schema-limited metadata with all input values already withheld.
+      "provenance",
       "requestId",
       "workItemId",
       "parentRunId",
@@ -122,6 +131,10 @@ export class ProtectedEventStore implements EventStore {
     }
     if (input.type === "human.requested") {
       publicPayload.kind = input.payload.kind;
+      // Only the typed runtime identity is structural. Never restore arbitrary
+      // context (including context.liveDecision) or extra properties from this object.
+      if (input.payload.liveDecision)
+        publicPayload.liveDecision = HumanInputLiveIdentitySchema.parse(input.payload.liveDecision);
       if (input.payload.agent) publicPayload.agent = input.payload.agent;
       const options = publicPayload.options as Record<string, unknown>[];
       input.payload.options.forEach((option, index) => {
@@ -209,13 +222,18 @@ export class ProtectedEventStore implements EventStore {
 
 /** Only the interpreter calls this. Public readers and subscriptions always use the public log. */
 export async function executionEvents(events: OrcaEvent[], execution: ExecutionStore): Promise<OrcaEvent[]> {
-  return Promise.all(
-    events.map(async (event) => {
-      if (!event.executionPayloadRef) return event;
-      const payload = await execution.getPayload(event.runId, event.executionPayloadRef, event.type);
-      const restored = OrcaEventSchema.safeParse({ ...event, payload });
-      if (!restored.success) throw unavailable();
-      return restored.data;
-    }),
+  const references = events.flatMap((event) =>
+    event.executionPayloadRef ? [{ runId: event.runId, ref: event.executionPayloadRef, type: event.type }] : [],
   );
+  const payloads = execution.getPayloads
+    ? await execution.getPayloads(references)
+    : await Promise.all(references.map(({ runId, ref, type }) => execution.getPayload(runId, ref, type)));
+  if (payloads.length !== references.length) throw unavailable();
+  let index = 0;
+  return events.map((event) => {
+    if (!event.executionPayloadRef) return event;
+    const restored = OrcaEventSchema.safeParse({ ...event, payload: payloads[index++] });
+    if (!restored.success) throw unavailable();
+    return restored.data;
+  });
 }

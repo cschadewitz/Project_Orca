@@ -4,7 +4,7 @@ import { readdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { OrcaError, type OrcaEventInput } from "@orca/core";
-import { readPrivateJson, writePrivateJson } from "./protected-file.js";
+import { readPrivateJson, readPrivateJsonBatch, writePrivateJson } from "./protected-file.js";
 
 const SensitivitySchema = z.object({ sensitiveNames: z.array(z.string()), secrets: z.array(z.unknown()) });
 const ExecutionInputsSchema = SensitivitySchema.extend({
@@ -25,11 +25,21 @@ const PayloadSchema = z.object({
 });
 
 export interface ExecutionStore {
+  getGeneration(id: string): Promise<unknown>;
+  putGeneration(id: string, snapshot: unknown): Promise<void>;
   getInputs(runId: string): Promise<ExecutionInputs | undefined>;
   putInputs(inputs: ExecutionInputs): Promise<void>;
   addSensitivity(runId: string, sensitivity: ExecutionSensitivity): Promise<void>;
   getPayload(runId: string, ref: string, type: string): Promise<OrcaEventInput["payload"]>;
+  /** Authenticate one replay batch with fresh inputs/sensitivity per run, never caller-supplied state. */
+  getPayloads?(references: readonly ExecutionPayloadReference[]): Promise<OrcaEventInput["payload"][]>;
   putPayload(ref: string, input: OrcaEventInput): Promise<void>;
+}
+
+export interface ExecutionPayloadReference {
+  runId: string;
+  ref: string;
+  type: string;
 }
 
 function mergeSensitivity(
@@ -46,6 +56,14 @@ function mergeSensitivity(
 }
 
 export class InMemoryExecutionStore implements ExecutionStore {
+  private readonly generations = new Map<string, unknown>();
+  async getGeneration(id: string): Promise<unknown> {
+    return structuredClone(this.generations.get(id));
+  }
+  async putGeneration(id: string, snapshot: unknown): Promise<void> {
+    if (this.generations.has(id)) throw unavailable();
+    this.generations.set(id, structuredClone(snapshot));
+  }
   private readonly inputs = new Map<string, ExecutionInputs>();
   private readonly sensitivity = new Map<string, z.infer<typeof OverlaySchema>>();
   private readonly payloads = new Map<string, { input: OrcaEventInput; sensitivityRefs: string[] }>();
@@ -87,6 +105,12 @@ export class FileExecutionStore implements ExecutionStore {
   private readonly dir: string;
   constructor(storeDir: string) {
     this.dir = join(storeDir, "private-execution");
+  }
+  async getGeneration(id: string): Promise<unknown> {
+    return readPrivateJson(this.dir, `${encodeURIComponent(id)}.generation.json`);
+  }
+  async putGeneration(id: string, snapshot: unknown): Promise<void> {
+    if (!(await writePrivateJson(this.dir, `${encodeURIComponent(id)}.generation.json`, snapshot))) throw unavailable();
   }
   private async overlays(runId: string): Promise<z.infer<typeof OverlaySchema>[]> {
     let names: string[];
@@ -151,13 +175,40 @@ export class FileExecutionStore implements ExecutionStore {
       throw unavailable();
   }
   async getPayload(runId: string, ref: string, type: string): Promise<OrcaEventInput["payload"]> {
-    const value = await readPrivateJson(this.dir, `${encodeURIComponent(ref)}.payload.json`);
-    const result = PayloadSchema.safeParse(value);
-    if (!result.success || result.data.runId !== runId || result.data.type !== type) throw unavailable();
-    const inputs = await this.getInputs(runId);
-    if (!inputs || result.data.sensitivityRefs.some((expected) => !inputs.sensitivityRefs?.includes(expected)))
-      throw unavailable();
-    return result.data.payload;
+    return (await this.getPayloads([{ runId, ref, type }]))[0]!;
+  }
+  async getPayloads(references: readonly ExecutionPayloadReference[]): Promise<OrcaEventInput["payload"][]> {
+    // Snapshot caller-owned references before any I/O. Only multi-record replay shares
+    // an entry key; empty and single-record reads keep their existing fresh-read path.
+    const requested = references.map(({ runId, ref, type }) => ({ runId, ref, type }));
+    const names = requested.map(({ ref }) => `${encodeURIComponent(ref)}.payload.json`);
+    const validate = async (values: unknown[]): Promise<OrcaEventInput["payload"][]> => {
+      const records = values.map((value, index) => {
+        const { runId, type } = requested[index]!;
+        const result = PayloadSchema.safeParse(value);
+        if (!result.success || result.data.runId !== runId || result.data.type !== type) throw unavailable();
+        return result.data;
+      });
+      // Read after the payloads, so an overlay removed while replay is being loaded cannot
+      // be vouched for by an earlier input snapshot. This state lives only for this call.
+      const inputs = new Map(
+        await Promise.all(
+          [...new Set(records.map((record) => record.runId))].map(async (runId) => {
+            const value = await this.getInputs(runId);
+            if (!value) throw unavailable();
+            return [runId, value] as const;
+          }),
+        ),
+      );
+      return records.map((record) => {
+        const current = inputs.get(record.runId)!;
+        if (record.sensitivityRefs.some((expected) => !current.sensitivityRefs?.includes(expected)))
+          throw unavailable();
+        return record.payload;
+      });
+    };
+    if (requested.length > 1) return readPrivateJsonBatch(this.dir, names, validate);
+    return validate(await Promise.all(names.map((name) => readPrivateJson(this.dir, name))));
   }
 }
 

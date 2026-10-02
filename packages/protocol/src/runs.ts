@@ -8,6 +8,8 @@
  * than two timestamps a client would subtract. Everything a screen shows is a field here;
  * anything a screen only *might* show is a second call.
  */
+import { RunProvenanceSchema } from "@orca/core/schemas";
+
 import { z } from "zod";
 // The node-free subpath, not the package root: the renderer bundles this package, and the
 // root would drag `node:crypto` and `node:fs` into that bundle. See packages/core/src/schemas.ts.
@@ -182,6 +184,7 @@ export const RunsGetParamsSchema = z.object({ runId: z.string().min(1) });
 export type RunsGetParams = z.infer<typeof RunsGetParamsSchema>;
 
 export const RunsGetResultSchema = z.object({
+  provenance: RunProvenanceSchema.optional(),
   run: RunSummaryViewSchema,
   workspace: WorkspaceSchema,
   /** The run's variables, as the run detail panel shows them. */

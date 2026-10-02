@@ -33,7 +33,7 @@ import type { OpenInputView, ProtocolError, RunSummaryView, RunChangedParams } f
 import { useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import { applyRunChanged, mergeRun, orderRuns } from "../runs/run-rows.js";
-import { alertItems, mergeInput, orderWaits } from "./items.js";
+import { alertItems, invalidateLiveInput, liveInputKey, mergeInput, orderWaits } from "./items.js";
 
 export type AttentionState =
   | { phase: "loading" }
@@ -95,6 +95,8 @@ export function useAttention(): AttentionFeed {
     const resolvingInputs = new Set<string>();
     const resolvingRuns = new Set<string>();
     const opened = new Map<string, Set<string>>();
+    // Connection-generation tombstones win over stale reads but never match a new turn.
+    const invalidated = new Set<string>();
     pendingAnswers.current.clear();
     setState({ phase: "loading" });
 
@@ -117,7 +119,11 @@ export function useAttention(): AttentionFeed {
       }
       const remaining = waits.filter((i) => !pendingAnswers.current.has(i.id));
       waiting -= waits.length - remaining.length;
-      setState({ ...next, waits: orderWaits(remaining), waiting: Math.max(0, waiting) });
+      setState({
+        ...next,
+        waits: orderWaits(remaining.map((input) => invalidateLiveInput(input, invalidated))),
+        waiting: Math.max(0, waiting),
+      });
     };
     const resolveInputs = (runId: string) => {
       if (resolvingInputs.has(runId)) return;
@@ -162,6 +168,10 @@ export function useAttention(): AttentionFeed {
       }),
       stream.on("input.answered", (params) => {
         answered(params.requestId);
+        publish();
+      }),
+      stream.on("input.invalidated", (params) => {
+        invalidated.add(liveInputKey(params.target));
         publish();
       }),
       stream.on("run.changed", (params) => {

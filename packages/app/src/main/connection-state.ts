@@ -42,6 +42,7 @@ import {
   type HelloResult,
 } from "@orca/protocol";
 import type { ConnectionSnapshot } from "../bridge.js";
+import { authenticationCode } from "../client/auth.js";
 import type { RetryCount, SubscriptionState } from "../client/subscription.js";
 
 /** How long a departure from `live` stays off the screen. */
@@ -107,6 +108,8 @@ export interface ConnectionMachineOptions {
    * a restart onto an older build is exactly the case the mismatch dialog exists for.
    */
   hello: () => Promise<HelloResult>;
+  /** Publish a post-subscribe handshake only after its connection lifetime is checked. */
+  onHello?: (hello: HelloResult) => void;
   /** Called with every snapshot the renderer has not already been told about. */
   onChange: (snapshot: ConnectionSnapshot) => void;
   quietMs?: number | undefined;
@@ -164,6 +167,9 @@ export class ConnectionMachine {
   linkChanged(link: SubscriptionState, retries: RetryCount = { consecutive: 0, atCap: 0 }): void {
     if (this.done || (this.link === link && this.failuresAtCap === retries.atCap)) return;
     const arrived = this.link !== link;
+    // Invalidate on departure too: an old HTTP reply can arrive while the replacement
+    // socket is still verifying, before its transition to live starts another handshake.
+    if (arrived) this.handshake += 1;
     this.link = link;
     this.failuresAtCap = retries.atCap;
     // A socket that has just become a stream is a daemon that has just answered a
@@ -223,6 +229,7 @@ export class ConnectionMachine {
   /** `startBundledDaemon`'s `onExit`: the daemon this process owns went away by itself. */
   daemonExited(): void {
     if (this.done) return;
+    this.handshake += 1;
     this.daemonGone = true;
     this.settle();
   }
@@ -249,12 +256,25 @@ export class ConnectionMachine {
     let result: HelloResult;
     try {
       result = await this.opts.hello();
-    } catch {
+    } catch (error) {
+      // A refusal from an old request cannot revoke a newer connection on the same client.
+      // Current revocation still bypasses the visual quiet window, like socket refusals.
+      if (!this.done && token === this.handshake && authenticationCode(error)) this.authenticationFailed();
       /* The socket is a stream and the read endpoint did not answer. That is not a verdict
          on the daemon's protocol, so the last verdict stands rather than being invented. */
       return;
     }
     if (this.done || token !== this.handshake) return;
+    this.opts.onHello?.(result);
+    this.acceptHello(result);
+  }
+
+  /** A verified reconnect probe can report mismatch before the socket subscribes. */
+  acceptHello(result: HelloResult): void {
+    if (this.done) return;
+    // A current subscription probe can precede the next live transition. Its verdict
+    // supersedes any older post-subscribe handshake even when the client is unchanged.
+    this.handshake += 1;
     this.orcaVersion = result.orcaVersion;
     this.daemonProtocol = formatProtocolVersion(result.protocol);
     this.capabilities = result.capabilities;

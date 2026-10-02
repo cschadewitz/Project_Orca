@@ -2,6 +2,9 @@
  * CLI command implementations. Each command receives parsed positionals and
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
+import { admissionsCommand } from "./admissions.js";
+import { workspaceIdentity } from "@orca/store";
+import { localSubmissionAuthority, authorityForNewLocalIntent } from "../local-submission-authority.js";
 import { releaseAssets } from "../bootstrap.js";
 
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
@@ -18,6 +21,8 @@ import {
   ReadModel,
   answerAndResume,
   startDaemon,
+  createDaemonIdentity,
+  daemonExecutionRuntime,
   bootstrapLocalOwner,
   openAuthDirectory,
   orchestratorResolver,
@@ -55,6 +60,7 @@ import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
 import { PausingHumanInput, PlanService, autoHumanInput, builtinExecutors } from "@orca/engine";
 import { AgentRegistry } from "@orca/agents";
+import { RequestSubmissionModel } from "@orca/daemon";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
 import { memoryStores } from "@orca/store";
 import { scriptedAgentSpec } from "@orca/testing";
@@ -453,6 +459,11 @@ export const commands: Record<string, Command> = {
     },
   },
 
+  admissions: {
+    help: "admissions [list|inspect <id>|reconcile <id>]  Inspect or recover original local Request admissions without starting execution.",
+    run: admissionsCommand,
+  },
+
   submit: {
     help: 'submit "<title>" [--body text | --body-file f] [--var k=v] [--item-workflow id] [--agent role=id]... [--model [agent=]model]...  Submit a request to the program workflow and follow it.',
     async run(ctx) {
@@ -462,7 +473,11 @@ export const commands: Record<string, Command> = {
         ? await readFile(String(ctx.flags["body-file"]), "utf8")
         : String(ctx.flags.body ?? "");
       const vars = parseVars(ctx.flags.var as string[] | undefined, ctx.flags["var-json"] as string[] | undefined);
-      const app = await bootstrap({ cwd: ctx.cwd, ...(ctx.configPath ? { configPath: ctx.configPath } : {}) });
+      const app = await bootstrap({
+        submissionAuthority: localSubmissionAuthority,
+        cwd: ctx.cwd,
+        ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+      });
       const overrides = selectionOverrides(ctx, {
         agents: app.agents,
         workflows: app.workflows,
@@ -472,13 +487,18 @@ export const commands: Record<string, Command> = {
       });
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
-        const { request, state } = await app.program.submitAndRun({
+        const admitted = await app.program.submit({
           title,
           body,
           vars,
           ...workflowGuards(ctx),
           ...(overrides ? { overrides } : {}),
         });
+        ctx.out(
+          `request ${admitted.request.id}; run ${admitted.runId}${admitted.admissionId ? `; admission ${admitted.admissionId}` : ""}`,
+        );
+        const state = await app.program.runSubmitted(admitted);
+        const request = (await app.program.settle(state)) ?? admitted.request;
         ctx.out(`request ${request.id}: ${request.status}`);
         const code = await finish(app, ctx, state);
         const items = await app.orchestrator.stores.workItems.list((w) => w.requestId === request.id);
@@ -622,11 +642,21 @@ export const commands: Record<string, Command> = {
     async run(ctx) {
       // stdout is the protocol channel; all logging goes to stderr.
       const app = await bootstrap({
+        submissionAuthority: localSubmissionAuthority,
         cwd: ctx.cwd,
         ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
         logger: consoleLogger((ctx.flags["log-level"] as never) ?? "info"),
       });
-      await serveAcpFacade({ orchestrator: app.orchestrator, program: app.program });
+      await serveAcpFacade({
+        orchestrator: app.orchestrator,
+        program: app.program,
+        ...(app.submissionAuthority
+          ? {
+              submissionAuthority: app.submissionAuthority,
+              authorityForNewIntent: authorityForNewLocalIntent(app, app.submissionAuthority),
+            }
+          : {}),
+      });
       return 0;
     },
   },
@@ -664,6 +694,7 @@ export const commands: Record<string, Command> = {
       // The two configuration documents, `--read-only` or not: `config.get` is a read, and
       // `config.set` is kept out by being in the control half of the table (#174, #266).
       const config = new ConfigModel({
+        generations: app.generations,
         configDir: app.configDir,
         ...(app.configFile ? { configFile: app.configFile } : {}),
         permissionsFile: permissionPolicyPath(app.configDir),
@@ -707,7 +738,38 @@ export const commands: Record<string, Command> = {
           };
       // Refuse an unsafe bind before rotating the credential local clients already use.
       validateDeployment(auth, (ctx.flags.host as string | undefined) ?? "127.0.0.1");
+      const workspaceId = await workspaceIdentity(storeDir);
+      const identity = createDaemonIdentity(workspaceId);
+      const liveRuntime =
+        !readOnly && authDir
+          ? daemonExecutionRuntime({
+              instanceId: identity.instanceId,
+              orchestrator: app.orchestrator,
+              credentials: authDir.credentials,
+              ownership: authDir.ownership,
+            })
+          : undefined;
+      if (liveRuntime) app.orchestrator.liveInput = liveRuntime;
+      const requestSubmissions =
+        !readOnly && authDir && app.program.submissions
+          ? new RequestSubmissionModel({
+              service: app.program.submissions,
+              checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
+              execute: async (id, authority) => {
+                const state = liveRuntime
+                  ? await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id))
+                  : await app.orchestrator.run(id);
+                await app.program.settle(state);
+              },
+              executionFailed: (id) => app.logger.error("Request execution requires recovery", { runId: id }),
+            })
+          : undefined;
       const daemon = await startDaemon({
+        requestSubmissions,
+        submissionWorkspaceId: workspaceId,
+        identity,
+        liveInputs: liveRuntime?.port,
+        workspaceId,
         auth,
         maintenanceToken: process.env.ORCA_MAINTENANCE_TOKEN,
         admissionFile: process.env.ORCA_ADMISSION_FILE,
@@ -755,6 +817,7 @@ export const commands: Record<string, Command> = {
       try {
         if (authDir) await bootstrapLocalOwner(authDir);
       } catch (error) {
+        liveRuntime?.close();
         await daemon.close();
         throw error;
       }
@@ -783,6 +846,7 @@ export const commands: Record<string, Command> = {
         process.once("SIGINT", stop);
         process.once("SIGTERM", stop);
       });
+      liveRuntime?.close();
       await daemon.close();
       return 0;
     },
@@ -953,6 +1017,7 @@ export const commands: Record<string, Command> = {
       // orca command run from <dir>) drives the same scripted agents afterwards.
       await writeFile(join(dir, "orca.config.yaml"), stringifyYaml(config), "utf8");
       const app = await bootstrap({
+        submissionAuthority: localSubmissionAuthority,
         config,
         configDir: dir,
         cwd: dir,
