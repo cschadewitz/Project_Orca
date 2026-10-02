@@ -28,6 +28,7 @@ import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
 import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
+import { LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
 import { appMenuTemplate } from "./app-menu.js";
@@ -214,7 +215,18 @@ const workspace = new Workspace({
         onExit(exit);
       },
     }),
-  client: (url) => new DaemonClient(url),
+  client: (url, options) =>
+    new DaemonClient(url, fetch, {
+      auth: new LocalDaemonToken({
+        url,
+        workspace: options.workspace,
+        ...(options.tokenFile ? { tokenFile: options.tokenFile } : {}),
+        // A spawned daemon issues its own token. A remote override in the app's environment
+        // belongs to the explicitly connected daemon, never to a newly opened local store.
+        ...(options.bundled ? { env: {} } : {}),
+      }),
+      onAuthFailure: () => connection.authenticationFailed(),
+    }),
   subscribe: (daemonClient) =>
     daemonClient.subscribe({
       params: {},

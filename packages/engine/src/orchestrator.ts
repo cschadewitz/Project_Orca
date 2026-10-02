@@ -25,6 +25,7 @@ import {
   silentLogger,
   systemClock,
   TemplateRegistry,
+  validateWorkflowInputs,
   WorkflowRegistry,
   type AgentSelector,
   type Artifact,
@@ -35,6 +36,7 @@ import {
   type Edge,
   type HumanInputRequest,
   type Logger,
+  type MutationActor,
   type NodeDef,
   type OrcaEvent,
   type RunState,
@@ -48,6 +50,9 @@ import {
 import { reduceRun } from "@orca/core";
 import {
   DEFAULT_LEASE_TTL_MS,
+  executionEvents,
+  ProtectedEventStore,
+  unavailable,
   describeLease,
   keepLease,
   lapsed,
@@ -78,6 +83,7 @@ import {
 import { PlanService } from "./plan/service.js";
 import { recoverReleasedWorkItem } from "./program/work-items.js";
 import { RunContext } from "./run-context.js";
+import { protectExecutionInputs } from "./execution-inputs.js";
 import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
 
 /** Opens an agent session; defaults to ACP over stdio (local or ssh). Integrations can substitute other transports. */
@@ -135,6 +141,8 @@ export type HeldClaim = WorkItemClaim & { owner: RunSummary["status"] | "missing
 export type AgentSessionOpenedListener = (info: { runId: string; agentId: string; session: AgentSession }) => void;
 
 export interface StartRunOptions {
+  /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
+  actor?: MutationActor;
   workflowId?: string;
   inline?: { graph: WorkflowGraph; id: string; version?: string };
   vars?: Record<string, unknown>;
@@ -148,9 +156,50 @@ export interface StartRunOptions {
    * before `run.created` is appended and recorded in it, so a replay resolves the same agents.
    */
   overrides?: RunOverrides;
+  /**
+   * Launch this version of `workflowId` rather than the one on disk (#330): the definition the
+   * workflow-version store kept for it, or the loaded one when it is at this version and has
+   * never been stored. Any other version is `WORKFLOW_VERSION_NOT_FOUND`, never the latest.
+   */
+  workflowVersion?: string;
+  /**
+   * The `revision` a preflight (`workflows.validateInputs`) returned. The selected definition
+   * must still have it, or the launch is refused as `WORKFLOW_INVALID` before anything is
+   * written - so a client never validates one definition and starts another.
+   */
+  expectedWorkflowRevision?: string;
 }
 
 export const INLINE_SEP = "::";
+
+/**
+ * The deterministic content digest of a definition (#330): SHA-256 over its JSON with object
+ * keys sorted and `undefined` members dropped, so the copy on disk and the copy the
+ * workflow-version store round-trips hash alike. Version text alone is not identity - a file
+ * can change without its `version` changing - so this is what a preflight hands a client and
+ * what admission and the same-version collision check compare.
+ */
+export function workflowRevision(def: WorkflowDefinition): string {
+  return `sha256:${sha256(canonicalJson(def))}`;
+}
+
+function versionCollision(def: WorkflowDefinition): OrcaError {
+  return new OrcaError(
+    "WORKFLOW_INVALID",
+    `workflow '${def.id}' version ${def.version} differs from the definition already recorded for that version; ` +
+      "a recorded version is immutable, so change the workflow's version",
+    { id: def.id, version: def.version },
+  );
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((v) => (v === undefined ? "null" : canonicalJson(v))).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+}
 
 export class Orchestrator {
   readonly stores: Stores;
@@ -189,7 +238,13 @@ export class Orchestrator {
   private readonly sessionOpenedListeners = new Set<AgentSessionOpenedListener>();
 
   constructor(o: OrchestratorOptions) {
-    this.stores = o.stores;
+    this.stores = {
+      ...o.stores,
+      events:
+        o.stores.events instanceof ProtectedEventStore
+          ? o.stores.events
+          : new ProtectedEventStore(o.stores.events, o.stores.execution, o.stores.workflows),
+    };
     this.agents = o.agents;
     this.workflows = o.workflows;
     this.templates = o.templates;
@@ -210,15 +265,51 @@ export class Orchestrator {
 
   // ---------------------------------------------------------------- public API
 
-  /** Create a run (emits run.created) without executing it. */
-  async startRun(opts: StartRunOptions): Promise<string> {
+  /** Side-effect-free admission used by Request submission before its first persistent write. */
+  async validateStartRun(
+    opts: StartRunOptions,
+  ): Promise<{ definition: WorkflowDefinition; vars: Record<string, unknown> }> {
+    // Admission (#330): select, check the preflight revision, check the selection and the
+    // launch vars - all before anything is written, provisioned or appended, so a refused
+    // launch leaves no definition, workspace, run, agent or child behind.
     const def = opts.inline
       ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1")
-      : this.workflows.get(opts.workflowId!);
+      : await this.selectDefinition(opts.workflowId!, opts.workflowVersion);
+    if (opts.expectedWorkflowRevision !== undefined && opts.expectedWorkflowRevision !== workflowRevision(def))
+      throw new OrcaError(
+        "WORKFLOW_INVALID",
+        `workflow '${def.id}' changed since its inputs were validated; validate them again before starting`,
+      );
     if (opts.overrides) this.validateOverrides(def, opts.overrides);
-    // Before `run.created`, so a run that says its definition is stored always has it (#179).
-    const workflowStored = await this.recordDefinition(def);
+    const inputs = validateWorkflowInputs(def, opts.vars ?? {});
+    if (!inputs.validation.ok) {
+      const { errors, warnings } = inputs.validation;
+      const listed = errors.slice(0, 3).map((e) => `${e.path}: ${e.message}`);
+      throw new OrcaError(
+        "WORKFLOW_INPUT_INVALID",
+        `workflow '${def.id}' inputs are invalid: ${listed.join("; ")}${errors.length > 3 ? `; and ${errors.length - 3} more` : ""}`,
+        { errors, warnings },
+      );
+    }
+    return { definition: def, vars: inputs.vars };
+  }
+
+  /** Create a run (emits run.created) without executing it. */
+  async startRun(opts: StartRunOptions): Promise<string> {
+    const { definition: def, vars } = await this.validateStartRun(opts);
     const runId = newId("run", this.clock.now());
+    // A child with an explicit workspace still has to validate its parent's sealed
+    // sensitivity state before copying vars. Missing overlays must never downgrade it.
+    const parentFirst = opts.parentRunId
+      ? (await this.stores.events.readRange(opts.parentRunId, { limit: 1 }))[0]
+      : undefined;
+    const parentInputs = opts.parentRunId ? await this.stores.execution.getInputs(opts.parentRunId) : undefined;
+    if (parentFirst?.type === "run.created" && parentFirst.payload.executionInputsStored && !parentInputs)
+      throw unavailable();
+    // Record only after every admission/inherited-integrity check, before public run creation.
+    const workflowStored = await this.recordDefinition(def);
+    const protectedInputs = protectExecutionInputs(runId, def, vars, parentInputs);
+    if (protectedInputs) await this.stores.execution.putInputs(protectedInputs);
     const request = opts.requestId ? await this.stores.requests.get(opts.requestId) : undefined;
     const workItem = opts.workItemId ? await this.stores.workItems.get(opts.workItemId) : undefined;
     const workspace =
@@ -228,16 +319,18 @@ export class Orchestrator {
         workflowId: def.id,
         request,
         workItem,
-        parent: opts.parentRunId ? (await this.getState(opts.parentRunId)).run.workspace : undefined,
+        parent: opts.parentRunId ? (await this.executionState(opts.parentRunId)).run.workspace : undefined,
       }));
     await this.stores.events.append({
       type: "run.created",
       runId,
       payload: {
+        ...(opts.actor ? { actor: opts.actor } : {}),
         workflowId: def.id,
         workflowVersion: def.version,
         workspace,
-        vars: { ...def.vars, ...(opts.vars ?? {}) },
+        vars,
+        ...(protectedInputs ? { executionInputsStored: true as const } : {}),
         ...(opts.requestId ? { requestId: opts.requestId } : {}),
         ...(opts.workItemId ? { workItemId: opts.workItemId } : {}),
         ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
@@ -254,9 +347,10 @@ export class Orchestrator {
     const inflight = this.running.get(runId);
     if (inflight) return inflight;
     const p = this.executeLeased(runId)
-      .then((state) => {
-        if (isTerminal(state)) this.cacheTerminalState(runId, state);
-        return state;
+      .then(async () => {
+        const projected = this.live.get(runId)?.publicState() ?? (await this.getState(runId));
+        if (isTerminal(projected)) this.cacheTerminalState(runId, projected);
+        return projected;
       })
       .finally(() => {
         this.running.delete(runId);
@@ -270,16 +364,19 @@ export class Orchestrator {
     return this.run(await this.startRun(opts));
   }
 
-  async cancel(runId: string, reason?: string): Promise<void> {
+  async cancel(runId: string, reason?: string, actor?: MutationActor): Promise<void> {
     const rc = this.live.get(runId);
     if (rc) {
+      // AbortController keeps the first reason; retain the same winning actor as well.
+      if (rc.abort.signal.aborted) return;
+      rc.cancelActor = actor;
       rc.abort.abort(reason ?? "cancelled");
-      for (const s of Object.values(rc.state.steps)) for (const c of s.childRunIds) await this.cancel(c, reason);
+      for (const s of Object.values(rc.state.steps)) for (const c of s.childRunIds) await this.cancel(c, reason, actor);
     } else {
       const state = await this.getState(runId);
       if (isTerminal(state)) return;
       // A parked run tree: cancel the children it is waiting on, then close its own open step.
-      for (const s of Object.values(state.steps)) for (const c of s.childRunIds) await this.cancel(c, reason);
+      for (const s of Object.values(state.steps)) for (const c of s.childRunIds) await this.cancel(c, reason, actor);
       // Closing a run we are not driving is still writing to its log, so it goes through the
       // same lease: cancelling a run another process is interpreting has to be refused there,
       // not raced into the log (that process would keep appending afterwards).
@@ -298,11 +395,15 @@ export class Orchestrator {
         );
       try {
         await this.stores.leases.withOwnership(lease, async () => {
-          const fresh = reduceRun(await this.stores.events.read(runId));
+          const fresh = reduceRun(await executionEvents(await this.stores.events.read(runId), this.stores.execution));
           if (isTerminal(fresh)) return;
           for (const s of openSteps(fresh))
             await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
-          await this.stores.events.append({ type: "run.cancelled", runId, payload: reason ? { reason } : {} });
+          await this.stores.events.append({
+            type: "run.cancelled",
+            runId,
+            payload: { ...(reason ? { reason } : {}), ...(actor ? { actor } : {}) },
+          });
         });
       } finally {
         await this.stores.leases.release(lease);
@@ -313,7 +414,7 @@ export class Orchestrator {
   /** Projected state of a run. Treat it as read-only: a live or terminal run's projection is shared. */
   async getState(runId: string): Promise<RunState> {
     const live = this.live.get(runId);
-    if (live) return live.state;
+    if (live) return live.publicState();
     const cached = this.terminalStates.get(runId);
     if (cached) return cached;
     const events = await this.stores.events.read(runId);
@@ -321,6 +422,18 @@ export class Orchestrator {
     const state = reduceRun(events);
     if (isTerminal(state)) this.cacheTerminalState(runId, state);
     return state;
+  }
+
+  /** Exact interpreter-only state. Public callers must use getState/run. */
+  private async executionState(runId: string): Promise<RunState> {
+    const live = this.live.get(runId);
+    if (live) return live.state;
+    const events = await this.stores.events.read(runId);
+    if (!events.length) throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
+    const first = events[0];
+    const inputs = await this.stores.execution.getInputs(runId);
+    if (first?.type === "run.created" && first.payload.executionInputsStored && !inputs) throw unavailable();
+    return reduceRun(await executionEvents(events, this.stores.execution));
   }
 
   private cacheTerminalState(runId: string, state: RunState): void {
@@ -371,7 +484,7 @@ export class Orchestrator {
 
   async getSummary(runId: string): Promise<RunSummary> {
     const live = this.live.get(runId);
-    if (live) return runSummary(live.state);
+    if (live) return runSummary(live.publicState());
     const events = await this.stores.events.readTypes(runId, RUN_SUMMARY_EVENT_TYPES);
     if (events.length === 0) throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
     return reduceRunSummary(events);
@@ -414,7 +527,14 @@ export class Orchestrator {
    * `human.answered` and nothing reads it back: no executor branches on it, and
    * `answerFromPreviousAttempt` picks up the answer alone when the run resumes.
    */
-  async answer(requestId: string, answer: string, runId?: string, note?: string): Promise<HumanInputRequest> {
+  async answer(
+    requestId: string,
+    answer: string,
+    runId?: string,
+    note?: string,
+    afterAnswer?: (request: HumanInputRequest, state: RunState) => Promise<void>,
+    actor?: MutationActor,
+  ): Promise<HumanInputRequest> {
     const candidate = (runId ? pendingHumanInputs(await this.getState(runId)) : await this.pendingInputs()).find(
       (h) => h.id === requestId,
     );
@@ -425,7 +545,7 @@ export class Orchestrator {
     if (!ownsLease(lease, holder)) throw new OrcaError("RUN_LEASED", `run ${candidate.runId} is being modified`);
     try {
       return await this.stores.leases.withOwnership(lease, () =>
-        this.answerOwned(requestId, answer, candidate.runId, note),
+        this.answerOwned(requestId, answer, candidate.runId, note, afterAnswer, actor),
       );
     } finally {
       await this.stores.leases.release(lease);
@@ -437,9 +557,11 @@ export class Orchestrator {
     answer: string,
     runId: string,
     note?: string,
+    afterAnswer?: (request: HumanInputRequest, state: RunState) => Promise<void>,
+    actor?: MutationActor,
   ): Promise<HumanInputRequest> {
     // Read the durable log under ownership; a cached paused context may precede another answer.
-    const fresh = reduceRun(await this.stores.events.read(runId));
+    const fresh = reduceRun(await executionEvents(await this.stores.events.read(runId), this.stores.execution));
     const request = pendingHumanInputs(fresh).find((h) => h.id === requestId);
     if (!request) throw new OrcaError("RUN_STATE", `no pending human input '${requestId}'`, { requestId });
     const state = fresh;
@@ -452,19 +574,37 @@ export class Orchestrator {
     // An answer is an option's id, never its label: a label may be reworded, and what
     // is recorded here is compared against the options again when the run is re-driven.
     const ids = request.options.map((o) => o.id);
-    if (ids.length && !ids.includes(answer))
-      throw new OrcaError("RUN_STATE", `'${answer}' is not one of: ${ids.join(", ")}`, {
-        requestId,
-        options: ids,
-      });
+    if (ids.length && !ids.includes(answer)) {
+      const protectedInputs = await this.stores.execution.getInputs(runId);
+      throw new OrcaError(
+        "RUN_STATE",
+        protectedInputs ? "the answer is not an offered option" : `'${answer}' is not one of: ${ids.join(", ")}`,
+        {
+          requestId,
+          ...(protectedInputs ? {} : { options: ids }),
+        },
+      );
+    }
     await this.stores.events.append({
       type: "human.answered",
       runId: request.runId,
       // The note is the person's reasoning, not part of the decision: the run branches on
       // `answer` alone, and the note is recorded beside it so the log says why (#238).
-      payload: { stepRunId: request.stepRunId, requestId, answer, ...(note ? { note } : {}) },
+      payload: {
+        stepRunId: request.stepRunId,
+        requestId,
+        answer,
+        ...(note ? { note } : {}),
+        ...(actor ? { actor } : {}),
+      },
     });
-    return { ...request, answer };
+    const accepted = { ...request, answer };
+    // The exact gate is durably accepted under ownership before a standing rule can be
+    // written. Failure of the additional write leaves this one-time answer parked and
+    // propagates to the caller; no automatic resume follows it.
+    await afterAnswer?.(accepted, state);
+    // Callers receive the public answer shape, not the hydrated private gate context.
+    return reduceRun(await this.stores.events.read(runId)).humanInputs[requestId]!;
   }
 
   /**
@@ -722,35 +862,78 @@ export class Orchestrator {
   async definitionFor(workflowId: string, version: string, stored = true): Promise<WorkflowDefinition> {
     const rootId = workflowId.split(INLINE_SEP)[0]!;
     const live = this.workflows.has(rootId) ? this.workflows.get(rootId) : undefined;
-    let root: WorkflowDefinition | undefined =
-      live?.version === version ? live : await this.stores.workflows.get(rootId, version);
+    // A run that recorded its definition walks that snapshot, even when the file on disk has
+    // since been edited without a version bump (#330); the file is the fallback for a store that
+    // lost it. A run from before versioning keeps its old order: the file first.
+    let root: WorkflowDefinition | undefined = stored
+      ? ((await this.stores.workflows.get(rootId, version)) ?? (live?.version === version ? live : undefined))
+      : live?.version === version
+        ? live
+        : await this.stores.workflows.get(rootId, version);
     // Predates versioning: whatever is current, and an unknown workflow is the registry's error.
     if (!root && !stored) root = live ?? this.workflows.get(rootId);
-    if (!root) {
-      const available = [
-        ...new Set([...(await this.stores.workflows.versions(rootId)), ...(live ? [live.version] : [])]),
-      ];
-      throw new OrcaError(
-        "WORKFLOW_VERSION_NOT_FOUND",
-        `workflow '${rootId}' version ${version} is neither stored nor on disk; ${
-          available.length ? `available: ${available.join(", ")}` : "no version of it exists"
-        }`,
-        { id: rootId, version, available },
-      );
-    }
+    if (!root) throw await this.versionNotFound(rootId, version, live);
     return workflowId.includes(INLINE_SEP) ? this.walkInline(root, workflowId) : root;
   }
 
   /**
+   * The definition a new run of `workflowId` would be admitted on, and the one a preflight
+   * validates against (#330), so the two cannot disagree.
+   *
+   * With a `version`: the copy the workflow-version store kept for it, else the loaded file
+   * when it is at that version (a workflow that has never run). Anything else is
+   * `WORKFLOW_VERSION_NOT_FOUND` - never the latest instead.
+   *
+   * Without one: the loaded file, provided that a stored definition of the same version, if
+   * any, is the same content. A version is immutable once a run has recorded it, so an edit
+   * that kept the version is `WORKFLOW_INVALID` here rather than a new run silently starting
+   * on a definition its resume would not find.
+   */
+  async selectDefinition(workflowId: string, version?: string): Promise<WorkflowDefinition> {
+    if (version !== undefined) {
+      const live = this.workflows.has(workflowId) ? this.workflows.get(workflowId) : undefined;
+      const def =
+        (await this.stores.workflows.get(workflowId, version)) ?? (live?.version === version ? live : undefined);
+      if (!def) throw await this.versionNotFound(workflowId, version, live);
+      return def;
+    }
+    const live = this.workflows.get(workflowId);
+    const kept = await this.stores.workflows.get(live.id, live.version);
+    if (kept && workflowRevision(kept) !== workflowRevision(live)) throw versionCollision(live);
+    return live;
+  }
+
+  private async versionNotFound(
+    rootId: string,
+    version: string,
+    live: WorkflowDefinition | undefined,
+  ): Promise<OrcaError> {
+    const available = [
+      ...new Set([...(await this.stores.workflows.versions(rootId)), ...(live ? [live.version] : [])]),
+    ];
+    return new OrcaError(
+      "WORKFLOW_VERSION_NOT_FOUND",
+      `workflow '${rootId}' version ${version} is neither stored nor on disk; ${
+        available.length ? `available: ${available.join(", ")}` : "no version of it exists"
+      }`,
+      { id: rootId, version, available },
+    );
+  }
+
+  /**
    * Keep the definition a run is starting on, so it can be resumed after the file changes.
-   * True when the store holds the run's root definition at this version afterwards.
+   * True when the store holds the run's root definition at this version afterwards. The store
+   * is write-once, so when this call did not write it - an earlier run did, or another process
+   * won a race to the first write - what is there is read back and must be this same content.
    */
   private async recordDefinition(def: WorkflowDefinition): Promise<boolean> {
     if (def.id.includes(INLINE_SEP)) {
       // A nested graph is part of its root's file; the root was kept when the parent started.
       return (await this.stores.workflows.get(def.id.split(INLINE_SEP)[0]!, def.version)) !== undefined;
     }
-    await this.stores.workflows.put(def);
+    if (await this.stores.workflows.put(def)) return true;
+    const kept = await this.stores.workflows.get(def.id, def.version);
+    if (!kept || workflowRevision(kept) !== workflowRevision(def)) throw versionCollision(def);
     return true;
   }
 
@@ -812,6 +995,15 @@ export class Orchestrator {
     const events = await this.stores.events.read(runId);
     const first = events[0];
     if (!first || first.type !== "run.created") throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
+    if (
+      first.payload.workflowStored &&
+      (await this.stores.execution.getInputs(runId)) &&
+      !(await this.stores.workflows.get(first.payload.workflowId.split(INLINE_SEP)[0]!, first.payload.workflowVersion))
+    )
+      throw new OrcaError(
+        "WORKFLOW_VERSION_NOT_FOUND",
+        "protected execution requires its original stored workflow snapshot",
+      );
     const def = await this.definitionFor(
       first.payload.workflowId,
       first.payload.workflowVersion,
@@ -821,7 +1013,7 @@ export class Orchestrator {
       stores: this.stores,
       clock: this.clock,
       logger: this.logger.child({ runId }),
-      loadState: (id) => this.getState(id),
+      loadState: (id) => this.executionState(id),
       plan: this.plan,
     });
     this.live.set(runId, rc);
@@ -1058,7 +1250,10 @@ export class Orchestrator {
       if (err.code === "CANCELLED" || rc.abort.signal.aborted) {
         // A step interrupted mid-flight (an agent turn, a parked human question) never reports back; close it here.
         for (const s of openSteps(rc.state)) await rc.emit({ type: "step.cancelled", payload: { stepRunId: s.id } });
-        await rc.emit({ type: "run.cancelled", payload: { reason: err.message } });
+        await rc.emit({
+          type: "run.cancelled",
+          payload: { reason: err.message, ...(rc.cancelActor ? { actor: rc.cancelActor } : {}) },
+        });
       } else {
         log.error("run failed", { error: err });
         await rc.emit({ type: "run.failed", payload: { error: err } });
@@ -1204,7 +1399,7 @@ export class Orchestrator {
             ...(resumedId ? { resumed: true } : {}),
           },
         });
-        const onAbort = () => void self.cancel(childId, "parent cancelled");
+        const onAbort = () => void self.cancel(childId, "parent cancelled", rc.cancelActor);
         rc.abort.signal.addEventListener("abort", onAbort, { once: true });
         // The caller may also cancel this one child on its own (e.g. a fail-fast parallel
         // abandoning the siblings of a branch that already decided the join).
@@ -1214,7 +1409,10 @@ export class Orchestrator {
         if (own?.aborted) onOwnAbort();
         else own?.addEventListener("abort", onOwnAbort, { once: true });
         try {
-          const result = await self.run(childId);
+          await self.run(childId);
+          const childInputs = await self.stores.execution.getInputs(childId);
+          if (childInputs) await rc.inheritSensitivity(childInputs);
+          const result = await self.executionState(childId);
           await rc.emit({
             type: "child.finished",
             payload: {

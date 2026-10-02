@@ -98,7 +98,14 @@ describe("hello", () => {
     // reading what it has run; writing it is a write, and `--read-only` omits it (#174).
     expect(READ_METHODS).toContain(CONFIG_GET_METHOD);
     expect(CONTROL_METHODS).toContain(CONFIG_SET_METHOD);
-    expect(DAEMON_CAPABILITIES).toEqual(["runs.read", "runs.subscribe", "runs.control", "plan.read", "plan.write"]);
+    expect(DAEMON_CAPABILITIES).toEqual([
+      "runs.read",
+      "runs.subscribe",
+      "runs.control",
+      "plan.read",
+      "plan.write",
+      "workflows.validateInputs",
+    ]);
   });
 });
 

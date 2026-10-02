@@ -26,7 +26,13 @@ const base = <T extends string, P extends z.ZodTypeAny>(type: T, payload: P) =>
     at: z.string(),
     type: z.literal(type),
     payload,
+    /** Opaque reference to a private authoritative payload; never a public retrieval capability. */
+    executionPayloadRef: z.string().optional(),
   });
+
+/** Verified server-side actor; never accepted from workflow vars or caller-supplied RPC fields. */
+export const MutationActorSchema = z.object({ principalId: z.string(), credentialId: z.string().optional() });
+export type MutationActor = z.infer<typeof MutationActorSchema>;
 
 /**
  * The most characters of one tool call body - its args, or its result - that go
@@ -102,6 +108,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
   base(
     "run.created",
     z.object({
+      actor: MutationActorSchema.optional(),
       workflowId: z.string(),
       workflowVersion: z.string(),
       requestId: z.string().optional(),
@@ -118,6 +125,8 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
        * on disk. Absent on runs that predate versioning, which run on whatever file is current.
        */
       workflowStored: z.literal(true).optional(),
+      /** Exact launch values require the private execution store; missing records fail closed. */
+      executionInputsStored: z.literal(true).optional(),
     }),
   ),
   base("run.started", z.object({})),
@@ -125,7 +134,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
   base("run.resumed", z.object({})),
   base("run.completed", z.object({ outcome: RunOutcomeSchema, message: z.string().optional() })),
   base("run.failed", z.object({ error: ErrorInfoSchema })),
-  base("run.cancelled", z.object({ reason: z.string().optional() })),
+  base("run.cancelled", z.object({ reason: z.string().optional(), actor: MutationActorSchema.optional() })),
   base("vars.set", z.object({ vars: z.record(z.string(), z.unknown()) })),
 
   base(
@@ -289,6 +298,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
   base(
     "human.answered",
     z.object({
+      actor: MutationActorSchema.optional(),
       stepRunId: z.string(),
       requestId: z.string(),
       answer: z.string(),
@@ -313,5 +323,10 @@ export type OrcaEventPayload<T extends OrcaEventType> = OrcaEventOf<T>["payload"
 
 /** An event before the store assigns id/seq/at. */
 export type OrcaEventInput = {
-  [T in OrcaEventType]: { type: T; runId: string; payload: OrcaEventPayload<T> };
+  [T in OrcaEventType]: {
+    type: T;
+    runId: string;
+    payload: OrcaEventPayload<T>;
+    executionPayloadRef?: string | undefined;
+  };
 }[OrcaEventType];

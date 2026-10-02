@@ -12,7 +12,7 @@ import {
   type RunOverrides,
   type RunState,
 } from "@orca/core";
-import { isTerminal, type Orchestrator } from "../orchestrator.js";
+import { isTerminal, workflowRevision, type Orchestrator } from "../orchestrator.js";
 
 export interface SubmitRequestInput {
   title: string;
@@ -21,6 +21,9 @@ export interface SubmitRequestInput {
   labels?: string[];
   /** Override the configured program workflow. */
   workflowId?: string;
+  /** Pin the root program definition selected by a launch preflight. */
+  workflowVersion?: string;
+  expectedWorkflowRevision?: string;
   vars?: Record<string, unknown>;
   /**
    * Per-run selection (#186). `overrides.itemWorkflow` wins over the configured
@@ -49,12 +52,24 @@ export class ProgramService {
       createdAt: now,
       updatedAt: now,
     });
-    await this.orchestrator.stores.requests.put(request);
-    const runId = await this.orchestrator.startRun({
+    const options = {
       workflowId: input.workflowId ?? this.programWorkflowId,
+      ...(input.workflowVersion !== undefined ? { workflowVersion: input.workflowVersion } : {}),
+      ...(input.expectedWorkflowRevision !== undefined
+        ? { expectedWorkflowRevision: input.expectedWorkflowRevision }
+        : {}),
       requestId: request.id,
       vars: { request, ...(this.itemWorkflowId ? { itemWorkflow: this.itemWorkflowId } : {}), ...(input.vars ?? {}) },
       ...(input.overrides ? { overrides: input.overrides } : {}),
+    };
+    // Admission errors must not leave an orphaned Request. Pin the admitted definition for
+    // the second check in startRun so a changed workflow cannot slip through between writes.
+    const { definition } = await this.orchestrator.validateStartRun(options);
+    await this.orchestrator.stores.requests.put(request);
+    const runId = await this.orchestrator.startRun({
+      ...options,
+      workflowVersion: definition.version,
+      expectedWorkflowRevision: workflowRevision(definition),
     });
     await this.orchestrator.stores.requests.put({ ...request, programRunId: runId });
     return { request: { ...request, programRunId: runId }, runId };

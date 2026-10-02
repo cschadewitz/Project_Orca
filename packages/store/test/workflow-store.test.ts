@@ -48,7 +48,12 @@ describe("workflow-version store", () => {
       expect((await store.get("flow", "1"))?.name).toBe("flow");
       expect(await store.versions("flow")).toEqual(["1", "2"]);
       expect(await store.versions("other")).toEqual([]);
-      if (dir) expect((await readdir(join(dir, "workflows"))).sort()).toEqual(["flow@v1.json", "flow@v2.json"]);
+      if (dir)
+        expect((await readdir(join(dir, "private-workflows"))).sort()).toEqual([
+          ".execution-key",
+          "flow@v1.json",
+          "flow@v2.json",
+        ]);
     });
   }
 
@@ -59,6 +64,6 @@ describe("workflow-version store", () => {
     const b = new FileWorkflowVersionStore(dir);
     const results = await Promise.all([a.put(def("3", "a")), b.put(def("3", "b"))]);
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(await readdir(join(dir, "workflows"))).toEqual(["flow@v3.json"]);
+    expect(await readdir(join(dir, "private-workflows"))).toEqual([".execution-key", "flow@v3.json"]);
   });
 });

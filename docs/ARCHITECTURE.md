@@ -47,6 +47,11 @@ one fold from the engine's statuses to the eight the design system draws
 it depends on `engine`, `store` and `agents` to project them — `store` for the stores it
 reads and for the file lock the config write takes, `agents` for the sidecar writer — and
 `cli` starts one with `orca serve`.
+The default daemon authenticates token-bearing HTTP/WebSocket clients; local unauthenticated
+compatibility must be explicit. Operation/resource checks precede typed launch validation,
+and protected execution records are separate from public event projections. See
+[runtime integration](runtime-foundation-integration.md) for the combined admission,
+ownership, client and resume boundaries.
 
 Since v0.4.0 that daemon is a **writer**, not a reader: it drives runs under a single‑writer
 lease of its own (`orca-serve@<host>:<pid>`), advertises the `runs.control` capability, and

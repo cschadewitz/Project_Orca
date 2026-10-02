@@ -16,7 +16,7 @@
  * promises, and a client that has to hide a button needs the first one.
  */
 import type { Maintenance } from "./maintenance.js";
-import { OrcaError } from "@orca/core";
+import { OrcaError, type MutationActor } from "@orca/core";
 import {
   AGENTS_LIST_METHOD,
   AGENTS_PING_METHOD,
@@ -142,6 +142,13 @@ import {
   type WorkflowsListResult,
 } from "@orca/protocol";
 import type { ZodType } from "zod";
+import {
+  WORKFLOWS_VALIDATE_INPUTS_METHOD,
+  WorkflowsValidateInputsParamsSchema,
+  type WorkflowsValidateInputsParams,
+  type WorkflowsValidateInputsResult,
+} from "@orca/protocol";
+import type { WorkflowInputsModel } from "./workflow-inputs.js";
 import type { AgentModel } from "./agent-model.js";
 import type { ConfigModel } from "./config-model.js";
 import type { ControlModel } from "./control.js";
@@ -151,6 +158,12 @@ import type { ReadModel } from "./read-model.js";
 import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 
 export interface MethodContext {
+  /** Set only by the authenticating guard, never read from RPC params. */
+  mutationActor?: MutationActor | undefined;
+  /** Side-effect-free launch preflight, using the same resolver as admission. */
+  workflowInputs?: WorkflowInputsModel | undefined;
+  /** Server-bound per-call ownership handoff; never parsed from RPC params. */
+  attributeStartedRun?: ((runId: string) => void | Promise<void>) | undefined;
   /** ORCA's own version, reported in `hello`. */
   orcaVersion: string;
   maintenance?: Maintenance | undefined;
@@ -273,7 +286,10 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
       orcaVersion: ctx.orcaVersion,
       ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
-      capabilities: [...ctx.capabilities],
+      capabilities: [
+        ...ctx.capabilities.filter((c) => c !== "workflows.validateInputs"),
+        ...(ctx.workflowInputs ? ["workflows.validateInputs" as const] : []),
+      ],
       methods: Object.keys(methodsFor(ctx)),
     };
   },
@@ -403,12 +419,21 @@ export const journalList: Method<Parameters<PlanModel["journalList"]>[0], Journa
   handle: (params, ctx) => plans(ctx).journalList(params),
 };
 
+/** Launch preflight is read-only, but requires launch authority before resolving a workflow. */
+export const workflowsValidateInputs: Method<WorkflowsValidateInputsParams, WorkflowsValidateInputsResult> = {
+  params: WorkflowsValidateInputsParamsSchema,
+  handle: (params, ctx) => {
+    if (!ctx.workflowInputs) throw new OrcaError("NOT_SUPPORTED", "this daemon serves no workflow preflight");
+    return ctx.workflowInputs.validateInputs(params);
+  },
+};
+
 // ----------------------------------------------------------------- the writes
 
 /** `inputs.answer`: record a person's answer to an open gate or permission ask, and continue. */
 export const inputsAnswer: Method<InputsAnswerParams, InputsAnswerResult> = {
   params: InputsAnswerParamsSchema,
-  handle: (params, ctx) => control(ctx).answerInput(params),
+  handle: (params, ctx) => control(ctx).answerInput(params, ctx.mutationActor),
 };
 
 /** `runs.resume`: re-drive a parked run here until it parks again or finishes. */
@@ -420,13 +445,13 @@ export const runsResume: Method<RunsResumeParams, RunsResumeResult> = {
 /** `runs.cancel`: close a run and the children it is waiting on. */
 export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
   params: RunsCancelParamsSchema,
-  handle: (params, ctx) => control(ctx).cancelRun(params),
+  handle: (params, ctx) => control(ctx).cancelRun(params, ctx.mutationActor),
 };
 
 /** `runs.start`: a workflow and its vars. No request, no work item, no documents - by decision. */
 export const runsStart: Method<RunsStartParams, RunsStartResult> = {
   params: RunsStartParamsSchema,
-  handle: (params, ctx) => control(ctx).startRun(params),
+  handle: (params, ctx) => control(ctx).startRun(params, ctx.attributeStartedRun, ctx.mutationActor),
 };
 
 /**
@@ -610,6 +635,7 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     table[UNSUBSCRIBE_METHOD] = unsubscribe;
   }
   if (ctx.control) Object.assign(table, controlMethods);
+  if (ctx.workflowInputs) table[WORKFLOWS_VALIDATE_INPUTS_METHOD] = workflowsValidateInputs;
   if (ctx.planControl) Object.assign(table, planControlMethods);
   if (ctx.agents) Object.assign(table, agentMethods);
   if (ctx.config) {

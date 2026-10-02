@@ -12,7 +12,7 @@ async function rpc(d: DaemonHandle, body: unknown) {
 describe("startDaemon", () => {
   let d: DaemonHandle;
   beforeAll(async () => {
-    d = await startDaemon({ ...ctx, storeDir: "/tmp/store" });
+    d = await startDaemon({ ...ctx, storeDir: "/tmp/store", auth: { mode: "loopback-unauthenticated" } });
   });
   afterAll(async () => {
     await d.close();

@@ -90,7 +90,11 @@ import { DaemonClient, DaemonClientError, DEFAULT_DAEMON_URL } from "../src/clie
 describe("DaemonClient", () => {
   let d: DaemonHandle;
   beforeAll(async () => {
-    d = await startDaemon({ orcaVersion: "0.1.0-test", capabilities: ["runs.read"] });
+    d = await startDaemon({
+      orcaVersion: "0.1.0-test",
+      capabilities: ["runs.read"],
+      auth: { mode: "loopback-unauthenticated" },
+    });
   });
   afterAll(async () => {
     await d.close();
@@ -185,7 +189,12 @@ describe("the read methods", () => {
 
   let d: DaemonHandle;
   beforeAll(async () => {
-    d = await startDaemon({ orcaVersion: "0.1.0-test", capabilities: ["runs.read"], methods: table });
+    d = await startDaemon({
+      orcaVersion: "0.1.0-test",
+      capabilities: ["runs.read"],
+      auth: { mode: "loopback-unauthenticated" },
+      methods: table,
+    });
   });
   afterAll(async () => {
     await d.close();
@@ -255,7 +264,12 @@ describe("the artifact methods", () => {
 
   let d: DaemonHandle;
   beforeAll(async () => {
-    d = await startDaemon({ orcaVersion: "0.1.0-test", capabilities: ["runs.read"], methods: table });
+    d = await startDaemon({
+      orcaVersion: "0.1.0-test",
+      capabilities: ["runs.read"],
+      auth: { mode: "loopback-unauthenticated" },
+      methods: table,
+    });
   });
   afterAll(async () => {
     await d.close();
@@ -333,7 +347,12 @@ describe("the agents method", () => {
 
   let d: DaemonHandle;
   beforeAll(async () => {
-    d = await startDaemon({ orcaVersion: "0.1.0-test", capabilities: ["runs.read"], methods: table });
+    d = await startDaemon({
+      orcaVersion: "0.1.0-test",
+      capabilities: ["runs.read"],
+      auth: { mode: "loopback-unauthenticated" },
+      methods: table,
+    });
   });
   afterAll(async () => {
     await d.close();
@@ -423,6 +442,7 @@ describe("the control methods", () => {
     d = await startDaemon({
       orcaVersion: "0.1.0-test",
       capabilities: ["runs.read", "runs.control"],
+      auth: { mode: "loopback-unauthenticated" },
       methods: table,
     });
   });
@@ -546,6 +566,7 @@ describe("the plan methods", () => {
     d = await startDaemon({
       orcaVersion: "0.1.0-test",
       capabilities: ["runs.read", "runs.control", "plan.read", "plan.write"],
+      auth: { mode: "loopback-unauthenticated" },
       methods: table,
     });
   });
@@ -680,6 +701,7 @@ describe("the workflow, config and start methods", () => {
     d = await startDaemon({
       orcaVersion: "0.1.0-test",
       capabilities: ["runs.read", "runs.control"],
+      auth: { mode: "loopback-unauthenticated" },
       methods: table,
     });
   });

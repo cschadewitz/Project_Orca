@@ -1,5 +1,8 @@
 {
-  "storeEpoch": "ownership-fences-v1",
-  "protocol": { "major": 1, "minor": 8 },
-  "capabilities": ["runs.read", "runs.control", "runs.subscribe", "plan.read", "plan.write"]
+  "storeEpoch": "protected-execution-v2",
+  "protocol": {
+    "major": 1,
+    "minor": 9
+  },
+  "capabilities": ["runs.read", "runs.control", "runs.subscribe", "plan.read", "plan.write", "workflows.validateInputs"]
 }

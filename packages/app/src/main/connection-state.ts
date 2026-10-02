@@ -93,6 +93,7 @@ export function connectionStateFor({
   failuresAtCap,
   fileMode,
 }: ConnectionInputs): ConnectionState {
+  if (link === "auth-failed") return "disconnected";
   if (!compatible) return "mismatch";
   if (daemonGone || link === "closed" || failuresAtCap >= GIVE_UP_AT_CAP) return "disconnected";
   if (link !== "live") return "reconnecting";
@@ -171,7 +172,14 @@ export class ConnectionMachine {
       this.generation += 1;
       void this.shakeHands();
     }
-    this.settle();
+    this.settle({ immediate: link === "auth-failed" });
+  }
+
+  /** Authentication refusals bypass the network-blip quiet window and stale handshakes. */
+  authenticationFailed(): void {
+    if (this.done) return;
+    this.handshake += 1;
+    this.linkChanged("auth-failed");
   }
 
   /**

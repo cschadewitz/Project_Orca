@@ -15,6 +15,8 @@ import { InMemoryEventStore, type EventStore } from "./event-store.js";
 import { JsonlEventStore } from "./jsonl-event-store.js";
 import { FileArtifactStore, InMemoryArtifactStore, type ArtifactStore } from "./artifact-store.js";
 import { FileWorkflowVersionStore, InMemoryWorkflowVersionStore, type WorkflowVersionStore } from "./workflow-store.js";
+import { FileExecutionStore, InMemoryExecutionStore, type ExecutionStore } from "./execution-store.js";
+import { ProtectedEventStore } from "./protected-event-store.js";
 import { filePlanStores, memoryPlanStores, type PlanStores } from "./plan-store.js";
 
 export interface DocumentStore<T extends { id: string }> {
@@ -222,6 +224,8 @@ function apply<T extends { id: string }>(map: Map<string, T>, m: Mutation<T>): v
 
 export interface Stores {
   events: EventStore;
+  /** Private execution inputs and original event payloads; never expose through read APIs. */
+  execution: ExecutionStore;
   artifacts: ArtifactStore;
   requests: DocumentStore<Request>;
   workItems: DocumentStore<WorkItem>;
@@ -237,27 +241,33 @@ export interface Stores {
 
 /** `logger` receives what the file-backed stores notice and survive: torn log lines, stale locks. */
 export function fileStores(dir: string, clock?: Clock, logger?: Logger): Stores {
+  const execution = new FileExecutionStore(dir);
+  const workflows = new FileWorkflowVersionStore(dir);
   return {
-    events: new JsonlEventStore(dir, clock, logger),
+    execution,
+    events: new ProtectedEventStore(new JsonlEventStore(dir, clock, logger), execution, workflows),
     artifacts: new FileArtifactStore(dir, logger),
     requests: new JsonFileDocumentStore<Request>(join(dir, "requests.json"), RequestSchema),
     workItems: new JsonFileDocumentStore<WorkItem>(join(dir, "work-items.json"), WorkItemSchema),
     claims: new FileClaimStore(dir),
     leases: new FileLeaseStore(dir, clock),
     plan: filePlanStores(dir, clock, logger),
-    workflows: new FileWorkflowVersionStore(dir),
+    workflows,
   };
 }
 
 export function memoryStores(clock?: Clock): Stores {
+  const execution = new InMemoryExecutionStore();
+  const workflows = new InMemoryWorkflowVersionStore();
   return {
-    events: new InMemoryEventStore(clock),
+    execution,
+    events: new ProtectedEventStore(new InMemoryEventStore(clock), execution, workflows),
     artifacts: new InMemoryArtifactStore(),
     requests: new InMemoryDocumentStore<Request>(),
     workItems: new InMemoryDocumentStore<WorkItem>(),
     claims: new InMemoryClaimStore(),
     leases: new InMemoryLeaseStore(clock),
     plan: memoryPlanStores(clock),
-    workflows: new InMemoryWorkflowVersionStore(),
+    workflows,
   };
 }

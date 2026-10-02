@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -70,15 +72,53 @@ def lock(path, exclusive=True):
         yield stream
 
 
-def rpc(url, method, params):
-    request = urllib.request.Request(url + "/rpc", json.dumps({
-        "kind": "request", "id": 1, "method": method, "params": params,
-    }).encode(), {"content-type": "application/json"})
-    with urllib.request.urlopen(request, timeout=5) as response:
-        result = json.load(response)
-    if not result.get("ok"):
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        raise RuntimeError("Daemon RPC redirects are refused")
+
+
+def rpc(url, method, params, token_file=None, use_environment=True):
+    explicit = os.environ.get("ORCA_DAEMON_TOKEN") if use_environment else None
+    token_file = (os.environ.get("ORCA_DAEMON_TOKEN_FILE") if use_environment else None) or token_file
+    opener = urllib.request.build_opener(NoRedirect())
+    for attempt in range(2):
+        token = explicit
+        if token is None and token_file:
+            try:
+                token = Path(token_file).read_text().strip()
+            except FileNotFoundError:
+                token = None  # The explicit loopback compatibility mode needs no token.
+            except OSError:
+                raise RuntimeError("Cannot read daemon credential file") from None
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise RuntimeError("Daemon URL must not contain credentials, query parameters or fragments")
+        if token and parsed.scheme != "https" and parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+            raise RuntimeError("Authenticated remote daemon connections require HTTPS")
+        headers = {"content-type": "application/json"}
+        if token:
+            if not re.fullmatch(r"[A-Za-z0-9._~-]+", token):
+                raise RuntimeError("Invalid daemon credential")
+            headers["authorization"] = "Bearer " + token
+        request = urllib.request.Request(url + "/rpc", json.dumps({
+            "kind": "request", "id": 1, "method": method, "params": params,
+        }).encode(), headers)
+        try:
+            response = opener.open(request, timeout=5)
+        except urllib.error.HTTPError as error:
+            if error.code not in (401, 403):
+                raise
+            response = error
+        with response:
+            result = json.load(response)
+        if result.get("ok"):
+            return result["result"]
+        code = result.get("error", {}).get("code")
+        if code == "AUTH_INVALID" and attempt == 0 and explicit is None and token_file:
+            continue  # A restart rotates the local file. Re-read it once, never loop.
+        if code in ("AUTH_REQUIRED", "AUTH_INVALID", "AUTH_FORBIDDEN"):
+            raise RuntimeError(f"Daemon refused {method}: {code}")
         raise RuntimeError(f"Daemon refused {method}: {result.get('error')}")
-    return result["result"]
 
 
 def metadata(release):
@@ -135,14 +175,16 @@ class Deployment:
     def systemctl(self, *args):
         return capture(["systemctl", *(["--user"] if self.config.get("userService", True) else []), *args])
 
-    def health(self, release, url=None, pid=None):
+    def health(self, release, url=None, pid=None, token_file=None):
         meta = metadata(release)
         if url is None:
             pid = int(self.systemctl("show", self.config["service"], "--property=MainPID", "--value"))
         last = None
         for _ in range(20):
             try:
-                hello = rpc(url or self.config["url"], "hello", {"client": "orca-release", "protocol": meta["compatibility"]["protocol"]})
+                hello = rpc(url or self.config["url"], "hello",
+                            {"client": "orca-release", "protocol": meta["compatibility"]["protocol"]},
+                            token_file=token_file or self.token_file(), use_environment=url is None)
                 verify_hello(hello, meta, pid)
                 return
             except Exception as error:
@@ -150,8 +192,11 @@ class Deployment:
                 time.sleep(0.25)
         raise RuntimeError(f"Health check failed: {last}")
 
+    def token_file(self):
+        return self.config.get("daemonTokenFile") or str(Path(self.config["daemonConfig"]).parent / "auth" / "local-client.token")
+
     def barrier(self, action, token):
-        result = rpc(self.config["url"], "maintenance", {"action": action, "token": token})
+        result = rpc(self.config["url"], "maintenance", {"action": action, "token": token}, token_file=self.token_file())
         if action == "prepare" and not result["ready"]:
             raise RuntimeError("Daemon busy: " + ", ".join(result["active"]))
 
@@ -195,7 +240,8 @@ class Deployment:
             child = subprocess.Popen([node, str(cli), "--cwd", scratch, "serve", "--port", str(port)],
                                      cwd=stage, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
-                self.health(stage, f"http://127.0.0.1:{port}", child.pid)
+                self.health(stage, f"http://127.0.0.1:{port}", child.pid,
+                            token_file=str(Path(scratch) / "auth" / "local-client.token"))
                 if child.poll() is not None:
                     raise RuntimeError("Staged daemon exited during health validation")
             finally:

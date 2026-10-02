@@ -6,6 +6,7 @@
  */
 import {
   applyEvent,
+  isOrcaError,
   latestStepForNode,
   OrcaError,
   reduceRun,
@@ -22,7 +23,8 @@ import {
   type WorkflowDefinition,
   type Workspace,
 } from "@orca/core";
-import type { Lease, Stores } from "@orca/store";
+import { executionEvents, unavailable, type ExecutionInputs, type Lease, type Stores } from "@orca/store";
+import { executionLogger } from "./execution-inputs.js";
 import type { ResolvedArtifact } from "./executors/types.js";
 import { projectWorkItems, type ProjectedWorkItem } from "./program/work-items.js";
 
@@ -59,8 +61,12 @@ export class RunContext {
    * `run.cancelled`. Only the orchestrator's lease heartbeat sets this.
    */
   leaseLost = false;
+  /** Verified actor of an explicit cancellation while this context is live. */
+  cancelActor: import("@orca/core").MutationActor | undefined;
   /** Installed by the interpreter before any execution write. */
   lease: Lease | undefined;
+  /** Serialize private sensitivity promotions from parallel children. */
+  private sensitivityUpdate: Promise<void> = Promise.resolve();
   /**
    * Artifact bodies by content hash. Blobs are content-addressed and therefore immutable, and
    * `evalContext()` runs for every render, condition, route and input resolution - without this
@@ -72,19 +78,69 @@ export class RunContext {
     readonly definition: WorkflowDefinition,
     public state: RunState,
     private readonly deps: RunContextDeps,
+    private readonly publicProjection: RunState,
+    private executionInputs?: ExecutionInputs,
   ) {}
 
   static async load(id: string, definition: WorkflowDefinition, deps: RunContextDeps): Promise<RunContext> {
     const events = await deps.stores.events.read(id);
     if (events.length === 0) throw new OrcaError("RUN_NOT_FOUND", `run ${id} has no events`);
-    return new RunContext(id, definition, reduceRun(events), deps);
+    const first = events[0];
+    const inputs = await deps.stores.execution.getInputs(id);
+    if (first?.type === "run.created" && first.payload.executionInputsStored && !inputs) throw unavailable();
+    if (inputs && (inputs.workflowId !== definition.id || inputs.workflowVersion !== definition.version))
+      throw unavailable();
+    const authoritative = await executionEvents(events, deps.stores.execution);
+    if (inputs && authoritative[0]?.type === "run.created")
+      authoritative[0] = {
+        ...authoritative[0],
+        payload: { ...authoritative[0].payload, vars: structuredClone(inputs.vars) },
+      };
+    const state = reduceRun(authoritative);
+    return new RunContext(id, definition, state, deps, reduceRun(events), inputs);
+  }
+
+  /** A public reader must never receive the interpreter's private vars or event payloads. */
+  publicState(): RunState {
+    return this.publicProjection;
   }
 
   get workspace(): Workspace {
     return this.state.run.workspace;
   }
   get logger(): Logger {
-    return this.deps.logger;
+    return executionLogger(this.deps.logger, () => this.executionInputs);
+  }
+
+  /** Promote before any exact child result returns; immutable admission vars are never rewritten. */
+  async inheritSensitivity(child: ExecutionInputs): Promise<void> {
+    const update = this.sensitivityUpdate.then(() =>
+      this.withOwnership(async () => {
+        let inputs = await this.deps.stores.execution.getInputs(this.id);
+        if (!inputs) {
+          const first = (await this.deps.stores.events.readRange(this.id, { limit: 1 }))[0];
+          if (first?.type !== "run.created") throw unavailable();
+          inputs = {
+            runId: this.id,
+            workflowId: first.payload.workflowId,
+            workflowVersion: first.payload.workflowVersion,
+            vars: first.payload.vars,
+            sensitiveNames: [],
+            secrets: [],
+          };
+          await this.deps.stores.execution.putInputs(inputs);
+        }
+        const present = new Set(inputs.secrets.map((value) => JSON.stringify(value)));
+        const secrets = child.secrets.filter((value) => !present.has(JSON.stringify(value)));
+        const sensitiveNames = child.sensitiveNames.filter((name) => !inputs.sensitiveNames.includes(name));
+        if (secrets.length || sensitiveNames.length)
+          await this.deps.stores.execution.addSensitivity(this.id, { secrets, sensitiveNames });
+        this.executionInputs = await this.deps.stores.execution.getInputs(this.id);
+        if (!this.executionInputs) throw unavailable();
+      }),
+    );
+    this.sensitivityUpdate = update.catch(() => undefined);
+    await update;
   }
 
   async withOwnership<T>(write: () => Promise<T>): Promise<T> {
@@ -104,7 +160,9 @@ export class RunContext {
     return this.withOwnership(async () => {
       await prepare?.();
       const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
-      applyEvent(this.state, e);
+      // The returned event is public; the interpreter keeps its exact authoritative payload.
+      applyEvent(this.state, { ...e, payload: input.payload } as OrcaEvent);
+      applyEvent(this.publicProjection, e);
       if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItemsOwned();
       return e;
     });
@@ -183,7 +241,10 @@ export class RunContext {
     for (const link of step.children) {
       if (link.runId === run.id) break; // everything from here on was spawned after us
       if (!link.status || !FINISHED.has(link.status)) continue;
-      const state = await this.deps.loadState(link.runId).catch(() => undefined);
+      const state = await this.deps.loadState(link.runId).catch((error: unknown) => {
+        if (isOrcaError(error, "RUN_NOT_FOUND")) return undefined;
+        throw error; // Missing/corrupt protected execution material is never an absent sibling.
+      });
       if (state?.run.completedAt && state.run.completedAt <= run.createdAt) out.push(state);
     }
     return out;

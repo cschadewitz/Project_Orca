@@ -7,6 +7,11 @@
  * is strictly additive: without a `source` this is exactly the server it always was, and
  * even with one, `hello` and every read method still work over `/rpc` with no socket in
  * sight. A client subscribes by opening a socket, not by changing how it reads.
+ *
+ * Both endpoints authenticate before anything else happens (#328, `auth/`): `startDaemon`
+ * refuses to start without an explicit `auth` policy, a request is admitted on its headers
+ * before its body is read, and every method runs behind the guard. `GET /health` is the one
+ * unauthenticated answer, and all it ever says is `{ "ok": true }`.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -22,8 +27,21 @@ import {
 import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
 import { Maintenance } from "./maintenance.js";
 import { attachSocket } from "./socket.js";
+import { Authorizer, bindPrincipal } from "./auth/guard.js";
+import { OwnershipStore } from "./auth/ownership.js";
+import type { ResourceResolver } from "./auth/resources.js";
+import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
 
 export interface DaemonOptions extends MethodContext {
+  /**
+   * How callers are authenticated. Required at runtime: `startDaemon` refuses to start
+   * without it, and there is no default - `{ mode: "loopback-unauthenticated" }` has to be
+   * asked for, and is refused off loopback. `docs/daemon-security.md` has both modes.
+   *
+   * Optional in the type only so the callers that integration wires (`orca serve`) still
+   * compile while they are wired; a call that omits it fails closed, not open.
+   */
+  auth?: DaemonAuthOptions | undefined;
   maintenanceToken?: string | undefined;
   admissionFile?: string | undefined;
   host?: string | undefined;
@@ -57,13 +75,40 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "content-type": "application/json" });
+function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+  res.writeHead(status, { "content-type": "application/json", ...headers });
   res.end(JSON.stringify(body));
 }
 
-/** Run one request envelope through the method table; every failure becomes a response envelope. */
-export async function dispatch(text: string, methods: MethodTable, ctx: MethodContext): Promise<ResponseMessage> {
+/** The response to a refused admission: the same envelope a method failure has, with a status. */
+export function refusalOf(admission: Extract<Admission, { ok: false }>): {
+  status: number;
+  headers: Record<string, string>;
+  body: ResponseMessage;
+} {
+  return {
+    status: admission.status,
+    headers: admission.status === 401 ? { "www-authenticate": 'Bearer realm="orca"' } : {},
+    body: { kind: "response", id: 0, ok: false, error: admission.error },
+  };
+}
+
+/**
+ * The operation check `dispatch` runs once the envelope parses and before the params do.
+ * `exists` is whether the method table answers the method. It throws the refusal.
+ */
+export type AuthorizeOperation = (method: string, exists: boolean) => void;
+
+/**
+ * Run one request envelope through the method table; every failure becomes a response envelope.
+ * With `authorize`, the caller's operation grant is checked before its params are validated.
+ */
+export async function dispatch(
+  text: string,
+  methods: MethodTable,
+  ctx: MethodContext,
+  authorize?: AuthorizeOperation,
+): Promise<ResponseMessage> {
   const fail = (id: string | number, error: ProtocolError): ResponseMessage => ({
     kind: "response",
     id,
@@ -74,7 +119,14 @@ export async function dispatch(text: string, methods: MethodTable, ctx: MethodCo
   if (!msg) return fail(0, protocolError("PROTOCOL_MESSAGE", "not a protocol message"));
   if (msg.kind !== "request")
     return fail(0, protocolError("PROTOCOL_MESSAGE", `expected a request, got a ${msg.kind}`));
-  const method = methods[msg.method];
+  if (authorize) {
+    try {
+      authorize(msg.method, Object.hasOwn(methods, msg.method));
+    } catch (e) {
+      return fail(msg.id, isProtocolFault(e) ? e.toJSON() : describeError(e));
+    }
+  }
+  const method = Object.hasOwn(methods, msg.method) ? methods[msg.method] : undefined;
   if (!method) return fail(msg.id, protocolError("PROTOCOL_METHOD", `unknown method '${msg.method}'`));
   const params = method.params.safeParse(msg.params ?? {});
   if (!params.success) {
@@ -93,8 +145,20 @@ export async function dispatch(text: string, methods: MethodTable, ctx: MethodCo
   }
 }
 
+/** The loopback mode's principal sees everything, so it never resolves a resource. */
+const NO_RESOURCES: ResourceResolver = {
+  run: async () => undefined,
+  inputRun: async () => undefined,
+  artifactRun: async () => undefined,
+  claimRun: async () => undefined,
+  workflowExists: () => false,
+};
+
 export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const host = opts.host ?? "127.0.0.1";
+  // Before anything is built: an unsafe or absent policy is a refusal to start, not a warning.
+  validateDeployment(opts.auth, host);
+  const auth = opts.auth;
   const ctx: MethodContext = {
     processId: process.pid,
     maintenance: new Maintenance(opts.maintenanceToken, opts.admissionFile),
@@ -102,6 +166,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     storeDir: opts.storeDir,
     capabilities: opts.capabilities,
     reads: opts.reads,
+    workflowInputs: opts.workflowInputs,
     source: opts.source,
     planSource: opts.planSource,
     control: opts.control,
@@ -111,18 +176,53 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   };
   // A daemon without a store serves `hello` alone, and says so in `hello.methods`: a read
   // method it cannot answer is an unknown method, not a method that fails.
-  const methods = opts.methods ? ctx.maintenance!.wrap(opts.methods) : methodsFor(ctx);
+  const authorizer = new Authorizer(
+    auth.mode === "token"
+      ? {
+          resolver: auth.resolver,
+          ownership: auth.ownership,
+          audit: auth.audit,
+          admissions: auth.admissions ?? ctx.source,
+        }
+      : { resolver: NO_RESOURCES, ownership: new OwnershipStore(), audit: auth.audit, admissions: ctx.source },
+  );
+  const gate = new TransportGate(auth, host, authorizer);
+  // The guard is outermost: a caller is authorized before maintenance admission is consulted,
+  // so an unauthorized caller cannot even learn that an update is in progress.
+  const methods = authorizer.guard(opts.methods ? ctx.maintenance!.wrap(opts.methods) : methodsFor(ctx));
   const server: Server = createServer((req, res) => {
     void (async () => {
-      if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true });
-      if (req.method === "POST" && req.url === "/rpc") {
+      const path = (req.url ?? "").split("?")[0];
+      if (req.method === "GET" && path === "/health") return sendJson(res, 200, { ok: true });
+      if (req.method === "POST" && path === "/rpc") {
+        const admission = gate.admit(req, "http");
+        if (!admission.ok) {
+          // Refused on its headers: the body is never read, so it is never parsed or buffered.
+          const refusal = refusalOf(admission);
+          req.resume();
+          return sendJson(res, refusal.status, refusal.body, { ...refusal.headers, connection: "close" });
+        }
         let body: string;
         try {
           body = await readBody(req);
         } catch (e) {
           return sendJson(res, 413, { kind: "response", id: 0, ok: false, error: describeError(e) });
         }
-        return sendJson(res, 200, await dispatch(body, methods, ctx));
+        // Body receipt can outlive a credential or its grants. Keep the early rejection,
+        // then authenticate again at dispatch and bind only the current authority.
+        const current = gate.admit(req, "http");
+        if (!current.ok) {
+          const refusal = refusalOf(current);
+          return sendJson(res, refusal.status, refusal.body, refusal.headers);
+        }
+        const { principal, meta } = current;
+        return sendJson(
+          res,
+          200,
+          await dispatch(body, methods, bindPrincipal(ctx, principal, meta), (method, exists) =>
+            authorizer.checkOperation(principal, method, exists, meta),
+          ),
+        );
       }
       sendJson(res, 404, { kind: "response", id: 0, ok: false, error: protocolError("PROTOCOL_METHOD", "not found") });
     })();
@@ -132,6 +232,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         methods,
         ctx,
         source: ctx.source,
+        gate,
+        authorizer,
         ...(opts.batchMs === undefined ? {} : { batchMs: opts.batchMs }),
       })
     : undefined;

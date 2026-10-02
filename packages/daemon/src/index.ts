@@ -24,3 +24,5 @@ export * from "./notifications.js";
 export * from "./subscriptions.js";
 export * from "./socket.js";
 export * from "./server.js";
+export * from "./auth/index.js";
+export * from "./workflow-inputs.js";

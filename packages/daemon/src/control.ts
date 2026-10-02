@@ -22,7 +22,14 @@
  * restart, and it is why `inputs.answer` is a write to a log and a re-drive rather than the
  * resolution of a promise.
  */
-import { OrcaError, isOrcaError, type HumanInputRequest, type RunState, type Clock } from "@orca/core";
+import {
+  OrcaError,
+  isOrcaError,
+  type HumanInputRequest,
+  type RunState,
+  type Clock,
+  type MutationActor,
+} from "@orca/core";
 import { recordAlwaysDecision, type RecordAlwaysResult } from "@orca/agents";
 import type { Orchestrator } from "@orca/engine";
 import {
@@ -44,6 +51,7 @@ import {
 import { agentSessionsByStep, type ReadModel } from "./read-model.js";
 
 export interface AnswerAndResumeOptions {
+  actor?: MutationActor | undefined;
   /** The `HumanInputRequest.id` being answered. */
   requestId: string;
   /** An option's `id`, or the free text for a question that offers none. */
@@ -70,6 +78,8 @@ export interface AnswerAndResumeOptions {
    * job and the daemon is not running a program. It stays a caller's choice either way.
    */
   resumeWith?: ((runId: string) => Promise<RunState>) | undefined;
+  /** Runs under the answer lease after durable acceptance, before any automatic resume. */
+  afterAnswer?: ((request: HumanInputRequest, state: RunState) => Promise<void>) | undefined;
 }
 
 export interface AnswerAndResumeResult {
@@ -114,7 +124,9 @@ export async function answerAndResume(orc: Orchestrator, opts: AnswerAndResumeOp
     );
   await refuseIfLeasedElsewhere(orc, runId);
 
-  const request = await orc.answer(opts.requestId, opts.answer, runId, opts.note);
+  const request = await leased(runId, () =>
+    orc.answer(opts.requestId, opts.answer, runId, opts.note, opts.afterAnswer, opts.actor),
+  );
   if (opts.resume === false) return { request };
   // `resume` walks up to the topmost parked ancestor and re-attaches on the way down, so a
   // gate answered inside a child continues the tree and not just the child.
@@ -246,18 +258,37 @@ export class ControlModel {
    * ask again" has to be able to check whether that is true, and `refused` is the case where
    * it is not: nothing generalised, so the answer held for this one call.
    */
-  async answerInput(params: InputsAnswerParams): Promise<InputsAnswerResult> {
-    const permission = params.always ? await this.recordAlways(params) : undefined;
-    // Only when the file actually changed: `alreadyPresent` rewrote nothing, and a frame
-    // announcing a revision nobody moved is the kind of noise `agent.changed` refuses to
-    // send on `lastSeenAt`.
-    if (permission && permission.added.length > 0) await this.config?.announce("permissions");
+  async answerInput(params: InputsAnswerParams, actor?: MutationActor): Promise<InputsAnswerResult> {
+    let permission: RecordAlwaysResult | undefined;
+    // Resolve the standing grant without writing; invalid grant prerequisites must not
+    // consume even the one-time answer. The engine rechecks the exact gate under its lease.
+    if (params.always) {
+      const found = await findInput(this.orc, params.requestId, params.runId);
+      await this.prepareAlways(params, found.request, found.state);
+    }
     const { request, state } = await answerAndResume(this.orc, {
+      actor,
       requestId: params.requestId,
       answer: params.optionId,
       ...(params.runId ? { runId: params.runId } : {}),
       ...(params.note ? { note: params.note } : {}),
       resume: params.resume,
+      ...(params.always
+        ? {
+            afterAnswer: async (request: HumanInputRequest, state: RunState) => {
+              try {
+                permission = await recordAlwaysDecision(await this.prepareAlways(params, request, state));
+              } catch {
+                throw new OrcaError(
+                  "INTERNAL",
+                  "the one-time answer was recorded, but its standing permission could not be saved; the run remains paused",
+                  { runId: request.runId, requestId: request.id, answerRecorded: true },
+                );
+              }
+              if (permission.added.length > 0) await this.config?.announce("permissions");
+            },
+          }
+        : {}),
     });
     return {
       requestId: request.id,
@@ -297,9 +328,9 @@ export class ControlModel {
    * holder's pid, rather than raising the engine's `RUN_LEASED` with a message a screen
    * cannot branch on.
    */
-  async cancelRun(params: RunsCancelParams): Promise<RunsCancelResult> {
+  async cancelRun(params: RunsCancelParams, actor?: MutationActor): Promise<RunsCancelResult> {
     await refuseIfLeasedElsewhere(this.orc, params.runId);
-    await leased(params.runId, () => this.orc.cancel(params.runId, params.reason));
+    await leased(params.runId, () => this.orc.cancel(params.runId, params.reason, actor));
     return { run: await this.runView(params.runId), asOf: this.clock.isoNow() };
   }
 
@@ -312,13 +343,22 @@ export class ControlModel {
    * `requestId` and `workItemId` travel onto `run.created` and out on the `run.changed`
    * notification; neither is read back from a document store.
    */
-  async startRun(params: RunsStartParams): Promise<RunsStartResult> {
+  async startRun(
+    params: RunsStartParams,
+    attributeStartedRun?: (runId: string) => void | Promise<void>,
+    actor?: MutationActor,
+  ): Promise<RunsStartResult> {
     const runId = await this.orc.startRun({
+      ...(actor ? { actor } : {}),
       workflowId: params.workflowId,
       vars: params.vars,
+      ...(params.workflowVersion ? { workflowVersion: params.workflowVersion } : {}),
+      ...(params.expectedWorkflowRevision ? { expectedWorkflowRevision: params.expectedWorkflowRevision } : {}),
       ...(params.requestId ? { requestId: params.requestId } : {}),
       ...(params.workItemId ? { workItemId: params.workItemId } : {}),
     });
+    // Persist the exact call/run ownership before execution can emit agent or child events.
+    await attributeStartedRun?.(runId);
     // A run this daemon has just created cannot be leased by anyone else *yet*, but it can be
     // by the time `run` reaches `execute`, and the lease can be taken away mid-run (#267).
     // Either way the engine raises `RUN_LEASED`, and an unmapped one reaches the client as an
@@ -371,20 +411,18 @@ export class ControlModel {
     return (await this.reads.runsGet({ runId })).run;
   }
 
-  /**
-   * Append the standing rule an "always" answer implies. It runs *before* the answer is
-   * recorded, deliberately: a sidecar write that fails must not leave a run resumed against
-   * a permission grant that does not exist, and the reverse - a rule written for an answer
-   * that was then refused - costs nothing, because a rule only ever fires on the next ask.
-   */
-  private async recordAlways(params: InputsAnswerParams): Promise<RecordAlwaysResult> {
+  /** Prepare a grant without touching the sidecar; persist only after exact gate acceptance. */
+  private async prepareAlways(
+    params: InputsAnswerParams,
+    request: HumanInputRequest,
+    state: RunState,
+  ): Promise<Parameters<typeof recordAlwaysDecision>[0]> {
     if (!this.permissionsFile)
       throw new OrcaError(
         "NOT_SUPPORTED",
         "this daemon serves no workspace configuration: there is nowhere to record a standing permission",
         { requestId: params.requestId },
       );
-    const { request, state } = await findInput(this.orc, params.requestId, params.runId);
     if (request.kind !== "permission")
       throw new OrcaError("NOT_SUPPORTED", `'${params.requestId}' is a ${request.kind}, not a permission ask`, {
         requestId: params.requestId,
@@ -402,13 +440,13 @@ export class ControlModel {
     const asRequest = { sessionId: "", toolCall, options: [] } as unknown as Parameters<
       typeof recordAlwaysDecision
     >[0]["request"];
-    return recordAlwaysDecision({
+    return {
       file: this.permissionsFile,
       agentId: await this.agentForStep(request.runId, request.stepRunId),
       request: asRequest,
       decision: params.always!.decision,
       workspaceCwd: state.run.workspace.cwd,
-    });
+    };
   }
 
   /**

@@ -34,6 +34,22 @@ edges:
   - { from: verdict, to: done }      # default edge (no `when`)
 ```
 
+## Typed launch inputs
+
+`inputs: {name: description}` remains documentation. Optional `inputSchema` declares
+`fields` with typed constraints, defaults and sensitivity, plus explicit unknown-field
+policy. Defaults are resolved before workflow `vars`, then launch vars; there is no
+implicit engine coercion. Workflows without a schema retain legacy input behavior.
+
+Use authorized `workflows.validateInputs` before launching, and pass its returned version
+and revision to `runs.start` (or CLI `--workflow-version` and
+`--expected-workflow-revision`). Admission validates before creating a run or provisioning
+its workspace. Persisted runs resume their pinned definition and authoritative inputs.
+
+Sensitive values live in protected execution storage rather than public run/event views.
+See [typed declarations](workflow-inputs.md) and [runtime integration](runtime-foundation-integration.md)
+for examples, client parsing, storage/backup boundaries and migration details.
+
 ## Node types
 
 | type | purpose | key fields |

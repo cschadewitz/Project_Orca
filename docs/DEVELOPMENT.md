@@ -30,6 +30,16 @@ postinstall (allow-listed in `pnpm-workspace.yaml`). CI sets
 lints and builds the renderer, none of which need the binary; do the same locally if you
 never launch it. The app reads `ORCA_DAEMON_URL` to attach to a daemon elsewhere.
 
+## Runtime integration checks
+
+`orca serve` now defaults to token mode. The app and CLI use the bootstrap token-file
+path; do not disable authentication just to make a smoke fixture pass. Explicit legacy
+fixtures use `auth: {mode: "loopback-unauthenticated"}`. The functional Electron smoke
+fixture passes its temporary workspace token-file path to its RPC helper and app process.
+See [runtime integration](runtime-foundation-integration.md) for pinned feature heads and
+security/storage boundaries. Run the combined suite and App smoke on the exact integration
+head before treating the independent story slices as accepted.
+
 ## The renderer build
 
 The app is three programs with three different runtimes, and they are built by two tools:

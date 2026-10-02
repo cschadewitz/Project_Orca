@@ -136,6 +136,9 @@ test.beforeAll(async () => {
     if (value !== undefined && key !== "ELECTRON_RUN_AS_NODE") env[key] = value;
   }
   env.ORCA_DAEMON_URL = daemon.url;
+  // Fixture credentials only: an operator's environment token must not take precedence.
+  delete env.ORCA_DAEMON_TOKEN;
+  env.ORCA_DAEMON_TOKEN_FILE = daemon.tokenFile;
 
   // A throwaway user-data directory, so `preferences.json` starts empty. Without it the app
   // would read whatever the previous run left behind and the theme cycle below would start

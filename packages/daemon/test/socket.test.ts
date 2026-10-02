@@ -110,6 +110,7 @@ describe("the WebSocket endpoint", () => {
     daemon = await startDaemon({
       orcaVersion: "0.1.0-test",
       capabilities: ["runs.read", "runs.subscribe"],
+      auth: { mode: "loopback-unauthenticated" },
       reads: new ReadModel({ orchestrator: fixture.orchestrator }),
       source: fixture.orchestrator,
       ...(batchMs === undefined ? {} : { batchMs }),
@@ -336,6 +337,7 @@ describe("the HTTP path", () => {
     daemon = await startDaemon({
       orcaVersion: "0.1.0-test",
       capabilities: ["runs.read", "runs.subscribe"],
+      auth: { mode: "loopback-unauthenticated" },
       reads: new ReadModel({ orchestrator: fixture.orchestrator }),
       source: fixture.orchestrator,
     });
@@ -356,6 +358,7 @@ describe("the HTTP path", () => {
     daemon = await startDaemon({
       orcaVersion: "0.1.0-test",
       capabilities: ["runs.read", "runs.subscribe"],
+      auth: { mode: "loopback-unauthenticated" },
       reads: new ReadModel({ orchestrator: fixture.orchestrator }),
       source: fixture.orchestrator,
     });
@@ -368,6 +371,7 @@ describe("the HTTP path", () => {
     daemon = await startDaemon({
       orcaVersion: "0.1.0-test",
       capabilities: ["runs.read"],
+      auth: { mode: "loopback-unauthenticated" },
       reads: new ReadModel({ orchestrator: fixture.orchestrator }),
     });
     expect(daemon.socketUrl).toBeUndefined();

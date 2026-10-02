@@ -10,8 +10,10 @@ it("closes admission atomically and guards both active operations and token owne
   const daemon = await startDaemon({
     orcaVersion: "0.6.0",
     capabilities: [],
+    auth: { mode: "loopback-unauthenticated" },
+    // Any inventoried method will do; an un-inventoried one is refused before admission (#328).
     methods: {
-      work: {
+      "agents.list": {
         params: z.object({}),
         handle: () => {
           entered();
@@ -31,16 +33,16 @@ it("closes admission atomically and guards both active operations and token owne
     return (await response.json()) as { ok: boolean; result: { ready: boolean; active: string[] } };
   };
   try {
-    const work = call("work");
+    const work = call("agents.list");
     await running;
     expect((await call("maintenance", { action: "prepare", token: "a" })).result).toEqual({
       ready: false,
-      active: ["work"],
+      active: ["agents.list"],
     });
     finish();
     await work;
     expect((await call("maintenance", { action: "prepare", token: "a" })).result.ready).toBe(true);
-    expect((await call("work")).ok).toBe(false);
+    expect((await call("agents.list")).ok).toBe(false);
     expect((await call("maintenance", { action: "resume", token: "b" })).ok).toBe(false);
     expect((await call("maintenance", { action: "resume", token: "a" })).ok).toBe(true);
   } finally {
@@ -48,7 +50,12 @@ it("closes admission atomically and guards both active operations and token owne
   }
 });
 it("starts closed for activation health checks", async () => {
-  const daemon = await startDaemon({ orcaVersion: "0.6.0", capabilities: [], maintenanceToken: "recovery" });
+  const daemon = await startDaemon({
+    orcaVersion: "0.6.0",
+    capabilities: [],
+    maintenanceToken: "recovery",
+    auth: { mode: "loopback-unauthenticated" },
+  });
   try {
     const response = await fetch(daemon.url + "/rpc", {
       method: "POST",
@@ -78,12 +85,13 @@ it("keeps durable admission closed across daemon restarts and resume requests", 
     orcaVersion: "0.6.0",
     capabilities: [],
     admissionFile,
+    auth: { mode: "loopback-unauthenticated" as const },
     methods: {
-      work: { params: z.object({}), handle: () => "accepted" },
+      "agents.list": { params: z.object({}), handle: () => "accepted" },
     },
   };
   let daemon = await startDaemon(options);
-  const call = async (method = "work", params = {}) => {
+  const call = async (method = "agents.list", params = {}) => {
     const response = await fetch(daemon.url + "/rpc", {
       method: "POST",
       body: JSON.stringify({ kind: "request", id: 1, method, params }),

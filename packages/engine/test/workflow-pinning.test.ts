@@ -114,6 +114,28 @@ describe("workflow version pinning (#179)", () => {
     });
   }
 
+  for (const storage of ["memory", "file"] as const) {
+    it(`${storage}: resumes on its stored snapshot after a same-version edit of the file (#330)`, async () => {
+      const dir = storage === "file" ? await mkdtemp(join(tmpdir(), "orca-pin-")) : undefined;
+      if (dir) dirs.push(dir);
+      const stores = dir ? fileStores(dir) : memoryStores();
+      const { runId, queryId } = await park(stores);
+
+      // v2's graph, but still labelled version 1: the edit a version bump should have marked.
+      const second = make(V2.replace('version: "2"', 'version: "1"'), stores);
+      await second.breakLease(runId, { force: true }).catch(() => undefined);
+      await second.answer(queryId, "go", runId);
+      const state = await second.resume(runId);
+      expect(state.run.status, JSON.stringify(state.run.error)).toBe("completed");
+      expect(nodes(state).slice(-3)).toEqual(["first:completed", "extra:completed", "done:completed"]);
+
+      // A new run cannot start on content the recorded version 1 does not have.
+      await expect(second.startRun({ workflowId: "pinned" })).rejects.toMatchObject({ code: "WORKFLOW_INVALID" });
+      // An unchanged file is the same revision as its stored round trip, so it still starts.
+      await expect(make(V1, stores).startRun({ workflowId: "pinned" })).resolves.toMatch(/^run/);
+    });
+  }
+
   it("refuses to resume a run whose version is neither stored nor on disk, naming what exists", async () => {
     const stores = memoryStores();
     const { runId, queryId } = await park(stores);
