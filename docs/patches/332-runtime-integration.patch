@@ -1,0 +1,1040 @@
+diff --git a/docs/daemon-security.md b/docs/daemon-security.md
+index 4eebcd8..d7abd3f 100644
+--- a/docs/daemon-security.md
++++ b/docs/daemon-security.md
+@@ -106,7 +106,7 @@ A credential holds a list of these permissions:
+ | `agents.read`        | Agent health; `agent.changed`.                                             |
+ | `agents.ping`        | Spawn an agent to perform a handshake.                                     |
+ | `config.read`        | `config.get`, which returns the configuration **unredacted**; `config.changed`. |
+-| `config.write`       | `config.set`.                                                              |
++| `config.write`       | `config.set`, `config.apply`.                                                              |
+ | `daemon.maintenance` | The update coordinator's admission control.                                |
+ 
+ A **resource scope** limits which resources those permissions apply to:
+@@ -166,6 +166,7 @@ that the two match. A method that is missing from the table is refused with
+ | `claims.release` | `claims.release` | the claim's owning run | mutation |
+ | `config.get` | `config.read` | workspace-wide | — |
+ | `config.set` | `config.write` | workspace-wide | mutation |
++| `config.apply` | `config.write` | workspace-wide | mutation |
+ | `plans.list` | `plan.read` | workspace-wide | — |
+ | `plan.get` | `plan.read` | workspace-wide | — |
+ | `items.list` | `plan.read` | workspace-wide | — |
+diff --git a/packages/cli/src/bootstrap.ts b/packages/cli/src/bootstrap.ts
+index 51c6dfb..e7debee 100644
+--- a/packages/cli/src/bootstrap.ts
++++ b/packages/cli/src/bootstrap.ts
+@@ -2,6 +2,8 @@
+  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
+  * The CLI, the ACP facade and embedders all go through here.
+  */
++import { createHash } from "node:crypto";
++
+ import { readFile, stat, realpath } from "node:fs/promises";
+ import { dirname, isAbsolute, join, resolve } from "node:path";
+ import { pathToFileURL } from "node:url";
+@@ -20,6 +22,7 @@ import {
+   type WorkflowRegistry,
+ } from "@orca/core";
+ import {
++  ConfigurationGenerations,
+   autoHumanInput,
+   builtinExecutors,
+   GitWorktreeProvider,
+@@ -63,6 +66,7 @@ export interface BootstrapOptions {
+ 
+ export interface OrcaApp {
+   config: OrcaConfig;
++  generations: ConfigurationGenerations;
+   configDir: string;
+   /**
+    * The file `config` was read from, when it was read from one. Absent means discovery found
+@@ -242,11 +246,49 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
+     // An ephemeral bootstrap deliberately gets none: it is a one-shot over in-memory stores
+     // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
+     // durable workspace state of exactly the kind `ephemeral` means to leave alone.
+-    ...(opts.ephemeral ? {} : { sessionFactory: makeSessionFactory(configDir) }),
++    ...(opts.ephemeral
++      ? {}
++      : {
++          sessionFactory: (options: OpenSessionOptions) => {
++            const current = agents.resolve(options.agent.id).agent;
++            return makeSessionFactory(configDir)({
++              ...options,
++              agent: { ...options.agent, permissions: current.permissions },
++            });
++          },
++        }),
+     ...(opts.lease ? { lease: opts.lease } : {}),
+   });
++  const generations = new ConfigurationGenerations({
++    store: stores.execution,
++    workflows: stores.workflows,
++    loadAssets: async (candidate) => {
++      if (candidate.plugins.length) throw new OrcaError("NOT_SUPPORTED", "plugin asset refresh requires restart");
++      const paths = await releaseAssets(candidate);
++      const loadedWorkflows = await loadWorkflows(paths.workflows, configDir);
++      const loadedTemplates = await loadTemplates(paths.templates, configDir);
++      return { workflows: loadedWorkflows.list(), templates: loadedTemplates.list() };
++    },
++    admission: {
++      validateStartRun: (options, generation) => orchestrator.validateStartRun(options, generation),
++      startRun: (options, generation) => orchestrator.startRun(options, generation),
++    },
++    validateCustomNode: (node) => executors.validateNode(node),
++  });
++  // Verify bytes still represent the config bootstrap loaded before labelling them active.
++  const saved = configFile ? await readFile(configFile, "utf8") : "";
++  if (configFile && JSON.stringify(parseOrcaConfig(parseYaml(saved))) !== JSON.stringify(config))
++    throw new OrcaError("CONFIG_STALE", "configuration changed during startup; restart bootstrap");
++  await generations.initialize(config, configFile ? createHash("sha256").update(saved).digest("hex") : "", {
++    workflows: workflows.list(),
++    templates: templates.list(),
++  });
++  orchestrator.generations = generations;
++  orchestrator.generationWorkspaceProvider = (generation) =>
++    makeWorkspaceProvider(generation.snapshot.config, configDir, generation.agents);
+   return {
+     config,
++    generations,
+     configDir,
+     ...(configFile ? { configFile } : {}),
+     orchestrator,
+diff --git a/packages/cli/src/commands/index.ts b/packages/cli/src/commands/index.ts
+index 488cc7b..60b1b25 100644
+--- a/packages/cli/src/commands/index.ts
++++ b/packages/cli/src/commands/index.ts
+@@ -664,6 +664,7 @@ export const commands: Record<string, Command> = {
+       // The two configuration documents, `--read-only` or not: `config.get` is a read, and
+       // `config.set` is kept out by being in the control half of the table (#174, #266).
+       const config = new ConfigModel({
++        generations: app.generations,
+         configDir: app.configDir,
+         ...(app.configFile ? { configFile: app.configFile } : {}),
+         permissionsFile: permissionPolicyPath(app.configDir),
+diff --git a/packages/cli/test/submit-settlement.test.ts b/packages/cli/test/submit-settlement.test.ts
+index 0421176..ca21806 100644
+--- a/packages/cli/test/submit-settlement.test.ts
++++ b/packages/cli/test/submit-settlement.test.ts
+@@ -33,6 +33,10 @@ it.each([
+           }
+         : new PausingHumanInput(),
+   });
++  // This fixture deliberately registers invalid runtime work after bootstrap to exercise
++  // settlement. Use the legacy in-process registry seam; generation admission is immutable
++  // and validates registrations before activation (covered by config-generation tests).
++  app.orchestrator.generations = undefined;
+   const node =
+     outcome === "execution"
+       ? '{ type: agent, agent: missing, prompt: "work" }'
+diff --git a/packages/core/src/events/events.ts b/packages/core/src/events/events.ts
+index b4fc691..04210c6 100644
+--- a/packages/core/src/events/events.ts
++++ b/packages/core/src/events/events.ts
+@@ -4,6 +4,8 @@
+  * runs resumable after a crash, auditable ("which artifact did the reviewer
+  * actually see?"), and streamable to UIs or upstream ACP clients.
+  */
++import { RunProvenanceSchema } from "../model/run-provenance.js";
++
+ import { z } from "zod";
+ import { ArtifactSchema } from "../model/artifact.js";
+ import {
+@@ -119,6 +121,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
+       vars: z.record(z.string(), z.unknown()),
+       /** Selection overrides (#186). Absent in logs written before v0.6.0: no overrides. */
+       overrides: RunOverridesSchema.optional(),
++      provenance: RunProvenanceSchema.optional(),
+       /**
+        * The definition the run started on is in the workflow-version store under
+        * `(workflowId's root, workflowVersion)` (#179), so a resume runs that and never the file
+diff --git a/packages/core/src/events/reduce.ts b/packages/core/src/events/reduce.ts
+index b351227..bb2b60d 100644
+--- a/packages/core/src/events/reduce.ts
++++ b/packages/core/src/events/reduce.ts
+@@ -22,6 +22,7 @@ export function reduceRun(events: readonly OrcaEvent[]): RunState {
+       ...(first.payload.parentRunId ? { parentRunId: first.payload.parentRunId } : {}),
+       ...(first.payload.parentStepRunId ? { parentStepRunId: first.payload.parentStepRunId } : {}),
+       ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
++      ...(first.payload.provenance ? { provenance: first.payload.provenance } : {}),
+     },
+     steps: {},
+     stepOrder: [],
+@@ -330,6 +331,7 @@ export function reduceRunSummary(events: readonly OrcaEvent[]): RunSummary {
+     ...(first.payload.workItemId ? { workItemId: first.payload.workItemId } : {}),
+     ...(first.payload.parentRunId ? { parentRunId: first.payload.parentRunId } : {}),
+     ...(first.payload.overrides ? { overrides: first.payload.overrides } : {}),
++    ...(first.payload.provenance ? { provenance: first.payload.provenance } : {}),
+   };
+   for (let i = 1; i < events.length; i++) {
+     const e = events[i]!;
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index e3822c9..07f42d7 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -21,3 +21,5 @@ export * from "./util/glob.js";
+ export * from "./util/hash.js";
+ export * from "./util/path-get.js";
+ export * from "./util/jsonl.js";
++
++export * from "./model/run-provenance.js";
+diff --git a/packages/core/src/model/run.ts b/packages/core/src/model/run.ts
+index bae5c97..a3d6f8f 100644
+--- a/packages/core/src/model/run.ts
++++ b/packages/core/src/model/run.ts
+@@ -4,6 +4,7 @@
+  * Runs and step runs are *projections* of the event log (see events/reduce.ts);
+  * these types describe the read model the engine and UIs work with.
+  */
++import { RunProvenanceSchema } from "./run-provenance.js";
+ import { z } from "zod";
+ import { ArtifactSchema } from "./artifact.js";
+ 
+@@ -147,6 +148,7 @@ export const RunSchema = z.object({
+   vars: z.record(z.string(), z.unknown()).default({}),
+   /** The run's selection overrides, from `run.created`; absent on runs that had none. */
+   overrides: RunOverridesSchema.optional(),
++  provenance: RunProvenanceSchema.optional(),
+   error: ErrorInfoSchema.optional(),
+   createdAt: z.string(),
+   startedAt: z.string().optional(),
+diff --git a/packages/core/src/schemas.ts b/packages/core/src/schemas.ts
+index afe8555..649f19a 100644
+--- a/packages/core/src/schemas.ts
++++ b/packages/core/src/schemas.ts
+@@ -25,3 +25,5 @@ export * from "./model/plan-events.js";
+ 
+ export * from "./events/events.js";
+ export * from "./events/reduce.js";
++
++export * from "./model/run-provenance.js";
+diff --git a/packages/daemon/src/auth/operations.ts b/packages/daemon/src/auth/operations.ts
+index 55963ca..b544ad3 100644
+--- a/packages/daemon/src/auth/operations.ts
++++ b/packages/daemon/src/auth/operations.ts
+@@ -83,6 +83,7 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
+   "claims.release": { permission: "claims.release", resource: "claim", audit: "mutation" },
+ 
+   "config.get": { permission: "config.read", resource: "none" },
++  "config.apply": { permission: "config.write", resource: "none", audit: "mutation" },
+   "config.set": { permission: "config.write", resource: "none", audit: "mutation" },
+ 
+   "plans.list": { permission: "plan.read", resource: "none" },
+diff --git a/packages/daemon/src/auth/resources.ts b/packages/daemon/src/auth/resources.ts
+index 2b85cd7..3937740 100644
+--- a/packages/daemon/src/auth/resources.ts
++++ b/packages/daemon/src/auth/resources.ts
+@@ -48,6 +48,7 @@ export interface ResolverSource {
+     claims: { get(workItemId: string): Promise<{ runId: string } | undefined> };
+   };
+   workflows: { has(id: string): boolean };
++  generations?: { current: { workflows: { has(id: string): boolean } } } | undefined;
+ }
+ 
+ export function orchestratorResolver(source: ResolverSource): ResourceResolver {
+@@ -67,7 +68,7 @@ export function orchestratorResolver(source: ResolverSource): ResourceResolver {
+       return (await source.stores.claims.get(workItemId))?.runId;
+     },
+     workflowExists(workflowId) {
+-      return source.workflows.has(workflowId.split("::")[0]!);
++      return (source.generations?.current.workflows ?? source.workflows).has(workflowId.split("::")[0]!);
+     },
+   };
+ }
+diff --git a/packages/daemon/src/control.ts b/packages/daemon/src/control.ts
+index 0a0e844..f55c175 100644
+--- a/packages/daemon/src/control.ts
++++ b/packages/daemon/src/control.ts
+@@ -348,7 +348,17 @@ export class ControlModel {
+     attributeStartedRun?: (runId: string) => void | Promise<void>,
+     actor?: MutationActor,
+   ): Promise<RunsStartResult> {
+-    const runId = await this.orc.startRun({
++    const captured = await this.orc.generations?.captureLaunch({
++      purpose: "workflow",
++      workflowId: params.workflowId,
++      ...(params.workflowVersion ? { workflowVersion: params.workflowVersion } : {}),
++      ...(params.expectedWorkflowRevision ? { expectedWorkflowRevision: params.expectedWorkflowRevision } : {}),
++      ...(params.expectedConfigGeneration ? { expectedConfigGeneration: params.expectedConfigGeneration } : {}),
++    });
++    if (params.expectedConfigGeneration && !captured)
++      throw new OrcaError("NOT_SUPPORTED", "configuration generations are unavailable");
++    const start = captured ? captured.startRun.bind(captured) : this.orc.startRun.bind(this.orc);
++    const runId = await start({
+       ...(actor ? { actor } : {}),
+       workflowId: params.workflowId,
+       vars: params.vars,
+diff --git a/packages/daemon/src/methods.ts b/packages/daemon/src/methods.ts
+index a725fb0..23b1cb2 100644
+--- a/packages/daemon/src/methods.ts
++++ b/packages/daemon/src/methods.ts
+@@ -15,6 +15,13 @@
+  * and `hello.methods` does not list them. "Absent" and "present but refusing" are different
+  * promises, and a client that has to hide a button needs the first one.
+  */
++import {
++  CONFIG_APPLY_METHOD,
++  ConfigApplyParamsSchema,
++  type ConfigApplyParams,
++  type ConfigApplyResult,
++} from "@orca/protocol";
++
+ import type { Maintenance } from "./maintenance.js";
+ import { OrcaError, type MutationActor } from "@orca/core";
+ import {
+@@ -356,7 +363,7 @@ export const workflowsGet: Method<Parameters<ReadModel["workflowsGet"]>[0], Work
+  * A read, so a `--read-only` daemon answers it. **It redacts nothing**: `config.text` is the
+  * bytes of `orca.config.yaml`, ssh hosts, command lines and environment names included. A
+  * form that edits a file has to show the file, and a redacted text written back would
+- * destroy what it hid. The port is loopback and unauthenticated either way.
++ * destroy what it hid. This read requires current config.read authority.
+  */
+ export const configGet: Method<ConfigGetParams, ConfigGetResult> = {
+   params: ConfigGetParamsSchema,
+@@ -461,12 +468,14 @@ export const runsStart: Method<RunsStartParams, RunsStartResult> = {
+  * event: a configuration file is not a run, and a `config.set` while a run is in flight
+  * disturbs nothing.
+  *
+- * **The daemon goes on serving the configuration it booted with.** Agents, hosts, workflows
+- * and the store were wired at `bootstrap`; nothing here rewires them, so a run started a
+- * moment after a successful write still uses the old config, and the new one takes effect on
+- * the next `orca serve`. Reloading a live orchestrator is its own piece of work and not a
+- * side effect of a form being saved.
++ * Saving does not activate the document. An explicitly wired config.apply validates and
++ * installs a generation for future launches; existing runs keep their admitted choices.
+  */
++export const configApply: Method<ConfigApplyParams, ConfigApplyResult> = {
++  params: ConfigApplyParamsSchema,
++  handle: (params, ctx) => config(ctx).apply(params),
++};
++
+ export const configSet: Method<ConfigSetParams, ConfigSetResult> = {
+   params: ConfigSetParamsSchema,
+   handle: (params, ctx) => config(ctx).set(params),
+@@ -642,7 +651,10 @@ export function methodsFor(ctx: MethodContext): MethodTable {
+     Object.assign(table, configMethods);
+     // Reading the configuration is a read; writing it is a write, and a read-only daemon
+     // has no `control`. Two facts, one `if`, so the two can never drift apart.
+-    if (ctx.control) Object.assign(table, configControlMethods);
++    if (ctx.control) {
++      Object.assign(table, configControlMethods);
++      if (ctx.config.canApply) table[CONFIG_APPLY_METHOD] = configApply;
++    }
+   }
+   return ctx.maintenance ? ctx.maintenance.wrap(table) : table;
+ }
+diff --git a/packages/daemon/src/read-model.ts b/packages/daemon/src/read-model.ts
+index 373344c..1b5c9e5 100644
+--- a/packages/daemon/src/read-model.ts
++++ b/packages/daemon/src/read-model.ts
+@@ -447,6 +447,7 @@ export class ReadModel {
+     return {
+       // Pinned only against a version that is on disk: an unregistered workflow has nothing newer.
+       run: { ...run, workflowPinned: onDisk !== undefined && onDisk !== state.run.workflowVersion },
++      ...(state.run.provenance ? { provenance: state.run.provenance } : {}),
+       workspace: state.run.workspace,
+       vars: state.run.vars,
+       steps,
+@@ -645,7 +646,7 @@ export class ReadModel {
+    */
+   workflowsList(_params: WorkflowsListParams): WorkflowsListResult {
+     const asOf = this.clock.isoNow();
+-    const workflows = this.orc.workflows.list().map(workflowSummaryView);
++    const workflows = (this.orc.generations?.current.workflows ?? this.orc.workflows).list().map(workflowSummaryView);
+     workflows.sort((a, b) => a.id.localeCompare(b.id));
+     return { workflows, asOf };
+   }
+@@ -735,7 +736,9 @@ export class ReadModel {
+   /** The version of the file on disk for this workflow (or the root of a nested id), if it is registered. */
+   private versionOnDisk(workflowId: string): string | undefined {
+     const rootId = workflowId.split(INLINE_WORKFLOW_SEPARATOR)[0]!;
+-    return this.orc.workflows.has(rootId) ? this.orc.workflows.get(rootId).version : undefined;
++    return (this.orc.generations?.current.workflows ?? this.orc.workflows).has(rootId)
++      ? (this.orc.generations?.current.workflows ?? this.orc.workflows).get(rootId).version
++      : undefined;
+   }
+ 
+   /** `stepRunId -> {agentId, model?}`, from the only event that records which agent worked a step. */
+diff --git a/packages/daemon/src/subscriptions.ts b/packages/daemon/src/subscriptions.ts
+index cbf944a..363269c 100644
+--- a/packages/daemon/src/subscriptions.ts
++++ b/packages/daemon/src/subscriptions.ts
+@@ -21,11 +21,14 @@
+  * the same run is sent, so a client appending as frames arrive sees the run's log in
+  * sequence order - agent output never lands after the `step.completed` that ended it.
+  */
++import type { ConfigGenerationStatus } from "@orca/protocol";
++
+ import type { OrcaEvent } from "@orca/core";
+ import {
+   AGENT_CHANGED,
+   AGENT_UPDATE,
+   CONFIG_CHANGED,
++  WORKFLOWS_CHANGED,
+   PLAN_CHANGED,
+   type AgentView,
+   type ConfigDocument,
+@@ -70,7 +73,15 @@ export interface AgentChangeSource {
+  */
+ export interface ConfigChangeSource {
+   onChange(
+-    listener: (change: { document: ConfigDocument; revision: string; path: string; at: string }) => void,
++    listener: (change: {
++      document: ConfigDocument;
++      revision: string;
++      path: string;
++      at: string;
++      kind?: "saved" | "activated";
++      generation?: ConfigGenerationStatus;
++      workflows?: { id: string; version: string; removed?: boolean }[];
++    }) => void,
+   ): () => void;
+ }
+ 
+@@ -199,11 +210,18 @@ export class Subscription {
+           params: {
+             subscriptionId: this.id,
+             document: change.document,
++            ...(change.kind ? { kind: change.kind } : {}),
++            ...(change.generation ? { generation: change.generation } : {}),
+             revision: change.revision,
+             path: change.path,
+             at: change.at,
+           },
+         });
++        for (const workflow of change.workflows ?? [])
++          this.emit({
++            method: WORKFLOWS_CHANGED,
++            params: { subscriptionId: this.id, ...workflow, at: change.at },
++          });
+       });
+ 
+     // A plan is not a run either, so the same rule: store-wide subscriptions only. There is
+diff --git a/packages/daemon/test/auth-operations.test.ts b/packages/daemon/test/auth-operations.test.ts
+index 1790e9b..cf34e16 100644
+--- a/packages/daemon/test/auth-operations.test.ts
++++ b/packages/daemon/test/auth-operations.test.ts
+@@ -53,7 +53,7 @@ function everyAnsweredMethod(): string[] {
+     control: present,
+     planControl: present,
+     agents: present,
+-    config: present,
++    config: { canApply: true } as never,
+   };
+   return Object.keys(methodsFor(full));
+ }
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+index 44c7451..e73f1d8 100644
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -11,3 +11,6 @@ export * from "./program/work-items.js";
+ export * from "./program/service.js";
+ export * from "./plan/service.js";
+ export * from "./plan/executors.js";
++
++export * from "./configuration-generation.js";
++export * from "./configuration-provenance.js";
+diff --git a/packages/engine/src/orchestrator.ts b/packages/engine/src/orchestrator.ts
+index 967bed8..9cc2a37 100644
+--- a/packages/engine/src/orchestrator.ts
++++ b/packages/engine/src/orchestrator.ts
+@@ -5,6 +5,9 @@
+  * Concurrency comes from `parallel` nodes, which spawn child runs. Every state
+  * transition is an event; a run can be resumed from its log at any time.
+  */
++import { ConfigurationGenerations, type GenerationMaterial } from "./configuration-generation.js";
++import { configuredGenerationSecrets, launchProvenance } from "./configuration-provenance.js";
++
+ import { AgentRegistry, openAcpSession, type AgentSession, type OpenSessionOptions } from "@orca/agents";
+ import { applyModel, currentModel, selectedModel } from "./session-model.js";
+ import {
+@@ -202,6 +205,23 @@ function canonicalJson(value: unknown): string {
+ }
+ 
+ export class Orchestrator {
++  generations: ConfigurationGenerations | undefined;
++  generationWorkspaceProvider: ((generation: GenerationMaterial) => WorkspaceProvider) | undefined;
++  private readonly contextGenerations = new WeakMap<RunContext, GenerationMaterial>();
++  private async admissionGeneration(
++    opts: StartRunOptions,
++    supplied?: GenerationMaterial,
++  ): Promise<GenerationMaterial | undefined> {
++    const selected = supplied ?? this.generations?.current;
++    if (!opts.parentRunId) return selected;
++    const first = (await this.stores.events.readRange(opts.parentRunId, { limit: 1 }))[0];
++    const id = first?.type === "run.created" ? first.payload.provenance?.configGeneration : undefined;
++    if (!id) return supplied;
++    if (!this.generations) throw unavailable();
++    if (supplied && supplied.snapshot.id !== id)
++      throw new OrcaError("CONFIG_STALE", "child generation differs from parent");
++    return this.generations.restore(id);
++  }
+   readonly stores: Stores;
+   readonly agents: AgentRegistry;
+   readonly workflows: WorkflowRegistry;
+@@ -268,19 +288,21 @@ export class Orchestrator {
+   /** Side-effect-free admission used by Request submission before its first persistent write. */
+   async validateStartRun(
+     opts: StartRunOptions,
+-  ): Promise<{ definition: WorkflowDefinition; vars: Record<string, unknown> }> {
++    supplied?: GenerationMaterial,
++  ): Promise<{ definition: WorkflowDefinition; vars: Record<string, unknown>; generation?: GenerationMaterial }> {
++    const generation = await this.admissionGeneration(opts, supplied);
+     // Admission (#330): select, check the preflight revision, check the selection and the
+     // launch vars - all before anything is written, provisioned or appended, so a refused
+     // launch leaves no definition, workspace, run, agent or child behind.
+     const def = opts.inline
+       ? this.inlineDefinition(opts.inline.id, opts.inline.graph, opts.inline.version ?? "1")
+-      : await this.selectDefinition(opts.workflowId!, opts.workflowVersion);
++      : await this.selectDefinition(opts.workflowId!, opts.workflowVersion, generation?.workflows);
+     if (opts.expectedWorkflowRevision !== undefined && opts.expectedWorkflowRevision !== workflowRevision(def))
+       throw new OrcaError(
+         "WORKFLOW_INVALID",
+         `workflow '${def.id}' changed since its inputs were validated; validate them again before starting`,
+       );
+-    if (opts.overrides) this.validateOverrides(def, opts.overrides);
++    if (opts.overrides) this.validateOverrides(def, opts.overrides, generation?.agents);
+     const inputs = validateWorkflowInputs(def, opts.vars ?? {});
+     if (!inputs.validation.ok) {
+       const { errors, warnings } = inputs.validation;
+@@ -291,12 +313,19 @@ export class Orchestrator {
+         { errors, warnings },
+       );
+     }
+-    return { definition: def, vars: inputs.vars };
++    return { definition: def, vars: inputs.vars, ...(generation ? { generation } : {}) };
+   }
+ 
+   /** Create a run (emits run.created) without executing it. */
+-  async startRun(opts: StartRunOptions): Promise<string> {
+-    const { definition: def, vars } = await this.validateStartRun(opts);
++  async startRun(opts: StartRunOptions, supplied?: GenerationMaterial): Promise<string> {
++    const { definition: def, vars, generation } = await this.validateStartRun(opts, supplied);
++    const provenance = generation
++      ? launchProvenance(generation, def, vars, opts.vars ?? {}, opts.overrides)
++      : undefined;
++    if (generation) {
++      if (!this.generations) throw unavailable();
++      await this.generations.restore(generation.snapshot.id);
++    }
+     const runId = newId("run", this.clock.now());
+     // A child with an explicit workspace still has to validate its parent's sealed
+     // sensitivity state before copying vars. Missing overlays must never downgrade it.
+@@ -308,13 +337,23 @@ export class Orchestrator {
+       throw unavailable();
+     // Record only after every admission/inherited-integrity check, before public run creation.
+     const workflowStored = await this.recordDefinition(def);
+-    const protectedInputs = protectExecutionInputs(runId, def, vars, parentInputs);
++    let protectedInputs = protectExecutionInputs(runId, def, vars, parentInputs);
++    const configuredSecrets = generation ? configuredGenerationSecrets(generation) : [];
++    if (configuredSecrets.length)
++      protectedInputs = {
++        ...(protectedInputs ?? { runId, workflowId: def.id, workflowVersion: def.version, vars, sensitiveNames: [] }),
++        secrets: [...(protectedInputs?.secrets ?? []), ...configuredSecrets],
++      };
+     if (protectedInputs) await this.stores.execution.putInputs(protectedInputs);
+     const request = opts.requestId ? await this.stores.requests.get(opts.requestId) : undefined;
+     const workItem = opts.workItemId ? await this.stores.workItems.get(opts.workItemId) : undefined;
+     const workspace =
+       opts.workspace ??
+-      (await this.workspaceProvider.provision({
++      (await (
++        generation && this.generationWorkspaceProvider
++          ? this.generationWorkspaceProvider(generation)
++          : this.workspaceProvider
++      ).provision({
+         runId,
+         workflowId: def.id,
+         request,
+@@ -328,6 +367,7 @@ export class Orchestrator {
+         ...(opts.actor ? { actor: opts.actor } : {}),
+         workflowId: def.id,
+         workflowVersion: def.version,
++        ...(provenance ? { provenance } : {}),
+         workspace,
+         vars,
+         ...(protectedInputs ? { executionInputsStored: true as const } : {}),
+@@ -847,8 +887,9 @@ export class Orchestrator {
+ 
+   /** Inline graphs get ids like `parent::loopNode` or `parent::parallelNode::branch`. */
+   resolveDefinition(workflowId: string): WorkflowDefinition {
+-    if (!workflowId.includes(INLINE_SEP)) return this.workflows.get(workflowId);
+-    return this.walkInline(this.workflows.get(workflowId.split(INLINE_SEP)[0]!), workflowId);
++    const workflows = this.generations?.current.workflows ?? this.workflows;
++    if (!workflowId.includes(INLINE_SEP)) return workflows.get(workflowId);
++    return this.walkInline(workflows.get(workflowId.split(INLINE_SEP)[0]!), workflowId);
+   }
+ 
+   /**
+@@ -889,15 +930,19 @@ export class Orchestrator {
+    * that kept the version is `WORKFLOW_INVALID` here rather than a new run silently starting
+    * on a definition its resume would not find.
+    */
+-  async selectDefinition(workflowId: string, version?: string): Promise<WorkflowDefinition> {
++  async selectDefinition(
++    workflowId: string,
++    version?: string,
++    workflows = this.generations?.current.workflows ?? this.workflows,
++  ): Promise<WorkflowDefinition> {
+     if (version !== undefined) {
+-      const live = this.workflows.has(workflowId) ? this.workflows.get(workflowId) : undefined;
++      const live = workflows.has(workflowId) ? workflows.get(workflowId) : undefined;
+       const def =
+         (await this.stores.workflows.get(workflowId, version)) ?? (live?.version === version ? live : undefined);
+       if (!def) throw await this.versionNotFound(workflowId, version, live);
+       return def;
+     }
+-    const live = this.workflows.get(workflowId);
++    const live = workflows.get(workflowId);
+     const kept = await this.stores.workflows.get(live.id, live.version);
+     if (kept && workflowRevision(kept) !== workflowRevision(live)) throw versionCollision(live);
+     return live;
+@@ -974,9 +1019,9 @@ export class Orchestrator {
+    * configured, and every role the workflow's own nodes ask for must be filled under it -
+    * rather than failing on the first step that needs the agent.
+    */
+-  private validateOverrides(def: WorkflowDefinition, overrides: RunOverrides): void {
+-    this.agents.validateOverrides(overrides);
+-    const scoped = this.agents.withOverrides(overrides);
++  private validateOverrides(def: WorkflowDefinition, overrides: RunOverrides, agents = this.agents): void {
++    agents.validateOverrides(overrides);
++    const scoped = agents.withOverrides(overrides);
+     for (const node of Object.values(def.nodes)) {
+       const selector = (node as { agent?: unknown }).agent;
+       if (selector && typeof selector === "object" && "role" in selector) scoped.resolve(selector as AgentSelector);
+@@ -997,7 +1042,7 @@ export class Orchestrator {
+     if (!first || first.type !== "run.created") throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
+     if (
+       first.payload.workflowStored &&
+-      (await this.stores.execution.getInputs(runId)) &&
++      (first.payload.provenance || (await this.stores.execution.getInputs(runId))) &&
+       !(await this.stores.workflows.get(first.payload.workflowId.split(INLINE_SEP)[0]!, first.payload.workflowVersion))
+     )
+       throw new OrcaError(
+@@ -1016,6 +1061,12 @@ export class Orchestrator {
+       loadState: (id) => this.executionState(id),
+       plan: this.plan,
+     });
++    if (first.payload.provenance) {
++      if (!this.generations) throw unavailable();
++      const generation = await this.generations.restore(first.payload.provenance.configGeneration);
++      if (workflowRevision(def) !== first.payload.provenance.workflow.revision) throw unavailable();
++      this.contextGenerations.set(rc, generation);
++    }
+     this.live.set(runId, rc);
+     return rc;
+   }
+@@ -1317,9 +1368,9 @@ export class Orchestrator {
+       logger: rc.logger.child({ step: step.nodeId }),
+       clock: this.clock,
+       stores: this.stores,
+-      agents: this.agents.withOverrides(rc.state.run.overrides),
+-      templates: this.templates,
+-      workflows: this.workflows,
++      agents: (this.contextGenerations.get(rc)?.agents ?? this.agents).withOverrides(rc.state.run.overrides),
++      templates: this.contextGenerations.get(rc)?.templates ?? this.templates,
++      workflows: this.contextGenerations.get(rc)?.workflows ?? this.workflows,
+       humanInput: abortableHumanInput(this.humanInput, rc.abort.signal),
+       plan: this.plan,
+ 
+@@ -1342,7 +1393,7 @@ export class Orchestrator {
+         return evaluateExpression(expr, await ctx.evalContext(extra));
+       },
+       async render(body, extra) {
+-        return renderTemplate(body, await ctx.evalContext(extra), { partials: self.templates.partials });
++        return renderTemplate(body, await ctx.evalContext(extra), { partials: ctx.templates.partials });
+       },
+       async resolveInputs(refs) {
+         const resolved = await self.resolveInputs(rc, refs);
+@@ -1546,7 +1597,9 @@ export class Orchestrator {
+     step: StepRun,
+     selector: AgentSelector,
+   ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
+-    const { agent, host } = this.agents.withOverrides(rc.state.run.overrides).resolve(selector);
++    const { agent, host } = (this.contextGenerations.get(rc)?.agents ?? this.agents)
++      .withOverrides(rc.state.run.overrides)
++      .resolve(selector);
+     const key = `${rc.id}:${agent.id}`;
+     const model = selectedModel(rc.state.run.overrides, agent);
+     const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;
+diff --git a/packages/protocol/src/control.ts b/packages/protocol/src/control.ts
+index 8c9d03a..2266acd 100644
+--- a/packages/protocol/src/control.ts
++++ b/packages/protocol/src/control.ts
+@@ -172,6 +172,7 @@ export const RunsStartParamsSchema = z.object({
+   vars: z.record(z.string(), z.unknown()).default({}),
+   /** Exact version and revision returned by workflows.validateInputs. */
+   workflowVersion: z.string().min(1).optional(),
++  expectedConfigGeneration: z.string().optional(),
+   expectedWorkflowRevision: z.string().min(1).optional(),
+   /**
+    * Recorded on `run.created` and carried into the `run.changed` notification, so a client
+diff --git a/packages/protocol/src/runs.ts b/packages/protocol/src/runs.ts
+index 35fea71..a95a26a 100644
+--- a/packages/protocol/src/runs.ts
++++ b/packages/protocol/src/runs.ts
+@@ -8,6 +8,8 @@
+  * than two timestamps a client would subtract. Everything a screen shows is a field here;
+  * anything a screen only *might* show is a second call.
+  */
++import { RunProvenanceSchema } from "@orca/core/schemas";
++
+ import { z } from "zod";
+ // The node-free subpath, not the package root: the renderer bundles this package, and the
+ // root would drag `node:crypto` and `node:fs` into that bundle. See packages/core/src/schemas.ts.
+@@ -182,6 +184,7 @@ export const RunsGetParamsSchema = z.object({ runId: z.string().min(1) });
+ export type RunsGetParams = z.infer<typeof RunsGetParamsSchema>;
+ 
+ export const RunsGetResultSchema = z.object({
++  provenance: RunProvenanceSchema.optional(),
+   run: RunSummaryViewSchema,
+   workspace: WorkspaceSchema,
+   /** The run's variables, as the run detail panel shows them. */
+diff --git a/packages/protocol/src/subscriptions.ts b/packages/protocol/src/subscriptions.ts
+index 0453424..3f0b16c 100644
+--- a/packages/protocol/src/subscriptions.ts
++++ b/packages/protocol/src/subscriptions.ts
+@@ -34,6 +34,8 @@
+  *   firehose a timeline tails - skips `agent.update` events because the coalesced
+  *   notification already carries them.
+  */
++import { ConfigGenerationStatusSchema } from "./config.js";
++
+ import { z } from "zod";
+ // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
+ import { AgentUpdateSummarySchema, GateOptionSchema, OrcaEventSchema, RunOutcomeSchema } from "@orca/core/schemas";
+@@ -278,6 +280,7 @@ export type AgentChangedParams = z.infer<typeof AgentChangedParamsSchema>;
+  * is indistinguishable from a workflow nobody edited.
+  */
+ export const WorkflowsChangedParamsSchema = z.object({
++  removed: z.boolean().optional(),
+   subscriptionId: z.string(),
+   /** The workflow id, or a nested graph's `parent::node`. */
+   id: z.string(),
+@@ -307,6 +310,8 @@ export type WorkflowsChangedParams = z.infer<typeof WorkflowsChangedParamsSchema
+  * it already has - its own write, echoed back - does nothing at all.
+  */
+ export const ConfigChangedParamsSchema = z.object({
++  kind: z.enum(["saved", "activated"]).optional(),
++  generation: ConfigGenerationStatusSchema.optional(),
+   subscriptionId: z.string(),
+   /** Which document moved. */
+   document: ConfigDocumentSchema,
+diff --git a/packages/protocol/src/version.ts b/packages/protocol/src/version.ts
+index 9f48294..8e61fdd 100644
+--- a/packages/protocol/src/version.ts
++++ b/packages/protocol/src/version.ts
+@@ -101,7 +101,7 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
+  * a 1.7 client reads a 1.8 daemon as before.
+  */
+ /** 1.9 adds authorized typed-input preflight, pinned launch guards, and authenticated local clients. */
+-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 9 };
++export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 10 };
+ 
+ export function formatProtocolVersion(v: ProtocolVersion): string {
+   return `${v.major}.${v.minor}`;
+diff --git a/packages/store/src/execution-store.ts b/packages/store/src/execution-store.ts
+index 6cabd54..a69f720 100644
+--- a/packages/store/src/execution-store.ts
++++ b/packages/store/src/execution-store.ts
+@@ -25,6 +25,8 @@ const PayloadSchema = z.object({
+ });
+ 
+ export interface ExecutionStore {
++  getGeneration(id: string): Promise<unknown>;
++  putGeneration(id: string, snapshot: unknown): Promise<void>;
+   getInputs(runId: string): Promise<ExecutionInputs | undefined>;
+   putInputs(inputs: ExecutionInputs): Promise<void>;
+   addSensitivity(runId: string, sensitivity: ExecutionSensitivity): Promise<void>;
+@@ -46,6 +48,14 @@ function mergeSensitivity(
+ }
+ 
+ export class InMemoryExecutionStore implements ExecutionStore {
++  private readonly generations = new Map<string, unknown>();
++  async getGeneration(id: string): Promise<unknown> {
++    return structuredClone(this.generations.get(id));
++  }
++  async putGeneration(id: string, snapshot: unknown): Promise<void> {
++    if (this.generations.has(id)) throw unavailable();
++    this.generations.set(id, structuredClone(snapshot));
++  }
+   private readonly inputs = new Map<string, ExecutionInputs>();
+   private readonly sensitivity = new Map<string, z.infer<typeof OverlaySchema>>();
+   private readonly payloads = new Map<string, { input: OrcaEventInput; sensitivityRefs: string[] }>();
+@@ -88,6 +98,12 @@ export class FileExecutionStore implements ExecutionStore {
+   constructor(storeDir: string) {
+     this.dir = join(storeDir, "private-execution");
+   }
++  async getGeneration(id: string): Promise<unknown> {
++    return readPrivateJson(this.dir, `${encodeURIComponent(id)}.generation.json`);
++  }
++  async putGeneration(id: string, snapshot: unknown): Promise<void> {
++    if (!(await writePrivateJson(this.dir, `${encodeURIComponent(id)}.generation.json`, snapshot))) throw unavailable();
++  }
+   private async overlays(runId: string): Promise<z.infer<typeof OverlaySchema>[]> {
+     let names: string[];
+     try {
+diff --git a/packages/store/src/protected-event-store.ts b/packages/store/src/protected-event-store.ts
+index 903a208..0fd2236 100644
+--- a/packages/store/src/protected-event-store.ts
++++ b/packages/store/src/protected-event-store.ts
+@@ -85,6 +85,8 @@ export class ProtectedEventStore implements EventStore {
+       "actor",
+       "workflowId",
+       "workflowVersion",
++      // Provenance is schema-limited metadata with all input values already withheld.
++      "provenance",
+       "requestId",
+       "workItemId",
+       "parentRunId",
+diff --git a/release-compatibility.json b/release-compatibility.json
+index 61768b0..cab4894 100644
+--- a/release-compatibility.json
++++ b/release-compatibility.json
+@@ -1,8 +1,8 @@
+ {
+-  "storeEpoch": "protected-execution-v2",
++  "storeEpoch": "config-generations-v3",
+   "protocol": {
+     "major": 1,
+-    "minor": 9
++    "minor": 10
+   },
+   "capabilities": ["runs.read", "runs.control", "runs.subscribe", "plan.read", "plan.write", "workflows.validateInputs"]
+ }
+diff --git a/packages/engine/test/config-generation-integration.test.ts b/packages/engine/test/config-generation-integration.test.ts
+new file mode 100644
+index 0000000..d741895
+--- /dev/null
++++ b/packages/engine/test/config-generation-integration.test.ts
+@@ -0,0 +1,134 @@
++/** Integration-only: included in the reserved-path handoff patch. */
++import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
++import { join } from "node:path";
++import { tmpdir } from "node:os";
++import { afterEach, expect, it } from "vitest";
++import { AgentRegistry } from "@orca/agents";
++import { parseOrcaConfig, parseWorkflow, parsePromptTemplate, TemplateRegistry, WorkflowRegistry } from "@orca/core";
++import { fileStores, memoryStores, type Stores } from "@orca/store";
++import { builtinExecutors, completed, LocalWorkspaceProvider, Orchestrator, PausingHumanInput } from "@orca/engine";
++import { ConfigurationGenerations } from "../src/configuration-generation.js";
++
++const dirs: string[] = [];
++afterEach(async () => {
++  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
++});
++const parent = parseWorkflow(`
++id: parent
++name: Parent
++version: '1'
++inputSchema:
++  fields:
++    token: {type: string, sensitive: true}
++start: start
++nodes:
++  start: {type: start}
++  gate: {type: gate, question: Go?, options: [go]}
++  child: {type: subworkflow, workflow: child}
++  done: {type: end}
++edges:
++  - {from: start, to: gate}
++  - {from: gate, to: child}
++  - {from: child, to: done}
++`);
++const child = parseWorkflow(`
++id: child
++name: Child
++version: '1'
++start: start
++nodes:
++  start: {type: start}
++  trace: {type: custom:trace}
++  done: {type: end}
++edges:
++  - {from: start, to: trace}
++  - {from: trace, to: done}
++`);
++const config = (agent = "a") =>
++  parseOrcaConfig({
++    agents: [
++      { id: "a", command: "unused", args: ["1"], env: { TOKEN: "credential-canary" } },
++      { id: "b", command: "unused" },
++    ],
++    roles: { builder: agent },
++  });
++async function make(stores: Stores, role = "a", body = "old template") {
++  const cfg = config(role);
++  const workflows = new WorkflowRegistry().register(parent).register(child);
++  const template = parsePromptTemplate(`---\nid: prompt\n---\n${body}`);
++  const templates = new TemplateRegistry().register(template);
++  const traces: string[] = [];
++  const executors = builtinExecutors();
++  executors.register({
++    type: "custom:trace",
++    execute: async (ctx) => {
++      traces.push(`${ctx.agents.resolve({ role: "builder" }).agent.id}:${ctx.templates.get("prompt").body}`);
++      await ctx.emit({ type: "vars.set", payload: { vars: { output: "credential-canary" } } });
++      return completed();
++    },
++  });
++  const orc = new Orchestrator({
++    stores,
++    workflows,
++    templates,
++    agents: AgentRegistry.fromConfig(cfg),
++    executors,
++    workspaceProvider: new LocalWorkspaceProvider("/tmp"),
++    humanInput: new PausingHumanInput(),
++  });
++  const generations = new ConfigurationGenerations({
++    store: stores.execution,
++    workflows: stores.workflows,
++    loadAssets: async () => ({ workflows: [parent, child], templates: [template] }),
++    admission: {
++      validateStartRun: (opts, material) => orc.validateStartRun(opts, material),
++      startRun: (opts, material) => orc.startRun(opts, material),
++    },
++    validateCustomNode: (node) => executors.validateNode(node),
++  });
++  await generations.initialize(cfg, role);
++  orc.generations = generations;
++  return { orc, generations, traces };
++}
++for (const disk of [false, true])
++  it(`${disk ? "file" : "memory"}: pinned restart retains roles/templates in children and keeps provenance secret-free`, async () => {
++    const dir = await mkdtemp(join(tmpdir(), "orca-generation-integration-"));
++    dirs.push(dir);
++    const stores = disk ? fileStores(dir) : memoryStores();
++    const first = await make(stores);
++    const captured = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "parent" });
++    const runId = await captured.startRun({ vars: { token: "sensitive-input-canary" } });
++    const parked = await first.orc.run(runId);
++    expect(parked.run.status).toBe("paused");
++    const input = (await first.orc.pendingInputs(runId))[0]!;
++    const second = await make(disk ? fileStores(dir) : stores, "b", "new template");
++    await second.orc.answer(input.id, "go", runId);
++    const result = await second.orc.resume(runId);
++    expect(result.run.status).toBe("completed");
++    expect(second.traces).toEqual(["a:old template"]);
++    expect(result.run.provenance?.configGeneration).toBe(captured.generationId);
++    const events = await stores.events.read(runId);
++    expect(JSON.stringify(events)).not.toMatch(/credential-canary|sensitive-input-canary/);
++    if (disk) {
++      const names = await readdir(join(dir, "private-execution"));
++      const bytes = await Promise.all(
++        names
++          .filter((name) => name.endsWith(".generation.json"))
++          .map((name) => readFile(join(dir, "private-execution", name), "utf8")),
++      );
++      expect(bytes.length).toBeGreaterThan(0);
++      expect(bytes.join("")).not.toMatch(/credential-canary|old template/);
++      await rm(join(dir, "private-execution", `${captured.generationId}.generation.json`));
++      await expect(second.generations.restore(captured.generationId)).rejects.toMatchObject({ code: "RUN_STATE" });
++    }
++  });
++
++it("configured literals protect public history even without sensitive launch inputs", async () => {
++  const stores = memoryStores();
++  const { orc, generations } = await make(stores);
++  const launch = await generations.captureLaunch({ purpose: "workflow", workflowId: "child" });
++  const id = await launch.startRun({});
++  await orc.run(id);
++  expect(JSON.stringify(await stores.events.read(id))).not.toContain("credential-canary");
++  expect((await orc.getState(id)).run.vars.output).toBe("[REDACTED]");
++});
+diff --git a/packages/daemon/test/config-generation-security.test.ts b/packages/daemon/test/config-generation-security.test.ts
+new file mode 100644
+index 0000000..a2675c0
+--- /dev/null
++++ b/packages/daemon/test/config-generation-security.test.ts
+@@ -0,0 +1,91 @@
++/** Integration-only transport checks, carried in the reserved-path patch. */
++import { mkdtemp, rm } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import WebSocket from "ws";
++import { expect, it } from "vitest";
++import { parseOrcaConfig } from "@orca/core";
++import { ConfigurationGenerations } from "../../engine/src/configuration-generation.js";
++import { ConfigModel, ControlModel, ReadModel, startDaemon } from "@orca/daemon";
++import { CredentialStore, OwnershipStore, orchestratorResolver } from "../src/auth/index.js";
++import { emptyFixture } from "./fixture.js";
++import { PROTOCOL_VERSION } from "@orca/protocol";
++
++for (const readOnly of [false, true])
++  it(`config.apply transport authorization and discovery, readOnly=${readOnly}`, async () => {
++    const dir = await mkdtemp(join(tmpdir(), "orca-generation-security-"));
++    const { orchestrator: orc, stores } = emptyFixture();
++    const generations = new ConfigurationGenerations({
++      store: stores.execution,
++      workflows: stores.workflows,
++      loadAssets: async () => ({ workflows: [], templates: [] }),
++      admission: {
++        validateStartRun: (opts, gen) => orc.validateStartRun(opts, gen),
++        startRun: (opts, gen) => orc.startRun(opts, gen),
++      },
++    });
++    await generations.initialize(parseOrcaConfig({}), "");
++    orc.generations = generations;
++    const model = new ConfigModel({ configDir: dir, generations });
++    const reads = new ReadModel({ orchestrator: orc });
++    const credentials = new CredentialStore();
++    const owner = await credentials.issue({ principal: "owner", preset: "owner" });
++    const viewer = await credentials.issue({ principal: "viewer", preset: "viewer" });
++    const daemon = await startDaemon({
++      capabilities: ["runs.read", "runs.subscribe", ...(readOnly ? [] : ["runs.control" as const])],
++      orcaVersion: "test",
++      reads,
++      config: model,
++      source: orc,
++      ...(readOnly ? {} : { control: new ControlModel({ orchestrator: orc, reads }) }),
++      auth: { mode: "token", credentials, ownership: new OwnershipStore(), resolver: orchestratorResolver(orc) },
++    });
++    const call = async (token: string, method: string, params: unknown) => {
++      const response = await fetch(`${daemon.url}/rpc`, {
++        method: "POST",
++        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
++        body: JSON.stringify({ kind: "request", id: 1, method, params }),
++      });
++      return response.json() as Promise<{
++        ok: boolean;
++        result?: { methods: string[]; outcome?: string };
++        error?: { code: string };
++      }>;
++    };
++    const socket = new WebSocket(daemon.socketUrl!, ["orca.v1"], {
++      headers: { authorization: `Bearer ${viewer.token}` },
++    });
++    try {
++      await new Promise<void>((resolve, reject) => {
++        socket.once("open", resolve);
++        socket.once("error", reject);
++      });
++      const advertised = await call(owner.token, "hello", { client: "test", protocol: PROTOCOL_VERSION });
++      expect(advertised.result?.methods.includes("config.apply")).toBe(!readOnly);
++      if (!readOnly) {
++        // A bad shape cannot disclose validation details before the config.write check.
++        expect(await call(viewer.token, "config.apply", { secret: "canary" })).toMatchObject({
++          ok: false,
++          error: { code: "AUTH_FORBIDDEN" },
++        });
++        const answer = new Promise<unknown>((resolve) =>
++          socket.once("message", (bytes) => resolve(JSON.parse(String(bytes)))),
++        );
++        socket.send(JSON.stringify({ kind: "request", id: 1, method: "config.apply", params: { secret: "canary" } }));
++        expect(await answer).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });
++        const generation = generations.current.snapshot.id;
++        expect(
++          await call(owner.token, "config.apply", {
++            expectedRevision: "",
++            expectedGeneration: generation,
++            validateOnly: true,
++          }),
++        ).toMatchObject({ ok: true, result: { outcome: "validated" } });
++        expect(generations.current.snapshot.id).toBe(generation);
++      }
++    } finally {
++      socket.close();
++      await daemon.close();
++      await rm(dir, { recursive: true, force: true });
++    }
++  });
