@@ -40,6 +40,14 @@ Previously admitted runs restore their recorded generation. Missing or corrupt
 material is `RUN_STATE`, never permission to use today's configuration. A missing
 workflow pin or different digest also fails closed.
 
+Request-written/run-missing recovery uses the separate trusted `restoreLaunch`
+callback, with the durable admission's generation, exact workflow identity and
+Request ID. It binds that Request ID and validates the protected material and
+workflow digest; it never falls back to the current generation. The #329 caller
+must authorize recovery and read this record from the durable Request rather than
+accept historical choices from the RPC caller. Ordinary `captureLaunch` continues
+to reject a noncurrent `expectedConfigGeneration`, including after restart.
+
 ## Reloadability
 
 | Settings | Apply behavior |
@@ -56,6 +64,20 @@ workflow pin or different digest also fails closed.
 A plugin can contribute runtime registrations, so refreshing plugin-backed
 assets is refused by the bootstrap loader; restart is required. Plugin and
 external-agent executable code is not snapshotted or claimed reproducible.
+Bootstrap captures effective plugin agent specifications and role mappings in the
+protected generation, and retains the actual host objects and workspace provider
+for that bootstrap lifetime. Later registry edits cannot replace those registrations.
+A later bootstrap cannot restore a plugin-bound generation: it fails with `RUN_STATE`
+rather than substituting current plugin code or a configured local provider. This
+is deliberately conservative until plugins have an explicit restoration contract.
+
+Apply also rejects removal of a previously resolvable program or item-workflow
+default, even when its configured name has not changed. Unconfigured bundled
+defaults that were already absent remain compatible with minimal installations.
+
+Configured gate behavior is restored from the admitted generation. Explicit
+embedder/plugin human-input ports and later facade replacements remain live, as
+does the human-input port used for permission requests.
 
 There is no filesystem watcher or periodic polling. `config.get` rereads saved
 bytes, detecting external YAML/JSON edits. Explicit `config.apply` is also the
@@ -80,7 +102,7 @@ models remain in the existing session-open/update records; an absent launch mode
 does not claim ORCA chose an external agent's default.
 
 The protected generation record contains parsed configuration and templates, plus
-references to the existing encrypted workflow pins. It uses `private-execution/`
+references to the existing encrypted workflow pins and effective plugin agent/role data. It uses `private-execution/`
 and its existing key, atomic publication and authenticated encryption. It does not
 create another workflow store or key lifecycle. Configured literals stay encrypted;
 ambient process environment, resolved credentials and live sessions are never
@@ -110,7 +132,8 @@ Apply with `git apply docs/patches/332-runtime-integration.patch`. It includes:
 - Protected execution-store generation methods, reusing the existing private directory.
 - Orchestrator admission/context/child binding and bootstrap construction.
 - Direct daemon admission through `CaptureLaunch`; #329 should inject this same provider
-  into Request admission without importing a peer branch.
+  into Request admission without importing a peer branch, and inject `restoreLaunch`
+  separately for authorized recovery of the original durable admission.
 - Apply registration/authorization, conditional method discovery, notifications,
   active workflow discovery, protocol minor 1.10, release compatibility metadata and the security matrix update.
 - Dedicated integration tests, the operation-inventory fixture update, and the existing

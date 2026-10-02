@@ -20,7 +20,7 @@ index 4eebcd8..d7abd3f 100644
  | `plan.get` | `plan.read` | workspace-wide | — |
  | `items.list` | `plan.read` | workspace-wide | — |
 diff --git a/packages/cli/src/bootstrap.ts b/packages/cli/src/bootstrap.ts
-index 51c6dfb..e7debee 100644
+index 51c6dfb..76e3344 100644
 --- a/packages/cli/src/bootstrap.ts
 +++ b/packages/cli/src/bootstrap.ts
 @@ -2,6 +2,8 @@
@@ -48,7 +48,34 @@ index 51c6dfb..e7debee 100644
    configDir: string;
    /**
     * The file `config` was read from, when it was read from one. Absent means discovery found
-@@ -242,11 +246,49 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
+@@ -185,7 +189,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
+   const workflows = await loadWorkflows(assets.workflows, configDir);
+   const executors = builtinExecutors();
+   let humanInput = opts.humanInput ?? makeHumanInput(config);
++  let explicitHumanInput = opts.humanInput !== undefined;
+   let workspaceProvider = makeWorkspaceProvider(config, configDir, agents);
++  let pluginWorkspaceProvider = false;
+   const stores = opts.ephemeral
+     ? memoryStores()
+     : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
+@@ -206,8 +212,14 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
+     workflows,
+     agents,
+     plan,
+-    setHumanInput: (p) => (humanInput = p),
+-    setWorkspaceProvider: (p) => (workspaceProvider = p),
++    setHumanInput: (p) => {
++      explicitHumanInput = true;
++      humanInput = p;
++    },
++    setWorkspaceProvider: (p) => {
++      pluginWorkspaceProvider = true;
++      workspaceProvider = p;
++    },
+   };
+   await loadPlugins(config, configDir, api, logger);
+ 
+@@ -242,11 +254,63 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
      // An ephemeral bootstrap deliberately gets none: it is a one-shot over in-memory stores
      // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
      // durable workspace state of exactly the kind `ephemeral` means to leave alone.
@@ -89,10 +116,24 @@ index 51c6dfb..e7debee 100644
 +  await generations.initialize(config, configFile ? createHash("sha256").update(saved).digest("hex") : "", {
 +    workflows: workflows.list(),
 +    templates: templates.list(),
++    ...(config.plugins.length ? { agents } : {}),
 +  });
 +  orchestrator.generations = generations;
-+  orchestrator.generationWorkspaceProvider = (generation) =>
-+    makeWorkspaceProvider(generation.snapshot.config, configDir, generation.agents);
++  // Explicit embedder/plugin ports and later facade replacements stay live. Only the
++  // configured gate policy is restored; permission requests still use the live port.
++  orchestrator.generationHumanInput = (generation) =>
++    explicitHumanInput || orchestrator.humanInput !== humanInput
++      ? orchestrator.humanInput
++      : makeHumanInput(generation.snapshot.config);
++  const bootGeneration = generations.current.snapshot.id;
++  orchestrator.generationWorkspaceProvider = (generation) => {
++    if (pluginWorkspaceProvider) {
++      if (generation.snapshot.id !== bootGeneration)
++        throw new OrcaError("RUN_STATE", "plugin workspace provider cannot be restored across bootstrap");
++      return workspaceProvider;
++    }
++    return makeWorkspaceProvider(generation.snapshot.config, configDir, generation.agents);
++  };
    return {
      config,
 +    generations,
@@ -434,7 +475,7 @@ index 44c7451..e73f1d8 100644
 +export * from "./configuration-generation.js";
 +export * from "./configuration-provenance.js";
 diff --git a/packages/engine/src/orchestrator.ts b/packages/engine/src/orchestrator.ts
-index 967bed8..9cc2a37 100644
+index 967bed8..ccfffaa 100644
 --- a/packages/engine/src/orchestrator.ts
 +++ b/packages/engine/src/orchestrator.ts
 @@ -5,6 +5,9 @@
@@ -447,11 +488,12 @@ index 967bed8..9cc2a37 100644
  import { AgentRegistry, openAcpSession, type AgentSession, type OpenSessionOptions } from "@orca/agents";
  import { applyModel, currentModel, selectedModel } from "./session-model.js";
  import {
-@@ -202,6 +205,23 @@ function canonicalJson(value: unknown): string {
+@@ -202,6 +205,24 @@ function canonicalJson(value: unknown): string {
  }
  
  export class Orchestrator {
 +  generations: ConfigurationGenerations | undefined;
++  generationHumanInput: ((generation: GenerationMaterial) => HumanInputPort) | undefined;
 +  generationWorkspaceProvider: ((generation: GenerationMaterial) => WorkspaceProvider) | undefined;
 +  private readonly contextGenerations = new WeakMap<RunContext, GenerationMaterial>();
 +  private async admissionGeneration(
@@ -471,7 +513,7 @@ index 967bed8..9cc2a37 100644
    readonly stores: Stores;
    readonly agents: AgentRegistry;
    readonly workflows: WorkflowRegistry;
-@@ -268,19 +288,21 @@ export class Orchestrator {
+@@ -268,19 +289,21 @@ export class Orchestrator {
    /** Side-effect-free admission used by Request submission before its first persistent write. */
    async validateStartRun(
      opts: StartRunOptions,
@@ -496,7 +538,7 @@ index 967bed8..9cc2a37 100644
      const inputs = validateWorkflowInputs(def, opts.vars ?? {});
      if (!inputs.validation.ok) {
        const { errors, warnings } = inputs.validation;
-@@ -291,12 +313,19 @@ export class Orchestrator {
+@@ -291,12 +314,19 @@ export class Orchestrator {
          { errors, warnings },
        );
      }
@@ -519,7 +561,7 @@ index 967bed8..9cc2a37 100644
      const runId = newId("run", this.clock.now());
      // A child with an explicit workspace still has to validate its parent's sealed
      // sensitivity state before copying vars. Missing overlays must never downgrade it.
-@@ -308,13 +337,23 @@ export class Orchestrator {
+@@ -308,13 +338,23 @@ export class Orchestrator {
        throw unavailable();
      // Record only after every admission/inherited-integrity check, before public run creation.
      const workflowStored = await this.recordDefinition(def);
@@ -545,7 +587,7 @@ index 967bed8..9cc2a37 100644
          runId,
          workflowId: def.id,
          request,
-@@ -328,6 +367,7 @@ export class Orchestrator {
+@@ -328,6 +368,7 @@ export class Orchestrator {
          ...(opts.actor ? { actor: opts.actor } : {}),
          workflowId: def.id,
          workflowVersion: def.version,
@@ -553,7 +595,7 @@ index 967bed8..9cc2a37 100644
          workspace,
          vars,
          ...(protectedInputs ? { executionInputsStored: true as const } : {}),
-@@ -847,8 +887,9 @@ export class Orchestrator {
+@@ -847,8 +888,9 @@ export class Orchestrator {
  
    /** Inline graphs get ids like `parent::loopNode` or `parent::parallelNode::branch`. */
    resolveDefinition(workflowId: string): WorkflowDefinition {
@@ -565,7 +607,7 @@ index 967bed8..9cc2a37 100644
    }
  
    /**
-@@ -889,15 +930,19 @@ export class Orchestrator {
+@@ -889,15 +931,19 @@ export class Orchestrator {
     * that kept the version is `WORKFLOW_INVALID` here rather than a new run silently starting
     * on a definition its resume would not find.
     */
@@ -588,7 +630,7 @@ index 967bed8..9cc2a37 100644
      const kept = await this.stores.workflows.get(live.id, live.version);
      if (kept && workflowRevision(kept) !== workflowRevision(live)) throw versionCollision(live);
      return live;
-@@ -974,9 +1019,9 @@ export class Orchestrator {
+@@ -974,9 +1020,9 @@ export class Orchestrator {
     * configured, and every role the workflow's own nodes ask for must be filled under it -
     * rather than failing on the first step that needs the agent.
     */
@@ -601,7 +643,7 @@ index 967bed8..9cc2a37 100644
      for (const node of Object.values(def.nodes)) {
        const selector = (node as { agent?: unknown }).agent;
        if (selector && typeof selector === "object" && "role" in selector) scoped.resolve(selector as AgentSelector);
-@@ -997,7 +1042,7 @@ export class Orchestrator {
+@@ -997,7 +1043,7 @@ export class Orchestrator {
      if (!first || first.type !== "run.created") throw new OrcaError("RUN_NOT_FOUND", `run ${runId} not found`);
      if (
        first.payload.workflowStored &&
@@ -610,7 +652,7 @@ index 967bed8..9cc2a37 100644
        !(await this.stores.workflows.get(first.payload.workflowId.split(INLINE_SEP)[0]!, first.payload.workflowVersion))
      )
        throw new OrcaError(
-@@ -1016,6 +1061,12 @@ export class Orchestrator {
+@@ -1016,6 +1062,12 @@ export class Orchestrator {
        loadState: (id) => this.executionState(id),
        plan: this.plan,
      });
@@ -623,20 +665,27 @@ index 967bed8..9cc2a37 100644
      this.live.set(runId, rc);
      return rc;
    }
-@@ -1317,9 +1368,9 @@ export class Orchestrator {
+@@ -1317,10 +1369,15 @@ export class Orchestrator {
        logger: rc.logger.child({ step: step.nodeId }),
        clock: this.clock,
        stores: this.stores,
 -      agents: this.agents.withOverrides(rc.state.run.overrides),
 -      templates: this.templates,
 -      workflows: this.workflows,
+-      humanInput: abortableHumanInput(this.humanInput, rc.abort.signal),
 +      agents: (this.contextGenerations.get(rc)?.agents ?? this.agents).withOverrides(rc.state.run.overrides),
 +      templates: this.contextGenerations.get(rc)?.templates ?? this.templates,
 +      workflows: this.contextGenerations.get(rc)?.workflows ?? this.workflows,
-       humanInput: abortableHumanInput(this.humanInput, rc.abort.signal),
++      humanInput: abortableHumanInput(
++        this.contextGenerations.has(rc) && this.generationHumanInput
++          ? this.generationHumanInput(this.contextGenerations.get(rc)!)
++          : this.humanInput,
++        rc.abort.signal,
++      ),
        plan: this.plan,
  
-@@ -1342,7 +1393,7 @@ export class Orchestrator {
+       async emit(event) {
+@@ -1342,7 +1399,7 @@ export class Orchestrator {
          return evaluateExpression(expr, await ctx.evalContext(extra));
        },
        async render(body, extra) {
@@ -645,7 +694,7 @@ index 967bed8..9cc2a37 100644
        },
        async resolveInputs(refs) {
          const resolved = await self.resolveInputs(rc, refs);
-@@ -1546,7 +1597,9 @@ export class Orchestrator {
+@@ -1546,7 +1603,9 @@ export class Orchestrator {
      step: StepRun,
      selector: AgentSelector,
    ): Promise<{ session: AgentSession; release: () => Promise<void> }> {
@@ -1038,3 +1087,127 @@ index 0000000..a2675c0
 +      await rm(dir, { recursive: true, force: true });
 +    }
 +  });
+diff --git a/packages/cli/test/config-generation-bootstrap.test.ts b/packages/cli/test/config-generation-bootstrap.test.ts
+new file mode 100644
+index 0000000..f3960d7
+--- /dev/null
++++ b/packages/cli/test/config-generation-bootstrap.test.ts
+@@ -0,0 +1,118 @@
++/** Reserved integration regressions: exercise the production bootstrap composition. */
++import { mkdtemp, rm, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { afterEach, expect, it } from "vitest";
++import { parseOrcaConfig, silentLogger } from "@orca/core";
++import { bootstrap } from "../src/bootstrap.js";
++
++const dirs: string[] = [];
++afterEach(async () => {
++  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
++});
++const tiny = `id: tiny
++name: Tiny
++start: s
++nodes:
++  s: { type: start }
++  done: { type: end }
++edges:
++  - { from: s, to: done }
++`;
++async function fixture(plugin: string, workflow = tiny) {
++  const dir = await mkdtemp(join(tmpdir(), "orca-generation-bootstrap-"));
++  dirs.push(dir);
++  await writeFile(join(dir, "flow.yaml"), workflow);
++  await writeFile(join(dir, "plugin.mjs"), `export default { name: "test", register(api) { ${plugin} } };`);
++  const config = parseOrcaConfig({ workflows: ["flow.yaml"], templates: [], plugins: ["./plugin.mjs"] });
++  return { config, configDir: dir, logger: silentLogger };
++}
++it("retains the plugin workspace provider and refuses historical substitution after bootstrap", async () => {
++  const opts = await fixture(`api.setWorkspaceProvider({ name: "sandbox", async provision() {
++    return { cwd: "/tmp/plugin-sandbox", hostId: "local", provider: "sandbox" };
++  } });`);
++  const first = await bootstrap(opts);
++  const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
++  const id = await launch.startRun({});
++  expect((await first.orchestrator.getState(id)).run.workspace).toMatchObject({
++    cwd: "/tmp/plugin-sandbox",
++    provider: "sandbox",
++  });
++  const second = await bootstrap(opts);
++  await expect(second.orchestrator.startRun({ workflowId: "tiny" }, first.generations.current)).rejects.toMatchObject({
++    code: "RUN_STATE",
++  });
++});
++it("captures plugin agents, hosts and roles without sharing mutable registrations", async () => {
++  const agent = parseOrcaConfig({
++    agents: [{ id: "plugin-agent", command: "unused", hostId: "plugin-host", env: { TOKEN: "plugin-secret" } }],
++  }).agents[0]!;
++  const opts = await fixture(
++    `
++    const host = Object.create(api.agents.host("local"));
++    Object.defineProperty(host, "id", { value: "plugin-host" });
++    api.agents.addHost(host);
++    api.agents.addAgent(${JSON.stringify(agent)});
++    api.agents.mapRole("plugin-role", "plugin-agent");
++  `,
++    tiny
++      .replace("  done:", "  agent: { type: agent, agent: { role: plugin-role }, prompt: work }\n  done:")
++      .replace("  - { from: s, to: done }", "  - { from: s, to: agent }\n  - { from: agent, to: done }"),
++  );
++  const first = await bootstrap(opts);
++  const generation = first.generations.current;
++  expect(generation.agents.resolve({ role: "plugin-role" })).toMatchObject({
++    agent: { id: "plugin-agent" },
++    host: { id: "plugin-host" },
++  });
++  first.orchestrator.agents.mapRole("plugin-role", "missing");
++  expect(
++    (await first.generations.restore(generation.snapshot.id)).agents.resolve({ role: "plugin-role" }).agent.id,
++  ).toBe("plugin-agent");
++  const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
++  const id = await launch.startRun({});
++  expect((await first.orchestrator.getState(id)).run.provenance?.selections[0]?.agent).toEqual({
++    value: "plugin-agent",
++    source: "plugin.roles",
++  });
++  const second = await bootstrap(opts);
++  await expect(second.generations.restore(generation.snapshot.id)).rejects.toMatchObject({ code: "RUN_STATE" });
++});
++it.each(["configured", "explicit", "replaced"] as const)(
++  "restores admitted gate policy while retaining %s callback behavior",
++  async (mode) => {
++    const opts = await fixture(
++      "",
++      `id: tiny
++name: Tiny
++start: s
++nodes:
++  s: { type: start }
++  gate1: { type: gate, question: First?, options: [go] }
++  gate2: { type: gate, question: Second?, options: [go] }
++  done: { type: end }
++edges:
++  - { from: s, to: gate1 }
++  - { from: gate1, to: gate2 }
++  - { from: gate2, to: done }
++`,
++    );
++    const config = parseOrcaConfig({ ...opts.config, plugins: [], humanInput: { mode: "pause" } });
++    const first = await bootstrap({ ...opts, config });
++    const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "tiny" });
++    const id = await launch.startRun({});
++    expect((await first.orchestrator.run(id)).run.status).toBe("paused");
++    const input = (await first.orchestrator.pendingInputs(id))[0]!;
++    const { autoHumanInput } = await import("@orca/engine");
++    const second = await bootstrap({
++      ...opts,
++      config: parseOrcaConfig({ ...config, humanInput: { mode: "auto" } }),
++      ...(mode === "explicit" ? { humanInput: autoHumanInput() } : {}),
++    });
++    if (mode === "replaced") second.orchestrator.humanInput = autoHumanInput();
++    await second.orchestrator.answer(input.id, "go", id);
++    expect((await second.orchestrator.resume(id)).run.status).toBe(mode === "configured" ? "paused" : "completed");
++    if (mode === "configured")
++      expect(await second.orchestrator.pendingInputs(id)).toMatchObject([{ question: "Second?" }]);
++  },
++);

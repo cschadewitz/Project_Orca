@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseOrcaConfig, parseWorkflow, parsePromptTemplate } from "@orca/core";
+import { AgentRegistry } from "@orca/agents";
 import { InMemoryWorkflowVersionStore } from "@orca/store";
 import {
   ConfigurationGenerations,
@@ -33,15 +34,15 @@ const config = () =>
     roles: { builder: "a" },
     program: { workflow: "flow", itemWorkflow: "flow" },
   });
-async function fixture() {
+async function fixture(agents?: AgentRegistry) {
   const records = new Map<string, GenerationSnapshot>();
   const workflows = new InMemoryWorkflowVersionStore();
-  let assets: GenerationAssets = { workflows: [definition()], templates: [] };
+  let assets: GenerationAssets = { workflows: [definition()], templates: [], ...(agents ? { agents } : {}) };
   const calls: { options: unknown; generation: GenerationMaterial }[] = [];
   const writes = vi.fn(async (id: string, value: GenerationSnapshot) => {
     records.set(id, structuredClone(value));
   });
-  const generations = new ConfigurationGenerations({
+  const options: ConstructorParameters<typeof ConfigurationGenerations>[0] = {
     store: { getGeneration: async (id) => structuredClone(records.get(id)), putGeneration: writes },
     workflows,
     loadAssets: async () => assets,
@@ -54,10 +55,16 @@ async function fixture() {
         return "run";
       },
     },
-  });
+  };
+  const generations = new ConfigurationGenerations(options);
   await generations.initialize(config(), "one");
   return {
     generations,
+    restart: async () => {
+      const next = new ConfigurationGenerations(options);
+      await next.initialize({ ...config(), roles: { builder: "b" } }, "two");
+      return next;
+    },
     records,
     workflows,
     calls,
@@ -211,9 +218,19 @@ describe("configuration generations", () => {
     setAssets({ workflows: [definition("2")], templates: [] });
     const applied = await generations.apply(config(), "one", id, false, recheck);
     expect(notify).toHaveBeenCalledWith(applied.status, [{ id: "flow", version: "2" }]);
-    setAssets({ workflows: [], templates: [] });
-    await generations.apply(config(), "one", applied.status.activeGeneration, false, recheck);
-    expect(notify).toHaveBeenLastCalledWith(expect.anything(), [{ id: "flow", version: "2", removed: true }]);
+    const replacement = { ...definition(), id: "replacement" };
+    setAssets({ workflows: [replacement], templates: [] });
+    await generations.apply(
+      { ...config(), program: { ...config().program, workflow: "replacement", itemWorkflow: "replacement" } },
+      "one",
+      applied.status.activeGeneration,
+      false,
+      recheck,
+    );
+    expect(notify).toHaveBeenLastCalledWith(expect.anything(), [
+      { id: "replacement", version: "1" },
+      { id: "flow", version: "2", removed: true },
+    ]);
     detach();
   });
   it("restores admitted material and fails closed on missing generation or workflow pin", async () => {
@@ -264,4 +281,61 @@ describe("configuration generations", () => {
     ]);
     expect(JSON.stringify(provenance)).not.toMatch(/credential-canary|art_inaccessible/);
   });
+});
+
+it.each(["workflow", "itemWorkflow"] as const)("rejects removal of unchanged program.%s", async (field) => {
+  const { generations, setAssets, writes } = await fixture();
+  const initial = generations.current;
+  const replacement = { ...definition(), id: "replacement" };
+  setAssets({ workflows: [replacement], templates: [] });
+  const other = field === "workflow" ? "itemWorkflow" : "workflow";
+  const candidate = { ...config(), workflows: [], program: { ...config().program, [other]: "replacement" } };
+  for (const validateOnly of [true, false]) {
+    expect(await generations.apply(candidate, "two", initial.snapshot.id, validateOnly, recheck)).toMatchObject({
+      outcome: "invalid",
+      validation: { errors: [{ path: `program.${field}` }] },
+    });
+    expect(generations.current).toBe(initial);
+    expect(writes).toHaveBeenCalledTimes(1);
+  }
+});
+
+it("recovers an original Request admission after restart without weakening fresh capture", async () => {
+  const { generations, restart, calls, records } = await fixture();
+  const original = await generations.captureLaunch({ purpose: "request" });
+  const next = await restart();
+  await expect(
+    next.captureLaunch({ purpose: "request", expectedConfigGeneration: original.generationId }),
+  ).rejects.toMatchObject({ code: "CONFIG_STALE" });
+  const recorded = { generationId: original.generationId, workflow: original.workflow, requestId: "req-original" };
+  const recovered = await next.restoreLaunch(recorded);
+  await recovered.validateStartRun({});
+  await recovered.startRun({});
+  expect(calls.map((call) => call.generation.agents.resolve({ role: "builder" }).agent.id)).toEqual(["a", "a"]);
+  expect(calls[1]?.options).toMatchObject({ requestId: "req-original", workflowVersion: original.workflow.version });
+  await expect(recovered.startRun({ requestId: "other" })).rejects.toMatchObject({ code: "RUN_STATE" });
+  await expect(
+    next.restoreLaunch({ ...recorded, workflow: { ...original.workflow, revision: "corrupt" } }),
+  ).rejects.toMatchObject({ code: "WORKFLOW_INVALID" });
+  records.delete(original.generationId);
+  await expect(next.restoreLaunch(recorded)).rejects.toMatchObject({ code: "RUN_STATE" });
+});
+
+it("retains effective registry registrations and refuses restoration by another provider", async () => {
+  const agents = AgentRegistry.fromConfig(config());
+  agents.mapRole("builder", "b");
+  const { generations, restart, records } = await fixture(agents);
+  const id = generations.current.snapshot.id;
+  agents.mapRole("builder", "a");
+  agents.resolve("b").agent.command = "changed-after-capture";
+  expect((await generations.restore(id)).agents.resolve({ role: "builder" }).agent).toMatchObject({
+    id: "b",
+    command: "test",
+  });
+  expect(generations.current.agents.host("local")).toBe(agents.host("local"));
+  const next = await restart();
+  await expect(next.restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+  const saved = records.get(id)!;
+  delete saved.effectiveAgents;
+  await expect(generations.restore(id)).rejects.toMatchObject({ code: "RUN_STATE" });
 });

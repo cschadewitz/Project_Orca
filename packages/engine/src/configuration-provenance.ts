@@ -30,9 +30,12 @@ export function launchProvenance(
           source: role
             ? overrides?.roles?.[role]
               ? "run.overrides.roles"
-              : config.roles[role]
-                ? "config.roles"
-                : "agent.roles"
+              : material.snapshot.effectiveRoles?.[role] &&
+                  material.snapshot.effectiveRoles[role] !== config.roles[role]
+                ? "plugin.roles"
+                : config.roles[role]
+                  ? "config.roles"
+                  : "agent.roles"
             : "workflow.agent",
         },
         host: { value: host.id, source: "agent.hostId" },
@@ -67,7 +70,8 @@ export function launchProvenance(
 
 /** Configured literals are known to the execution boundary; ambient/resolved credentials are not captured. */
 export function configuredGenerationSecrets(material: GenerationMaterial): string[] {
-  return material.snapshot.config.agents
+  return material.agents
+    .listAgents()
     .flatMap((agent) => [
       ...Object.values(agent.env),
       ...agent.args,

@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { AgentRegistry } from "@orca/agents";
 import {
+  AgentSpecSchema,
   OrcaConfigSchema,
   OrcaError,
   PromptTemplateSchema,
@@ -35,6 +36,13 @@ export interface CapturedLaunch {
   startRun(options: BoundLaunchOptions): Promise<string>;
 }
 export type CaptureLaunch = (selection: LaunchSelection) => Promise<CapturedLaunch>;
+/** Trusted recovery only: values must come from the authorized, durable Request admission. */
+export interface RecordedRequestLaunch {
+  requestId: string;
+  generationId: string;
+  workflow: { id: string; version: string; revision: string };
+}
+export type RestoreLaunch = (recorded: RecordedRequestLaunch) => Promise<CapturedLaunch>;
 
 const WorkflowIdentitySchema = z.object({ id: z.string(), version: z.string(), revision: z.string() });
 export const GenerationSnapshotSchema = z.object({
@@ -43,6 +51,9 @@ export const GenerationSnapshotSchema = z.object({
   config: OrcaConfigSchema,
   workflows: z.array(WorkflowIdentitySchema),
   templates: z.array(PromptTemplateSchema),
+  runtimeBinding: z.string().optional(),
+  effectiveAgents: z.array(AgentSpecSchema).optional(),
+  effectiveRoles: z.record(z.string(), z.string()).optional(),
 });
 export type GenerationSnapshot = z.infer<typeof GenerationSnapshotSchema>;
 export interface GenerationStore {
@@ -50,6 +61,8 @@ export interface GenerationStore {
   putGeneration(id: string, snapshot: GenerationSnapshot): Promise<void>;
 }
 export interface GenerationAssets {
+  /** Executable plugin hosts are retained only within this provider lifetime. */
+  agents?: AgentRegistry;
   workflows: WorkflowDefinition[];
   templates: PromptTemplate[];
 }
@@ -101,6 +114,7 @@ const unavailable = () => new OrcaError("RUN_STATE", "recorded configuration gen
 
 export class ConfigurationGenerations {
   private active: GenerationMaterial | undefined;
+  private readonly runtimeBindings = new Map<string, AgentRegistry>();
   private readonly listeners = new Set<(status: GenerationStatus, workflows: WorkflowChange[]) => void>();
   constructor(
     private readonly options: {
@@ -190,7 +204,10 @@ export class ConfigurationGenerations {
       candidate = await this.prepare(parsed.data, savedRevision);
       for (const field of ["workflow", "itemWorkflow"] as const) {
         const value = parsed.data.program[field];
-        if (value !== previous.snapshot.config.program[field] && !candidate.workflows.has(value))
+        if (
+          (value !== previous.snapshot.config.program[field] || previous.workflows.has(value)) &&
+          !candidate.workflows.has(value)
+        )
           candidateInvalid(`program.${field}`, "selected workflow is not registered");
       }
     } catch (error) {
@@ -235,6 +252,31 @@ export class ConfigurationGenerations {
     const material = this.current; // Capture before the first await.
     if (selection.expectedConfigGeneration !== undefined && selection.expectedConfigGeneration !== material.snapshot.id)
       throw new OrcaError("CONFIG_STALE", "active configuration changed; refresh before launching");
+    return this.captureMaterial(selection, material);
+  };
+
+  /** Distinct from fresh capture: never expose historical selection directly to RPC callers. */
+  readonly restoreLaunch: RestoreLaunch = async (recorded) => {
+    recorded = structuredClone(recorded);
+    if (!recorded.requestId) throw unavailable();
+    const material = await this.restore(recorded.generationId);
+    return this.captureMaterial(
+      {
+        purpose: "request",
+        workflowId: recorded.workflow.id,
+        workflowVersion: recorded.workflow.version,
+        expectedWorkflowRevision: recorded.workflow.revision,
+      },
+      material,
+      recorded.requestId,
+    );
+  };
+
+  private async captureMaterial(
+    selection: LaunchSelection,
+    material: GenerationMaterial,
+    recordedRequestId?: string,
+  ): Promise<CapturedLaunch> {
     const id =
       selection.workflowId ?? (selection.purpose === "request" ? material.snapshot.config.program.workflow : undefined);
     if (!id) throw new OrcaError("WORKFLOW_NOT_FOUND", "workflow launch requires a workflow id");
@@ -250,7 +292,10 @@ export class ConfigurationGenerations {
       throw new OrcaError("WORKFLOW_INVALID", "workflow changed; validate inputs again before launching");
     // Explicit whitelist prevents JavaScript callers from smuggling inline/workflow/generation substitutions.
     const bound = (options: BoundLaunchOptions): StartRunOptions => {
-      const { actor, workspace, requestId, workItemId, parentRunId, parentStepRunId, overrides } = options;
+      if (recordedRequestId && options.requestId !== undefined && options.requestId !== recordedRequestId)
+        throw new OrcaError("RUN_STATE", "recovery Request differs from recorded admission");
+      const { actor, workspace, workItemId, parentRunId, parentStepRunId, overrides } = options;
+      const requestId = recordedRequestId ?? options.requestId;
       const vars =
         selection.purpose === "request"
           ? { itemWorkflow: material.snapshot.config.program.itemWorkflow, ...options.vars }
@@ -275,9 +320,9 @@ export class ConfigurationGenerations {
       validateStartRun: async (options: BoundLaunchOptions) => {
         await this.options.admission.validateStartRun(bound(options), material);
       },
-      startRun: (options: BoundLaunchOptions) => this.options.admission.startRun(bound(options), material),
+      startRun: async (options: BoundLaunchOptions) => this.options.admission.startRun(bound(options), material),
     });
-  };
+  }
 
   /** No fallback to current. Validate protected material and every reused workflow pin on each restore. */
   async restore(id: string): Promise<GenerationMaterial> {
@@ -293,7 +338,17 @@ export class ConfigurationGenerations {
     return this.material(parsed.data, definitions);
   }
   private material(snapshot: GenerationSnapshot, definitions: WorkflowDefinition[]): GenerationMaterial {
+    const runtimeAgents = snapshot.runtimeBinding ? this.runtimeBindings.get(snapshot.runtimeBinding) : undefined;
+    if (snapshot.config.plugins.length && !snapshot.runtimeBinding) throw unavailable();
+    if (snapshot.runtimeBinding && (!runtimeAgents || !snapshot.effectiveAgents || !snapshot.effectiveRoles))
+      throw unavailable();
     frozen(snapshot);
+    const agents = snapshot.runtimeBinding ? new AgentRegistry() : AgentRegistry.fromConfig(snapshot.config);
+    if (snapshot.runtimeBinding) {
+      for (const host of runtimeAgents!.listHosts()) agents.addHost(host);
+      for (const agent of snapshot.effectiveAgents ?? []) agents.addAgent(agent);
+      for (const [role, id] of Object.entries(snapshot.effectiveRoles ?? {})) agents.mapRole(role, id);
+    }
     const workflows = new WorkflowRegistry(),
       templates = new TemplateRegistry();
     for (const def of definitions) workflows.register(frozen(structuredClone(def)));
@@ -302,7 +357,7 @@ export class ConfigurationGenerations {
     readonlyRegistry(templates, ["register", "registerSource"]);
     return Object.freeze({
       snapshot,
-      agents: readonlyRegistry(AgentRegistry.fromConfig(snapshot.config), ["addHost", "addAgent", "mapRole"]),
+      agents: readonlyRegistry(agents, ["addHost", "addAgent", "mapRole"]),
       workflows,
       templates,
     });
@@ -312,12 +367,26 @@ export class ConfigurationGenerations {
     savedRevision: string,
     supplied?: GenerationAssets,
   ): Promise<GenerationMaterial> {
-    const assets = structuredClone(supplied ?? (await this.options.loadAssets(config)));
+    const loaded = supplied ?? (await this.options.loadAssets(config));
+    const assets = structuredClone({ workflows: loaded.workflows, templates: loaded.templates });
+    const runtimeBinding = loaded.agents ? randomUUID() : undefined;
+    if (loaded.agents && runtimeBinding) {
+      const runtimeAgents = new AgentRegistry();
+      for (const host of loaded.agents.listHosts()) runtimeAgents.addHost(host);
+      this.runtimeBindings.set(runtimeBinding, runtimeAgents);
+    }
     const material = this.material(
       {
         id: randomUUID(),
         savedRevision,
         config: structuredClone(config),
+        ...(loaded.agents
+          ? {
+              runtimeBinding,
+              effectiveAgents: structuredClone(loaded.agents.listAgents()),
+              effectiveRoles: loaded.agents.listRoles(),
+            }
+          : {}),
         workflows: assets.workflows.map((def) => ({
           id: def.id,
           version: def.version,
