@@ -23,7 +23,11 @@ access refusal, protocol mismatch and unreachability distinguished.
 Precedence at launch is **ORCA_DAEMON_URL > saved endpoint > bundled daemon >
 development loopback fallback**. Config and the dialog show the source. An explicit
 environment override disables both connection changes and **Use the bundled
-daemon**; unset it and restart to enable these actions. Returning to bundled clears
+daemon**; unset it and restart to enable these actions. After **Open a store…**,
+the read-only store banner's **Connect to a daemon** action returns to the exact
+launch-pinned environment target, after the all-window draft check. This return
+does not change the saved endpoint or allow another target to override the environment.
+Returning to bundled clears
 the saved endpoint only after its handshake succeeds. A previously active bundled
 daemon remains alive when switching to an external endpoint, and is reused on
 return, so changing the view does not stop its work. The app still owns its shutdown
@@ -101,6 +105,14 @@ renderer boundary, File menu, Config source header and status-bar action. It als
 updates the exact native-menu and smoke bridge inventories. No new RPC method,
 capability or error enum is introduced; hello identity is additive. The integration
 owner chooses the combined protocol minor version with the other stories.
+
+The patch includes `packages/app/test/daemon-connection-integration.test.ts`.
+After applying it, run `pnpm exec vitest run daemon-connection packages/app/test/workspace.test.ts`.
+The integration regression loads the actual main-process IPC registrations with an
+Electron shell fixture and checks environment → read-only store → environment,
+draft refusal/release, epoch advancement and unchanged saved preferences. It also
+checks that arbitrary and bundled targets remain forbidden under the override.
+This IPC regression does not claim real-window or platform smoke coverage.
 
 Dedicated tests cover transaction failures/cancel, saved restart and precedence,
 bundled return without cancelling execution, pending edits, old epoch results,
