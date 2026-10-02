@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { useLayoutEffect } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { DaemonConnectionBridge, DaemonTargetSnapshot } from "../../src/daemon-connection.js";
@@ -51,7 +52,7 @@ it("keeps old drafts mounted and refuses target activation until explicit discar
   );
   act(r.change);
   expect(screen.getByLabelText<HTMLInputElement>("Pending edit").value).toBe("keep my edits");
-  expect(r.bridge.activate).not.toHaveBeenCalled();
+  expect(r.bridge.activate).toHaveBeenCalledExactlyOnceWith(1);
   fireEvent.click(screen.getByText("Discard pending edits and load this daemon"));
   await waitFor(() => expect(r.bridge.activate).toHaveBeenCalledWith(2));
 });
@@ -93,3 +94,43 @@ it("shows an inline auth failure and keeps the dialog open; Cancel fences the pr
   expect(close).toHaveBeenCalled();
   h.dispose();
 });
+
+it("synchronizes the initial preload epoch before child resource effects run", () => {
+  const r = rig();
+  let preloadEpoch = 0;
+  r.bridge.activate = vi.fn((epoch) => {
+    preloadEpoch = epoch;
+  });
+  const epochs: number[] = [];
+  function Resource() {
+    useLayoutEffect(() => {
+      epochs.push(preloadEpoch);
+    }, []);
+    return null;
+  }
+  render(
+    <ConnectionBoundary bridge={r.bridge}>
+      <Resource />
+    </ConnectionBoundary>,
+  );
+  expect(epochs).toEqual([1]);
+  expect(r.bridge.activate).toHaveBeenCalledExactlyOnceWith(1);
+});
+
+it.each(["bundled", "store", "development", "saved", "env"] as const)(
+  "prefills only a durable external target (%s)",
+  (source) => {
+    stubMatchMedia(1200);
+    const h = harness();
+    const r = rig();
+    render(
+      <h.Providers>
+        <ConnectionDialog bridge={r.bridge} target={{ ...r.target, source }} close={() => {}} />
+      </h.Providers>,
+    );
+    expect(screen.getByRole<HTMLInputElement>("textbox").value).toBe(
+      source === "saved" || source === "env" ? r.target.url : "",
+    );
+    h.dispose();
+  },
+);

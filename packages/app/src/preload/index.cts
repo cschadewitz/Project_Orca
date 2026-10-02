@@ -61,9 +61,10 @@ const bridge: OrcaBridge = {
     },
     show: () => ipcRenderer.send("orca:daemon.show"),
     onShow: (listener) => {
-      ipcRenderer.on("orca:daemon.show", listener);
+      const forward = () => listener();
+      ipcRenderer.on("orca:daemon.show", forward);
       return () => {
-        ipcRenderer.off("orca:daemon.show", listener);
+        ipcRenderer.off("orca:daemon.show", forward);
       };
     },
     connect: (url) =>

@@ -3,9 +3,9 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "@orca/protocol";
-import { DaemonClient, DaemonClientError } from "../src/client/daemon-client.js";
+import type { DaemonClient } from "../src/client/daemon-client.js";
 import type { Workspace } from "../src/main/workspace.js";
 import { DaemonSubscription } from "../src/client/subscription.js";
 import type { BridgeResult, WorkspaceSnapshot } from "../src/bridge.js";
@@ -17,6 +17,9 @@ const shell = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
   events: undefined as EventEmitter | undefined,
   ready: true,
+  hasWindow: true,
+  createWindow: vi.fn(),
+  openDialog: vi.fn(async () => ({ canceled: false, filePaths: ["/archive/.orca"] })),
   sent: vi.fn(),
   stop: vi.fn(async () => {}),
 }));
@@ -46,8 +49,19 @@ vi.mock("electron", async () => {
       whenReady: () => new Promise(() => {}),
       on: vi.fn(),
     },
-    BrowserWindow: {
-      getAllWindows: () => [{ isDestroyed: () => false, isFocused: () => true, webContents }],
+    BrowserWindow: class {
+      constructor() {
+        shell.createWindow();
+        shell.hasWindow = true;
+      }
+      static getAllWindows() {
+        return shell.hasWindow ? [{ isDestroyed: () => false, isFocused: () => true, webContents }] : [];
+      }
+      static getFocusedWindow() {
+        return this.getAllWindows()[0];
+      }
+      once = vi.fn();
+      loadFile = vi.fn();
     },
     ipcMain: Object.assign(events, {
       handle: (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
@@ -55,7 +69,7 @@ vi.mock("electron", async () => {
       },
     }),
     nativeTheme: { on: vi.fn() },
-    dialog: {},
+    dialog: { showOpenDialog: shell.openDialog },
     Menu: {},
     Notification: {},
   };
@@ -79,6 +93,17 @@ vi.mock("../src/main/daemon-process.js", () => ({
 vi.mock("../src/main/update-driver.js", () => ({ updateDriver: () => undefined }));
 
 let directory: string;
+beforeEach(() => {
+  vi.resetModules();
+  shell.events?.removeAllListeners();
+  shell.handlers.clear();
+  shell.workspace = undefined;
+  shell.ready = true;
+  shell.hasWindow = true;
+  shell.createWindow.mockClear();
+  shell.stop.mockClear();
+  shell.sent.mockClear();
+});
 afterEach(async () => {
   await shell.workspace?.close();
   vi.restoreAllMocks();
@@ -87,6 +112,7 @@ afterEach(async () => {
 });
 
 it("returns env → read-only store → env through IPC, honoring drafts and preserving the saved endpoint", async () => {
+  const { DaemonClient, DaemonClientError } = await import("../src/client/daemon-client.js");
   directory = await mkdtemp(join(tmpdir(), "orca-connection-integration-"));
   shell.userData = directory;
   const preferences = join(directory, "preferences.json");
@@ -200,3 +226,60 @@ it("returns env → read-only store → env through IPC, honoring drafts and pre
   expect(shell.sent.mock.calls.some(([channel]) => channel === "orca:daemon.show")).toBe(false);
   expect(await readFile(preferences, "utf8")).toBe(saved);
 });
+
+it("opens a store with no windows and still refuses drafts when a window exists", async () => {
+  const { DaemonClient } = await import("../src/client/daemon-client.js");
+  directory = await mkdtemp(join(tmpdir(), "orca-no-window-"));
+  shell.userData = directory;
+  vi.stubEnv("ORCA_DAEMON_URL", "http://localhost:9999");
+  vi.spyOn(DaemonClient.prototype, "subscribe").mockReturnValue({ close: vi.fn() } as unknown as DaemonSubscription);
+  await import("../src/main/index.js");
+  const workspace = shell.workspace!;
+  await workspace.connect();
+  shell.hasWindow = false;
+  const invoke = () => shell.handlers.get("orca:workspace.open")!({}, {}, workspace.connectionTarget.epoch);
+  const initial = workspace.connectionTarget;
+  shell.openDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
+  expect(await invoke()).toMatchObject({ ok: true });
+  expect(workspace.connectionTarget).toEqual(initial);
+  expect(shell.createWindow).not.toHaveBeenCalled();
+  expect(await invoke()).toMatchObject({ ok: true, result: { path: "/archive", readOnly: true } });
+  expect(shell.openDialog).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Open a store" }));
+  expect(shell.createWindow).toHaveBeenCalledOnce();
+  expect(shell.sent.mock.calls.some(([channel]) => channel === "orca:update.prepare")).toBe(true);
+  shell.ready = false;
+  const old = workspace.connectionTarget;
+  expect(await invoke()).toMatchObject({
+    ok: false,
+    error: { message: "Save or discard pending edits before opening a store" },
+  });
+  expect(workspace.connectionTarget).toEqual(old);
+  expect(shell.createWindow).toHaveBeenCalledOnce();
+});
+
+it.each(["localhost:6722", "not-a-url-private-token", "https://owner:private-token@host"])(
+  "installs synchronous IPC and disconnects safely for malformed configuration %s",
+  async (url) => {
+    const { DaemonClient } = await import("../src/client/daemon-client.js");
+    directory = await mkdtemp(join(tmpdir(), "orca-invalid-url-"));
+    shell.userData = directory;
+    vi.stubEnv("ORCA_DAEMON_URL", url);
+    const subscribe = vi.spyOn(DaemonClient.prototype, "subscribe");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await import("../src/main/index.js");
+    const read = (channel: string) => {
+      const event = { returnValue: undefined as unknown };
+      shell.events!.emit(channel, event);
+      return event.returnValue;
+    };
+    expect(read("orca:daemon.read")).toMatchObject({ source: "env", url: "", environmentOverride: true });
+    await shell.workspace!.connect();
+    expect(read("orca:connection.read")).toMatchObject({ state: "disconnected" });
+    expect(read("orca:daemon.read")).toMatchObject({ source: "env", url: "" });
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(JSON.stringify(errors.mock.calls)).not.toContain("private-token");
+    expect(
+      await shell.handlers.get("orca:workspace.connectLive")!({}, {}, shell.workspace!.connectionTarget.epoch),
+    ).toMatchObject({ ok: false, error: { message: expect.stringContaining("HTTP or HTTPS") } });
+  },
+);

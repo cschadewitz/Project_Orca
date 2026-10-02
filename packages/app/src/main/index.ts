@@ -29,6 +29,7 @@ import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
 import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
 import { DEFAULT_DAEMON_URL, DaemonClient, DaemonClientError } from "../client/daemon-client.js";
+import { daemonEndpoint } from "../daemon-connection.js";
 import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
@@ -226,6 +227,13 @@ const workspace = new Workspace({
       },
     }),
   client: (url, options) => {
+    try {
+      url = daemonEndpoint(url);
+    } catch {
+      // An inert client keeps IPC installed; Workspace publishes disconnected without
+      // subscribing or falling back to a different store. Never retain the invalid input.
+      return new DaemonClient("");
+    }
     const candidate = new DaemonClient(url, fetch, {
       requireAuthentication: !isLoopbackDaemon(url),
       auth: new LocalDaemonToken({
@@ -320,7 +328,9 @@ async function openStore(path?: string): Promise<WorkspaceSnapshot> {
     throw new Error("Save or discard pending edits before opening a store");
   }
   try {
-    return await workspace.open(storeRoot(chosen));
+    const snapshot = await workspace.open(storeRoot(chosen));
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    return snapshot;
   } finally {
     send("orca:update.prepare", null);
   }
@@ -342,9 +352,14 @@ handle("orca:workspace.connectLive", async () => {
 });
 
 async function guardConnectionDrafts(): Promise<boolean> {
+  const ids = BrowserWindow.getAllWindows()
+    .filter((win) => !win.isDestroyed())
+    .map((win) => win.webContents.id);
+  // No renderer means no drafts. Update preparation deliberately has a different rule.
+  if (ids.length === 0) return true;
   try {
     await prepareDrafts({
-      ids: BrowserWindow.getAllWindows().map((win) => win.webContents.id),
+      ids,
       send: (nonce) => send("orca:update.prepare", nonce),
       listen: (callback) => {
         const listener = (event: Electron.IpcMainEvent, value: unknown) => {
@@ -623,7 +638,16 @@ if (!primary) {
         appMenuTemplate(
           process.platform,
           app.getName(),
-          { openStore: () => void openStore(), connectLive: () => send("orca:daemon.show", null) },
+          {
+            openStore: () =>
+              void openStore().catch((error: unknown) => {
+                dialog.showErrorBox(
+                  "Store could not be opened",
+                  error instanceof Error ? error.message : "Try opening the store again.",
+                );
+              }),
+            connectLive: () => send("orca:daemon.show", null),
+          },
           rendererUrl !== undefined,
         ),
       ),
