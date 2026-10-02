@@ -1,12 +1,18 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OrcaError, parseWorkflow, SUBMISSION_CORRELATION_VAR, type SubmissionCommand } from "@orca/core";
+import {
+  OrcaError,
+  parseWorkflow,
+  RequestSchema,
+  SUBMISSION_CORRELATION_VAR,
+  type SubmissionCommand,
+} from "@orca/core";
 import { fileStores } from "@orca/store";
 import { ProgramService } from "@orca/engine";
 import { RequestSubmissionService } from "../src/program/request-submission.js";
-import { FileAdmissionStore } from "../src/program/submission-store.js";
+import { FileAdmissionStore, type Admission } from "../src/program/submission-store.js";
 import { submissionFixture } from "./request-submission-fixture.js";
 
 const command = { title: "Build it", body: "A useful feature" };
@@ -47,6 +53,7 @@ it.each([
   { principalId: "other" },
   { actor: { principalId: "other" } },
   { admissionId: "retry" },
+  { requestAdmissionId: "forged" },
   { programRunId: "run-x" },
   { overrides: { nope: true } },
 ])("rejects invalid/unsupported associations before side effects: %j", async (patch) => {
@@ -383,13 +390,18 @@ it("recovers an unlinked root using protected correlation after file-store resta
   let rootId = "";
   vi.spyOn(f.orc, "startRun").mockImplementationOnce(async (options) => {
     // A sensitive value can match the correlation: public vars must not drive recovery.
-    rootId = await start({ ...options, vars: { ...options.vars, token: options.vars![SUBMISSION_CORRELATION_VAR] } });
+    rootId = await start({
+      ...options,
+      vars: { ...options.vars, token: (options as { requestAdmissionId?: string }).requestAdmissionId },
+    });
     throw new Error("crash after root publication");
   });
   const initial = await f.service.submit(command, f.authority);
   expect(initial.state).toBe("recoverable-failure");
   const [created] = await f.stores.events.read(rootId);
-  expect(created).toMatchObject({ payload: { vars: { [SUBMISSION_CORRELATION_VAR]: "[REDACTED]" } } });
+  const publicLog = await readFile(join(dir, "runs", `${rootId}.jsonl`), "utf8");
+  expect(publicLog).not.toContain(initial.admissionId);
+  expect(created?.payload).not.toHaveProperty(`vars.${SUBMISSION_CORRELATION_VAR}`);
   await start({ workflowId: "program", requestId: initial.requestId, actor: f.authority.actor });
   const reopened = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
   expect(await reopened.service.reconcile(initial.admissionId, reopened.authority)).toMatchObject({
@@ -452,3 +464,178 @@ it.each(["completed", "failed", "cancelled"] as const)(
     expect(await restarted.orc.listRuns()).toEqual([admitted.runId]);
   },
 );
+
+it.each([true, false])("admits strict workflow inputs with sensitive inputs=%s", async (sensitiveInputs) => {
+  const f = submissionFixture(undefined, undefined, { strictInputs: true, sensitiveInputs });
+  const admitted = await f.service.submit({ ...command, vars: { token: "valid-token" } }, f.authority);
+  expect(admitted.state).toBe("accepted");
+  if (admitted.state !== "accepted") throw new Error("not accepted");
+  const [created] = await f.orc.stores.events.read(admitted.runId);
+  expect(created?.executionPayloadRef).toBeDefined();
+  const original = await f.stores.execution.getPayload(admitted.runId, created!.executionPayloadRef!, "run.created");
+  expect(original).toMatchObject({ requestAdmissionId: admitted.admissionId });
+  expect((await f.stores.execution.getInputs(admitted.runId))?.vars).toEqual({
+    token: "valid-token",
+    request: expect.objectContaining({ id: admitted.requestId }),
+    capturedGeneration: "fixture-generation-1",
+  });
+  expect((await f.service.reconcile(admitted.admissionId, f.authority)).state).toBe("accepted");
+});
+
+it.each([{ unexpected: "caller-value" }, { token: 42 }])(
+  "still rejects invalid caller inputs before strict-schema admission: %j",
+  async (vars) => {
+    const f = submissionFixture(undefined, undefined, { strictInputs: true });
+    await expect(f.service.submit({ ...command, vars }, f.authority)).rejects.toMatchObject({
+      code: "WORKFLOW_INPUT_INVALID",
+    });
+    expect(await f.admissions.records.list()).toEqual([]);
+    expect(await f.stores.requests.list()).toEqual([]);
+    expect(await f.orc.listRuns()).toEqual([]);
+  },
+);
+
+it.each(["before-root", "after-root"])(
+  "recovers strict workflow inputs after %s crash and file-store restart",
+  async (boundary) => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-strict-correlation-"));
+    dirs.push(dir);
+    const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), { strictInputs: true });
+    const start = f.orc.startRun.bind(f.orc);
+    let rootId: string | undefined;
+    vi.spyOn(f.orc, "startRun").mockImplementationOnce(async (options) => {
+      if (boundary === "after-root") rootId = await start(options);
+      throw new Error("crash at root publication");
+    });
+    const initial = await f.service.submit({ ...command, vars: { token: "secret-token" } }, f.authority);
+    expect(initial.state).toBe("recoverable-failure");
+    expect((await f.admissions.records.get(initial.admissionId))?.runId).toBeUndefined();
+    const peer = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), { strictInputs: true });
+    const recovered = await peer.service.reconcile(initial.admissionId, peer.authority);
+    expect(recovered.state).toBe("accepted");
+    if (recovered.state !== "accepted") throw new Error("not accepted");
+    if (rootId) expect(recovered.runId).toBe(rootId);
+    expect(await peer.orc.listRuns()).toEqual([recovered.runId]);
+    expect((await peer.stores.execution.getInputs(recovered.runId))?.vars).not.toHaveProperty(
+      SUBMISSION_CORRELATION_VAR,
+    );
+  },
+);
+
+it("refuses providers without the protected correlation contract before admission side effects", async () => {
+  const f = submissionFixture();
+  const capture = f.capture;
+  const service = new RequestSubmissionService({
+    orchestrator: f.orc,
+    admissions: f.admissions,
+    captureLaunch: async (selection) => {
+      const launch = await capture(selection);
+      Reflect.deleteProperty(launch, "requestAdmissionCorrelation");
+      return launch;
+    },
+  });
+  await expect(service.submit(command, f.authority)).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+  expect(await f.admissions.records.list()).toEqual([]);
+  expect(await f.stores.requests.list()).toEqual([]);
+  expect(await f.orc.listRuns()).toEqual([]);
+});
+
+it("refuses an uncorrelated root returned by a broken provider without replacing it", async () => {
+  const f = submissionFixture();
+  const service = new RequestSubmissionService({
+    orchestrator: f.orc,
+    admissions: f.admissions,
+    captureLaunch: async (selection) => {
+      const launch = await f.capture(selection);
+      return { ...launch, startRun: ({ requestAdmissionId: _id, ...options }) => launch.startRun(options) };
+    },
+  });
+  const result = await service.submit(command, f.authority);
+  expect(result.state).toBe("recoverable-failure");
+  const roots = await f.orc.listRuns();
+  expect(roots).toHaveLength(1);
+  expect((await service.reconcile(result.admissionId, f.authority)).state).toBe("recoverable-failure");
+  expect(await f.orc.listRuns()).toEqual(roots);
+});
+
+it.each(["public-tamper", "private-missing"])("authenticates root correlation during %s recovery", async (fault) => {
+  const dir = await mkdtemp(join(tmpdir(), "orca-authenticated-correlation-"));
+  dirs.push(dir);
+  const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), {
+    strictInputs: true,
+    sensitiveInputs: false,
+  });
+  const start = f.orc.startRun.bind(f.orc);
+  let runId = "";
+  vi.spyOn(f.orc, "startRun").mockImplementationOnce(async (options) => {
+    runId = await start(options);
+    throw new Error("crash after root publication");
+  });
+  const result = await f.service.submit(command, f.authority);
+  const [created] = await f.orc.stores.events.read(runId);
+  expect(created?.executionPayloadRef).toBeDefined();
+  if (fault === "public-tamper") {
+    const file = join(dir, "runs", `${runId}.jsonl`);
+    const publicLog = await readFile(file, "utf8");
+    await writeFile(file, publicLog.replace(result.admissionId, "forged-public-correlation"));
+  } else {
+    await rm(join(dir, "private-execution", `${created!.executionPayloadRef!}.payload.json`));
+  }
+  const peer = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), {
+    strictInputs: true,
+    sensitiveInputs: false,
+  });
+  expect((await peer.service.reconcile(result.admissionId, peer.authority)).state).toBe(
+    fault === "public-tamper" ? "accepted" : "recoverable-failure",
+  );
+  expect(await peer.orc.listRuns()).toEqual([runId]);
+});
+
+it("recovers an existing v1 admission from its protected legacy marker", async () => {
+  const f = submissionFixture();
+  const launch = await f.capture({ purpose: "request" });
+  const request = RequestSchema.parse({
+    id: "req_legacy",
+    ...command,
+    status: "decomposing",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+  });
+  const record: Admission = {
+    id: "admission_legacy",
+    requestId: request.id,
+    workspaceId: f.authority.workspaceId,
+    principalId: f.authority.actor.principalId,
+    workflowId: launch.workflow.id,
+    workflowVersion: launch.workflow.version,
+    workflowRevision: launch.workflow.revision,
+    generationId: launch.generationId,
+    createdAt: request.createdAt,
+    state: "prepared",
+    correlationVersion: 1,
+  };
+  // Exact prior format: sealed v1 binding, vars marker, neither root link persisted.
+  await f.stores.execution.putInputs({
+    runId: record.id,
+    workflowId: record.workflowId,
+    workflowVersion: record.workflowVersion,
+    vars: { command, request, admission: record, actor: f.authority.actor },
+    sensitiveNames: ["command", "request", "admission", "actor"],
+    secrets: [],
+  });
+  await f.admissions.records.put(record);
+  await f.stores.requests.put(request);
+  const runId = await f.orc.startRun({
+    workflowId: record.workflowId,
+    requestId: request.id,
+    actor: f.authority.actor,
+    vars: { request, [SUBMISSION_CORRELATION_VAR]: record.id, token: record.id },
+  });
+  expect(await f.service.reconcile(record.id, f.authority)).toEqual({
+    admissionId: record.id,
+    requestId: request.id,
+    runId,
+    state: "accepted",
+  });
+  expect(await f.orc.listRuns()).toEqual([runId]);
+});

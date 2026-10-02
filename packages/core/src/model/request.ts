@@ -27,7 +27,7 @@ export const RequestSourceSchema = z.discriminatedUnion("kind", [
 ]);
 export type RequestSource = z.infer<typeof RequestSourceSchema>;
 
-/** Internal launch correlation, never a caller-controlled submission variable or authority. */
+/** Legacy v1 correlation name, reserved against caller spoofing; new launches use out-of-band metadata. */
 export const SUBMISSION_CORRELATION_VAR = "__orcaAdmissionId";
 
 /** A new Request, never a caller-selected association or execution identity. */

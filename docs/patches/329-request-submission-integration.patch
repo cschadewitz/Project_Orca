@@ -25,7 +25,44 @@
 +export * from "./request-submission.js";
 --- a/packages/engine/src/orchestrator.ts
 +++ b/packages/engine/src/orchestrator.ts
-@@ -296,6 +296,15 @@
+@@ -39,6 +39,7 @@
+   type MutationActor,
+   type NodeDef,
+   type OrcaEvent,
++  type OrcaEventInput,
+   type RunState,
+   type RunSummary,
+   type StepResult,
+@@ -65,6 +66,7 @@
+   type Stores,
+   type WorkItemClaim,
+ } from "@orca/store";
++import { correlateRequestAdmission } from "./program/request-admission-event.js";
+ import { builtinExecutors } from "./executors/index.js";
+ import {
+   NodeExecutorRegistry,
+@@ -141,6 +143,8 @@
+ export type AgentSessionOpenedListener = (info: { runId: string; agentId: string; session: AgentSession }) => void;
+
+ export interface StartRunOptions {
++  /** Server-owned Request admission metadata; never part of workflow vars or wire launch params. */
++  requestAdmissionId?: string;
+   /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
+   actor?: MutationActor;
+   workflowId?: string;
+@@ -269,6 +273,11 @@
+   async validateStartRun(
+     opts: StartRunOptions,
+   ): Promise<{ definition: WorkflowDefinition; vars: Record<string, unknown> }> {
++    if (
++      opts.requestAdmissionId !== undefined &&
++      (!opts.requestAdmissionId || !opts.requestId || !opts.actor || opts.parentRunId)
++    )
++      throw new OrcaError("RUN_STATE", "request admission correlation is unavailable");
+     // Admission (#330): select, check the preflight revision, check the selection and the
+     // launch vars - all before anything is written, provisioned or appended, so a refused
+     // launch leaves no definition, workspace, run, agent or child behind.
+@@ -296,6 +305,15 @@
 
    /** Create a run (emits run.created) without executing it. */
    async startRun(opts: StartRunOptions): Promise<string> {
@@ -41,6 +78,29 @@
      const { definition: def, vars } = await this.validateStartRun(opts);
      const runId = newId("run", this.clock.now());
      // A child with an explicit workspace still has to validate its parent's sealed
+@@ -321,7 +339,7 @@
+         workItem,
+         parent: opts.parentRunId ? (await this.executionState(opts.parentRunId)).run.workspace : undefined,
+       }));
+-    await this.stores.events.append({
++    const created: Extract<OrcaEventInput, { type: "run.created" }> = {
+       type: "run.created",
+       runId,
+       payload: {
+@@ -338,7 +356,12 @@
+         ...(opts.overrides ? { overrides: opts.overrides } : {}),
+         ...(workflowStored ? { workflowStored: true as const } : {}),
+       },
+-    });
++    };
++    await this.stores.events.append(
++      opts.requestAdmissionId
++        ? await correlateRequestAdmission(created, opts.requestAdmissionId, this.stores.execution)
++        : created,
++    );
+     return runId;
+   }
+
 --- a/packages/daemon/src/methods.ts
 +++ b/packages/daemon/src/methods.ts
 @@ -15,6 +15,13 @@
@@ -584,3 +644,68 @@
     */
    async startRun(
      params: RunsStartParams,
+--- a/packages/core/src/events/events.ts
++++ b/packages/core/src/events/events.ts
+@@ -112,6 +112,8 @@
+       workflowId: z.string(),
+       workflowVersion: z.string(),
+       requestId: z.string().optional(),
++      /** Server-owned recovery correlation, authenticated in the private creation payload. */
++      requestAdmissionId: z.string().optional(),
+       workItemId: z.string().optional(),
+       parentRunId: z.string().optional(),
+       parentStepRunId: z.string().optional(),
+--- /dev/null
++++ b/packages/engine/test/request-submission-correlation-integration.test.ts
+@@ -0,0 +1,51 @@
++/** Strict Request input validation through the actual reserved orchestrator correlation wiring. */
++import { mkdtemp, rm } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { expect, it, vi } from "vitest";
++import { fileStores } from "@orca/store";
++import { FileAdmissionStore } from "../src/program/submission-store.js";
++import { submissionFixture } from "./request-submission-fixture.js";
++
++it.each(["initial", "before-root", "after-root"])(
++  "uses native correlation for strict %s admission",
++  async (boundary) => {
++    const dir = await mkdtemp(join(tmpdir(), "orca-native-correlation-"));
++    try {
++      const options = {
++        nativeCorrelation: true,
++        strictInputs: true,
++        sensitiveInputs: false,
++      };
++      const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), options);
++      const start = f.orc.startRun.bind(f.orc);
++      let rootId: string | undefined;
++      if (boundary !== "initial") {
++        vi.spyOn(f.orc, "startRun").mockImplementationOnce(async (launch) => {
++          if (boundary === "after-root") rootId = await start(launch);
++          throw new Error("crash at root publication");
++        });
++      }
++      const result = await f.service.submit(
++        { title: "Strict", body: "Request", vars: { token: "valid" } },
++        f.authority,
++      );
++      expect(result.state).toBe(boundary === "initial" ? "accepted" : "recoverable-failure");
++      const peer = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), options);
++      const recovered = await peer.service.reconcile(result.admissionId, peer.authority);
++      expect(recovered.state).toBe("accepted");
++      if (recovered.state !== "accepted") throw new Error("not accepted");
++      if (rootId) expect(recovered.runId).toBe(rootId);
++      expect(await peer.orc.listRuns()).toEqual([recovered.runId]);
++      const [created] = await peer.orc.stores.events.read(recovered.runId);
++      expect(created).toMatchObject({
++        payload: { requestAdmissionId: result.admissionId },
++      });
++      expect(created?.executionPayloadRef).toBeDefined();
++      expect((await peer.stores.execution.getInputs(recovered.runId))?.vars).not.toHaveProperty("__orcaAdmissionId");
++    } finally {
++      vi.restoreAllMocks();
++      await rm(dir, { recursive: true, force: true });
++    }
++  },
++);

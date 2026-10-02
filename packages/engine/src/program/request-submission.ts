@@ -1,9 +1,10 @@
 /** One durable admission lifecycle; client retry keys deliberately belong to #331. */
 import { randomUUID } from "node:crypto";
-import { executionEvents, redactExecutionValue } from "@orca/store";
+import { redactExecutionValue } from "@orca/store";
 import {
   newId,
   OrcaError,
+  OrcaEventSchema,
   RequestSchema,
   SubmissionCommandSchema,
   SUBMISSION_CORRELATION_VAR,
@@ -14,6 +15,7 @@ import {
   type SubmissionService,
 } from "@orca/core";
 import type { Orchestrator, StartRunOptions } from "../orchestrator.js";
+import { RequestAdmissionCorrelationSchema } from "./request-admission-event.js";
 import { AdmissionSchema, type Admission, type AdmissionStore } from "./submission-store.js";
 
 export interface LaunchSelection {
@@ -26,8 +28,10 @@ export interface LaunchSelection {
 export type BoundLaunchOptions = Omit<
   StartRunOptions,
   "workflowId" | "workflowVersion" | "expectedWorkflowRevision" | "inline"
->;
+> & { requestAdmissionId?: string };
 export interface CapturedLaunch {
+  /** startRun persists requestAdmissionId in the protected creation payload, never in vars. */
+  readonly requestAdmissionCorrelation: true;
   readonly generationId: string;
   readonly workflow: Readonly<{ id: string; version: string; revision: string }>;
   validateStartRun(options: BoundLaunchOptions): Promise<void>;
@@ -64,6 +68,7 @@ export class RequestSubmissionService implements SubmissionService {
     const captured = await this.opts.captureLaunch({ purpose: "request", ...selection(command) });
     const resolved = { ...command, workflowId: captured.workflow.id };
     await authority.authorize(resolved);
+    this.requireCorrelation(captured);
     const id = `admission_${randomUUID()}`;
     const request = RequestSchema.parse({
       id: newId("req", this.opts.orchestrator.clock.now()),
@@ -89,7 +94,7 @@ export class RequestSubmissionService implements SubmissionService {
       generationId: captured.generationId,
       createdAt: request.createdAt,
       state: "prepared",
-      correlationVersion: 1,
+      correlationVersion: 2,
     };
     // Seal first. The discoverable index never contains title/body, vars, source or overrides.
     // Reuse protected-execution-v2 key handling and immutable authenticated records.
@@ -186,6 +191,11 @@ export class RequestSubmissionService implements SubmissionService {
     return { command: command.data, request: request.data };
   }
 
+  private requireCorrelation(launch: CapturedLaunch): void {
+    if (launch.requestAdmissionCorrelation !== true)
+      throw new OrcaError("NOT_SUPPORTED", "Request launch provider must support protected admission correlation");
+  }
+
   private options(
     command: SubmissionCommand,
     request: Request,
@@ -194,7 +204,8 @@ export class RequestSubmissionService implements SubmissionService {
   ): BoundLaunchOptions {
     return {
       requestId: request.id,
-      vars: { ...command.vars, request, [SUBMISSION_CORRELATION_VAR]: admissionId },
+      vars: { ...command.vars, request },
+      requestAdmissionId: admissionId,
       actor: authority.actor,
       ...(command.overrides ? { overrides: command.overrides } : {}),
     };
@@ -209,12 +220,24 @@ export class RequestSubmissionService implements SubmissionService {
     const readRoot = async (runId: string) => {
       const first = (await orc.stores.events.readRange(runId, { limit: 1 }))[0];
       if (!first || first.type !== "run.created") throw unavailable();
+      if (first.payload.executionInputsStored && !first.executionPayloadRef) throw unavailable();
       // The correlation can coincide with a sensitive value. Recovery reads the sealed
-      // original, never treats a redacted public variable as absence of a durable root.
-      const [original] = await executionEvents([first], orc.stores.execution);
-      if (original?.type !== "run.created") throw unavailable();
-      return original.payload;
+      // original, never treats redacted public metadata as absence of a durable root.
+      const original = first.executionPayloadRef
+        ? await orc.stores.execution.getPayload(runId, first.executionPayloadRef, first.type)
+        : first.payload;
+      const restored = OrcaEventSchema.safeParse({ ...first, payload: original });
+      if (!restored.success || restored.data.type !== "run.created") throw unavailable();
+      const correlation = RequestAdmissionCorrelationSchema.safeParse(original);
+      return {
+        ...restored.data.payload,
+        // Legacy vars may have been redacted; read them from the authenticated original too.
+        legacyCorrelation: restored.data.payload.vars[SUBMISSION_CORRELATION_VAR],
+        correlation: first.executionPayloadRef && correlation.success ? correlation.data.requestAdmissionId : undefined,
+      };
     };
+    const correlated = (root: Awaited<ReturnType<typeof readRoot>>) =>
+      root.correlation === record.id || (record.correlationVersion === 1 && root.legacyCorrelation === record.id);
     const verify = (root: Awaited<ReturnType<typeof readRoot>>) => {
       if (
         root.requestId !== record.requestId ||
@@ -222,7 +245,7 @@ export class RequestSubmissionService implements SubmissionService {
         root.workflowId !== record.workflowId ||
         root.workflowVersion !== record.workflowVersion ||
         root.actor?.principalId !== record.principalId ||
-        (record.correlationVersion === 1 && root.vars[SUBMISSION_CORRELATION_VAR] !== record.id)
+        (record.correlationVersion && !correlated(root))
       )
         throw unavailable();
     };
@@ -232,16 +255,11 @@ export class RequestSubmissionService implements SubmissionService {
     }
     // Old incomplete admissions have no unambiguous correlation. Fail closed rather than
     // guessing which associated run was the root or launching a duplicate.
-    if (record.correlationVersion !== 1) throw unavailable();
+    if (!record.correlationVersion) throw unavailable();
     const roots: string[] = [];
     for (const runId of await orc.listRuns()) {
       const root = await readRoot(runId);
-      if (
-        root.parentRunId ||
-        root.requestId !== record.requestId ||
-        root.vars[SUBMISSION_CORRELATION_VAR] !== record.id
-      )
-        continue;
+      if (root.parentRunId || root.requestId !== record.requestId || !correlated(root)) continue;
       verify(root);
       roots.push(runId);
     }
@@ -271,6 +289,7 @@ export class RequestSubmissionService implements SubmissionService {
             expectedWorkflowRevision: record.workflowRevision,
             expectedConfigGeneration: record.generationId,
           }));
+        this.requireCorrelation(launch);
         if (
           launch.generationId !== record.generationId ||
           launch.workflow.id !== record.workflowId ||
@@ -290,6 +309,8 @@ export class RequestSubmissionService implements SubmissionService {
       }
       current = { ...record, runId };
       await admissions.records.put(current);
+      // Refuse a provider that advertised correlation but failed to persist it.
+      if ((await this.findRoot(current)) !== runId) throw unavailable();
       await authority.authorize({ ...command, workflowId: record.workflowId });
       await authority.onRunAdmitted(runId);
       const stored = await orc.stores.requests.get(record.requestId);

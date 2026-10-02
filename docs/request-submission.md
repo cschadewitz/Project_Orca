@@ -109,8 +109,14 @@ A per-admission file mutex serializes the **entire** recovery sequence across pr
 A recorded admission run ID (or the Request's program root link) is verified directly.
 Other top-level runs may legitimately associate with the same Request, even with the
 same workflow, without becoming candidates for that admission. When neither link survived,
-recovery scans for the service-injected `vars.__orcaAdmissionId`, using protected original
-payloads when the public value was redacted. That marker is correlation, not authority.
+recovery reads `requestAdmissionId` from the authenticated original `run.created` payload.
+The service passes it as server-owned launch metadata, outside `vars`; workflow authors do
+not declare it in `inputSchema`, and strict unknown-input rejection remains unchanged.
+Even workflows without sensitive fields seal their creation payload using the existing
+protected execution store. Public metadata is never proof of correlation, including when
+it was redacted or altered. That marker is correlation, not authority. Previously prepared
+v1 admissions retain read compatibility with the old `vars.__orcaAdmissionId` marker;
+new v2 admissions never inject it.
 An unreadable/ambiguous scan or multiple roots carrying that exact correlation fails closed.
 Older incomplete admissions without the correlation version require explicit repair when
 both root links are missing; recovery never guesses or silently creates a replacement.
@@ -178,6 +184,19 @@ authority}`. Integration must bind that callback to the actual #332 provider and
 local authority using #318's persistent workspace identity. The feature branch cannot
 name a peer implementation's constructor before it exists; no placeholder provider is
 included. Consolidate identical capture types with #332 when its exports are available.
+
+The capture seam now requires `CapturedLaunch.requestAdmissionCorrelation: true`. Its
+`startRun` must forward `BoundLaunchOptions.requestAdmissionId` unchanged as launch metadata.
+The orchestrator patch calls `correlateRequestAdmission` after ordinary typed validation
+and before publishing `run.created`, authenticating that metadata even for nonsensitive
+workflows. It also adds the optional creation-event field to the core schema. Do not set
+the capability until this wiring is present; missing support refuses submission before
+admission side effects. A returned root is verified before acceptance too. No workflow
+input allowlist exception or validation bypass is needed.
+
+The standalone feature fixture supplies this publication boundary for its injected capture
+provider. The patch includes separate strict initial/restart tests with that fixture adapter
+disabled, exercising the real orchestrator path.
 
 Required existing-suite updates at integration: method inventories/security matrix tests
 for four additive methods; explicit-run association fixtures must create their Request/
