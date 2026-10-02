@@ -483,3 +483,43 @@ and final cross-run assertions were not reached. Those results are partial nativ
 evidence, not full revision acceptance. The unchanged native scenario must pass
 at the corrected readiness/restriction head. Independent revision-recovery
 re-review remains pending.
+
+At readiness/restriction head `8f7302a9560892e576f712b648fd2e798611b54f`,
+CI 371 passed both Node versions (Node24: 3411 tests passed, three opt-in skips;
+coverage 91.54% statements, 83.93% branches, 93.05% functions, 94.06% lines).
+App smoke 81 completed the entire native revision scenario on macOS, including
+ordinary-rationale exclusion and the final cross-run duplicate check. Windows
+passed atomic save and same-profile pending recovery, then received an actual
+`RUN_LEASED` while the test expected `REVISION_STALE`; later assertions were not
+reached. Its artifact did not record the lease holder, so the old run's specific
+holder is not established.
+
+Protected revision inspection/discovery and mutation share an immediate run lease.
+An overlapping read can legitimately prevent a mutation from reaching its CAS
+check and yield `RUN_LEASED`. This transient read/mutation contention remains a
+limitation; test synchronization does not resolve production contention. The
+native stale-CAS scenario isolates that specific check by briefly delaying real
+app read forwarding and draining already-forwarded reads, then releases the reads
+in a finally path. It retains the real competing mutation, real stale command and
+all assertions, without retrying a mutation or accepting a different refusal as
+proof of stale-CAS behavior. Separate regression evidence covers the lease refusal
+and draft/error retention. Cross-platform acceptance requires the next exact-head
+native run; independent recovery re-review remains pending.
+
+A controlled compiled-fixture reproduction held each actual protected read route
+at its own lease-release boundary and verified the on-disk holder identity. The
+stale authenticated command returned `RUN_LEASED` while that read owned the lease;
+a distinct uncontended invocation of the same stale command after release returned
+`REVISION_STALE`, without changing the competing correction. Reusing the already
+claimed retry identity returned in-progress, so the native synchronization must not
+retry its mutation. These synthetic results establish the contention mechanism,
+not the unrecorded holder identity in the earlier Windows artifact.
+
+Further inspection confirmed that the completed lease refusal left an unbound
+`claimed` retry record after the lease disappeared. Explicit internal reconciliation
+also returned in-progress without entering recovery, and the current public admission
+receipt dispatcher refuses revision operation kinds. This is a retry-composition
+defect, not evidence that the original mutation remains running. Native timing
+isolation does not repair it. Existing ambiguous claims must not be discarded or
+replayed automatically; prospective fence-before-claim correction is tracked
+separately from the test synchronization.

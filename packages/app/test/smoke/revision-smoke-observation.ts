@@ -8,6 +8,10 @@ export interface RevisionSmokeProbe {
   holdNextReplacement: boolean;
   replacementWaiting: boolean;
   releaseReplacement?: () => void;
+  holdRevisionReads: boolean;
+  revisionReadsWaiting: number;
+  activeRevisionReads: number;
+  releaseRevisionReads: (() => void)[];
   holdPendingReads: boolean;
   pendingReadsWaiting: number;
   releasePendingReads: (() => void)[];
@@ -35,6 +39,10 @@ export function installRevisionSmokeObservation({ app }: { app: { getAppPath(): 
     errors: [],
     holdNextReplacement: false,
     replacementWaiting: false,
+    holdRevisionReads: false,
+    revisionReadsWaiting: 0,
+    activeRevisionReads: 0,
+    releaseRevisionReads: [],
     holdPendingReads: false,
     pendingReadsWaiting: 0,
     releasePendingReads: [],
@@ -48,6 +56,8 @@ export function installRevisionSmokeObservation({ app }: { app: { getAppPath(): 
     ...args: Parameters<typeof original>
   ) {
     const method = args[0];
+    // inputs.list also performs protected boundary/discovery reads under the run lease.
+    const revisionRead = method === "inputs.list" || method === "inputs.revisionPending";
     if (["inputs.revise", "inputs.replaceRevision", "inputs.answer", "runs.resume"].includes(method))
       probe.methods.push(method);
     if (method === "inputs.replaceRevision" && probe.holdNextReplacement) {
@@ -59,6 +69,13 @@ export function installRevisionSmokeObservation({ app }: { app: { getAppPath(): 
       probe.replacementWaiting = false;
       delete probe.releaseReplacement;
     }
+    if (revisionRead && probe.holdRevisionReads) {
+      probe.revisionReadsWaiting++;
+      await new Promise<void>((resolve) => {
+        probe.releaseRevisionReads.push(resolve);
+      });
+      probe.revisionReadsWaiting--;
+    }
     if (method === "inputs.revisionPending" && probe.holdPendingReads) {
       probe.delayedReadCount++;
       probe.pendingReadsWaiting++;
@@ -67,6 +84,7 @@ export function installRevisionSmokeObservation({ app }: { app: { getAppPath(): 
       });
       probe.pendingReadsWaiting--;
     }
+    if (revisionRead) probe.activeRevisionReads++;
     try {
       const result = await original.apply(this, args);
       if (method === "inputs.revise" || method === "inputs.replaceRevision")
@@ -77,6 +95,9 @@ export function installRevisionSmokeObservation({ app }: { app: { getAppPath(): 
       const code = error instanceof DaemonClientError ? error.error.code : undefined;
       probe.errors.push({ method, code: typeof code === "string" && /^[A-Z_]+$/.test(code) ? code : "UNKNOWN" });
       throw error;
+    } finally {
+      // A read remains in flight through its real response/refusal, including lease release.
+      if (revisionRead) probe.activeRevisionReads--;
     }
   } as typeof original;
 }

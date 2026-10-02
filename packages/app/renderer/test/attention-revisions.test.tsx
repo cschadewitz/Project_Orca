@@ -450,6 +450,49 @@ it("retains retry identity after response loss without automatically writing", a
   expect(revise.mock.calls[0]![0].retry.idempotencyKey).toBe(revise.mock.calls[1]![0].retry.idempotencyKey);
 });
 
+it.each([false, true])("preserves a refused replacement draft when the run is leased (inline=%s)", async (inline) => {
+  open = [];
+  summaries = [summary];
+  replace.mockResolvedValue({
+    ok: false,
+    error: { code: "RUN_LEASED", message: "Run already has an execution owner" },
+  });
+  const announce = vi.fn();
+  const unsubscribe = h.announcements.subscribe(announce);
+  mount(inline);
+  await screen.findByRole("button", { name: "Replace pending correction" });
+  fireEvent.change(screen.getByLabelText("Correction"), { target: { value: "Keep my refused replacement" } });
+  fireEvent.click(screen.getByRole("button", { name: "Replace pending correction" }));
+  await screen.findByText("The correction could not be confirmed. Your draft and retry identity are preserved.");
+  expect(replace).toHaveBeenCalledOnce();
+  expect(replace.mock.calls[0]![0]).toEqual({
+    command: {
+      target,
+      expectedRevision: "v1",
+      payload: { kind: "text", text: "Keep my refused replacement" },
+    },
+    retry: { idempotencyKey: expect.any(String) },
+  });
+  expect(screen.getByLabelText<HTMLTextAreaElement>("Correction").value).toBe("Keep my refused replacement");
+  expect(screen.getByText("Recorded correction text", { selector: "pre" })).toBeTruthy();
+  expect(screen.queryByText("Keep my refused replacement", { selector: "pre" })).toBeNull();
+  expect(screen.queryByText(/It applies only to the displayed destination and attempt/)).toBeNull();
+  expect(screen.queryByText(/Correction is being recorded/)).toBeNull();
+  expect(announce.mock.calls).toEqual([["Correction not confirmed. Draft preserved."]]);
+  expect(feed.revisions?.items).toHaveLength(1);
+  expect(feed.revisions?.items[0]?.pending).toEqual(pending);
+  expect(feed.state.phase === "ready" && feed.state.waiting).toBe(0);
+  expect(revise).not.toHaveBeenCalled();
+  expect(fake.calls.some((call) => call.method === "inputs.answer")).toBe(false);
+
+  fireEvent.click(screen.getByRole("button", { name: "Replace pending correction" }));
+  await waitFor(() => expect(announce).toHaveBeenCalledTimes(2));
+  expect(replace).toHaveBeenCalledTimes(2);
+  expect(replace.mock.calls[1]![0]).toEqual(replace.mock.calls[0]![0]);
+  expect(screen.getByLabelText<HTMLTextAreaElement>("Correction").value).toBe("Keep my refused replacement");
+  unsubscribe();
+});
+
 it("removes protected content after denial and ignores a late pending response across a connection epoch", async () => {
   open = [];
   summaries = [summary];

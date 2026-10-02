@@ -125,22 +125,47 @@ async function observe(app: ElectronApplication) {
 async function observation(app: ElectronApplication) {
   return bounded(
     app.evaluate(() => {
-      const { methods, receipts, errors, replacementWaiting, pendingReadsWaiting, delayedReadCount } = (
-        globalThis as unknown as RevisionSmokeMain
-      ).orcaRevisionSmoke;
-      return { methods, receipts, errors, replacementWaiting, pendingReadsWaiting, delayedReadCount };
+      const {
+        methods,
+        receipts,
+        errors,
+        replacementWaiting,
+        revisionReadsWaiting,
+        activeRevisionReads,
+        pendingReadsWaiting,
+        delayedReadCount,
+      } = (globalThis as unknown as RevisionSmokeMain).orcaRevisionSmoke;
+      return {
+        methods,
+        receipts,
+        errors,
+        replacementWaiting,
+        revisionReadsWaiting,
+        activeRevisionReads,
+        pendingReadsWaiting,
+        delayedReadCount,
+      };
     }),
     "reading sanitized RPC evidence",
   );
 }
 async function configureProbe(
   app: ElectronApplication,
-  settings: { holdNextReplacement?: boolean; holdPendingReads?: boolean; release?: boolean },
+  settings: {
+    holdNextReplacement?: boolean;
+    holdRevisionReads?: boolean;
+    holdPendingReads?: boolean;
+    release?: boolean;
+  },
 ) {
   await bounded(
     app.evaluate((_electron, settings) => {
       const probe = (globalThis as unknown as RevisionSmokeMain).orcaRevisionSmoke;
       if (settings.holdNextReplacement !== undefined) probe.holdNextReplacement = settings.holdNextReplacement;
+      if (settings.holdRevisionReads !== undefined) {
+        probe.holdRevisionReads = settings.holdRevisionReads;
+        if (!settings.holdRevisionReads) for (const release of probe.releaseRevisionReads.splice(0)) release();
+      }
       if (settings.holdPendingReads !== undefined) {
         probe.holdPendingReads = settings.holdPendingReads;
         if (!settings.holdPendingReads) for (const release of probe.releasePendingReads.splice(0)) release();
@@ -256,27 +281,47 @@ test("revision controls survive restart and conflict, then deliver the reviewed 
     await configureProbe(app, { holdNextReplacement: true });
     await replace.click();
     await expect.poll(async () => (await observation(app!)).replacementWaiting).toBe(true);
-    // This independent HTTP client owns the same synthetic principal, never the app's IPC.
-    const competitor = RevisionResultSchema.parse(
-      await daemon.rpc("inputs.replaceRevision", {
-        command: {
-          target: pendingTarget(first.result),
-          expectedRevision: recovered.expectedRevision,
-          payload: { kind: "text", text: fixture.competing },
-        },
-        retry: { idempotencyKey: "native-revision-competing-client" },
-      }),
-    );
-    expect(competitor.state).toBe("resolved");
-    if (competitor.state !== "resolved") throw new Error("The competing client did not establish a new revision");
-    await configureProbe(app, { release: true });
-    await expect
-      .poll(async () =>
-        (await observation(app!)).errors.some(
-          (entry) => entry.method === "inputs.replaceRevision" && entry.code === "REVISION_STALE",
-        ),
-      )
-      .toBe(true);
+    let competitor: ResolvedRevision;
+    await configureProbe(app, { holdRevisionReads: true });
+    try {
+      // Drain calls already forwarded, then hold both lease-taking read routes while
+      // competing writes reach the real CAS. No read result, notification or error is replaced.
+      await expect.poll(async () => (await observation(app!)).activeRevisionReads).toBe(0);
+      // This independent HTTP client owns the same synthetic principal, never the app's IPC.
+      const competing = RevisionResultSchema.parse(
+        await daemon.rpc("inputs.replaceRevision", {
+          command: {
+            target: pendingTarget(first.result),
+            expectedRevision: recovered.expectedRevision,
+            payload: { kind: "text", text: fixture.competing },
+          },
+          retry: { idempotencyKey: "native-revision-competing-client" },
+        }),
+      );
+      expect(competing.state).toBe("resolved");
+      if (competing.state !== "resolved") throw new Error("The competing client did not establish a new revision");
+      competitor = competing;
+      // The competitor's genuine notifications still reach the renderer and request refreshes.
+      await expect.poll(async () => (await observation(app!)).revisionReadsWaiting).toBeGreaterThan(0);
+      expect((await observation(app)).activeRevisionReads).toBe(0);
+      await configureProbe(app, { release: true });
+      await expect
+        .poll(async () =>
+          (await observation(app!)).errors.some(
+            (entry) => entry.method === "inputs.replaceRevision" && entry.code === "REVISION_STALE",
+          ),
+        )
+        .toBe(true);
+      expect((await observation(app)).methods.filter((method) => method === "inputs.replaceRevision")).toHaveLength(1);
+      evidence.staleCasReadBarrier = {
+        readsDrained: true,
+        notificationReadsHeld: true,
+        originalMutationSentOnce: true,
+      };
+    } finally {
+      // Failed assertions must not strand refreshes. Never retry the held mutation.
+      await configureProbe(app, { holdRevisionReads: false });
+    }
     await expect(
       recorded.getByText("The correction changed. Your draft is preserved; review the current correction.", {
         exact: true,
