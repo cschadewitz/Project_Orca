@@ -4,7 +4,7 @@ import { readdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { OrcaError, type OrcaEventInput } from "@orca/core";
-import { readPrivateJson, writePrivateJson } from "./protected-file.js";
+import { readPrivateJson, readPrivateJsonBatch, writePrivateJson } from "./protected-file.js";
 
 const SensitivitySchema = z.object({ sensitiveNames: z.array(z.string()), secrets: z.array(z.unknown()) });
 const ExecutionInputsSchema = SensitivitySchema.extend({
@@ -178,30 +178,37 @@ export class FileExecutionStore implements ExecutionStore {
     return (await this.getPayloads([{ runId, ref, type }]))[0]!;
   }
   async getPayloads(references: readonly ExecutionPayloadReference[]): Promise<OrcaEventInput["payload"][]> {
-    const records = await Promise.all(
-      references.map(async ({ runId, ref, type }) => {
-        const value = await readPrivateJson(this.dir, `${encodeURIComponent(ref)}.payload.json`);
+    // Snapshot caller-owned references before any I/O. Only multi-record replay shares
+    // an entry key; empty and single-record reads keep their existing fresh-read path.
+    const requested = references.map(({ runId, ref, type }) => ({ runId, ref, type }));
+    const names = requested.map(({ ref }) => `${encodeURIComponent(ref)}.payload.json`);
+    const validate = async (values: unknown[]): Promise<OrcaEventInput["payload"][]> => {
+      const records = values.map((value, index) => {
+        const { runId, type } = requested[index]!;
         const result = PayloadSchema.safeParse(value);
         if (!result.success || result.data.runId !== runId || result.data.type !== type) throw unavailable();
         return result.data;
-      }),
-    );
-    // Read after the payloads, so an overlay removed while replay is being loaded cannot
-    // be vouched for by an earlier input snapshot. This state lives only for this call.
-    const inputs = new Map(
-      await Promise.all(
-        [...new Set(records.map((record) => record.runId))].map(async (runId) => {
-          const value = await this.getInputs(runId);
-          if (!value) throw unavailable();
-          return [runId, value] as const;
-        }),
-      ),
-    );
-    return records.map((record) => {
-      const current = inputs.get(record.runId)!;
-      if (record.sensitivityRefs.some((expected) => !current.sensitivityRefs?.includes(expected))) throw unavailable();
-      return record.payload;
-    });
+      });
+      // Read after the payloads, so an overlay removed while replay is being loaded cannot
+      // be vouched for by an earlier input snapshot. This state lives only for this call.
+      const inputs = new Map(
+        await Promise.all(
+          [...new Set(records.map((record) => record.runId))].map(async (runId) => {
+            const value = await this.getInputs(runId);
+            if (!value) throw unavailable();
+            return [runId, value] as const;
+          }),
+        ),
+      );
+      return records.map((record) => {
+        const current = inputs.get(record.runId)!;
+        if (record.sensitivityRefs.some((expected) => !current.sensitivityRefs?.includes(expected)))
+          throw unavailable();
+        return record.payload;
+      });
+    };
+    if (requested.length > 1) return readPrivateJsonBatch(this.dir, names, validate);
+    return validate(await Promise.all(names.map((name) => readPrivateJson(this.dir, name))));
   }
 }
 

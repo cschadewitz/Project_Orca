@@ -2,7 +2,7 @@
 import { constants, type BigIntStats } from "node:fs";
 import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { OrcaError } from "@orca/core";
 
@@ -188,6 +188,74 @@ export async function readPrivateJson(dir: string, name: string): Promise<unknow
     return decodeRecord(dir, name, bytes, await keyFor(dir, false));
   } catch {
     // Parse and authentication failures must never include source bytes or underlying exceptions.
+    throw unreadable();
+  }
+}
+
+/** A fresh, stable key observation for one replay call; never enters the ciphertext cache. */
+async function replayKey(dir: string): Promise<{ bytes: Buffer; directory: string; file: string }> {
+  const path = join(dir, KEY_FILE);
+  const directory = await lstat(dir, { bigint: true });
+  const info = await lstat(path, { bigint: true });
+  if (
+    !directory.isDirectory() ||
+    !info.isFile() ||
+    (process.platform !== "win32" && ((directory.mode | info.mode) & 0o077n) !== 0n)
+  )
+    throw unreadable();
+  const directoryStamp = directoryIdentity(directory);
+  const fileStamp = fileIdentity(info);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (fileIdentity(opened) !== fileStamp) throw unreadable();
+    const bytes = await handle.readFile();
+    const after = await handle.stat({ bigint: true });
+    const current = await lstat(path, { bigint: true });
+    const currentDirectory = await lstat(dir, { bigint: true });
+    if (
+      bytes.length !== 32 ||
+      fileIdentity(after) !== fileStamp ||
+      fileIdentity(current) !== fileStamp ||
+      directoryIdentity(currentDirectory) !== directoryStamp
+    )
+      throw unreadable();
+    return { bytes, directory: directoryStamp, file: fileStamp };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Internal multi-record replay boundary. Authenticate every record with the entry key,
+ * validate current inputs/sensitivity, then require the same fresh key bytes and identities
+ * before returning any plaintext. No authority survives this call or authorizes a write.
+ * These are entry/terminal observations, not proof against every transient A -> B -> A edit.
+ */
+export async function readPrivateJsonBatch<T>(
+  dir: string,
+  names: readonly string[],
+  validate: (records: unknown[]) => Promise<T>,
+): Promise<T> {
+  try {
+    const entry = await replayKey(dir);
+    const records = await Promise.all(
+      names.map(async (name) => {
+        const bytes = await privateBytes(dir, name);
+        if (!bytes) throw unreadable();
+        return decodeRecord(dir, name, bytes, entry.bytes);
+      }),
+    );
+    const result = await validate(records);
+    const terminal = await replayKey(dir);
+    if (
+      entry.directory !== terminal.directory ||
+      entry.file !== terminal.file ||
+      !timingSafeEqual(entry.bytes, terminal.bytes)
+    )
+      throw unreadable();
+    return result;
+  } catch {
     throw unreadable();
   }
 }

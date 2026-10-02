@@ -96,8 +96,14 @@ docs and #404 corrected connection handling. The subsequent runtime corrections 
 Protected events remain encrypted and durable. Replay batches authenticate inputs and
 sensitivity overlays once per run per call. Bounded reuse of ciphertext bytes still
 checks current file/directory identity, permissions and nanosecond modification metadata.
-The execution key is reread on every key lookup, without byte-cache reuse; every payload
-is authenticated and decoded. Deletion, replacement, tampering and missing
+The execution key is never reused across calls. Multi-record replay authenticates each
+payload with a fresh call-local entry key, validates current inputs/sensitivity, then
+requires freshly read terminal key bytes and directory/key identities to match before
+returning any payload. Its validation callback is trusted store-internal code, not a
+consumer hook. Single-record reads and all write/append/fsync paths remain unchanged.
+Entry/terminal observations detect persistent mid-call changes, including same-tick
+rewrites; they do not prove that every transient A → B → A mutation was observed.
+Every payload remains authenticated and decoded. Deletion, replacement, tampering and missing
 sensitivity material still fail closed, and write/fsync ordering is unchanged.
 
 Before the mandatory uncached execution-key reads, three same-machine compiled-demo
@@ -110,9 +116,18 @@ measurements, not CI deadlines. A fresh three-pair comparison after the key-cach
 demos completed successfully. Both artifacts were rebuilt with `tsc -b tsconfig.build.json
 --force` and measured with `node packages/cli/dist/main.js demo` on the same Linux
 6.18.44 x86_64 machine using Node 24.19.0. Alternating candidate order retained
-per-run output and source/artifact hashes. These measurements supersede the earlier
-47% overhead estimate for current acceptance; performance parity is not established.
+per-run output and source/artifact hashes. Those measurements superseded the earlier
+47% estimate for the key-reread correction, before call-local replay batching.
 Durable encryption and fresh-key validation must not be relaxed to reduce that cost.
+
+The subsequent same-machine three-candidate comparison measured medians of 5.230 s
+for main, 9.719 s for the stable key-reread correction `ce2c09a3`, and 8.143 s with
+call-local replay batching: 16.2% faster than the stable correction, still 55.7% slower
+than main. All nine compiled demos completed successfully, with candidate order rotated
+across three rounds. Commands, environment, source snapshots and artifact hashes were
+recorded under the same setup above. Demo workspaces were on tmpfs; these are not
+physical-disk durability measurements. This latest comparison is the current performance
+evidence. Remaining overhead requires explicit acceptance; parity is not established.
 
 Exact-head Node 22/24 CI, coverage, native App smoke and
 independent re-review remain required. The former 60 s demo bounds are unchanged.
