@@ -257,6 +257,52 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           admissions: ctx.source,
         },
   );
+  if (opts.reads && typeof opts.reads.inputRevisionActionId === "function" && auth.mode === "token") {
+    const reads = opts.reads;
+    ctx.inputRevisionRestrictions = async (invocation, inputs, revisionRunIds) => {
+      const bound = principalOf(invocation);
+      const credentialId = bound?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      const principal = () => {
+        const current = auth.credentials.current(credentialId);
+        if (!current.ok) throw authInvalid();
+        if (
+          current.principal.id !== bound.principal.id ||
+          current.principal.credentialId !== credentialId ||
+          !holds(current.principal, "runs.read")
+        )
+          throw authForbidden();
+        return current.principal;
+      };
+      const authority = () => {
+        const current = principal();
+        return JSON.stringify({ permissions: [...current.permissions].sort(), scope: current.scope });
+      };
+      const original = authority();
+      const visibility = new Map<string, boolean>();
+      for (const runId of new Set([...inputs.map((input) => input.runId), ...revisionRunIds]))
+        visibility.set(runId, await authorizer.runs.allows(principal(), runId));
+      const recheck = async () => {
+        if (authority() !== original) throw authForbidden();
+        for (const [runId, allowed] of visibility)
+          if ((await authorizer.runs.allows(principal(), runId)) !== allowed) throw authForbidden();
+        if (authority() !== original) throw authForbidden();
+      };
+      const projected = [];
+      for (const input of inputs) {
+        // Filter before any private pin lookup. An authorization change during this or a
+        // later boundary/discovery read refuses the complete result, including metadata.
+        if (!visibility.get(input.runId)) continue;
+        if (authority() !== original || !(await authorizer.runs.allows(principal(), input.runId)))
+          throw authForbidden();
+        const actionId = await reads.inputRevisionActionId(input);
+        projected.push({ ...input, ...(actionId === undefined ? {} : { revisionActionId: actionId }) });
+      }
+      await recheck();
+      return { inputs: projected, recheck };
+    };
+  }
+
   if (opts.admissionExecutionSource && auth.mode === "token") {
     const source = opts.admissionExecutionSource;
     ctx.admissionExecution = async (invocation, runId) => {

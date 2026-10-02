@@ -207,6 +207,134 @@ it("revision-only gates have no ordinary free-text path, digit, Enter, note, or 
   expect(revise).not.toHaveBeenCalled();
 });
 
+it.each([false, true])(
+  "keeps a declared revision action out of every ordinary path without a protected boundary (inline=%s)",
+  async (inline) => {
+    const { revision: _revision, ...restricted } = gate;
+    open = [{ ...restricted, revisionActionId: "changes", options: [{ id: "changes", label: "Changes" }] }];
+    mount(inline);
+    const region = await screen.findByRole("region", { name: "gate, Ship release 1?" });
+    expect(
+      screen.getByText("Request changes is unavailable until the current revision boundary can be confirmed."),
+    ).toBeTruthy();
+    expect(within(region).queryByRole("button", { name: /Changes/ })).toBeNull();
+    expect(within(region).queryByLabelText("Answer")).toBeNull();
+    expect(screen.queryByLabelText("Correction")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Request changes" })).toBeNull();
+    region.focus();
+    fireEvent.keyDown(region, { key: "1", code: "Digit1" });
+    fireEvent.keyDown(region, { key: "Enter", code: "Enter" });
+    fireEvent.keyDown(region, { key: "Enter", code: "Enter", shiftKey: true });
+    if (inline) {
+      // Inline cards do not own the run tree's keyboard scope.
+      expect(within(region).queryByLabelText("Note")).toBeNull();
+    } else {
+      fireEvent.change(within(region).getByLabelText("Note"), { target: { value: "Not a correction" } });
+      fireEvent.keyDown(within(region).getByLabelText("Note"), { key: "Enter" });
+    }
+    const answer = within(region).getByRole("button", { name: "Answer" });
+    expect(answer.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(answer);
+    act(() => controls.answer(open[0]!, { optionId: "changes", note: "Not a correction" }));
+    expect(controls.report?.failed).toBe(true);
+    expect(controls.report?.message).toContain("Use Request changes");
+    expect(h.keyboard.list().some((shortcut) => shortcut.scope === "card" && shortcut.key === "1")).toBe(false);
+    expect(fake.calls.some((call) => call.method === "inputs.answer")).toBe(false);
+    expect(revise).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    expect(feed.state.phase === "ready" && feed.state.waiting).toBe(1);
+  },
+);
+
+it.each(["button", "keyboard"] as const)(
+  "keeps the ordinary Continue option usable while revision authority is unavailable (%s)",
+  async (via) => {
+    const { revision: _revision, ...restricted } = gate;
+    open = [
+      {
+        ...restricted,
+        revisionActionId: "changes",
+        options: [
+          { id: "changes", label: "Changes" },
+          { id: "continue", label: "Continue" },
+        ],
+      },
+    ];
+    mount();
+    const region = await screen.findByRole("region", { name: "gate, Ship release 1?" });
+    expect(within(region).queryByRole("button", { name: /Changes/ })).toBeNull();
+    expect(within(region).getByRole("button", { name: /Continue$/ })).toBeTruthy();
+    if (via === "button") {
+      fireEvent.click(within(region).getByRole("button", { name: /Continue$/ }));
+      fireEvent.click(within(region).getByRole("button", { name: "Answer" }));
+    } else {
+      region.focus();
+      fireEvent.keyDown(region, { key: "1", code: "Digit1" });
+      fireEvent.keyDown(region, { key: "Enter", code: "Enter" });
+    }
+    await waitFor(() => expect(fake.calls.filter((call) => call.method === "inputs.answer")).toHaveLength(1));
+    expect(fake.calls.find((call) => call.method === "inputs.answer")?.params).toMatchObject({
+      requestId: gate.id,
+      runId: gate.runId,
+      optionId: "continue",
+    });
+    expect(revise).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps a gate resolved at step readiness restricted while its protected boundary is unavailable", async () => {
+  open = [];
+  mount();
+  await waitFor(() => expect(feed.state.phase).toBe("ready"));
+  await act(async () =>
+    fake.notify({
+      kind: "notification",
+      method: "input.opened",
+      params: {
+        subscriptionId: "attention",
+        at: INPUTS_AS_OF,
+        seq: 7,
+        runId: gate.runId,
+        stepRunId: gate.stepRunId,
+        requestId: gate.id,
+        kind: gate.kind,
+        question: gate.question,
+        options: gate.options,
+      },
+    }),
+  );
+  expect(feed.state.phase === "ready" && feed.state.waiting).toBe(0);
+  const { revision: _revision, ...restricted } = gate;
+  open = [{ ...restricted, revisionActionId: "changes" }];
+  await act(async () =>
+    fake.notify({
+      kind: "notification",
+      method: "step.changed",
+      params: {
+        subscriptionId: "attention",
+        at: INPUTS_AS_OF,
+        seq: 8,
+        runId: gate.runId,
+        stepRunId: gate.stepRunId,
+        status: "waiting",
+        event: "step.waiting",
+        waitingOn: "human-input",
+      },
+    }),
+  );
+  const region = screen.getByRole("region", { name: "gate, Ship release 1?" });
+  expect(within(region).queryByRole("button", { name: /Changes/ })).toBeNull();
+  expect(within(region).getByRole("button", { name: /Approve$/ })).toBeTruthy();
+  expect(screen.queryByLabelText("Correction")).toBeNull();
+  expect(
+    screen.getByText("Request changes is unavailable until the current revision boundary can be confirmed."),
+  ).toBeTruthy();
+  expect(feed.state.phase === "ready" && feed.state.waiting).toBe(1);
+  expect(fake.calls.some((call) => call.method === "inputs.answer")).toBe(false);
+  expect(revise).not.toHaveBeenCalled();
+});
+
 it("hydrates closed-gate corrections after restart from only a bounded authorized run page", async () => {
   open = [];
   summaries = [summary];

@@ -217,6 +217,17 @@ export interface MethodContext {
     | undefined;
   /** Authenticated optional enrichment; each run is authorized before protected reads. */
   revisionBoundaries?: ((invocation: MethodContext, runId: string) => Promise<readonly RevisionBoundary[]>) | undefined;
+  /** Current input-read authorization; filters rows before projecting restriction-only action IDs. */
+  inputRevisionRestrictions?:
+    | ((
+        invocation: MethodContext,
+        inputs: InputsListResult["inputs"],
+        revisionRunIds: readonly string[],
+      ) => Promise<{
+        inputs: InputsListResult["inputs"];
+        recheck(): Promise<void>;
+      }>)
+    | undefined;
   pendingRevisionDiscovery?:
     ((invocation: MethodContext, runIds: readonly string[]) => Promise<PendingRevisionsDiscovery>) | undefined;
   liveInputs?: LiveInputChangeSource | undefined;
@@ -425,13 +436,20 @@ export const inputsList: Method<Parameters<ReadModel["inputsList"]>[0], InputsLi
   handle: async (params, ctx) => {
     const result = { ...(await reads(ctx).inputsList(params)) };
     delete result.pendingRevisions;
+    const revisionRunIds = params.revisionRunIds ?? (params.runId === undefined ? [] : [params.runId]);
+    const clean = result.inputs.map((row) => {
+      const input = { ...row };
+      // Only authenticated projections may install these fields, never a legacy read model.
+      delete input.revision;
+      delete input.revisionActionId;
+      return input;
+    });
+    const restricted = ctx.inputRevisionRestrictions
+      ? await ctx.inputRevisionRestrictions(ctx, clean, revisionRunIds)
+      : { inputs: clean, recheck: undefined };
     const boundaries = new Map<string, readonly RevisionBoundary[]>();
     const inputs = [];
-    for (const row of result.inputs) {
-      const input = { ...row };
-      // Only this authenticated projection may install a revision field. A legacy read
-      // model cannot make a protected capability discoverable by returning extra fields.
-      delete input.revision;
+    for (const input of restricted.inputs) {
       if (ctx.revisionBoundaries && input.kind === "decision" && !input.live) {
         if (!boundaries.has(input.runId)) boundaries.set(input.runId, await ctx.revisionBoundaries(ctx, input.runId));
         const matching = boundaries
@@ -457,17 +475,17 @@ export const inputsList: Method<Parameters<ReadModel["inputsList"]>[0], InputsLi
       }
       inputs.push(input);
     }
+    const pendingRevisions = ctx.pendingRevisionDiscovery
+      ? await ctx.pendingRevisionDiscovery(ctx, revisionRunIds)
+      : undefined;
+    // Recheck all row and discovery-run visibility after every awaited enrichment. Changed
+    // authority refuses the whole response, including protected metadata and omission counts.
+    await restricted.recheck?.();
     return {
       ...result,
       inputs,
-      ...(ctx.pendingRevisionDiscovery
-        ? {
-            pendingRevisions: await ctx.pendingRevisionDiscovery(
-              ctx,
-              params.revisionRunIds ?? (params.runId === undefined ? [] : [params.runId]),
-            ),
-          }
-        : {}),
+      waiting: inputs.length,
+      ...(pendingRevisions ? { pendingRevisions } : {}),
     };
   },
 };

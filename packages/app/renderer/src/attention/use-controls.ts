@@ -71,7 +71,7 @@ export function useControls({ onAnswered }: ControlsOptions): Controls {
 
   const answer = useCallback(
     (input: OpenInputView, request: AnswerRequest) => {
-      if (input.revision?.capability.actionId === request.optionId) {
+      if (input.revisionActionId === request.optionId || input.revision?.capability.actionId === request.optionId) {
         setReport({
           subject: input.id,
           failed: true,

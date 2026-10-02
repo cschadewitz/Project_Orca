@@ -444,3 +444,42 @@ new-process same-receipt recovery, non-plaintext journal and zero admissions und
 unavailable encryption. That evidence belongs to the mounting checkpoint, before
 the bounded first-attachment changes in this section; it does not validate the
 later checkpoint or daemon execution resumption.
+
+## Attention readiness and read-only revision restrictions
+
+An `input.opened` notification can precede the durable gate becoming readable as
+waiting. Attention now retains the exact run/request/step identity and performs a
+scoped refresh on matching human-input `step.waiting` or `run.paused` readiness.
+Signals arriving during a read coalesce into one follow-on read. An empty result
+alone never starts polling, and answered requests and transport generations retain
+their existing invalidation rules.
+
+Within the unreleased protocol-2 boundary, `OpenInputView.revisionActionId` is an
+optional string identifying only the exact pinned gate's declared revision option.
+It is a restriction on ordinary `inputs.answer`, not a writable capability. The
+server derives it under current input-read and exact-run authorization from the
+original stored definition; it contains no protected correction text, schema,
+revision token or destination. Full revision controls still require their existing
+stronger authorized boundary. When that boundary is unavailable (including while
+the run lease is held), the ordinary controls exclude the revision option and show
+an unavailable hint rather than offering it as a normal answer.
+
+A missing, malformed or mismatched stored pin, or an older durable gate without a
+verifiable original stored definition, fails the read explicitly. The current
+`inputs.list` API reports a generic whole-read error for that authorized scope; it
+cannot return partial valid rows with a per-row unavailable reason. It does not
+silently return an empty list, guess ordinary choices, migrate historical pins or
+fall back to current workflow definitions. Legitimate stored legacy definitions
+remain supported. Live permission and non-gate inputs retain their existing paths.
+The coordinated-writer and complete-store rollback requirements above still apply.
+
+At `82b829cd00322357b881a13cb0c0203256d9e604`, CI 370 passed both Node
+versions. App smoke 80 verified the corrective native revision path on macOS and
+Windows: atomic save, same-profile new-process pending recovery, actual stale-CAS
+draft preservation, delayed-refresh draft preservation, one exact-provenance
+corrective delivery and late replacement refusal. Its later ordinary-rationale
+scenario failed when Attention's early input read stayed empty; ordinary-rationale
+and final cross-run assertions were not reached. Those results are partial native
+evidence, not full revision acceptance. The unchanged native scenario must pass
+at the corrected readiness/restriction head. Independent revision-recovery
+re-review remains pending.

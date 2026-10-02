@@ -14,7 +14,13 @@ import {
   TemplateRegistry,
   WorkflowRegistry,
 } from "@orca/core";
-import { createRevisionInputServices, createRevisionRuntime, Orchestrator, type RevisionBoundary } from "@orca/engine";
+import {
+  createRevisionInputServices,
+  createRevisionRuntime,
+  Orchestrator,
+  workflowRevision,
+  type RevisionBoundary,
+} from "@orca/engine";
 import { executionEvents, fileStores } from "@orca/store";
 import {
   HelloResultSchema,
@@ -113,18 +119,20 @@ edges:
   const adapter = createRevisionRuntime({ stores, authorizeExecution: (runId) => execution.authorizeExecution(runId) });
   const declare = async (runId: string, principalId?: string, parentRunId?: string) => {
     const def = parentRunId ? { ...definition, id: "private-child" } : definition;
+    await stores.workflows.put(def);
     await stores.events.append({
       runId,
       type: "run.created",
       payload: {
         workflowId: def.id,
         workflowVersion: def.version,
+        workflowStored: true,
         vars: {},
         workspace: { hostId: "local", cwd: dir },
         ...(parentRunId ? { parentRunId, parentStepRunId: "spawn" } : {}),
         provenance: {
           configGeneration: "PRIVATE-GENERATION",
-          workflow: { id: def.id, version: def.version, revision: "PRIVATE-WORKFLOW-REVISION" },
+          workflow: { id: def.id, version: def.version, revision: workflowRevision(def) },
           inputs: [],
           selections: [],
         },
@@ -908,11 +916,8 @@ it.each(["credential", "ownership"] as const)(
     });
     const response = await f.http("inputs.list", { runId: "owned" });
     if (change === "credential") expect(response).toMatchObject({ ok: false, error: { code: "AUTH_INVALID" } });
-    else
-      expect(result(response)).toMatchObject({
-        inputs: [],
-        waiting: 0,
-        pendingRevisions: { items: [], incomplete: false },
-      });
+    // A visibility change after enrichment starts refuses the whole response, including
+    // already-projected input restrictions, pending metadata and omission counts.
+    else expect(response).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });
   },
 );

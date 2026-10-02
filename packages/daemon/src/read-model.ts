@@ -23,9 +23,12 @@
  * first read. Run logs were never affected - the event store re-reads them - so statuses
  * and trees stay current the same way.
  */
+import { isDeepStrictEqual } from "node:util";
 import {
   OrcaError,
   RUN_SUMMARY_EVENT_TYPES,
+  reduceRun,
+  validateRevisionCapability,
   reduceRunSummary,
   runSummary,
   type Artifact,
@@ -38,9 +41,10 @@ import {
   type RunSummary,
   type StepRun,
   type WorkflowDefinition,
+  type WorkflowGraph,
   type WorkItem,
 } from "@orca/core";
-import type { Orchestrator, PlanService } from "@orca/engine";
+import { workflowRevision, type Orchestrator, type PlanService } from "@orca/engine";
 import { redactExecutionValue, type WorkItemClaim } from "@orca/store";
 import {
   INLINE_WORKFLOW_SEPARATOR,
@@ -78,6 +82,33 @@ import {
 } from "@orca/protocol";
 import { PlanModel } from "./plan-model.js";
 import { workflowSummaryView, workflowView } from "./workflow-model.js";
+
+/** Resolve an inline graph only within the stored root, without any live-definition fallback. */
+function storedInputDefinition(root: WorkflowDefinition, workflowId: string): WorkflowDefinition | undefined {
+  const [rootId, ...path] = workflowId.split(INLINE_WORKFLOW_SEPARATOR);
+  if (root.id !== rootId) return undefined;
+  if (!path.length) return root;
+  let graph: WorkflowGraph = root;
+  for (let i = 0; i < path.length; i++) {
+    const node = graph.nodes[path[i]!];
+    if (node?.type === "loop" && "graph" in node.body) graph = node.body.graph;
+    else if (node?.type === "parallel") {
+      const body = node.forEach ? node.forEach.body : node.branches?.[path[++i] ?? ""];
+      if (!body || !("graph" in body)) return undefined;
+      graph = body.graph;
+    } else return undefined;
+  }
+  return {
+    id: workflowId,
+    name: workflowId,
+    version: root.version,
+    vars: {},
+    inputs: {},
+    start: graph.start,
+    nodes: graph.nodes,
+    edges: graph.edges,
+  };
+}
 
 /** The events a listing needs: a summary's, plus the one that says which agent worked the run. */
 const LIST_EVENT_TYPES = [
@@ -533,6 +564,79 @@ export class ReadModel {
     }
     inputs.sort((a, b) => b.waitingMs - a.waitingMs || a.id.localeCompare(b.id));
     return { inputs, waiting: inputs.length, asOf: pass.asOf };
+  }
+
+  /**
+   * Internal restriction projection, never an RPC or a revision capability. The server must
+   * authorize and filter the input first. No protected journal, payload or lease is read.
+   * A legacy run without a recorded pin is deliberately not inferred from current defaults.
+   */
+  async inputRevisionActionId(input: OpenInputView): Promise<string | undefined> {
+    if (input.kind !== "decision" || input.live) return undefined;
+    const unavailable = () => new OrcaError("RUN_STATE", "The pinned input declaration is unavailable");
+    const current = async () => {
+      const events = await this.orc.events(input.runId);
+      const created = events[0];
+      if (created?.type !== "run.created" || created.runId !== input.runId) throw unavailable();
+      const state = reduceRun(events);
+      // The row was pending when listed. Retain its restriction if answered concurrently:
+      // the scalar says which action is special, never that this request is still writable.
+      const request = state.humanInputs[input.id];
+      const step = state.steps[input.stepRunId];
+      if (
+        !request ||
+        request.id !== input.id ||
+        request.runId !== input.runId ||
+        request.stepRunId !== input.stepRunId ||
+        request.kind !== "decision" ||
+        request.liveDecision ||
+        !step ||
+        step.runId !== input.runId ||
+        step.id !== input.stepRunId ||
+        step.nodeId !== input.nodeId
+      )
+        throw unavailable();
+      return { created, request, step };
+    };
+    const before = structuredClone(await current());
+    if (before.created.payload.workflowStored !== true) {
+      // Legacy agent-origin decisions are not workflow gates. Their recorded node class
+      // cannot declare a corrective branch; unpinned gates/decisions remain unavailable.
+      if (before.step.nodeType !== "gate" && before.step.nodeType !== "decision") return undefined;
+      throw unavailable();
+    }
+    const { workflowId, workflowVersion, provenance } = before.created.payload;
+    const root = await this.orc.stores.workflows.get(workflowId.split(INLINE_WORKFLOW_SEPARATOR)[0]!, workflowVersion);
+    if (!root || root.version !== workflowVersion) throw unavailable();
+    const definition = storedInputDefinition(root, workflowId);
+    if (
+      !definition ||
+      (provenance &&
+        (provenance.workflow.id !== workflowId ||
+          provenance.workflow.version !== workflowVersion ||
+          provenance.workflow.revision !== workflowRevision(definition)))
+    )
+      throw unavailable();
+    const node = definition.nodes[before.step.nodeId];
+    if (!node || node.type !== before.step.nodeType) throw unavailable();
+    const revision = node.type === "gate" || node.type === "decision" ? node.revision : undefined;
+    const actionId = revision?.actionId;
+    if (revision !== undefined) {
+      if (!validateRevisionCapability(definition, before.step.nodeId, revision).ok) throw unavailable();
+      if (
+        !input.options.some((option) => option.id === actionId) ||
+        !before.request.options.some((option) => option.id === actionId)
+      )
+        throw unavailable();
+    }
+    const after = await current();
+    if (
+      !isDeepStrictEqual(after.created, before.created) ||
+      after.step.nodeId !== before.step.nodeId ||
+      !isDeepStrictEqual(after.request.options, before.request.options)
+    )
+      throw unavailable();
+    return actionId;
   }
 
   /** Who owns which work item, and whether the run that took it is still alive. */

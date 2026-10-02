@@ -67,7 +67,7 @@ export function GateCard({ input, artifactsReady, revisions, ...rest }: GateCard
           </>
         }
         options={input.options}
-        excludedOptionId={input.revision?.capability.actionId}
+        excludedOptionId={input.revisionActionId ?? input.revision?.capability.actionId}
         artifactsReady={ready}
         refs={<ArtifactRefs input={input} ready={ready} />}
         {...rest}

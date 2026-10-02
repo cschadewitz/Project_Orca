@@ -19,7 +19,10 @@ export function GateRevision({
   artifactsReady: boolean;
 }): JSX.Element | null {
   const announce = useAnnounce();
-  if (!input.revision) return null;
+  if (!input.revision)
+    return input.revisionActionId ? (
+      <Text style="caption">Request changes is unavailable until the current revision boundary can be confirmed.</Text>
+    ) : null;
   if (!feed?.supported || !artifactsReady)
     return (
       <Text style="caption">
