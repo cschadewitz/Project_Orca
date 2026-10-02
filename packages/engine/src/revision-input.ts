@@ -2,7 +2,13 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
-import { OrcaError, validateWorkflowInputs, type MutationActor } from "@orca/core";
+import {
+  OrcaError,
+  redactWorkflowInputSchema,
+  RevisionCapabilitySchema,
+  validateWorkflowInputs,
+  type MutationActor,
+} from "@orca/core";
 import type { RegisteredRetryClaims } from "./admission-retry.js";
 import type {
   RevisionBoundaryView,
@@ -346,6 +352,22 @@ export class RevisionInputService {
       const access = await this.opts.access.read(target.runId);
       const record = await exactRevision(tx, target, this.opts.stale);
       const boundary = await tx.boundary(target.destinationId);
+      // A prior content grant does not survive an asynchronous journal/status read.
+      // Intersect both checks so a viewer cannot gain protected data mid-request either.
+      const currentAccess = await this.opts.access.read(target.runId);
+      const content = access.content && currentAccess.content;
+      const capability = RevisionCapabilitySchema.safeParse(record.capability);
+      const matchingBoundary =
+        boundary &&
+        boundary.currentRevisionId === target.revisionId &&
+        boundary.attemptId === target.attemptId &&
+        boundary.target.runId === target.runId &&
+        boundary.target.destinationId === target.destinationId &&
+        boundary.target.stepRunId === record.receipt.target.stepRunId &&
+        boundary.target.requestId === record.receipt.target.requestId &&
+        boundary.target.expectedRevision === record.receipt.expectedRevision &&
+        isDeepStrictEqual(boundary.capability, record.capability) &&
+        capability.success;
       const unavailableReason =
         record.receipt.state === "delivered"
           ? "delivered"
@@ -353,11 +375,40 @@ export class RevisionInputService {
             ? "cancelled"
             : record.delivery !== "unclaimed"
               ? "delivery-uncertain"
-              : boundary?.currentRevisionId !== target.revisionId || boundary.status === "moved"
+              : !matchingBoundary || boundary.status === "moved" || record.receipt.state === "superseded"
                 ? "target-changed"
                 : boundary.status === "cancelled"
                   ? "cancelled"
                   : undefined;
+      const replacementAllowed = content && access.mutate && currentAccess.mutate && unavailableReason === undefined;
+      // Explicit projection only. The pinned declaration supplies every destination and
+      // constraint; journal provenance and private generation identifiers stay internal.
+      const view: RevisionBoundaryView | undefined =
+        replacementAllowed && boundary && capability.success
+          ? {
+              target: {
+                runId: boundary.target.runId,
+                stepRunId: boundary.target.stepRunId,
+                requestId: boundary.target.requestId,
+                destinationId: boundary.target.destinationId,
+                expectedRevision: boundary.target.expectedRevision,
+              },
+              capability: {
+                actionId: capability.data.actionId,
+                destinationNodeId: capability.data.destinationNodeId,
+                composition: capability.data.composition,
+                payload:
+                  capability.data.payload.kind === "values"
+                    ? {
+                        kind: "values",
+                        maxBytes: capability.data.payload.maxBytes,
+                        inputSchema: redactWorkflowInputSchema(capability.data.payload.inputSchema),
+                      }
+                    : { kind: "text", maxBytes: capability.data.payload.maxBytes },
+              },
+              destinationDescription: boundary.destinationDescription,
+            }
+          : undefined;
       return {
         target,
         expectedRevision: record.receipt.expectedRevision,
@@ -365,8 +416,9 @@ export class RevisionInputService {
           boundary?.status === "cancelled" && record.delivery === "unclaimed" && record.receipt.state === "pending"
             ? "rejected"
             : record.receipt.state,
-        ...(access.content ? { payload: record.payload } : {}),
-        replacementAllowed: access.content && access.mutate && unavailableReason === undefined,
+        ...(content ? { payload: record.payload } : {}),
+        ...(view ? { boundary: view } : {}),
+        replacementAllowed,
         ...(unavailableReason ? { unavailableReason } : {}),
       };
     });

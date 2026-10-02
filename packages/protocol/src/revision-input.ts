@@ -65,14 +65,6 @@ export const RevisionReceiptSchema = z.strictObject({
   currentRevisionId: id,
   expectedRevision: id,
 });
-export const PendingRevisionViewSchema = z.strictObject({
-  target: PendingRevisionTargetSchema,
-  expectedRevision: id,
-  state: RevisionStateSchema,
-  payload: RevisionPayloadSchema.optional(),
-  replacementAllowed: z.boolean(),
-  unavailableReason: z.enum(["delivered", "target-changed", "cancelled", "delivery-uncertain"]).optional(),
-});
 export const RevisionCapabilitySchema = z.strictObject({
   actionId: id,
   destinationNodeId: id,
@@ -90,6 +82,15 @@ export const RevisionBoundaryViewSchema = z.strictObject({
   target: RevisionTargetSchema,
   capability: RevisionCapabilitySchema,
   destinationDescription: z.string(),
+});
+export const PendingRevisionViewSchema = z.strictObject({
+  target: PendingRevisionTargetSchema,
+  expectedRevision: id,
+  state: RevisionStateSchema,
+  payload: RevisionPayloadSchema.optional(),
+  boundary: RevisionBoundaryViewSchema.optional(),
+  replacementAllowed: z.boolean(),
+  unavailableReason: z.enum(["delivered", "target-changed", "cancelled", "delivery-uncertain"]).optional(),
 });
 const retry = z.strictObject({
   idempotencyKey: z

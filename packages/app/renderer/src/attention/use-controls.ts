@@ -71,6 +71,14 @@ export function useControls({ onAnswered }: ControlsOptions): Controls {
 
   const answer = useCallback(
     (input: OpenInputView, request: AnswerRequest) => {
+      if (input.revision?.capability.actionId === request.optionId) {
+        setReport({
+          subject: input.id,
+          failed: true,
+          message: "Use Request changes to record a correction for this revision branch.",
+        });
+        return;
+      }
       if (pending.has(input.id)) return;
       run(input.id, async () => {
         const result = await window.orca.inputs.answer({

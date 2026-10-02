@@ -33,6 +33,7 @@ import type { OpenInputView, ProtocolError, RunSummaryView, RunChangedParams } f
 import { useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import { applyRunChanged, mergeRun, orderRuns } from "../runs/run-rows.js";
+import { useRevisions, type RevisionsFeed } from "./use-revisions.js";
 import { alertItems, invalidateLiveInput, liveInputKey, mergeInput, orderWaits } from "./items.js";
 
 export type AttentionState =
@@ -58,6 +59,8 @@ export type AttentionState =
 
 export interface AttentionFeed {
   state: AttentionState;
+  /** Correction metadata/content is separate from unanswered inputs and alerts. */
+  revisions?: RevisionsFeed;
   /** Re-read both lists: the error state's retry, and what a person reaches for after a blip. */
   reload: () => void;
   /**
@@ -84,6 +87,9 @@ export function useAttention(): AttentionFeed {
       return { ...prev, waits: prev.waits.filter((i) => i.id !== requestId), waiting: Math.max(0, prev.waiting - 1) };
     });
   }, []);
+
+  const revisions = useRevisions(answered);
+  const observeRevisions = revisions.observeInputs;
 
   useEffect(() => {
     let live = true;
@@ -133,6 +139,7 @@ export function useAttention(): AttentionFeed {
         resolvingInputs.delete(runId);
         if (!live) return;
         if (result.ok) {
+          observeRevisions(result.result.inputs);
           for (const input of result.result.inputs) inputs.set(input.id, input);
           publish();
         }
@@ -197,6 +204,7 @@ export function useAttention(): AttentionFeed {
         setState({ phase: "error", error: inputResult.error });
         return;
       }
+      observeRevisions(inputResult.result.inputs);
       snapshot = {
         phase: "ready",
         waits: inputResult.result.inputs,
@@ -211,7 +219,7 @@ export function useAttention(): AttentionFeed {
       live = false;
       off.forEach((remove) => remove());
     };
-  }, [stream, answered, attempt, generation]);
+  }, [stream, answered, attempt, generation, observeRevisions, revisions.scope]);
 
   /* The main process is told what is open, and decides what to post from it (#162). Here
      rather than in the surface because this is the one place that holds both halves, and
@@ -221,7 +229,7 @@ export function useAttention(): AttentionFeed {
     window.orca.alerts.update({ waiting: state.waiting, items: alertItems(state.waits, state.failures) });
   }, [state]);
 
-  return { state, reload, answered };
+  return { state, reload, answered, revisions };
 }
 
 /** The two lists of runs this surface holds. Neither is a tier; the failures are one. */

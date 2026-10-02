@@ -43,18 +43,21 @@ import {
   type OrcaPlugin,
   type PluginApi,
   type RunLeaseOptions,
+  type OrchestratorOptions,
   type SessionFactory,
   type WorkspaceProvider,
   type RequestSubmissionOptions,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
-import { fileStores, memoryStores } from "@orca/store";
+import { fileStores, memoryStores, type Stores } from "@orca/store";
 import { cliHumanInput } from "./human-input-cli.js";
 import { captureRuntimeObjects } from "./plugin-runtime.js";
 
 export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
 
 export interface BootstrapOptions {
+  /** Trusted production composition, created over these exact stores before any interpreter runs. */
+  revisionRuntime?: (stores: Stores) => NonNullable<OrchestratorOptions["revisionRuntime"]>;
   /** Bound by integration to #332 CaptureLaunch, durable admissions and verified local authority. */
   submissionAuthority?: (app: {
     config: OrcaConfig;
@@ -333,6 +336,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
 
   const orchestrator = new Orchestrator({
     stores,
+    ...(opts.revisionRuntime ? { revisionRuntime: opts.revisionRuntime(stores) } : {}),
     agents,
     workflows,
     templates,

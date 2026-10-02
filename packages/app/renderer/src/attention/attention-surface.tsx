@@ -39,8 +39,10 @@ import { useKeyboard } from "../keyboard-context.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
 import { bindOptions, isFreeText } from "./card-model.js";
 import { VirtualList } from "../list/index.js";
-import { Duration, StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
+import { Button, Duration, StateView, StatusChip, Text, Time, textClass } from "../ui/index.js";
 import type { AnswerRequest } from "./answer-card.js";
+import { PendingCorrection } from "./revision-card.js";
+import { revisionSlotKey, type RevisionsFeed } from "./use-revisions.js";
 import { GateCard } from "./gate-card.js";
 import { PermissionCard } from "./permission-card.js";
 import { tierOf } from "./items.js";
@@ -175,8 +177,16 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
         ) : (
           <StateView
             kind="empty"
-            title="Nothing needs you"
-            body="Gates and permission asks appear here the moment a run raises one."
+            title={
+              feed.revisions?.notice || feed.revisions?.items.length
+                ? "No unanswered gates or permission asks"
+                : "Nothing needs you"
+            }
+            body={
+              feed.revisions?.notice || feed.revisions?.items.length
+                ? "Recorded corrections are shown separately below."
+                : "Gates and permission asks appear here the moment a run raises one."
+            }
           />
         )
       ) : (
@@ -192,6 +202,7 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
               <Wait
                 key={input.id}
                 input={input}
+                revisions={feed.revisions}
                 focused={index === focusIndex}
                 pending={controls.pending.has(input.id)}
                 cannotWrite={cannotWrite}
@@ -207,6 +218,23 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
               />
             ))}
           </div>
+        </section>
+      )}
+
+      {feed.revisions && (feed.revisions.items.length > 0 || feed.revisions.notice) && (
+        <section className="orca-attn__section" aria-label="Recorded corrections">
+          <Text style="eyebrow" as="h2">
+            Recorded corrections
+          </Text>
+          {feed.revisions.notice && (
+            <>
+              <Text style="caption">{feed.revisions.notice}</Text>
+              <Button onClick={() => feed.revisions?.refresh()}>Refresh corrections</Button>
+            </>
+          )}
+          {feed.revisions.items.map((entry) => (
+            <PendingCorrection key={revisionSlotKey(entry.summary.target)} entry={entry} feed={feed.revisions!} />
+          ))}
         </section>
       )}
 
@@ -331,6 +359,7 @@ function RunningRow({ run, live }: { run: RunSummaryView; live: boolean }): JSX.
  */
 interface WaitProps {
   input: OpenInputView;
+  revisions?: RevisionsFeed | undefined;
   index: number;
   registerCard: (index: number, element: HTMLElement | null) => void;
   focused: boolean;
@@ -342,12 +371,12 @@ interface WaitProps {
   goToRun?: () => void;
 }
 
-function Wait({ input, index, registerCard, ...rest }: WaitProps): JSX.Element {
+function Wait({ input, index, registerCard, revisions, ...rest }: WaitProps): JSX.Element {
   const cardRef = useCallback((element: HTMLElement | null) => registerCard(index, element), [registerCard, index]);
   return tierOf(input) === "permission" ? (
     <PermissionCard input={input} placement="inbox" cardRef={cardRef} {...rest} />
   ) : (
-    <GateCard input={input} placement="inbox" cardRef={cardRef} {...rest} />
+    <GateCard input={input} revisions={revisions} placement="inbox" cardRef={cardRef} {...rest} />
   );
 }
 
@@ -430,24 +459,34 @@ function useCardWrites(
   /* What the rows are *about*, as one string. The options are part of it because a gate
      re-asked with different options is a different set of rows. */
   const signature =
-    input === undefined ? "" : [input.id, input.runId, input.question, ...input.options.map((o) => o.id)].join("|");
+    input === undefined
+      ? ""
+      : [
+          input.id,
+          input.runId,
+          input.question,
+          input.revision?.capability.actionId ?? "",
+          ...input.options.map((o) => o.id),
+        ].join("|");
 
   const rows = useMemo((): readonly PaletteWrite[] => {
     const held = current.current.input;
     if (held === undefined || signature === "") return [];
     const answers = isFreeText(held.options)
       ? []
-      : bindOptions(held.options).map(({ option }) => ({
-          scope: "card" as const,
-          method: "inputs.answer",
-          label: `Answer ${held.question}: ${option.label}`,
-          detail: option.consequence ?? `Answers ${held.runName} the way the card's option does`,
-          ...(option.destructive ? { tone: "danger" as const } : {}),
-          action: () => {
-            const { input: now, actions: act } = current.current;
-            if (now) act.answer(now, { optionId: option.id });
-          },
-        }));
+      : bindOptions(held.options.filter((option) => option.id !== held.revision?.capability.actionId)).map(
+          ({ option }) => ({
+            scope: "card" as const,
+            method: "inputs.answer",
+            label: `Answer ${held.question}: ${option.label}`,
+            detail: option.consequence ?? `Answers ${held.runName} the way the card's option does`,
+            ...(option.destructive ? { tone: "danger" as const } : {}),
+            action: () => {
+              const { input: now, actions: act } = current.current;
+              if (now) act.answer(now, { optionId: option.id });
+            },
+          }),
+        );
     return [
       ...answers,
       {

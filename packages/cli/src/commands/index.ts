@@ -7,6 +7,7 @@ import { AdmissionRetryModel, ContinuationAdmissionModel, neverAttached } from "
 import { admissionRetryOptions } from "./admission-retry.js";
 
 import { admissionsCommand } from "./admissions.js";
+import { revisionsCommand } from "./revisions.js";
 import { FileContinuationLocatorStore, workspaceIdentity } from "@orca/store";
 import {
   localSubmissionAuthority,
@@ -66,7 +67,14 @@ import {
 } from "@orca/core";
 import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
-import { PausingHumanInput, PlanService, autoHumanInput, builtinExecutors } from "@orca/engine";
+import {
+  PausingHumanInput,
+  PlanService,
+  autoHumanInput,
+  builtinExecutors,
+  createRevisionRuntime,
+  createRevisionInputServices,
+} from "@orca/engine";
 import { AgentRegistry } from "@orca/agents";
 import { RequestSubmissionModel } from "@orca/daemon";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
@@ -505,6 +513,13 @@ export const commands: Record<string, Command> = {
     run: admissionsCommand,
   },
 
+  revisions: {
+    help: "revisions <discover <runId>|inspect|submit|replace>  Inspect or record explicit corrective input through an authenticated daemon.",
+    usage:
+      "--endpoint <url> (or ORCA_DAEMON_URL) selects the daemon; --token-env <name> defaults to ORCA_DAEMON_TOKEN.\ninspect reads a PendingRevisionTarget JSON file; submit reads a RevisionCommand; replace reads a ReplacePendingRevisionCommand via --body-file <file>.\nsubmit and replace require an explicit --idempotency-key retained for that exact intent. No credentials are discovered or saved. Execution continuation is separate.\n",
+    run: revisionsCommand,
+  },
+
   submit: {
     help: 'submit "<title>" [--body text | --body-file f] [--var k=v] [--item-workflow id] [--agent role=id]... [--model [agent=]model]...  Submit a request to the program workflow and follow it.',
     async run(ctx) {
@@ -717,7 +732,24 @@ export const commands: Record<string, Command> = {
         throw new OrcaError("CONFIG_INVALID", `--port must be a port number, got '${String(ctx.flags.port)}'`);
       }
       const readOnly = Boolean(ctx.flags["read-only"]);
+      let revisionRuntime: ReturnType<typeof createRevisionRuntime> | undefined;
+      const executionBinding: { current?: ReturnType<typeof daemonExecutionRuntime> } = {};
       const app = await bootstrap({
+        ...(!readOnly && !ctx.flags["unauthenticated-loopback"]
+          ? {
+              revisionRuntime: (stores) => {
+                revisionRuntime = createRevisionRuntime({
+                  stores,
+                  authorizeExecution: async (runId) => {
+                    const current = executionBinding.current;
+                    if (!current) throw new OrcaError("RUN_STATE", "Revision execution authority is unavailable");
+                    await current.authorizeExecution(runId);
+                  },
+                });
+                return revisionRuntime.runtime;
+              },
+            }
+          : {}),
         cwd: ctx.cwd,
         ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
         // Every gate parks to the log, whatever `humanInput.mode` says in the config. A
@@ -795,7 +827,10 @@ export const commands: Record<string, Command> = {
               ownership: authDir.ownership,
             })
           : undefined;
-      if (liveRuntime) app.orchestrator.liveInput = liveRuntime;
+      if (liveRuntime) {
+        executionBinding.current = liveRuntime;
+        app.orchestrator.liveInput = liveRuntime;
+      }
       const requestSubmissions =
         !readOnly && authDir && app.program.submissions
           ? new RequestSubmissionModel({
@@ -839,7 +874,19 @@ export const commands: Record<string, Command> = {
               executionRuntime: liveRuntime,
             })
           : undefined;
+      const revisionServices =
+        revisionRuntime && app.retryClaims && liveRuntime
+          ? createRevisionInputServices({
+              journal: revisionRuntime.journal,
+              retries: app.retryClaims,
+              stale: () => new OrcaError("REVISION_STALE", "Revision destination is no longer available"),
+            })
+          : undefined;
+      if (revisionServices && app.retryClaims) revisionServices.register(app.retryClaims);
       const daemon = await startDaemon({
+        ...(revisionServices && revisionRuntime
+          ? { revisionSources: { services: revisionServices, readBoundaries: revisionRuntime.readBoundaries } }
+          : {}),
         operatorSources: {
           events: app.orchestrator.stores.events,
           leases: app.orchestrator.stores.leases,

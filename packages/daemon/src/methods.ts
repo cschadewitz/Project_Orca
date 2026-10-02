@@ -42,8 +42,9 @@ import {
   InputsReviseParamsSchema,
   InputsReplaceRevisionParamsSchema,
   InputsRevisionPendingParamsSchema,
+  RevisionBoundaryViewSchema,
 } from "@orca/protocol";
-import type { RevisionInputService, RevisionAccess } from "@orca/engine";
+import type { RevisionInputService, RevisionAccess, RevisionBoundary } from "@orca/engine";
 import { revisionAuthority } from "./revision-input.js";
 import type { SubmissionAuthority } from "@orca/core";
 import {
@@ -155,6 +156,7 @@ import {
   type InputsAnswerParams,
   type InputsAnswerResult,
   type InputsListResult,
+  type PendingRevisionsDiscovery,
   type ItemsListResult,
   type JournalListResult,
   type PlanGetResult,
@@ -211,6 +213,10 @@ export interface MethodContext {
         access: RevisionAccess;
       }>)
     | undefined;
+  /** Authenticated optional enrichment; each run is authorized before protected reads. */
+  revisionBoundaries?: ((invocation: MethodContext, runId: string) => Promise<readonly RevisionBoundary[]>) | undefined;
+  pendingRevisionDiscovery?:
+    ((invocation: MethodContext, runIds: readonly string[]) => Promise<PendingRevisionsDiscovery>) | undefined;
   liveInputs?: LiveInputChangeSource | undefined;
   liveAnswerAuthority?: LiveAnswerAuthority;
   executionResumeAuthority?: ExecutionResumeAuthority;
@@ -412,7 +418,54 @@ export const runsEvents: Method<Parameters<ReadModel["runsEvents"]>[0], RunsEven
 /** `inputs.list`: the gates and permission asks waiting on a person. */
 export const inputsList: Method<Parameters<ReadModel["inputsList"]>[0], InputsListResult> = {
   params: InputsListParamsSchema,
-  handle: (params, ctx) => reads(ctx).inputsList(params),
+  handle: async (params, ctx) => {
+    const result = { ...(await reads(ctx).inputsList(params)) };
+    delete result.pendingRevisions;
+    const boundaries = new Map<string, readonly RevisionBoundary[]>();
+    const inputs = [];
+    for (const row of result.inputs) {
+      const input = { ...row };
+      // Only this authenticated projection may install a revision field. A legacy read
+      // model cannot make a protected capability discoverable by returning extra fields.
+      delete input.revision;
+      if (ctx.revisionBoundaries && input.kind === "decision" && !input.live) {
+        if (!boundaries.has(input.runId)) boundaries.set(input.runId, await ctx.revisionBoundaries(ctx, input.runId));
+        const matching = boundaries
+          .get(input.runId)!
+          .filter(
+            (boundary) =>
+              boundary?.target?.runId === input.runId &&
+              boundary.target.stepRunId === input.stepRunId &&
+              boundary.target.requestId === input.id,
+          );
+        // Ambiguity is not permission to choose a destination. Status and public fields
+        // must agree with this exact open input; private journal fields never cross RPC.
+        const boundary = matching.length === 1 ? matching[0] : undefined;
+        if (boundary?.status === "waiting") {
+          const view = RevisionBoundaryViewSchema.safeParse({
+            target: boundary.target,
+            capability: boundary.capability,
+            destinationDescription: boundary.destinationDescription,
+          });
+          if (view.success && input.options.some((option) => option.id === view.data.capability.actionId))
+            input.revision = view.data;
+        }
+      }
+      inputs.push(input);
+    }
+    return {
+      ...result,
+      inputs,
+      ...(ctx.pendingRevisionDiscovery
+        ? {
+            pendingRevisions: await ctx.pendingRevisionDiscovery(
+              ctx,
+              params.revisionRunIds ?? (params.runId === undefined ? [] : [params.runId]),
+            ),
+          }
+        : {}),
+    };
+  },
 };
 
 /** `claims.list`: who owns which work item, and whether that run is still alive. */

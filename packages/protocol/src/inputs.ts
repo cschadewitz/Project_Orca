@@ -22,7 +22,7 @@
  * agent's question.
  */
 import { z } from "zod";
-import { RevisionBoundaryViewSchema } from "./revision-input.js";
+import { PendingRevisionViewSchema, RevisionBoundaryViewSchema } from "./revision-input.js";
 import { LiveInputViewSchema } from "./live-input.js";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
 import { GateOptionSchema } from "@orca/core/schemas";
@@ -87,10 +87,39 @@ export const OpenInputViewSchema = z.object({
 });
 export type OpenInputView = z.infer<typeof OpenInputViewSchema>;
 
+export const INPUTS_REVISION_RUN_LIMIT = 20;
+export const INPUTS_REVISION_ITEM_LIMIT = 50;
+/** Metadata only. Protected correction text still requires inputs.revisionPending. */
+export const PendingRevisionSummarySchema = PendingRevisionViewSchema.pick({
+  target: true,
+  expectedRevision: true,
+  state: true,
+  unavailableReason: true,
+});
+export type PendingRevisionSummary = z.infer<typeof PendingRevisionSummarySchema>;
+const revisionItems = z.array(PendingRevisionSummarySchema).max(INPUTS_REVISION_ITEM_LIMIT);
+/** Current revisions in an explicit run batch, never a complete historical/global index. */
+export const PendingRevisionsDiscoverySchema = z.discriminatedUnion("incomplete", [
+  z.strictObject({ items: revisionItems, incomplete: z.literal(false) }),
+  z.strictObject({
+    items: revisionItems,
+    incomplete: z.literal(true),
+    reason: z.enum(["run-scope-required", "limit", "boundary-unavailable"]),
+  }),
+]);
+export type PendingRevisionsDiscovery = z.infer<typeof PendingRevisionsDiscoverySchema>;
+
 export const InputsListParamsSchema = z.object({
   /** One run and its descendants. Absent: every run in the store. */
   runId: z.string().optional(),
   kind: z.array(InputKindSchema).optional(),
+  /** Explicit exact-run batch for current revision metadata. Defaults to [runId], never descendants/global history. */
+  revisionRunIds: z
+    .array(z.string().min(1).max(1024))
+    .min(1)
+    .max(INPUTS_REVISION_RUN_LIMIT)
+    .refine((ids) => new Set(ids).size === ids.length, "revision run IDs must be unique")
+    .optional(),
 });
 export type InputsListParams = z.infer<typeof InputsListParamsSchema>;
 
@@ -99,6 +128,8 @@ export const InputsListResultSchema = z.object({
   inputs: z.array(OpenInputViewSchema),
   /** The title bar's one number - `inputs.length`, sent so a client never recounts it. */
   waiting: z.number().int().nonnegative(),
+  /** Separate from unanswered inputs and waiting. Absent when production revision discovery is unavailable. */
+  pendingRevisions: PendingRevisionsDiscoverySchema.optional(),
   asOf: z.string(),
 });
 export type InputsListResult = z.infer<typeof InputsListResultSchema>;

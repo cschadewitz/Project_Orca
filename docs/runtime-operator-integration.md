@@ -308,3 +308,83 @@ also matches the frozen base. This is consistent with the macOS demo's repeated
 false reports, but retained CI counter state is unavailable and the specific run's
 cause is unproven. The helper is unchanged; its defect is separate from native
 acceptance and is not resolved by fixture isolation.
+
+## Authenticated revision composition and read contracts
+
+Writable token-authenticated `serve` composes the protected adapter over the
+interpreter's exact stores before execution, then registers its two operations
+with shared retry claims. Delivery uses the daemon runtime's actual bound actor.
+The optional service is absent for unauthenticated/read-only composition; absent
+services do not acquire capabilities merely from placeholder method handlers.
+Authorized open-input views expose only a validated `RevisionBoundaryView`.
+Revision submission records the gate decision plus correction; execution remains
+a separate explicitly authorized continuation.
+
+Within the approved protocol-2 boundary, `inputs.list` adds optional
+`revisionRunIds`: 1–20 unique run IDs. Its separate optional `pendingRevisions`
+result contains at most 50 current summaries and has either:
+
+- `{items, incomplete: false}`; or
+- `{items, incomplete: true, reason}` where reason is `run-scope-required`, `limit`
+  or `boundary-unavailable`.
+
+Each item is strictly `{target, expectedRevision, state, unavailableReason?}`.
+`target` contains only run/revision/destination/attempt IDs. No protected text,
+capability/schema, provenance, generation or replacement promise is included.
+These rows do not add to `inputs` or `waiting`, nor reopen a completed gate.
+Current authority and resource visibility are checked before reading records and
+again before return; missing and denied run IDs have the same omission behavior.
+Clients batch run IDs from already-authorized run pages rather than scanning an
+unbounded global history. `runId` supplies an exact-run default for this new
+projection; it does not implicitly include descendant revision summaries even
+though the existing unanswered-input listing includes descendants. Global calls
+without revision scope report explicit incompleteness. Failed journal verification
+or revoked authority remains an error, never an empty-list success.
+
+Only each destination's current revision is discovered; superseded IDs give way
+to their replacement, and delivered/cancelled states remain inspectable. This is
+not complete revision-history pagination. Requested runs, metadata reads and
+response rows are bounded; the existing adapter still materializes each selected
+run's protected journal internally.
+
+`inputs.revisionPending` additionally permits optional `boundary`, using the
+existing strict `RevisionBoundaryView` shape. It is derived from the current
+matching pinned declaration, available only with the existing stronger current
+content/mutation grants and an eligible replacement target. Viewer metadata stays
+unchanged; private journal/configuration fields and sensitive schema defaults or
+enums are not exposed. Grants are checked again after asynchronous journal reads.
+A read response never authorizes a later replacement: the mutation still checks
+current grants, exact target/attempt and opaque CAS under the run fence.
+
+The renderer mounts an explicit correction editor in Attention and inline step
+input detail. Ordinary answer buttons, free-text answers, keyboard controls and
+palette controls cannot submit the declared revision action through
+`inputs.answer`. Pending correction cards use bounded authorized run discovery,
+remain separate from unanswered-input counts, and fetch protected replacement
+content only through `inputs.revisionPending`. Drafts survive same-target refresh
+and supersession; stale, failed-refresh and unavailable boundaries disable writes
+until explicitly reviewed against current server data. Connection changes isolate
+protected drafts. No automatic continuation is implied by submitting a correction.
+
+The CLI parser mounts `revisions discover`, `inspect`, `submit` and `replace` via
+an explicit daemon endpoint and captured token environment variable. Mutations
+require the operator's retained idempotency key and strict JSON body. It does not
+load daemon-owner credentials, discover credentials, automatically retry a write,
+or resume execution. The closed HTTP method set uses bounded request/response
+sizes, protocol negotiation, redirect refusal and sanitized uncertainty details.
+Real authenticated protected-service tests include a committed write whose HTTP
+response is lost, followed by explicit same-key recovery.
+
+Native App smoke 77 at `2a2a3cc27335144c20b6361eb50d96a440cae8fe`
+verified real safeStorage encryption and same-profile, new-process receipt recovery
+on macOS and Windows, plus zero admissions when encryption is unavailable. This
+is app restart after accepted admission. It does not establish daemon execution
+resumption, crash-before-acknowledgement recovery, or independent clearance of the
+revision journal correction. That independent re-review remains pending.
+
+Request/direct automatic startup dispatch remains outside this checkpoint. A
+separate bounded correctness slice is planned to verify existing creation evidence,
+protect first execution across all admitted entry points, and expose truthful
+pending/uncertain status. Existing continuation startup recovery remains required
+and unchanged. Admission receipt acceptance must not be described as proof of
+execution attachment or completion.

@@ -52,6 +52,8 @@ export interface AnswerCardProps {
   /** The exact command or path, verbatim and in mono. Permission asks only. */
   command?: string | undefined;
   options: readonly GateOption[];
+  /** A separate revision form owns this option; it is never an ordinary answer. */
+  excludedOptionId?: string | undefined;
   /** The artifacts the decision is about, as chips that open the docked panel. */
   refs?: ReactNode;
   /**
@@ -86,7 +88,8 @@ export function AnswerCard({
   question,
   subtitle,
   command,
-  options,
+  options: offeredOptions,
+  excludedOptionId,
   refs,
   placement,
   artifactsReady = true,
@@ -103,6 +106,10 @@ export function AnswerCard({
   /* Memoised on the options themselves: the bound list is what `useCardKeys` registers
      from, and a new array each render would mean four shortcuts unregistered and
      re-registered on every push. */
+  const options = useMemo(
+    () => offeredOptions.filter((option) => option.id !== excludedOptionId),
+    [offeredOptions, excludedOptionId],
+  );
   const bound = useMemo(() => bindOptions(options), [options]);
   const [selected, setSelected] = useState<string | undefined>(() => defaultSelection(options));
   const [note, setNote] = useState("");
@@ -126,7 +133,7 @@ export function AnswerCard({
     if (noteOpen) noteField.current?.focus();
   }, [noteOpen]);
 
-  const free = isFreeText(options);
+  const free = isFreeText(offeredOptions) && excludedOptionId === undefined;
   const answerValue = free ? text.trim() : selected;
 
   /* Two reasons, and they disable different things. `blocked` is about the card as a whole
@@ -143,7 +150,13 @@ export function AnswerCard({
   const submitBlocked = blocked ?? (answerValue ? undefined : free ? "type an answer first" : "choose an option first");
 
   const send = (over: Partial<AnswerRequest> = {}): void => {
-    if (submitBlocked !== undefined || !answerValue) return;
+    if (
+      submitBlocked !== undefined ||
+      !answerValue ||
+      answerValue === excludedOptionId ||
+      (!free && !options.some((option) => option.id === answerValue))
+    )
+      return;
     onAnswer({ optionId: answerValue, ...(note.trim() ? { note: note.trim() } : {}), ...over });
   };
 

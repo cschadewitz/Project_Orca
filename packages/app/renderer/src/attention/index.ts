@@ -27,3 +27,4 @@ export { InlineAsksProvider, StepAsks, type StepAsksProps } from "./inline-asks.
 export { useAlertActivation } from "./use-alert-activation.js";
 export { useAttention, type AttentionFeed, type AttentionState } from "./use-attention.js";
 export { useControls, type ControlReport, type Controls } from "./use-controls.js";
+export type { AttentionRevision, RevisionsFeed } from "./use-revisions.js";

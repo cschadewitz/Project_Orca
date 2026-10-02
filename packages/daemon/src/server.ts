@@ -1,6 +1,14 @@
 /** Authenticated HTTP and WebSocket daemon composition. */
 import { randomBytes } from "node:crypto";
-import { PROTOCOL_VERSION } from "@orca/protocol";
+import {
+  PROTOCOL_VERSION,
+  INPUTS_REVISION_ITEM_LIMIT,
+  PendingRevisionTargetSchema,
+  PendingRevisionSummarySchema,
+  PendingRevisionsDiscoverySchema,
+  type PendingRevisionSummary,
+  type PendingRevisionTarget,
+} from "@orca/protocol";
 import {
   OperatorReadModel,
   operatorEventCollections,
@@ -25,7 +33,8 @@ import type { EventStore, LeaseStore } from "@orca/store";
  * before its body is read, and every method runs behind the guard. `GET /health` is the one
  * unauthenticated answer, and all it ever says is `{ "ok": true }`.
  */
-import { OrcaError } from "@orca/core";
+import { isOrcaError, OrcaError } from "@orca/core";
+import type { createRevisionInputServices, createRevisionRuntime } from "@orca/engine";
 import { createDaemonIdentity } from "./daemon-identity.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -46,12 +55,18 @@ import { directAdmissionAuthority } from "./admission-retry.js";
 import { holds } from "./auth/principal.js";
 import { authForbidden } from "./auth/errors.js";
 import { submissionAuthority } from "./request-submission.js";
+import { revisionAccess } from "./revision-input.js";
 import { authInvalid, authRequired } from "./auth/errors.js";
 import { OwnershipStore } from "./auth/ownership.js";
 import type { ResourceResolver } from "./auth/resources.js";
 import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
 
 export interface DaemonOptions extends MethodContext {
+  /** Actual protected runtime and registered retry services; never a placeholder capability. */
+  revisionSources?: {
+    services: ReturnType<typeof createRevisionInputServices>;
+    readBoundaries: ReturnType<typeof createRevisionRuntime>["readBoundaries"];
+  };
   /** Explicit read projection sources, independent of the legacy unbounded read model. */
   operatorSources?: Pick<OperatorReadOptions, "generations" | "configStatus" | "artifact" | "artifactRun"> & {
     events: EventStore;
@@ -238,6 +253,165 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           admissions: ctx.source,
         },
   );
+  if (opts.revisionSources && identity && ctx.control && auth.mode === "token") {
+    const sources = opts.revisionSources;
+    const accessFor = (invocation: MethodContext) => {
+      const bound = principalOf(invocation);
+      const credentialId = bound?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      const principalId = bound.principal.id;
+      const currentPrincipal = async () => {
+        const current = auth.credentials.current(credentialId);
+        if (!current.ok) throw authInvalid();
+        if (current.principal.id !== principalId || current.principal.credentialId !== credentialId)
+          throw authForbidden();
+        return current.principal;
+      };
+      return {
+        currentPrincipal,
+        access: revisionAccess({ workspaceId: identity.workspaceId, principalId, currentPrincipal, authorizer }),
+      };
+    };
+    ctx.revisionInputs = async (invocation) => {
+      const { access } = accessFor(invocation);
+      return { service: sources.services.forAccess(access), access };
+    };
+    ctx.revisionBoundaries = async (invocation, runId) => {
+      const { currentPrincipal } = accessFor(invocation);
+      const visible = async () => {
+        const current = await currentPrincipal();
+        return (
+          holds(current, "runs.read") &&
+          holds(current, "inputs.answer") &&
+          holds(current, "runs.control") &&
+          (await authorizer.runs.allows(current, runId))
+        );
+      };
+      // inputs.list still filters inaccessible rows normally. Optional enrichment must not
+      // turn an unowned row into an exception (or read its protected boundary first).
+      if (!(await visible())) return [];
+      let boundaries;
+      try {
+        boundaries = await sources.readBoundaries(runId);
+      } catch (error) {
+        // An active interpreter can own the fence. Absence of this optional projection
+        // makes no claim about revision acceptance; unexpected store/auth failures surface.
+        if (isOrcaError(error) && error.code === "RUN_LEASED") return [];
+        throw error;
+      }
+      return (await visible()) ? boundaries : [];
+    };
+    ctx.pendingRevisionDiscovery = async (invocation, runIds) => {
+      const { currentPrincipal, access } = accessFor(invocation);
+      const visible = async (runId?: string) => {
+        const current = await currentPrincipal();
+        if (!holds(current, "runs.read")) throw authForbidden();
+        return runId === undefined || (await authorizer.runs.allows(current, runId));
+      };
+      await visible();
+      if (!runIds.length) return { items: [], incomplete: true, reason: "run-scope-required" };
+      // Reading summaries cannot materialize text, even for a caller that may separately
+      // fetch it. Retry/service authority remains pinned to the original invocation.
+      const service = sources.services.forAccess({
+        ...access,
+        read: async (runId) => {
+          await access.read(runId);
+          return { content: false, mutate: false };
+        },
+      });
+      const items: PendingRevisionSummary[] = [];
+      const omissions = new Map<string, "limit" | "boundary-unavailable">();
+      const omitted = (runId: string, reason: "limit" | "boundary-unavailable") => {
+        if (reason === "limit" || !omissions.has(runId)) omissions.set(runId, reason);
+      };
+      let inspected = 0;
+      for (const runId of runIds) {
+        // An inaccessible run contributes neither candidates, counts nor omission reasons.
+        if (!(await visible(runId))) continue;
+        let boundaries;
+        try {
+          boundaries = await sources.readBoundaries(runId);
+        } catch (error) {
+          if (isOrcaError(error) && error.code === "RUN_LEASED") {
+            if (await visible(runId)) omitted(runId, "boundary-unavailable");
+            continue;
+          }
+          throw error;
+        }
+        if (!(await visible(runId))) continue;
+        const candidates = new Map<string, PendingRevisionTarget[]>();
+        for (const boundary of boundaries) {
+          if (boundary?.currentRevisionId === undefined) continue;
+          const target = PendingRevisionTargetSchema.safeParse({
+            runId: boundary.target?.runId,
+            revisionId: boundary.currentRevisionId,
+            destinationId: boundary.target?.destinationId,
+            attemptId: boundary.attemptId,
+          });
+          if (!target.success || target.data.runId !== runId) {
+            omitted(runId, "boundary-unavailable");
+            continue;
+          }
+          const matching = candidates.get(target.data.destinationId) ?? [];
+          if (!matching.length && candidates.size >= INPUTS_REVISION_ITEM_LIMIT + 1) {
+            omitted(runId, "limit");
+            continue;
+          }
+          if (matching.length < 2) matching.push(target.data);
+          candidates.set(target.data.destinationId, matching);
+        }
+        for (const matching of candidates.values()) {
+          if (matching.length !== 1) {
+            omitted(runId, "boundary-unavailable");
+            continue;
+          }
+          if (inspected >= INPUTS_REVISION_ITEM_LIMIT) {
+            omitted(runId, "limit");
+            break;
+          }
+          const target = matching[0]!;
+          if (!(await visible(runId))) break;
+          inspected++;
+          let pending;
+          try {
+            pending = await service.readPending(target);
+          } catch (error) {
+            // Losing the fence or a concurrently superseded destination is incomplete
+            // discovery, never an invented empty/accepted history. Journal/auth faults
+            // are deliberately not folded into successful omission.
+            if (isOrcaError(error) && ["RUN_LEASED", "REVISION_STALE"].includes(error.code)) {
+              if (await visible(runId)) omitted(runId, "boundary-unavailable");
+              continue;
+            }
+            if (isOrcaError(error) && error.code === "RUN_NOT_FOUND" && !(await visible(runId))) break;
+            throw error;
+          }
+          if (!(await visible(runId))) break;
+          if (pending.state === "superseded") {
+            omitted(runId, "boundary-unavailable");
+            continue;
+          }
+          const summary = PendingRevisionSummarySchema.safeParse({
+            target: pending.target,
+            expectedRevision: pending.expectedRevision,
+            state: pending.state,
+            ...(pending.unavailableReason ? { unavailableReason: pending.unavailableReason } : {}),
+          });
+          if (summary.success) items.push(summary.data);
+          else omitted(runId, "boundary-unavailable");
+        }
+      }
+      const authorized: PendingRevisionSummary[] = [];
+      for (const item of items) if (await visible(item.target.runId)) authorized.push(item);
+      let reason: "limit" | "boundary-unavailable" | undefined;
+      for (const [runId, omission] of omissions)
+        if ((await visible(runId)) && (reason === undefined || omission === "limit")) reason = omission;
+      await visible();
+      return PendingRevisionsDiscoverySchema.parse(
+        reason ? { items: authorized, incomplete: true, reason } : { items: authorized, incomplete: false },
+      );
+    };
+  }
   if (ctx.requestSubmissions && ctx.submissionWorkspaceId && auth.mode === "token") {
     const workspaceId = ctx.submissionWorkspaceId;
     ctx.requestSubmissionAuthority = async (invocation) => {

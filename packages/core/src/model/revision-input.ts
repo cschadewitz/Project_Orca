@@ -56,6 +56,8 @@ export interface PendingRevisionView {
   expectedRevision: string;
   state: RevisionState;
   payload?: RevisionPayload;
+  /** Current allowlisted destination, visible only with protected content grants. */
+  boundary?: RevisionBoundaryView;
   replacementAllowed: boolean;
   unavailableReason?: "delivered" | "target-changed" | "cancelled" | "delivery-uncertain";
 }
