@@ -22,8 +22,8 @@ not by a mutable configuration read after capture.
 
 Caller-selected `requestId`, `workItemId`, `programRunId`, `admissionId`, `actor`,
 `principalId`, `vars.request` and `vars.__orcaAdmissionId` are rejected. This contract submits **new** Requests;
-it does not attach a new program root to arbitrary existing documents. The shared
-orchestrator patch separately validates associations on explicit `runs.start`: missing
+it does not attach a new program root to arbitrary existing documents. The integrated
+orchestrator separately validates associations on explicit `runs.start`: missing
 Requests, missing work items, missing work-item Requests and mismatched pairs fail before
 workflow snapshot, workspace or run creation. The daemon's resource guard runs first.
 
@@ -48,7 +48,7 @@ Restricted clients do not acquire workspace rights by supplying a source label.
 Recovery/list/inspect are scoped to the same principal and workspace, with current grants
 rechecked. A different principal and a missing admission produce the same refusal.
 
-The integration patch rechecks operation grants before parameter diagnostics over the
+The dispatcher rechecks operation grants before parameter diagnostics over the
 shared HTTP/WebSocket dispatcher. It registers admission methods only with the provider,
 control enabled and durable token-mode ownership. Explicit legacy loopback mode retains
 its old methods. No new permissive principal or production generation is synthesized.
@@ -114,6 +114,16 @@ lost the initial response. `requests.admission {admissionId}` inspects one.
 `requests.reconcile {admissionId}` reconciles that **original** admission and queues an
 accepted root for execution. No command values can be replaced during recovery.
 
+These are daemon RPC methods, registered only with token-mode ownership and a wired
+submission provider. At reviewed head `27411de9`, there is no CLI command, ACP slash
+command or app action for admission list/inspect/reconcile, despite error messages
+asking users to reconcile. A standalone OS-user admission cannot be recovered by a
+later daemon's different `local-owner` principal. Do not submit again as a recovery
+substitute: a new submit creates another admission. A supported local recovery surface
+remains outstanding; the table below describes service behavior, not available CLI commands.
+Listing can also fail if any admission's workflow is no longer authorized, rather than
+returning the remaining accessible records; see the final reconciliation checklist.
+
 | Failure boundary | What survives | Reconciliation |
 | --- | --- | --- |
 | Before durable index publication | No Request or run; an unreferenced encrypted record may remain | No work was accepted; submitting anew is safe only after inspecting for an uncertain index write |
@@ -138,14 +148,18 @@ new v2 admissions never inject it.
 An unreadable/ambiguous scan or multiple roots carrying that exact correlation fails closed.
 Older incomplete admissions without the correlation version require explicit repair when
 both root links are missing; recovery never guesses or silently creates a replacement.
-Scanning in the missing-link case is linear in the number of runs; there is no second client retry index. Missing/corrupt protected material is a
+Scanning in the missing-link case is linear in the number of runs; there is no second
+client retry index. At reviewed head `27411de9`, fresh submissions also scan the store:
+an unrelated unreadable run can strand new admissions. This is an unresolved
+[review finding](https://github.com/cschadewitz/Project_Orca/pull/397#discussion_r4163374801),
+not a recovery guarantee. Missing/corrupt protected material is a
 `RUN_STATE` refusal. If the original generation cannot be captured after restart,
 reconciliation remains recoverable; it never silently chooses the latest configuration.
 Restoring generation material is the #332 provider's responsibility.
 
 Public failure text is fixed and never contains a raw exception, secret or path. If the
 failure-marker write itself fails, the prior prepared state remains the recovery handle.
-Acceptance requires the callback to have flushed ownership durably. The shared patch
+Acceptance requires the callback to have flushed ownership durably. The integrated ownership store
 adds ownership write retries and fsync of the owner file and directory to the existing
 store; it does not create a second ownership map. The file admission index likewise
 flushes its directory entry before acknowledgment.
@@ -162,7 +176,7 @@ external effects or replay safety for arbitrary workflow steps.
 | Missing/invalid/forbidden verified authority | Existing `AUTH_REQUIRED`, `AUTH_INVALID`, `AUTH_FORBIDDEN` protocol faults |
 | Malformed command, unknown association fields, reserved Request variable | `WORKFLOW_INPUT_INVALID` from service; strict wire schema rejects invalid envelopes with `PROTOCOL_MESSAGE` |
 | Missing/disallowed workflow, version/revision mismatch, invalid inputs/overrides | Existing workflow/agent validation errors, before persistence |
-| Missing/mismatched explicit-run association | `RUN_STATE` (shared orchestrator patch) |
+| Missing/mismatched explicit-run association | `RUN_STATE` |
 | Missing/foreign admission or missing protected recovery material | `RUN_STATE`, generic unavailable message |
 | Failure after prepared admission | `recoverable-failure` with stable IDs and safe `RUN_STATE` recovery information |
 
@@ -173,7 +187,7 @@ leaves the accepted work inspectable by authorized callers without starting a wo
 
 The configured `ProgramService.submit` delegates to this service and preserves its
 `{request, runId}` result, adding optional `admissionId`. `submitAndRun` and settlement
-retain their existing completion behavior. The CLI patch prints admitted Request/run/
+retain their existing completion behavior. The CLI prints admitted Request/run/
 admission IDs before following execution, preserving existing exit status and work-item
 output. ACP emits Request/admission IDs before its usual run updates and completion;
 its long-lived `session/prompt` contract still streams until the turn ends. `/run` and a
@@ -182,45 +196,33 @@ selected direct workflow remain direct runs. ACP session labels never supply aut
 The old three-argument embedded `ProgramService` constructor remains a legacy
 compatibility path until its composition root supplies admission dependencies. It gains
 reserved-variable validation, but **does not promise durable admission recovery** and
-rejects generation guards it cannot honor. Production integration must configure the
+rejects generation guards it cannot honor. Production bootstrap configures the
 fourth constructor argument for CLI/ACP/daemon; a configured service without explicit
 local authority refuses the legacy wrapper. This is an integration requirement, not an
 alternate supported new submission contract.
 
 Existing clients using `runs.start` keep its response shape. New clients discover the
 additive methods through `hello.methods`; no admission method is advertised merely
-because its schemas exist. No protocol version bump or new capability is claimed by
-this independently developed slice.
+because its schemas exist. The combined runtime uses protocol 1.10. Admission methods have no separate
+capability class; discovery and current operation grants still govern access.
 
-## Integration handoff
+## Integrated wiring and historical handoff
 
-The patch applies to preparation baseline `7abc2342aa672ee9d2f10d565ca4f8eb546184df`.
-It contains exact exports, association admission checks, method/auth/server registration,
-CLI compatibility changes, ownership durability and shared documentation links. Bootstrap
-accepts a `requestSubmission` composition callback returning `{admissions, captureLaunch,
-authority}`. Integration must bind that callback to the actual #332 provider and verified
-local authority using #318's persistent workspace identity. The feature branch cannot
-name a peer implementation's constructor before it exists; no placeholder provider is
-included. Consolidate identical capture types with #332 when its exports are available.
+[329-request-submission-integration.patch](patches/329-request-submission-integration.patch)
+is retained as a historical handoff against preparation baseline
+`7abc2342aa672ee9d2f10d565ca4f8eb546184df`. Its wiring is reconciled in this tree;
+do not apply it to the integrated runtime. Bootstrap supplies the real generation
+provider, separate `restoreLaunch`, durable admission store and explicit local authority.
+Daemon registration uses persistent workspace identity and token-mode ownership.
 
-The capture seam now requires `CapturedLaunch.requestAdmissionCorrelation: true`. Its
-`startRun` must forward `BoundLaunchOptions.requestAdmissionId` unchanged as launch metadata.
-The orchestrator patch calls `correlateRequestAdmission` after ordinary typed validation
-and before publishing `run.created`, authenticating that metadata even for nonsensitive
-workflows. It also adds the optional creation-event field to the core schema. Do not set
-the capability until this wiring is present; missing support refuses submission before
-admission side effects. A returned root is verified before acceptance too. No workflow
-input allowlist exception or validation bypass is needed.
+`CapturedLaunch.requestAdmissionCorrelation: true` requires `startRun` to forward
+`BoundLaunchOptions.requestAdmissionId` unchanged. The integrated orchestrator seals
+that metadata after typed validation and before publishing `run.created`, including
+for nonsensitive workflows. Missing provider support refuses submission before
+admission side effects, and a returned root is verified before acceptance.
 
-The standalone feature fixture supplies this publication boundary for its injected capture
-provider. The patch includes separate strict initial/restart tests with that fixture adapter
-disabled, exercising the real orchestrator path.
-
-Required existing-suite updates at integration: method inventories/security matrix tests
-for four additive methods; explicit-run association fixtures must create their Request/
-work-item documents; production bootstrap/CLI tests must inject the genuine provider.
-Run HTTP/WebSocket parity, concurrent apply/admission, persisted generation restart and
-the real App smoke at the combined head. Independent feature checks are not that evidence.
+Final combined checks remain necessary; see the unresolved findings and reconciliation
+checklist in [runtime-next integration](runtime-next-integration.md#review-status-and-final-reconciliation).
 
 Dedicated tests cover admission/refusal, each durable write boundary, concurrent recovery,
 file-store restart, protected Request projections, configuration capture and fail-closed
