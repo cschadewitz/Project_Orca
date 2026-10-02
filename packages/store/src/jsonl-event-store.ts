@@ -11,6 +11,8 @@ import {
   newId,
   OrcaError,
   OrcaEventSchema,
+  EventJournalCorrelationSchema,
+  type EventJournalCorrelation,
   type Clock,
   type Logger,
   type OrcaEvent,
@@ -66,6 +68,16 @@ export class JsonlEventStore extends BaseEventStore {
     });
     if (fresh) this.publish(record);
     return record;
+  }
+
+  async synchronizeJournal(runId: string, correlation: EventJournalCorrelation): Promise<void> {
+    const expected = EventJournalCorrelationSchema.parse(correlation);
+    await this.logs.synchronizeExisting(runId, (raw) => {
+      const event = OrcaEventSchema.parse(raw);
+      if (event.runId !== runId) throw new OrcaError("RUN_STATE", "Durable journal run identity is inconsistent");
+      const journal = event.journal;
+      return journal?.kind === expected.kind && journal.id === expected.id && journal.revision === expected.revision;
+    });
   }
 
   read(runId: string): Promise<OrcaEvent[]> {

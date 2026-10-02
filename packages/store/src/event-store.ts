@@ -57,6 +57,8 @@ export interface DurableEventAppend {
 }
 
 export interface EventStore {
+  /** Verify and sync an existing marker; never publish, reconstruct, or notify. */
+  synchronizeJournal?(runId: string, correlation: EventJournalCorrelation): Promise<void>;
   /** Optional: production journal services refuse stores without durable unique publication. */
   appendDurableUnique?(input: OrcaEventInput, options: DurableEventAppend): Promise<OrcaEvent>;
   append(input: OrcaEventInput): Promise<OrcaEvent>;

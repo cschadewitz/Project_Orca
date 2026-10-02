@@ -6,7 +6,8 @@ import { OperatorReadModel } from "../src/operator-read-model.js";
 import { Authorizer, OwnershipStore, bindPrincipal, type Permission, type Principal } from "../src/auth/index.js";
 
 const admissions = ["runs.admit", "admissions.get", "admissions.reconcile"] as const;
-const optional = [...OPERATOR_METHODS, ...admissions, ...REVISION_METHODS] as const;
+const continuations = ["runs.continue", "continuations.get", "continuations.reconcile"] as const;
+const optional = [...OPERATOR_METHODS, ...admissions, ...REVISION_METHODS, ...continuations] as const;
 const helloParams = { client: "operator-integration-test", protocol: PROTOCOL_VERSION };
 const target = {
   workspaceId: "a05d4634-3cb0-451c-b0ba-6255ac03bf89",
@@ -78,6 +79,23 @@ describe("operator runtime integration discovery", () => {
     for (const name of admissions) {
       expect(result.capabilities).toContain(name);
       expect(result.methods).toContain(name);
+    }
+  });
+
+  it.each([false, true])("advertises continuation writes only with control present (%s)", async (writable) => {
+    const result = await discovery(
+      context({
+        capabilities: [],
+        continuationAdmissions: {} as NonNullable<MethodContext["continuationAdmissions"]>,
+        continuationAccess: unavailable,
+        ...(writable ? { control: {} as NonNullable<MethodContext["control"]> } : {}),
+      }),
+    );
+    expect(result.capabilities).toContain("continuations.get");
+    expect(result.methods).toContain("continuations.get");
+    for (const method of ["runs.continue", "continuations.reconcile"] as const) {
+      expect(result.capabilities.includes(method)).toBe(writable);
+      expect(result.methods?.includes(method)).toBe(writable);
     }
   });
 

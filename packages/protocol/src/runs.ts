@@ -184,6 +184,8 @@ export const RunsGetParamsSchema = z.object({ runId: z.string().min(1) });
 export type RunsGetParams = z.infer<typeof RunsGetParamsSchema>;
 
 export const RunsGetResultSchema = z.object({
+  /** Opaque server-issued CAS guard for a supported durable boundary; never an authorization grant. */
+  continuation: z.object({ expectedBoundary: z.string().min(1).max(512) }).optional(),
   provenance: RunProvenanceSchema.optional(),
   run: RunSummaryViewSchema,
   workspace: WorkspaceSchema,

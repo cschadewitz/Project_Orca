@@ -23,6 +23,7 @@ import {
   type Logger,
   type OrcaConfig,
   type SubmissionAuthority,
+  type RetryClaimStore,
   type TemplateRegistry,
   type WorkflowRegistry,
 } from "@orca/core";
@@ -102,6 +103,7 @@ export interface OrcaApp {
   program: ProgramService;
   retrySafeAdmissions?: RetrySafeAdmissionService | undefined;
   retryClaims?: RegisteredRetryClaims | undefined;
+  retryClaimStore?: RetryClaimStore | undefined;
   directAdmissions?: DirectAdmissionService | undefined;
   submissionAuthority?: SubmissionAuthority | undefined;
   plan: PlanService;
@@ -415,17 +417,15 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   };
   const provided = await opts.requestSubmission?.({ orchestrator, config, configDir });
   const authority = provided?.authority ?? (await opts.submissionAuthority?.({ orchestrator, config, configDir }));
-  const retryClaims = opts.ephemeral
+  const retryClaimStore = opts.ephemeral
     ? undefined
-    : new RegisteredRetryClaims(
-        new FileRetryClaimStore({
-          storeDir: resolve(configDir, config.storeDir),
-          execution: orchestrator.stores.execution,
-          faults: admissionRetryFaults,
-          limits: config.admissionRetry ?? {},
-        }),
-        admissionRetryFaults,
-      );
+    : new FileRetryClaimStore({
+        storeDir: resolve(configDir, config.storeDir),
+        execution: orchestrator.stores.execution,
+        faults: admissionRetryFaults,
+        limits: config.admissionRetry ?? {},
+      });
+  const retryClaims = retryClaimStore ? new RegisteredRetryClaims(retryClaimStore, admissionRetryFaults) : undefined;
   const directAdmissions = retryClaims
     ? new DirectAdmissionService({
         orchestrator,
@@ -450,6 +450,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     generations,
     submissionAuthority: submission?.authority,
     retryClaims,
+    retryClaimStore,
     directAdmissions,
     retrySafeAdmissions:
       directAdmissions && program.submissions

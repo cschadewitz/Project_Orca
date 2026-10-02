@@ -1,6 +1,12 @@
 /** Typed daemon dispatch, including opt-in authenticated operator projections. */
 import { z } from "zod";
 import type { OperatorReadModel } from "./operator-read-model.js";
+import type { ContinuationAdmissionModel, ContinuationAccess } from "./continuation-admission.js";
+import {
+  RunsContinueParamsSchema,
+  ContinuationsGetParamsSchema,
+  ContinuationsReconcileParamsSchema,
+} from "@orca/protocol";
 import {
   OPERATOR_METHODS,
   OperatorTargetSchema,
@@ -194,6 +200,8 @@ import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 import type { LiveInputChangeSource } from "./live-input-notifications.js";
 
 export interface MethodContext {
+  continuationAdmissions?: ContinuationAdmissionModel | undefined;
+  continuationAccess?: ((ctx: MethodContext) => Promise<ContinuationAccess>) | undefined;
   /** Bound to the original authenticated invocation; absent without production sources. */
   operatorReads?: { methods: readonly string[]; model(ctx: MethodContext): Promise<OperatorReadModel> };
   /** Only install after protected journal, #331 claims, exact attempt dispatch and live auth are wired. */
@@ -343,6 +351,10 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
       capabilities: [
         ...OPERATOR_METHODS.filter((name) => ctx.operatorReads?.methods.includes(name)),
+        ...(ctx.continuationAdmissions && ctx.continuationAccess ? ["continuations.get" as const] : []),
+        ...(ctx.control && ctx.continuationAdmissions && ctx.continuationAccess
+          ? (["runs.continue", "continuations.reconcile"] as const)
+          : []),
         ...(ctx.control && ctx.admissionRetries && ctx.admissionAuthorities
           ? (["runs.admit", "admissions.get", "admissions.reconcile"] as const)
           : []),
@@ -352,6 +364,9 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
             c !== "runs.admit" &&
             c !== "admissions.get" &&
             c !== "admissions.reconcile" &&
+            c !== "runs.continue" &&
+            c !== "continuations.get" &&
+            c !== "continuations.reconcile" &&
             c !== "workflows.validateInputs" &&
             c !== "inputs.live" &&
             c !== "inputs.revise" &&
@@ -377,7 +392,15 @@ export const runsList: Method<Parameters<ReadModel["runsList"]>[0], RunsListResu
 /** `runs.get`: one run's tree - steps, attempts, children, artifacts. */
 export const runsGet: Method<Parameters<ReadModel["runsGet"]>[0], RunsGetResult> = {
   params: RunsGetParamsSchema,
-  handle: (params, ctx) => reads(ctx).runsGet(params),
+  handle: async (params, ctx) => {
+    const result = await reads(ctx).runsGet(params);
+    if (!ctx.continuationAdmissions || !ctx.continuationAccess) return result;
+    const expectedBoundary = await ctx.continuationAdmissions.expectedBoundary(
+      params.runId,
+      await ctx.continuationAccess(ctx),
+    );
+    return expectedBoundary ? { ...result, continuation: { expectedBoundary } } : result;
+  },
 };
 
 /** `runs.events`: one page of a run's log, by sequence number, forwards or backwards. */
@@ -804,6 +827,24 @@ export function methodsFor(ctx: MethodContext): MethodTable {
       params: AdmissionsReconcileParamsSchema,
       handle: async (params, invocation) => model.reconcile(params.operationId, await authorities(invocation)),
     };
+  }
+  if (ctx.continuationAdmissions && ctx.continuationAccess) {
+    const model = ctx.continuationAdmissions;
+    const access = ctx.continuationAccess;
+    table["continuations.get"] = {
+      params: ContinuationsGetParamsSchema,
+      handle: async (params, invocation) => model.inspect(params.continuationId, await access(invocation)),
+    };
+    if (ctx.control) {
+      table["runs.continue"] = {
+        params: RunsContinueParamsSchema,
+        handle: async (params, invocation) => model.admit(params.command, params.retry, await access(invocation)),
+      };
+      table["continuations.reconcile"] = {
+        params: ContinuationsReconcileParamsSchema,
+        handle: async (params, invocation) => model.reconcile(params.continuationId, await access(invocation)),
+      };
+    }
   }
   if (ctx.revisionInputs) {
     const authenticated = ctx.revisionInputs;

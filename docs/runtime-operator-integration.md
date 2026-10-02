@@ -4,6 +4,55 @@ This is the shared integration of the three parallel handoffs, not production
 acceptance of #331, #356 or #327. No main merge, release, deployment or actual Cal
 connection is included.
 
+## Current continuation composition
+
+The follow-up to the initial checkpoint production-wires `runs.continue`,
+`continuations.get` and `continuations.reconcile`. Authorized `runs.get` includes
+an optional `continuation.expectedBoundary` opaque CAS guard. The guard is issued
+only for a supported boundary and grants no authority. Parameters are the frozen
+`{command, retry}` pair; both transports use the same strict schemas.
+
+This first slice supports sealed root runs paused at durable gates or human
+decisions. It refuses live callbacks, revision-only branch answers, child/ancestor
+continuation, uncertain agent pauses and missing original generations. Legacy
+blocking control methods keep their existing behavior. Unsupported boundaries
+omit the projection rather than suggesting that a token can be invented.
+
+Admission writes one protected decision-plus-dispatch marker before returning.
+Automatic dispatch acknowledges attachment after current execution authorization
+and its durable transition, holding the same run lease through execution. Startup
+recovery processes at most 100 retry candidates per sweep and resolves only the
+original recorded credential. Missing/revoked authority becomes blocked; a new
+daemon-local owner credential is never substituted. Explicit same-principal
+reconciliation may supply current authorized execution context after rotation.
+Already-attached work after a crash is treated as ambiguous unless terminal
+history proves settlement. A competing lease is refused without writing through
+another owner's fence.
+
+Receipt lookup uses encrypted immutable locators. They are discovery hints, never
+acceptance. Startup can rebuild a missing hint only after authenticating and
+syncing its existing authoritative marker. A bound claim without a marker creates
+no acceptance, answer or execution. A cached retry result is also checked against
+the authoritative journal before being returned.
+
+Inspection authenticates and syncs an existing marker without appending, repairing
+missing records, allocating a new private payload or attaching execution. Failed
+durability verification returns `RUN_STATE` with `uncertain: true` and the original
+continuation correlation for reconciliation; it does not report accepted from
+merely readable bytes. Missing or rewound markers fail closed. Real HTTP/WebSocket
+tests cover this behavior with actual credentials and file stores.
+
+Internal continuation replay is bounded to 100,000 events, read in fixed-size
+pages; larger histories refuse with an explicit unsupported result. This limit
+does not change the bounded operator tool response limits. Generic admission
+receipt dispatch has not been broadened to continuation grants: use the dedicated
+continuation receipt methods.
+
+MCP mutation discovery remains disabled pending its bounded boundary projection
+and real adapter composition. Durable Request/direct startup dispatch, production
+revision delivery, author fixes, Electron, independent review and actual Cal
+acceptance remain open; continuation completion does not close those gates.
+
 ## Source ancestry and ownership
 
 The common frozen base is `9058fa8935ae4c999293727c005031eec93114be`.
@@ -48,15 +97,15 @@ MCP mutation fixture callbacks are not installed by this checkpoint.
 
 ## Remaining production composition
 
-1. Compose continuation boundary issuance, protected entry validation, a rebuildable
-   receipt-to-run discovery index, exact decision plus accepted dispatch commit,
-   current-authority recovery and leased attachment. The sidecar is never authority.
+1. Complete wider continuation lineage cases only after defining and testing their
+   exact boundaries; the current production slice deliberately supports roots only.
 2. Supply the real `RevisionLog` adapter, protected-input/sensitivity promotion,
    exact reserved destination attempt and conservative delivery recovery; mount
    Attention/inline/CLI consumers only after those boundaries are proven.
-3. Discover durable Request/direct/continuation dispatch after daemon restart in
-   bounded batches. Accepted storage plus an in-memory callback is not startup
-   discovery. Missing/revoked authority stays blocked; no daemon-owner fallback.
+3. Add durable Request/direct admission dispatch discovery after daemon restart,
+   sharing bounded retry discovery rather than racing independent cursors.
+   Continuation discovery is implemented; an in-memory callback alone is still
+   not startup discovery. Missing/revoked authority must stay blocked.
 4. Add thin authenticated, target-bound MCP mutation endpoints delegating to those
    production services. Preserve their `RetryResult` envelopes; do not alias them
    to flat legacy receipts or claim fixture-backed methods are implemented.
@@ -110,3 +159,11 @@ Exact-head remote CI, final Node 22/24 tests and coverage, format/lint/design/bu
 compiled CLI/runtime smoke, real Electron smoke, independent review, combined
 crash/restart acceptance and actual-Cal tests remain required. No threshold,
 authorization, key or durability check is relaxed by this checkpoint.
+
+CI #358 found eight protocol-1 fixture failures; the isolated fixture repair in
+`ae902c40c976a6c0c3497777102198f324e5cd80` passed all 67 affected tests locally.
+CI #359 then passed all 2,886 tests on both supported Node versions, and Node 22
+build/compiled smoke. Its sole failure was app Node-side coverage for three newly
+wired revision client methods. The follow-up adds 15 focused tests covering those
+exact RPC methods; thresholds and exclusions are unchanged. Fresh complete-suite
+coverage remains required on the next published head.

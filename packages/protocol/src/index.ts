@@ -34,3 +34,4 @@ export * from "./admission-retry.js";
 export * from "./revision-input.js";
 
 export * from "./operator-reads.js";
+export * from "./continuation-admission.js";

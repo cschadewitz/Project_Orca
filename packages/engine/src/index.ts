@@ -27,3 +27,4 @@ export * from "./direct-admission.js";
 export * from "./revision-input.js";
 
 export * from "./revision-delivery.js";
+export * from "./continuation-admission.js";

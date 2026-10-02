@@ -940,6 +940,34 @@ production implementation is wired and the current principal has its grants.
 
 ## Publication and handoff
 
+### Integration clarifications approved 2 October 2026
+
+- The new wire `runs.admit` receipt is `DirectAdmissionResult & {operationId: string}`.
+  Every resolved prepared/accepted/recoverable-failure receipt retains that safe
+  retry correlation; an in-progress response uses a typed non-success envelope.
+  The internal result and settled legacy `runs.start` shape are unchanged. The
+  client idempotency key is never returned as a receipt or used as authority.
+- The combined implementation crosses an explicit protocol **2.0** and
+  **operator-journals-v4** store boundary. Old clients have closed capability and
+  event schemas; this is not a backward-compatible minor. Client and server upgrade
+  together. Managed activation/recovery checks epochs, while direct startup does
+  not enforce the release marker. Rollback requires the complete pre-upgrade store
+  backup and its matching binary; epoch equality is not a downgrade guarantee.
+- The supported continuation boundary is exposed as optional authorized
+  `runs.get.continuation.expectedBoundary`; the token is an opaque CAS guard, not
+  permission. `runs.continue` accepts `{command, retry}`, and dedicated continuation
+  inspection/reconciliation names the returned continuation ID. Initial production
+  composition is restricted to sealed root durable gates/human decisions, with
+  unsupported or ambiguous lineage omitted/refused explicitly. Wider acceptance
+  remains subject to the original gates below.
+- One protected authoritative event commits decision plus dispatch intent.
+  Existing-file synchronization must complete before accepted acknowledgement or
+  inspection. Private locator/index records are never authority: missing markers
+  cannot be rebuilt from a cached receipt or index. Recovery may repair only the
+  locator after verifying the original marker, preserving correlation and current
+  authority. No second execution store, encryption key lifecycle or owner fallback
+  is introduced.
+
 The coordinator publishes only this preparation document against the exact merged
 base after final review, then records its full commit SHA in #331/#356/#327 and
 all three kickoff messages. A kickoff names issue, exact start SHA, exclusive

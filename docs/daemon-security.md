@@ -176,6 +176,9 @@ that the two match. A method that is missing from the table is refused with
 | `admissions.get` | `runs.start` | own operation, original grants and resources; Request also needs `plan.write` | — |
 | `admissions.reconcile` | `runs.start` | own operation, original grants/resources; attachment requires current execution authority | mutation |
 | `runs.resume` | `runs.control` | the run | mutation |
+| `runs.continue` | `runs.control` | exact sealed run and issued boundary; an included decision also requires `inputs.answer` | mutation |
+| `continuations.get` | `runs.read` | the sealed receipt's run; a locator or CAS token is not authority | — |
+| `continuations.reconcile` | `runs.control` | original principal and run; original decision also requires `inputs.answer`, execution authority is rechecked separately | mutation |
 | `runs.cancel` | `runs.control` | the run | mutation |
 | `inputs.answer` | `inputs.answer` | the exact open gate and its run; `always` also needs `permissions.grant` | decision |
 | `claims.release` | `claims.release` | the claim's owning run | mutation |

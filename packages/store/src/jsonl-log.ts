@@ -196,22 +196,7 @@ export class JsonlLogDir {
             // Even an existing marker might follow a previous sync failure. Never infer
             // durability merely because its complete bytes can currently be read.
             await handle.sync();
-            if (process.platform !== "win32") {
-              // Include the containing directory and its ancestry on first creation.
-              // Syncing every time also retries any earlier uncertain directory sync.
-              let dir = this.dir;
-              for (;;) {
-                const directory = await open(dir, "r");
-                try {
-                  await directory.sync();
-                } finally {
-                  await directory.close();
-                }
-                const parent = dirname(dir);
-                if (parent === dir) break;
-                dir = parent;
-              }
-            }
+            await this.syncDirectories();
             this.tails.delete(key);
             return { record, fresh: existing === undefined };
           } finally {
@@ -228,6 +213,70 @@ export class JsonlLogDir {
       next.catch(() => undefined),
     );
     return next;
+  }
+
+  /** Read-only confirmation. Missing or incomplete markers cannot be reconstructed here. */
+  synchronizeExisting(key: string, matches: (record: unknown) => boolean): Promise<void> {
+    const prev = this.chains.get(key) ?? Promise.resolve();
+    const next = prev.then(() =>
+      withFileLock(
+        `${this.file(key)}.lock`,
+        async () => {
+          // Do not initialize the directory or use a creating/write-capable file mode.
+          const handle = await open(this.file(key), "r");
+          try {
+            const bytes = await handle.readFile();
+            if (bytes.length > 0 && bytes[bytes.length - 1] !== NEWLINE)
+              throw new OrcaError("RUN_STATE", "Journal synchronization requires complete records");
+            let seq = 0;
+            let found = false;
+            for (const line of splitJsonlLines(bytes.toString("utf8"))) {
+              let raw: unknown;
+              try {
+                raw = JSON.parse(line) as unknown;
+              } catch {
+                throw new OrcaError("RUN_STATE", "Durable journal contains an invalid complete record");
+              }
+              if ((raw as { seq?: unknown } | null)?.seq !== seq++)
+                throw new OrcaError("RUN_STATE", "Durable journal sequence is inconsistent");
+              if (matches(raw)) {
+                if (found) throw new OrcaError("RUN_STATE", "Durable journal contains duplicate correlations");
+                found = true;
+              }
+            }
+            if (!found) throw new OrcaError("RUN_STATE", "The durable journal marker is missing");
+            await handle.sync();
+            await this.syncDirectories();
+          } finally {
+            await handle.close();
+          }
+        },
+        this.lock,
+      ),
+    );
+    this.chains.set(
+      key,
+      next.catch(() => undefined),
+    );
+    return next;
+  }
+
+  private async syncDirectories(): Promise<void> {
+    // POSIX directory-entry durability includes newly created ancestors. Windows
+    // currently guarantees file synchronization only, as with protected-file.ts.
+    if (process.platform === "win32") return;
+    let dir = this.dir;
+    for (;;) {
+      const directory = await open(dir, "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
   }
 
   private async appendLocked<T>(key: string, build: (seq: number) => T): Promise<T> {

@@ -145,9 +145,29 @@ export class ContinuationAdmissionService implements ContinuationService {
     retry: RetryOptions,
     authority: RetryAuthority<ContinuationCommand>,
   ): Promise<RetryResult<ContinuationReceipt>> {
-    return this.authorities.run(authority, () =>
-      this.options.retries.execute(this.operation, command, retry, authority),
-    );
+    return this.authorities.run(authority, async () => {
+      // Snapshot the canonical intent before asynchronous authorization or lookup. The
+      // retry ledger is an intent/result index, never evidence that its run journal
+      // still contains the authoritative acceptance after a restore or rewind.
+      const canonical = canonicalJson(this.operation.canonicalize(command));
+      const snapshot = JSON.parse(canonical) as ContinuationCommand;
+      const response = await this.options.retries.execute(this.operation, snapshot, retry, authority);
+      if (response.state !== "resolved") return response;
+      const entry = await this.read(response.result.continuationId);
+      this.assertOwner(entry, authority);
+      this.assertReceipt(entry.receipt, response.result);
+      if (
+        response.operationId !== entry.receipt.operationId ||
+        entry.receipt.runId !== snapshot.runId ||
+        entry.receipt.expectedBoundary !== snapshot.expectedBoundary ||
+        canonicalJson(entry.command) !== canonical
+      )
+        throw unavailable();
+      await authority.authorize(snapshot);
+      // Preserve original receipt/replayed semantics. A missing or mismatched marker
+      // fails closed; replay must never recreate it or record a second decision.
+      return response;
+    });
   }
 
   async inspect(continuationId: string): Promise<ContinuationReceipt> {

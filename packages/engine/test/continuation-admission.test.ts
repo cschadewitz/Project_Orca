@@ -126,16 +126,15 @@ async function fixture() {
   };
   const boot = () => {
     const execution = new FileExecutionStore(dir);
-    const claims = new RegisteredRetryClaims(
-      new FileRetryClaimStore({ storeDir: dir, execution, faults, lockTimeoutMs: 200 }),
-      faults,
-    );
-    return { claims, service: new ContinuationAdmissionService({ retries: claims, journal, runtime }) };
+    const claimStore = new FileRetryClaimStore({ storeDir: dir, execution, faults, lockTimeoutMs: 200 });
+    const claims = new RegisteredRetryClaims(claimStore, faults);
+    return { claimStore, claims, service: new ContinuationAdmissionService({ retries: claims, journal, runtime }) };
   };
   return {
     boot,
     read,
     save,
+    rewind: () => rm(file),
     journal,
     runtime,
     counts: () => ({ answers, appends, runtimeCalls }),
@@ -169,6 +168,69 @@ describe("continuation service with explicitly simulated journal/runtime adapter
     expect(f.counts()).toEqual({ appends: 1, answers: 1, runtimeCalls: 0 });
     expect(await admit(service)).toEqual({ ...result, replayed: true });
     expect(f.counts().answers).toBe(1);
+  });
+  it("refuses a replay after the authoritative marker is rewound without recreating it", async () => {
+    const f = await fixture();
+    const first = await admit(f.boot().service);
+    const original = (await f.read())!;
+    const commit = vi.spyOn(f.journal, "commit");
+    await f.rewind();
+    const { service, claimStore } = f.boot();
+    const before = await claimStore.read(first.operationId);
+    await expect(admit(service)).rejects.toThrow("Continuation is unavailable");
+    expect(await f.read()).toBeUndefined();
+    expect(commit).not.toHaveBeenCalled();
+    expect(await claimStore.read(first.operationId)).toEqual(before);
+    expect(f.counts()).toEqual({ appends: 1, answers: 1, runtimeCalls: 0 });
+    await f.save(original);
+    expect(await admit(service)).toEqual({ ...first, replayed: true });
+  });
+  it.each([
+    "principalId",
+    "workspaceId",
+    "operationId",
+    "continuationId",
+    "runId",
+    "expectedBoundary",
+    "command",
+  ] as const)("refuses replay with changed sealed %s without another commit or binding", async (field) => {
+    const f = await fixture();
+    const { service, claimStore } = f.boot();
+    const first = await admit(service);
+    const original = (await f.read())!;
+    const changed = structuredClone(original);
+    if (field === "principalId" || field === "workspaceId") changed[field] = "other";
+    else if (field === "command") changed.command.decision!.optionId = "other";
+    else changed.receipt[field] = "other";
+    await f.save(changed);
+    const commit = vi.spyOn(f.journal, "commit");
+    const before = await claimStore.read(first.operationId);
+    await expect(admit(service)).rejects.toThrow("Continuation is unavailable");
+    expect(commit).not.toHaveBeenCalled();
+    expect(await claimStore.read(first.operationId)).toEqual(before);
+    expect(f.counts()).toEqual({ appends: 1, answers: 1, runtimeCalls: 0 });
+    await f.save(original);
+    expect(await admit(service)).toEqual({ ...first, replayed: true });
+  });
+  it("reauthorizes after verifying the durable marker before acknowledging replay", async () => {
+    const f = await fixture();
+    const { service } = f.boot();
+    await admit(service);
+    let allowed = true;
+    const current = {
+      ...authority,
+      authorize: async () => {
+        if (!allowed) throw new Error("revoked after read");
+      },
+    };
+    const read = f.journal.read.bind(f.journal);
+    f.journal.read = async (id) => {
+      const entry = await read(id);
+      allowed = false;
+      return entry;
+    };
+    await expect(service.admit(command, { idempotencyKey: "intent" }, current)).rejects.toThrow("revoked after read");
+    expect(f.counts()).toEqual({ appends: 1, answers: 1, runtimeCalls: 0 });
   });
   it("recovers the same claim and continuation after an append-before-ack crash and restart", async () => {
     const f = await fixture();

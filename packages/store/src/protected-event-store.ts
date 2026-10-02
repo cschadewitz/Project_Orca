@@ -1,9 +1,12 @@
 /** Public event facade: save secret-bearing originals privately before publishing a scrubbed durable event. */
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   OrcaError,
   sensitiveInputNames,
   OrcaEventSchema,
+  EventJournalCorrelationSchema,
+  type EventJournalCorrelation,
   HumanInputLiveIdentitySchema,
   type OrcaEvent,
   type OrcaEventInput,
@@ -60,6 +63,46 @@ export class ProtectedEventStore implements EventStore {
       !(await this.execution.getInputs(runId))
     )
       throw unavailable();
+  }
+
+  /** Inspection confirms durability without allocating another private payload or public marker. */
+  async synchronizeJournal(runId: string, correlation: EventJournalCorrelation): Promise<void> {
+    if (!this.publicEvents.synchronizeJournal)
+      throw new OrcaError("NOT_SUPPORTED", "this event store has no journal synchronization");
+    const expected = EventJournalCorrelationSchema.parse(correlation);
+    const authenticate = async () => {
+      await this.requireSafeLegacy(runId);
+      await this.requireIntegrity(runId);
+      const events = await this.publicEvents.readRange(runId, {
+        limit: 2,
+        match: (event) =>
+          event.journal?.kind === expected.kind &&
+          event.journal.id === expected.id &&
+          event.journal.revision === expected.revision,
+      });
+      const event = events[0];
+      if (
+        events.length !== 1 ||
+        !event ||
+        event.runId !== runId ||
+        event.type !== `${expected.kind}.recorded` ||
+        !event.executionPayloadRef
+      )
+        throw unavailable();
+      const [restored] = await executionEvents([event], this.execution);
+      if (
+        !restored ||
+        (restored.type !== "continuation.recorded" && restored.type !== "revision.recorded") ||
+        !restored.payload.entry
+      )
+        throw unavailable();
+      return restored;
+    };
+    const before = await authenticate();
+    await this.publicEvents.synchronizeJournal(runId, expected);
+    // Fail closed if either the immutable marker or current key/material changed while
+    // syncing. This is not authority to recover a missing marker from private records.
+    if (!isDeepStrictEqual(before, await authenticate())) throw unavailable();
   }
 
   /** Only journal adapters under the run fence may publish an authoritative acceptance marker. */

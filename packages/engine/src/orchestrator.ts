@@ -756,6 +756,98 @@ export class Orchestrator {
     return this.run(id);
   }
 
+  /**
+   * Internal durable-continuation attachment. The acknowledgement waits only for the
+   * fenced durable transition, never for execution. The callback already owns the
+   * mutation fence: use rc.emitOwned, not rc.emit/withOwnership or public answer/resume.
+   * It must revalidate the exact continuation boundary and persist its attached CAS.
+   * Any caller using withResumeAuthority MUST enclose the completion lifetime, not
+   * just this method's acknowledgement, so renewed authority survives execution.
+   */
+  async attachContinuation(
+    runId: string,
+    options: { beforeExecute: (rc: RunContext) => Promise<void> },
+  ): Promise<{ runId: string; completion: Promise<RunState> }> {
+    // Reserve synchronously, including against ordinary run() on this instance.
+    if (this.running.has(runId)) throw new OrcaError("RUN_LEASED", "execution is already attached");
+    let acknowledge!: () => void;
+    let refuse!: (error: unknown) => void;
+    const attached = new Promise<void>((resolve, reject) => {
+      acknowledge = resolve;
+      refuse = reject;
+    });
+    const completion = this.executeContinuationLeased(runId, options.beforeExecute, acknowledge)
+      .then(async () => {
+        const projected = this.live.get(runId)?.publicState() ?? (await this.getState(runId));
+        if (isTerminal(projected)) this.cacheTerminalState(runId, projected);
+        return projected;
+      })
+      .finally(() => {
+        this.running.delete(runId);
+        this.live.delete(runId);
+      });
+    this.running.set(runId, completion);
+    // Before acknowledgement the caller has no completion handle. After it, a
+    // detached caller still cannot generate an unhandled rejection in the daemon.
+    void completion.catch(refuse);
+    await attached;
+    return { runId, completion };
+  }
+
+  private async executeContinuationLeased(
+    runId: string,
+    beforeExecute: (rc: RunContext) => Promise<void>,
+    acknowledge: () => void,
+  ): Promise<RunState> {
+    const summary = await this.getSummary(runId);
+    if (summary.status !== "paused") throw new OrcaError("RUN_STATE", "continuation requires a paused root");
+    let rc: RunContext | undefined;
+    const held = await this.takeRunLease(runId, summary.workflowId, () => rc);
+    try {
+      rc = await this.loadContext(runId);
+      rc.lease = held.lease;
+      if (held.lost || !held.held) {
+        rc.leaseLost = true;
+        throw new OrcaError("RUN_LEASED", "continuation execution lease was lost");
+      }
+      const context = rc;
+      await context.withOwnership(async () => {
+        const first = (await this.stores.events.readRange(runId, { limit: 1 }))[0];
+        const state = context.state;
+        const last = state.steps[state.stepOrder.at(-1) ?? ""];
+        const node = last && context.definition.nodes[last.nodeId];
+        const inputs = Object.values(state.humanInputs).filter((input) => input.stepRunId === last?.id);
+        if (
+          first?.type !== "run.created" ||
+          !first.executionPayloadRef ||
+          !first.payload.workflowStored ||
+          !state.run.provenance ||
+          !this.contextGenerations.has(context) ||
+          state.run.parentRunId ||
+          state.run.status !== "paused" ||
+          !last ||
+          (last.status !== "waiting" && last.status !== "running") ||
+          !(node?.type === "gate" || (node?.type === "decision" && node.source.kind === "human")) ||
+          inputs.length !== 1 ||
+          inputs[0]!.kind !== "decision" ||
+          inputs[0]!.liveDecision
+        )
+          throw new OrcaError("RUN_STATE", "continuation requires a sealed durable root decision boundary");
+        // Execution authority is checked under the same fence as the attached marker.
+        await this.liveInput?.prepareExecution?.(runId);
+        await beforeExecute(context);
+      });
+      acknowledge();
+      return await this.execute(context);
+    } finally {
+      try {
+        this.liveInput?.releaseExecution?.(runId);
+      } finally {
+        await held.release();
+      }
+    }
+  }
+
   // ------------------------------------------------------------------ claims
 
   /**

@@ -3,11 +3,11 @@
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
 import { mcpCommand } from "./mcp.js";
-import { AdmissionRetryModel, neverAttached } from "@orca/daemon";
+import { AdmissionRetryModel, ContinuationAdmissionModel, neverAttached } from "@orca/daemon";
 import { admissionRetryOptions } from "./admission-retry.js";
 
 import { admissionsCommand } from "./admissions.js";
-import { workspaceIdentity } from "@orca/store";
+import { FileContinuationLocatorStore, workspaceIdentity } from "@orca/store";
 import {
   localSubmissionAuthority,
   localDirectAdmissionAuthority,
@@ -826,6 +826,19 @@ export const commands: Record<string, Command> = {
               executionFailed: (id) => app.logger.error("Run admission requires recovery", { runId: id }),
             })
           : undefined;
+      const continuationAdmissions =
+        !readOnly && liveRuntime && app.retryClaims && app.retryClaimStore
+          ? new ContinuationAdmissionModel({
+              claims: app.retryClaims,
+              orchestrator: app.orchestrator,
+              locators: new FileContinuationLocatorStore({
+                storeDir,
+                execution: app.orchestrator.stores.execution,
+                retries: app.retryClaimStore,
+              }),
+              executionRuntime: liveRuntime,
+            })
+          : undefined;
       const daemon = await startDaemon({
         operatorSources: {
           events: app.orchestrator.stores.events,
@@ -843,6 +856,7 @@ export const commands: Record<string, Command> = {
         },
 
         admissionRetries,
+        continuationAdmissions,
         requestSubmissions,
         submissionWorkspaceId: workspaceId,
         identity,
@@ -900,6 +914,19 @@ export const commands: Record<string, Command> = {
         await daemon.close();
         throw error;
       }
+      let recoveringContinuations: Promise<void> | undefined;
+      const recoverContinuations = () => {
+        if (!daemon.recoverContinuations || recoveringContinuations) return;
+        recoveringContinuations = daemon
+          .recoverContinuations()
+          .catch(() => app.logger.warn("Continuation recovery requires explicit attention"))
+          .finally(() => {
+            recoveringContinuations = undefined;
+          });
+      };
+      recoverContinuations();
+      const continuationTimer = daemon.recoverContinuations ? setInterval(recoverContinuations, 5_000) : undefined;
+      continuationTimer?.unref();
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
       );
@@ -925,8 +952,11 @@ export const commands: Record<string, Command> = {
         process.once("SIGINT", stop);
         process.once("SIGTERM", stop);
       });
+      if (continuationTimer) clearInterval(continuationTimer);
+      await recoveringContinuations;
       liveRuntime?.close();
       await daemon.close();
+      await continuationAdmissions?.drain();
       return 0;
     },
   },

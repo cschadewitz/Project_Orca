@@ -88,6 +88,8 @@ export interface DaemonHandle {
   /** The WebSocket URL, when this daemon was given an engine feed to subscribe to. */
   socketUrl?: string | undefined;
   close: () => Promise<void>;
+  /** Bounded startup sweep; resolves only the original sealed credential, never a process owner. */
+  recoverContinuations?: (() => Promise<void>) | undefined;
 }
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -202,6 +204,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     workflowInputs: opts.workflowInputs,
     requestSubmissions: auth.mode === "token" ? opts.requestSubmissions : undefined,
     admissionRetries: auth.mode === "token" ? opts.admissionRetries : undefined,
+    continuationAdmissions: auth.mode === "token" ? opts.continuationAdmissions : undefined,
     submissionWorkspaceId: opts.submissionWorkspaceId,
     source: opts.source,
     liveInputs: opts.liveInputs,
@@ -276,6 +279,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         },
         request: async () => submissionAuthority({ workspaceId, actor, authorizer, principal }),
         direct: async () => directAdmissionAuthority({ workspaceId, actor, authorizer, principal }),
+      };
+    };
+  }
+  if (ctx.continuationAdmissions && ctx.submissionWorkspaceId && auth.mode === "token") {
+    const workspaceId = ctx.submissionWorkspaceId;
+    ctx.continuationAccess = async (invocation) => {
+      const bound = principalOf(invocation);
+      const credentialId = bound?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      return {
+        workspaceId,
+        authorizer,
+        executionAuthority: invocation.executionResumeAuthority,
+        current: async () => {
+          const current = auth.credentials.current(credentialId);
+          if (!current.ok) throw authInvalid();
+          return current.principal;
+        },
       };
     };
   }
@@ -390,10 +411,37 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   });
   const { port } = server.address() as AddressInfo;
   const url = `http://${host}:${port}`;
+  const continuationModel = ctx.continuationAdmissions;
+  const recoverContinuations =
+    continuationModel && ctx.submissionWorkspaceId && auth.mode === "token"
+      ? async () => {
+          await continuationModel.recoverBatch(async (entry) => {
+            const credentialId = entry.actor?.credentialId;
+            if (!credentialId || entry.workspaceId !== ctx.submissionWorkspaceId) return undefined;
+            const checked = auth.credentials.current(credentialId);
+            if (!checked.ok || checked.principal.id !== entry.principalId) return undefined;
+            const principal = checked.principal;
+            if (!holds(principal, "runs.control") || (entry.command.decision && !holds(principal, "inputs.answer")))
+              return undefined;
+            if (!(await authorizer.runs.allows(principal, entry.receipt.runId))) return undefined;
+            return {
+              workspaceId: entry.workspaceId,
+              authorizer,
+              executionAuthority: authorizer.executionResumeAuthority(principal),
+              current: async () => {
+                const current = auth.credentials.current(credentialId);
+                if (!current.ok || current.principal.id !== entry.principalId) throw authInvalid();
+                return current.principal;
+              },
+            };
+          });
+        }
+      : undefined;
   return {
     host,
     port,
     url,
+    ...(recoverContinuations ? { recoverContinuations } : {}),
     ...(detachSocket ? { socketUrl: socketUrlFor(url) } : {}),
     close: async () => {
       // Sockets first: an open upgraded connection is not an HTTP connection, so

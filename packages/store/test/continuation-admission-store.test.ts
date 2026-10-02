@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { JsonlLogDir } from "../src/jsonl-log.js";
 import { JsonlEventStore } from "../src/jsonl-event-store.js";
+import { ProtectedEventStore } from "../src/protected-event-store.js";
+import { FileExecutionStore } from "../src/execution-store.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -247,5 +249,123 @@ describe("durable event facade", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "CONTINUATION_STALE" });
+  });
+});
+
+describe("read-only journal synchronization", () => {
+  const correlation = { kind: "continuation" as const, id: "inspect-c1", revision: 1 };
+  const input = { runId: "run", type: "run.started" as const, payload: {} };
+
+  it("reconfirms an fsync-failed marker after reconstruction without writing or notifying", async () => {
+    const { dir } = await fixture();
+    const original = new JsonlEventStore(dir);
+    const prototype = await handlePrototype(join(dir, "probe"));
+    const failure = vi.spyOn(prototype, "sync").mockRejectedValueOnce(new Error("publication fsync failed"));
+    await expect(
+      original.appendDurableUnique(input, {
+        expectedSeq: -1,
+        correlation,
+        equivalent: () => true,
+      }),
+    ).rejects.toThrow("publication fsync failed");
+    failure.mockRestore();
+    const file = join(dir, "runs", "run.jsonl");
+    const contents = await readFile(file, "utf8");
+    const reopened = new JsonlEventStore(dir);
+    const listener = vi.fn();
+    reopened.subscribe(listener);
+    const sync = vi.spyOn(prototype, "sync").mockRejectedValueOnce(new Error("inspection fsync failed"));
+    await expect(reopened.synchronizeJournal("run", correlation)).rejects.toThrow("inspection fsync failed");
+    sync.mockRestore();
+    const write = vi.spyOn(prototype, "writeFile");
+    await reopened.synchronizeJournal("run", correlation);
+    expect(write).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    expect(await readFile(file, "utf8")).toBe(contents);
+  });
+
+  it("refuses missing or rewound markers, missing files and incomplete tails without reconstruction", async () => {
+    const { dir } = await fixture();
+    const events = new JsonlEventStore(dir);
+    await events.appendDurableUnique(input, { expectedSeq: -1, correlation, equivalent: () => true });
+    const file = join(dir, "runs", "run.jsonl");
+    const marker = await readFile(file, "utf8");
+    await expect(events.synchronizeJournal("run", { ...correlation, revision: 2 })).rejects.toThrow("missing");
+    expect(await readFile(file, "utf8")).toBe(marker);
+    for (const bytes of ["", marker.trimEnd(), marker + '{"seq":']) {
+      await writeFile(file, bytes);
+      await expect(events.synchronizeJournal("run", correlation)).rejects.toThrow();
+      expect(await readFile(file, "utf8")).toBe(bytes);
+    }
+    await rm(file);
+    await expect(events.synchronizeJournal("run", correlation)).rejects.toThrow();
+    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects duplicate correlation and wrong-run history during synchronization", async () => {
+    const { dir } = await fixture();
+    const events = new JsonlEventStore(dir);
+    const marker = await events.appendDurableUnique(input, { expectedSeq: -1, correlation, equivalent: () => true });
+    const file = join(dir, "runs", "run.jsonl");
+    const duplicate = JSON.stringify(marker) + "\n" + JSON.stringify({ ...marker, seq: 1 }) + "\n";
+    await writeFile(file, duplicate);
+    await expect(events.synchronizeJournal("run", correlation)).rejects.toThrow("duplicate correlations");
+    expect(await readFile(file, "utf8")).toBe(duplicate);
+    const foreign = JSON.stringify({ ...marker, runId: "foreign" }) + "\n";
+    await writeFile(file, foreign);
+    await expect(events.synchronizeJournal("run", correlation)).rejects.toThrow("run identity");
+    expect(await readFile(file, "utf8")).toBe(foreign);
+  });
+
+  it("authenticates protected material without new private writes or subscriber effects", async () => {
+    const { dir } = await fixture();
+    const execution = new FileExecutionStore(dir);
+    await execution.putInputs({
+      runId: "run",
+      workflowId: "workflow",
+      workflowVersion: "1",
+      vars: {},
+      sensitiveNames: [],
+      secrets: [],
+    });
+    const events = new ProtectedEventStore(new JsonlEventStore(dir), execution);
+    await events.appendDurableUnique(
+      {
+        runId: "run",
+        type: "continuation.recorded",
+        payload: { continuationId: correlation.id, state: "accepted", entry: { schemaVersion: 1, secret: "private" } },
+      },
+      { expectedSeq: -1, correlation, equivalent: () => true },
+    );
+    const writes = vi.spyOn(execution, "putPayload");
+    const listener = vi.fn();
+    events.subscribe(listener);
+    const contents = await readFile(join(dir, "runs", "run.jsonl"), "utf8");
+    await events.synchronizeJournal("run", correlation);
+    expect(writes).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    expect(await readFile(join(dir, "runs", "run.jsonl"), "utf8")).toBe(contents);
+    const marker = (await events.read("run"))[0]!;
+    await rm(join(dir, "private-execution", `${encodeURIComponent(marker.executionPayloadRef!)}.payload.json`));
+    await expect(events.synchronizeJournal("run", correlation)).rejects.toThrow();
+    expect(writes).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when protected synchronization is unsupported", async () => {
+    const { dir } = await fixture();
+    const publicEvents = new JsonlEventStore(dir);
+    const events = new ProtectedEventStore(
+      {
+        append: publicEvents.append.bind(publicEvents),
+        read: publicEvents.read.bind(publicEvents),
+        readTypes: publicEvents.readTypes.bind(publicEvents),
+        readRange: publicEvents.readRange.bind(publicEvents),
+        lastSeq: publicEvents.lastSeq.bind(publicEvents),
+        listRuns: publicEvents.listRuns.bind(publicEvents),
+        subscribe: publicEvents.subscribe.bind(publicEvents),
+      },
+      new FileExecutionStore(dir),
+    );
+    await expect(events.synchronizeJournal("run", correlation)).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
   });
 });

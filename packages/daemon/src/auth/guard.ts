@@ -199,6 +199,31 @@ export class Authorizer {
     });
   }
 
+  /** Same credential-pinned authority for transport calls and trusted durable recovery. */
+  executionResumeAuthority(principal: Principal): NonNullable<MethodContext["executionResumeAuthority"]> {
+    return {
+      actor: {
+        principalId: principal.id,
+        ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
+      },
+      authorize: async (origin) => {
+        if (!this.currentPrincipal) throw authRequired();
+        const current = this.currentPrincipal(principal);
+        if (
+          current.id !== principal.id ||
+          current.credentialId !== principal.credentialId ||
+          current.id !== origin.actor.principalId ||
+          !holds(current, "runs.control") ||
+          !holds(current, "runs.start") ||
+          (origin.request && !holds(current, "plan.write")) ||
+          !workflowAllowed(current.scope, origin.workflowId)
+        )
+          throw authForbidden();
+        if (!(await this.runs.allows(current, origin.rootId))) throw runNotFound(origin.rootId);
+      },
+    };
+  }
+
   /** Attribute a root run to a principal. The integration seam for `ControlModel.startRun`. */
   attributeRun(runId: string, principal: Principal): void {
     this.runs.ownership.record(runId, principal.id);
@@ -253,27 +278,7 @@ export class Authorizer {
                     throw inputNotFound(target.requestId, target.runId);
                 },
               },
-              executionResumeAuthority: {
-                actor: {
-                  principalId: principal.id,
-                  ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
-                },
-                authorize: async (origin) => {
-                  if (!this.currentPrincipal) throw authRequired();
-                  const current = this.currentPrincipal(principal);
-                  if (
-                    current.id !== principal.id ||
-                    current.credentialId !== principal.credentialId ||
-                    current.id !== origin.actor.principalId ||
-                    !holds(current, "runs.control") ||
-                    !holds(current, "runs.start") ||
-                    (origin.request && !holds(current, "plan.write")) ||
-                    !workflowAllowed(current.scope, origin.workflowId)
-                  )
-                    throw authForbidden();
-                  if (!(await this.runs.allows(current, origin.rootId))) throw runNotFound(origin.rootId);
-                },
-              },
+              executionResumeAuthority: this.executionResumeAuthority(principal),
               attributeStartedRun: async (runId) => {
                 this.attributeRun(runId, principal);
                 await this.runs.ownership.flush(runId);
