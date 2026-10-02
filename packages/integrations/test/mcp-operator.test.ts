@@ -297,6 +297,35 @@ describe("authenticated HTTP backend and transport", () => {
   });
 });
 
+it("keeps shared-service retry receipts distinct from flat runs.admit wire receipts", () => {
+  for (const result of [
+    { state: "prepared", admissionId: "admission" },
+    { state: "accepted", admissionId: "admission", runId: "run" },
+    { state: "recoverable-failure", admissionId: "admission", failure: { code: "RUN_STATE", recovery: "reconcile" } },
+  ]) {
+    const receipt = {
+      state: "resolved",
+      operationId: "stable-operation",
+      replayed: true,
+      result,
+      idempotencyKey: "PRIVATE-CLIENT-KEY",
+    };
+    const projected = MCP_OPERATIONS.admitRun.output.parse(receipt);
+    expect(projected).toMatchObject({ operationId: "stable-operation", result });
+    expect(JSON.stringify(projected)).not.toContain("PRIVATE-CLIENT-KEY");
+    expect(MCP_OPERATIONS.admitRun.output.safeParse({ ...result, operationId: "stable-operation" }).success).toBe(
+      false,
+    );
+  }
+  expect(
+    MCP_OPERATIONS.admitRun.output.parse({
+      state: "in-progress",
+      operationId: "stable-operation",
+      recovery: "inspect-or-retry",
+    }),
+  ).toEqual({ state: "in-progress", operationId: "stable-operation", recovery: "inspect-or-retry" });
+});
+
 it("completes a gated lifecycle through the frozen shared-service fixture across adapter reconnect", async () => {
   // Fixture receipts stand in for #331. No production adapter-local ledger is provided or tested here.
   const f = fixture();
