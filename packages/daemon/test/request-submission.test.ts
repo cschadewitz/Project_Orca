@@ -18,7 +18,7 @@ it("returns admission while execution is still pending, and never starts failed 
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(execute).toHaveBeenCalledOnce();
   if (result.state !== "accepted") throw new Error("not accepted");
-  expect(execute).toHaveBeenCalledWith(result.runId);
+  expect(execute).toHaveBeenCalledWith(result.runId, undefined);
   expect(await model.inspect(result.admissionId, f.authority)).toEqual(result);
   vi.mocked(f.authority.onRunAdmitted).mockRejectedValueOnce(new Error("disk failed"));
   expect((await model.submit(command, f.authority)).state).toBe("recoverable-failure");

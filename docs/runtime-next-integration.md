@@ -58,7 +58,8 @@ See [configuration generations](configuration-generations.md#reloadability),
 Feature CI is not combined acceptance. The exact combined head requires typechecks,
 format/lint/design checks, Node 22/24 tests and coverage, builds, compiled smoke and
 independent review. Real Electron-window App smoke is a separate required gate.
-Runner prerequisite/runtime-library failure is blocked, never a pass.
+Runner prerequisite/runtime-library failure is blocked, never a pass. Final combined
+validation and performance review remain required before release.
 
 Regression coverage includes crash recovery across generation changes, strict
 correlation, local authority/revocation, concurrent ownership, plugin wrong-workspace
@@ -93,14 +94,25 @@ docs and #404 corrected connection handling. The subsequent runtime corrections 
   part of the combined smoke regression.
 
 Protected events remain encrypted and durable. Replay batches authenticate inputs and
-sensitivity overlays once per run per call. Bounded reuse of ciphertext/key bytes still
-checks current file/directory identity, permissions and nanosecond modification metadata;
-every payload is authenticated and decoded. Deletion, replacement, tampering and missing
+sensitivity overlays once per run per call. Bounded reuse of ciphertext bytes still
+checks current file/directory identity, permissions and nanosecond modification metadata.
+The execution key is reread on every key lookup, without byte-cache reuse; every payload
+is authenticated and decoded. Deletion, replacement, tampering and missing
 sensitivity material still fail closed, and write/fsync ordering is unchanged.
 
-Three same-machine compiled-demo comparisons measured median elapsed times of 6.07 s
+Before the mandatory uncached execution-key reads, three same-machine compiled-demo
+comparisons measured median elapsed times of 6.07 s
 on main `7abc2342`, 13.58 s on the reviewed integration and 8.95 s after the corrections.
 The correction improves the reviewed candidate by about 34%, but retains about 47%
 overhead versus main; do not describe that as performance parity. These are local
-measurements, not CI deadlines. Exact-head Node 22/24 CI, coverage, native App smoke and
+measurements, not CI deadlines. A fresh three-pair comparison after the key-cache correction measured 5.138 s on main
+`7abc2342` and 10.104 s on the corrected source (about 97% overhead). All six compiled
+demos completed successfully. Both artifacts were rebuilt with `tsc -b tsconfig.build.json
+--force` and measured with `node packages/cli/dist/main.js demo` on the same Linux
+6.18.44 x86_64 machine using Node 24.19.0. Alternating candidate order retained
+per-run output and source/artifact hashes. These measurements supersede the earlier
+47% overhead estimate for current acceptance; performance parity is not established.
+Durable encryption and fresh-key validation must not be relaxed to reduce that cost.
+
+Exact-head Node 22/24 CI, coverage, native App smoke and
 independent re-review remain required. The former 60 s demo bounds are unchanged.

@@ -103,9 +103,10 @@ interface SmokeConnection {
 const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
 /**
- * The OS-level Chromium sandbox needs unprivileged user namespaces, which a plain container
- * usually does not have — hence the opt-out for a local run. It is *not* set in CI, where
- * the workflow clears the AppArmor restriction instead and the real sandbox stays on.
+ * On Linux, Chromium's OS-level sandbox needs unprivileged user namespaces. The
+ * workflow checks that prerequisite and xvfb availability; it does not change host
+ * security policy or set this local-only opt-out. A passing application smoke test
+ * is not an attestation of the host's complete sandbox/security configuration.
  *
  * This is unrelated to `webPreferences.sandbox: true`, which is the renderer's isolation
  * from Node and stays on everywhere; the smoke test would be pointless without it, since

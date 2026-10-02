@@ -196,6 +196,8 @@ ipcMain.on("orca:connection.read", (event) => {
 
 /* ---------- the workspace ---------- */
 
+let alertsEpoch = 0;
+
 /**
  * The store on screen, and the daemon serving it. Everything Electron knows and the module
  * must not — where the resources are, what the home directory is, what the environment
@@ -285,7 +287,12 @@ const workspace = new Workspace({
   },
   savedUrl: preferences.read().daemonUrl,
   onTarget: (target) => {
-    alerts.update({ waiting: 0, items: [] });
+    // The first verified hello enriches the current epoch. It must not erase alerts
+    // already supplied by that epoch's renderer while verification was in flight.
+    if (target.epoch !== alertsEpoch) {
+      alertsEpoch = target.epoch;
+      alerts.update({ waiting: 0, items: [] });
+    }
     send("orca:daemon.target", target);
   },
   explicitUrl: process.env.ORCA_DAEMON_URL,

@@ -8,7 +8,7 @@ import { PROTOCOL_VERSION } from "@orca/protocol";
 import type { DaemonClient } from "../src/client/daemon-client.js";
 import type { Workspace } from "../src/main/workspace.js";
 import { DaemonSubscription } from "../src/client/subscription.js";
-import type { BridgeResult, WorkspaceSnapshot } from "../src/bridge.js";
+import type { AlertsUpdate, BridgeResult, WorkspaceSnapshot } from "../src/bridge.js";
 import type { DaemonTargetSnapshot } from "../src/daemon-connection.js";
 
 const shell = vi.hoisted(() => ({
@@ -22,6 +22,9 @@ const shell = vi.hoisted(() => ({
   openDialog: vi.fn(async () => ({ canceled: false, filePaths: ["/archive/.orca"] })),
   sent: vi.fn(),
   stop: vi.fn(async () => {}),
+  badge: vi.fn(),
+  notificationShow: vi.fn(),
+  notificationClose: vi.fn(),
 }));
 vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
@@ -45,6 +48,7 @@ vi.mock("electron", async () => {
       getPath: (name: string) => (name === "userData" ? shell.userData : "/launch-workspace"),
       requestSingleInstanceLock: () => true,
       getVersion: () => "0.6.0",
+      setBadgeCount: shell.badge,
       // Test bootstrap explicitly; creating a real BrowserWindow is outside this IPC regression.
       whenReady: () => new Promise(() => {}),
       on: vi.fn(),
@@ -71,7 +75,14 @@ vi.mock("electron", async () => {
     nativeTheme: { on: vi.fn() },
     dialog: { showOpenDialog: shell.openDialog },
     Menu: {},
-    Notification: {},
+    Notification: class {
+      static isSupported() {
+        return true;
+      }
+      on = vi.fn();
+      show = shell.notificationShow;
+      close = shell.notificationClose;
+    },
   };
 });
 vi.mock("../src/main/workspace.js", async (original) => {
@@ -103,6 +114,9 @@ beforeEach(() => {
   shell.createWindow.mockClear();
   shell.stop.mockClear();
   shell.sent.mockClear();
+  shell.badge.mockClear();
+  shell.notificationShow.mockClear();
+  shell.notificationClose.mockClear();
 });
 afterEach(async () => {
   await shell.workspace?.close();
@@ -256,6 +270,89 @@ it("opens a store with no windows and still refuses drafts when a window exists"
   expect(workspace.connectionTarget).toEqual(old);
   expect(shell.createWindow).toHaveBeenCalledOnce();
 });
+
+it.each(["env", "bundled", "store"] as const)(
+  "preserves %s permission alerts when first hello arrives after the renderer update",
+  async (source) => {
+    const { DaemonClient } = await import("../src/client/daemon-client.js");
+    directory = await mkdtemp(join(tmpdir(), "orca-alert-epoch-"));
+    shell.userData = directory;
+    vi.stubEnv("ORCA_DAEMON_URL", source === "env" ? "http://localhost:9999" : "");
+    vi.spyOn(DaemonClient.prototype, "subscribe").mockReturnValue({ close: vi.fn() } as unknown as DaemonSubscription);
+    await import("../src/main/index.js");
+    const workspace = shell.workspace!;
+    await workspace.connect();
+    if (source === "store") await workspace.open("/archive");
+    expect(workspace.connectionTarget.source).toBe(source);
+    const epoch = workspace.connectionTarget.epoch;
+    const update: AlertsUpdate = {
+      waiting: 1,
+      items: [
+        {
+          id: "permission-1",
+          tier: "permission",
+          title: "Permission needed",
+          body: "A run is waiting",
+          runId: "run-1",
+          inputId: "permission-1",
+          since: new Date().toISOString(),
+        },
+      ],
+    };
+    const publish = (atEpoch = workspace.connectionTarget.epoch) =>
+      shell.events!.emit("orca:alerts.update", {}, update, atEpoch);
+    // Model inputs.list finishing while the subscription's verify hello is pending.
+    publish();
+    expect(shell.badge).toHaveBeenLastCalledWith(1);
+    expect(shell.notificationShow).toHaveBeenCalledOnce();
+    const badgeCalls = shell.badge.mock.calls.length;
+    const hello: Awaited<ReturnType<DaemonClient["hello"]>> = {
+      protocol: PROTOCOL_VERSION,
+      orcaVersion: "test",
+      capabilities: ["runs.read", "runs.subscribe"],
+      identity: { workspaceId: "workspace-1", instanceId: "boot-1" },
+    };
+    workspace.observeHello(workspace.client, hello);
+    expect(workspace.connectionTarget.epoch).toBe(epoch);
+    expect(shell.sent).toHaveBeenLastCalledWith(
+      "orca:daemon.target",
+      expect.objectContaining({ epoch, identity: hello.identity }),
+    );
+    expect(shell.badge).toHaveBeenCalledTimes(badgeCalls);
+    expect(shell.notificationClose).not.toHaveBeenCalled();
+    workspace.observeHello(workspace.client, hello);
+    publish();
+    expect(shell.notificationShow).toHaveBeenCalledOnce();
+    expect(shell.notificationClose).not.toHaveBeenCalled();
+
+    // A real daemon boot change still clears the old scope and ignores late IPC.
+    workspace.observeHello(workspace.client, { ...hello, identity: { ...hello.identity!, instanceId: "boot-2" } });
+    expect(workspace.connectionTarget.epoch).toBe(epoch + 1);
+    expect(shell.badge).toHaveBeenLastCalledWith(0);
+    expect(shell.notificationClose).toHaveBeenCalledOnce();
+    publish(epoch);
+    expect(shell.badge).toHaveBeenLastCalledWith(0);
+    expect(shell.notificationShow).toHaveBeenCalledOnce();
+    publish();
+    expect(shell.badge).toHaveBeenLastCalledWith(1);
+    expect(shell.notificationShow).toHaveBeenCalledTimes(2);
+
+    // Switching targets also clears alerts, without the new target's seed clearing twice.
+    const oldClient = workspace.client;
+    await workspace.open("/another-archive");
+    expect(shell.badge).toHaveBeenLastCalledWith(0);
+    expect(shell.notificationClose).toHaveBeenCalledTimes(2);
+    publish();
+    workspace.observeHello(oldClient, hello);
+    workspace.observeHello(workspace.client, hello);
+    expect(shell.badge).toHaveBeenLastCalledWith(1);
+    expect(shell.notificationClose).toHaveBeenCalledTimes(2);
+    expect(shell.notificationShow).toHaveBeenCalledTimes(3);
+    shell.events!.emit("orca:alerts.update", {}, { waiting: 0, items: [] }, workspace.connectionTarget.epoch);
+    expect(shell.badge).toHaveBeenLastCalledWith(0);
+    expect(shell.notificationClose).toHaveBeenCalledTimes(3);
+  },
+);
 
 it.each(["localhost:6722", "not-a-url-private-token", "https://owner:private-token@host"])(
   "installs synchronous IPC and disconnects safely for malformed configuration %s",

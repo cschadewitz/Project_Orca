@@ -754,8 +754,12 @@ export const commands: Record<string, Command> = {
         !readOnly && authDir && app.program.submissions
           ? new RequestSubmissionModel({
               service: app.program.submissions,
-              execute: async (id) => {
-                await app.program.settle(await app.orchestrator.run(id));
+              checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
+              execute: async (id, authority) => {
+                const state = liveRuntime
+                  ? await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id))
+                  : await app.orchestrator.run(id);
+                await app.program.settle(state);
               },
               executionFailed: (id) => app.logger.error("Request execution requires recovery", { runId: id }),
             })

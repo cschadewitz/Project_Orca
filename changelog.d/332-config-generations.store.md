@@ -9,3 +9,8 @@ manual rollback to an older binary is not guaranteed to refuse the store and is 
 supported migration. Retain a complete pre-upgrade store backup, including protected
 material and keys, with its matching binary. Custom executable plugin registrations
 can prevent generation restoration after an engine-process restart; see #394–396.
+
+Generation snapshots now embed their workflow definitions without pinning unlaunched
+workflows. Older binaries that ignore those definitions cannot restore a generation when
+any catalog workflow lacks a pin, even if both builds report `config-generations-v3`.
+Snapshot compatibility is one-way; an equal epoch does not make binary-only rollback safe.

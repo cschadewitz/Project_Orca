@@ -113,6 +113,13 @@ failure or cancellation and its timestamp, without a stale read-and-replace writ
 lost the initial response. `requests.admission {admissionId}` inspects one.
 `requests.reconcile {admissionId}` reconciles that **original** admission and queues an
 accepted root for execution. No command values can be replaced during recovery.
+Daemon reconciliation validates current execution-renewal authority before returning an
+accepted recovery receipt and rechecks it when the worker attaches. After bootstrap
+credential rotation, this permits the original principal to recover with its current
+credential, subject to unchanged workflow scope, durable ownership, `runs.start`,
+`runs.control` and `plan.write` checks. A failed preflight is returned to the caller;
+the original admission remains durable and can be inspected or retried. An accepted
+receipt acknowledges admission and queued execution, not successful completion.
 
 Daemon recovery RPCs require token-mode ownership and a wired submission provider.
 Standalone admissions keep their original OS-user principal; a later daemon cannot

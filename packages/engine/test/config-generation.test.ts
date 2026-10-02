@@ -460,3 +460,42 @@ it("collects configured credentials without treating transport words and setting
   expect(secrets).not.toEqual(expect.arrayContaining(["mcp"]));
   expect(secrets).not.toEqual(expect.arrayContaining(["1"]));
 });
+
+it("does not turn credential metadata or basic prose into needles while preserving actual short credentials", async () => {
+  const { generations } = await fixture();
+  const agents = AgentRegistry.fromConfig(
+    parseOrcaConfig({
+      agents: [
+        {
+          id: "worker",
+          command: "agent",
+          args: [
+            "--no-auth",
+            "serve",
+            "--token-file",
+            "/home/u/x.json",
+            "--name",
+            "basic worker",
+            "--password",
+            "tiny",
+            "Basic dXNlcjpwYXNz",
+            "--api-token",
+            "/actual/credential",
+          ],
+          env: {
+            AUTH_MODE: "oauth",
+            PASSWORD_PROMPT: "true",
+            AUTH_ENABLED: "false",
+            TOKEN: "1",
+            TOKEN_FILE: "ghp_1234567890abcdefghij",
+          },
+        },
+      ],
+    }),
+  );
+  const secrets = configuredGenerationSecrets({ ...generations.current, agents });
+  for (const value of ["serve", "/home/u/x.json", "worker", "oauth", "true", "false"])
+    expect(secrets).not.toContain(value);
+  for (const value of ["tiny", "1", "/actual/credential", "dXNlcjpwYXNz", "ghp_1234567890abcdefghij"])
+    expect(secrets).toContain(value);
+});

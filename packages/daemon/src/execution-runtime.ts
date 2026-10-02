@@ -81,30 +81,46 @@ export function daemonExecutionRuntime(options: {
     a.request === b.request &&
     a.actor.principalId === b.actor.principalId &&
     a.actor.credentialId === b.actor.credentialId;
+  const refuseIfAttached = (rootId: string) => {
+    // Never replace the authority of an attached interpreter or its old callbacks.
+    if (renewing.has(rootId) || [...origins.values()].some((entry) => entry.rootId === rootId))
+      throw new OrcaError("RUN_LEASED", "execution is already attached");
+  };
+  const resumeBinding = async (runId: string, authority: ExecutionResumeAuthority | undefined) => {
+    const origin = await originOf(runId);
+    if (!origin) return;
+    const prior = renewed.get(origin.rootId);
+    if (prior && !sameOrigin(origin, prior.origin)) throw resumeRequired();
+    if (isCurrent(origin, prior?.authority.actor ?? origin.actor)) return;
+    if (!authority || authority.actor.principalId !== origin.actor.principalId) throw resumeRequired();
+    refuseIfAttached(origin.rootId);
+    await authority.authorize(origin);
+    const current = authority.actor.credentialId
+      ? options.credentials.current(authority.actor.credentialId)
+      : undefined;
+    if (!isCurrent(origin, authority.actor) || !current?.ok || !holds(current.principal, "runs.control"))
+      throw resumeRequired();
+    refuseIfAttached(origin.rootId);
+    return { origin, authority };
+  };
   return {
     port,
+    /** Read-only preflight for asynchronous recovery; attachment rechecks before execution. */
+    async checkResumeAuthority(runId: string, authority: ExecutionResumeAuthority | undefined): Promise<void> {
+      await resumeBinding(runId, authority);
+    },
     async withResumeAuthority(
       runId: string,
       authority: ExecutionResumeAuthority | undefined,
       operation: () => Promise<RunState>,
     ): Promise<RunState> {
-      const origin = await originOf(runId);
-      if (!origin) return operation();
+      const binding = await resumeBinding(runId, authority);
+      if (!binding) return operation();
+      const { origin } = binding;
+      // Preflight does not reserve anything. Recheck after its asynchronous return so
+      // concurrent attachments cannot replace each other's verified authority.
+      refuseIfAttached(origin.rootId);
       const prior = renewed.get(origin.rootId);
-      if (prior && !sameOrigin(origin, prior.origin)) throw resumeRequired();
-      if (isCurrent(origin, prior?.authority.actor ?? origin.actor)) return operation();
-      if (!authority || authority.actor.principalId !== origin.actor.principalId) throw resumeRequired();
-      // Never replace the authority of an attached interpreter or its old callbacks.
-      if (renewing.has(origin.rootId) || [...origins.values()].some((entry) => entry.rootId === origin.rootId))
-        throw new OrcaError("RUN_LEASED", "execution is already attached");
-      await authority.authorize(origin);
-      const current = authority.actor.credentialId
-        ? options.credentials.current(authority.actor.credentialId)
-        : undefined;
-      if (!isCurrent(origin, authority.actor) || !current?.ok || !holds(current.principal, "runs.control"))
-        throw resumeRequired();
-      if (renewing.has(origin.rootId)) throw new OrcaError("RUN_LEASED", "execution attachment is already pending");
-      const binding = { origin, authority };
       renewing.add(origin.rootId);
       renewed.set(origin.rootId, binding);
       try {
@@ -125,11 +141,19 @@ export function daemonExecutionRuntime(options: {
       const origin = await originOf(runId);
       if (!origin) return;
       const binding = renewed.get(origin.rootId);
+      const actor = binding?.authority.actor ?? origin.actor;
+      // Revocation while awaiting the lease still means explicit execution recovery,
+      // including when a durable gate answer has already been recorded.
+      if (!isCurrent(origin, actor)) throw resumeRequired();
       if (binding) {
         if (!sameOrigin(origin, binding.origin)) throw resumeRequired();
-        await binding.authority.authorize(origin);
+        try {
+          await binding.authority.authorize(origin);
+        } catch (error) {
+          if (!isCurrent(origin, actor)) throw resumeRequired();
+          throw error;
+        }
       }
-      const actor = binding?.authority.actor ?? origin.actor;
       if (!isCurrent(origin, actor)) throw resumeRequired();
       origins.set(runId, origin);
       authorities.bind(runId, actor);

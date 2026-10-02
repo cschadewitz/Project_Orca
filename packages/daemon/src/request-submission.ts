@@ -6,7 +6,7 @@ import {
   type SubmissionResult,
   type SubmissionService,
 } from "@orca/core";
-import { executeAcceptedSubmission } from "@orca/engine";
+import { executeAcceptedSubmission, type ExecutionResumeAuthority } from "@orca/engine";
 import { authForbidden, workflowNotFound } from "./auth/errors.js";
 import { holds, workflowAllowed, type Principal } from "./auth/principal.js";
 import type { Authorizer } from "./auth/guard.js";
@@ -52,7 +52,9 @@ export class RequestSubmissionModel {
     private readonly opts: {
       service: SubmissionService;
       /** The worker drives/settles accepted roots; no workflow promise is awaited by the RPC. */
-      execute: (runId: string) => Promise<void>;
+      execute: (runId: string, authority?: ExecutionResumeAuthority) => Promise<void>;
+      /** Read-only renewal preflight. The worker rechecks when it attaches under the lease. */
+      checkResumeAuthority?: (runId: string, authority?: ExecutionResumeAuthority) => Promise<void>;
       /** Report background infrastructure failures; run execution failures are already events. */
       executionFailed: (runId: string) => void;
     },
@@ -61,8 +63,14 @@ export class RequestSubmissionModel {
   async submit(command: SubmissionCommand, authority: SubmissionAuthority): Promise<SubmissionResult> {
     return this.start(await this.opts.service.submit(command, authority), authority);
   }
-  async reconcile(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult> {
-    return this.start(await this.opts.service.reconcile(admissionId, authority), authority);
+  async reconcile(
+    admissionId: string,
+    authority: SubmissionAuthority,
+    executionAuthority?: ExecutionResumeAuthority,
+  ): Promise<SubmissionResult> {
+    const result = await this.opts.service.reconcile(admissionId, authority);
+    if (result.state === "accepted") await this.opts.checkResumeAuthority?.(result.runId, executionAuthority);
+    return this.start(result, authority, executionAuthority);
   }
   inspect(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult> {
     return this.opts.service.inspect(admissionId, authority);
@@ -70,17 +78,19 @@ export class RequestSubmissionModel {
   async list(authority: SubmissionAuthority): Promise<{ admissions: SubmissionResult[] }> {
     return { admissions: await this.opts.service.list(authority) };
   }
-  private start(result: SubmissionResult, authority: SubmissionAuthority): SubmissionResult {
+  private start(
+    result: SubmissionResult,
+    authority: SubmissionAuthority,
+    executionAuthority?: ExecutionResumeAuthority,
+  ): SubmissionResult {
     if (result.state === "accepted") {
       // Queue after returning admission. A failed/restarted client can use authorized run reads
       // and reconcile the admission to resume an accepted root whose worker never started.
+      // Recovery carries the caller's verified resume authority; the original sealed actor
+      // may name a bootstrap credential invalidated by the daemon restart.
       setImmediate(() => {
-        void executeAcceptedSubmission(
-          this.opts.service,
-          result.admissionId,
-          result.runId,
-          authority,
-          this.opts.execute,
+        void executeAcceptedSubmission(this.opts.service, result.admissionId, result.runId, authority, (runId) =>
+          this.opts.execute(runId, executionAuthority),
         ).catch(() => this.opts.executionFailed(result.runId));
       });
     }

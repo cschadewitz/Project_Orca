@@ -33,7 +33,8 @@ active-pointer swap. Launch capture reads that pointer before awaiting anything.
 Both returned admission callbacks remain bound to that generation and exact
 workflow version/revision. A concurrent apply cannot mix their choices. Failures
 leave the old active pointer intact. A crash before activation can leave unused
-protected records or workflow pins; there is no automatic deletion of resume data.
+protected generation records; preparation and persistence do not write workflow pins.
+Only actual launches pin definitions, and there is no automatic deletion of resume data.
 
 A boot validates and activates the saved configuration for new work without reserving
 all loaded workflow versions in the global version store. Each protected generation
@@ -153,6 +154,15 @@ uses `private-execution/` and its existing key, atomic publication and authentic
 encryption, without a second key lifecycle. Configured bytes stay encrypted; ambient
 process environment, resolved credentials and live sessions are not captured except for
 the explicitly resolved built-in provider directories above.
+
+Snapshot compatibility is one-way. This runtime can read legacy pin-backed generation
+snapshots subject to the restoration checks above. Older binaries that do not understand
+`workflowDefinitions` discard that field and rely on pins for the entire workflow catalog.
+New generations do not pin unlaunched workflows, so even a generation used by a launched
+run cannot restore on such a binary if another catalog workflow has never been pinned.
+This restriction also applies between builds reporting the same `config-generations-v3`
+epoch; epoch equality alone does not establish rollback compatibility. Retain a complete
+pre-upgrade store backup and its matching binary instead of attempting binary-only rollback.
 
 Public launch provenance withholds every input value. Explicitly sensitive workflow
 inputs remain protected. Defense-in-depth literal redaction additionally recognizes

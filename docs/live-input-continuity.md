@@ -64,7 +64,9 @@ original root principal and durable ownership before execution. Without an expli
 renewal, the original credential must remain current. Revoked/missing authority fails
 before attaching an interpreter; the execution lifetime is independent of UI sockets.
 
-After bootstrap credential rotation, `runs.resume` is the explicit renewal boundary.
+After bootstrap credential rotation, `runs.resume` and daemon `requests.reconcile`
+are explicit renewal boundaries. Reconciliation validates the accepted root before
+acknowledging recovery and passes the same verified authority to its queued worker.
 The server supplies a separate attachment capability: the current credential must
 represent the original protected principal and durable root owner, retain workflow
 scope plus `runs.control` and `runs.start`, and retain `plan.write` for a Request root.

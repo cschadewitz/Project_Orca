@@ -87,7 +87,13 @@ export function configuredGenerationSecrets(material: GenerationMaterial): strin
       /(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/g,
     ))
       add(match[0]);
-    for (const match of value.matchAll(/(?:Bearer|Basic)\s+([^\s"']+)/gi)) add(match[1]!);
+    // Standalone authorization values or a named header, not prose containing
+    // "basic worker". Basic credentials encode a user/password pair separated by ':'.
+    const authorization = /^(?:Authorization:\s*)?(Bearer|Basic)\s+([A-Za-z0-9._~+/-]+=*)$/i.exec(value);
+    if (authorization) {
+      const token = authorization[2]!;
+      if (authorization[1]!.toLowerCase() === "bearer" || Buffer.from(token, "base64").includes(0x3a)) add(token);
+    }
     const header = /^([^:]+):\s*(.+)$/.exec(value);
     if (header && credentialKey(header[1]!)) add(header[2]!);
     try {
@@ -125,7 +131,13 @@ export function configuredGenerationSecrets(material: GenerationMaterial): strin
   return [...secrets];
 }
 function credentialKey(key: string): boolean {
+  const normalized = key.replace(/([a-z])([A-Z])/g, "$1_$2");
+  // These names describe credential configuration, not a credential value. Still
+  // inspect their values for recognizable token syntax; do not suppress arbitrary
+  // short or path-shaped values of actual password/token fields.
+  if (/^--?no[-_]/i.test(normalized) || /(?:^|[-_])(?:file|path|mode|prompt|enabled|disabled)$/i.test(normalized))
+    return false;
   return /(?:^|[^a-z0-9])(?:api[-_]?key|access[-_]?key|private[-_]?key|client[-_]?secret|token|secret|password|passwd|pass|pwd|credential|credentials|authorization|auth|bearer)(?:$|[^a-z0-9])/i.test(
-    key.replace(/([a-z])([A-Z])/g, "$1_$2"),
+    normalized,
   );
 }

@@ -8,7 +8,8 @@ import { OrcaError } from "@orca/core";
 
 const KEY_FILE = ".execution-key";
 const syncedDirectories = new Set<string>();
-// Immutable ciphertext/key bytes only; callers still authenticate and parse every record.
+// Immutable ciphertext bytes only; callers still authenticate and parse every record.
+// Keys are always reread: same-size in-place rewrites can share a kernel timestamp tick.
 // Every hit revalidates the current path, owner-only mode and nanosecond change metadata.
 const byteCache = new Map<string, { directory: string; file: string; bytes: Buffer }>();
 const MAX_CACHED_BYTES = 8 * 1024 * 1024;
@@ -77,7 +78,8 @@ async function privateBytes(dir: string, name: string): Promise<Buffer | undefin
     if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077n) !== 0n)) throw unreadable();
     const directoryStamp = directoryIdentity(directory);
     const fileStamp = fileIdentity(info);
-    const cached = byteCache.get(path);
+    const cacheable = name !== KEY_FILE;
+    const cached = cacheable ? byteCache.get(path) : undefined;
     if (cached?.directory === directoryStamp && cached.file === fileStamp) return cached.bytes;
     forgetBytes(path);
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -90,7 +92,7 @@ async function privateBytes(dir: string, name: string): Promise<Buffer | undefin
       const bytes = await handle.readFile();
       const after = await handle.stat({ bigint: true });
       if (!after.isFile() || (process.platform !== "win32" && (after.mode & 0o077n) !== 0n)) throw unreadable();
-      if (fileIdentity(opened) === fileStamp && fileIdentity(after) === fileStamp)
+      if (cacheable && fileIdentity(opened) === fileStamp && fileIdentity(after) === fileStamp)
         rememberBytes(path, directoryStamp, fileStamp, bytes);
       return bytes;
     } finally {

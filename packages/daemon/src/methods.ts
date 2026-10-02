@@ -673,7 +673,8 @@ export function methodsFor(ctx: MethodContext): MethodTable {
       },
       "requests.reconcile": {
         params: RequestsAdmissionParamsSchema,
-        handle: async (params, invocation) => model.reconcile(params.admissionId, await authority(invocation)),
+        handle: async (params, invocation) =>
+          model.reconcile(params.admissionId, await authority(invocation), invocation.executionResumeAuthority),
       },
       "requests.admission": {
         params: RequestsAdmissionParamsSchema,

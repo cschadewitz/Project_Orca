@@ -556,6 +556,70 @@ it("runs guarded HTTP resume with current launch authority, audits identity, and
   }
 });
 
+it("keeps the recorded-answer recovery hint when renewed authority is revoked during the next resume lease", async () => {
+  const f = await fixture({ secondGate: true });
+  const daemon = await startDaemon({
+    orcaVersion: "test",
+    capabilities: ["runs.read", "runs.control"],
+    reads: f.reads,
+    control: f.control,
+    source: f.orchestrator,
+    auth: {
+      mode: "token",
+      credentials: f.credentials,
+      ownership: f.ownership,
+      resolver: orchestratorResolver(f.orchestrator),
+    },
+  });
+  const rpc = async (method: string, params: unknown) => {
+    const response = await fetch(`${daemon.url}/rpc`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${f.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ kind: "request", id: 1, method, params }),
+    });
+    return (await response.json()) as { ok: boolean; error?: { code: string; details?: unknown } };
+  };
+  const release = deferred();
+  try {
+    await recordGate(f);
+    const resumed = track(rpc("runs.resume", { runId: f.runId }));
+    await answerPermission(f, await permission(f, f.runId));
+    expect(await resumed).toMatchObject({ ok: true });
+    const again = (await f.orchestrator.pendingInputs(f.runId)).find((input) => input.kind === "decision")!;
+    const entered = deferred();
+    const acquire = f.stores.leases.acquire.bind(f.stores.leases);
+    let acquisitions = 0;
+    vi.spyOn(f.stores.leases, "acquire").mockImplementation(async (request) => {
+      if (++acquisitions === 2) {
+        entered.resolve();
+        await release.promise;
+      }
+      return acquire(request);
+    });
+    const answered = track(rpc("inputs.answer", { runId: f.runId, requestId: again.id, optionId: "go", resume: true }));
+    await entered.promise;
+    await f.credentials.revoke(f.currentActor.credentialId);
+    release.resolve();
+    expect(await answered).toMatchObject({
+      ok: false,
+      error: { code: "RUN_STATE", details: { answerRecorded: true, executionResumeRequired: true } },
+    });
+    expect(f.sessions).toHaveLength(1);
+    expect((await f.orchestrator.getState(f.runId)).run.status).toBe("paused");
+    expect(
+      (await f.orchestrator.events(f.runId)).filter(
+        (event) => event.type === "human.answered" && event.payload.requestId === again.id,
+      ),
+    ).toHaveLength(1);
+    expect(await f.orchestrator.listLeases()).toEqual([]);
+  } finally {
+    release.resolve();
+    f.runtime.close();
+    await Promise.allSettled(jobs);
+    await daemon.close();
+  }
+});
+
 it("cancels remembered-only agent permission options without publishing an unanswerable live card", async () => {
   const f = await fixture({ rememberedOnly: true });
   await recordGate(f);

@@ -5,13 +5,22 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { FileExecutionStore } from "@orca/store";
 
-const calls = vi.hoisted(() => ({ open: 0 }));
+const calls = vi.hoisted(() => ({
+  open: [] as string[],
+  frozenTimes: new Map<string, { mtimeNs: bigint; ctimeNs: bigint }>(),
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    lstat: async (...args: Parameters<typeof actual.lstat>) => {
+      const info = await actual.lstat(...args);
+      const times = calls.frozenTimes.get(String(args[0]));
+      if (times) Object.assign(info, times);
+      return info;
+    },
     open: (...args: Parameters<typeof actual.open>) => {
-      calls.open++;
+      calls.open.push(String(args[0]));
       return actual.open(...args);
     },
   };
@@ -19,6 +28,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const dirs: string[] = [];
 afterEach(async () => {
+  calls.frozenTimes.clear();
   for (const directory of dirs.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
@@ -40,15 +50,16 @@ async function fixture() {
   return { directory, store, read, path: (name: string) => join(directory, "private-execution", name) };
 }
 
-it("reuses unchanged private bytes without reopening files and returns isolated decoded values", async () => {
+it("reuses unchanged ciphertext bytes while rereading the key and returns isolated decoded values", async () => {
   const f = await fixture();
-  calls.open = 0;
+  calls.open = [];
   for (let index = 0; index < 8; index++) {
     const payload = (await f.read()) as { vars: Record<string, unknown> };
     expect(payload.vars.secret).toBe("secret-value");
     payload.vars.secret = "caller mutation";
   }
-  expect(calls.open).toBe(0);
+  expect(calls.open.length).toBeGreaterThan(0);
+  expect(calls.open.every((path) => path.endsWith(".execution-key"))).toBe(true);
 });
 
 it.each([".execution-key", "run.inputs.json", "payload.payload.json"])(
@@ -111,3 +122,21 @@ it.each(["", ".execution-key", "run.inputs.json", "payload.payload.json"])(
     await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
   },
 );
+
+it("rejects an in-place key rewrite when the filesystem reports identical nanosecond timestamps", async () => {
+  const f = await fixture();
+  const path = f.path(".execution-key");
+  const before = await stat(path, { bigint: true });
+  // Model a coarse kernel timestamp tick deterministically, without utimes (which
+  // itself changes ctime). Keep real inode, size, permissions and actual disk I/O.
+  calls.frozenTimes.set(path, { mtimeNs: before.mtimeNs, ctimeNs: before.ctimeNs });
+  await f.read();
+  const key = await readFile(path);
+  key[0] = key[0]! ^ 1;
+  await writeFile(path, key);
+  expect((await stat(path, { bigint: true })).ino).toBe(before.ino);
+  expect((await stat(path, { bigint: true })).size).toBe(before.size);
+  await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
+  await expect(f.store.putGeneration("after-rewrite", {})).rejects.toMatchObject({ code: "RUN_STATE" });
+  expect(await readFile(path)).toEqual(key);
+});
