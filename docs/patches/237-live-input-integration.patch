@@ -1,0 +1,964 @@
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 14df45f..a3681bb 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -256,6 +256,17 @@ Decisions then read front matter (`source: { kind: artifact, artifact: review,
+ field: verdict }`), so a reviewer's `verdict: changes-requested` routes the graph
+ back to `build` with the review as an extra input. That *is* the hand‑off.
+ 
++## Live permission continuity
++
++Supported permission callbacks can use `LiveHumanInput` while their owning
++interpreter retains its execution lease. Acceptance names exact run/step/input,
++daemon boot, session, turn and invocation, revalidates the responder's authority,
++and records the actor before delivering once to the original callback. Workflow
++gates keep their durable parked lifecycle. Expired callbacks cannot be replayed;
++other processes report owner-unavailable rather than taking a live session over.
++See [live permission continuity](live-input-continuity.md) for the two lifetimes,
++standing-write failure ordering, resumption fallbacks and integration requirements.
++
+ ## The level above (program)
+ 
+ `workflows/program.yaml` + `packages/engine/src/program/` + `packages/engine/src/plan/`:
+diff --git a/packages/app/renderer/src/attention/permission-card.tsx b/packages/app/renderer/src/attention/permission-card.tsx
+index 3bfed4b..32cb681 100644
+--- a/packages/app/renderer/src/attention/permission-card.tsx
++++ b/packages/app/renderer/src/attention/permission-card.tsx
+@@ -67,6 +67,14 @@ export function PermissionCard({ input, ...rest }: PermissionCardProps): JSX.Ele
+       options={input.options}
+       offerAlways
+       {...rest}
++      cannotWrite={
++        rest.cannotWrite ??
++        (!input.live
++          ? "Permission callback is unavailable."
++          : input.live.state !== "pending"
++            ? `Permission callback is ${input.live.state}; this answer cannot be delivered.`
++            : undefined)
++      }
+     />
+   );
+ }
+diff --git a/packages/app/renderer/src/attention/use-controls.ts b/packages/app/renderer/src/attention/use-controls.ts
+index 81bfc3d..d23ca48 100644
+--- a/packages/app/renderer/src/attention/use-controls.ts
++++ b/packages/app/renderer/src/attention/use-controls.ts
+@@ -75,6 +75,7 @@ export function useControls({ onAnswered }: ControlsOptions): Controls {
+       run(input.id, async () => {
+         const result = await window.orca.inputs.answer({
+           requestId: input.id,
++          ...(input.live ? { live: input.live.target } : {}),
+           runId: input.runId,
+           optionId: request.optionId,
+           ...(request.note ? { note: request.note } : {}),
+diff --git a/packages/core/src/events/events.ts b/packages/core/src/events/events.ts
+index b4fc691..ef137d2 100644
+--- a/packages/core/src/events/events.ts
++++ b/packages/core/src/events/events.ts
+@@ -165,6 +165,13 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
+   base(
+     "agent.session.opened",
+     z.object({
++      /** Conversation context only; loading never restores a pending tool approval. */
++      continuity: z
++        .object({
++          mode: z.enum(["fresh", "loaded"]),
++          reason: z.enum(["new", "load-supported", "load-unsupported", "load-failed"]),
++        })
++        .optional(),
+       stepRunId: z.string(),
+       sessionId: z.string(),
+       agentId: z.string(),
+diff --git a/packages/daemon/src/auth/guard.ts b/packages/daemon/src/auth/guard.ts
+index 0dcffd4..853a91d 100644
+--- a/packages/daemon/src/auth/guard.ts
++++ b/packages/daemon/src/auth/guard.ts
+@@ -111,6 +111,8 @@ export interface AdmissionSource {
+ 
+ export interface AuthorizerOptions {
+   resolver: ResourceResolver;
++  /** Live-answer acceptance rechecks credentials under the owner lease. */
++  currentPrincipal?: (principal: Principal) => Principal;
+   ownership: OwnershipStore;
+   audit?: AuditSink | undefined;
+   admissions?: AdmissionSource | undefined;
+@@ -136,11 +138,13 @@ export class Authorizer {
+   readonly runs: RunAccess;
+   private readonly audit: AuditSink | undefined;
+   private readonly now: () => Date;
++  private readonly currentPrincipal: AuthorizerOptions["currentPrincipal"];
+ 
+   constructor(opts: AuthorizerOptions) {
+     this.runs = new RunAccess(opts.resolver, opts.ownership);
+     this.audit = opts.audit;
+     this.now = opts.now ?? (() => new Date());
++    this.currentPrincipal = opts.currentPrincipal;
+   }
+ 
+   get resolver(): ResourceResolver {
+@@ -210,6 +214,25 @@ export class Authorizer {
+                 principalId: principal.id,
+                 ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
+               },
++              liveAnswerAuthority: {
++                actor: {
++                  principalId: principal.id,
++                  ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
++                },
++                authorize: async (target, standing) => {
++                  if (!this.currentPrincipal) throw authRequired();
++                  const current = this.currentPrincipal(principal);
++                  if (
++                    current.id !== principal.id ||
++                    current.credentialId !== principal.credentialId ||
++                    !holds(current, "inputs.answer") ||
++                    (standing && !holds(current, "permissions.grant"))
++                  )
++                    throw authForbidden();
++                  if (!(await this.runs.allows(current, target.runId)))
++                    throw inputNotFound(target.requestId, target.runId);
++                },
++              },
+               attributeStartedRun: async (runId) => {
+                 this.attributeRun(runId, principal);
+                 await this.runs.ownership.flush();
+diff --git a/packages/daemon/src/auth/operations.ts b/packages/daemon/src/auth/operations.ts
+index 55963ca..e6240e5 100644
+--- a/packages/daemon/src/auth/operations.ts
++++ b/packages/daemon/src/auth/operations.ts
+@@ -117,6 +117,7 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
+  * and to nobody else.
+  */
+ export const CAPABILITY_PERMISSIONS: Readonly<Record<string, readonly Permission[]>> = {
++  "inputs.live": ["inputs.answer"],
+   "runs.read": ["runs.read"],
+   "runs.subscribe": ["runs.read"],
+   // The app derives "can write" from this one capability (`useWritability`), so it is shown
+diff --git a/packages/daemon/src/control.ts b/packages/daemon/src/control.ts
+index 0a0e844..3f111f6 100644
+--- a/packages/daemon/src/control.ts
++++ b/packages/daemon/src/control.ts
+@@ -22,6 +22,7 @@
+  * restart, and it is why `inputs.answer` is a write to a log and a re-drive rather than the
+  * resolution of a promise.
+  */
++import type { LiveAnswerAuthority } from "@orca/engine";
+ import {
+   OrcaError,
+   isOrcaError,
+@@ -116,6 +117,12 @@ export async function answerAndResume(orc: Orchestrator, opts: AnswerAndResumeOp
+     });
+ 
+   const runId = found.request.runId;
++  if (found.request.kind === "permission") {
++    const held = (await orc.listLeases()).some((lease) => lease.runId === runId && !lease.lapsed);
++    throw new OrcaError("RUN_STATE", "answer a live permission at its owning daemon with its exact identity", {
++      liveInputState: held ? "owner-unavailable" : "expired",
++    });
++  }
+   if (found.state.run.status !== "paused")
+     throw new ProtocolFault(
+       "RUN_NOT_WAITING",
+@@ -249,6 +256,10 @@ export class ControlModel {
+     this.clock = opts.clock ?? opts.orchestrator.clock;
+   }
+ 
++  get supportsLiveInputs(): boolean {
++    return this.orc.liveInput !== undefined;
++  }
++
+   /**
+    * `inputs.answer`: record the answer and continue the run.
+    *
+@@ -258,7 +269,16 @@ export class ControlModel {
+    * ask again" has to be able to check whether that is true, and `refused` is the case where
+    * it is not: nothing generalised, so the answer held for this one call.
+    */
+-  async answerInput(params: InputsAnswerParams, actor?: MutationActor): Promise<InputsAnswerResult> {
++  async answerInput(
++    params: InputsAnswerParams,
++    actor?: MutationActor,
++    authority?: LiveAnswerAuthority,
++  ): Promise<InputsAnswerResult> {
++    const candidate = await findInput(this.orc, params.requestId, params.runId);
++    if (candidate.request.kind === "permission") {
++      return this.answerLive(params, candidate.request, candidate.state, authority);
++    }
++    if (params.live) throw new OrcaError("RUN_STATE", "a durable gate has no live callback");
+     let permission: RecordAlwaysResult | undefined;
+     // Resolve the standing grant without writing; invalid grant prerequisites must not
+     // consume even the one-time answer. The engine rechecks the exact gate under its lease.
+@@ -300,6 +320,56 @@ export class ControlModel {
+     };
+   }
+ 
++  private async answerLive(
++    params: InputsAnswerParams,
++    request: HumanInputRequest,
++    state: RunState,
++    authority?: LiveAnswerAuthority,
++  ): Promise<InputsAnswerResult> {
++    if (!authority) throw new OrcaError("NOT_SUPPORTED", "live answers require current server-bound authority");
++    if (
++      !params.live ||
++      params.live.runId !== request.runId ||
++      params.live.stepRunId !== request.stepRunId ||
++      params.live.requestId !== request.id
++    )
++      throw new OrcaError("RUN_STATE", "the exact live decision identity is required");
++    await authority.authorize(params.live, Boolean(params.always));
++    if (!this.orc.liveInput) {
++      const held = (await this.orc.listLeases()).find((lease) => lease.runId === request.runId && !lease.lapsed);
++      throw new OrcaError("RUN_STATE", "live permission callback cannot be delivered here", {
++        liveInputState: held ? "owner-unavailable" : "expired",
++      });
++    }
++    if (!params.resume)
++      throw new OrcaError("NOT_SUPPORTED", "a live answer delivers to the original turn; no-resume is not supported");
++    const always = params.always ? await this.prepareAlways(params, request, state) : undefined;
++    let permission: RecordAlwaysResult | undefined;
++    await this.orc.liveInput.port.answer(
++      {
++        target: params.live,
++        optionId: params.optionId,
++        ...(params.note ? { note: params.note } : {}),
++        standing: Boolean(always),
++      },
++      authority,
++      always
++        ? async () => {
++            permission = await recordAlwaysDecision(always);
++            if (permission.added.length) await this.config?.announce("permissions");
++          }
++        : undefined,
++    );
++    return {
++      requestId: request.id,
++      runId: request.runId,
++      answer: params.optionId,
++      ...(permission ? { permission } : {}),
++      run: await this.runView(request.runId),
++      asOf: this.clock.isoNow(),
++    };
++  }
++
+   /**
+    * `runs.resume`: re-drive a parked run here, under this daemon's lease, until it stops again.
+    *
+diff --git a/packages/daemon/src/index.ts b/packages/daemon/src/index.ts
+index 271ba10..684a542 100644
+--- a/packages/daemon/src/index.ts
++++ b/packages/daemon/src/index.ts
+@@ -26,3 +26,5 @@ export * from "./socket.js";
+ export * from "./server.js";
+ export * from "./auth/index.js";
+ export * from "./workflow-inputs.js";
++
++export * from "./live-input-authority.js";
+diff --git a/packages/daemon/src/methods.ts b/packages/daemon/src/methods.ts
+index a725fb0..154c73c 100644
+--- a/packages/daemon/src/methods.ts
++++ b/packages/daemon/src/methods.ts
+@@ -15,6 +15,7 @@
+  * and `hello.methods` does not list them. "Absent" and "present but refusing" are different
+  * promises, and a client that has to hide a button needs the first one.
+  */
++import type { LiveAnswerAuthority } from "@orca/engine";
+ import type { Maintenance } from "./maintenance.js";
+ import { OrcaError, type MutationActor } from "@orca/core";
+ import {
+@@ -158,6 +159,8 @@ import type { ReadModel } from "./read-model.js";
+ import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
+ 
+ export interface MethodContext {
++  /** Bound by the auth guard for this call only, never wire parameters. */
++  liveAnswerAuthority?: LiveAnswerAuthority;
+   /** Set only by the authenticating guard, never read from RPC params. */
+   mutationActor?: MutationActor | undefined;
+   /** Side-effect-free launch preflight, using the same resolver as admission. */
+@@ -287,7 +290,8 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
+       ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
+       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
+       capabilities: [
+-        ...ctx.capabilities.filter((c) => c !== "workflows.validateInputs"),
++        ...ctx.capabilities.filter((c) => c !== "workflows.validateInputs" && c !== "inputs.live"),
++        ...(ctx.control?.supportsLiveInputs ? ["inputs.live" as const] : []),
+         ...(ctx.workflowInputs ? ["workflows.validateInputs" as const] : []),
+       ],
+       methods: Object.keys(methodsFor(ctx)),
+@@ -433,7 +437,7 @@ export const workflowsValidateInputs: Method<WorkflowsValidateInputsParams, Work
+ /** `inputs.answer`: record a person's answer to an open gate or permission ask, and continue. */
+ export const inputsAnswer: Method<InputsAnswerParams, InputsAnswerResult> = {
+   params: InputsAnswerParamsSchema,
+-  handle: (params, ctx) => control(ctx).answerInput(params, ctx.mutationActor),
++  handle: (params, ctx) => control(ctx).answerInput(params, ctx.mutationActor, ctx.liveAnswerAuthority),
+ };
+ 
+ /** `runs.resume`: re-drive a parked run here until it parks again or finishes. */
+diff --git a/packages/daemon/src/read-model.ts b/packages/daemon/src/read-model.ts
+index 373344c..2a4f777 100644
+--- a/packages/daemon/src/read-model.ts
++++ b/packages/daemon/src/read-model.ts
+@@ -44,6 +44,7 @@ import type { Orchestrator, PlanService } from "@orca/engine";
+ import { redactExecutionValue, type WorkItemClaim } from "@orca/store";
+ import {
+   INLINE_WORKFLOW_SEPARATOR,
++  LiveDecisionIdentitySchema,
+   displayStatusForRun,
+   displayStatusForStep,
+   isTextMediaType,
+@@ -809,7 +810,19 @@ export class ReadModel {
+   }
+ 
+   private async inputView(pass: Pass, request: HumanInputRequest, state: RunState): Promise<OpenInputView> {
++    const identity = LiveDecisionIdentitySchema.safeParse(request.context["liveDecision"]);
++    const target = identity.success
++      ? { ...identity.data, runId: request.runId, stepRunId: request.stepRunId, requestId: request.id }
++      : undefined;
+     const facts = factsFromState(state, new Map());
++    const live = target
++      ? {
++          target,
++          state: (await pass.leaseLapsed(facts.summary))
++            ? ("expired" as const)
++            : (this.orc.liveInput?.port.inspect(target) ?? ("owner-unavailable" as const)),
++        }
++      : undefined;
+     const { name, workItem } = await pass.naming(facts.summary);
+     const step = state.steps[request.stepRunId];
+     // What the asking step had in hand: the artifacts the answer is about.
+@@ -827,6 +840,7 @@ export class ReadModel {
+     const hostType = session && registry.hasHost(session.hostId) ? registry.host(session.hostId).spec.type : undefined;
+     return {
+       id: request.id,
++      ...(live ? { live } : {}),
+       kind: request.kind,
+       question: request.question,
+       // The whole `GateOption` travels as of protocol 1.4 (#161): the id is what
+diff --git a/packages/daemon/src/server.ts b/packages/daemon/src/server.ts
+index 1bde24d..059f1fc 100644
+--- a/packages/daemon/src/server.ts
++++ b/packages/daemon/src/server.ts
+@@ -27,6 +27,7 @@ import {
+ import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
+ import { Maintenance } from "./maintenance.js";
+ import { attachSocket } from "./socket.js";
++import { authRequired } from "./auth/errors.js";
+ import { Authorizer, bindPrincipal } from "./auth/guard.js";
+ import { OwnershipStore } from "./auth/ownership.js";
+ import type { ResourceResolver } from "./auth/resources.js";
+@@ -179,12 +180,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
+   const authorizer = new Authorizer(
+     auth.mode === "token"
+       ? {
++          currentPrincipal: (principal) => {
++            if (!principal.credentialId) throw authRequired();
++            const current = auth.credentials.current(principal.credentialId);
++            if (!current.ok) throw authRequired();
++            return current.principal;
++          },
+           resolver: auth.resolver,
+           ownership: auth.ownership,
+           audit: auth.audit,
+           admissions: auth.admissions ?? ctx.source,
+         }
+-      : { resolver: NO_RESOURCES, ownership: new OwnershipStore(), audit: auth.audit, admissions: ctx.source },
++      : {
++          currentPrincipal: (principal) => principal,
++          resolver: NO_RESOURCES,
++          ownership: new OwnershipStore(),
++          audit: auth.audit,
++          admissions: ctx.source,
++        },
+   );
+   const gate = new TransportGate(auth, host, authorizer);
+   // The guard is outermost: a caller is authorized before maintenance admission is consulted,
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+index 44c7451..1c6df3e 100644
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -11,3 +11,5 @@ export * from "./program/work-items.js";
+ export * from "./program/service.js";
+ export * from "./plan/service.js";
+ export * from "./plan/executors.js";
++
++export * from "./live-input.js";
+diff --git a/packages/engine/src/orchestrator.ts b/packages/engine/src/orchestrator.ts
+index 967bed8..c1b6e49 100644
+--- a/packages/engine/src/orchestrator.ts
++++ b/packages/engine/src/orchestrator.ts
+@@ -83,6 +83,7 @@ import {
+ import { PlanService } from "./plan/service.js";
+ import { recoverReleasedWorkItem } from "./program/work-items.js";
+ import { RunContext } from "./run-context.js";
++import type { LiveHumanInput } from "./live-input.js";
+ import { protectExecutionInputs } from "./execution-inputs.js";
+ import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
+ 
+@@ -96,6 +97,8 @@ export interface OrchestratorOptions {
+   templates: TemplateRegistry;
+   executors?: NodeExecutorRegistry;
+   humanInput?: HumanInputPort;
++  /** Daemon-owned callbacks; execution authority lifetime is independent of any UI connection. */
++  liveInput?: { port: LiveHumanInput; executionSignal(runId: string): AbortSignal };
+   workspaceProvider?: WorkspaceProvider;
+   sessionFactory?: SessionFactory;
+   /** Planning layer; created over `stores` when omitted. */
+@@ -208,6 +211,7 @@ export class Orchestrator {
+   readonly templates: TemplateRegistry;
+   readonly executors: NodeExecutorRegistry;
+   humanInput: HumanInputPort;
++  readonly liveInput: OrchestratorOptions["liveInput"];
+   workspaceProvider: WorkspaceProvider;
+   sessionFactory: SessionFactory;
+   readonly plan: PlanService;
+@@ -249,7 +253,8 @@ export class Orchestrator {
+     this.workflows = o.workflows;
+     this.templates = o.templates;
+     this.executors = o.executors ?? builtinExecutors();
+-    this.humanInput = o.humanInput ?? autoHumanInput();
++    this.liveInput = o.liveInput;
++    this.humanInput = o.humanInput ?? o.liveInput?.port ?? autoHumanInput();
+     this.workspaceProvider = o.workspaceProvider ?? new LocalWorkspaceProvider(process.cwd());
+     this.sessionFactory = o.sessionFactory ?? openAcpSession;
+     this.clock = o.clock ?? systemClock;
+@@ -565,6 +570,10 @@ export class Orchestrator {
+     const request = pendingHumanInputs(fresh).find((h) => h.id === requestId);
+     if (!request) throw new OrcaError("RUN_STATE", `no pending human input '${requestId}'`, { requestId });
+     const state = fresh;
++    if (request.kind === "permission")
++      throw new OrcaError("RUN_STATE", "tool permission callbacks cannot be answered from a parked log", {
++        liveInputState: "expired",
++      });
+     if (state.run.status !== "paused")
+       throw new OrcaError(
+         "RUN_STATE",
+@@ -1587,6 +1596,7 @@ export class Orchestrator {
+     // Nothing polls - health only ever reflects work a run asked for (#222).
+     const handshake = this.agents.health.begin(agent.id);
+     let session: AgentSession;
++    let continuity: Parameters<NonNullable<OpenSessionOptions["onSessionContinuity"]>>[0] | undefined;
+     try {
+       session = await this.sessionFactory({
+         host,
+@@ -1594,13 +1604,31 @@ export class Orchestrator {
+         cwd: rc.workspace.cwd,
+         logger: rc.logger,
+         clock: this.clock,
++        onSessionContinuity: (state) => {
++          continuity = state;
++        },
+         // Each `ask` permission is its own human-input request: an agent may block on
+         // several tool calls at once, and every one must be listed, answerable and
+         // logged independently (one id per session made concurrent asks collide).
+-        askPermission: async (req) => {
++        askPermission: async (req, invocation) => {
+           const stepRunId = current.step.id;
++          const live =
++            this.liveInput && invocation
++              ? {
++                  identity: {
++                    instanceId: this.liveInput.port.instanceId,
++                    sessionId: invocation.sessionId,
++                    turnId: invocation.turnId,
++                    invocationId: invocation.invocationId,
++                  },
++                  signal: AbortSignal.any([rc.abort.signal, invocation.signal, this.liveInput.executionSignal(rc.id)]),
++                  withOwnership: <T>(operation: () => Promise<T>) => rc.withOwnership(operation),
++                  emitOwned: (event: Parameters<RunContext["emitOwned"]>[0]) => rc.emitOwned(event),
++                }
++              : undefined;
+           return askHumanInput({
+-            port: humanInput,
++            port: live ? this.liveInput!.port : humanInput,
++            ...(live ? { live } : {}),
+             emit: (e) => rc.emit(e),
+             clock: this.clock,
+             runId: rc.id,
+@@ -1628,17 +1656,23 @@ export class Orchestrator {
+             },
+           });
+         },
+-        onPermission: (info) =>
+-          void rc.emit({
+-            type: "agent.permission",
+-            payload: {
+-              stepRunId: current.step.id,
+-              sessionId: session.id,
+-              title: info.title,
+-              decision: info.decision,
+-              ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
+-            },
+-          }),
++        onPermission: (info) => {
++          if (rc.abort.signal.aborted) return;
++          void rc
++            .emit({
++              type: "agent.permission",
++              payload: {
++                stepRunId: current.step.id,
++                sessionId: session.id,
++                title: info.title,
++                decision: info.decision,
++                ...(info.toolCallId ? { toolCallId: info.toolCallId } : {}),
++              },
++            })
++            .catch((error: unknown) =>
++              rc.logger.warn("permission audit append failed", { error: describeError(error) }),
++            );
++        },
+       });
+     } catch (e) {
+       handshake.failed(e);
+@@ -1664,6 +1698,7 @@ export class Orchestrator {
+         hostId: host.id,
+         cwd: rc.workspace.cwd,
+         ...(applied !== undefined ? { model: applied } : {}),
++        ...(continuity ? { continuity } : {}),
+       },
+     });
+     for (const listener of this.sessionOpenedListeners) {
+diff --git a/packages/engine/src/run-context.ts b/packages/engine/src/run-context.ts
+index 722f732..a73b523 100644
+--- a/packages/engine/src/run-context.ts
++++ b/packages/engine/src/run-context.ts
+@@ -159,15 +159,20 @@ export class RunContext {
+   async emit(input: Omit<OrcaEventInput, "runId">, prepare?: () => Promise<void>): Promise<OrcaEvent> {
+     return this.withOwnership(async () => {
+       await prepare?.();
+-      const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
+-      // The returned event is public; the interpreter keeps its exact authoritative payload.
+-      applyEvent(this.state, { ...e, payload: input.payload } as OrcaEvent);
+-      applyEvent(this.publicProjection, e);
+-      if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItemsOwned();
+-      return e;
++      return this.emitOwned(input);
+     });
+   }
+ 
++  /** Only within withOwnership: live answers and their standing write share one mutex. */
++  async emitOwned(input: Omit<OrcaEventInput, "runId">): Promise<OrcaEvent> {
++    const e = await this.deps.stores.events.append({ ...input, runId: this.id } as OrcaEventInput);
++    // The returned event is public; the interpreter keeps its exact authoritative payload.
++    applyEvent(this.state, { ...e, payload: input.payload } as OrcaEvent);
++    applyEvent(this.publicProjection, e);
++    if (BRANCH_EVENTS.has(e.type)) await this.syncWorkItemsOwned();
++    return e;
++  }
++
+   /**
+    * Refresh the WorkItem documents from this run's log. The documents are a cache of a
+    * projection (see program/work-items.ts), never an independent record, so it is always
+diff --git a/packages/protocol/src/control.ts b/packages/protocol/src/control.ts
+index 8c9d03a..30e4950 100644
+--- a/packages/protocol/src/control.ts
++++ b/packages/protocol/src/control.ts
+@@ -24,6 +24,7 @@
+  *   still to be designed. See its schema.
+  */
+ import { z } from "zod";
++import { LiveDecisionTargetSchema } from "./live-input.js";
+ // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
+ import { PermissionRuleSchema } from "@orca/core/schemas";
+ import { RunSummaryViewSchema } from "./runs.js";
+@@ -44,6 +45,8 @@ export const AlwaysDecisionSchema = z.object({ decision: z.enum(["allow", "deny"
+ export type AlwaysDecision = z.infer<typeof AlwaysDecisionSchema>;
+ 
+ export const InputsAnswerParamsSchema = z.object({
++  /** Required for live callbacks; copied exactly from inputs.list, never inferred. */
++  live: LiveDecisionTargetSchema.optional(),
+   /** The `OpenInputView.id` being answered. */
+   requestId: z.string().min(1),
+   /** Narrows the search to one run and its descendants. Optional: an id is unique either way. */
+diff --git a/packages/protocol/src/handshake.ts b/packages/protocol/src/handshake.ts
+index 7b65e70..230e018 100644
+--- a/packages/protocol/src/handshake.ts
++++ b/packages/protocol/src/handshake.ts
+@@ -140,6 +140,7 @@ export type HelloParams = z.infer<typeof HelloParamsSchema>;
+ 
+ /** What a daemon can do; a client checks these rather than the ORCA version. */
+ export const DAEMON_CAPABILITIES = [
++  "inputs.live",
+   "runs.read",
+   "runs.subscribe",
+   "runs.control",
+diff --git a/packages/protocol/src/index.ts b/packages/protocol/src/index.ts
+index d7f7370..75b099c 100644
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -24,3 +24,5 @@ export * from "./plan.js";
+ export * from "./plan-control.js";
+ 
+ export * from "./maintenance.js";
++
++export * from "./live-input.js";
+diff --git a/packages/protocol/src/inputs.ts b/packages/protocol/src/inputs.ts
+index 2792e83..56f1ea0 100644
+--- a/packages/protocol/src/inputs.ts
++++ b/packages/protocol/src/inputs.ts
+@@ -22,6 +22,7 @@
+  * agent's question.
+  */
+ import { z } from "zod";
++import { LiveInputViewSchema } from "./live-input.js";
+ // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
+ import { GateOptionSchema } from "@orca/core/schemas";
+ import { AgentHostTypeSchema } from "./agents.js";
+@@ -51,6 +52,8 @@ export const InputAgentSchema = z.object({
+ export type InputAgent = z.infer<typeof InputAgentSchema>;
+ 
+ export const OpenInputViewSchema = z.object({
++  /** Absent for durable workflow gates; expired permission asks cannot be answered. */
++  live: LiveInputViewSchema.optional(),
+   id: z.string(),
+   /**
+    * `permission` is tier 1 (an agent turn is held open), `decision` and `question` are
+diff --git a/packages/protocol/src/version.ts b/packages/protocol/src/version.ts
+index 9f48294..df7fff0 100644
+--- a/packages/protocol/src/version.ts
++++ b/packages/protocol/src/version.ts
+@@ -100,8 +100,8 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
+  * version that is neither on disk nor in the store's workflow-version store. All optional, so
+  * a 1.7 client reads a 1.8 daemon as before.
+  */
+-/** 1.9 adds authorized typed-input preflight, pinned launch guards, and authenticated local clients. */
+-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 9 };
++/** 1.10 adds exact live-permission identities and owner-local callback acceptance. */
++export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 10 };
+ 
+ export function formatProtocolVersion(v: ProtocolVersion): string {
+   return `${v.major}.${v.minor}`;
+diff --git a/packages/daemon/test/live-input-integration.test.ts b/packages/daemon/test/live-input-integration.test.ts
+new file mode 100644
+index 0000000..6438f47
+--- /dev/null
++++ b/packages/daemon/test/live-input-integration.test.ts
+@@ -0,0 +1,328 @@
++/** Applied with the shared #237 patch: the real interpreter, lease, read and control paths agree. */
++import WebSocket from "ws";
++import { CredentialStore, OwnershipStore, orchestratorResolver } from "../src/auth/index.js";
++import { randomUUID } from "node:crypto";
++import { expect, it, vi } from "vitest";
++import { AgentRegistry, LocalHost, type AgentSession } from "@orca/agents";
++import { AgentSpecSchema, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
++import {
++  LiveHumanInput,
++  LocalWorkspaceProvider,
++  Orchestrator,
++  type LiveAnswerAuthority,
++  type SessionFactory,
++} from "@orca/engine";
++import { memoryStores } from "@orca/store";
++import { ControlModel, ReadModel, startDaemon } from "@orca/daemon";
++import { LiveExecutionAuthorities } from "../src/live-input-authority.js";
++
++async function fixture() {
++  const stores = memoryStores();
++  const port = new LiveHumanInput("boot");
++  const executions = new LiveExecutionAuthorities(() => true);
++  const answers: (string | undefined)[] = [];
++  let opens = 0;
++  const sessionFactory: SessionFactory = async (opts) => {
++    const id = `session-${++opens}`;
++    let close!: () => void;
++    const closed = new Promise<void>((resolve) => {
++      close = resolve;
++    });
++    const abort = new AbortController();
++    const session: AgentSession = {
++      id,
++      agentId: opts.agent.id,
++      hostId: opts.host.id,
++      cwd: opts.cwd,
++      acpSessionId: id,
++      configOptions: [],
++      closed: closed,
++      setConfigOption: async () => [],
++      onUpdate: () => () => {},
++      cancel: async () => {
++        abort.abort();
++      },
++      close: async () => {
++        abort.abort();
++        close();
++      },
++      prompt: async (_input, options) => {
++        const answer = await opts.askPermission!(
++          {
++            sessionId: id,
++            toolCall: { toolCallId: "same-tool", title: "Execute?", kind: "execute" },
++            options: [
++              { optionId: "allow", name: "Allow", kind: "allow_once" },
++              { optionId: "deny", name: "Deny", kind: "reject_once" },
++            ],
++          },
++          {
++            sessionId: id,
++            turnId: randomUUID(),
++            invocationId: randomUUID(),
++            signal: AbortSignal.any([abort.signal, ...(options?.signal ? [options.signal] : [])]),
++          },
++        );
++        answers.push(answer);
++        return { stopReason: "end_turn", durationMs: 1 };
++      },
++    };
++    return session;
++  };
++  const agents = new AgentRegistry()
++    .addHost(new LocalHost({ id: "local", type: "local" }))
++    .addAgent(AgentSpecSchema.parse({ id: "builder", command: "unused", permissions: { default: "ask" } }));
++  const workflows = new WorkflowRegistry().register(
++    parseWorkflow(`
++id: live
++name: live
++start: s
++nodes:
++  s: {type: start}
++  work: {type: agent, agent: builder, prompt: Execute}
++  end: {type: end}
++edges: [{from: s, to: work}, {from: work, to: end}]
++`),
++  );
++  const orc = new Orchestrator({
++    stores,
++    agents,
++    workflows,
++    templates: new TemplateRegistry(),
++    sessionFactory,
++    workspaceProvider: new LocalWorkspaceProvider("/tmp"),
++    liveInput: { port, executionSignal: (id) => executions.signalFor(id) },
++    lease: { ttlMs: 300, renewMs: 50 },
++  });
++  const reads = new ReadModel({ orchestrator: orc });
++  const control = new ControlModel({ orchestrator: orc, reads });
++  const runId = await orc.startRun({ workflowId: "live" });
++  executions.bind(runId, { principalId: "alice" });
++  const done = orc.run(runId);
++  void done.catch(() => undefined);
++  await vi.waitFor(async () => expect((await reads.inputsList({ runId })).inputs).toHaveLength(1));
++  const input = (await reads.inputsList({ runId })).inputs[0]!;
++  expect(input.live?.state).toBe("pending");
++  const authority: LiveAnswerAuthority = { actor: { principalId: "alice" }, authorize: async () => {} };
++  const params = { runId, requestId: input.id, optionId: "allow", live: input.live!.target, resume: true };
++  return {
++    orc,
++    reads,
++    control,
++    runId,
++    done,
++    input,
++    authority,
++    params,
++    port,
++    stores,
++    answers,
++    opens: () => opens,
++    close: async () => {
++      port.close();
++      executions.close();
++      await done.catch(() => undefined);
++    },
++  };
++}
++
++it("answers the original callback once while retaining and renewing the interpreter lease", async () => {
++  const f = await fixture();
++  try {
++    await new Promise((resolve) => setTimeout(resolve, 400));
++    const held = (await f.orc.listLeases()).find((l) => l.runId === f.runId)!;
++    expect(held.lapsed).toBe(false);
++    const second = new Orchestrator({
++      stores: f.stores,
++      agents: f.orc.agents,
++      workflows: f.orc.workflows,
++      templates: f.orc.templates,
++    });
++    await expect(second.run(f.runId)).rejects.toMatchObject({ code: "RUN_LEASED" });
++    await expect(f.orc.answer(f.input.id, "allow", f.runId)).rejects.toMatchObject({ code: "RUN_LEASED" });
++    const results = await Promise.allSettled([
++      f.control.answerInput(f.params, f.authority.actor, f.authority),
++      f.control.answerInput(f.params, f.authority.actor, f.authority),
++    ]);
++    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
++    expect((await f.done).run.status).toBe("completed");
++    expect(f.answers).toEqual(["allow"]);
++    expect(f.opens()).toBe(1);
++    expect((await f.orc.events(f.runId)).filter((e) => e.type === "human.answered")).toHaveLength(1);
++  } finally {
++    await f.close();
++  }
++});
++
++it("honestly reports cross-process owner-unavailable and refuses stale identities", async () => {
++  const f = await fixture();
++  try {
++    const peer = new Orchestrator({
++      stores: f.stores,
++      agents: f.orc.agents,
++      workflows: f.orc.workflows,
++      templates: f.orc.templates,
++    });
++    const peerReads = new ReadModel({ orchestrator: peer });
++    expect((await peerReads.inputsList({ runId: f.runId })).inputs[0]!.live?.state).toBe("owner-unavailable");
++    await expect(
++      new ControlModel({ orchestrator: peer, reads: peerReads }).answerInput(f.params, f.authority.actor, f.authority),
++    ).rejects.toMatchObject({ details: { liveInputState: "owner-unavailable" } });
++    await expect(
++      f.control.answerInput({ ...f.params, live: { ...f.params.live, turnId: "old" } }, f.authority.actor, f.authority),
++    ).rejects.toMatchObject({ code: "RUN_STATE" });
++    await f.control.answerInput(f.params, f.authority.actor, f.authority);
++    await f.done;
++  } finally {
++    await f.close();
++  }
++});
++
++it("parks after accepted standing-write failure and asks afresh on resume", async () => {
++  const f = await fixture();
++  try {
++    await expect(
++      f.port.answer({ target: f.params.live, optionId: "allow", standing: true }, f.authority, async () => {
++        throw new Error("disk full");
++      }),
++    ).rejects.toMatchObject({ details: { answerRecorded: true } });
++    expect((await f.done).run.status).toBe("paused");
++    expect(f.answers).toEqual([]);
++    const resumed = f.orc.resume(f.runId);
++    await vi.waitFor(async () =>
++      expect((await f.reads.inputsList({ runId: f.runId })).inputs[0]?.id).not.toBe(f.input.id),
++    );
++    await vi.waitFor(async () => expect((await f.reads.inputsList({ runId: f.runId })).inputs).toHaveLength(1));
++    const input = (await f.reads.inputsList({ runId: f.runId })).inputs[0]!;
++    expect(input.live!.target.sessionId).not.toBe(f.params.live.sessionId);
++    await expect(f.control.answerInput(f.params, f.authority.actor, f.authority)).rejects.toMatchObject({
++      code: "RUN_STATE",
++    });
++    await f.control.answerInput(
++      { ...f.params, requestId: input.id, live: input.live!.target },
++      f.authority.actor,
++      f.authority,
++    );
++    expect((await resumed).run.status).toBe("completed");
++    expect(f.answers).toEqual(["allow"]);
++  } finally {
++    await f.close();
++  }
++});
++
++it.each(["http", "socket"] as const)(
++  "%s authorizes, reconnects and answers the same original callback",
++  async (transport) => {
++    const f = await fixture();
++    const credentials = new CredentialStore();
++    const owner = await credentials.issue({ principal: "owner", preset: "owner" });
++    const viewer = await credentials.issue({ principal: "viewer", preset: "viewer" });
++    const daemon = await startDaemon({
++      orcaVersion: "test",
++      capabilities: ["runs.read", "runs.control", "runs.subscribe"],
++      reads: f.reads,
++      control: f.control,
++      source: f.orc,
++      auth: { mode: "token", credentials, ownership: new OwnershipStore(), resolver: orchestratorResolver(f.orc) },
++    });
++    const clients: WebSocket[] = [];
++    const call = async (
++      token: string,
++      method: string,
++      params: unknown,
++    ): Promise<{ ok: boolean; error?: { code: string }; result?: unknown }> => {
++      const message = { kind: "request", id: 1, method, params };
++      if (transport === "http") {
++        const res = await fetch(`${daemon.url}/rpc`, {
++          method: "POST",
++          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
++          body: JSON.stringify(message),
++        });
++        return (await res.json()) as { ok: boolean; error?: { code: string }; result?: unknown };
++      }
++      const ws = new WebSocket(daemon.socketUrl!, ["orca.v1"], { headers: { authorization: `Bearer ${token}` } });
++      clients.push(ws);
++      await new Promise<void>((resolve, reject) => {
++        ws.once("open", resolve);
++        ws.once("error", reject);
++      });
++      const result = new Promise<{ ok: boolean; error?: { code: string }; result?: unknown }>((resolve, reject) => {
++        ws.once("message", (data) =>
++          resolve(JSON.parse(String(data)) as { ok: boolean; error?: { code: string }; result?: unknown }),
++        );
++        ws.once("error", reject);
++      });
++      ws.send(JSON.stringify(message));
++      const response = await result;
++      ws.close();
++      return response;
++    };
++    try {
++      expect(await call(viewer.token, "inputs.answer", f.params)).toMatchObject({
++        ok: false,
++        error: { code: "AUTH_FORBIDDEN" },
++      });
++      expect(await call(owner.token, "inputs.list", { runId: f.runId })).toMatchObject({
++        ok: true,
++        result: { inputs: [{ live: { state: "pending" } }] },
++      });
++      // Each call above disconnects its client; execution authority remains attached to the run.
++      expect(f.port.inspect(f.params.live)).toBe("pending");
++      expect(await call(owner.token, "inputs.list", { runId: f.runId })).toMatchObject({
++        ok: true,
++        result: { inputs: [{ id: f.input.id }] },
++      });
++      expect(await call(owner.token, "inputs.answer", f.params)).toMatchObject({ ok: true });
++      expect((await f.done).run.status).toBe("completed");
++      expect(f.answers).toEqual(["allow"]);
++      expect((await f.orc.events(f.runId)).find((e) => e.type === "human.answered")?.payload).toMatchObject({
++        actor: { principalId: "owner", credentialId: owner.credential.id },
++      });
++    } finally {
++      for (const ws of clients) ws.terminate();
++      await daemon.close();
++      await f.close();
++    }
++  },
++);
++
++it("refuses an orphaned tool approval even if an old log describes it as a parked gate", async () => {
++  const f = await fixture();
++  try {
++    const runId = await f.orc.startRun({ workflowId: "live" });
++    const stepRunId = "dead-step",
++      requestId = "dead-permission";
++    await f.stores.events.append({ type: "run.started", runId, payload: {} });
++    await f.stores.events.append({
++      type: "step.scheduled",
++      runId,
++      payload: { stepRunId, nodeId: "work", nodeType: "agent", attempt: 1 },
++    });
++    await f.stores.events.append({ type: "step.started", runId, payload: { stepRunId, inputArtifactIds: [] } });
++    await f.stores.events.append({
++      type: "human.requested",
++      runId,
++      payload: {
++        stepRunId,
++        requestId,
++        kind: "permission",
++        question: "Old tool",
++        options: [{ id: "allow", label: "Allow" }],
++        context: {},
++      },
++    });
++    await f.stores.events.append({
++      type: "step.waiting",
++      runId,
++      payload: { stepRunId, on: "human-input", detail: requestId },
++    });
++    await f.stores.events.append({ type: "run.paused", runId, payload: { reason: "old callback" } });
++    await expect(f.orc.answer(requestId, "allow", runId)).rejects.toMatchObject({
++      code: "RUN_STATE",
++      details: { liveInputState: "expired" },
++    });
++    expect((await f.orc.events(runId)).filter((e) => e.type === "human.answered")).toHaveLength(0);
++  } finally {
++    await f.close();
++  }
++});

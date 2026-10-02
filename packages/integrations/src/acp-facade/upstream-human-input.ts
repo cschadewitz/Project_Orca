@@ -12,7 +12,7 @@
  * concurrent sessions never see each other's gates.
  */
 import * as acp from "@agentclientprotocol/sdk";
-import type { HumanInputPort, HumanInputQuery } from "@orca/engine";
+import { HumanInputPending, type HumanInputPort, type HumanInputQuery } from "@orca/engine";
 
 export interface UpstreamTarget {
   sessionId: string;
@@ -65,6 +65,9 @@ export class UpstreamHumanInput implements HumanInputPort {
   }
 
   async ask(q: HumanInputQuery): Promise<string | undefined> {
+    // Live decisions use the authenticated owner-local answer path. An upstream
+    // ACP option alone supplies neither current principal nor invocation identity.
+    if (q.live) return this.fallback?.ask(q);
     const t = await this.targetFor(q.runId);
     if (!t) return this.fallback?.ask(q);
     // `optionId` carries our option's id, so `res.outcome.optionId` comes straight back
@@ -84,12 +87,28 @@ export class UpstreamHumanInput implements HumanInputPort {
       status: "pending",
       rawInput: q.context,
     };
-    const res = await t.request(acp.methods.client.session.requestPermission, {
-      sessionId: t.sessionId,
-      toolCall,
-      options,
-    });
+    let res: acp.RequestPermissionResponse;
+    try {
+      res = await t.request(acp.methods.client.session.requestPermission, {
+        sessionId: t.sessionId,
+        toolCall,
+        options,
+      });
+    } catch {
+      return this.disconnected(q);
+    }
+    if (q.signal?.aborted || (await this.targetFor(q.runId)) !== t) return this.disconnected(q);
     const outcome = res.outcome;
     return outcome.outcome === "selected" ? outcome.optionId : undefined;
+  }
+
+  recordsAnswer(q: HumanInputQuery): boolean {
+    return Boolean(q.live && this.fallback?.recordsAnswer?.(q));
+  }
+
+  private disconnected(q: HumanInputQuery): Promise<string | undefined> {
+    if (this.fallback) return this.fallback.ask(q);
+    if (q.kind !== "permission") return Promise.reject(new HumanInputPending(q));
+    return Promise.resolve(undefined);
   }
 }
