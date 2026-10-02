@@ -558,3 +558,30 @@ without the hook retain their existing behavior. Crashes or failures after actua
 claim publication, including subsequent authority loss, remain explicit ambiguity;
 old unbound records are unchanged and are never deleted, rebound or automatically
 replayed. The coordinated-writer/full-store rollback requirement remains in force.
+
+## Revision read sequencing
+
+At `1144bb01f88575d3a66bf99912c7873b75653977`, CI 372 passed both Node
+versions (Node24: 3453 tests passed, three opt-in skips; coverage 91.58% statements,
+83.98% branches, 93.06% functions, 94.09% lines). App smoke 82 completed the full
+native revision scenario on macOS. On Windows, the initial revision was accepted,
+but two protected pending reads returned `RUN_LEASED`; the UI showed the recorded
+correction's unavailable state and explicit Refresh action. The initial content
+assertion failed before atomic-save/restart evidence collection. This was a real
+protected-read refusal, not a missing locator or observer-code defect.
+
+The revision feed previously started a protected pending read immediately after
+receipt acceptance and then immediately invalidated it while starting discovery.
+Discovery and notification-driven refreshes could overlap further lease-taking
+reads. The correction sequences the feed's protected reads in one retained queue,
+coalescing stale queued work through the existing exact identity, version and
+connection checks. A discovery request may also inspect ordinary gates and child
+runs, so per-run queues would not cover its full read scope. The queue makes no
+claim of concurrent throughput for disjoint runs.
+Receipt acceptance records metadata; authoritative discovery and a subsequent
+protected read supply content. Accepted replacement metadata synchronously removes
+its older same-slot entry, so incomplete discovery cannot displace the new receipt
+with an obsolete identity. No correction payload is invented from a receipt,
+no mutation is retried, and no empty/error result starts polling. External lease
+ownership remains a truthful unavailable result with explicit user refresh; the
+read queue does not bypass the runtime lease or expand current authority.

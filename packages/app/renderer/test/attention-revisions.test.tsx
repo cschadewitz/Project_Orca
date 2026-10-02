@@ -76,12 +76,12 @@ let summaries: PendingRevisionSummary[];
 let pendingRead: ReturnType<typeof vi.fn<NonNullable<OrcaBridge["inputs"]["revisionPending"]>>>;
 let revise: ReturnType<typeof vi.fn<NonNullable<OrcaBridge["inputs"]["revise"]>>>;
 let replace: ReturnType<typeof vi.fn<NonNullable<OrcaBridge["inputs"]["replaceRevision"]>>>;
-function App({ inline = false }: { inline?: boolean }) {
+function App({ inline = false, stepRunId = "step-review" }: { inline?: boolean; stepRunId?: string }) {
   feed = useAttention();
   controls = useControls({ onAnswered: feed.answered });
   return inline ? (
     <InlineAsksProvider feed={feed}>
-      <StepAsks runId="run-1" stepRunId="step-review" />
+      <StepAsks runId="run-1" stepRunId={stepRunId} />
     </InlineAsksProvider>
   ) : (
     <AttentionSurface connection="live" feed={feed} />
@@ -94,7 +94,7 @@ function mount(inline = false) {
     </h.Providers>,
   );
 }
-function push(seq = 10) {
+function push(seq = 10, runId = "run-1") {
   act(() =>
     fake.notify({
       kind: "notification",
@@ -103,12 +103,19 @@ function push(seq = 10) {
         subscriptionId: "attention",
         at: INPUTS_AS_OF,
         event: "run.started",
-        runId: "run-1",
+        runId,
         seq,
         status: "running",
       },
     }),
   );
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 beforeEach(() => {
   stubMatchMedia(1440);
@@ -188,6 +195,266 @@ it("mounts the real revision boundary separately from ordinary options and notes
     payload: { kind: "text", text: "Better correction" },
   });
   expect(fake.calls.some((call) => call.method === "inputs.answer")).toBe(false);
+});
+
+it.each(["receipt", "notification"])(
+  "serializes an accepted correction with concurrent discovery when the %s arrives first",
+  async (first) => {
+    mount();
+    await screen.findByLabelText("Correction");
+    await act(async () => {});
+    const result = deferred<Awaited<ReturnType<NonNullable<OrcaBridge["inputs"]["revise"]>>>>();
+    const heldRead = deferred<void>();
+    let holdNext = true;
+    let leased = false;
+    const started: string[] = [];
+    const collisions: string[] = [];
+    const list = window.orca.inputs.list;
+    window.orca.inputs.list = async (params) => {
+      if (!params?.revisionRunIds?.length) return list(params);
+      started.push("discovery");
+      if (leased) {
+        collisions.push("discovery");
+        return {
+          ok: true,
+          result: {
+            inputs: [],
+            waiting: 0,
+            asOf: INPUTS_AS_OF,
+            pendingRevisions: { items: [], incomplete: true, reason: "boundary-unavailable" },
+          },
+        };
+      }
+      leased = true;
+      try {
+        if (holdNext) {
+          holdNext = false;
+          await heldRead.promise;
+        }
+        return await list(params);
+      } finally {
+        leased = false;
+      }
+    };
+    pendingRead.mockImplementation(async () => {
+      started.push("pending");
+      if (leased) {
+        collisions.push("pending");
+        return { ok: false, error: { code: "RUN_LEASED", message: "The protected read owns the run" } };
+      }
+      leased = true;
+      try {
+        if (holdNext) {
+          holdNext = false;
+          await heldRead.promise;
+        }
+        return { ok: true, result: pending };
+      } finally {
+        leased = false;
+      }
+    });
+    revise.mockImplementation(() => result.promise);
+    fireEvent.change(screen.getByLabelText("Correction"), { target: { value: "Unconfirmed receipt payload" } });
+    fireEvent.click(screen.getByRole("button", { name: "Request changes" }));
+    open = [];
+    summaries = [summary];
+    if (first === "notification") {
+      push();
+      await waitFor(() => expect(started).toHaveLength(1));
+    }
+    await act(async () => result.resolve({ ok: true, result: receipt }));
+    push(11);
+    push(12);
+    await act(async () => {});
+    // An accepted receipt only supplies identity. Content still requires the protected read.
+    expect(screen.queryByText("Unconfirmed receipt payload", { selector: "pre" })).toBeNull();
+    expect(screen.queryByText("Recorded correction text", { selector: "pre" })).toBeNull();
+    expect(feed.state.phase === "ready" && feed.state.waiting).toBe(0);
+    await act(async () => heldRead.resolve());
+    expect(collisions).toEqual([]);
+    await screen.findByText("Recorded correction text", { selector: "pre" });
+    expect(started).toEqual(["discovery", "discovery", "pending"]);
+    expect(feed.revisions?.items[0]?.summary).toEqual(summary);
+    expect(revise).toHaveBeenCalledOnce();
+    expect(replace).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["RUN_LEASED", "rejected"])(
+  "keeps accepted metadata honest after a %s protected read until explicit refresh",
+  async (failure) => {
+    mount();
+    await screen.findByLabelText("Correction");
+    await act(async () => {});
+    let incomplete = true;
+    fake.script({
+      "inputs.list": () => ({
+        ok: true,
+        result: {
+          inputs: open,
+          waiting: open.length,
+          asOf: INPUTS_AS_OF,
+          pendingRevisions: incomplete
+            ? { items: [], incomplete: true, reason: "boundary-unavailable" }
+            : { items: summaries, incomplete: false },
+        },
+      }),
+    });
+    if (failure === "RUN_LEASED")
+      pendingRead.mockResolvedValue({
+        ok: false,
+        error: { code: "RUN_LEASED", message: "Another client owns the run" },
+      });
+    else pendingRead.mockRejectedValue(new Error("Read transport failed"));
+    fireEvent.change(screen.getByLabelText("Correction"), { target: { value: "Accepted but unread payload" } });
+    fireEvent.click(screen.getByRole("button", { name: "Request changes" }));
+    await screen.findByText(/current correction could not be confirmed/);
+    await screen.findByText(/Only part of the pending correction list/);
+    expect(feed.revisions?.items[0]?.summary).toEqual(summary);
+    expect(feed.revisions?.items[0]?.pending).toBeUndefined();
+    expect(pendingRead).toHaveBeenCalledExactlyOnceWith({ target });
+    expect(screen.queryByText("Accepted but unread payload", { selector: "pre" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Replace pending correction" })).toBeNull();
+    pendingRead.mockResolvedValue({ ok: true, result: pending });
+    incomplete = false;
+    await act(async () => {});
+    expect(pendingRead).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh correction" }));
+    await screen.findByText("Recorded correction text", { selector: "pre" });
+    expect(pendingRead).toHaveBeenCalledTimes(2);
+    expect(revise).toHaveBeenCalledOnce();
+    expect(replace).not.toHaveBeenCalled();
+  },
+);
+
+it("inspects the accepted replacement identity when incomplete discovery omits the entire slot", async () => {
+  open = [];
+  summaries = [summary];
+  mount();
+  await screen.findByRole("button", { name: "Replace pending correction" });
+  const next = { ...summary, target: { ...target, revisionId: "revision-2" }, expectedRevision: "v2" };
+  if (receipt.state !== "resolved") throw new Error("The fixture must contain a resolved receipt");
+  replace.mockResolvedValue({
+    ok: true,
+    result: {
+      ...receipt,
+      result: {
+        ...receipt.result,
+        revisionId: next.target.revisionId,
+        currentRevisionId: next.target.revisionId,
+        expectedRevision: next.expectedRevision,
+      },
+    },
+  });
+  fake.script({
+    "inputs.list": () => ({
+      ok: true,
+      result: {
+        inputs: [],
+        waiting: 0,
+        asOf: INPUTS_AS_OF,
+        pendingRevisions: { items: [], incomplete: true, reason: "boundary-unavailable" },
+      },
+    }),
+  });
+  pendingRead.mockResolvedValue({
+    ok: true,
+    result: { ...pending, ...next, payload: { kind: "text", text: "Protected replacement content" } },
+  });
+  fireEvent.change(screen.getByLabelText("Correction"), { target: { value: "Replacement sent once" } });
+  fireEvent.click(screen.getByRole("button", { name: "Replace pending correction" }));
+  await screen.findByText("Protected replacement content", { selector: "pre" });
+  expect(feed.revisions?.items).toHaveLength(1);
+  expect(feed.revisions?.items[0]?.summary).toEqual(next);
+  expect(pendingRead.mock.calls.map(([params]) => params.target)).toEqual([target, next.target]);
+  expect(replace).toHaveBeenCalledOnce();
+  expect(revise).not.toHaveBeenCalled();
+});
+
+it("serializes overlapping and disjoint discovery selections without mixing their current corrections", async () => {
+  open = [];
+  const second = { ...summary, target: { ...target, runId: "run-2", revisionId: "revision-2" } };
+  const third = { ...summary, target: { ...target, runId: "run-3", revisionId: "revision-3" } };
+  summaries = [summary, second, third];
+  const leased = new Set<string>();
+  const collisions: string[] = [];
+  const started: string[][] = [];
+  const heldRead = deferred<void>();
+  let holdNext = false;
+  let holding = false;
+  fake.script({
+    "runs.list": () => ({
+      ok: true,
+      result: {
+        runs: ["run-1", "run-2"].map((id) => ({ ...RUNS[0]!, id, status: "running" as const })),
+        total: 2,
+        asOf: INPUTS_AS_OF,
+      },
+    }),
+    "inputs.list": async (params) => {
+      const runIds = params.revisionRunIds ?? [];
+      if (runIds.length) started.push(runIds);
+      for (const runId of runIds) {
+        if (leased.has(runId)) collisions.push(runId);
+        leased.add(runId);
+      }
+      await Promise.resolve();
+      for (const runId of runIds) leased.delete(runId);
+      return {
+        ok: true,
+        result: {
+          inputs: [],
+          waiting: 0,
+          asOf: INPUTS_AS_OF,
+          pendingRevisions: {
+            items: summaries.filter((item) => runIds.includes(item.target.runId)),
+            incomplete: false,
+          },
+        },
+      };
+    },
+  });
+  pendingRead.mockImplementation(async ({ target: requested }) => {
+    if (leased.has(requested.runId)) collisions.push(requested.runId);
+    leased.add(requested.runId);
+    try {
+      if (holdNext && requested.runId === "run-1") {
+        holdNext = false;
+        holding = true;
+        await heldRead.promise;
+      }
+      return {
+        ok: true,
+        result: { ...pending, target: requested, payload: { kind: "text", text: `Correction for ${requested.runId}` } },
+      };
+    } finally {
+      leased.delete(requested.runId);
+    }
+  });
+  mount();
+  await waitFor(() => expect(feed.revisions?.items.filter((entry) => entry.pending)).toHaveLength(2));
+  holdNext = true;
+  push();
+  await waitFor(() => expect(holding).toBe(true));
+  act(() => feed.revisions?.refresh());
+  await act(async () => {});
+  push(11, "run-2");
+  act(() => feed.revisions?.refresh("run-3"));
+  await act(async () => {});
+  expect(leased.has("run-1")).toBe(true);
+  expect(feed.revisions?.items.find((entry) => entry.summary.target.runId === "run-2")?.pending).toBeUndefined();
+  expect(feed.revisions?.items.find((entry) => entry.summary.target.runId === "run-3")).toBeUndefined();
+  await act(async () => heldRead.resolve());
+  await waitFor(() => expect(feed.revisions?.items.filter((entry) => entry.pending)).toHaveLength(3));
+  expect(collisions).toEqual([]);
+  expect(started).toEqual([["run-1", "run-2"], ["run-1"], ["run-1"], ["run-2"], ["run-3"]]);
+  for (const entry of feed.revisions!.items)
+    expect(entry.pending).toMatchObject({
+      target: entry.summary.target,
+      payload: { kind: "text", text: `Correction for ${entry.summary.target.runId}` },
+    });
+  expect(revise).not.toHaveBeenCalled();
+  expect(replace).not.toHaveBeenCalled();
 });
 
 it("revision-only gates have no ordinary free-text path, digit, Enter, note, or shared-control bypass", async () => {
@@ -526,6 +793,138 @@ it("removes protected content after denial and ignores a late pending response a
   });
   expect(screen.queryByText("Recorded correction text", { selector: "pre" })).toBeNull();
   expect(screen.queryByLabelText("Correction")).toBeNull();
+  expect(replace).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "discards an invalidated in-flight read and preserves the draft for the latest identity (inline=%s)",
+  async (inline) => {
+    open = [];
+    summaries = [summary];
+    mount(inline);
+    await screen.findByRole("button", { name: "Replace pending correction" });
+    fireEvent.change(screen.getByLabelText("Correction"), {
+      target: { value: "Keep my draft across queued refreshes" },
+    });
+    const stale = deferred<Awaited<ReturnType<NonNullable<OrcaBridge["inputs"]["revisionPending"]>>>>();
+    const fresh = deferred<Awaited<ReturnType<NonNullable<OrcaBridge["inputs"]["revisionPending"]>>>>();
+    pendingRead.mockImplementationOnce(() => stale.promise).mockImplementationOnce(() => fresh.promise);
+    push();
+    await waitFor(() => expect(pendingRead).toHaveBeenCalledTimes(2));
+    const next = { ...summary, target: { ...target, revisionId: "revision-2" }, expectedRevision: "v2" };
+    summaries = [next];
+    push(11);
+    push(12);
+    await act(async () => {});
+    expect(pendingRead).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Recorded correction text", { selector: "pre" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Replace pending correction" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+    await act(async () =>
+      stale.resolve({ ok: true, result: { ...pending, payload: { kind: "text", text: "Stale held body" } } }),
+    );
+    await waitFor(() => expect(pendingRead).toHaveBeenCalledTimes(3));
+    expect(pendingRead.mock.calls[2]![0]).toEqual({ target: next.target });
+    expect(screen.queryByText("Stale held body", { selector: "pre" })).toBeNull();
+    await act(async () =>
+      fresh.resolve({
+        ok: true,
+        result: { ...pending, ...next, payload: { kind: "text", text: "Latest protected body" } },
+      }),
+    );
+    await screen.findByText("Latest protected body", { selector: "pre" });
+    expect(screen.getByLabelText<HTMLTextAreaElement>("Correction").value).toBe(
+      "Keep my draft across queued refreshes",
+    );
+    expect(screen.getByRole("button", { name: "Use reviewed correction version" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Replace pending correction" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+    expect(feed.revisions?.items).toHaveLength(1);
+    expect(feed.revisions?.items[0]?.summary).toEqual(next);
+    expect(replace).not.toHaveBeenCalled();
+  },
+);
+
+it("drains the old protected read across reconnect and rejects its content before reading the new authority", async () => {
+  open = [];
+  summaries = [summary];
+  mount();
+  await screen.findByRole("button", { name: "Replace pending correction" });
+  fireEvent.change(screen.getByLabelText("Correction"), { target: { value: "Old authority draft" } });
+  const stale = deferred<Awaited<ReturnType<NonNullable<OrcaBridge["inputs"]["revisionPending"]>>>>();
+  const fresh = deferred<Awaited<ReturnType<NonNullable<OrcaBridge["inputs"]["revisionPending"]>>>>();
+  pendingRead.mockImplementationOnce(() => stale.promise).mockImplementationOnce(() => fresh.promise);
+  push();
+  await waitFor(() => expect(pendingRead).toHaveBeenCalledTimes(2));
+  push(11); // This queued refresh belongs to the old authority and must never reach the bridge.
+  const discoveryCount = fake.calls.filter(
+    (call) => call.method === "inputs.list" && (call.params as { revisionRunIds?: string[] })?.revisionRunIds,
+  ).length;
+  act(() =>
+    fake.connect({
+      state: "live",
+      since: INPUTS_AS_OF,
+      generation: 2,
+      capabilities: ["runs.read", "runs.control"],
+      methods,
+    }),
+  );
+  await act(async () => {});
+  expect(pendingRead).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText("Recorded correction text", { selector: "pre" })).toBeNull();
+  expect(screen.queryByDisplayValue("Old authority draft")).toBeNull();
+  await act(async () =>
+    stale.resolve({ ok: true, result: { ...pending, payload: { kind: "text", text: "Old authority body" } } }),
+  );
+  await waitFor(() => expect(pendingRead).toHaveBeenCalledTimes(3));
+  expect(
+    fake.calls.filter(
+      (call) => call.method === "inputs.list" && (call.params as { revisionRunIds?: string[] })?.revisionRunIds,
+    ),
+  ).toHaveLength(discoveryCount + 1);
+  expect(screen.queryByText("Old authority body", { selector: "pre" })).toBeNull();
+  await act(async () =>
+    fresh.resolve({ ok: true, result: { ...pending, payload: { kind: "text", text: "New authority body" } } }),
+  );
+  await screen.findByText("New authority body", { selector: "pre" });
+  expect(screen.getByLabelText<HTMLTextAreaElement>("Correction").value).toBe("");
+  expect(replace).not.toHaveBeenCalled();
+});
+
+it("keeps queued correction reads out of a newly selected inline step", async () => {
+  open = [];
+  summaries = [summary];
+  const view = mount(true);
+  await screen.findByText("Recorded correction text", { selector: "pre" });
+  const stale = deferred<Awaited<ReturnType<NonNullable<OrcaBridge["inputs"]["revisionPending"]>>>>();
+  pendingRead.mockImplementationOnce(() => stale.promise);
+  push();
+  await waitFor(() => expect(pendingRead).toHaveBeenCalledTimes(2));
+  view.rerender(
+    <h.Providers>
+      <App inline stepRunId="another-step" />
+    </h.Providers>,
+  );
+  const next = { ...summary, target: { ...target, revisionId: "revision-2" }, expectedRevision: "v2" };
+  summaries = [next];
+  pendingRead.mockResolvedValue({
+    ok: true,
+    result: { ...pending, ...next, payload: { kind: "text", text: "Current selected correction" } },
+  });
+  push(11);
+  await act(async () => stale.resolve({ ok: true, result: pending }));
+  await waitFor(() => expect(feed.revisions?.items[0]?.pending?.target).toEqual(next.target));
+  expect(view.container.textContent).toBe("");
+  view.rerender(
+    <h.Providers>
+      <App inline />
+    </h.Providers>,
+  );
+  await screen.findByText("Current selected correction", { selector: "pre" });
+  expect(screen.queryByText("Recorded correction text", { selector: "pre" })).toBeNull();
+  expect(pendingRead).toHaveBeenCalledTimes(3);
   expect(replace).not.toHaveBeenCalled();
 });
 

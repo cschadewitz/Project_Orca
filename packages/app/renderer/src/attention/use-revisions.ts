@@ -85,6 +85,9 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
     items: [],
   });
   const controller = useRef<Controller>(EMPTY);
+  // Discovery can enrich gates outside revisionRunIds, including child runs. Serialize
+  // all protected reads in this feed, across effect restarts and reconnects too.
+  const protectedReads = useRef<Promise<void>>(Promise.resolve());
   const retained = useRef<
     | {
         scope: string;
@@ -117,6 +120,15 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
     const discoveryVersions = new Map<string, number>();
     const pendingVersions = new Map<string, number>();
     const writes = new Set<string>();
+    const protectedRead = <T>(current: () => boolean, read: () => Promise<T>) => {
+      const result = protectedReads.current.then(() => (active() && current() ? read() : undefined));
+      // A refused or rejected read releases the lane, without scheduling a retry.
+      protectedReads.current = result.then(
+        () => {},
+        () => {},
+      );
+      return result;
+    };
     let pageNotice: string | undefined;
     const runNotices = new Map<string, string>();
     const publish = () => {
@@ -135,6 +147,15 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
       pending.boundary
         ? contexts.get(JSON.stringify([pending.boundary.target.runId, pending.boundary.target.requestId]))
         : undefined;
+    const discardSuperseded = (target: PendingRevisionTarget) => {
+      // A receipt or discovery advances the current slot, never an unbounded history.
+      for (const [key, entry] of entries) {
+        if (key !== revisionTargetKey(target) && revisionSlotKey(entry.summary.target) === revisionSlotKey(target)) {
+          entries.delete(key);
+          pendingVersions.delete(key); // A late response cannot restore the superseded identity.
+        }
+      }
+    };
     const readPending = (summary: PendingRevisionSummary) => {
       const key = revisionTargetKey(summary.target);
       const version = (pendingVersions.get(key) ?? 0) + 1;
@@ -150,13 +171,7 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
         ...(previous?.input ? { input: previous.input } : {}),
         ...(previous?.stepRunId ? { stepRunId: previous.stepRunId } : {}),
       });
-      // Discovery is a current-slot view. Keep its previous form association, not an unbounded history.
-      for (const [oldKey, entry] of entries) {
-        if (oldKey !== key && revisionSlotKey(entry.summary.target) === revisionSlotKey(summary.target)) {
-          entries.delete(oldKey);
-          pendingVersions.delete(oldKey); // A late response for the superseded identity cannot restore it.
-        }
-      }
+      discardSuperseded(summary.target);
       publish();
       const read = window.orca.inputs.revisionPending;
       if (!readable || !read) {
@@ -164,9 +179,11 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
         publish();
         return;
       }
-      void read({ target: summary.target })
+      const current = () =>
+        pendingVersions.get(key) === version && currentTargets.get(revisionSlotKey(summary.target)) === key;
+      void protectedRead(current, () => read({ target: summary.target }))
         .then((result) => {
-          if (!active() || pendingVersions.get(key) !== version) return;
+          if (!result || !active() || !current()) return;
           if (!result.ok || revisionTargetKey(result.result.target) !== key) {
             entries.set(key, {
               summary,
@@ -195,7 +212,7 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
           publish();
         })
         .catch(() => {
-          if (!active() || pendingVersions.get(key) !== version) return;
+          if (!active() || !current()) return;
           entries.set(key, {
             summary,
             reading: false,
@@ -231,20 +248,23 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
           }
         }
         publish();
-        void window.orca.inputs
-          .list({ revisionRunIds: batch })
+        const currentRuns = () => batch.filter((id) => discoveryVersions.get(id) === versions.get(id));
+        void protectedRead(
+          () => currentRuns().length > 0,
+          () => window.orca.inputs.list({ revisionRunIds: currentRuns() }),
+        )
           .then((result) => {
-            if (!active()) return;
-            const currentRuns = batch.filter((id) => discoveryVersions.get(id) === versions.get(id));
-            if (currentRuns.length === 0) return;
+            if (!result || !active()) return;
+            const runs = currentRuns();
+            if (runs.length === 0) return;
             const projection = result.ok ? result.result.pendingRevisions : undefined;
             if (!projection) {
               const notice = result.ok
                 ? "Pending correction discovery is unavailable on this daemon."
                 : "Pending corrections could not be refreshed. Their absence is not confirmed.";
-              for (const runId of currentRuns) runNotices.set(runId, notice);
+              for (const runId of runs) runNotices.set(runId, notice);
               for (const [key, entry] of entries)
-                if (currentRuns.includes(entry.summary.target.runId))
+                if (runs.includes(entry.summary.target.runId))
                   entries.set(key, {
                     summary: entry.summary,
                     reading: false,
@@ -254,7 +274,7 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
               publish();
               return;
             }
-            for (const runId of currentRuns) {
+            for (const runId of runs) {
               if (projection.incomplete)
                 runNotices.set(
                   runId,
@@ -264,14 +284,14 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
             }
             const seen = new Set<string>();
             for (const summary of projection.items) {
-              if (!currentRuns.includes(summary.target.runId)) continue;
+              if (!runs.includes(summary.target.runId)) continue;
               seen.add(revisionTargetKey(summary.target));
               currentTargets.set(revisionSlotKey(summary.target), revisionTargetKey(summary.target));
               readPending(summary);
             }
             // Omission never proves delivery or cancellation. Retain known identities and inspect them.
             for (const [key, entry] of entries)
-              if (currentRuns.includes(entry.summary.target.runId) && !seen.has(key)) readPending(entry.summary);
+              if (runs.includes(entry.summary.target.runId) && !seen.has(key)) readPending(entry.summary);
             publish();
           })
           .catch(() => {
@@ -306,8 +326,8 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
         stepRunId: receipt.target.stepRunId,
         ...(input ? { input } : {}),
       });
+      discardSuperseded(target);
       onAnswered(receipt.target.requestId);
-      readPending({ target, expectedRevision: receipt.expectedRevision, state: receipt.state });
       discover([target.runId]);
     };
     const write = async (command: RevisionCommand | ReplacePendingRevisionCommand, key: string, replace: boolean) => {
