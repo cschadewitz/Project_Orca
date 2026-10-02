@@ -1,4 +1,5 @@
 /** Explicit OS-user admission for local CLI/stdio entry points, never network RPC. */
+import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { createHash } from "node:crypto";
 import { existsSync, constants } from "node:fs";
 import { access, mkdir, stat } from "node:fs/promises";
@@ -54,13 +55,15 @@ export async function localSubmissionAuthority(
         return current.principal;
       },
     });
-    return {
+    const local: SubmissionAuthority = {
       ...authority,
       authorize: (command) =>
         authority.authorize(
           command as import("@orca/core").SubmissionCommand & import("@orca/core").DirectAdmissionCommand,
         ),
     };
+    bindLocalAdmissionExecution(app.orchestrator, mode, local);
+    return local;
   }
   const localUser = userInfo();
   const principalId = `os-user-${createHash("sha256")
@@ -84,10 +87,15 @@ export async function localSubmissionAuthority(
     }
   };
   await verify();
-  return {
+  const local: SubmissionAuthority = {
     workspaceId,
     actor: { principalId },
     authorize: verify,
+    verifyRunAdmitted: async (runId) => {
+      await verify();
+      await ownership.verify(runId, principalId);
+      await verify();
+    },
     onRunAdmitted: async (runId) => {
       await verify();
       const existing = ownership.owner(runId);
@@ -98,6 +106,8 @@ export async function localSubmissionAuthority(
         throw new OrcaError("STORE_WRITE", "Request ownership could not be persisted");
     },
   };
+  bindLocalAdmissionExecution(app.orchestrator, mode, local);
+  return local;
 }
 
 /** Reload configured credentials only for a new local submission/recovery intent.

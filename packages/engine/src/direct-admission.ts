@@ -17,6 +17,11 @@ import type {
 import type { Orchestrator } from "./orchestrator.js";
 import type { BoundLaunchOptions, CapturedLaunch, LaunchSelection } from "./configuration-generation.js";
 import { canonicalJson, type RegisteredRetryClaims } from "./admission-retry.js";
+import {
+  publishAdmissionExecutionPolicy,
+  requireAdmissionExecutionPolicy,
+  type AdmissionExecutionBinding,
+} from "./admission-execution.js";
 
 export const DirectAdmissionCommandSchema = z.strictObject({
   workflowId: z.string().min(1),
@@ -62,24 +67,28 @@ export class DirectAdmissionService {
       restoreLaunch(recorded: RecordedDirectLaunch): Promise<DirectCapturedLaunch>;
     },
   ) {
-    this.operation = options.retries.register({
-      kind: "run.admit",
-      canonicalize: (input: DirectAdmissionCommand) => {
-        const parsed = DirectAdmissionCommandSchema.safeParse(input);
-        if (!parsed.success) throw new OrcaError("WORKFLOW_INPUT_INVALID", "Invalid direct admission");
-        return JSON.parse(
-          canonicalJson(
-            {
-              ...Object.fromEntries(Object.entries(parsed.data).filter(([, value]) => value !== undefined)),
-              vars: parsed.data.vars ?? {},
-            },
-            false,
-          ),
-        ) as JsonValue;
+    this.operation = options.retries.register(
+      {
+        kind: "run.admit",
+        canonicalize: (input: DirectAdmissionCommand) => {
+          const parsed = DirectAdmissionCommandSchema.safeParse(input);
+          if (!parsed.success) throw new OrcaError("WORKFLOW_INPUT_INVALID", "Invalid direct admission");
+          return JSON.parse(
+            canonicalJson(
+              {
+                ...Object.fromEntries(Object.entries(parsed.data).filter(([, value]) => value !== undefined)),
+                vars: parsed.data.vars ?? {},
+              },
+              false,
+            ),
+          ) as JsonValue;
+        },
+        prepare: (command, context) => this.prepare(command, context),
+        recover: (command, context) => this.recover(command, context),
       },
-      prepare: (command, context) => this.prepare(command, context),
-      recover: (command, context) => this.recover(command, context),
-    });
+      undefined,
+      (command, binding, receipt, operationId) => this.verifyAccepted(command, binding, receipt, operationId),
+    );
   }
   withRetryAuthority<T>(authority: DirectAdmissionAuthority, action: () => Promise<T>): Promise<T> {
     return this.authorities.run(authority, action);
@@ -142,30 +151,27 @@ export class DirectAdmissionService {
   }
   private async recover(command: DirectAdmissionCommand, context: RetryContext): Promise<DirectAdmissionResult> {
     const binding = BindingSchema.parse(await context.readBinding());
-    const raw = await this.options.orchestrator.stores.execution.getGeneration(binding.materialId);
-    if (!raw) return { state: "recoverable-failure", admissionId: binding.admissionId, failure };
-    const material = MaterialSchema.parse(raw);
-    if (
-      material.actor.principalId !== this.authority().actor.principalId ||
-      material.workspaceId !== this.authority().workspaceId ||
-      canonicalJson(material.command) !== canonicalJson(command)
-    )
-      throw unavailable();
-    await context.reauthorize();
-    if (await this.findRun(binding, material)) return this.accept(binding, context);
-    // A private run record without run.created may have provisioned external workspace state.
-    // Do not repeat that uncertain side effect; preserve the reserved identity for inspection.
-    if (await this.options.orchestrator.stores.execution.getInputs(binding.runId))
+    try {
+      const material = await this.material(binding, command);
+      await context.reauthorize();
+      if (await this.findRun(binding, material)) return await this.accept(binding, context, material);
+      // A private run record without run.created may have provisioned external workspace state.
+      // Do not repeat that uncertain side effect; preserve the reserved identity for inspection.
+      if (await this.options.orchestrator.stores.execution.getInputs(binding.runId))
+        return { state: "recoverable-failure", admissionId: binding.admissionId, runId: binding.runId, failure };
+      const launch = await this.options.restoreLaunch(material);
+      if (
+        !launch.admissionRunIds ||
+        launch.generationId !== material.generationId ||
+        canonicalJson(launch.workflow) !== canonicalJson(material.workflow)
+      )
+        throw unavailable();
+      return this.admit(command, context, binding, launch, material.actor);
+    } catch {
       return { state: "recoverable-failure", admissionId: binding.admissionId, runId: binding.runId, failure };
-    const launch = await this.options.restoreLaunch(material);
-    if (
-      !launch.admissionRunIds ||
-      launch.generationId !== material.generationId ||
-      canonicalJson(launch.workflow) !== canonicalJson(material.workflow)
-    )
-      throw unavailable();
-    return this.admit(command, context, binding, launch, material.actor);
+    }
   }
+
   private async findRun(
     binding: z.infer<typeof BindingSchema>,
     material: z.infer<typeof MaterialSchema>,
@@ -174,8 +180,10 @@ export class DirectAdmissionService {
     const first = (await stores.events.readRange(binding.runId, { limit: 1 }))[0];
     if (!first) return false;
     if (first.type !== "run.created" || !first.executionPayloadRef) throw unavailable();
-    const payload = await stores.execution.getPayload(binding.runId, first.executionPayloadRef, first.type);
-    const parsed = OrcaEventSchema.safeParse({ ...first, payload });
+    if (!stores.events.synchronizeEvent) throw unavailable();
+    const original = await stores.events.synchronizeEvent(first);
+    const payload = original.payload;
+    const parsed = OrcaEventSchema.safeParse(original);
     const correlation = z.object({ directAdmissionId: z.string() }).safeParse(payload);
     if (
       !parsed.success ||
@@ -221,14 +229,94 @@ export class DirectAdmissionService {
         }))
       )
         throw unavailable();
-      return await this.accept(binding, context);
+      const material = await this.material(binding, command);
+      await context.reauthorize();
+      await publishAdmissionExecutionPolicy(this.options.orchestrator.stores, this.policyBinding(binding, material));
+      return await this.accept(binding, context, material);
     } catch {
       return { state: "recoverable-failure", admissionId: binding.admissionId, runId: binding.runId, failure };
     }
   }
-  private async accept(binding: z.infer<typeof BindingSchema>, context: RetryContext): Promise<DirectAdmissionResult> {
+  private async material(binding: z.infer<typeof BindingSchema>, command: DirectAdmissionCommand) {
+    const raw = await this.options.orchestrator.stores.execution.getGeneration(binding.materialId);
+    const parsed = MaterialSchema.safeParse(raw);
+    if (!parsed.success) throw unavailable();
+    const material = parsed.data;
+    if (
+      material.actor.principalId !== this.authority().actor.principalId ||
+      material.workspaceId !== this.authority().workspaceId ||
+      canonicalJson(material.command) !== canonicalJson(command)
+    )
+      throw unavailable();
+    return material;
+  }
+  private policyBinding(
+    binding: z.infer<typeof BindingSchema>,
+    material: z.infer<typeof MaterialSchema>,
+  ): AdmissionExecutionBinding {
+    return {
+      kind: "direct",
+      admissionId: binding.admissionId,
+      runId: binding.runId,
+      workspaceId: material.workspaceId,
+      actor: material.actor,
+      generationId: material.generationId,
+      workflow: material.workflow,
+      ...(material.command.requestId ? { requestId: material.command.requestId } : {}),
+      ...(material.command.workItemId ? { workItemId: material.command.workItemId } : {}),
+    };
+  }
+  private async verifyAccepted(
+    command: DirectAdmissionCommand,
+    rawBinding: Record<string, JsonValue> | undefined,
+    receipt: unknown,
+    operationId: string,
+  ): Promise<void> {
+    const accepted = z
+      .object({ state: z.literal("accepted"), admissionId: z.string(), runId: z.string() })
+      .safeParse(receipt);
+    if (!accepted.success) {
+      if (receipt && typeof receipt === "object" && "state" in receipt && receipt.state === "accepted")
+        throw unavailable();
+      return;
+    }
+    const binding = BindingSchema.safeParse(rawBinding);
+    try {
+      if (
+        !binding.success ||
+        accepted.data.admissionId !== binding.data.admissionId ||
+        accepted.data.runId !== binding.data.runId
+      )
+        throw unavailable();
+      const material = await this.material(binding.data, command);
+      await this.authority().authorize(command);
+      if (!(await this.findRun(binding.data, material))) throw unavailable();
+      await requireAdmissionExecutionPolicy(
+        this.options.orchestrator.stores,
+        this.policyBinding(binding.data, material),
+      );
+      if (!this.authority().verifyRunAdmitted) throw unavailable();
+      await this.authority().verifyRunAdmitted!(binding.data.runId);
+      await this.authority().authorize(command);
+    } catch {
+      throw new OrcaError("RUN_STATE", "Direct admission acceptance is unavailable; inspect the original admission", {
+        operationId,
+        admissionId: accepted.data.admissionId,
+        runId: accepted.data.runId,
+      });
+    }
+  }
+  private async accept(
+    binding: z.infer<typeof BindingSchema>,
+    context: RetryContext,
+    material: z.infer<typeof MaterialSchema>,
+  ): Promise<DirectAdmissionResult> {
+    await context.reauthorize();
+    await requireAdmissionExecutionPolicy(this.options.orchestrator.stores, this.policyBinding(binding, material));
     await context.reauthorize();
     await this.authority().onRunAdmitted(binding.runId);
+    if (!this.authority().verifyRunAdmitted) throw unavailable();
+    await this.authority().verifyRunAdmitted!(binding.runId);
     await context.reauthorize();
     // The enclosing retry journal commits this receipt before any adapter may attach execution.
     return { state: "accepted", admissionId: binding.admissionId, runId: binding.runId };

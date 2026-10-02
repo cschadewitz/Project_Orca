@@ -11,11 +11,13 @@ import {
   ReadModel,
   orchestratorResolver,
   startDaemon,
+  daemonExecutionRuntime,
 } from "@orca/daemon";
 import { OperatorDiscoverySchema, RunsAdmitResultSchema, type ResponseMessage } from "@orca/protocol";
 import { AdmissionIntents, AdmissionIntentController } from "../../app/src/main/admission-intents.js";
-import { AdmissionRetryModel } from "../../daemon/src/admission-retry.js";
+import { AdmissionRetryModel, neverAttached } from "../../daemon/src/admission-retry.js";
 import { RequestSubmissionModel } from "../../daemon/src/request-submission.js";
+import type { ExecutionResumeAuthority } from "@orca/engine";
 import type { DirectAdmissionService } from "../../engine/src/direct-admission.js";
 import type { RegisteredRetryClaims } from "../../engine/src/admission-retry.js";
 import type { RequestSubmissionService } from "../../engine/src/program/request-submission.js";
@@ -26,6 +28,7 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
     const dir = await mkdtemp(join(tmpdir(), "orca-retry-wiring-"));
     let close: (() => Promise<void>) | undefined;
     let socket: WebSocket | undefined;
+    let runtime: ReturnType<typeof daemonExecutionRuntime> | undefined;
     try {
       await writeFile(
         join(dir, "program.yaml"),
@@ -44,7 +47,22 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       const viewer = await credentials.issue({ principal: "viewer", preset: "viewer" });
       const ownership = new OwnershipStore();
       const reads = new ReadModel({ orchestrator: app.orchestrator });
-      const execute = vi.fn(() => new Promise<void>(() => {}));
+      const workspaceId = "00000000-0000-4000-8000-000000000001";
+      const execution = daemonExecutionRuntime({
+        instanceId: "admission-retry-test",
+        workspaceId,
+        orchestrator: app.orchestrator,
+        credentials,
+        ownership,
+      });
+      runtime = execution;
+      app.orchestrator.liveInput = execution;
+      app.orchestrator.admissionExecution = { authorize: (policy) => execution.authorizeAdmissionExecution(policy) };
+      const execute = vi.fn(async (runId: string, authority?: ExecutionResumeAuthority) => {
+        const state = await execution.withResumeAuthority(runId, authority, () => app.orchestrator.run(runId));
+        await app.program.settle(state);
+      });
+      const executionFailed = vi.fn();
       const requestService = app.program.submissions as RequestSubmissionService;
       const admissionRetries = new AdmissionRetryModel({
         claims: app.retryClaims,
@@ -52,19 +70,26 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
         requests: requestService,
         orchestrator: app.orchestrator,
         execute,
-        executionFailed: vi.fn(),
+        checkResumeAuthority: (runId, authority) => execution.checkResumeAuthority(runId, authority),
+        executionFailed,
       });
       const options = {
         orcaVersion: "test",
-        workspaceId: "00000000-0000-4000-8000-000000000001",
+        workspaceId,
         operatorSources: { events: app.orchestrator.stores.events },
         capabilities: [] as [],
         reads,
         control: new ControlModel({ orchestrator: app.orchestrator, reads }),
         source: app.orchestrator,
         admissionRetries,
-        requestSubmissions: new RequestSubmissionModel({ service: requestService, execute, executionFailed: vi.fn() }),
-        submissionWorkspaceId: "00000000-0000-4000-8000-000000000001",
+        requestSubmissions: new RequestSubmissionModel({
+          service: requestService,
+          shouldDispatch: (runId) => neverAttached(app.orchestrator, runId),
+          execute,
+          checkResumeAuthority: (runId, authority) => execution.checkResumeAuthority(runId, authority),
+          executionFailed,
+        }),
+        submissionWorkspaceId: workspaceId,
         auth: { mode: "token" as const, credentials, ownership, resolver: orchestratorResolver(app.orchestrator) },
       };
       const daemon = await startDaemon(options);
@@ -97,7 +122,10 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       if (!first.ok) throw new Error("not admitted");
       const receipt = first.result as { runId: string; operationId: string };
       expect(ownership.owner(receipt.runId)).toBe("alice");
-      await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+      await vi.waitFor(async () => {
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect((await app.orchestrator.getState(receipt.runId)).run.status).toBe("completed");
+      });
       const second = await new Promise<ResponseMessage>((resolve) => {
         socket!.addEventListener("message", (event) => {
           const frame = JSON.parse(String(event.data)) as ResponseMessage;
@@ -111,10 +139,20 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
         result: { state: "resolved", result: { runId: receipt.runId } },
       });
       expect(await http("runs.start", command)).toMatchObject({ ok: true, result: { runId: receipt.runId } });
+      expect(
+        (await app.orchestrator.events(receipt.runId)).filter((event) => event.type === "run.started"),
+      ).toHaveLength(1);
+      expect(execute).toHaveBeenCalledTimes(1);
       expect(await app.orchestrator.listRuns()).toHaveLength(1);
       expect(await app.orchestrator.stores.requests.list()).toHaveLength(0);
       const request = { title: "request", body: "body", idempotencyKey: "request-intent" };
       const one = await http("requests.submit", request);
+      expect(one).toMatchObject({ ok: true, result: { state: "accepted" } });
+      if (!one.ok) throw new Error("Request not admitted");
+      const requestReceipt = one.result as { runId: string };
+      await vi.waitFor(async () =>
+        expect((await app.orchestrator.getState(requestReceipt.runId)).run.status).toBe("completed"),
+      );
       const two = await http("requests.submit", request);
       expect(two).toEqual(one);
       expect(await app.orchestrator.stores.requests.list()).toHaveLength(1);
@@ -156,6 +194,12 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       const palette = await controller().start("program");
       expect(await controller().start("program")).toEqual(palette);
       expect(await controller().list()).toHaveLength(1);
+      await vi.waitFor(async () =>
+        expect((await app.orchestrator.getState(palette.runId)).run.status).toBe("completed"),
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await Promise.all(execute.mock.results.map((result) => result.value));
+      expect(executionFailed).not.toHaveBeenCalled();
       await credentials.revoke(owner.credential.id);
       expect(await http("admissions.get", { operationId: receipt.operationId })).toMatchObject({
         ok: false,
@@ -164,6 +208,7 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
     } finally {
       socket?.close();
       await close?.();
+      runtime?.close();
       await rm(dir, { recursive: true, force: true });
     }
   },

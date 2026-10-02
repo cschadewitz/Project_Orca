@@ -5,6 +5,7 @@ import {
   type Orchestrator,
   type ExecutionResumeAuthority,
   type ExecutionResumeOrigin,
+  type AdmissionExecutionPolicy,
 } from "@orca/engine";
 import { executionEvents } from "@orca/store";
 import type { CredentialStore } from "./auth/credentials.js";
@@ -14,6 +15,7 @@ import { LiveExecutionAuthorities } from "./live-input-authority.js";
 type ExecutionOrigin = ExecutionResumeOrigin;
 export function daemonExecutionRuntime(options: {
   instanceId: string;
+  workspaceId?: string;
   orchestrator: Orchestrator;
   credentials: CredentialStore;
   ownership: OwnershipStore;
@@ -108,6 +110,28 @@ export function daemonExecutionRuntime(options: {
   };
   return {
     port,
+    /** First attachment is checked with the actor actually bound under the run lease. */
+    async authorizeAdmissionExecution(policy: Readonly<AdmissionExecutionPolicy>): Promise<void> {
+      const binding = policy.binding;
+      const origin = origins.get(binding.runId);
+      const exactOrigin = () =>
+        options.workspaceId === binding.workspaceId &&
+        origin !== undefined &&
+        origin.rootId === binding.runId &&
+        origin.workflowId === binding.workflow.id &&
+        origin.request === (binding.kind === "request") &&
+        origin.actor.principalId === binding.actor.principalId &&
+        origin.actor.credentialId === binding.actor.credentialId;
+      const current = () =>
+        exactOrigin() &&
+        authorities.allowsCurrent(
+          binding.runId,
+          (actor) => actor.principalId === binding.actor.principalId && currentPrincipal(origin, actor) !== undefined,
+        );
+      if (!current()) throw resumeRequired();
+      await options.ownership.verify(binding.runId, binding.actor.principalId);
+      if (!current()) throw resumeRequired();
+    },
     /** Protected revision delivery rechecks the attached execution actor at every boundary. */
     async authorizeExecution(runId: string): Promise<void> {
       const origin = origins.get(runId);

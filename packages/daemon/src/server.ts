@@ -2,6 +2,8 @@
 import { randomBytes } from "node:crypto";
 import {
   PROTOCOL_VERSION,
+  AdmissionExecutionViewSchema,
+  type AdmissionExecutionView,
   INPUTS_REVISION_ITEM_LIMIT,
   PendingRevisionTargetSchema,
   PendingRevisionSummarySchema,
@@ -62,6 +64,8 @@ import type { ResourceResolver } from "./auth/resources.js";
 import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
 
 export interface DaemonOptions extends MethodContext {
+  /** Installed protected evidence reader; never a callback that attaches execution. */
+  admissionExecutionSource?: ((runId: string) => Promise<AdmissionExecutionView | undefined>) | undefined;
   /** Actual protected runtime and registered retry services; never a placeholder capability. */
   revisionSources?: {
     services: ReturnType<typeof createRevisionInputServices>;
@@ -253,6 +257,25 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           admissions: ctx.source,
         },
   );
+  if (opts.admissionExecutionSource && auth.mode === "token") {
+    const source = opts.admissionExecutionSource;
+    ctx.admissionExecution = async (invocation, runId) => {
+      const bound = principalOf(invocation);
+      const credentialId = bound?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      const check = async () => {
+        const current = auth.credentials.current(credentialId);
+        if (!current.ok) throw authInvalid();
+        if (current.principal.id !== bound.principal.id || !holds(current.principal, "runs.read"))
+          throw authForbidden();
+        if (!(await authorizer.runs.allows(current.principal, runId))) throw authForbidden();
+      };
+      await check();
+      const projection = await source(runId);
+      await check();
+      return projection === undefined ? undefined : AdmissionExecutionViewSchema.parse(projection);
+    };
+  }
   if (opts.revisionSources && identity && ctx.control && auth.mode === "token") {
     const sources = opts.revisionSources;
     const accessFor = (invocation: MethodContext) => {

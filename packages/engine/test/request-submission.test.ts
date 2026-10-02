@@ -102,6 +102,7 @@ describe("durable write boundaries", () => {
     "accepted-after",
   ])("reconciles %s without a second root", async (boundary) => {
     const f = submissionFixture();
+    const attribute = vi.mocked(f.authority.onRunAdmitted).getMockImplementation()!;
     const fault = () => {
       throw new Error("secret failure details");
     };
@@ -135,9 +136,7 @@ describe("durable write boundaries", () => {
     expect(JSON.stringify(failed)).not.toContain("secret");
     const existing = await f.orc.listRuns();
     vi.restoreAllMocks();
-    vi.mocked(f.authority.onRunAdmitted).mockImplementation(async (id) => {
-      f.owners.set(id, "owner");
-    });
+    vi.mocked(f.authority.onRunAdmitted).mockImplementation(attribute);
     const restarted = new RequestSubmissionService({
       orchestrator: f.orc,
       admissions: f.admissions,
@@ -148,6 +147,16 @@ describe("durable write boundaries", () => {
       f.service.reconcile(failed.admissionId, f.authority),
     ]);
     expect(a).toEqual(b);
+    if (boundary === "run-after") {
+      expect(a).toMatchObject({
+        state: "recoverable-failure",
+        requestId: failed.requestId,
+        admissionId: failed.admissionId,
+      });
+      expect(await f.orc.listRuns()).toEqual(existing);
+      expect(existing).toHaveLength(1);
+      return;
+    }
     expect(a).toMatchObject({ state: "accepted", requestId: failed.requestId, admissionId: failed.admissionId });
     if (a.state !== "accepted") throw new Error("not accepted");
     expect(await f.orc.listRuns()).toEqual([a.runId]);
@@ -350,7 +359,9 @@ it.each(["recorded", "request-link", "neither-link"])(
   async (links) => {
     const f = submissionFixture();
     f.orc.workflows.register(
-      parseWorkflow(`id: direct-followup\nname: Followup\nstart: e\nnodes: { e: { type: end } }\nedges: []`),
+      parseWorkflow(
+        `id: direct-followup\nname: Followup\nstart: s\nnodes: { s: { type: start }, e: { type: end } }\nedges: [{ from: s, to: e }]`,
+      ),
     );
     const start = f.orc.startRun.bind(f.orc);
     let rootId: string | undefined;
@@ -371,6 +382,15 @@ it.each(["recorded", "request-link", "neither-link"])(
     for (const workflowId of ["direct-followup", "program"])
       await start({ workflowId, requestId: initial.requestId, actor: f.authority.actor });
     const recovered = await f.service.reconcile(initial.admissionId, f.authority);
+    if (links !== "recorded") {
+      expect(recovered).toMatchObject({
+        state: "recoverable-failure",
+        admissionId: initial.admissionId,
+        requestId: initial.requestId,
+      });
+      expect(await f.orc.listRuns()).toHaveLength(3);
+      return;
+    }
     expect(recovered).toEqual({
       state: "accepted",
       admissionId: initial.admissionId,
@@ -382,7 +402,7 @@ it.each(["recorded", "request-link", "neither-link"])(
   },
 );
 
-it("recovers an unlinked root using protected correlation after file-store restart", async () => {
+it("retains an unlinked root without manufacturing missing policy after file-store restart", async () => {
   const dir = await mkdtemp(join(tmpdir(), "orca-root-correlation-"));
   dirs.push(dir);
   const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
@@ -405,7 +425,7 @@ it("recovers an unlinked root using protected correlation after file-store resta
   await start({ workflowId: "program", requestId: initial.requestId, actor: f.authority.actor });
   const reopened = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
   expect(await reopened.service.reconcile(initial.admissionId, reopened.authority)).toMatchObject({
-    state: "accepted",
+    state: "recoverable-failure",
     runId: rootId,
   });
   expect(await reopened.orc.listRuns()).toHaveLength(2);
@@ -430,7 +450,7 @@ it.each(["completed", "failed", "cancelled"] as const)(
     dirs.push(dir);
     const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
     const workflow = parseWorkflow(
-      `id: settlement-program\nname: Settlement\nstart: e\nnodes: { e: { type: end, outcome: ${status === "failed" ? "failure" : "success"} } }\nedges: []`,
+      `id: settlement-program\nname: Settlement\nstart: s\nnodes: { s: { type: start }, e: { type: end, outcome: ${status === "failed" ? "failure" : "success"} } }\nedges: [{ from: s, to: e }]`,
     );
     f.orc.workflows.register(workflow);
     const admitted = await f.service.submit({ ...command, workflowId: workflow.id }, f.authority);
@@ -446,16 +466,16 @@ it.each(["completed", "failed", "cancelled"] as const)(
     let settled: Awaited<ReturnType<typeof program.settle>>;
     // Pause recovery at its projection read; another store instance settles the run
     // before recovery receives its stale Request snapshot.
-    vi.mocked(f.authority.onRunAdmitted).mockImplementationOnce(async () => {
-      vi.spyOn(f.stores.requests, "get").mockImplementationOnce(async (id) => {
-        const stale = await get(id);
-        expect(stale?.status).toBe("decomposing");
-        settled = await program.settle(terminal);
-        return stale;
-      });
+    vi.spyOn(f.stores.requests, "get").mockImplementationOnce(async (id) => {
+      const stale = await get(id);
+      expect(stale?.status).toBe("decomposing");
+      settled = await program.settle(terminal);
+      return stale;
     });
+    vi.mocked(f.authority.onRunAdmitted).mockClear();
     expect(await f.service.reconcile(admitted.admissionId, f.authority)).toEqual(admitted);
     expect(settled).toMatchObject({ status, updatedAt: "2030-01-01T00:00:00.000Z" });
+    expect(f.authority.onRunAdmitted).not.toHaveBeenCalled();
     const restarted = submissionFixture(fileStores(dir), new FileAdmissionStore(dir));
     expect(await restarted.stores.requests.get(admitted.requestId)).toEqual(settled);
     // Repeated recovery after settlement must leave the same document intact too.
@@ -512,6 +532,11 @@ it.each(["before-root", "after-root"])(
     expect((await f.admissions.records.get(initial.admissionId))?.runId).toBeUndefined();
     const peer = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), { strictInputs: true });
     const recovered = await peer.service.reconcile(initial.admissionId, peer.authority);
+    if (boundary === "after-root") {
+      expect(recovered.state).toBe("recoverable-failure");
+      expect(await peer.orc.listRuns()).toEqual([rootId]);
+      return;
+    }
     expect(recovered.state).toBe("accepted");
     if (recovered.state !== "accepted") throw new Error("not accepted");
     if (rootId) expect(recovered.runId).toBe(rootId);
@@ -585,13 +610,11 @@ it.each(["public-tamper", "private-missing"])("authenticates root correlation du
     strictInputs: true,
     sensitiveInputs: false,
   });
-  expect((await peer.service.reconcile(result.admissionId, peer.authority)).state).toBe(
-    fault === "public-tamper" ? "accepted" : "recoverable-failure",
-  );
+  expect((await peer.service.reconcile(result.admissionId, peer.authority)).state).toBe("recoverable-failure");
   expect(await peer.orc.listRuns()).toEqual([runId]);
 });
 
-it("recovers an existing v1 admission from its protected legacy marker", async () => {
+it("refuses a legacy v1 admission without fabricating first-attachment policy", async () => {
   const f = submissionFixture();
   const launch = await f.capture({ purpose: "request" });
   const request = RequestSchema.parse({
@@ -631,11 +654,11 @@ it("recovers an existing v1 admission from its protected legacy marker", async (
     actor: f.authority.actor,
     vars: { request, [SUBMISSION_CORRELATION_VAR]: record.id, token: record.id },
   });
-  expect(await f.service.reconcile(record.id, f.authority)).toEqual({
+  expect(await f.service.reconcile(record.id, f.authority)).toMatchObject({
     admissionId: record.id,
     requestId: request.id,
     runId,
-    state: "accepted",
+    state: "recoverable-failure",
   });
   expect(await f.orc.listRuns()).toEqual([runId]);
 });

@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AgentRegistry, type AgentSession } from "@orca/agents";
 import {
   AgentSpecSchema,
-  RequestSchema,
+  parseOrcaConfig,
   TemplateRegistry,
   WorkflowRegistry,
   parseWorkflow,
@@ -14,6 +14,10 @@ import {
   type MutationActor,
 } from "@orca/core";
 import {
+  ConfigurationGenerations,
+  RequestSubmissionService,
+  MemoryAdmissionStore,
+  FileAdmissionStore,
   LocalWorkspaceProvider,
   Orchestrator,
   PausingHumanInput,
@@ -24,6 +28,7 @@ import {
 import { fileStores, memoryStores, type Stores } from "@orca/store";
 import { ControlModel, ReadModel, startDaemon } from "@orca/daemon";
 import {
+  Authorizer,
   CredentialStore,
   MemoryAuditSink,
   OwnershipStore,
@@ -31,6 +36,7 @@ import {
   type IssueOptions,
 } from "../src/auth/index.js";
 import { daemonExecutionRuntime } from "../src/execution-runtime.js";
+import { submissionAuthority } from "../src/request-submission.js";
 
 const runtimes: ReturnType<typeof daemonExecutionRuntime>[] = [];
 const jobs: Promise<unknown>[] = [];
@@ -143,14 +149,16 @@ async function fixture(
       parseWorkflow(`
 id: visible
 name: Visible
-start: ${options.initialAgent ? "oldWork" : "gate"}
+start: s
 nodes:
+  s: {type: start}
   ${options.initialAgent ? "oldWork: {type: agent, agent: worker, prompt: Old turn}" : ""}
   gate: {type: gate, question: Continue?, options: [go]}
   work: {type: agent, agent: worker, prompt: Fresh turn}
   ${options.secondGate ? "again: {type: gate, question: Continue again?, options: [go]}\n  more: {type: agent, agent: worker, prompt: Another turn}" : ""}
   end: {type: end}
 edges:
+  - {from: s, to: ${options.initialAgent ? "oldWork" : "gate"}}
   ${options.initialAgent ? "- {from: oldWork, to: gate}" : ""}
   - {from: gate, to: work}
   - {from: work, to: ${options.secondGate ? "again" : "end"}}
@@ -161,14 +169,15 @@ edges:
       parseWorkflow(`
 id: private-child
 name: Child
-start: gate
+start: s
 nodes:
+  s: {type: start}
   gate: {type: gate, question: Child?, options: [go]}
   end: {type: end}
-edges: [{from: gate, to: end}]
+edges: [{from: s, to: gate}, {from: gate, to: end}]
 `),
     );
-  function boot(instanceId: string, stores: Stores, credentials: CredentialStore, ownership: OwnershipStore) {
+  async function boot(instanceId: string, stores: Stores, credentials: CredentialStore, ownership: OwnershipStore) {
     const orchestrator = new Orchestrator({
       stores,
       agents,
@@ -179,24 +188,67 @@ edges: [{from: gate, to: end}]
       humanInput: new PausingHumanInput(),
       logger: silentLogger,
     });
-    const runtime = daemonExecutionRuntime({ instanceId, orchestrator, credentials, ownership, revalidateMs: 60_000 });
+    if (options.request) {
+      const generations = new ConfigurationGenerations({
+        store: stores.execution,
+        workflows: stores.workflows,
+        loadAssets: async () => ({ workflows: workflows.list(), templates: [] }),
+        admission: {
+          validateStartRun: (input, material) => orchestrator.validateStartRun(input, material),
+          startRun: (input, material) => orchestrator.startRun(input, material),
+        },
+      });
+      await generations.initialize(
+        parseOrcaConfig({
+          agents: [AgentSpecSchema.parse({ id: "worker", command: "unused", permissions: { default: "ask" } })],
+          program: { workflow: "visible" },
+        }),
+        "fixture",
+      );
+      orchestrator.generations = generations;
+    }
+    const runtime = daemonExecutionRuntime({
+      instanceId,
+      workspaceId: "workspace",
+      orchestrator,
+      credentials,
+      ownership,
+      revalidateMs: 60_000,
+    });
     runtimes.push(runtime);
     orchestrator.liveInput = runtime;
+    orchestrator.admissionExecution = { authorize: (policy) => runtime.authorizeAdmissionExecution(policy) };
     const reads = new ReadModel({ orchestrator });
     return { orchestrator, runtime, reads, control: new ControlModel({ orchestrator, reads }) };
   }
-  const first = boot("boot-a", originalStores, originalCredentials, originalOwnership);
-  if (options.request)
-    await originalStores.requests.put(
-      RequestSchema.parse({ id: "request", title: "Task", body: "", createdAt: "now", updatedAt: "now" }),
-    );
-  const runId = await first.orchestrator.startRun({
-    workflowId: "visible",
-    actor,
-    ...(options.request ? { requestId: "request", requestAdmissionId: "admission" } : {}),
-  });
-  originalOwnership.record(runId, "alice");
-  await originalOwnership.flush(runId);
+  const first = await boot("boot-a", originalStores, originalCredentials, originalOwnership);
+  let runId: string;
+  if (options.request) {
+    const generations = first.orchestrator.generations!;
+    const submissions = new RequestSubmissionService({
+      orchestrator: first.orchestrator,
+      admissions: options.disk ? new FileAdmissionStore(storeDir) : new MemoryAdmissionStore(),
+      captureLaunch: generations.captureLaunch,
+      restoreLaunch: generations.restoreLaunch,
+    });
+    const authority = submissionAuthority({
+      workspaceId: "workspace",
+      actor,
+      authorizer: new Authorizer({ ownership: originalOwnership, resolver: orchestratorResolver(first.orchestrator) }),
+      principal: async () => {
+        const current = originalCredentials.current(original.credentialId);
+        if (!current.ok) throw new Error("fixture credential unavailable");
+        return current.principal;
+      },
+    });
+    const admitted = await submissions.submit({ title: "Task", body: "", workflowId: "visible" }, authority);
+    if (admitted.state !== "accepted") throw new Error("fixture admission failed");
+    runId = admitted.runId;
+  } else {
+    runId = await first.orchestrator.startRun({ workflowId: "visible", actor });
+    originalOwnership.record(runId, "alice");
+    await originalOwnership.flush(runId);
+  }
   const initial = track(first.orchestrator.run(runId));
   const oldInput = options.initialAgent ? await permission(first, runId) : undefined;
   if (oldInput) first.runtime.close();
@@ -210,7 +262,7 @@ edges: [{from: gate, to: end}]
   const rotated = await credentials.bootstrap(grants, tokenFile);
   const token = (await readFile(tokenFile, "utf8")).trim();
   const currentActor = { principalId: "alice", credentialId: rotated.credentialId };
-  const second = boot("boot-b", stores, credentials, ownership);
+  const second = await boot("boot-b", stores, credentials, ownership);
   return {
     ...second,
     first,

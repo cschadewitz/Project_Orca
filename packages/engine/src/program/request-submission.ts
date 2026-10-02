@@ -13,6 +13,8 @@ import { randomUUID } from "node:crypto";
 import { redactExecutionValue } from "@orca/store";
 import {
   newId,
+  MutationActorSchema,
+  type MutationActor,
   OrcaError,
   isOrcaError,
   OrcaEventSchema,
@@ -28,6 +30,11 @@ import {
 import type { Orchestrator } from "../orchestrator.js";
 import { RequestAdmissionCorrelationSchema } from "./request-admission-event.js";
 import { AdmissionSchema, type Admission, type AdmissionStore } from "./submission-store.js";
+import {
+  publishAdmissionExecutionPolicy,
+  requireAdmissionExecutionPolicy,
+  type AdmissionExecutionBinding,
+} from "../admission-execution.js";
 
 import type {
   CaptureLaunch,
@@ -102,6 +109,43 @@ export class RequestSubmissionService implements SubmissionService {
           }
         }
       },
+      async (command, binding, receipt, operationId) => {
+        const accepted = z
+          .object({ state: z.literal("accepted"), admissionId: z.string(), requestId: z.string(), runId: z.string() })
+          .safeParse(receipt);
+        if (!accepted.success) {
+          if (receipt && typeof receipt === "object" && "state" in receipt && receipt.state === "accepted")
+            throw unavailable();
+          return;
+        }
+        try {
+          if (binding?.admissionId !== accepted.data.admissionId || binding.requestId !== accepted.data.requestId)
+            throw unavailable();
+          const record = await this.owned(accepted.data.admissionId, this.authority());
+          const material = await this.material(record);
+          const normalized = SubmissionCommandSchema.parse(command);
+          if (
+            canonicalJson({ ...material.command, vars: material.command.vars ?? {} }) !==
+              canonicalJson({ ...normalized, vars: normalized.vars ?? {} }) ||
+            record.state !== "accepted" ||
+            record.runId !== accepted.data.runId ||
+            record.requestId !== accepted.data.requestId
+          )
+            throw unavailable();
+          await this.verifyAccepted(record, this.authority());
+        } catch {
+          throw new OrcaError(
+            "RUN_STATE",
+            "Request admission acceptance is unavailable; inspect the original admission",
+            {
+              operationId,
+              admissionId: accepted.data.admissionId,
+              requestId: accepted.data.requestId,
+              runId: accepted.data.runId,
+            },
+          );
+        }
+      },
     );
   }
   private authority(): SubmissionAuthority {
@@ -145,10 +189,10 @@ export class RequestSubmissionService implements SubmissionService {
           throw unavailable();
         await this.opts.admissions.records.put(record);
       }
-      const { command, request } = await this.material(record);
+      const { command, request, actor } = await this.material(record);
       await context.reauthorize();
       await authority.authorize({ ...command, workflowId: record.workflowId });
-      return this.admit(record, command, request, authority);
+      return this.admit(record, command, request, authority, undefined, actor);
     });
   }
 
@@ -228,7 +272,7 @@ export class RequestSubmissionService implements SubmissionService {
       });
       return await this.opts.admissions.lock(id, async () => {
         await this.opts.admissions.records.put(record);
-        return this.admit(record, command, request, authority, captured);
+        return this.admit(record, command, request, authority, captured, authority.actor);
       });
     } catch {
       // A write can commit and then fail its acknowledgment. Supply the correlation, but
@@ -248,9 +292,9 @@ export class RequestSubmissionService implements SubmissionService {
     await authority.authorize({ title: "", body: "" });
     return this.opts.admissions.lock(id, async () => {
       const record = await this.owned(id, authority);
-      const { command, request } = await this.material(record);
+      const { command, request, actor } = await this.material(record);
       await authority.authorize({ ...command, workflowId: record.workflowId });
-      return this.admit(record, command, request, authority);
+      return this.admit(record, command, request, authority, undefined, actor);
     });
   }
 
@@ -258,7 +302,7 @@ export class RequestSubmissionService implements SubmissionService {
     await authority.authorize({ title: "", body: "" });
     const record = await this.owned(id, authority);
     await authority.authorize({ title: "", body: "", workflowId: record.workflowId });
-    return result(record);
+    return this.inspectedResult(record, authority);
   }
 
   async list(authority: SubmissionAuthority): Promise<SubmissionResult[]> {
@@ -278,7 +322,7 @@ export class RequestSubmissionService implements SubmissionService {
         if (isOrcaError(error, "WORKFLOW_NOT_FOUND")) continue;
         throw error;
       }
-      results.push(result(record));
+      results.push(await this.inspectedResult(record, authority));
     }
     return results;
   }
@@ -292,17 +336,25 @@ export class RequestSubmissionService implements SubmissionService {
     return record;
   }
 
-  private async material(record: Admission): Promise<{ command: SubmissionCommand; request: Request }> {
+  private async material(
+    record: Admission,
+  ): Promise<{ command: SubmissionCommand; request: Request; actor: MutationActor }> {
     const sealed = await this.opts.orchestrator.stores.execution.getInputs(record.id);
     const command = SubmissionCommandSchema.safeParse(sealed?.vars.command);
     const request = RequestSchema.safeParse(sealed?.vars.request);
     const admission = AdmissionSchema.safeParse(sealed?.vars.admission);
+    const actor = MutationActorSchema.safeParse(sealed?.vars.actor);
     if (
       !sealed ||
       !command.success ||
       !request.success ||
       request.data.id !== record.requestId ||
       !admission.success ||
+      !actor.success ||
+      actor.data.principalId !== record.principalId ||
+      admission.data.workflowId !== record.workflowId ||
+      admission.data.workflowVersion !== record.workflowVersion ||
+      admission.data.createdAt !== record.createdAt ||
       admission.data.id !== record.id ||
       admission.data.requestId !== record.requestId ||
       admission.data.workspaceId !== record.workspaceId ||
@@ -315,7 +367,45 @@ export class RequestSubmissionService implements SubmissionService {
       sealed.workflowVersion !== record.workflowVersion
     )
       throw unavailable();
-    return { command: command.data, request: request.data };
+    return { command: command.data, request: request.data, actor: actor.data };
+  }
+
+  private policyBinding(record: Admission, actor: MutationActor): AdmissionExecutionBinding {
+    if (!record.runId) throw unavailable();
+    return {
+      kind: "request",
+      admissionId: record.id,
+      runId: record.runId,
+      requestId: record.requestId,
+      workspaceId: record.workspaceId,
+      actor,
+      generationId: record.generationId,
+      workflow: { id: record.workflowId, version: record.workflowVersion, revision: record.workflowRevision },
+    };
+  }
+
+  private async verifyAccepted(record: Admission, authority: SubmissionAuthority): Promise<void> {
+    if (record.state !== "accepted" || !record.runId) throw unavailable();
+    const { command, actor } = await this.material(record);
+    await authority.authorize({ ...command, workflowId: record.workflowId });
+    if ((await this.findRoot(record)) !== record.runId) throw unavailable();
+    await requireAdmissionExecutionPolicy(this.opts.orchestrator.stores, this.policyBinding(record, actor));
+    const linked = await this.opts.orchestrator.stores.requests.get(record.requestId);
+    if (!linked || linked.programRunId !== record.runId) throw unavailable();
+    if (!authority.verifyRunAdmitted) throw unavailable();
+    await authority.verifyRunAdmitted(record.runId);
+    await authority.authorize({ ...command, workflowId: record.workflowId });
+  }
+
+  private async inspectedResult(record: Admission, authority: SubmissionAuthority): Promise<SubmissionResult> {
+    if (record.state !== "accepted") return result(record);
+    try {
+      await this.verifyAccepted(record, authority);
+      return result(record);
+    } catch {
+      // Read paths retain correlation but never repair or downgrade the persisted record.
+      return result({ ...record, state: "recoverable-failure" });
+    }
   }
 
   private requireCorrelation(launch: CapturedLaunch): void {
@@ -346,16 +436,17 @@ export class RequestSubmissionService implements SubmissionService {
     const request = await orc.stores.requests.get(record.requestId);
     if (record.runId && request?.programRunId && record.runId !== request.programRunId) throw unavailable();
     const recorded = record.runId ?? request?.programRunId;
+    if (record.reservedRunId && recorded && record.reservedRunId !== recorded) throw unavailable();
     const readRoot = async (runId: string) => {
       const first = (await orc.stores.events.readRange(runId, { limit: 1 }))[0];
       if (!first || first.type !== "run.created") throw unavailable();
       if (first.payload.executionInputsStored && !first.executionPayloadRef) throw unavailable();
       // The correlation can coincide with a sensitive value. Recovery reads the sealed
       // original, never treats redacted public metadata as absence of a durable root.
-      const original = first.executionPayloadRef
-        ? await orc.stores.execution.getPayload(runId, first.executionPayloadRef, first.type)
-        : first.payload;
-      const restored = OrcaEventSchema.safeParse({ ...first, payload: original });
+      if (!orc.stores.events.synchronizeEvent) throw unavailable();
+      const authenticated = await orc.stores.events.synchronizeEvent(first);
+      const original = authenticated.payload;
+      const restored = OrcaEventSchema.safeParse(authenticated);
       if (!restored.success || restored.data.type !== "run.created") throw unavailable();
       const correlation = RequestAdmissionCorrelationSchema.safeParse(original);
       return {
@@ -408,9 +499,12 @@ export class RequestSubmissionService implements SubmissionService {
     request: Request,
     authority: SubmissionAuthority,
     captured?: CapturedLaunch,
+    actor: MutationActor = authority.actor,
   ): Promise<SubmissionResult> {
     const { orchestrator: orc, admissions } = this.opts;
     let current = record;
+    // Accepted projections never grant permission to restore ownership, links or policy.
+    if (record.state === "accepted") return this.inspectedResult(record, authority);
     try {
       // Only this freshly prepared, mutex-held admission owns a capture. It cannot
       // have an earlier root. Historical/uncertain admission still scans fail-closed.
@@ -443,7 +537,7 @@ export class RequestSubmissionService implements SubmissionService {
           launch.workflow.revision !== record.workflowRevision
         )
           throw unavailable();
-        const options = this.options(command, request, authority, record.id, record.reservedRunId);
+        const options = { ...this.options(command, request, authority, record.id, record.reservedRunId), actor };
         await launch.validateStartRun(options);
         // Request persistence is retried only before a root exists; never overwrite settlement.
         // Until startRun has persisted its authoritative sensitivity overlay we cannot know
@@ -453,8 +547,13 @@ export class RequestSubmissionService implements SubmissionService {
         await authority.authorize({ ...command, workflowId: record.workflowId });
         runId = await launch.startRun(options);
         if (record.reservedRunId && runId !== record.reservedRunId) throw unavailable();
+        current = { ...record, runId };
+        await authority.authorize({ ...command, workflowId: record.workflowId });
+        await publishAdmissionExecutionPolicy(orc.stores, this.policyBinding(current, actor));
       }
       current = { ...record, runId };
+      // Historical or uncertain roots must already have their first-attachment policy.
+      await requireAdmissionExecutionPolicy(orc.stores, this.policyBinding(current, actor));
       await admissions.records.put(current);
       // Refuse a provider that advertised correlation but failed to persist it.
       if ((await this.findRoot(current)) !== runId) throw unavailable();
@@ -488,6 +587,7 @@ export class RequestSubmissionService implements SubmissionService {
         });
       }
       current = { ...current, state: "accepted" };
+      await this.verifyAccepted(current, authority);
       await admissions.records.put(current);
       // Execution is the adapter's responsibility, only after this durable boundary.
       return result(current);

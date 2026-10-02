@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OrcaError, type OrcaEventInput } from "@orca/core";
+import { OrcaError } from "@orca/core";
 import { FileExecutionStore } from "@orca/store";
 import { FileRetryClaimStore } from "../../store/src/admission-retry-store.js";
 import { RegisteredRetryClaims } from "../src/admission-retry.js";
@@ -24,55 +24,34 @@ async function fixture(failAt?: "inputs" | "created" | "ownership") {
   const store = new FileRetryClaimStore({ storeDir: dir, execution: new FileExecutionStore(dir), faults });
   const claims = new RegisteredRetryClaims(store, faults);
   let fail = true;
-  const start = vi.fn<DirectCapturedLaunch["startRun"]>(async (options) => {
-    if (!options.admissionRunId || !options.directAdmissionId) throw new Error("missing identity");
-    const runId = options.admissionRunId;
-    await f.stores.execution.putInputs({
-      runId,
-      workflowId: "program",
-      workflowVersion: "1",
-      vars: options.vars ?? {},
-      sensitiveNames: [],
-      secrets: [],
+  await f.ready();
+  const baseLaunch = await f.generations.captureLaunch({ purpose: "workflow", workflowId: "program" });
+  if (failAt === "inputs") {
+    const putInputs = f.stores.execution.putInputs.bind(f.stores.execution);
+    vi.spyOn(f.stores.execution, "putInputs").mockImplementation(async (inputs) => {
+      await putInputs(inputs);
+      if (fail && inputs.runId.startsWith("run_")) {
+        fail = false;
+        throw new Error("crash");
+      }
     });
-    if (fail && failAt === "inputs") {
-      fail = false;
-      throw new Error("crash");
-    }
-    const created: Extract<OrcaEventInput, { type: "run.created" }> & { payload: { directAdmissionId: string } } = {
-      runId,
-      type: "run.created",
-      payload: {
-        workflowId: "program",
-        workflowVersion: "1",
-        vars: options.vars ?? {},
-        workspace: { hostId: "local", cwd: process.cwd() },
-        ...(options.actor ? { actor: options.actor } : {}),
-        executionInputsStored: true,
-        directAdmissionId: options.directAdmissionId,
-      },
-    };
-    await f.stores.events.append(created);
+  }
+  const start = vi.fn<DirectCapturedLaunch["startRun"]>(async (options) => {
+    const runId = await baseLaunch.startRun(options);
     if (fail && failAt === "created") {
       fail = false;
       throw new Error("crash");
     }
     return runId;
   });
-  const launch: DirectCapturedLaunch = {
-    admissionRunIds: true,
-    requestAdmissionCorrelation: true,
-    generationId: "g1",
-    workflow: { id: "program", version: "1", revision: "r1" },
-    validateStartRun: async () => {},
-    startRun: start,
-  };
+  const launch: DirectCapturedLaunch = { ...baseLaunch, startRun: start };
   const capture = vi.fn(async () => launch),
     restore = vi.fn(async () => launch);
   const authority: DirectAdmissionAuthority = {
     workspaceId: f.authority.workspaceId,
     actor: f.authority.actor,
     authorize: async () => {},
+    verifyRunAdmitted: (runId) => f.authority.verifyRunAdmitted!(runId),
     onRunAdmitted: vi.fn(async (id) => {
       if (fail && failAt === "ownership") {
         fail = false;
@@ -114,7 +93,8 @@ it("admits a direct run without fabricating a Request or driving execution; retr
   expect(f.capture).toHaveBeenCalledTimes(1);
   expect(f.start).toHaveBeenCalledTimes(1);
 });
-it.each(["created", "ownership"] as const)("reconciles original run after %s interruption", async (boundary) => {
+it("reconciles original run after ownership interruption", async () => {
+  const boundary = "ownership";
   const f = await fixture(boundary);
   const first = await f.service.admitRun({ workflowId: "program" }, { idempotencyKey: "intent" }, f.authority);
   expect(first).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
@@ -131,4 +111,19 @@ it("does not repeat uncertain workspace provisioning after private input persist
   expect(result).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
   expect(f.start).toHaveBeenCalledTimes(1);
   expect(await f.orc.listRuns()).toEqual([]);
+});
+
+it("refuses a root whose creation acknowledgement was lost before policy publication", async () => {
+  const f = await fixture("created");
+  const first = await f.service.admitRun({ workflowId: "program" }, { idempotencyKey: "intent" }, f.authority);
+  expect(first).toMatchObject({ state: "resolved", result: { state: "recoverable-failure" } });
+  expect(
+    await f.service.withRetryAuthority(f.authority, () => f.claims.reconcile(first.operationId, f.scope)),
+  ).toMatchObject({
+    operationId: first.operationId,
+    state: "resolved",
+    result: { state: "recoverable-failure" },
+  });
+  expect(f.start).toHaveBeenCalledTimes(1);
+  expect(await f.orc.listRuns()).toHaveLength(1);
 });

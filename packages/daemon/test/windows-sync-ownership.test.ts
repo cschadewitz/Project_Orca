@@ -156,3 +156,52 @@ describe("simulated ownership synchronization platform branches", () => {
     expect(await readdir(dir)).toEqual(["ownership.json"]);
   });
 });
+
+describe("existing ownership verification", () => {
+  it.each([
+    ["win32", "r+"],
+    ["linux", "r"],
+    ["darwin", "r"],
+  ])("verifies %s through %s without allocating or replacing ownership", async (os, expectedMode) => {
+    const { dir, file, ownership } = await fixture();
+    ownership.record("run", "alice");
+    await ownership.flush("run");
+    const before = snapshot(file);
+    Object.defineProperty(process, "platform", { ...platform, value: os });
+    const directoryFd = -42;
+    vi.mocked(openSync)
+      .mockClear()
+      .mockImplementation((path, flags, mode) => (path === dir ? directoryFd : actual.openSync(path, flags, mode)));
+    vi.mocked(fsyncSync)
+      .mockClear()
+      .mockImplementation(() => undefined);
+    vi.mocked(closeSync)
+      .mockClear()
+      .mockImplementation((fd) => {
+        if (fd !== directoryFd) actual.closeSync(fd);
+      });
+    await ownership.verify("run", "alice");
+    expect(openSync).toHaveBeenCalledWith(file, expectedMode);
+    expect(openSync).toHaveBeenCalledTimes(os === "win32" ? 1 : 2);
+    expect(fsyncSync).toHaveBeenCalledTimes(os === "win32" ? 1 : 2);
+    expect(snapshot(file)).toEqual(before);
+    expect(await readdir(dir)).toEqual(["ownership.json"]);
+  });
+  it("refuses failed verification sync without replacing or repairing ownership", async () => {
+    const { dir, file, ownership } = await fixture();
+    ownership.record("run", "alice");
+    await ownership.flush("run");
+    const before = snapshot(file);
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    vi.mocked(openSync).mockClear();
+    vi.mocked(closeSync).mockClear();
+    vi.mocked(fsyncSync).mockImplementationOnce(() => {
+      throw new Error("sync failed");
+    });
+    await expect(ownership.verify("run", "alice")).rejects.toMatchObject({ code: "STORE_WRITE" });
+    expect(openSync).toHaveBeenCalledExactlyOnceWith(file, "r+");
+    expect(closeSync).toHaveBeenCalledTimes(1);
+    expect(snapshot(file)).toEqual(before);
+    expect(await readdir(dir)).toEqual(["ownership.json"]);
+  });
+});

@@ -382,9 +382,65 @@ is app restart after accepted admission. It does not establish daemon execution
 resumption, crash-before-acknowledgement recovery, or independent clearance of the
 revision journal correction. That independent re-review remains pending.
 
-Request/direct automatic startup dispatch remains outside this checkpoint. A
-separate bounded correctness slice is planned to verify existing creation evidence,
-protect first execution across all admitted entry points, and expose truthful
+Request/direct automatic startup dispatch remains outside this checkpoint. The
+bounded correctness slice below verifies existing creation evidence, protects
+first execution across all admitted entry points, and exposes truthful
 pending/uncertain status. Existing continuation startup recovery remains required
 and unchanged. Admission receipt acceptance must not be described as proof of
 execution attachment or completion.
+
+## Bounded admission execution evidence
+
+Request/direct first execution uses existing `run.created` and `run.started`
+events. It adds no event kind and no second authoritative admission journal.
+A fresh admitted root receives a versioned immutable protected execution policy
+binding its original correlation, actor/workspace, generation, workflow and exact
+creation evidence. Existing creation evidence is synchronized before acceptance.
+Accepted replay and inspection revalidate original creation, private material,
+current exact durable ownership and the Request program-root link; they do not
+re-attribute ownership, recreate linkage or repair missing policy records.
+
+Under the actual held run lease, the interpreter checks current execution
+authority and consumes one immutable attempt record before appending the existing
+start event. It synchronizes that exact event and publishes an immutable exact
+start witness before interpreter effects. An attempted publication with absent or
+rewound matching evidence stays uncertain; the record is not recreated. A start
+witness proves an earlier first-start attempt, not permission to repeat an
+interrupted effect. Healthy explicit continuation and first attachment are
+separate entry semantics. Concurrent first-start callers share only actual local
+inflight work or compete for the same run lease/fence.
+
+The optional authorized `runs.get.admissionExecution` projection has `state`
+`pending`, `started` or `uncertain`, with optional allowlisted `reason`
+`legacy-evidence` or `evidence-unavailable`. It includes no policy, actor,
+credential, generation, private command or key. `started` means verified prior
+first-start evidence, not present liveness or completion. Ordinary non-admitted
+runs omit the field. The server checks current read/resource authority before
+and after protected evidence reads. A failed evidence read yields uncertainty or
+an error, never a false empty/pending success.
+
+Legacy admitted roots without the new policy and interrupted first starts whose
+complete evidence cannot be established are not automatically dispatched.
+Automatic Request/direct startup sweeps remain deferred. Existing sealed-root
+continuation startup discovery remains installed. After-acceptance app restart
+proof is separate from daemon execution resumption. This bounded composition does
+not claim complete recovery acceptance or detection of coordinated rollback of
+all durable evidence.
+
+The records fit the already-approved unreleased protocol-2 / operator-journals-v4
+boundary, but old writers do not understand these private fences. Coordinate all
+writers; mixed-version writing and in-place downgrade are unsupported. Rollback
+requires the matching old binary and a complete pre-upgrade store backup, not
+selective journal or sidecar restoration. Managed epoch refusal and direct
+startup limitations described above remain unchanged.
+
+The preceding mounting checkpoint
+`14300fa52576b2482c36f07abc9a69ce1be4482f` passed CI 367 on both Node
+versions and App smoke 78 with exact workflow-definition and checkout provenance.
+Smoke passed 24 functional tests, six type-proof tests per OS, and two native
+admission-intent tests on each of macOS and Windows. Native artifacts again verify
+real encryption/ownership flush, matching physical/canonical profile identity,
+new-process same-receipt recovery, non-plaintext journal and zero admissions under
+unavailable encryption. That evidence belongs to the mounting checkpoint, before
+the bounded first-attachment changes in this section; it does not validate the
+later checkpoint or daemon execution resumption.

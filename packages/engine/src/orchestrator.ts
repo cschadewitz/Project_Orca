@@ -69,6 +69,7 @@ import {
   type Stores,
   type WorkItemClaim,
 } from "@orca/store";
+import { prepareAdmissionExecution, type AdmissionExecutionRuntime } from "./admission-execution.js";
 import { correlateRequestAdmission } from "./program/request-admission-event.js";
 import { builtinExecutors } from "./executors/index.js";
 import {
@@ -96,6 +97,8 @@ import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/prov
 export type SessionFactory = (options: OpenSessionOptions) => Promise<AgentSession>;
 
 export interface OrchestratorOptions {
+  /** Trusted current authority for bounded first attachment of admitted roots. */
+  admissionExecution?: AdmissionExecutionRuntime;
   revisionRuntime?: {
     /** Reserve exactly the declared next attempt before scheduling; refuse ambiguous replay. */
     reserveStep(rc: RunContext, nodeId: string): Promise<string | undefined>;
@@ -230,6 +233,7 @@ function canonicalJson(value: unknown): string {
 }
 
 export class Orchestrator {
+  admissionExecution: AdmissionExecutionRuntime | undefined;
   generations: ConfigurationGenerations | undefined;
   generationHumanInput: ((generation: GenerationMaterial) => HumanInputPort) | undefined;
   generationWorkspaceProvider: ((generation: GenerationMaterial) => WorkspaceProvider) | undefined;
@@ -286,6 +290,7 @@ export class Orchestrator {
   private readonly sessionOpenedListeners = new Set<AgentSessionOpenedListener>();
 
   constructor(o: OrchestratorOptions) {
+    this.admissionExecution = o.admissionExecution;
     this.revisionRuntime = o.revisionRuntime;
     this.stores = {
       ...o.stores,
@@ -459,11 +464,18 @@ export class Orchestrator {
     return runId;
   }
 
-  /** Execute (or resume) a run until it reaches a terminal state. Safe to call twice. */
+  /**
+   * Drive ordinary runs or first-attach admitted roots. Repeated inflight/terminal calls
+   * are safe; an admitted root with a prior start requires explicit resume/continuation.
+   */
   run(runId: string): Promise<RunState> {
+    return this.runAttachment(runId, false);
+  }
+
+  private runAttachment(runId: string, recovery: boolean): Promise<RunState> {
     const inflight = this.running.get(runId);
     if (inflight) return inflight;
-    const p = this.executeLeased(runId)
+    const p = this.executeLeased(runId, recovery)
       .then(async () => {
         const projected = this.live.get(runId)?.publicState() ?? (await this.getState(runId));
         if (isTerminal(projected)) this.cacheTerminalState(runId, projected);
@@ -753,7 +765,7 @@ export class Orchestrator {
       if ((await this.executionState(state.run.parentRunId)).run.status !== "paused") break;
       id = state.run.parentRunId;
     }
-    return this.run(id);
+    return this.runAttachment(id, true);
   }
 
   /**
@@ -835,6 +847,7 @@ export class Orchestrator {
           throw new OrcaError("RUN_STATE", "continuation requires a sealed durable root decision boundary");
         // Execution authority is checked under the same fence as the attached marker.
         await this.liveInput?.prepareExecution?.(runId);
+        await prepareAdmissionExecution(this.stores, context, this.admissionExecution, true);
         await beforeExecute(context);
       });
       acknowledge();
@@ -1261,7 +1274,7 @@ export class Orchestrator {
    * *writes* to a run's log happens inside here; reading and reducing it does not, because a
    * reader cannot corrupt anyone's story.
    */
-  private async executeLeased(runId: string): Promise<RunState> {
+  private async executeLeased(runId: string, recovery: boolean): Promise<RunState> {
     // The summary comes first because it is cheap - it never replays the step events - and it
     // answers both questions that have to be answered before the log is reduced: what to write
     // on the lease, and whether this run is finished. A finished run is not driven at all, so
@@ -1293,7 +1306,11 @@ export class Orchestrator {
       }
       // Terminal again only if it finished between the summary and here; releasing is enough.
       if (isTerminal(rc.state)) return rc.state;
-      await this.liveInput?.prepareExecution?.(runId);
+      const context = rc;
+      await context.withOwnership(async () => {
+        await this.liveInput?.prepareExecution?.(runId);
+        await prepareAdmissionExecution(this.stores, context, this.admissionExecution, recovery);
+      });
       return await this.execute(rc);
     } finally {
       this.liveInput?.releaseExecution?.(runId);

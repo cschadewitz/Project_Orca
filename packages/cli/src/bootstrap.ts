@@ -50,6 +50,7 @@ import {
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { fileStores, memoryStores, type Stores } from "@orca/store";
+import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { cliHumanInput } from "./human-input-cli.js";
 import { captureRuntimeObjects } from "./plugin-runtime.js";
 
@@ -421,6 +422,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   };
   const provided = await opts.requestSubmission?.({ orchestrator, config, configDir });
   const authority = provided?.authority ?? (await opts.submissionAuthority?.({ orchestrator, config, configDir }));
+  if (authority) bindLocalAdmissionExecution(orchestrator, "request", authority);
   const retryClaimStore = opts.ephemeral
     ? undefined
     : new FileRetryClaimStore({

@@ -60,6 +60,8 @@ export interface DirectAdmissionAuthority {
   readonly actor: MutationActor;
   authorize(command: DirectAdmissionCommand): Promise<void>;
   onRunAdmitted(runId: string): Promise<void>;
+  /** Verify existing exact durable ownership without attributing or repairing it. */
+  verifyRunAdmitted?(runId: string): Promise<void>;
 }
 export interface RetrySafeAdmissions {
   submit(

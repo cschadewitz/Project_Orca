@@ -7,6 +7,7 @@
  * with the plan journal.
  */
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   newId,
   OrcaError,
@@ -78,6 +79,23 @@ export class JsonlEventStore extends BaseEventStore {
       const journal = event.journal;
       return journal?.kind === expected.kind && journal.id === expected.id && journal.revision === expected.revision;
     });
+  }
+
+  async synchronizeEvent(expected: OrcaEvent): Promise<OrcaEvent> {
+    const snapshot = OrcaEventSchema.parse(structuredClone(expected));
+    let verified: OrcaEvent | undefined;
+    await this.logs.synchronizeExisting(snapshot.runId, (raw) => {
+      const event = OrcaEventSchema.parse(raw);
+      if (event.runId !== snapshot.runId)
+        throw new OrcaError("RUN_STATE", "Durable event run identity is inconsistent");
+      if (event.id !== snapshot.id && event.seq !== snapshot.seq) return false;
+      if (!isDeepStrictEqual(event, snapshot))
+        throw new OrcaError("RUN_STATE", "The durable event has different material");
+      verified = event;
+      return true;
+    });
+    if (!verified) throw new OrcaError("RUN_STATE", "The durable event is missing");
+    return verified;
   }
 
   read(runId: string): Promise<OrcaEvent[]> {

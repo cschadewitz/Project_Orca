@@ -5,8 +5,11 @@
  * and `at`, persist atomically per append, and fan out to subscribers *after*
  * the event is durable.
  */
+import { isDeepStrictEqual } from "node:util";
 import {
   newId,
+  OrcaError,
+  OrcaEventSchema,
   type Clock,
   systemClock,
   type OrcaEvent,
@@ -57,6 +60,13 @@ export interface DurableEventAppend {
 }
 
 export interface EventStore {
+  /**
+   * Internal admission boundary: verify and sync this exact existing public event without
+   * publishing, reconstructing or notifying. Protected stores return its authenticated
+   * execution original; callers must keep that result private and hold the run fence.
+   * Missing support or any mismatch must fail closed at the caller.
+   */
+  synchronizeEvent?(expected: OrcaEvent): Promise<OrcaEvent>;
   /** Verify and sync an existing marker; never publish, reconstruct, or notify. */
   synchronizeJournal?(runId: string, correlation: EventJournalCorrelation): Promise<void>;
   /** Optional: production journal services refuse stores without durable unique publication. */
@@ -165,6 +175,24 @@ export abstract class BaseEventStore implements EventStore {
 
 export class InMemoryEventStore extends BaseEventStore {
   private readonly runs = new Map<string, OrcaEvent[]>();
+
+  /** Exact existing evidence for the memory backend; this makes no disk-durability promise. */
+  async synchronizeEvent(expected: OrcaEvent): Promise<OrcaEvent> {
+    const snapshot = OrcaEventSchema.parse(structuredClone(expected));
+    const events = structuredClone(this.runs.get(snapshot.runId) ?? []);
+    let verified: OrcaEvent | undefined;
+    for (const [seq, raw] of events.entries()) {
+      const event = OrcaEventSchema.parse(raw);
+      if (event.runId !== snapshot.runId || event.seq !== seq)
+        throw new OrcaError("RUN_STATE", "Existing event history is inconsistent");
+      if (event.id !== snapshot.id && event.seq !== snapshot.seq) continue;
+      if (verified || !isDeepStrictEqual(event, snapshot))
+        throw new OrcaError("RUN_STATE", "The existing event has different material");
+      verified = event;
+    }
+    if (!verified) throw new OrcaError("RUN_STATE", "The existing event is missing");
+    return verified;
+  }
 
   /** Synchronous from reading the length to pushing, so concurrent appends cannot share a seq. */
   protected async write(runId: string, build: (seq: number) => OrcaEvent): Promise<OrcaEvent> {

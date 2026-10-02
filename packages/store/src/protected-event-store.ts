@@ -65,6 +65,40 @@ export class ProtectedEventStore implements EventStore {
       throw unavailable();
   }
 
+  /** Private admission evidence only: public readers and subscribers keep the scrubbed event. */
+  async synchronizeEvent(expected: OrcaEvent): Promise<OrcaEvent> {
+    if (!this.publicEvents.synchronizeEvent)
+      throw new OrcaError("NOT_SUPPORTED", "this event store has no exact event synchronization");
+    const snapshot = OrcaEventSchema.parse(structuredClone(expected));
+    const authenticate = async () => {
+      await this.requireSafeLegacy(snapshot.runId);
+      await this.requireIntegrity(snapshot.runId);
+      const events = await this.publicEvents.readRange(snapshot.runId, {
+        limit: 2,
+        match: (event) => event.id === snapshot.id || event.seq === snapshot.seq,
+      });
+      const event = events[0];
+      if (events.length !== 1 || !event || !isDeepStrictEqual(event, snapshot)) throw unavailable();
+      // Protected admission events cannot be downgraded to a public-only payload.
+      // Refuse older pre-promotion events too: this seam cannot reconstruct originals.
+      if (
+        !event.executionPayloadRef &&
+        ((event.type === "run.created" && event.payload.executionInputsStored) ||
+          (await this.execution.getInputs(snapshot.runId)))
+      )
+        throw unavailable();
+      const [restored] = await executionEvents([event], this.execution);
+      if (!restored) throw unavailable();
+      return restored;
+    };
+    const before = await authenticate();
+    const synchronized = await this.publicEvents.synchronizeEvent(snapshot);
+    if (!isDeepStrictEqual(synchronized, snapshot)) throw unavailable();
+    const after = await authenticate();
+    if (!isDeepStrictEqual(before, after)) throw unavailable();
+    return after;
+  }
+
   /** Inspection confirms durability without allocating another private payload or public marker. */
   async synchronizeJournal(runId: string, correlation: EventJournalCorrelation): Promise<void> {
     if (!this.publicEvents.synchronizeJournal)

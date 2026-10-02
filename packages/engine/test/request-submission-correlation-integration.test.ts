@@ -33,6 +33,11 @@ it.each(["initial", "before-root", "after-root"])(
       expect(result.state).toBe(boundary === "initial" ? "accepted" : "recoverable-failure");
       const peer = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), options);
       const recovered = await peer.service.reconcile(result.admissionId, peer.authority);
+      if (boundary === "after-root") {
+        expect(recovered.state).toBe("recoverable-failure");
+        expect(await peer.orc.listRuns()).toEqual([rootId]);
+        return;
+      }
       expect(recovered.state).toBe("accepted");
       if (recovered.state !== "accepted") throw new Error("not accepted");
       if (rootId) expect(recovered.runId).toBe(rootId);

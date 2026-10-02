@@ -202,6 +202,8 @@ import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 import type { LiveInputChangeSource } from "./live-input-notifications.js";
 
 export interface MethodContext {
+  admissionExecution?:
+    ((invocation: MethodContext, runId: string) => Promise<RunsGetResult["admissionExecution"]>) | undefined;
   continuationAdmissions?: ContinuationAdmissionModel | undefined;
   continuationAccess?: ((ctx: MethodContext) => Promise<ContinuationAccess>) | undefined;
   /** Bound to the original authenticated invocation; absent without production sources. */
@@ -400,6 +402,8 @@ export const runsGet: Method<Parameters<ReadModel["runsGet"]>[0], RunsGetResult>
   params: RunsGetParamsSchema,
   handle: async (params, ctx) => {
     const result = await reads(ctx).runsGet(params);
+    const admissionExecution = await ctx.admissionExecution?.(ctx, params.runId);
+    if (admissionExecution) result.admissionExecution = admissionExecution;
     if (!ctx.continuationAdmissions || !ctx.continuationAccess) return result;
     const expectedBoundary = await ctx.continuationAdmissions.expectedBoundary(
       params.runId,

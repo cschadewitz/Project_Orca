@@ -33,13 +33,18 @@ export function submissionAuthority(opts: {
     authorize: async (command) => {
       await check(command);
     },
+    verifyRunAdmitted: async (runId) => {
+      const principal = await check();
+      await opts.authorizer.runs.ownership.verify(runId, principal.id);
+      await check();
+    },
     onRunAdmitted: async (runId) => {
       const principal = await check();
       const ownership = opts.authorizer.runs.ownership;
       const owner = ownership.owner(runId);
       if (owner && owner !== principal.id) throw authForbidden();
-      // The existing ownership store does not retry a failed write for an already-known id.
-      // Refuse it here: restart reloads only durable ownership and reconciliation can retry.
+      // Attribution belongs only to the write path. Receipt inspection verifies
+      // existing durable ownership through verifyRunAdmitted instead.
       opts.authorizer.attributeRun(runId, principal);
       await ownership.flush(runId);
       if (ownership.owner(runId) !== principal.id)

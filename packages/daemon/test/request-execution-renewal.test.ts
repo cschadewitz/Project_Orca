@@ -37,12 +37,14 @@ async function fixture() {
     const token = (await readFile(tokenFile, "utf8")).trim();
     const runtime = daemonExecutionRuntime({
       instanceId: executeWork ? "new-boot" : "old-boot",
+      workspaceId: "workspace-test",
       orchestrator: f.orc,
       credentials,
       ownership,
     });
     close.push(() => runtime.close());
     f.orc.liveInput = runtime;
+    f.orc.admissionExecution = { authorize: (policy) => runtime.authorizeAdmissionExecution(policy) };
     const reads = new ReadModel({ orchestrator: f.orc });
     const execute = vi.fn(async (runId: string, authority?: ExecutionResumeAuthority) => {
       if (executeWork) await runtime.withResumeAuthority(runId, authority, () => f.orc.run(runId));

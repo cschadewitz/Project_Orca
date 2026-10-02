@@ -130,6 +130,17 @@ it("ACP refreshes a submission authority once per new prompt and retains it thro
     captureLaunch: f.capture,
   });
   let current = f.authority;
+  // First execution resolves the credential captured by this admission, as production does.
+  const authorities = new Map([[current.actor.credentialId, current]]);
+  f.orc.admissionExecution = {
+    authorize: async (policy) => {
+      const bound = authorities.get(policy.binding.actor.credentialId);
+      if (!bound || bound.actor.principalId !== policy.binding.actor.principalId)
+        throw new Error("admission authority unavailable");
+      await bound.authorize({ title: "", body: "", workflowId: policy.binding.workflow.id });
+      await bound.verifyRunAdmitted!(policy.binding.runId);
+    },
+  };
   const refresh = vi.fn(async () => current);
   const agent = new OrcaAcpAgent({ orchestrator: f.orc, program, authorityForNewIntent: refresh }).register(
     acp.agent({ name: "orca-test" }),
@@ -144,6 +155,7 @@ it("ACP refreshes a submission authority once per new prompt and retains it thro
       actor: { ...f.authority.actor, credentialId: "new-credential" },
       authorize: vi.fn(async () => {}),
     };
+    authorities.set(current.actor.credentialId, current);
     vi.mocked(f.authority.authorize).mockRejectedValue(new Error("old credential revoked"));
     await ctx.request(acp.methods.agent.session.prompt, { sessionId, prompt: [{ type: "text", text: "Second" }] });
     expect(refresh).toHaveBeenCalledTimes(2);

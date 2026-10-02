@@ -74,6 +74,7 @@ import {
   builtinExecutors,
   createRevisionRuntime,
   createRevisionInputServices,
+  readAdmissionExecutionStatus,
 } from "@orca/engine";
 import { AgentRegistry } from "@orca/agents";
 import { RequestSubmissionModel } from "@orca/daemon";
@@ -822,6 +823,7 @@ export const commands: Record<string, Command> = {
         !readOnly && authDir
           ? daemonExecutionRuntime({
               instanceId: identity.instanceId,
+              workspaceId,
               orchestrator: app.orchestrator,
               credentials: authDir.credentials,
               ownership: authDir.ownership,
@@ -830,6 +832,9 @@ export const commands: Record<string, Command> = {
       if (liveRuntime) {
         executionBinding.current = liveRuntime;
         app.orchestrator.liveInput = liveRuntime;
+        app.orchestrator.admissionExecution = {
+          authorize: (policy) => liveRuntime.authorizeAdmissionExecution(policy),
+        };
       }
       const requestSubmissions =
         !readOnly && authDir && app.program.submissions
@@ -884,6 +889,21 @@ export const commands: Record<string, Command> = {
           : undefined;
       if (revisionServices && app.retryClaims) revisionServices.register(app.retryClaims);
       const daemon = await startDaemon({
+        admissionExecutionSource: async (runId) => {
+          const status = await readAdmissionExecutionStatus(app.orchestrator.stores, runId);
+          switch (status.state) {
+            case "ordinary":
+              return undefined;
+            case "ready":
+              return { state: "pending" };
+            case "started":
+              return { state: "started" };
+            case "unknown":
+              return { state: "uncertain", reason: "legacy-evidence" };
+            case "blocked":
+              return { state: "uncertain", reason: "evidence-unavailable" };
+          }
+        },
         ...(revisionServices && revisionRuntime
           ? { revisionSources: { services: revisionServices, readBoundaries: revisionRuntime.readBoundaries } }
           : {}),

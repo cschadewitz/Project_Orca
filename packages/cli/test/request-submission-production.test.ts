@@ -6,7 +6,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { parseOrcaConfig, silentLogger } from "@orca/core";
 import { bootstrapLocalOwner, openAuthDirectory } from "@orca/daemon";
 import { bootstrap } from "../src/bootstrap.js";
-import { localSubmissionAuthority, authorityForNewLocalIntent } from "../src/local-submission-authority.js";
+import {
+  localSubmissionAuthority,
+  localDirectAdmissionAuthority,
+  authorityForNewLocalIntent,
+} from "../src/local-submission-authority.js";
 const dirs: string[] = [];
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -136,4 +140,35 @@ it("refreshes only a new local intent after bootstrap rotation without reviving 
   expect((await app.program.runSubmitted(fresh, current)).run.status).toBe("completed");
   await auth.credentials.revoke(replacement.credentialId);
   await expect(nextIntent()).rejects.toMatchObject({ code: "RUN_STATE" });
+});
+
+it("direct local admission binds only its explicit authority at the shared run barrier", async () => {
+  const f = await fixture();
+  const app = await bootstrap(f.options);
+  expect(app.orchestrator.admissionExecution).toBeUndefined();
+  const authority = await localDirectAdmissionAuthority(app);
+  const admitted = await app.directAdmissions!.admitRun({ workflowId: "alpha" }, {}, authority);
+  if (admitted.state !== "resolved" || admitted.result.state !== "accepted") throw new Error("not accepted");
+  expect((await app.orchestrator.run(admitted.result.runId)).run.status).toBe("completed");
+});
+it("plain run cannot bypass revoked local admission authority after receipt acceptance", async () => {
+  const f = await fixture();
+  const auth = openAuthDirectory(join(f.dir, "auth"));
+  const issued = await bootstrapLocalOwner(auth);
+  const app = await bootstrap({ ...f.options, submissionAuthority: localSubmissionAuthority });
+  const admitted = await app.program.submit({ title: "one", body: "" });
+  await auth.credentials.revoke(issued.credentialId);
+  await expect(app.orchestrator.run(admitted.runId)).rejects.toBeTruthy();
+  expect((await app.orchestrator.events(admitted.runId)).map((event) => event.type)).toEqual(["run.created"]);
+});
+it("a local ownership rewind refuses first execution without repairing attribution", async () => {
+  const f = await fixture();
+  const app = await bootstrap({ ...f.options, submissionAuthority: localSubmissionAuthority });
+  const admitted = await app.program.submit({ title: "one", body: "" });
+  const file = join(f.dir, "auth", "ownership.json");
+  const before = JSON.stringify({ version: 1, runs: {} });
+  await writeFile(file, before);
+  await expect(app.orchestrator.run(admitted.runId)).rejects.toMatchObject({ code: "RUN_STATE" });
+  expect(await readFile(file, "utf8")).toBe(before);
+  expect((await app.orchestrator.events(admitted.runId)).map((event) => event.type)).toEqual(["run.created"]);
 });

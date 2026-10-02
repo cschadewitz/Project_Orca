@@ -27,6 +27,45 @@ export class OwnershipStore {
     if (pending?.remove && durable === pending.principalId) return undefined;
     return durable ?? (pending && !pending.remove ? pending.principalId : undefined);
   }
+  /** Only durable ownership is evidence. Verification never records or repairs attribution. */
+  async verify(rootRunId: string, principalId: string): Promise<void> {
+    const check = () => {
+      if (this.readDisk(true).get(rootRunId) !== principalId)
+        throw new OrcaError("RUN_STATE", "exact durable run ownership is unavailable");
+    };
+    // Refuse missing files before acquiring the file mutex; pending attribution is
+    // deliberately ignored even when a writer is queued in this process.
+    check();
+    if (!this.file) return;
+    const file = this.file;
+    await withFileLock(`${file}.lock`, async () => {
+      check();
+      try {
+        this.syncExisting(file);
+      } catch (error) {
+        throw new OrcaError("STORE_WRITE", "run ownership durability could not be verified", {}, { cause: error });
+      }
+      check();
+    });
+  }
+  private syncExisting(file: string): void {
+    // Windows FlushFileBuffers requires a writable handle. r+ neither creates
+    // nor truncates the ownership file; this handle only synchronizes it.
+    const fd = openSync(file, process.platform === "win32" ? "r+" : "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    if (process.platform !== "win32") {
+      const directory = openSync(dirname(file), "r");
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
+    }
+  }
   /** The first durable owner wins. Pending attribution is visible in-process until flush. */
   record(rootRunId: string, principalId: string): void {
     if (this.owner(rootRunId)) {
@@ -50,22 +89,7 @@ export class OwnershipStore {
             if (current.get(change.runId) === change.principalId) current.delete(change.runId);
           } else if (!current.has(change.runId)) current.set(change.runId, change.principalId);
           writePrivateFile(file, `${JSON.stringify({ version: 1, runs: Object.fromEntries(current) })}\n`);
-          // Windows FlushFileBuffers requires a writable handle. r+ neither creates
-          // nor truncates the ownership file; this handle only synchronizes it.
-          const fd = openSync(file, process.platform === "win32" ? "r+" : "r");
-          try {
-            fsyncSync(fd);
-          } finally {
-            closeSync(fd);
-          }
-          if (process.platform !== "win32") {
-            const directory = openSync(dirname(file), "r");
-            try {
-              fsyncSync(directory);
-            } finally {
-              closeSync(directory);
-            }
-          }
+          this.syncExisting(file);
           this.diskCache = undefined;
           this.runs.clear();
           for (const [run, owner] of current) this.runs.set(run, owner);

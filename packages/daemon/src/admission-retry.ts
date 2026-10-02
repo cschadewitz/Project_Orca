@@ -1,6 +1,6 @@
 /** Authenticated direct admission and fixed-kind receipt dispatch. No execution is awaited by admit. */
 import { OrcaError, type SubmissionAuthority } from "@orca/core";
-import type { Orchestrator, ExecutionResumeAuthority } from "@orca/engine";
+import { readAdmissionExecutionStatus, type Orchestrator, type ExecutionResumeAuthority } from "@orca/engine";
 import type {
   DirectAdmissionAuthority,
   DirectAdmissionCommand,
@@ -37,6 +37,11 @@ export function directAdmissionAuthority(options: {
     actor: options.actor,
     authorize: async (command) => {
       await check(command);
+    },
+    verifyRunAdmitted: async (runId) => {
+      const principal = await check();
+      await options.authorizer.runs.ownership.verify(runId, principal.id);
+      await check();
     },
     onRunAdmitted: async (runId) => {
       const principal = await check();
@@ -156,10 +161,10 @@ export class AdmissionRetryModel {
   }
 }
 
-/** The execution lease closes the race after this read; receipt replay never resumes parked/terminal work. */
+/** Only verified, unattempted admission policy permits dispatch; the actual lease fence rechecks it. */
 export async function neverAttached(orchestrator: Orchestrator, runId: string): Promise<boolean> {
-  const events = await orchestrator.stores.events.readRange(runId, { limit: 2 });
-  if (events.length !== 1 || events[0]?.type !== "run.created") return false;
+  const status = await readAdmissionExecutionStatus(orchestrator.stores, runId);
+  if (status.state !== "ready") return false;
   return !(await orchestrator.stores.leases.get(`run:${runId}`));
 }
 

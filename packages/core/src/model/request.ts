@@ -67,6 +67,8 @@ export interface SubmissionAuthority {
   readonly actor: MutationActor;
   authorize(this: void, command: SubmissionCommand): Promise<void>;
   onRunAdmitted(this: void, runId: string): Promise<void>;
+  /** Verify existing exact durable ownership without attributing or repairing it. */
+  verifyRunAdmitted?(runId: string): Promise<void>;
 }
 
 export interface SubmissionService {
