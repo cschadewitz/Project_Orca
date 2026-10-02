@@ -42,6 +42,8 @@ export const HELLO_METHOD = "hello";
  * none of it.
  */
 export const READ_METHODS = [
+  "requests.admission",
+  "requests.admissions",
   RUNS_LIST_METHOD,
   RUNS_GET_METHOD,
   RUNS_EVENTS_METHOD,
@@ -102,6 +104,8 @@ export const PLAN_READ_METHODS = [
  * draw one disabled state would eventually get a different answer to each.
  */
 export const CONTROL_METHODS = [
+  "requests.submit",
+  "requests.reconcile",
   INPUTS_ANSWER_METHOD,
   RUNS_RESUME_METHOD,
   RUNS_CANCEL_METHOD,
@@ -140,6 +144,7 @@ export type HelloParams = z.infer<typeof HelloParamsSchema>;
 
 /** What a daemon can do; a client checks these rather than the ORCA version. */
 export const DAEMON_CAPABILITIES = [
+  "inputs.live",
   "runs.read",
   "runs.subscribe",
   "runs.control",
@@ -151,6 +156,7 @@ export const DaemonCapabilitySchema = z.enum(DAEMON_CAPABILITIES);
 export type DaemonCapability = z.infer<typeof DaemonCapabilitySchema>;
 
 export const HelloResultSchema = z.object({
+  identity: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }).optional(),
   protocol: ProtocolVersionSchema,
   orcaVersion: z.string(),
   /** Local supervisors bind health/admission to the process they actually own. Protocol 1.8. */

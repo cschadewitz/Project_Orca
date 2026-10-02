@@ -84,6 +84,29 @@ a reply from a replaced target parks a durable gate rather than accepting a stal
 answer. A transport that does not supply an invocation lifetime retains the
 conservative permission-cancellation fallback.
 
+## Connected callback invalidation
+
+Connected clients receive `input.invalidated` when their owning callback expires.
+`LiveHumanInput.onInvalidated` exposes only its complete target, never the question,
+secret-bearing context or abort reason. `Subscription` attaches before replay and
+uses the existing method/run filters and current credential/resource authorization.
+Execution-principal revocation updates other authorized observers; a revoked reader's
+socket is closed instead of sending that reader private state.
+
+This is ephemeral state, not `human.answered` or another event-store append. It carries
+no `seq`, advances no cursor and is not replayed, including after lease loss. Attention
+retains exact-identity invalidations per connection generation, so initial/scoped reads
+already in flight cannot re-enable expired controls. Inline cards share that feed.
+The disabled record and daemon waiting count remain; invalidation never calls answer,
+cancel or resume. Replacement invocations are distinct and reconnect reconciles via
+an authorized `inputs.list` snapshot.
+
+Wire the same port as `MethodContext.liveInputs`, preserving it through the server's
+context construction. Socket unsubscription detaches only the observer, never the port.
+Focused coverage includes authenticated sockets, stale reads, exact identities, client
+connection epochs, lease-fenced refusal and durable gate recovery. Final app smoke
+still belongs to the production-wired integration head.
+
 ## Session context
 
 `openAcpSession` accepts an explicit `resumeSessionId`. It checks the agent's
@@ -131,8 +154,9 @@ The additive wire fields are `OpenInputView.live: {target, state}` and
 `inputs.live` is advertised only for a wired control model and authorized
 responders. The candidate protocol minor is 1.10; consolidate that increment with
 the other stories once, at integration. The app forwards the exact identity and
-disables expired/unavailable cards. Existing notifications trigger the same scoped
-reads; no new polling channel or second gate engine is added.
+disables expired/unavailable cards. `input.invalidated` updates connected cards directly;
+open/reconnect notifications retain their scoped reads. No client polling or second
+gate engine is added.
 
 Required existing-test updates belong to Cal: fixtures that synthesize parked
 permission callbacks must instead use live invocations or assert refusal;
@@ -162,9 +186,9 @@ cost is introduced.
 The PR review also identified a required combined UI check: an already-connected
 Attention/inline permission card must be invalidated on callback timeout,
 owner/agent death and execution-authority revocation, without requiring a
-reconnect. Expiration does not emit `input.answered`, so the integration must
-provide an expiry/invalidation path and test that the card stops offering answers.
-The feature slice and its current reserved patch do not claim this UI gate passes.
+reconnect. Expiration does not emit `input.answered`; the combined implementation
+now supplies the ephemeral `input.invalidated` path and focused connected-card tests.
+These checks do not replace final application smoke.
 
 Verification on this implementation (2026-10-02): the unpatched feature tree
 passed `pnpm test` (198 files, 2,386 tests; one skipped), `typecheck`, `lint`,

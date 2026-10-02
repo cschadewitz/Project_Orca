@@ -2,6 +2,8 @@
  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
  * The CLI, the ACP facade and embedders all go through here.
  */
+import { createHash, randomUUID } from "node:crypto";
+
 import { readFile, stat, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -16,10 +18,14 @@ import {
   validateWorkflow,
   type Logger,
   type OrcaConfig,
+  type SubmissionAuthority,
   type TemplateRegistry,
   type WorkflowRegistry,
 } from "@orca/core";
 import {
+  ConfigurationGenerations,
+  FileAdmissionStore,
+  MemoryAdmissionStore,
   autoHumanInput,
   builtinExecutors,
   GitWorktreeProvider,
@@ -34,14 +40,27 @@ import {
   type RunLeaseOptions,
   type SessionFactory,
   type WorkspaceProvider,
+  type RequestSubmissionOptions,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { fileStores, memoryStores } from "@orca/store";
 import { cliHumanInput } from "./human-input-cli.js";
+import { captureRuntimeObjects } from "./plugin-runtime.js";
 
 export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
 
 export interface BootstrapOptions {
+  /** Bound by integration to #332 CaptureLaunch, durable admissions and verified local authority. */
+  submissionAuthority?: (app: {
+    config: OrcaConfig;
+    configDir: string;
+    orchestrator: Orchestrator;
+  }) => Promise<SubmissionAuthority>;
+  requestSubmission?: (app: {
+    orchestrator: Orchestrator;
+    config: OrcaConfig;
+    configDir: string;
+  }) => Promise<Omit<RequestSubmissionOptions, "orchestrator"> & { authority?: SubmissionAuthority }>;
   cwd?: string;
   configPath?: string;
   /** Use in-memory stores (demo/tests). */
@@ -63,6 +82,7 @@ export interface BootstrapOptions {
 
 export interface OrcaApp {
   config: OrcaConfig;
+  generations: ConfigurationGenerations;
   configDir: string;
   /**
    * The file `config` was read from, when it was read from one. Absent means discovery found
@@ -76,6 +96,7 @@ export interface OrcaApp {
   configFile?: string | undefined;
   orchestrator: Orchestrator;
   program: ProgramService;
+  submissionAuthority?: SubmissionAuthority | undefined;
   plan: PlanService;
   workflows: WorkflowRegistry;
   templates: TemplateRegistry;
@@ -119,7 +140,12 @@ export async function loadConfig(
   }
 }
 
-export function makeWorkspaceProvider(config: OrcaConfig, configDir: string, agents: AgentRegistry): WorkspaceProvider {
+export function makeWorkspaceProvider(
+  config: OrcaConfig,
+  configDir: string,
+  agents: AgentRegistry,
+  keplerTaskDir?: string,
+): WorkspaceProvider {
   const ws = config.workspace;
   switch (ws.provider) {
     case "local":
@@ -136,7 +162,7 @@ export function makeWorkspaceProvider(config: OrcaConfig, configDir: string, age
       });
     case "kepler":
       return new KeplerTaskWorkspaceProvider({
-        taskDir: ws.taskDir ?? process.env.KEPLER_TASK_DIR ?? configDir,
+        taskDir: keplerTaskDir ?? ws.taskDir ?? process.env.KEPLER_TASK_DIR ?? configDir,
         hostId: ws.hostId,
       });
   }
@@ -185,7 +211,22 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const workflows = await loadWorkflows(assets.workflows, configDir);
   const executors = builtinExecutors();
   let humanInput = opts.humanInput ?? makeHumanInput(config);
-  let workspaceProvider = makeWorkspaceProvider(config, configDir, agents);
+  let explicitHumanInput = opts.humanInput !== undefined;
+  const workspaceInputs = {
+    configDir: resolve(configDir),
+    ...(config.workspace.provider === "kepler"
+      ? {
+          keplerTaskDir: resolve(configDir, config.workspace.taskDir ?? process.env.KEPLER_TASK_DIR ?? configDir),
+        }
+      : {}),
+  };
+  let workspaceProvider = makeWorkspaceProvider(
+    config,
+    workspaceInputs.configDir,
+    agents,
+    workspaceInputs.keplerTaskDir,
+  );
+  let pluginWorkspaceProvider = false;
   const stores = opts.ephemeral
     ? memoryStores()
     : fileStores(resolve(configDir, config.storeDir), undefined, logger.child({ component: "store" }));
@@ -206,10 +247,54 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     workflows,
     agents,
     plan,
-    setHumanInput: (p) => (humanInput = p),
-    setWorkspaceProvider: (p) => (workspaceProvider = p),
+    setHumanInput: (p) => {
+      explicitHumanInput = true;
+      humanInput = p;
+    },
+    setWorkspaceProvider: (p) => {
+      pluginWorkspaceProvider = true;
+      workspaceProvider = p;
+    },
   };
+  const configuredHosts = new Map(agents.listHosts().map((host) => [host.id, host]));
+  const configuredExecutors = new Map(executors.types().map((type) => [type, executors.get(type)]));
+  const runtimeMutated = captureRuntimeObjects([...agents.listHosts(), ...configuredExecutors.values()]);
+  let pluginPlanCallbacks = false;
+  const addSignalExtractor = plan.addSignalExtractor.bind(plan);
+  plan.addSignalExtractor = (extractor) => {
+    pluginPlanCallbacks = true;
+    addSignalExtractor(extractor);
+  };
+  const pluginEntries = await pluginEntryDigests(config, configDir);
   await loadPlugins(config, configDir, api, logger);
+  // Declarative agents/roles are restored from the encrypted snapshot. Arbitrary executable
+  // hosts/providers may close over configuration or unrecorded ambient state, so they are
+  // bootstrap-bound until plugins offer a restoration contract. No-op/declarative plugins
+  // retain verified-entry restart compatibility. This digest stays private, with no raw secrets.
+  const pluginHosts = agents
+    .listHosts()
+    .filter((host) => configuredHosts.get(host.id) !== host)
+    .map((host) => host.id)
+    .sort();
+  const pluginExecutors = executors.types().filter((type) => configuredExecutors.get(type) !== executors.get(type));
+  const bootstrapBound =
+    pluginWorkspaceProvider ||
+    pluginHosts.length > 0 ||
+    pluginExecutors.length > 0 ||
+    pluginPlanCallbacks ||
+    runtimeMutated();
+  const runtimeFingerprint = pluginEntries
+    ? createHash("sha256")
+        .update(
+          JSON.stringify({
+            plugins: pluginEntries,
+            workspaceProvider: pluginWorkspaceProvider,
+            pluginHosts,
+            ...(bootstrapBound ? { runtimeLifetime: randomUUID() } : {}),
+          }),
+        )
+        .digest("hex")
+    : undefined;
 
   const problems: string[] = [];
   for (const def of workflows.list()) {
@@ -242,15 +327,93 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     // An ephemeral bootstrap deliberately gets none: it is a one-shot over in-memory stores
     // (`orca agent ping`), and standing grants a workspace recorded for its real runs are
     // durable workspace state of exactly the kind `ephemeral` means to leave alone.
-    ...(opts.ephemeral ? {} : { sessionFactory: makeSessionFactory(configDir) }),
+    ...(opts.ephemeral
+      ? {}
+      : {
+          sessionFactory: (options: OpenSessionOptions) => {
+            const current = agents.resolve(options.agent.id).agent;
+            return makeSessionFactory(configDir)({
+              ...options,
+              agent: { ...options.agent, permissions: current.permissions },
+            });
+          },
+        }),
     ...(opts.lease ? { lease: opts.lease } : {}),
   });
+  const generations = new ConfigurationGenerations({
+    store: stores.execution,
+    workflows: stores.workflows,
+    loadAssets: async (candidate) => {
+      if (candidate.plugins.length) throw new OrcaError("NOT_SUPPORTED", "plugin asset refresh requires restart");
+      const paths = await releaseAssets(candidate);
+      const loadedWorkflows = await loadWorkflows(paths.workflows, configDir);
+      const loadedTemplates = await loadTemplates(paths.templates, configDir);
+      return { workflows: loadedWorkflows.list(), templates: loadedTemplates.list(), workspaceInputs };
+    },
+    admission: {
+      validateStartRun: (options, generation) => orchestrator.validateStartRun(options, generation),
+      startRun: (options, generation) => orchestrator.startRun(options, generation),
+    },
+    validateCustomNode: (node) => executors.validateNode(node),
+  });
+  // Verify bytes still represent the config bootstrap loaded before labelling them active.
+  const saved = configFile ? await readFile(configFile, "utf8") : "";
+  if (configFile && JSON.stringify(parseOrcaConfig(parseYaml(saved))) !== JSON.stringify(config))
+    throw new OrcaError("CONFIG_STALE", "configuration changed during startup; restart bootstrap");
+  await generations.initialize(config, configFile ? createHash("sha256").update(saved).digest("hex") : "", {
+    workflows: workflows.list(),
+    templates: templates.list(),
+    workspaceInputs,
+    ...(config.plugins.length ? { agents } : {}),
+    ...(config.plugins.length && runtimeFingerprint ? { runtimeFingerprint } : {}),
+  });
+  orchestrator.generations = generations;
+  // Explicit embedder/plugin ports and later facade replacements stay live. Only the
+  // configured gate policy is restored; permission requests still use the live port.
+  orchestrator.generationHumanInput = (generation) =>
+    explicitHumanInput || orchestrator.humanInput !== humanInput
+      ? orchestrator.humanInput
+      : makeHumanInput(generation.snapshot.config);
+  const bootGeneration = generations.current.snapshot.id;
+  orchestrator.generationWorkspaceProvider = (generation) => {
+    if (pluginWorkspaceProvider) {
+      // Restoring a plugin-bound generation already matched this boot's runtime fingerprint,
+      // which includes the non-restorable executable provider lifetime.
+      const sameRuntime =
+        runtimeFingerprint !== undefined && generation.snapshot.runtimeFingerprint === runtimeFingerprint;
+      if (generation.snapshot.id !== bootGeneration && !sameRuntime)
+        throw new OrcaError("RUN_STATE", "plugin workspace provider cannot be restored for a different plugin runtime");
+      return workspaceProvider;
+    }
+    const inputs = generation.snapshot.workspaceInputs;
+    if (!inputs && generation.snapshot.config.workspace.provider === "kepler")
+      throw new OrcaError("RUN_STATE", "recorded Kepler workspace inputs are unavailable");
+    return makeWorkspaceProvider(
+      generation.snapshot.config,
+      inputs?.configDir ?? configDir,
+      generation.agents,
+      inputs?.keplerTaskDir,
+    );
+  };
+  const provided = await opts.requestSubmission?.({ orchestrator, config, configDir });
+  const authority = provided?.authority ?? (await opts.submissionAuthority?.({ orchestrator, config, configDir }));
+  const submission = {
+    admissions: opts.ephemeral
+      ? new MemoryAdmissionStore()
+      : new FileAdmissionStore(resolve(configDir, config.storeDir)),
+    captureLaunch: generations.captureLaunch.bind(generations),
+    restoreLaunch: generations.restoreLaunch.bind(generations),
+    ...provided,
+    ...(authority ? { authority } : {}),
+  };
   return {
     config,
+    generations,
+    submissionAuthority: submission?.authority,
     configDir,
     ...(configFile ? { configFile } : {}),
     orchestrator,
-    program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow),
+    program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission),
     plan,
     workflows,
     templates,
@@ -271,13 +434,42 @@ export async function loadPlugins(
   logger: Logger,
 ): Promise<void> {
   for (const spec of config.plugins) {
-    const url = spec.startsWith(".") || isAbsolute(spec) ? pathToFileURL(resolve(configDir, spec)).href : spec;
-    const mod = (await import(url)) as { default?: OrcaPlugin };
+    const mod = (await import(pluginSpecifier(spec, configDir))) as { default?: OrcaPlugin };
     if (!mod.default?.register)
       throw new OrcaError("CONFIG_INVALID", `plugin ${spec} has no default OrcaPlugin export`);
     await mod.default.register(api);
     logger.debug("plugin loaded", { plugin: mod.default.name });
   }
+}
+
+function pluginSpecifier(spec: string, configDir: string): string {
+  return spec.startsWith(".") || isAbsolute(spec) ? pathToFileURL(resolve(configDir, spec)).href : spec;
+}
+
+/**
+ * The resolved entry module and its SHA-256 for each plugin, read before import. Plugin code
+ * is not snapshotted; this only lets a later bootstrap prove it loads the same entry bytes.
+ * A plugin that does not resolve to a local file yields none, so its generations stay
+ * bound to the bootstrap that admitted them.
+ */
+async function pluginEntryDigests(
+  config: OrcaConfig,
+  configDir: string,
+): Promise<{ spec: string; url: string; digest: string }[] | undefined> {
+  const entries: { spec: string; url: string; digest: string }[] = [];
+  for (const spec of config.plugins) {
+    let url: URL;
+    try {
+      url = new URL(import.meta.resolve(pluginSpecifier(spec, configDir)));
+    } catch {
+      return undefined;
+    }
+    if (url.protocol !== "file:") return undefined;
+    const bytes = await readFile(url).catch(() => undefined);
+    if (!bytes) return undefined;
+    entries.push({ spec, url: url.href, digest: createHash("sha256").update(bytes).digest("hex") });
+  }
+  return entries;
 }
 
 function stripUndefined<T extends object>(o: T): { [K in keyof T]?: Exclude<T[K], undefined> } {

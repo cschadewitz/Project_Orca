@@ -28,7 +28,7 @@ describe("appMenuTemplate", () => {
 
     const file = menu(template, "File");
     expect(file.map((item) => item.label)).toContain("Open a store…");
-    expect(file.map((item) => item.label)).toContain("Connect to a daemon");
+    expect(file.map((item) => item.label)).toContain("Connect to a daemon…");
 
     // Electron hands a click three arguments this app has no use for; the handler takes none.
     const open = file.find((item) => item.label === "Open a store…")?.click as (() => void) | undefined;

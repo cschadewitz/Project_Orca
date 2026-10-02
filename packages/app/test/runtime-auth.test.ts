@@ -293,7 +293,8 @@ describe("proxy authentication responses", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(machine.current.state).toBe("disconnected");
         expect(stream.state).toBe("auth-failed");
-        expect(onAuthFailure).toHaveBeenCalled();
+        // Verification publishes through its epoch-checked subscription state.
+        expect(onAuthFailure).not.toHaveBeenCalled();
         expect(fetchImpl).toHaveBeenCalledTimes(calls);
         expect(refresh).toHaveBeenCalledTimes(status === 401 && token ? 1 : 0);
         expect(socket).not.toHaveBeenCalled();
@@ -366,7 +367,8 @@ describe("daemon redirects and offline retry", () => {
         expect.objectContaining({ redirect: "manual" }),
       );
       expect(refresh).not.toHaveBeenCalled();
-      expect(onAuthFailure).toHaveBeenCalledOnce();
+      // A hello caller owns publication after checking its handshake lifetime.
+      expect(onAuthFailure).not.toHaveBeenCalled();
     },
   );
 
@@ -485,7 +487,8 @@ describe("authentication failure and teardown edges", () => {
       error: { code: "AUTH_INVALID", message: "Authentication failed" },
     });
     expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(onAuthFailure).toHaveBeenCalledOnce();
+    // The probe returns the refusal without publishing into the live connection.
+    expect(onAuthFailure).not.toHaveBeenCalled();
   });
 
   it("refuses a socket whose credential becomes unreadable after HTTP verification", async () => {

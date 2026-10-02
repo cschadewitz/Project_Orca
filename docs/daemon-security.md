@@ -106,7 +106,7 @@ A credential holds a list of these permissions:
 | `agents.read`        | Agent health; `agent.changed`.                                             |
 | `agents.ping`        | Spawn an agent to perform a handshake.                                     |
 | `config.read`        | `config.get`, which returns the configuration **unredacted**; `config.changed`. |
-| `config.write`       | `config.set`.                                                              |
+| `config.write`       | `config.set`, `config.apply`.                                                              |
 | `daemon.maintenance` | The update coordinator's admission control.                                |
 
 A **resource scope** limits which resources those permissions apply to:
@@ -159,6 +159,10 @@ that the two match. A method that is missing from the table is refused with
 | `workflows.list` | `workflows.read` | filtered to the workflow scope | — |
 | `workflows.get` | `workflows.read` | the workflow (by root id) | — |
 | `workflows.validateInputs` | `runs.start` | the selected workflow, before any schema or input diagnostic (reserved for #330) | — |
+| `requests.submit` | `plan.write` | plus `runs.start`; workspace Request admission | mutation |
+| `requests.reconcile` | `plan.write` | plus `runs.start`; own admission in this workspace | mutation |
+| `requests.admission` | `plan.write` | plus `runs.start`; own admission in this workspace | — |
+| `requests.admissions` | `plan.write` | plus `runs.start`; own admissions in this workspace | — |
 | `runs.start` | `runs.start` | the workflow; the new run is attributed to the caller | mutation |
 | `runs.resume` | `runs.control` | the run | mutation |
 | `runs.cancel` | `runs.control` | the run | mutation |
@@ -166,6 +170,7 @@ that the two match. A method that is missing from the table is refused with
 | `claims.release` | `claims.release` | the claim's owning run | mutation |
 | `config.get` | `config.read` | workspace-wide | — |
 | `config.set` | `config.write` | workspace-wide | mutation |
+| `config.apply` | `config.write` | workspace-wide | mutation |
 | `plans.list` | `plan.read` | workspace-wide | — |
 | `plan.get` | `plan.read` | workspace-wide | — |
 | `items.list` | `plan.read` | workspace-wide | — |
@@ -213,7 +218,7 @@ that moment, before it is written to the socket:
 
 | Notification                                                                                   | Needs                                                  |
 | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `run.changed`, `step.changed`, `agent.update`, `input.opened`, `input.answered`, `event.appended` | `runs.read`, and the run visible                       |
+| `run.changed`, `step.changed`, `agent.update`, `input.opened`, `input.answered`, `input.invalidated`, `event.appended` | `runs.read`, and the run visible                       |
 | `agent.changed`                                                                                | `agents.read`                                          |
 | `config.changed`                                                                               | `config.read`                                          |
 | `plan.changed`                                                                                 | `plan.read`                                            |
@@ -438,3 +443,10 @@ Compatibility-only edits already present in the first pass (the two changelog fr
 `packages/app/test/daemon-client.test.ts`, `packages/app/test/notifications.test.ts`, and
 `packages/daemon/test/maintenance.test.ts`) still need Cal's ownership reconciliation;
 the review fixes do not expand those edits.
+
+
+Request admission methods require both `runs.start` and workspace-scoped `plan.write`.
+`requests.submit` and `requests.reconcile` are audited mutations; `requests.admission`
+and `requests.admissions` expose only this principal's admissions in this workspace.
+They are registered only with the submission provider and durable token-mode ownership.
+See [Request submission](request-submission.md) for recovery and discovery.

@@ -102,7 +102,8 @@ export interface DaemonSubscriptionOptions {
   onState?: ((state: SubscriptionState, retries: RetryCount) => void) | undefined;
   socket?: SocketFactory | undefined;
   backoffMs?: readonly number[] | undefined;
-  verify?: () => Promise<DaemonIdentity | undefined>;
+  /** Check this attempt's lifetime before publishing any verification side effects. */
+  verify?: (isCurrent: () => boolean) => Promise<DaemonIdentity | undefined>;
   auth?: { tokens: DaemonTokenSource; verify?: () => Promise<void> };
 }
 
@@ -175,7 +176,7 @@ export class DaemonSubscription {
     const epoch = ++this.epoch;
     const verify = this.opts.verify ?? this.opts.auth?.verify;
     if (verify) {
-      void verify().then(
+      void verify(() => !this.done && this.epoch === epoch).then(
         (identity) => {
           if (this.done || this.epoch !== epoch) return;
           if (

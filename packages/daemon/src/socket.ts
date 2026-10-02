@@ -215,6 +215,7 @@ export function attachSocket(server: Server, opts: SocketOptions): () => Promise
             // Plan changes live on the context for the same reason: the plan journal is not
             // an event feed, and a daemon can serve one without the other.
             ...(opts.ctx.planSource ? { plans: opts.ctx.planSource } : {}),
+            ...(opts.ctx.liveInputs ? { liveInputs: opts.ctx.liveInputs } : {}),
             ...(opts.batchMs === undefined ? {} : { batchMs: opts.batchMs }),
           });
           subscriptions.set(id, subscription);

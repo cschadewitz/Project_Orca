@@ -32,6 +32,7 @@
  *   placed by path; an error against a path no field draws is listed above the form rather
  *   than swallowed (`placeErrors`).
  */
+import { ConnectionSource } from "../daemon-connection/source.js";
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import type { ConnectionState } from "@orca/design";
 import { CONFIG_SET_METHOD, type ConfigDocument } from "@orca/protocol";
@@ -284,6 +285,7 @@ const fileName = (path: string): string => path.split("/").pop() ?? path;
 function Surface({ children }: { children: ReactNode }): JSX.Element {
   return (
     <div className="orca-config" data-surface="config" {...scopeProps("config")}>
+      {window.orca.daemonConnection && <ConnectionSource bridge={window.orca.daemonConnection} />}
       {children}
     </div>
   );

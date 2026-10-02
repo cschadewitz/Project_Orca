@@ -99,6 +99,7 @@ describe("hello", () => {
     expect(READ_METHODS).toContain(CONFIG_GET_METHOD);
     expect(CONTROL_METHODS).toContain(CONFIG_SET_METHOD);
     expect(DAEMON_CAPABILITIES).toEqual([
+      "inputs.live",
       "runs.read",
       "runs.subscribe",
       "runs.control",

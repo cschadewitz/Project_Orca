@@ -126,8 +126,13 @@ it.each(["owner died", "agent died", "lease lost", "cancelled", "timeout", "exec
   "expires without approval when %s",
   async (reason) => {
     const f = await fixture();
+    const invalidated = vi.fn();
+    f.port.onInvalidated(invalidated);
     f.abort.abort(reason);
     expect(await f.result).toBeUndefined();
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(f.target);
+    f.port.close();
+    expect(invalidated).toHaveBeenCalledTimes(1);
     await expect(f.answer()).rejects.toMatchObject({ details: { liveInputState: "expired" } });
     expect(f.writes.filter((e) => e.type === "human.answered")).toHaveLength(0);
   },
@@ -303,4 +308,49 @@ it("does not retry an identity when its answer append reports an uncertain failu
   await expect(port.answer({ target, optionId: "yes" }, f.authority)).rejects.toMatchObject({
     details: { liveInputState: "expired" },
   });
+});
+
+it("notifies lease-fenced refusal without appending an expiry or answer event", async () => {
+  const f = await fixture();
+  const invalidated = vi.fn();
+  f.port.onInvalidated(invalidated);
+  const before = [...f.writes];
+  await f.stores.leases.release(f.lease);
+  await expect(f.answer()).rejects.toMatchObject({ code: "RUN_LEASED" });
+  expect(await f.result).toBeUndefined();
+  expect(invalidated).toHaveBeenCalledExactlyOnceWith(f.target);
+  expect(f.writes).toEqual(before);
+});
+it("unsubscribing an observer cannot expire a callback or a durable workflow gate", async () => {
+  const f = await fixture();
+  const invalidated = vi.fn();
+  f.port.onInvalidated(invalidated)();
+  expect(f.port.inspect(f.target)).toBe("pending");
+  await expect(f.port.ask({ ...f.query, kind: "decision" })).rejects.toBeInstanceOf(HumanInputPending);
+  f.port.close();
+  expect(await f.result).toBeUndefined();
+  expect(invalidated).not.toHaveBeenCalled();
+  expect(f.writes.filter((event) => event.type === "human.answered")).toHaveLength(0);
+});
+it("observer failures or mutations cannot keep an expired callback alive or corrupt another observer", async () => {
+  const f = await fixture();
+  f.port.onInvalidated((target) => {
+    target.runId = "other";
+    throw new Error("observer failed");
+  });
+  const invalidated = vi.fn();
+  f.port.onInvalidated(invalidated);
+  f.abort.abort("timeout");
+  expect(await f.result).toBeUndefined();
+  expect(invalidated).toHaveBeenCalledExactlyOnceWith(f.target);
+  expect(f.port.inspect(f.target)).toBe("expired");
+});
+it("successful answers use input.answered, without also announcing expiration", async () => {
+  const f = await fixture();
+  const invalidated = vi.fn();
+  f.port.onInvalidated(invalidated);
+  await f.answer();
+  expect(await f.result).toBe("yes");
+  f.port.close();
+  expect(invalidated).not.toHaveBeenCalled();
 });

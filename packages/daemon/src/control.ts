@@ -22,6 +22,7 @@
  * restart, and it is why `inputs.answer` is a write to a log and a re-drive rather than the
  * resolution of a promise.
  */
+import type { LiveAnswerAuthority } from "@orca/engine";
 import {
   OrcaError,
   isOrcaError,
@@ -116,6 +117,12 @@ export async function answerAndResume(orc: Orchestrator, opts: AnswerAndResumeOp
     });
 
   const runId = found.request.runId;
+  if (found.request.kind === "permission") {
+    const held = (await orc.listLeases()).some((lease) => lease.runId === runId && !lease.lapsed);
+    throw new OrcaError("RUN_STATE", "answer a live permission at its owning daemon with its exact identity", {
+      liveInputState: held ? "owner-unavailable" : "expired",
+    });
+  }
   if (found.state.run.status !== "paused")
     throw new ProtocolFault(
       "RUN_NOT_WAITING",
@@ -249,6 +256,10 @@ export class ControlModel {
     this.clock = opts.clock ?? opts.orchestrator.clock;
   }
 
+  get supportsLiveInputs(): boolean {
+    return this.orc.liveInput !== undefined;
+  }
+
   /**
    * `inputs.answer`: record the answer and continue the run.
    *
@@ -258,7 +269,16 @@ export class ControlModel {
    * ask again" has to be able to check whether that is true, and `refused` is the case where
    * it is not: nothing generalised, so the answer held for this one call.
    */
-  async answerInput(params: InputsAnswerParams, actor?: MutationActor): Promise<InputsAnswerResult> {
+  async answerInput(
+    params: InputsAnswerParams,
+    actor?: MutationActor,
+    authority?: LiveAnswerAuthority,
+  ): Promise<InputsAnswerResult> {
+    const candidate = await findInput(this.orc, params.requestId, params.runId);
+    if (candidate.request.kind === "permission") {
+      return this.answerLive(params, candidate.request, candidate.state, authority);
+    }
+    if (params.live) throw new OrcaError("RUN_STATE", "a durable gate has no live callback");
     let permission: RecordAlwaysResult | undefined;
     // Resolve the standing grant without writing; invalid grant prerequisites must not
     // consume even the one-time answer. The engine rechecks the exact gate under its lease.
@@ -300,6 +320,56 @@ export class ControlModel {
     };
   }
 
+  private async answerLive(
+    params: InputsAnswerParams,
+    request: HumanInputRequest,
+    state: RunState,
+    authority?: LiveAnswerAuthority,
+  ): Promise<InputsAnswerResult> {
+    if (!authority) throw new OrcaError("NOT_SUPPORTED", "live answers require current server-bound authority");
+    if (
+      !params.live ||
+      params.live.runId !== request.runId ||
+      params.live.stepRunId !== request.stepRunId ||
+      params.live.requestId !== request.id
+    )
+      throw new OrcaError("RUN_STATE", "the exact live decision identity is required");
+    await authority.authorize(params.live, Boolean(params.always));
+    if (!this.orc.liveInput) {
+      const held = (await this.orc.listLeases()).find((lease) => lease.runId === request.runId && !lease.lapsed);
+      throw new OrcaError("RUN_STATE", "live permission callback cannot be delivered here", {
+        liveInputState: held ? "owner-unavailable" : "expired",
+      });
+    }
+    if (!params.resume)
+      throw new OrcaError("NOT_SUPPORTED", "a live answer delivers to the original turn; no-resume is not supported");
+    const always = params.always ? await this.prepareAlways(params, request, state) : undefined;
+    let permission: RecordAlwaysResult | undefined;
+    await this.orc.liveInput.port.answer(
+      {
+        target: params.live,
+        optionId: params.optionId,
+        ...(params.note ? { note: params.note } : {}),
+        standing: Boolean(always),
+      },
+      authority,
+      always
+        ? async () => {
+            permission = await recordAlwaysDecision(always);
+            if (permission.added.length) await this.config?.announce("permissions");
+          }
+        : undefined,
+    );
+    return {
+      requestId: request.id,
+      runId: request.runId,
+      answer: params.optionId,
+      ...(permission ? { permission } : {}),
+      run: await this.runView(request.runId),
+      asOf: this.clock.isoNow(),
+    };
+  }
+
   /**
    * `runs.resume`: re-drive a parked run here, under this daemon's lease, until it stops again.
    *
@@ -337,18 +407,26 @@ export class ControlModel {
   /**
    * `runs.start`: create a run and drive it here until it parks or finishes.
    *
-   * A workflow and its vars, and no documents - not because the store could not take them
-   * (#196 made it multi-process safe) but because submitting a request is a method still to
-   * be designed. `RunsStartParamsSchema` says the rest.
-   * `requestId` and `workItemId` travel onto `run.created` and out on the `run.changed`
-   * notification; neither is read back from a document store.
+   * A workflow and its vars, with optional existing Request/work-item associations checked
+   * by the orchestrator before admission. It never creates a Request; requests.submit is
+   * the separate application service for decomposition/program admission.
    */
   async startRun(
     params: RunsStartParams,
     attributeStartedRun?: (runId: string) => void | Promise<void>,
     actor?: MutationActor,
   ): Promise<RunsStartResult> {
-    const runId = await this.orc.startRun({
+    const captured = await this.orc.generations?.captureLaunch({
+      purpose: "workflow",
+      workflowId: params.workflowId,
+      ...(params.workflowVersion ? { workflowVersion: params.workflowVersion } : {}),
+      ...(params.expectedWorkflowRevision ? { expectedWorkflowRevision: params.expectedWorkflowRevision } : {}),
+      ...(params.expectedConfigGeneration ? { expectedConfigGeneration: params.expectedConfigGeneration } : {}),
+    });
+    if (params.expectedConfigGeneration && !captured)
+      throw new OrcaError("NOT_SUPPORTED", "configuration generations are unavailable");
+    const start = captured ? captured.startRun.bind(captured) : this.orc.startRun.bind(this.orc);
+    const runId = await start({
       ...(actor ? { actor } : {}),
       workflowId: params.workflowId,
       vars: params.vars,

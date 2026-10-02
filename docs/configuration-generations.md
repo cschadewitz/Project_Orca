@@ -68,24 +68,30 @@ Bootstrap captures effective plugin agent specifications and role mappings in th
 protected generation, and retains the actual host objects and workspace provider
 for that bootstrap lifetime. Later registry edits cannot replace those registrations.
 
-A later bootstrap (`orca resume`, a daemon restart) restores a plugin-bound generation
-under a restoration contract. Before importing plugins, bootstrap resolves each plugin's
-entry module and hashes its bytes. The runtime fingerprint covers those digests, the
-resolved URLs, and whether a plugin supplied the workspace provider. The generation
-records that fingerprint and its host ids. A later bootstrap uses its own plugin hosts
-and workspace provider for that generation only when all of these match:
+A later bootstrap restores declarative plugin agent specifications and role mappings
+from the protected generation after verifying unchanged resolved entry modules,
+plugin list and configured host definitions. No-op and declarative-only plugins retain
+restart compatibility. Entry digests do not cover transitive imports; ORCA does not
+claim reproducible plugin execution.
 
-- the runtime fingerprint;
-- the `plugins` list and the configured `hosts`;
-- the set of host ids.
+Arbitrary custom executors, plan signal extractors, workspace-provider and changed host objects may close over
+registration-time config, environment or other unrecorded state. Matching entry
+bytes and host IDs cannot prove that state. These executable registrations are bound
+to the bootstrap that captured them until an explicit plugin restoration contract
+can reconstruct those inputs. Their private fingerprint includes a fresh lifetime
+nonce, without raw configuration or secret values. A historical launch or resume in
+a later bootstrap fails closed with `RUN_STATE`, before workspace provisioning.
+Captured launches within the original bootstrap retain their provider/host objects.
+This is not a blanket restart refusal for no-op or declarative-only plugins.
+In-place host/executor and nested filesystem callback edits are behavior-bearing too.
+The shipped JEV example registers custom executors and is therefore bootstrap-bound:
+finish its admitted work before restarting. Do not delete protected records or start a
+replacement run under new callbacks to bypass a refusal. Cross-bootstrap recovery for
+such plugins needs an explicit restoration contract; this release does not provide one.
 
-Agent specs and role mappings still come from the recorded generation. Anything else
-fails with `RUN_STATE` rather than substituting different plugin code or a configured
-local provider. That covers an edited plugin entry, an added or removed plugin or
-host, a provider that appeared or disappeared, and a plugin that does not resolve to
-a local file (which gets no fingerprint). The digest covers the entry module only.
-It does not cover modules that entry imports, and ORCA does not claim plugin execution
-is reproducible.
+Built-in providers record their resolved bootstrap directory and Kepler task directory
+inside the protected generation. Historical launch restoration never rereads the current
+`KEPLER_TASK_DIR`; a missing recorded Kepler context fails closed.
 
 Apply also rejects removal of a previously resolvable program or item-workflow
 default, even when its configured name has not changed. Unconfigured bundled
@@ -140,9 +146,10 @@ uses current configured permission policy and the live sidecar, even when execut
 choices were restored from an older generation. New restrictions therefore do not
 require rewriting old execution material.
 
-## Integration handoff
+## Integrated wiring (original handoff retained)
 
-Apply with `git apply docs/patches/332-runtime-integration.patch`. It includes:
+The combined runtime reconciles `docs/patches/332-runtime-integration.patch`. Do not
+reapply that historical handoff. The integrated wiring includes:
 
 - Core provenance exports, event/run projection and protocol run inspection.
 - Protected execution-store generation methods, reusing the existing private directory.

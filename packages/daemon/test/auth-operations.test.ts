@@ -53,7 +53,7 @@ function everyAnsweredMethod(): string[] {
     control: present,
     planControl: present,
     agents: present,
-    config: present,
+    config: { canApply: true } as never,
   };
   return Object.keys(methodsFor(full));
 }

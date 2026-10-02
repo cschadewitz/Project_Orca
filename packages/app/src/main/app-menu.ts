@@ -48,7 +48,7 @@ export function appMenuTemplate(
       // one place the app writes a label that is not sentence case by its own rule (13) —
       // a menu item is a command, and "Open a store…" is how every other app spells it.
       { label: "Open a store…", accelerator: "CmdOrCtrl+O", click: actions.openStore },
-      { label: "Connect to a daemon", click: actions.connectLive },
+      { label: "Connect to a daemon…", click: actions.connectLive },
       { type: "separator" },
       mac ? { role: "close" } : { role: "quit" },
     ],

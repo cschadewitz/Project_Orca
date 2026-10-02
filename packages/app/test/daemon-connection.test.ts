@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from "@orca/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,7 +12,7 @@ import { Workspace, type WorkspaceDeps } from "../src/main/workspace.js";
 import { DaemonSubscription } from "../src/client/subscription.js";
 
 const hello = {
-  protocol: { major: 1, minor: 9 },
+  protocol: PROTOCOL_VERSION,
   orcaVersion: "test",
   capabilities: ["runs.read", "runs.subscribe"],
   identity: { workspaceId: "2c7bf988-cf11-4f6d-9b36-77a4a7bf714f", instanceId: "44112345-b16c-44ba-831d-a66f44488f66" },

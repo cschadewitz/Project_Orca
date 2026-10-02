@@ -19,11 +19,11 @@
  *   own option ids and guess that `allow_always` means allow: those ids are the agent's, a
  *   standing permission grant is the last place to guess, and the result says exactly what
  *   was written so a button can promise it honestly.
- * - **`runs.start` writes no documents.** Not because it cannot any more - the store became
- *   multi-process safe in #196 - but because submitting a request is a different method,
- *   still to be designed. See its schema.
+ * - **`runs.start` writes no Request documents.** Request submission is the separate
+ *   `requests.submit` application service. Supplied associations are validated before launch.
  */
 import { z } from "zod";
+import { LiveDecisionTargetSchema } from "./live-input.js";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
 import { PermissionRuleSchema } from "@orca/core/schemas";
 import { RunSummaryViewSchema } from "./runs.js";
@@ -44,6 +44,8 @@ export const AlwaysDecisionSchema = z.object({ decision: z.enum(["allow", "deny"
 export type AlwaysDecision = z.infer<typeof AlwaysDecisionSchema>;
 
 export const InputsAnswerParamsSchema = z.object({
+  /** Required for live callbacks; copied exactly from inputs.list, never inferred. */
+  live: LiveDecisionTargetSchema.optional(),
   /** The `OpenInputView.id` being answered. */
   requestId: z.string().min(1),
   /** Narrows the search to one run and its descendants. Optional: an id is unique either way. */
@@ -147,24 +149,10 @@ export type RunsCancelResult = z.infer<typeof RunsCancelResultSchema>;
 // ------------------------------------------------------------------- runs.start
 
 /**
- * `runs.start` - a workflow and its vars, and deliberately nothing else.
- *
- * The reason this shape was chosen has since been fixed: `JsonFileDocumentStore` re-reads a
- * collection under a lock before every write (#196), so a daemon and a CLI writing documents
- * beside each other no longer clobber one another and the store is multi-process safe.
- *
- * The narrow method is kept anyway, by decision rather than by constraint. Submitting a
- * *request* and decomposing it into *work items* is `orca submit`'s job - a workflow, an
- * agent and an artifact, not a record insert - and growing this method into it would settle
- * that design by accident, in the schema of a method whose job is "run this workflow". When
- * a `requests.submit` method is designed it goes beside this one, with its own shape.
- *
- * So `requestId` and `workItemId` are accepted and passed through: they are recorded on
- * `run.created` and travel out on the `run.changed` notification, so a client that already
- * knows a work item can start a run against it and find the run again. Neither id is read
- * back from a document store and neither document is created. A run naming itself after a
- * work item the daemon has not got simply falls back to the workflow id, which is the
- * fallback chain `ReadModel` has always had.
+ * Explicit workflow launch, independent of Request submission. No Request is created.
+ * Optional Request/work-item associations must exist and agree before admission; the
+ * daemon authorizes those workspace resources before their validation diagnostics.
+ * `requests.submit` is the separate program/decomposition admission operation.
  */
 export const RunsStartParamsSchema = z.object({
   workflowId: z.string().min(1),
@@ -172,6 +160,7 @@ export const RunsStartParamsSchema = z.object({
   vars: z.record(z.string(), z.unknown()).default({}),
   /** Exact version and revision returned by workflows.validateInputs. */
   workflowVersion: z.string().min(1).optional(),
+  expectedConfigGeneration: z.string().optional(),
   expectedWorkflowRevision: z.string().min(1).optional(),
   /**
    * Recorded on `run.created` and carried into the `run.changed` notification, so a client

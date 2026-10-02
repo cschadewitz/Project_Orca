@@ -1,11 +1,10 @@
 # Request submission and recovery (#329)
 
 This feature slice implements the frozen [parallel contract](runtime-next-parallel-contract.md).
-The production method table, CLI bootstrap and generation-provider wiring are reserved
-for integration. Apply [the shared wiring patch](patches/329-request-submission-integration.patch)
-and bind the real #332 `CaptureLaunch` and #318 workspace identity before advertising
-these methods. Feature tests use an injected generation provider; they do not establish
-cross-story acceptance. No MCP transport is implemented here (#327).
+The combined runtime wires daemon methods and CLI/ACP entry points to the real
+configuration-generation provider, historical `RestoreLaunch`, persistent workspace
+identity and durable admission store. The patch is a historical handoff; do not
+reapply it. No MCP transport is implemented here (#327).
 
 ## Two operations
 
@@ -53,6 +52,25 @@ The integration patch rechecks operation grants before parameter diagnostics ove
 shared HTTP/WebSocket dispatcher. It registers admission methods only with the provider,
 control enabled and durable token-mode ownership. Explicit legacy loopback mode retains
 its old methods. No new permissive principal or production generation is synthesized.
+
+### Explicit local authority
+
+`orca submit`, `orca acp` and the demo explicitly select local-process admission.
+An embedder calling `bootstrap()` gets the service but cannot submit through
+`ProgramService` without explicit authority. RPC never uses the local factory.
+Where token authentication is configured, local entry points verify the existing
+local-client token, pin its credential ID, and recheck grants/revocation before
+admission and worker execution. They neither issue nor rotate tokens. Missing,
+invalid or revoked configured credentials cannot fall back to OS authority.
+
+In a standalone workspace that has never configured token authentication, those
+entry points bind the actual OS user, check current workspace access and (on Unix)
+config/store directory ownership, and record an opaque OS-user actor plus durable
+run ownership. Each authorization rechecks the boundary. Configuring token auth
+invalidates previously captured standalone authority; restart the command. This
+preserves the local disk-owner CLI boundary without a network-usable permissive
+principal. Ownership writes merge under a cross-process mutex and retain the first
+durable owner rather than clobbering a concurrent daemon's mapping.
 
 ## Durable boundary and recovery
 

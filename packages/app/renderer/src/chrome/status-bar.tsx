@@ -18,7 +18,7 @@
  * it is absent rather than an invented zero (docs/design/60-implementation.md).
  */
 import type { JSX } from "react";
-import { ConnectionIndicator, Text, textClass } from "../ui/index.js";
+import { Button, ConnectionIndicator, Text, textClass } from "../ui/index.js";
 import { writability, type Connection } from "../connection.js";
 
 export interface StatusBarProps {
@@ -36,6 +36,11 @@ export function StatusBar({ connection }: StatusBarProps): JSX.Element {
         {...(connection.eventCursor !== undefined ? { eventCursor: connection.eventCursor } : {})}
         {...(connection.versions ? { versions: connection.versions } : {})}
       />
+      {window.orca.daemonConnection && (
+        <Button size="sm" onClick={() => window.orca.daemonConnection?.show()}>
+          Connect to a daemon…
+        </Button>
+      )}
       <span className="orca-spacer" />
       {connection.state === "live" && !writes.can ? (
         <Text style="caption" className="orca-faint">

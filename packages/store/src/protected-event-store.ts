@@ -1,6 +1,13 @@
 /** Public event facade: save secret-bearing originals privately before publishing a scrubbed durable event. */
 import { randomUUID } from "node:crypto";
-import { OrcaError, sensitiveInputNames, OrcaEventSchema, type OrcaEvent, type OrcaEventInput } from "@orca/core";
+import {
+  OrcaError,
+  sensitiveInputNames,
+  OrcaEventSchema,
+  HumanInputLiveIdentitySchema,
+  type OrcaEvent,
+  type OrcaEventInput,
+} from "@orca/core";
 import type { WorkflowVersionStore } from "./workflow-store.js";
 import type { EventFilter, EventListener, EventRange, EventStore } from "./event-store.js";
 import { publicInputVars, redactExecutionValue, unavailable, type ExecutionStore } from "./execution-store.js";
@@ -85,6 +92,8 @@ export class ProtectedEventStore implements EventStore {
       "actor",
       "workflowId",
       "workflowVersion",
+      // Provenance is schema-limited metadata with all input values already withheld.
+      "provenance",
       "requestId",
       "workItemId",
       "parentRunId",
@@ -122,6 +131,10 @@ export class ProtectedEventStore implements EventStore {
     }
     if (input.type === "human.requested") {
       publicPayload.kind = input.payload.kind;
+      // Only the typed runtime identity is structural. Never restore arbitrary
+      // context (including context.liveDecision) or extra properties from this object.
+      if (input.payload.liveDecision)
+        publicPayload.liveDecision = HumanInputLiveIdentitySchema.parse(input.payload.liveDecision);
       if (input.payload.agent) publicPayload.agent = input.payload.agent;
       const options = publicPayload.options as Record<string, unknown>[];
       input.payload.options.forEach((option, index) => {

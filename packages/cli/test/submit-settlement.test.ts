@@ -1,7 +1,7 @@
 /** CLI submissions print and persist the same outcome-aware Request settlement as ACP. */
 import { afterEach, expect, it, vi } from "vitest";
 import { parseOrcaConfig, parseWorkflow, silentLogger } from "@orca/core";
-import { PausingHumanInput } from "@orca/engine";
+import { PausingHumanInput, ProgramService } from "@orca/engine";
 import * as bootstrapModule from "../src/bootstrap.js";
 import { commands } from "../src/commands/index.js";
 
@@ -33,6 +33,11 @@ it.each([
           }
         : new PausingHumanInput(),
   });
+  // This fixture deliberately registers invalid runtime work after bootstrap to exercise
+  // settlement. Use the legacy in-process registry seam; generation admission is immutable
+  // and validates registrations before activation (covered by config-generation tests).
+  app.orchestrator.generations = undefined;
+  app.program = new ProgramService(app.orchestrator);
   const node =
     outcome === "execution"
       ? '{ type: agent, agent: missing, prompt: "work" }'

@@ -184,6 +184,7 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     // viewer draws (#177). Written down here, in the PR that widened `src/bridge.ts`.
     "config",
     "connection",
+    "daemonConnection",
     "deepLink",
     "hello",
     "inputs",

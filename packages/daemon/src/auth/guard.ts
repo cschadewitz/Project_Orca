@@ -28,6 +28,7 @@ import {
   CONFIG_CHANGED,
   EVENT_APPENDED,
   INPUT_ANSWERED,
+  INPUT_INVALIDATED,
   INPUT_OPENED,
   PLAN_CHANGED,
   RUN_CHANGED,
@@ -111,6 +112,8 @@ export interface AdmissionSource {
 
 export interface AuthorizerOptions {
   resolver: ResourceResolver;
+  /** Live-answer acceptance rechecks credentials under the owner lease. */
+  currentPrincipal?: (principal: Principal) => Principal;
   ownership: OwnershipStore;
   audit?: AuditSink | undefined;
   admissions?: AdmissionSource | undefined;
@@ -123,6 +126,7 @@ const RUN_NOTIFICATIONS = new Set<string>([
   AGENT_UPDATE,
   INPUT_OPENED,
   INPUT_ANSWERED,
+  INPUT_INVALIDATED,
   EVENT_APPENDED,
 ]);
 
@@ -136,11 +140,13 @@ export class Authorizer {
   readonly runs: RunAccess;
   private readonly audit: AuditSink | undefined;
   private readonly now: () => Date;
+  private readonly currentPrincipal: AuthorizerOptions["currentPrincipal"];
 
   constructor(opts: AuthorizerOptions) {
     this.runs = new RunAccess(opts.resolver, opts.ownership);
     this.audit = opts.audit;
     this.now = opts.now ?? (() => new Date());
+    this.currentPrincipal = opts.currentPrincipal;
   }
 
   get resolver(): ResourceResolver {
@@ -156,6 +162,10 @@ export class Authorizer {
    * refused, because that is the bypass deny-by-default exists to stop.
    */
   checkOperation(principal: Principal, method: string, exists: boolean, meta: RequestMeta): void {
+    if (method.startsWith("requests.") && (!holds(principal, "runs.start") || !holds(principal, "plan.write"))) {
+      this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", "request-submission-not-permitted");
+      throw authForbidden();
+    }
     const spec = OPERATIONS[method];
     if (!spec) {
       if (!exists) return;
@@ -172,7 +182,11 @@ export class Authorizer {
   permittedMethods(principal: Principal, names: readonly string[]): string[] {
     return names.filter((name) => {
       const spec = OPERATIONS[name];
-      return spec !== undefined && (!spec.permission || holds(principal, spec.permission));
+      return (
+        spec !== undefined &&
+        (!spec.permission || holds(principal, spec.permission)) &&
+        (!name.startsWith("requests.") || holds(principal, "runs.start"))
+      );
     });
   }
 
@@ -195,6 +209,7 @@ export class Authorizer {
           // transport is refused, never treated as local.
           if (!bound) throw authRequired();
           const { principal, meta } = bound;
+          this.checkOperation(principal, name, true, meta);
           if (!spec) {
             this.deny(principal, meta, name, params, "AUTH_FORBIDDEN", "operation-not-inventoried");
             throw authForbidden();
@@ -210,10 +225,29 @@ export class Authorizer {
                 principalId: principal.id,
                 ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
               },
+              liveAnswerAuthority: {
+                actor: {
+                  principalId: principal.id,
+                  ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
+                },
+                authorize: async (target, standing) => {
+                  if (!this.currentPrincipal) throw authRequired();
+                  const current = this.currentPrincipal(principal);
+                  if (
+                    current.id !== principal.id ||
+                    current.credentialId !== principal.credentialId ||
+                    !holds(current, "inputs.answer") ||
+                    (standing && !holds(current, "permissions.grant"))
+                  )
+                    throw authForbidden();
+                  if (!(await this.runs.allows(current, target.runId)))
+                    throw inputNotFound(target.requestId, target.runId);
+                },
+              },
               attributeStartedRun: async (runId) => {
                 this.attributeRun(runId, principal);
                 await this.runs.ownership.flush();
-                if (this.runs.ownership.lastError)
+                if (this.runs.ownership.lastError || this.runs.ownership.owner(runId) !== principal.id)
                   throw new OrcaError("INTERNAL", "run ownership could not be persisted; execution was not started");
               },
             },

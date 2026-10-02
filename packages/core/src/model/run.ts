@@ -4,6 +4,7 @@
  * Runs and step runs are *projections* of the event log (see events/reduce.ts);
  * these types describe the read model the engine and UIs work with.
  */
+import { RunProvenanceSchema } from "./run-provenance.js";
 import { z } from "zod";
 import { ArtifactSchema } from "./artifact.js";
 
@@ -147,6 +148,7 @@ export const RunSchema = z.object({
   vars: z.record(z.string(), z.unknown()).default({}),
   /** The run's selection overrides, from `run.created`; absent on runs that had none. */
   overrides: RunOverridesSchema.optional(),
+  provenance: RunProvenanceSchema.optional(),
   error: ErrorInfoSchema.optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
@@ -212,6 +214,14 @@ export function toGateOption(option: GateOptionInput): GateOption {
 
 export const GateOptionSchema = z.union([z.string().transform(toGateOption), GateOptionObjectSchema]);
 
+/** Runtime correlation only; these four identifiers survive protected public projection. */
+export const HumanInputLiveIdentitySchema = z.object({
+  instanceId: z.string().min(1),
+  sessionId: z.string().min(1),
+  turnId: z.string().min(1),
+  invocationId: z.string().min(1),
+});
+
 export const HumanInputRequestSchema = z.object({
   id: z.string(),
   runId: z.string(),
@@ -220,6 +230,7 @@ export const HumanInputRequestSchema = z.object({
   question: z.string(),
   options: z.array(GateOptionSchema).default([]),
   context: z.record(z.string(), z.unknown()).default({}),
+  liveDecision: HumanInputLiveIdentitySchema.optional(),
   answer: z.string().optional(),
   requestedAt: z.string(),
   answeredAt: z.string().optional(),

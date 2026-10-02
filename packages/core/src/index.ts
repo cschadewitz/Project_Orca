@@ -21,3 +21,5 @@ export * from "./util/glob.js";
 export * from "./util/hash.js";
 export * from "./util/path-get.js";
 export * from "./util/jsonl.js";
+
+export * from "./model/run-provenance.js";

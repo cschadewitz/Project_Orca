@@ -1,6 +1,6 @@
 /**
- * `subscribe` / `unsubscribe` and the ten notifications a subscription produces: six about
- * a run; `agent.changed`, `workflows.changed` and `config.changed`, which are pushes about
+ * `subscribe` / `unsubscribe` and the eleven notifications a subscription produces: six derived from
+ * a run log; ephemeral `input.invalidated`, about an owner-local callback; `agent.changed`, `workflows.changed` and `config.changed`, which are pushes about
  * the process and about the workspace's files rather than about a run; and `plan.changed`,
  * which is about the plan that outlives every run in it.
  *
@@ -11,11 +11,13 @@
  *
  * Three shaping decisions worth knowing before reading the schemas:
  *
- * - **Every *run* notification carries `seq`, and `seq` is the cursor.** It is the sequence
+ * - **Every log-derived run notification carries `seq`, and `seq` is the cursor.** It is the sequence
  *   number, within `runId`, of the event that caused the notification. A client that keeps
  *   the highest `seq` it has seen can `subscribe({ runId, since: seq })` after a dropped
  *   connection and be sent `seq + 1` onwards, so a blip costs latency and not data. Sequence
  *   numbers are per-run and gap-free (`EventStore`), which is what makes that work.
+ *   `input.invalidated` carries a `runId` but no `seq`: it never advances a cursor
+ *   or fabricates an event after the interpreter loses its lease.
  *   `agent.changed` and `plan.changed` are the two that carry no `runId`: one is about the
  *   process and one about a plan, and neither is about a run. `agent.changed` has no cursor
  *   at all; `plan.changed` has a `seq`, but it is the *plan journal's* and not a run's, so it
@@ -34,12 +36,15 @@
  *   firehose a timeline tails - skips `agent.update` events because the coalesced
  *   notification already carries them.
  */
+import { ConfigGenerationStatusSchema } from "./config.js";
+
 import { z } from "zod";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
 import { AgentUpdateSummarySchema, GateOptionSchema, OrcaEventSchema, RunOutcomeSchema } from "@orca/core/schemas";
 import { AgentViewSchema } from "./agents.js";
 import { ConfigDocumentSchema } from "./config.js";
 import { InputAgentSchema, InputKindSchema } from "./inputs.js";
+import { LiveDecisionTargetSchema } from "./live-input.js";
 import { DisplayStatusSchema } from "./status.js";
 import { ViewErrorSchema } from "./views.js";
 
@@ -64,6 +69,7 @@ export const NOTIFICATION_METHODS = [
   "agent.update",
   "input.opened",
   "input.answered",
+  "input.invalidated",
   "event.appended",
   "agent.changed",
   "workflows.changed",
@@ -78,6 +84,7 @@ export const STEP_CHANGED = "step.changed";
 export const AGENT_UPDATE = "agent.update";
 export const INPUT_OPENED = "input.opened";
 export const INPUT_ANSWERED = "input.answered";
+export const INPUT_INVALIDATED = "input.invalidated";
 export const EVENT_APPENDED = "event.appended";
 export const AGENT_CHANGED = "agent.changed";
 export const WORKFLOWS_CHANGED = "workflows.changed";
@@ -200,6 +207,21 @@ export const InputAnsweredParamsSchema = notification({
 export type InputAnsweredParams = z.infer<typeof InputAnsweredParamsSchema>;
 
 /**
+ * An owner-local permission callback expired without an answer. No log event, seq or
+ * cursor: lease loss cannot authorize an append. Reconnect uses inputs.list. Only this
+ * exact identity is invalidated; replacement turns and durable gates are unaffected.
+ */
+export const InputInvalidatedParamsSchema = z
+  .object({
+    subscriptionId: z.string(),
+    runId: z.string(),
+    target: LiveDecisionTargetSchema,
+    at: z.string(),
+  })
+  .refine((params) => params.runId === params.target.runId, "invalidation run must match its exact target");
+export type InputInvalidatedParams = z.infer<typeof InputInvalidatedParamsSchema>;
+
+/**
  * `event.appended` - the raw log entry, for a timeline that renders events rather than
  * state. Every event type except `agent.update`, which arrives coalesced as its own
  * notification instead of once per line (see the file header).
@@ -278,6 +300,7 @@ export type AgentChangedParams = z.infer<typeof AgentChangedParamsSchema>;
  * is indistinguishable from a workflow nobody edited.
  */
 export const WorkflowsChangedParamsSchema = z.object({
+  removed: z.boolean().optional(),
   subscriptionId: z.string(),
   /** The workflow id, or a nested graph's `parent::node`. */
   id: z.string(),
@@ -307,6 +330,8 @@ export type WorkflowsChangedParams = z.infer<typeof WorkflowsChangedParamsSchema
  * it already has - its own write, echoed back - does nothing at all.
  */
 export const ConfigChangedParamsSchema = z.object({
+  kind: z.enum(["saved", "activated"]).optional(),
+  generation: ConfigGenerationStatusSchema.optional(),
   subscriptionId: z.string(),
   /** Which document moved. */
   document: ConfigDocumentSchema,
@@ -371,6 +396,7 @@ export const NOTIFICATION_PARAMS = {
   [AGENT_UPDATE]: AgentUpdateParamsSchema,
   [INPUT_OPENED]: InputOpenedParamsSchema,
   [INPUT_ANSWERED]: InputAnsweredParamsSchema,
+  [INPUT_INVALIDATED]: InputInvalidatedParamsSchema,
   [EVENT_APPENDED]: EventAppendedParamsSchema,
   [AGENT_CHANGED]: AgentChangedParamsSchema,
   [WORKFLOWS_CHANGED]: WorkflowsChangedParamsSchema,
@@ -385,6 +411,7 @@ export interface NotificationParamsByMethod {
   "agent.update": AgentUpdateParams;
   "input.opened": InputOpenedParams;
   "input.answered": InputAnsweredParams;
+  "input.invalidated": InputInvalidatedParams;
   "event.appended": EventAppendedParams;
   "agent.changed": AgentChangedParams;
   "workflows.changed": WorkflowsChangedParams;

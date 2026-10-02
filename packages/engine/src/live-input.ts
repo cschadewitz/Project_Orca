@@ -52,7 +52,7 @@ interface Pending {
   state: "pending" | "accepting";
   resolve(answer: string | undefined): void;
   reject(error: unknown): void;
-  dispose(): void;
+  dispose(invalidated?: boolean): void;
 }
 
 const IDENTITY_KEYS = ["instanceId", "sessionId", "turnId", "invocationId", "runId", "stepRunId", "requestId"] as const;
@@ -64,6 +64,7 @@ function unavailable(state: LiveInputState): OrcaError {
 
 export class LiveHumanInput implements HumanInputPort {
   private readonly pending = new Map<string, Pending>();
+  private readonly invalidations = new Set<(target: LiveDecisionTarget) => void>();
   private closed = false;
 
   constructor(readonly instanceId: string) {
@@ -84,7 +85,7 @@ export class LiveHumanInput implements HumanInputPort {
     if (this.pending.has(query.requestId)) return Promise.reject(unavailable("accepting"));
     return new Promise((resolve, reject) => {
       const expire = () => {
-        entry.dispose();
+        entry.dispose(true);
         resolve(undefined);
       };
       const entry: Pending = {
@@ -94,16 +95,33 @@ export class LiveHumanInput implements HumanInputPort {
         state: "pending",
         resolve,
         reject,
-        dispose: () => {
-          if (this.pending.get(query.requestId) === entry) this.pending.delete(query.requestId);
+        dispose: (invalidated = false) => {
+          const removed = this.pending.get(query.requestId) === entry;
+          if (removed) this.pending.delete(query.requestId);
           binding.signal.removeEventListener("abort", expire);
           query.signal?.removeEventListener("abort", expire);
+          // Ephemeral, owner-local state only. Lease loss cannot append an event, and a
+          // broken observer must never prevent the original callback settling.
+          if (removed && invalidated)
+            for (const listener of [...this.invalidations]) {
+              try {
+                listener({ ...entry.target });
+              } catch {
+                /* Observation is never execution authority. */
+              }
+            }
         },
       };
       this.pending.set(query.requestId, entry);
       binding.signal.addEventListener("abort", expire, { once: true });
       query.signal?.addEventListener("abort", expire, { once: true });
     });
+  }
+
+  /** Internal feed. Every recipient must be authorized for the exact run before delivery. */
+  onInvalidated(listener: (target: LiveDecisionTarget) => void): () => void {
+    this.invalidations.add(listener);
+    return () => void this.invalidations.delete(listener);
   }
 
   /** Called only after the reader has authorized this exact input's run. No global public list. */
@@ -154,7 +172,7 @@ export class LiveHumanInput implements HumanInputPort {
         try {
           await afterAnswer?.();
         } catch {
-          entry.dispose();
+          entry.dispose(true);
           // Propagate to the owning prompt, so its interpreter parks rather than retrying
           // or executing an accepted tool after a failed standing write.
           entry.reject(new HumanInputPending(entry.query));
@@ -174,14 +192,14 @@ export class LiveHumanInput implements HumanInputPort {
         if (attemptedWrite) {
           // An append may have reached disk before reporting failure. Never reopen that
           // identity for a second answer, and never write policy after an uncertain append.
-          entry.dispose();
+          entry.dispose(true);
           entry.reject(error);
           throw error;
         }
         // A refused responder does not consume an otherwise live question. Loss of the
         // owning lease does, even when its heartbeat has not fired yet.
         if (error instanceof OrcaError && error.code === "RUN_LEASED") {
-          entry.dispose();
+          entry.dispose(true);
           entry.resolve(undefined);
         } else entry.state = "pending";
       }
@@ -193,7 +211,7 @@ export class LiveHumanInput implements HumanInputPort {
   close(): void {
     this.closed = true;
     for (const entry of this.pending.values()) {
-      entry.dispose();
+      entry.dispose(true);
       entry.resolve(undefined);
     }
   }

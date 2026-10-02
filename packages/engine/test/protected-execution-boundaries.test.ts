@@ -178,7 +178,7 @@ it("does not retroactively withhold an ordinary parallel sibling when a secret s
     const childStates = await Promise.all((await stores.events.listRuns()).map((id) => orc.getState(id)));
     const ordinaryState = childStates.find((state) => state.run.workflowId === "ordinary")!;
     expect(ordinaryState).toBeTruthy();
-    expect(await stores.execution.getInputs(ordinaryState.run.id)).toBeUndefined();
+    expect(await stores.execution.getInputs(ordinaryState.run.id)).toMatchObject({ sensitiveNames: [], secrets: [] });
     expect((await stores.execution.getInputs(result.run.id))?.secrets).toContain(SECRET);
   } finally {
     unsubscribe();

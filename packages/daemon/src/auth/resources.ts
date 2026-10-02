@@ -48,6 +48,7 @@ export interface ResolverSource {
     claims: { get(workItemId: string): Promise<{ runId: string } | undefined> };
   };
   workflows: { has(id: string): boolean };
+  generations?: { current: { workflows: { has(id: string): boolean } } } | undefined;
 }
 
 export function orchestratorResolver(source: ResolverSource): ResourceResolver {
@@ -67,7 +68,7 @@ export function orchestratorResolver(source: ResolverSource): ResourceResolver {
       return (await source.stores.claims.get(workItemId))?.runId;
     },
     workflowExists(workflowId) {
-      return source.workflows.has(workflowId.split("::")[0]!);
+      return (source.generations?.current.workflows ?? source.workflows).has(workflowId.split("::")[0]!);
     },
   };
 }

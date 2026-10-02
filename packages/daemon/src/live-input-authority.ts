@@ -3,6 +3,7 @@ import { OrcaError, type MutationActor } from "@orca/core";
 
 interface BoundAuthority {
   actor: MutationActor;
+  runId: string;
   abort: AbortController;
 }
 
@@ -12,7 +13,7 @@ export class LiveExecutionAuthorities {
   private closed = false;
 
   constructor(
-    private readonly isCurrent: (actor: MutationActor) => boolean,
+    private readonly isCurrent: (actor: MutationActor, runId: string) => boolean,
     revalidateMs = 1000,
   ) {
     if (!Number.isFinite(revalidateMs) || revalidateMs <= 0)
@@ -25,7 +26,7 @@ export class LiveExecutionAuthorities {
   bind(runId: string, actor: MutationActor): void {
     if (this.closed || this.runs.has(runId))
       throw new OrcaError("RUN_STATE", "execution authority already bound or closed");
-    const bound = { actor: { ...actor }, abort: new AbortController() };
+    const bound = { actor: { ...actor }, runId, abort: new AbortController() };
     this.runs.set(runId, bound);
     this.check(bound);
   }
@@ -50,7 +51,7 @@ export class LiveExecutionAuthorities {
 
   private check(bound: BoundAuthority): void {
     try {
-      if (!this.isCurrent(bound.actor)) bound.abort.abort("execution authority revoked");
+      if (!this.isCurrent(bound.actor, bound.runId)) bound.abort.abort("execution authority revoked");
     } catch {
       bound.abort.abort("execution authority unavailable");
     }

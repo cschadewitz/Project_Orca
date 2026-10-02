@@ -14,35 +14,30 @@ import {
   type SubmissionResult,
   type SubmissionService,
 } from "@orca/core";
-import type { Orchestrator, StartRunOptions } from "../orchestrator.js";
+import type { Orchestrator } from "../orchestrator.js";
 import { RequestAdmissionCorrelationSchema } from "./request-admission-event.js";
 import { AdmissionSchema, type Admission, type AdmissionStore } from "./submission-store.js";
 
-export interface LaunchSelection {
-  purpose: "workflow" | "request";
-  workflowId?: string;
-  workflowVersion?: string;
-  expectedWorkflowRevision?: string;
-  expectedConfigGeneration?: string;
-}
-export type BoundLaunchOptions = Omit<
-  StartRunOptions,
-  "workflowId" | "workflowVersion" | "expectedWorkflowRevision" | "inline"
-> & { requestAdmissionId?: string };
-export interface CapturedLaunch {
-  /** startRun persists requestAdmissionId in the protected creation payload, never in vars. */
-  readonly requestAdmissionCorrelation: true;
-  readonly generationId: string;
-  readonly workflow: Readonly<{ id: string; version: string; revision: string }>;
-  validateStartRun(options: BoundLaunchOptions): Promise<void>;
-  startRun(options: BoundLaunchOptions): Promise<string>;
-}
-export type CaptureLaunch = (selection: LaunchSelection) => Promise<CapturedLaunch>;
+import type {
+  CaptureLaunch,
+  CapturedLaunch,
+  BoundLaunchOptions,
+  LaunchSelection,
+  RestoreLaunch,
+} from "../configuration-generation.js";
+export type {
+  CaptureLaunch,
+  CapturedLaunch,
+  BoundLaunchOptions,
+  LaunchSelection,
+  RestoreLaunch,
+} from "../configuration-generation.js";
 
 export interface RequestSubmissionOptions {
   orchestrator: Orchestrator;
   admissions: AdmissionStore;
   captureLaunch: CaptureLaunch;
+  restoreLaunch?: RestoreLaunch;
 }
 
 const unavailable = () => new OrcaError("RUN_STATE", "request admission is unavailable");
@@ -282,13 +277,19 @@ export class RequestSubmissionService implements SubmissionService {
       if (!runId) {
         const launch =
           captured ??
-          (await this.opts.captureLaunch({
-            purpose: "request",
-            workflowId: record.workflowId,
-            workflowVersion: record.workflowVersion,
-            expectedWorkflowRevision: record.workflowRevision,
-            expectedConfigGeneration: record.generationId,
-          }));
+          (this.opts.restoreLaunch
+            ? await this.opts.restoreLaunch({
+                requestId: record.requestId,
+                generationId: record.generationId,
+                workflow: { id: record.workflowId, version: record.workflowVersion, revision: record.workflowRevision },
+              })
+            : await this.opts.captureLaunch({
+                purpose: "request",
+                workflowId: record.workflowId,
+                workflowVersion: record.workflowVersion,
+                expectedWorkflowRevision: record.workflowRevision,
+                expectedConfigGeneration: record.generationId,
+              }));
         this.requireCorrelation(launch);
         if (
           launch.generationId !== record.generationId ||

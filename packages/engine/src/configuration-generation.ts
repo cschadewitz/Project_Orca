@@ -30,6 +30,7 @@ export type BoundLaunchOptions = Omit<
   "workflowId" | "workflowVersion" | "expectedWorkflowRevision" | "inline"
 >;
 export interface CapturedLaunch {
+  readonly requestAdmissionCorrelation: true;
   readonly generationId: string;
   readonly workflow: Readonly<{ id: string; version: string; revision: string }>;
   validateStartRun(options: BoundLaunchOptions): Promise<void>;
@@ -51,6 +52,7 @@ export const GenerationSnapshotSchema = z.object({
   config: OrcaConfigSchema,
   workflows: z.array(WorkflowIdentitySchema),
   templates: z.array(PromptTemplateSchema),
+  workspaceInputs: z.object({ configDir: z.string(), keplerTaskDir: z.string().optional() }).optional(),
   runtimeBinding: z.string().optional(),
   runtimeFingerprint: z.string().optional(),
   runtimeHosts: z.array(z.string()).optional(),
@@ -63,6 +65,8 @@ export interface GenerationStore {
   putGeneration(id: string, snapshot: GenerationSnapshot): Promise<void>;
 }
 export interface GenerationAssets {
+  /** Resolved built-in provider inputs, kept only in the protected generation. */
+  workspaceInputs?: { configDir: string; keplerTaskDir?: string };
   /** Executable plugin hosts are held by this provider, never written to the snapshot. */
   agents?: AgentRegistry;
   /**
@@ -304,10 +308,13 @@ export class ConfigurationGenerations {
     const bound = (options: BoundLaunchOptions): StartRunOptions => {
       if (recordedRequestId && options.requestId !== undefined && options.requestId !== recordedRequestId)
         throw new OrcaError("RUN_STATE", "recovery Request differs from recorded admission");
-      const { actor, workspace, workItemId, parentRunId, parentStepRunId, overrides } = options;
+      const { actor, workspace, workItemId, parentRunId, parentStepRunId, overrides, requestAdmissionId } = options;
       const requestId = recordedRequestId ?? options.requestId;
       const vars =
-        selection.purpose === "request"
+        selection.purpose === "request" &&
+        (definition.inputSchema?.unknown !== "reject" ||
+          Object.hasOwn(definition.inputSchema.fields, "itemWorkflow") ||
+          Object.hasOwn(definition.vars, "itemWorkflow"))
           ? { itemWorkflow: material.snapshot.config.program.itemWorkflow, ...options.vars }
           : options.vars;
       return {
@@ -318,6 +325,7 @@ export class ConfigurationGenerations {
         ...(vars ? { vars: structuredClone(vars) } : {}),
         ...(workspace ? { workspace: structuredClone(workspace) } : {}),
         ...(requestId ? { requestId } : {}),
+        ...(requestAdmissionId ? { requestAdmissionId } : {}),
         ...(workItemId ? { workItemId } : {}),
         ...(parentRunId ? { parentRunId } : {}),
         ...(parentStepRunId ? { parentStepRunId } : {}),
@@ -325,6 +333,7 @@ export class ConfigurationGenerations {
       };
     };
     return Object.freeze({
+      requestAdmissionCorrelation: true as const,
       generationId: material.snapshot.id,
       workflow,
       validateStartRun: async (options: BoundLaunchOptions) => {
@@ -416,6 +425,7 @@ export class ConfigurationGenerations {
         id: randomUUID(),
         savedRevision,
         config: structuredClone(config),
+        ...(loaded.workspaceInputs ? { workspaceInputs: structuredClone(loaded.workspaceInputs) } : {}),
         ...(loaded.agents
           ? {
               runtimeBinding,

@@ -4,12 +4,15 @@
  * runs resumable after a crash, auditable ("which artifact did the reviewer
  * actually see?"), and streamable to UIs or upstream ACP clients.
  */
+import { RunProvenanceSchema } from "../model/run-provenance.js";
+
 import { z } from "zod";
 import { ArtifactSchema } from "../model/artifact.js";
 import {
   BranchSkipReasonSchema,
   ErrorInfoSchema,
   GateOptionSchema,
+  HumanInputLiveIdentitySchema,
   RunOutcomeSchema,
   RunOverridesSchema,
   RunStatusSchema,
@@ -112,6 +115,8 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       workflowId: z.string(),
       workflowVersion: z.string(),
       requestId: z.string().optional(),
+      /** Server-owned recovery correlation, authenticated in the private creation payload. */
+      requestAdmissionId: z.string().optional(),
       workItemId: z.string().optional(),
       parentRunId: z.string().optional(),
       parentStepRunId: z.string().optional(),
@@ -119,6 +124,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       vars: z.record(z.string(), z.unknown()),
       /** Selection overrides (#186). Absent in logs written before v0.6.0: no overrides. */
       overrides: RunOverridesSchema.optional(),
+      provenance: RunProvenanceSchema.optional(),
       /**
        * The definition the run started on is in the workflow-version store under
        * `(workflowId's root, workflowVersion)` (#179), so a resume runs that and never the file
@@ -165,6 +171,13 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
   base(
     "agent.session.opened",
     z.object({
+      /** Conversation context only; loading never restores a pending tool approval. */
+      continuity: z
+        .object({
+          mode: z.enum(["fresh", "loaded"]),
+          reason: z.enum(["new", "load-supported", "load-unsupported", "load-failed"]),
+        })
+        .optional(),
       stepRunId: z.string(),
       sessionId: z.string(),
       agentId: z.string(),
@@ -292,6 +305,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
        * for those logs from the session scan, which is why the read path does not use it.
        */
       agent: z.object({ id: z.string(), hostId: z.string() }).optional(),
+      liveDecision: HumanInputLiveIdentitySchema.optional(),
       context: z.record(z.string(), z.unknown()).default({}),
     }),
   ),

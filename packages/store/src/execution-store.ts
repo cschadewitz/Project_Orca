@@ -25,6 +25,8 @@ const PayloadSchema = z.object({
 });
 
 export interface ExecutionStore {
+  getGeneration(id: string): Promise<unknown>;
+  putGeneration(id: string, snapshot: unknown): Promise<void>;
   getInputs(runId: string): Promise<ExecutionInputs | undefined>;
   putInputs(inputs: ExecutionInputs): Promise<void>;
   addSensitivity(runId: string, sensitivity: ExecutionSensitivity): Promise<void>;
@@ -46,6 +48,14 @@ function mergeSensitivity(
 }
 
 export class InMemoryExecutionStore implements ExecutionStore {
+  private readonly generations = new Map<string, unknown>();
+  async getGeneration(id: string): Promise<unknown> {
+    return structuredClone(this.generations.get(id));
+  }
+  async putGeneration(id: string, snapshot: unknown): Promise<void> {
+    if (this.generations.has(id)) throw unavailable();
+    this.generations.set(id, structuredClone(snapshot));
+  }
   private readonly inputs = new Map<string, ExecutionInputs>();
   private readonly sensitivity = new Map<string, z.infer<typeof OverlaySchema>>();
   private readonly payloads = new Map<string, { input: OrcaEventInput; sensitivityRefs: string[] }>();
@@ -87,6 +97,12 @@ export class FileExecutionStore implements ExecutionStore {
   private readonly dir: string;
   constructor(storeDir: string) {
     this.dir = join(storeDir, "private-execution");
+  }
+  async getGeneration(id: string): Promise<unknown> {
+    return readPrivateJson(this.dir, `${encodeURIComponent(id)}.generation.json`);
+  }
+  async putGeneration(id: string, snapshot: unknown): Promise<void> {
+    if (!(await writePrivateJson(this.dir, `${encodeURIComponent(id)}.generation.json`, snapshot))) throw unavailable();
   }
   private async overlays(runId: string): Promise<z.infer<typeof OverlaySchema>[]> {
     let names: string[];

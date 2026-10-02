@@ -13,6 +13,8 @@
  * before its body is read, and every method runs behind the guard. `GET /health` is the one
  * unauthenticated answer, and all it ever says is `{ "ok": true }`.
  */
+import { OrcaError } from "@orca/core";
+import { createDaemonIdentity } from "./daemon-identity.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describeError } from "@orca/core";
@@ -27,12 +29,16 @@ import {
 import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
 import { Maintenance } from "./maintenance.js";
 import { attachSocket } from "./socket.js";
-import { Authorizer, bindPrincipal } from "./auth/guard.js";
+import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
+import { submissionAuthority } from "./request-submission.js";
+import { authInvalid, authRequired } from "./auth/errors.js";
 import { OwnershipStore } from "./auth/ownership.js";
 import type { ResourceResolver } from "./auth/resources.js";
 import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
 
 export interface DaemonOptions extends MethodContext {
+  /** Persistent store identity initialized by the owner at bootstrap. */
+  workspaceId?: string;
   /**
    * How callers are authenticated. Required at runtime: `startDaemon` refuses to start
    * without it, and there is no default - `{ mode: "loopback-unauthenticated" }` has to be
@@ -159,7 +165,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   // Before anything is built: an unsafe or absent policy is a refusal to start, not a warning.
   validateDeployment(opts.auth, host);
   const auth = opts.auth;
+  const identity = opts.identity ?? (opts.workspaceId ? createDaemonIdentity(opts.workspaceId) : undefined);
+  if (identity && opts.workspaceId && identity.workspaceId !== opts.workspaceId)
+    throw new OrcaError("CONFIG_INVALID", "daemon identity does not match its workspace");
   const ctx: MethodContext = {
+    ...(identity ? { identity } : {}),
     processId: process.pid,
     maintenance: new Maintenance(opts.maintenanceToken, opts.admissionFile),
     orcaVersion: opts.orcaVersion,
@@ -167,7 +177,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     capabilities: opts.capabilities,
     reads: opts.reads,
     workflowInputs: opts.workflowInputs,
+    requestSubmissions: auth.mode === "token" ? opts.requestSubmissions : undefined,
+    submissionWorkspaceId: opts.submissionWorkspaceId,
     source: opts.source,
+    liveInputs: opts.liveInputs,
     planSource: opts.planSource,
     control: opts.control,
     planControl: opts.planControl,
@@ -179,13 +192,44 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const authorizer = new Authorizer(
     auth.mode === "token"
       ? {
+          currentPrincipal: (principal) => {
+            if (!principal.credentialId) throw authRequired();
+            const current = auth.credentials.current(principal.credentialId);
+            if (!current.ok) throw authRequired();
+            return current.principal;
+          },
           resolver: auth.resolver,
           ownership: auth.ownership,
           audit: auth.audit,
           admissions: auth.admissions ?? ctx.source,
         }
-      : { resolver: NO_RESOURCES, ownership: new OwnershipStore(), audit: auth.audit, admissions: ctx.source },
+      : {
+          currentPrincipal: (principal) => principal,
+          resolver: NO_RESOURCES,
+          ownership: new OwnershipStore(),
+          audit: auth.audit,
+          admissions: ctx.source,
+        },
   );
+  if (ctx.requestSubmissions && ctx.submissionWorkspaceId && auth.mode === "token") {
+    const workspaceId = ctx.submissionWorkspaceId;
+    ctx.requestSubmissionAuthority = async (invocation) => {
+      const bound = principalOf(invocation);
+      const actor = invocation.mutationActor;
+      if (!bound || !actor || !bound.principal.credentialId) throw authRequired();
+      const credentialId = bound.principal.credentialId;
+      return submissionAuthority({
+        workspaceId,
+        actor,
+        authorizer,
+        principal: async () => {
+          const current = auth.credentials.current(credentialId);
+          if (!current.ok) throw authInvalid();
+          return current.principal;
+        },
+      });
+    };
+  }
   const gate = new TransportGate(auth, host, authorizer);
   // The guard is outermost: a caller is authorized before maintenance admission is consulted,
   // so an unauthorized caller cannot even learn that an update is in progress.

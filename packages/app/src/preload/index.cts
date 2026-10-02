@@ -1,6 +1,6 @@
 /**
  * Preload: the narrow bridge between the sandboxed renderer and the main process. The
- * renderer never gets Node or the daemon URL; it gets `window.orca` with one function
+ * renderer never gets Node or credentials; it gets `window.orca` with one function
  * per IPC channel the main process registers, plus the platform (for the modifier key).
  * The contract is `../bridge.ts`.
  *
@@ -16,6 +16,7 @@
  * repo-wide and forbids `import … from` in a file that emits CommonJS, so the value import
  * is written in the form the emit actually has; the type imports are erased either way.
  */
+import type { DaemonTargetSnapshot } from "../daemon-connection.js";
 // A CommonJS file under `verbatimModuleSyntax` has no other way to spell a value import,
 // and emitting CommonJS is the whole point of this file — see the header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -39,11 +40,36 @@ const { contextBridge, ipcRenderer } = electron;
  * The trailing comma in `<T,>` is not a typo: a `.cts` file is parsed with the JSX-adjacent
  * rules that make a bare `<T>` on an arrow ambiguous, and the comma is the disambiguator.
  */
+let targetEpoch = (ipcRenderer.sendSync("orca:daemon.read") as DaemonTargetSnapshot).epoch;
+
 const call = <T,>(channel: string, params?: unknown): Promise<BridgeResult<T>> =>
-  ipcRenderer.invoke(channel, params) as Promise<BridgeResult<T>>;
+  ipcRenderer.invoke(channel, params, targetEpoch) as Promise<BridgeResult<T>>;
 
 const bridge: OrcaBridge = {
   platform: process.platform,
+  daemonConnection: {
+    read: () => ipcRenderer.sendSync("orca:daemon.read") as DaemonTargetSnapshot,
+    subscribe: (listener) => {
+      const forward = (_event: unknown, target: DaemonTargetSnapshot) => listener(target);
+      ipcRenderer.on("orca:daemon.target", forward);
+      return () => {
+        ipcRenderer.off("orca:daemon.target", forward);
+      };
+    },
+    activate: (epoch) => {
+      targetEpoch = epoch;
+    },
+    show: () => ipcRenderer.send("orca:daemon.show"),
+    onShow: (listener) => {
+      ipcRenderer.on("orca:daemon.show", listener);
+      return () => {
+        ipcRenderer.off("orca:daemon.show", listener);
+      };
+    },
+    connect: (url) =>
+      ipcRenderer.invoke("orca:daemon.connect", url) as Promise<{ ok: true } | { ok: false; message: string }>,
+    cancel: () => ipcRenderer.send("orca:daemon.cancel"),
+  },
   updates: {
     read: () => ipcRenderer.sendSync("orca:update.read") as UpdateSnapshot,
     act: (action) => call("orca:update.act", action),
@@ -115,7 +141,9 @@ const bridge: OrcaBridge = {
     // listener gets its own `ipcRenderer` listener so that unsubscribing one cannot silence
     // another, and so nothing here has to keep a registry across the context bridge.
     subscribe: (listener: (notification: NotificationMessage) => void) => {
-      const forward = (_event: unknown, notification: NotificationMessage): void => listener(notification);
+      const forward = (_event: unknown, notification: NotificationMessage, epoch: number): void => {
+        if (epoch === targetEpoch) listener(notification);
+      };
       ipcRenderer.on("orca:notification", forward);
       return () => void ipcRenderer.off("orca:notification", forward);
     },
@@ -123,7 +151,7 @@ const bridge: OrcaBridge = {
   alerts: {
     // `send`, not `invoke`: the main process has no verdict to give back about what is
     // waiting, and a promise nobody awaits is a promise nobody notices rejecting.
-    update: (update: AlertsUpdate) => ipcRenderer.send("orca:alerts.update", update),
+    update: (update: AlertsUpdate) => ipcRenderer.send("orca:alerts.update", update, targetEpoch),
     // A third push channel, one `ipcRenderer` listener per renderer listener as above.
     subscribe: (listener: (activation: AlertActivation) => void) => {
       const forward = (_event: unknown, activation: AlertActivation): void => listener(activation);
@@ -138,7 +166,9 @@ const bridge: OrcaBridge = {
     // A second channel the main process pushes on. One `ipcRenderer` listener per renderer
     // listener, as above, so unsubscribing one cannot silence another.
     subscribe: (listener: (snapshot: ConnectionSnapshot) => void) => {
-      const forward = (_event: unknown, snapshot: ConnectionSnapshot): void => listener(snapshot);
+      const forward = (_event: unknown, snapshot: ConnectionSnapshot, epoch: number): void => {
+        if (epoch === targetEpoch) listener(snapshot);
+      };
       ipcRenderer.on("orca:connection", forward);
       return () => void ipcRenderer.off("orca:connection", forward);
     },

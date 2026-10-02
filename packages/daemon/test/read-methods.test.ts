@@ -17,6 +17,8 @@ import {
   PROTOCOL_VERSION,
   CONFIG_GET_METHOD,
   READ_METHODS,
+  REQUESTS_ADMISSION_METHOD,
+  REQUESTS_ADMISSIONS_METHOD,
   RunsEventsResultSchema,
   RunsGetResultSchema,
   RunsListResultSchema,
@@ -533,7 +535,9 @@ describe("hello", () => {
     // `config.get` is a read, but it needs a config directory rather than a store, and this
     // fixture is a store alone. A method this daemon will not answer is a method it does not
     // advertise, which is the whole of `methodsFor` (#174).
-    expect(r.methods).toEqual(["hello", ...READ_METHODS.filter((m) => m !== CONFIG_GET_METHOD)]);
+    // Request admission reads also require their service, absent from this store-only fixture.
+    const absent: readonly string[] = [CONFIG_GET_METHOD, REQUESTS_ADMISSION_METHOD, REQUESTS_ADMISSIONS_METHOD];
+    expect(r.methods).toEqual(["hello", ...READ_METHODS.filter((m) => !absent.includes(m))]);
     expect(r.storeDir).toBe("/work/orca/.orca");
   });
 

@@ -7,7 +7,15 @@
 import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { AgentRegistry, LocalHost } from "@orca/agents";
-import { FakeClock, parseWorkflow, silentLogger, TemplateRegistry, WorkflowRegistry, type Logger } from "@orca/core";
+import {
+  FakeClock,
+  parseWorkflow,
+  RequestSchema,
+  silentLogger,
+  TemplateRegistry,
+  WorkflowRegistry,
+  type Logger,
+} from "@orca/core";
 import {
   LocalWorkspaceProvider,
   Orchestrator,
@@ -64,6 +72,16 @@ async function setup(
   logger: Logger = silentLogger,
 ) {
   const stores = memoryStores();
+  for (const id of ["req_1", "req_not_registered"])
+    await stores.requests.put(
+      RequestSchema.parse({
+        id,
+        title: id,
+        body: "",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
   const plan = new PlanService({ stores, defaults: { planKey: "roadmap", planName: "Roadmap" } });
   const p = await plan.ensurePlan({ requestId: "req_1" }, { kind: "human", actor: "test" });
   await plan.registerWorkItems(p.id, { requestId: "req_1", items }, { kind: "decomposition" });

@@ -11,3 +11,11 @@ export * from "./program/work-items.js";
 export * from "./program/service.js";
 export * from "./plan/service.js";
 export * from "./plan/executors.js";
+
+export * from "./configuration-generation.js";
+export * from "./configuration-provenance.js";
+
+export { RequestSubmissionService, type RequestSubmissionOptions } from "./program/request-submission.js";
+export * from "./program/submission-store.js";
+
+export * from "./live-input.js";

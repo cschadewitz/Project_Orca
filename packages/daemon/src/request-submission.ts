@@ -41,7 +41,8 @@ export function submissionAuthority(opts: {
       // Refuse it here: restart reloads only durable ownership and reconciliation can retry.
       opts.authorizer.attributeRun(runId, principal);
       await ownership.flush();
-      if (ownership.lastError) throw new OrcaError("STORE_WRITE", "Request ownership could not be persisted");
+      if (ownership.lastError || ownership.owner(runId) !== principal.id)
+        throw new OrcaError("STORE_WRITE", "Request ownership could not be persisted");
     },
   };
 }
