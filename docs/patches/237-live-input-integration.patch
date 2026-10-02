@@ -384,7 +384,7 @@ index 44c7451..1c6df3e 100644
 +
 +export * from "./live-input.js";
 diff --git a/packages/engine/src/orchestrator.ts b/packages/engine/src/orchestrator.ts
-index 967bed8..d1e4e6e 100644
+index 967bed8..061d78f 100644
 --- a/packages/engine/src/orchestrator.ts
 +++ b/packages/engine/src/orchestrator.ts
 @@ -83,6 +83,7 @@ import {
@@ -441,7 +441,7 @@ index 967bed8..d1e4e6e 100644
      try {
        session = await this.sessionFactory({
          host,
-@@ -1594,13 +1604,31 @@ export class Orchestrator {
+@@ -1594,13 +1604,40 @@ export class Orchestrator {
          cwd: rc.workspace.cwd,
          logger: rc.logger,
          clock: this.clock,
@@ -464,7 +464,16 @@ index 967bed8..d1e4e6e 100644
 +                    invocationId: invocation.invocationId,
 +                  },
 +                  signal: AbortSignal.any([rc.abort.signal, invocation.signal, this.liveInput.executionSignal(rc.id)]),
-+                  withOwnership: <T>(operation: () => Promise<T>) => rc.withOwnership(operation),
++                  withOwnership: <T>(operation: () => Promise<T>) =>
++                    rc.withOwnership(async () => {
++                      // Polling expires idle asks; acceptance must also check the initiating
++                      // actor now, after acquiring the original interpreter's lease mutex.
++                      if (this.liveInput!.executionSignal(rc.id).aborted)
++                        throw new OrcaError("RUN_STATE", "live execution authority expired", {
++                          liveInputState: "expired",
++                        });
++                      return operation();
++                    }),
 +                  emitOwned: (event: Parameters<RunContext["emitOwned"]>[0]) => rc.emitOwned(event),
 +                }
 +              : undefined;
@@ -475,7 +484,7 @@ index 967bed8..d1e4e6e 100644
              emit: (e) => rc.emit(e),
              clock: this.clock,
              runId: rc.id,
-@@ -1609,7 +1637,11 @@ export class Orchestrator {
+@@ -1609,7 +1646,11 @@ export class Orchestrator {
              question: req.toolCall.title ?? "Allow tool call?",
              // ACP already separates the two: `optionId` is what the agent is answered
              // with, `name` is what the host shows. Keep them apart here too.
@@ -488,7 +497,7 @@ index 967bed8..d1e4e6e 100644
              // Whose turn is being held open (#248). It is recorded here because here is
              // where it is known: an attention card has to name the agent, and the push that
              // opens the card is a pure function of the event it comes from.
-@@ -1628,17 +1660,23 @@ export class Orchestrator {
+@@ -1628,17 +1669,23 @@ export class Orchestrator {
              },
            });
          },
@@ -523,7 +532,7 @@ index 967bed8..d1e4e6e 100644
        });
      } catch (e) {
        handshake.failed(e);
-@@ -1664,6 +1702,7 @@ export class Orchestrator {
+@@ -1664,6 +1711,7 @@ export class Orchestrator {
          hostId: host.id,
          cwd: rc.workspace.cwd,
          ...(applied !== undefined ? { model: applied } : {}),
@@ -643,10 +652,10 @@ index 9f48294..df7fff0 100644
    return `${v.major}.${v.minor}`;
 diff --git a/packages/daemon/test/live-input-integration.test.ts b/packages/daemon/test/live-input-integration.test.ts
 new file mode 100644
-index 0000000..8dc8ca7
+index 0000000..14a2516
 --- /dev/null
 +++ b/packages/daemon/test/live-input-integration.test.ts
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,362 @@
 +/** Applied with the shared #237 patch: the real interpreter, lease, read and control paths agree. */
 +import WebSocket from "ws";
 +import { CredentialStore, OwnershipStore, orchestratorResolver } from "../src/auth/index.js";
@@ -665,10 +674,10 @@ index 0000000..8dc8ca7
 +import { ControlModel, ReadModel, startDaemon } from "@orca/daemon";
 +import { LiveExecutionAuthorities } from "../src/live-input-authority.js";
 +
-+async function fixture() {
++async function fixture(isCurrent = () => true) {
 +  const stores = memoryStores();
 +  const port = new LiveHumanInput("boot");
-+  const executions = new LiveExecutionAuthorities(() => true);
++  const executions = new LiveExecutionAuthorities(isCurrent, 60_000);
 +  const answers: (string | undefined)[] = [];
 +  let opens = 0;
 +  const sessionFactory: SessionFactory = async (opts) => {
@@ -800,6 +809,27 @@ index 0000000..8dc8ca7
 +    expect(f.answers).toEqual(["allow"]);
 +    expect(f.opens()).toBe(1);
 +    expect((await f.orc.events(f.runId)).filter((e) => e.type === "human.answered")).toHaveLength(1);
++  } finally {
++    await f.close();
++  }
++});
++
++it("rechecks the initiating credential at acceptance before the idle revocation poll", async () => {
++  const credentials = new CredentialStore();
++  const initiator = await credentials.issue({ principal: "alice", preset: "operator" });
++  const f = await fixture(() => credentials.authenticate(initiator.token).ok);
++  try {
++    await credentials.revoke(initiator.credential.id);
++    // No timer advancement: a distinct, still-authorized responder arrives immediately.
++    expect(f.port.inspect(f.params.live)).toBe("pending");
++    const responder: LiveAnswerAuthority = { actor: { principalId: "bob" }, authorize: async () => {} };
++    await expect(f.control.answerInput(f.params, responder.actor, responder)).rejects.toMatchObject({
++      code: "RUN_STATE",
++      details: { liveInputState: "expired" },
++    });
++    await f.done;
++    expect(f.answers).toEqual([undefined]);
++    expect((await f.orc.events(f.runId)).filter((event) => event.type === "human.answered")).toHaveLength(0);
 +  } finally {
 +    await f.close();
 +  }
