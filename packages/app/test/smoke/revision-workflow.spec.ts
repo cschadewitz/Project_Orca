@@ -15,6 +15,7 @@ import {
 } from "@orca/protocol";
 import type { OrcaBridge } from "../../src/bridge.js";
 import { profileDirectoryEvidence, type AdmissionDaemon } from "./admission-daemon.js";
+import { installRevisionSmokeObservation, type RevisionSmokeMain } from "./revision-smoke-observation.js";
 import {
   pendingTarget,
   revisionEvidence,
@@ -26,21 +27,6 @@ import {
 const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const phaseTimeout = 30_000;
 type ResolvedRevision = Extract<RevisionResult, { state: "resolved" }>;
-interface Probe {
-  methods: string[];
-  receipts: { method: string; value: RevisionResult }[];
-  errors: { method: string; code: string }[];
-  holdNextReplacement: boolean;
-  replacementWaiting: boolean;
-  releaseReplacement?: () => void;
-  holdPendingReads: boolean;
-  pendingReadsWaiting: number;
-  releasePendingReads: (() => void)[];
-  delayedReadCount: number;
-}
-interface ProbedMain {
-  orcaRevisionSmoke: Probe;
-}
 
 async function bounded<T>(action: Promise<T>, phase: string, timeout = phaseTimeout): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -132,64 +118,7 @@ async function launch(daemon: AdmissionDaemon, profile: string) {
  */
 async function observe(app: ElectronApplication) {
   await bounded(
-    app.evaluate(
-      ({ app }, modulePath) => {
-        const requireFromApp = process
-          .getBuiltinModule("module")
-          .createRequire(process.getBuiltinModule("path").join(app.getAppPath(), "package.json"));
-        const { DaemonClient } = requireFromApp(modulePath) as typeof import("../../src/client/daemon-client.js");
-        const probe: Probe = {
-          methods: [],
-          receipts: [],
-          errors: [],
-          holdNextReplacement: false,
-          replacementWaiting: false,
-          holdPendingReads: false,
-          pendingReadsWaiting: 0,
-          releasePendingReads: [],
-          delayedReadCount: 0,
-        };
-        (globalThis as unknown as ProbedMain).orcaRevisionSmoke = probe;
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        const original = DaemonClient.prototype.call;
-        DaemonClient.prototype.call = async function (
-          this: InstanceType<typeof DaemonClient>,
-          ...args: Parameters<typeof original>
-        ) {
-          const method = args[0];
-          if (["inputs.revise", "inputs.replaceRevision", "inputs.answer", "runs.resume"].includes(method))
-            probe.methods.push(method);
-          if (method === "inputs.replaceRevision" && probe.holdNextReplacement) {
-            probe.holdNextReplacement = false;
-            probe.replacementWaiting = true;
-            await new Promise<void>((resolve) => {
-              probe.releaseReplacement = resolve;
-            });
-            probe.replacementWaiting = false;
-            delete probe.releaseReplacement;
-          }
-          if (method === "inputs.revisionPending" && probe.holdPendingReads) {
-            probe.delayedReadCount++;
-            probe.pendingReadsWaiting++;
-            await new Promise<void>((resolve) => {
-              probe.releasePendingReads.push(resolve);
-            });
-            probe.pendingReadsWaiting--;
-          }
-          try {
-            const result = await original.apply(this, args);
-            if (method === "inputs.revise" || method === "inputs.replaceRevision")
-              probe.receipts.push({ method, value: result as RevisionResult });
-            return result;
-          } catch (error) {
-            const code = (error as { code?: unknown }).code;
-            probe.errors.push({ method, code: typeof code === "string" && /^[A-Z_]+$/.test(code) ? code : "UNKNOWN" });
-            throw error;
-          }
-        } as typeof original;
-      },
-      join(appDir, "dist/client/daemon-client.js"),
-    ),
+    app.evaluate(installRevisionSmokeObservation, join(appDir, "dist/client/daemon-client.js")),
     "installing sanitized RPC observation",
   );
 }
@@ -197,7 +126,7 @@ async function observation(app: ElectronApplication) {
   return bounded(
     app.evaluate(() => {
       const { methods, receipts, errors, replacementWaiting, pendingReadsWaiting, delayedReadCount } = (
-        globalThis as unknown as ProbedMain
+        globalThis as unknown as RevisionSmokeMain
       ).orcaRevisionSmoke;
       return { methods, receipts, errors, replacementWaiting, pendingReadsWaiting, delayedReadCount };
     }),
@@ -210,7 +139,7 @@ async function configureProbe(
 ) {
   await bounded(
     app.evaluate((_electron, settings) => {
-      const probe = (globalThis as unknown as ProbedMain).orcaRevisionSmoke;
+      const probe = (globalThis as unknown as RevisionSmokeMain).orcaRevisionSmoke;
       if (settings.holdNextReplacement !== undefined) probe.holdNextReplacement = settings.holdNextReplacement;
       if (settings.holdPendingReads !== undefined) {
         probe.holdPendingReads = settings.holdPendingReads;
