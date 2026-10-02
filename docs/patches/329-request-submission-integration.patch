@@ -508,3 +508,79 @@
 +    error: { code: "AUTH_INVALID" },
 +  });
 +});
+--- a/packages/protocol/src/control.ts
++++ b/packages/protocol/src/control.ts
+@@ -19,9 +19,8 @@
+  *   own option ids and guess that `allow_always` means allow: those ids are the agent's, a
+  *   standing permission grant is the last place to guess, and the result says exactly what
+  *   was written so a button can promise it honestly.
+- * - **`runs.start` writes no documents.** Not because it cannot any more - the store became
+- *   multi-process safe in #196 - but because submitting a request is a different method,
+- *   still to be designed. See its schema.
++ * - **`runs.start` writes no Request documents.** Request submission is the separate
++ *   `requests.submit` application service. Supplied associations are validated before launch.
+  */
+ import { z } from "zod";
+ // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
+@@ -147,24 +146,10 @@
+ // ------------------------------------------------------------------- runs.start
+ 
+ /**
+- * `runs.start` - a workflow and its vars, and deliberately nothing else.
+- *
+- * The reason this shape was chosen has since been fixed: `JsonFileDocumentStore` re-reads a
+- * collection under a lock before every write (#196), so a daemon and a CLI writing documents
+- * beside each other no longer clobber one another and the store is multi-process safe.
+- *
+- * The narrow method is kept anyway, by decision rather than by constraint. Submitting a
+- * *request* and decomposing it into *work items* is `orca submit`'s job - a workflow, an
+- * agent and an artifact, not a record insert - and growing this method into it would settle
+- * that design by accident, in the schema of a method whose job is "run this workflow". When
+- * a `requests.submit` method is designed it goes beside this one, with its own shape.
+- *
+- * So `requestId` and `workItemId` are accepted and passed through: they are recorded on
+- * `run.created` and travel out on the `run.changed` notification, so a client that already
+- * knows a work item can start a run against it and find the run again. Neither id is read
+- * back from a document store and neither document is created. A run naming itself after a
+- * work item the daemon has not got simply falls back to the workflow id, which is the
+- * fallback chain `ReadModel` has always had.
++ * Explicit workflow launch, independent of Request submission. No Request is created.
++ * Optional Request/work-item associations must exist and agree before admission; the
++ * daemon authorizes those workspace resources before their validation diagnostics.
++ * `requests.submit` is the separate program/decomposition admission operation.
+  */
+ export const RunsStartParamsSchema = z.object({
+   workflowId: z.string().min(1),
+@@ -174,12 +159,11 @@
+   workflowVersion: z.string().min(1).optional(),
+   expectedWorkflowRevision: z.string().min(1).optional(),
+   /**
+-   * Recorded on `run.created` and carried into the `run.changed` notification, so a client
+-   * that started the run can find it. **No request document is written or read** - see the
+-   * block above for why that is still true now that the store is multi-process safe (#196).
++   * An existing Request to associate with this run. Validated before admission and recorded
++   * on run.created; this operation never creates or decomposes a Request.
+    */
+   requestId: z.string().min(1).optional(),
+-  /** The same, for a work item. No work-item document is written or read. */
++  /** An existing work item; its Request must agree with requestId when both are supplied. */
+   workItemId: z.string().min(1).optional(),
+ });
+ export type RunsStartParams = z.infer<typeof RunsStartParamsSchema>;
+--- a/packages/daemon/src/control.ts
++++ b/packages/daemon/src/control.ts
+@@ -337,11 +337,9 @@
+   /**
+    * `runs.start`: create a run and drive it here until it parks or finishes.
+    *
+-   * A workflow and its vars, and no documents - not because the store could not take them
+-   * (#196 made it multi-process safe) but because submitting a request is a method still to
+-   * be designed. `RunsStartParamsSchema` says the rest.
+-   * `requestId` and `workItemId` travel onto `run.created` and out on the `run.changed`
+-   * notification; neither is read back from a document store.
++   * A workflow and its vars, with optional existing Request/work-item associations checked
++   * by the orchestrator before admission. It never creates a Request; requests.submit is
++   * the separate application service for decomposition/program admission.
+    */
+   async startRun(
+     params: RunsStartParams,
