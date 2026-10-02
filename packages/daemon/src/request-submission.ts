@@ -1,4 +1,5 @@
 /** Request adapter. Method registration and transport pre-validation authorization are shared wiring. */
+import type { RetryOptions } from "../../core/src/model/admission-retry.js";
 import {
   OrcaError,
   type SubmissionAuthority,
@@ -50,18 +51,30 @@ export function submissionAuthority(opts: {
 export class RequestSubmissionModel {
   constructor(
     private readonly opts: {
-      service: SubmissionService;
+      service: SubmissionService & {
+        submit(
+          command: SubmissionCommand,
+          authority: SubmissionAuthority,
+          retry?: RetryOptions,
+        ): Promise<SubmissionResult>;
+      };
       /** The worker drives/settles accepted roots; no workflow promise is awaited by the RPC. */
       execute: (runId: string, authority?: ExecutionResumeAuthority) => Promise<void>;
       /** Read-only renewal preflight. The worker rechecks when it attaches under the lease. */
       checkResumeAuthority?: (runId: string, authority?: ExecutionResumeAuthority) => Promise<void>;
       /** Report background infrastructure failures; run execution failures are already events. */
       executionFailed: (runId: string) => void;
+      /** Production retry wiring restricts automatic dispatch to never-attached runs. */
+      shouldDispatch?: (runId: string) => Promise<boolean>;
     },
   ) {}
 
-  async submit(command: SubmissionCommand, authority: SubmissionAuthority): Promise<SubmissionResult> {
-    return this.start(await this.opts.service.submit(command, authority), authority);
+  async submit(
+    command: SubmissionCommand,
+    authority: SubmissionAuthority,
+    retry: RetryOptions = {},
+  ): Promise<SubmissionResult> {
+    return this.start(await this.opts.service.submit(command, authority, retry), authority);
   }
   async reconcile(
     admissionId: string,
@@ -89,8 +102,15 @@ export class RequestSubmissionModel {
       // Recovery carries the caller's verified resume authority; the original sealed actor
       // may name a bootstrap credential invalidated by the daemon restart.
       setImmediate(() => {
-        void executeAcceptedSubmission(this.opts.service, result.admissionId, result.runId, authority, (runId) =>
-          this.opts.execute(runId, executionAuthority),
+        void executeAcceptedSubmission(
+          this.opts.service,
+          result.admissionId,
+          result.runId,
+          authority,
+          async (runId) => {
+            if (!this.opts.shouldDispatch || (await this.opts.shouldDispatch(runId)))
+              await this.opts.execute(runId, executionAuthority);
+          },
         ).catch(() => this.opts.executionFailed(result.runId));
       });
     }

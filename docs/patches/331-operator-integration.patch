@@ -1,0 +1,886 @@
+diff --git a/docs/daemon-security.md b/docs/daemon-security.md
+--- a/docs/daemon-security.md
++++ b/docs/daemon-security.md
+@@ -164,6 +164,9 @@
+ | `requests.admission` | `plan.write` | plus `runs.start`; own admission in this workspace | — |
+ | `requests.admissions` | `plan.write` | plus `runs.start`; own admissions in this workspace | — |
+ | `runs.start` | `runs.start` | the workflow; the new run is attributed to the caller | mutation |
++| `runs.admit` | `runs.start` | the workflow and authorized associations; prompt durable receipt | mutation |
++| `admissions.get` | `runs.start` | own operation, original grants and resources; Request also needs `plan.write` | — |
++| `admissions.reconcile` | `runs.start` | own operation, original grants/resources; attachment requires current execution authority | mutation |
+ | `runs.resume` | `runs.control` | the run | mutation |
+ | `runs.cancel` | `runs.control` | the run | mutation |
+ | `inputs.answer` | `inputs.answer` | the exact open gate and its run; `always` also needs `permissions.grant` | decision |
+diff --git a/packages/app/renderer/src/palette/start-run.tsx b/packages/app/renderer/src/palette/start-run.tsx
+--- a/packages/app/renderer/src/palette/start-run.tsx
++++ b/packages/app/renderer/src/palette/start-run.tsx
+@@ -19,7 +19,8 @@
+  * resolver every link, crumb and palette row goes through — and the sentence goes in the
+  * app's one live region for anybody who did not see the screen change.
+  */
+-import { useMemo, type JSX } from "react";
++import { newAdmissionIntent } from "@orca/protocol";
++import { useRef, useMemo, type JSX } from "react";
+ import { useAnnounce } from "../a11y/announce-context.js";
+ import { runUrl } from "../route-table.js";
+ import { usePaletteWrites, type PaletteWrite } from "./use-write-actions.js";
+@@ -32,6 +33,7 @@
+ /** Nothing to render: this component *is* one registration. */
+ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element | null {
+   const announce = useAnnounce();
++  const intents = useRef(new Map<string, ReturnType<typeof newAdmissionIntent>>());
+ 
+   const rows = useMemo(
+     (): readonly PaletteWrite[] => [
+@@ -57,11 +59,14 @@
+             }));
+           },
+           choose: (workflowId) => {
+-            void window.orca.runs.start({ workflowId }).then((result) => {
++            const intent = intents.current.get(workflowId) ?? newAdmissionIntent();
++            intents.current.set(workflowId, intent);
++            void window.orca.runs.start({ workflowId, ...intent }).then((result) => {
+               if (!result.ok) {
+                 announce(`The run did not start: ${result.error.message}`);
+                 return;
+               }
++              if (intents.current.get(workflowId) === intent) intents.current.delete(workflowId);
+               announce(`${result.result.run.name} is running.`);
+               onOpen(runUrl(result.result.runId));
+             });
+diff --git a/packages/app/renderer/test/palette-writes.test.tsx b/packages/app/renderer/test/palette-writes.test.tsx
+--- a/packages/app/renderer/test/palette-writes.test.tsx
++++ b/packages/app/renderer/test/palette-writes.test.tsx
+@@ -168,7 +168,7 @@
+     fireEvent.click(items[0]!);
+     await waitFor(() => expect(callsTo("runs.start")).toHaveLength(1));
+     // No vars: the run takes the workflow's own (the form for them is specified nowhere).
+-    expect(callsTo("runs.start")[0]).toEqual({ workflowId: WORKFLOWS[0]!.id });
++    expect(callsTo("runs.start")[0]).toEqual({ workflowId: WORKFLOWS[0]!.id, idempotencyKey: expect.any(String) });
+ 
+     /* And the app went to the run, through the route table — which is visible as the Runs
+        surface reading the run that has just been started. */
+diff --git a/packages/cli/src/bootstrap.ts b/packages/cli/src/bootstrap.ts
+--- a/packages/cli/src/bootstrap.ts
++++ b/packages/cli/src/bootstrap.ts
+@@ -1,3 +1,6 @@
++import { admissionRetryFaults } from "@orca/core";
++import { FileRetryClaimStore } from "@orca/store";
++import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
+ /**
+  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
+  * The CLI, the ACP facade and embedders all go through here.
+@@ -96,6 +99,9 @@
+   configFile?: string | undefined;
+   orchestrator: Orchestrator;
+   program: ProgramService;
++  retrySafeAdmissions?: RetrySafeAdmissionService | undefined;
++  retryClaims?: RegisteredRetryClaims | undefined;
++  directAdmissions?: DirectAdmissionService | undefined;
+   submissionAuthority?: SubmissionAuthority | undefined;
+   plan: PlanService;
+   workflows: WorkflowRegistry;
+@@ -408,7 +414,27 @@
+   };
+   const provided = await opts.requestSubmission?.({ orchestrator, config, configDir });
+   const authority = provided?.authority ?? (await opts.submissionAuthority?.({ orchestrator, config, configDir }));
++  const retryClaims = opts.ephemeral
++    ? undefined
++    : new RegisteredRetryClaims(
++        new FileRetryClaimStore({
++          storeDir: resolve(configDir, config.storeDir),
++          execution: orchestrator.stores.execution,
++          faults: admissionRetryFaults,
++          limits: config.admissionRetry ?? {},
++        }),
++        admissionRetryFaults,
++      );
++  const directAdmissions = retryClaims
++    ? new DirectAdmissionService({
++        orchestrator,
++        retries: retryClaims,
++        captureLaunch: generations.captureLaunch,
++        restoreLaunch: generations.restoreDirectLaunch,
++      })
++    : undefined;
+   const submission = {
++    ...(retryClaims ? { retries: retryClaims } : {}),
+     admissions: opts.ephemeral
+       ? new MemoryAdmissionStore()
+       : new FileAdmissionStore(resolve(configDir, config.storeDir)),
+@@ -417,14 +443,21 @@
+     ...provided,
+     ...(authority ? { authority } : {}),
+   };
++  const program = new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission);
+   return {
+     config,
+     generations,
+     submissionAuthority: submission?.authority,
++    retryClaims,
++    directAdmissions,
++    retrySafeAdmissions:
++      directAdmissions && program.submissions
++        ? new RetrySafeAdmissionService({ requests: program.submissions, direct: directAdmissions })
++        : undefined,
+     configDir,
+     ...(configFile ? { configFile } : {}),
+     orchestrator,
+-    program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission),
++    program,
+     plan,
+     workflows,
+     templates,
+diff --git a/packages/cli/src/commands/index.ts b/packages/cli/src/commands/index.ts
+--- a/packages/cli/src/commands/index.ts
++++ b/packages/cli/src/commands/index.ts
+@@ -1,10 +1,16 @@
++import { AdmissionRetryModel, neverAttached } from "@orca/daemon";
++import { admissionRetryOptions } from "./admission-retry.js";
+ /**
+  * CLI command implementations. Each command receives parsed positionals and
+  * flags and an output sink; `main.ts` handles argument parsing and errors.
+  */
+ import { admissionsCommand } from "./admissions.js";
+ import { workspaceIdentity } from "@orca/store";
+-import { localSubmissionAuthority, authorityForNewLocalIntent } from "../local-submission-authority.js";
++import {
++  localSubmissionAuthority,
++  localDirectAdmissionAuthority,
++  authorityForNewLocalIntent,
++} from "../local-submission-authority.js";
+ import { releaseAssets } from "../bootstrap.js";
+ 
+ import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
+@@ -445,6 +451,25 @@
+       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
+       try {
+         const workspace = ctx.flags.cwd ? { hostId: "local", cwd: String(ctx.flags.cwd) } : undefined;
++        if (app.directAdmissions && !workspace && !overrides) {
++          const retry = admissionRetryOptions(ctx.flags["idempotency-key"] as string | undefined);
++          if (ctx.flags["idempotency-key"] === undefined) ctx.err(`Retry key: ${retry.idempotencyKey}`);
++          const authority = await localDirectAdmissionAuthority(app);
++          const response = await app.directAdmissions.admitRun(
++            { workflowId, vars, ...workflowGuards(ctx) },
++            retry,
++            authority,
++          );
++          if (response.state !== "resolved" || response.result.state !== "accepted")
++            throw new OrcaError("RUN_STATE", "Run admission requires reconciliation", { ...response });
++          await authority.authorize({ workflowId });
++          return await finish(app, ctx, await app.orchestrator.run(response.result.runId));
++        }
++        if (ctx.flags["idempotency-key"] !== undefined)
++          throw new OrcaError(
++            "NOT_SUPPORTED",
++            "Keyed direct admission does not support explicit workspace or selection overrides",
++          );
+         const state = await app.orchestrator.startAndRun({
+           workflowId,
+           vars,
+@@ -487,13 +512,18 @@
+       });
+       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
+       try {
+-        const admitted = await app.program.submit({
+-          title,
+-          body,
+-          vars,
+-          ...workflowGuards(ctx),
+-          ...(overrides ? { overrides } : {}),
+-        });
++        const retry = admissionRetryOptions(ctx.flags["idempotency-key"] as string | undefined);
++        if (ctx.flags["idempotency-key"] === undefined) ctx.err(`Retry key: ${retry.idempotencyKey}\n`);
++        const admitted = await app.program.submit(
++          {
++            title,
++            body,
++            vars,
++            ...workflowGuards(ctx),
++            ...(overrides ? { overrides } : {}),
++          },
++          retry,
++        );
+         ctx.out(
+           `request ${admitted.request.id}; run ${admitted.runId}${admitted.admissionId ? `; admission ${admitted.admissionId}` : ""}`,
+         );
+@@ -754,6 +784,7 @@
+         !readOnly && authDir && app.program.submissions
+           ? new RequestSubmissionModel({
+               service: app.program.submissions,
++              shouldDispatch: (id) => neverAttached(app.orchestrator, id),
+               checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
+               execute: async (id, authority) => {
+                 const state = liveRuntime
+@@ -764,7 +795,23 @@
+               executionFailed: (id) => app.logger.error("Request execution requires recovery", { runId: id }),
+             })
+           : undefined;
++      const admissionRetries =
++        !readOnly && authDir && app.retryClaims && app.directAdmissions && app.program.submissions
++          ? new AdmissionRetryModel({
++              claims: app.retryClaims,
++              direct: app.directAdmissions,
++              requests: app.program.submissions,
++              orchestrator: app.orchestrator,
++              checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
++              execute: async (id, authority) => {
++                if (liveRuntime) await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id));
++                else await app.orchestrator.run(id);
++              },
++              executionFailed: (id) => app.logger.error("Run admission requires recovery", { runId: id }),
++            })
++          : undefined;
+       const daemon = await startDaemon({
++        admissionRetries,
+         requestSubmissions,
+         submissionWorkspaceId: workspaceId,
+         identity,
+@@ -795,6 +842,7 @@
+         // over a store with no plan advertised a capability whose nine methods `hello` did
+         // not list, and a client hid nothing on the strength of it.
+         capabilities: [
++          ...(admissionRetries ? (["runs.admit", "admissions.get", "admissions.reconcile"] as const) : []),
+           "runs.read",
+           "runs.subscribe",
+           "workflows.validateInputs",
+diff --git a/packages/cli/src/local-submission-authority.ts b/packages/cli/src/local-submission-authority.ts
+--- a/packages/cli/src/local-submission-authority.ts
++++ b/packages/cli/src/local-submission-authority.ts
+@@ -16,13 +16,17 @@
+   OWNERSHIP_FILE,
+   readLocalToken,
+   submissionAuthority,
++  directAdmissionAuthority,
+   orchestratorResolver,
+ } from "@orca/daemon";
+-export async function localSubmissionAuthority(app: {
+-  config: OrcaConfig;
+-  configDir: string;
+-  orchestrator: Orchestrator;
+-}): Promise<SubmissionAuthority> {
++export async function localSubmissionAuthority(
++  app: {
++    config: OrcaConfig;
++    configDir: string;
++    orchestrator: Orchestrator;
++  },
++  mode: "request" | "direct" = "request",
++): Promise<SubmissionAuthority> {
+   const storeDir = resolve(app.configDir, app.config.storeDir);
+   await mkdir(storeDir, { recursive: true });
+   const workspaceId = await workspaceIdentity(storeDir);
+@@ -39,7 +43,8 @@
+       throw new OrcaError("RUN_STATE", "a current local client credential is required");
+     const principal = authenticated.principal;
+     const credentialId = principal.credentialId!;
+-    return submissionAuthority({
++    const factory = mode === "request" ? submissionAuthority : directAdmissionAuthority;
++    const authority = factory({
+       workspaceId,
+       actor: { principalId: principal.id, credentialId },
+       authorizer: new Authorizer({ resolver: orchestratorResolver(app.orchestrator), ownership }),
+@@ -49,6 +54,13 @@
+         return current.principal;
+       },
+     });
++    return {
++      ...authority,
++      authorize: (command) =>
++        authority.authorize(
++          command as import("@orca/core").SubmissionCommand & import("@orca/core").DirectAdmissionCommand,
++        ),
++    };
+   }
+   const localUser = userInfo();
+   const principalId = `os-user-${createHash("sha256")
+@@ -102,3 +114,10 @@
+     return current;
+   };
+ }
++
++export async function localDirectAdmissionAuthority(
++  app: Parameters<typeof localSubmissionAuthority>[0],
++): Promise<import("@orca/core").DirectAdmissionAuthority> {
++  const authority = await localSubmissionAuthority(app, "direct");
++  return { ...authority, authorize: (command) => authority.authorize({ title: "", body: "", ...command }) };
++}
+diff --git a/packages/cli/src/main.ts b/packages/cli/src/main.ts
+--- a/packages/cli/src/main.ts
++++ b/packages/cli/src/main.ts
+@@ -48,6 +48,7 @@
+         "template-pack": { type: "string" },
+         body: { type: "string" },
+         "body-file": { type: "string" },
++        "idempotency-key": { type: "string" },
+         dir: { type: "string" },
+         "log-level": { type: "string" },
+         note: { type: "string" },
+diff --git a/packages/core/src/config.ts b/packages/core/src/config.ts
+--- a/packages/core/src/config.ts
++++ b/packages/core/src/config.ts
+@@ -52,6 +52,12 @@
+   version: z.literal(1).default(1),
+   /** Where event logs, artifacts and indexes are stored (relative to the config file). */
+   storeDir: z.string().default(".orca"),
++  admissionRetry: z
++    .object({
++      maxClaimsPerWorkspace: z.number().int().positive().default(100_000),
++      maxClaimsPerPrincipal: z.number().int().positive().default(10_000),
++    })
++    .optional(),
+   hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),
+   agents: z.array(AgentSpecSchema).default([]),
+   /** Explicit role -> agent id mapping. Falls back to the first agent listing the role. */
+diff --git a/packages/core/src/errors.ts b/packages/core/src/errors.ts
+--- a/packages/core/src/errors.ts
++++ b/packages/core/src/errors.ts
+@@ -3,6 +3,8 @@
+  * integrations, UIs) can branch on it without parsing messages.
+  */
+ export type OrcaErrorCode =
++  | "RETRY_CONFLICT"
++  | "RETRY_LIMIT"
+   | "WORKFLOW_INVALID"
+   /** Launch vars failed the selected workflow revision's input schema; details has errors and warnings. */
+   | "WORKFLOW_INPUT_INVALID"
+@@ -81,3 +83,9 @@
+   if (e instanceof Error) return { code: "INTERNAL", message: e.message };
+   return { code: "INTERNAL", message: String(e) };
+ }
++
++/** Shared retry refusals contain no key or command material. */
++export const admissionRetryFaults = {
++  conflict: () => new OrcaError("RETRY_CONFLICT", "Retry key is already bound to a different command"),
++  limit: () => new OrcaError("RETRY_LIMIT", "Admission retry quota reached; existing receipts remain recoverable"),
++};
+diff --git a/packages/core/src/events/events.ts b/packages/core/src/events/events.ts
+--- a/packages/core/src/events/events.ts
++++ b/packages/core/src/events/events.ts
+@@ -117,6 +117,7 @@
+       requestId: z.string().optional(),
+       /** Server-owned recovery correlation, authenticated in the private creation payload. */
+       requestAdmissionId: z.string().optional(),
++      directAdmissionId: z.string().optional(),
+       workItemId: z.string().optional(),
+       parentRunId: z.string().optional(),
+       parentStepRunId: z.string().optional(),
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -23,3 +23,5 @@
+ export * from "./util/jsonl.js";
+ 
+ export * from "./model/run-provenance.js";
++
++export * from "./model/admission-retry.js";
+diff --git a/packages/core/src/model/request.ts b/packages/core/src/model/request.ts
+--- a/packages/core/src/model/request.ts
++++ b/packages/core/src/model/request.ts
+@@ -70,7 +70,11 @@
+ }
+ 
+ export interface SubmissionService {
+-  submit(command: SubmissionCommand, authority: SubmissionAuthority): Promise<SubmissionResult>;
++  submit(
++    command: SubmissionCommand,
++    authority: SubmissionAuthority,
++    retry?: import("./admission-retry.js").RetryOptions,
++  ): Promise<SubmissionResult>;
+   reconcile(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
+   inspect(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
+   list(authority: SubmissionAuthority): Promise<SubmissionResult[]>;
+diff --git a/packages/daemon/src/auth/guard.ts b/packages/daemon/src/auth/guard.ts
+--- a/packages/daemon/src/auth/guard.ts
++++ b/packages/daemon/src/auth/guard.ts
+@@ -369,7 +369,7 @@
+       case "workflow": {
+         // Linked documents are workspace resources, not made visible by owning a new run.
+         // Work-item execution may settle the plan, so reading it alone is insufficient.
+-        if (name === "runs.start") {
++        if (name === "runs.start" || name === "runs.admit") {
+           if (params.requestId !== undefined && !holds(principal, "plan.read"))
+             throw new Denied(authForbidden(), "linked-request-not-permitted");
+           if (params.workItemId !== undefined && (!holds(principal, "plan.read") || !holds(principal, "plan.write")))
+diff --git a/packages/daemon/src/auth/operations.ts b/packages/daemon/src/auth/operations.ts
+--- a/packages/daemon/src/auth/operations.ts
++++ b/packages/daemon/src/auth/operations.ts
+@@ -79,6 +79,9 @@
+   "requests.reconcile": { permission: "plan.write", resource: "none", audit: "mutation" },
+   "requests.admission": { permission: "plan.write", resource: "none" },
+   "requests.admissions": { permission: "plan.write", resource: "none" },
++  "runs.admit": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
++  "admissions.get": { permission: "runs.start", resource: "none" },
++  "admissions.reconcile": { permission: "runs.start", resource: "none", audit: "mutation" },
+   "runs.start": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
+   "runs.resume": { permission: "runs.control", resource: "run", audit: "mutation" },
+   "runs.cancel": { permission: "runs.control", resource: "run", audit: "mutation" },
+@@ -122,6 +125,9 @@
+  * and to nobody else.
+  */
+ export const CAPABILITY_PERMISSIONS: Readonly<Record<string, readonly Permission[]>> = {
++  "runs.admit": ["runs.start"],
++  "admissions.get": ["runs.start"],
++  "admissions.reconcile": ["runs.start"],
+   "inputs.live": ["inputs.answer"],
+   "runs.read": ["runs.read"],
+   "runs.subscribe": ["runs.read"],
+diff --git a/packages/daemon/src/control.ts b/packages/daemon/src/control.ts
+--- a/packages/daemon/src/control.ts
++++ b/packages/daemon/src/control.ts
+@@ -435,6 +435,13 @@
+    * by the orchestrator before admission. It never creates a Request; requests.submit is
+    * the separate application service for decomposition/program admission.
+    */
++  async settleAdmitted(runId: string): Promise<RunsStartResult> {
++    const state = await this.orc.getState(runId);
++    if (state.run.status === "created" || state.run.status === "running")
++      await leased(runId, () => this.orc.run(runId));
++    return { runId, run: await this.runView(runId), asOf: this.clock.isoNow() };
++  }
++
+   async startRun(
+     params: RunsStartParams,
+     attributeStartedRun?: (runId: string) => void | Promise<void>,
+diff --git a/packages/daemon/src/index.ts b/packages/daemon/src/index.ts
+--- a/packages/daemon/src/index.ts
++++ b/packages/daemon/src/index.ts
+@@ -34,3 +34,5 @@
+ 
+ export * from "./daemon-identity.js";
+ export * from "./execution-runtime.js";
++
++export * from "./admission-retry.js";
+diff --git a/packages/daemon/src/methods.ts b/packages/daemon/src/methods.ts
+--- a/packages/daemon/src/methods.ts
++++ b/packages/daemon/src/methods.ts
+@@ -28,6 +28,8 @@
+   RequestsAdmissionParamsSchema,
+   RequestsAdmissionsParamsSchema,
+ } from "@orca/protocol";
++import { RunsAdmitParamsSchema, AdmissionsGetParamsSchema, AdmissionsReconcileParamsSchema } from "@orca/protocol";
++import type { AdmissionRetryModel, AdmissionAuthorities } from "./admission-retry.js";
+ import type { RequestSubmissionModel } from "./request-submission.js";
+ import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
+ import type { Maintenance } from "./maintenance.js";
+@@ -179,6 +181,8 @@
+   liveAnswerAuthority?: LiveAnswerAuthority;
+   executionResumeAuthority?: ExecutionResumeAuthority;
+   requestSubmissions?: RequestSubmissionModel | undefined;
++  admissionRetries?: AdmissionRetryModel | undefined;
++  admissionAuthorities?: ((ctx: MethodContext) => Promise<AdmissionAuthorities>) | undefined;
+   submissionWorkspaceId?: string | undefined;
+   requestSubmissionAuthority?: ((ctx: MethodContext) => Promise<SubmissionAuthority>) | undefined;
+   identity?: { workspaceId: string; instanceId: string };
+@@ -477,7 +481,22 @@
+ /** `runs.start`: a workflow and its vars. No request, no work item, no documents - by decision. */
+ export const runsStart: Method<RunsStartParams, RunsStartResult> = {
+   params: RunsStartParamsSchema,
+-  handle: (params, ctx) => control(ctx).startRun(params, ctx.attributeStartedRun, ctx.mutationActor),
++  handle: async (params, ctx) => {
++    if (!ctx.admissionRetries || !ctx.admissionAuthorities) {
++      if (params.idempotencyKey !== undefined)
++        throw new OrcaError("NOT_SUPPORTED", "Retry admission is not configured");
++      return control(ctx).startRun(params, ctx.attributeStartedRun, ctx.mutationActor);
++    }
++    const { idempotencyKey, ...command } = params;
++    const admitted = await ctx.admissionRetries.admit(
++      command,
++      idempotencyKey === undefined ? {} : { idempotencyKey },
++      await (await ctx.admissionAuthorities(ctx)).direct(),
++    );
++    if (admitted.state !== "accepted")
++      throw new OrcaError("RUN_STATE", "Run admission requires reconciliation", { ...admitted });
++    return control(ctx).settleAdmitted(admitted.runId);
++  },
+ };
+ 
+ /**
+@@ -669,7 +688,14 @@
+     Object.assign(table, {
+       "requests.submit": {
+         params: RequestsSubmitParamsSchema,
+-        handle: async (params, invocation) => model.submit(params, await authority(invocation)),
++        handle: async (params, invocation) => {
++          const { idempotencyKey, ...command } = params;
++          return model.submit(
++            command,
++            await authority(invocation),
++            idempotencyKey === undefined ? {} : { idempotencyKey },
++          );
++        },
+       },
+       "requests.reconcile": {
+         params: RequestsAdmissionParamsSchema,
+@@ -686,6 +712,29 @@
+       },
+     } satisfies MethodTable);
+   }
++  if (ctx.control && ctx.admissionRetries && ctx.admissionAuthorities) {
++    const model = ctx.admissionRetries,
++      authorities = ctx.admissionAuthorities;
++    table["runs.admit"] = {
++      params: RunsAdmitParamsSchema,
++      handle: async (params, invocation) => {
++        const { idempotencyKey, ...command } = params;
++        return model.admit(
++          command,
++          idempotencyKey === undefined ? {} : { idempotencyKey },
++          await (await authorities(invocation)).direct(),
++        );
++      },
++    };
++    table["admissions.get"] = {
++      params: AdmissionsGetParamsSchema,
++      handle: async (params, invocation) => model.inspect(params.operationId, await authorities(invocation)),
++    };
++    table["admissions.reconcile"] = {
++      params: AdmissionsReconcileParamsSchema,
++      handle: async (params, invocation) => model.reconcile(params.operationId, await authorities(invocation)),
++    };
++  }
+   if (ctx.workflowInputs) table[WORKFLOWS_VALIDATE_INPUTS_METHOD] = workflowsValidateInputs;
+   if (ctx.planControl) Object.assign(table, planControlMethods);
+   if (ctx.agents) Object.assign(table, agentMethods);
+diff --git a/packages/daemon/src/server.ts b/packages/daemon/src/server.ts
+--- a/packages/daemon/src/server.ts
++++ b/packages/daemon/src/server.ts
+@@ -30,6 +30,9 @@
+ import { Maintenance } from "./maintenance.js";
+ import { attachSocket } from "./socket.js";
+ import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
++import { directAdmissionAuthority } from "./admission-retry.js";
++import { holds } from "./auth/principal.js";
++import { authForbidden } from "./auth/errors.js";
+ import { submissionAuthority } from "./request-submission.js";
+ import { authInvalid, authRequired } from "./auth/errors.js";
+ import { OwnershipStore } from "./auth/ownership.js";
+@@ -178,6 +181,7 @@
+     reads: opts.reads,
+     workflowInputs: opts.workflowInputs,
+     requestSubmissions: auth.mode === "token" ? opts.requestSubmissions : undefined,
++    admissionRetries: auth.mode === "token" ? opts.admissionRetries : undefined,
+     submissionWorkspaceId: opts.submissionWorkspaceId,
+     source: opts.source,
+     liveInputs: opts.liveInputs,
+@@ -228,6 +232,31 @@
+           return current.principal;
+         },
+       });
++    };
++  }
++  if (ctx.admissionRetries && ctx.submissionWorkspaceId && auth.mode === "token") {
++    const workspaceId = ctx.submissionWorkspaceId;
++    ctx.admissionAuthorities = async (invocation) => {
++      const bound = principalOf(invocation);
++      // Read calls have no mutationActor, so bind a verified actor from the authenticated context.
++      if (!bound?.principal.credentialId) throw authRequired();
++      const credentialId = bound.principal.credentialId;
++      const actor = { principalId: bound.principal.id, credentialId };
++      const principal = async () => {
++        const current = auth.credentials.current(credentialId);
++        if (!current.ok) throw authInvalid();
++        return current.principal;
++      };
++      return {
++        principalId: actor.principalId,
++        workspaceId,
++        executionAuthority: invocation.executionResumeAuthority,
++        check: async () => {
++          if (!holds(await principal(), "runs.start")) throw authForbidden();
++        },
++        request: async () => submissionAuthority({ workspaceId, actor, authorizer, principal }),
++        direct: async () => directAdmissionAuthority({ workspaceId, actor, authorizer, principal }),
++      };
+     };
+   }
+   const gate = new TransportGate(auth, host, authorizer);
+diff --git a/packages/daemon/test/auth-operations.test.ts b/packages/daemon/test/auth-operations.test.ts
+--- a/packages/daemon/test/auth-operations.test.ts
++++ b/packages/daemon/test/auth-operations.test.ts
+@@ -62,6 +62,9 @@
+   it("covers every method the protocol declares and the daemon answers, and nothing else", () => {
+     const declared = new Set<string>([
+       HELLO_METHOD,
++      "runs.admit",
++      "admissions.get",
++      "admissions.reconcile",
+       ...READ_METHODS,
+       ...PLAN_READ_METHODS,
+       ...CONTROL_METHODS,
+diff --git a/packages/engine/src/configuration-generation.ts b/packages/engine/src/configuration-generation.ts
+--- a/packages/engine/src/configuration-generation.ts
++++ b/packages/engine/src/configuration-generation.ts
+@@ -32,6 +32,7 @@
+ >;
+ export interface CapturedLaunch {
+   readonly requestAdmissionCorrelation: true;
++  readonly admissionRunIds?: true;
+   readonly generationId: string;
+   readonly workflow: Readonly<{ id: string; version: string; revision: string }>;
+   validateStartRun(options: BoundLaunchOptions): Promise<void>;
+@@ -272,7 +273,9 @@
+     return { outcome: "applied", status: applied, validation: { errors: [] } };
+   }
+ 
+-  readonly captureLaunch: CaptureLaunch = async (selection) => {
++  readonly captureLaunch = async (
++    selection: LaunchSelection,
++  ): Promise<import("./direct-admission.js").DirectCapturedLaunch> => {
+     selection = { ...selection };
+     const material = this.current; // Capture before the first await.
+     if (selection.expectedConfigGeneration !== undefined && selection.expectedConfigGeneration !== material.snapshot.id)
+@@ -297,11 +300,26 @@
+     );
+   };
+ 
++  readonly restoreDirectLaunch = async (
++    recorded: import("./direct-admission.js").RecordedDirectLaunch,
++  ): Promise<import("./direct-admission.js").DirectCapturedLaunch> => {
++    const material = await this.restore(recorded.generationId);
++    return this.captureMaterial(
++      {
++        purpose: "workflow",
++        workflowId: recorded.workflow.id,
++        workflowVersion: recorded.workflow.version,
++        expectedWorkflowRevision: recorded.workflow.revision,
++      },
++      material,
++    );
++  };
++
+   private async captureMaterial(
+     selection: LaunchSelection,
+     material: GenerationMaterial,
+     recordedRequestId?: string,
+-  ): Promise<CapturedLaunch> {
++  ): Promise<import("./direct-admission.js").DirectCapturedLaunch> {
+     const id =
+       selection.workflowId ?? (selection.purpose === "request" ? material.snapshot.config.program.workflow : undefined);
+     if (!id) throw new OrcaError("WORKFLOW_NOT_FOUND", "workflow launch requires a workflow id");
+@@ -324,7 +342,17 @@
+     const bound = (options: BoundLaunchOptions): StartRunOptions => {
+       if (recordedRequestId && options.requestId !== undefined && options.requestId !== recordedRequestId)
+         throw new OrcaError("RUN_STATE", "recovery Request differs from recorded admission");
+-      const { actor, workspace, workItemId, parentRunId, parentStepRunId, overrides, requestAdmissionId } = options;
++      const {
++        actor,
++        workspace,
++        workItemId,
++        parentRunId,
++        parentStepRunId,
++        overrides,
++        requestAdmissionId,
++        directAdmissionId,
++        admissionRunId,
++      } = options;
+       const requestId = recordedRequestId ?? options.requestId;
+       const vars =
+         selection.purpose === "request" &&
+@@ -342,6 +370,8 @@
+         ...(workspace ? { workspace: structuredClone(workspace) } : {}),
+         ...(requestId ? { requestId } : {}),
+         ...(requestAdmissionId ? { requestAdmissionId } : {}),
++        ...(directAdmissionId ? { directAdmissionId } : {}),
++        ...(admissionRunId ? { admissionRunId } : {}),
+         ...(workItemId ? { workItemId } : {}),
+         ...(parentRunId ? { parentRunId } : {}),
+         ...(parentStepRunId ? { parentStepRunId } : {}),
+@@ -350,6 +380,7 @@
+     };
+     return Object.freeze({
+       requestAdmissionCorrelation: true as const,
++      admissionRunIds: true as const,
+       generationId: material.snapshot.id,
+       workflow,
+       validateStartRun: async (options: BoundLaunchOptions) => {
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -19,3 +19,7 @@
+ export * from "./program/submission-store.js";
+ 
+ export * from "./live-input.js";
++
++export * from "./admission-retry.js";
++
++export * from "./direct-admission.js";
+diff --git a/packages/engine/src/orchestrator.ts b/packages/engine/src/orchestrator.ts
+--- a/packages/engine/src/orchestrator.ts
++++ b/packages/engine/src/orchestrator.ts
+@@ -161,6 +161,9 @@
+ export interface StartRunOptions {
+   /** Server-owned Request admission metadata; never part of workflow vars or wire launch params. */
+   requestAdmissionId?: string;
++  /** Trusted admission journal only; never accepted by wire schemas. */
++  admissionRunId?: string;
++  directAdmissionId?: string;
+   /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
+   actor?: MutationActor;
+   workflowId?: string;
+@@ -358,7 +361,22 @@
+       if (!this.generations) throw unavailable();
+       await this.generations.restore(generation.snapshot.id);
+     }
+-    const runId = newId("run", this.clock.now());
++    if (
++      opts.admissionRunId &&
++      (!/^run_[a-f0-9-]{36}$/.test(opts.admissionRunId) ||
++        !opts.actor ||
++        opts.parentRunId ||
++        (!opts.directAdmissionId && !opts.requestAdmissionId) ||
++        (opts.directAdmissionId && opts.requestAdmissionId))
++    )
++      throw new OrcaError("RUN_STATE", "Invalid reserved admission identity");
++    const runId = opts.admissionRunId ?? newId("run", this.clock.now());
++    if (
++      opts.admissionRunId &&
++      ((await this.stores.events.readRange(runId, { limit: 1 })).length ||
++        (await this.stores.execution.getInputs(runId)))
++    )
++      throw new OrcaError("RUN_STATE", "Reserved admission was already prepared; reconcile its original receipt");
+     // A child with an explicit workspace still has to validate its parent's sealed
+     // sensitivity state before copying vars. Missing overlays must never downgrade it.
+     const parentFirst = opts.parentRunId
+@@ -427,7 +445,9 @@
+     await this.stores.events.append(
+       opts.requestAdmissionId
+         ? await correlateRequestAdmission(created, opts.requestAdmissionId, this.stores.execution)
+-        : created,
++        : opts.directAdmissionId
++          ? { ...created, payload: { ...created.payload, directAdmissionId: opts.directAdmissionId } }
++          : created,
+     );
+     return runId;
+   }
+diff --git a/packages/engine/src/program/service.ts b/packages/engine/src/program/service.ts
+--- a/packages/engine/src/program/service.ts
++++ b/packages/engine/src/program/service.ts
+@@ -39,7 +39,7 @@
+ }
+ 
+ export class ProgramService {
+-  readonly submissions: SubmissionService | undefined;
++  readonly submissions: RequestSubmissionService | undefined;
+   constructor(
+     private readonly orchestrator: Orchestrator,
+     private readonly programWorkflowId = "program",
+@@ -50,11 +50,14 @@
+     this.submissions = submission ? new RequestSubmissionService({ ...submission, orchestrator }) : undefined;
+   }
+ 
+-  async submit(input: SubmitRequestInput): Promise<{ request: Request; runId: string; admissionId?: string }> {
++  async submit(
++    input: SubmitRequestInput,
++    retry: import("@orca/core").RetryOptions = {},
++  ): Promise<{ request: Request; runId: string; admissionId?: string }> {
+     if (this.submissions) {
+       if (!this.submission?.authority)
+         throw new OrcaError("NOT_SUPPORTED", "Request submission requires explicit authority");
+-      const result = await this.submissions.submit(input, this.submission.authority);
++      const result = await this.submissions.submit(input, this.submission.authority, retry);
+       if (result.state !== "accepted")
+         throw new OrcaError("RUN_STATE", "Request requires reconciliation", { ...result });
+       const request = await this.orchestrator.stores.requests.get(result.requestId);
+diff --git a/packages/integrations/src/acp-facade/orca-acp-agent.ts b/packages/integrations/src/acp-facade/orca-acp-agent.ts
+--- a/packages/integrations/src/acp-facade/orca-acp-agent.ts
++++ b/packages/integrations/src/acp-facade/orca-acp-agent.ts
+@@ -231,6 +231,13 @@
+   private async prompt(ctx: acp.AgentRequestContext<acp.PromptRequest>): Promise<acp.PromptResponse> {
+     const session = this.sessions.get(ctx.params.sessionId);
+     if (!session) throw acp.RequestError.invalidParams({ sessionId: ctx.params.sessionId, reason: "unknown session" });
++    const retryKey = ctx.params._meta?.["orca/idempotencyKey"];
++    if (
++      retryKey !== undefined &&
++      (typeof retryKey !== "string" || Buffer.byteLength(retryKey) < 1 || Buffer.byteLength(retryKey) > 128)
++    )
++      throw acp.RequestError.invalidParams({ reason: "orca/idempotencyKey must contain 1–128 UTF-8 bytes" });
++    const retry = typeof retryKey === "string" ? { idempotencyKey: retryKey } : {};
+     const text = ctx.params.prompt
+       .map((b) => (b.type === "text" ? b.text : b.type === "resource" && "text" in b.resource ? b.resource.text : ""))
+       .join("\n")
+@@ -311,6 +318,10 @@
+     let runId: string;
+     let admissionId: string | undefined;
+     let admissionAuthority: SubmissionAuthority | undefined;
++    if (retry.idempotencyKey && ((command === "run" && runWorkflowId) || session.selection.workflow))
++      throw acp.RequestError.invalidParams({
++        reason: "Keyed ACP direct launch with session workspace/selection is unsupported; use runs.admit",
++      });
+     if (command === "run" && runWorkflowId) {
+       const vars: Record<string, unknown> = {};
+       for (const kv of runArgs) {
+@@ -329,7 +340,9 @@
+       const command = {
+         title: title || "Untitled request",
+         body: body.join("\n").trim(),
+-        source: { kind: "acp-session" as const, sessionId: session.id },
++        source: retry.idempotencyKey
++          ? { kind: "api" as const, clientId: "orca-acp" }
++          : { kind: "acp-session" as const, sessionId: session.id },
+         ...(overrides ? { overrides } : {}),
+       };
+       if (this.opts.program.submissions) {
+@@ -338,7 +351,7 @@
+           : this.opts.submissionAuthority;
+         if (!admissionAuthority)
+           throw acp.RequestError.invalidParams({ reason: "Request submission authority is unavailable" });
+-        const submitted = await this.opts.program.submissions.submit(command, admissionAuthority);
++        const submitted = await this.opts.program.submissions.submit(command, admissionAuthority, retry);
+         await say(`Request ${submitted.requestId}; admission ${submitted.admissionId}: ${submitted.state}\n`);
+         if (submitted.state !== "accepted") {
+           await say(`Use /admissions reconcile ${submitted.admissionId} before starting another Request.\n`);
+diff --git a/packages/protocol/src/control.ts b/packages/protocol/src/control.ts
+--- a/packages/protocol/src/control.ts
++++ b/packages/protocol/src/control.ts
+@@ -155,6 +155,7 @@
+  * `requests.submit` is the separate program/decomposition admission operation.
+  */
+ export const RunsStartParamsSchema = z.object({
++  idempotencyKey: z.string().optional(),
+   workflowId: z.string().min(1),
+   /** Merged over the workflow's own `vars`, exactly as `orca run --var` merges them. */
+   vars: z.record(z.string(), z.unknown()).default({}),
+diff --git a/packages/protocol/src/handshake.ts b/packages/protocol/src/handshake.ts
+--- a/packages/protocol/src/handshake.ts
++++ b/packages/protocol/src/handshake.ts
+@@ -149,6 +149,9 @@
+   "inputs.live",
+   "runs.read",
+   "runs.subscribe",
++  "runs.admit",
++  "admissions.get",
++  "admissions.reconcile",
+   "runs.control",
+   "plan.read",
+   "plan.write",
+diff --git a/packages/protocol/src/index.ts b/packages/protocol/src/index.ts
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -28,3 +28,5 @@
+ export * from "./request-submission.js";
+ 
+ export * from "./live-input.js";
++
++export * from "./admission-retry.js";
+diff --git a/packages/protocol/src/request-submission.ts b/packages/protocol/src/request-submission.ts
+--- a/packages/protocol/src/request-submission.ts
++++ b/packages/protocol/src/request-submission.ts
+@@ -7,7 +7,7 @@
+ export const REQUESTS_RECONCILE_METHOD = "requests.reconcile";
+ export const REQUESTS_ADMISSION_METHOD = "requests.admission";
+ export const REQUESTS_ADMISSIONS_METHOD = "requests.admissions";
+-export const RequestsSubmitParamsSchema = SubmissionCommandSchema;
++export const RequestsSubmitParamsSchema = SubmissionCommandSchema.extend({ idempotencyKey: z.string().optional() });
+ export const RequestsAdmissionParamsSchema = z.strictObject({ admissionId: z.string().min(1) });
+ export const RequestsAdmissionsParamsSchema = z.strictObject({});
+ export type RequestsSubmitParams = z.infer<typeof RequestsSubmitParamsSchema>;
+diff --git a/packages/store/src/index.ts b/packages/store/src/index.ts
+--- a/packages/store/src/index.ts
++++ b/packages/store/src/index.ts
+@@ -13,3 +13,5 @@
+ export * from "./protected-event-store.js";
+ 
+ export { workspaceIdentity, renewWorkspaceIdentity } from "./workspace-identity.js";
++
++export * from "./admission-retry-store.js";
