@@ -82,6 +82,7 @@ interface Registered {
     operationId: string,
   ): Promise<void>;
   canonicalize(command: unknown): JsonValue;
+  validateFresh?(command: unknown): Promise<void>;
   prepare(command: unknown, context: RetryContext): Promise<unknown>;
   recover(command: unknown, context: RetryContext): Promise<unknown>;
 }
@@ -106,6 +107,7 @@ export class RegisteredRetryClaims implements RetryClaims {
       throw new OrcaError("CONFIG_INVALID", "Retry operation is already registered");
     const instance = Object.freeze(operation);
     const canonicalize = instance.canonicalize.bind(instance);
+    const validateFresh = instance.validateFresh?.bind(instance);
     const prepare = instance.prepare.bind(instance);
     const recover = instance.recover.bind(instance);
     this.operations.set(instance.kind, {
@@ -127,6 +129,7 @@ export class RegisteredRetryClaims implements RetryClaims {
           }
         : {}),
       canonicalize: (command) => canonicalize(command as C),
+      ...(validateFresh ? { validateFresh: (command: unknown) => validateFresh(command as C) } : {}),
       prepare: (command, context) => prepare(command as C, context),
       recover: (command, context) => recover(command as C, context),
     });
@@ -166,11 +169,25 @@ export class RegisteredRetryClaims implements RetryClaims {
       ...authority,
       authorize: (value) => authority.authorize(value as C),
     };
+    const validateFresh = registered.validateFresh?.bind(registered);
     const { record, fresh } = await this.store.claim(
       { principalId: authority.principalId, workspaceId: authority.workspaceId, kind: operation.kind },
       key,
       normalized,
       canonical,
+      validateFresh
+        ? async () => {
+            // Waiting for the catalog lock or validation must not preserve revoked
+            // authority. Every callback receives a copy of the sealed intent.
+            const check = async () => {
+              await scopedAuthority.authorize(structuredClone(normalized));
+              await registered.authorize?.(structuredClone(normalized), undefined);
+            };
+            await check();
+            await validateFresh(structuredClone(normalized));
+            await check();
+          }
+        : undefined,
     );
     await scopedAuthority.authorize(record.command);
     await registered.authorize?.(record.command, record.binding);

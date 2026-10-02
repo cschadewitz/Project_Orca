@@ -134,6 +134,7 @@ export class FileRetryClaimStore implements RetryClaimStore {
     key: string | undefined,
     command: JsonValue,
     canonical: string,
+    validateFresh?: () => Promise<void>,
   ): Promise<{ record: RetryRecord; fresh: boolean }> {
     return this.mutex("catalog", async () => {
       const catalog = await this.catalog();
@@ -162,6 +163,10 @@ export class FileRetryClaimStore implements RetryClaimStore {
         (catalog.principals[principal] ?? 0) >= this.limits.maxClaimsPerPrincipal
       )
         throw this.options.faults.limit();
+      // Existing records returned above never revalidate moving state. A fresh
+      // refusal leaves no sealed claim, lookup entry, quota charge or publication.
+      // The trusted validator must not acquire a fence or mutate this journal.
+      if (validateFresh) await validateFresh();
       const record: RetryRecord = {
         ...scope,
         operationId: `retry_${randomUUID()}`,

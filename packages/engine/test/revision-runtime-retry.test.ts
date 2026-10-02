@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OrcaError, parseWorkflow, reduceRun, silentLogger, systemClock } from "@orca/core";
 import { executionEvents, fileStores } from "@orca/store";
@@ -119,19 +120,25 @@ edges:
   const claimStore = new FileRetryClaimStore({ storeDir: dir, execution: stores.execution, faults });
   const claims = new RegisteredRetryClaims(claimStore, faults);
   const authorize = vi.fn(async (_command: unknown) => undefined);
+  const mutate = vi.fn(async (_runId: string) => undefined);
   const authority = { principalId: "user", workspaceId: "workspace", authorize };
   const service = new RevisionInputService({
     journal: runtime.journal,
     retries: runtime.fenceRetries(claims),
+    assertRetryFence: runtime.assertRetryFence,
     stale,
     access: {
       principalId: "user",
       workspaceId: "workspace",
       actor: async () => ({ principalId: "user" }),
       read: async () => ({ content: true, mutate: true }),
-      mutate: async () => undefined,
+      mutate,
     },
   });
+  const validateFresh = vi.fn(service.submitOperation.validateFresh!.bind(service.submitOperation));
+  const validateFreshReplacement = vi.fn(service.replaceOperation.validateFresh!.bind(service.replaceOperation));
+  service.submitOperation.validateFresh = validateFresh;
+  service.replaceOperation.validateFresh = validateFreshReplacement;
   const prepare = vi.fn(service.submitOperation.prepare.bind(service.submitOperation));
   const recover = vi.fn(service.submitOperation.recover.bind(service.submitOperation));
   service.submitOperation.prepare = prepare;
@@ -157,6 +164,9 @@ edges:
     service,
     authority,
     authorize,
+    mutate,
+    validateFresh,
+    validateFreshReplacement,
     command,
     submit,
     prepare,
@@ -302,19 +312,21 @@ describe("revision retry run fence", () => {
     expect(await f.claims.reconcile(legacy.record.operationId, f.authority)).toEqual(pending);
     expect(await f.claimStore.read(legacy.record.operationId)).toEqual(before);
     expect(write).not.toHaveBeenCalled();
+    expect(f.validateFresh).not.toHaveBeenCalled();
     expect(f.prepare).not.toHaveBeenCalled();
     expect(f.recover).not.toHaveBeenCalled();
     expect(await f.commits()).toHaveLength(0);
   });
 
   it.each(["stale-submit", "stale-replace", "missing-boundary", "capability-payload"] as const)(
-    "characterizes the remaining new-key %s prebinding refusal without automatic recovery",
+    "refuses a fresh %s without a claim and accepts corrected intent using the same key",
     async (failure) => {
       const f = await fixture();
       const first = await f.submit();
       if (first.state !== "resolved") throw new Error("expected first receipt");
       const command = replacement(first.result);
       const key = "new-rejected-key";
+      const write = vi.spyOn(f.claimStore, "write");
       const invoke = () =>
         failure === "stale-submit"
           ? f.service.submit(f.command, { idempotencyKey: key }, f.authority)
@@ -328,26 +340,135 @@ describe("revision retry run fence", () => {
               { idempotencyKey: key },
               f.authority,
             );
-      await expect(invoke()).rejects.toMatchObject({
+      const refusal = {
         code:
           failure === "missing-boundary"
             ? "NOT_SUPPORTED"
             : failure === "capability-payload"
               ? "WORKFLOW_INPUT_INVALID"
               : "REVISION_STALE",
-      });
-      const pending = await invoke();
-      expect(pending).toMatchObject({ state: "in-progress" });
-      const before = await f.claimStore.read(pending.operationId);
-      expect(before).toMatchObject({ phase: "claimed" });
-      expect(before?.binding).toBeUndefined();
-      expect(await f.claims.reconcile(pending.operationId, f.authority)).toEqual(pending);
-      expect(await f.claimStore.read(pending.operationId)).toEqual(before);
+      };
+      await expect(invoke()).rejects.toMatchObject(refusal);
+      await expect(invoke()).rejects.toMatchObject(refusal);
+      expect(write).not.toHaveBeenCalled();
+      expect(await f.claimStore.batch()).toEqual([first.operationId]);
       expect(await f.commits()).toHaveLength(1);
-      // Applying target/CAS preflight unconditionally would break this healthy replay.
+      const corrected = () =>
+        failure === "stale-submit"
+          ? f.service.submit(
+              {
+                ...f.command,
+                target: { ...first.result.target, expectedRevision: first.result.expectedRevision },
+                supersedesRevisionId: first.result.revisionId,
+              },
+              { idempotencyKey: key },
+              f.authority,
+            )
+          : f.service.replacePending(command, { idempotencyKey: key }, f.authority);
+      const accepted = await corrected();
+      expect(accepted).toMatchObject({ state: "resolved", replayed: false });
+      expect(await corrected()).toEqual({ ...accepted, replayed: true });
+      // Discovery resumes after the first receipt already observed above.
+      expect(await f.claimStore.batch()).toEqual([accepted.operationId]);
+      expect(await f.commits()).toHaveLength(2);
+      // Existing keys bypass moving-state preflight and still verify their exact marker.
       expect(await f.submit()).toEqual({ ...first, replayed: true });
     },
   );
+
+  it("replays accepted submit and replacement after later boundary advancement without fresh validation", async () => {
+    const f = await fixture();
+    const first = await f.submit();
+    if (first.state !== "resolved") throw new Error("expected first receipt");
+    const command = replacement(first.result);
+    const second = await f.service.replacePending(command, { idempotencyKey: "replace" }, f.authority);
+    if (second.state !== "resolved") throw new Error("expected replacement receipt");
+    await f.service.replacePending(replacement(second.result), { idempotencyKey: "advance" }, f.authority);
+    f.validateFresh.mockClear();
+    f.validateFreshReplacement.mockClear();
+    const write = vi.spyOn(f.claimStore, "write");
+    expect(await f.submit()).toEqual({ ...first, replayed: true });
+    expect(await f.service.replacePending(command, { idempotencyKey: "replace" }, f.authority)).toEqual({
+      ...second,
+      replayed: true,
+    });
+    expect(f.validateFresh).not.toHaveBeenCalled();
+    expect(f.validateFreshReplacement).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(await f.commits()).toHaveLength(3);
+  });
+
+  it("retains key conflicts without allowing fresh validation to reinterpret accepted intent", async () => {
+    const f = await fixture();
+    const first = await f.submit();
+    f.validateFresh.mockClear();
+    const before = await f.claimStore.read(first.operationId);
+    await expect(
+      f.service.submit(
+        {
+          ...f.command,
+          target: { ...f.command.target, expectedRevision: "also-stale" },
+          payload: { kind: "text", text: "DIFFERENT" },
+        },
+        { idempotencyKey: "submit" },
+        f.authority,
+      ),
+    ).rejects.toMatchObject({ code: "RETRY_CONFLICT" });
+    expect(f.validateFresh).not.toHaveBeenCalled();
+    expect(await f.claimStore.read(first.operationId)).toEqual(before);
+    expect(await f.commits()).toHaveLength(1);
+    expect(await f.submit()).toEqual({ ...first, replayed: true });
+  });
+
+  it("refuses fresh validation outside its run fence before acquiring ownership or publishing a claim", async () => {
+    const f = await fixture();
+    const acquire = vi.spyOn(f.stores.leases, "acquire");
+    const write = vi.spyOn(f.claimStore, "write");
+    await expect(
+      f.claims.execute(f.service.submitOperation, f.command, { idempotencyKey: "submit" }, f.authority),
+    ).rejects.toMatchObject({ code: "RUN_STATE" });
+    expect(f.validateFresh).toHaveBeenCalledTimes(1);
+    expect(acquire).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(await f.claimStore.batch()).toEqual([]);
+    expect(await f.commits()).toHaveLength(0);
+    expect(await f.submit()).toMatchObject({ state: "resolved", replayed: false });
+  });
+
+  it("rechecks authority after fresh validation and leaves a refused key available", async () => {
+    const f = await fixture();
+    let authorized = true;
+    f.authorize.mockImplementation(async () => {
+      if (!authorized) {
+        expect(await f.stores.leases.get("run:run")).toBeDefined();
+        throw new OrcaError("RUN_STATE", "revoked during validation");
+      }
+    });
+    const validate = f.validateFresh.getMockImplementation()!;
+    f.validateFresh.mockImplementation(async (command) => {
+      await validate(command);
+      authorized = false;
+    });
+    await expect(f.submit()).rejects.toThrow("revoked during validation");
+    expect(await f.claimStore.batch()).toEqual([]);
+    expect(f.prepare).not.toHaveBeenCalled();
+    expect(await f.commits()).toHaveLength(0);
+    authorized = true;
+    f.validateFresh.mockImplementation(validate);
+    expect(await f.submit()).toMatchObject({ state: "resolved", replayed: false });
+  });
+
+  it("also validates a new unkeyed intent before creating its claim", async () => {
+    const f = await fixture();
+    await expect(
+      f.service.submit({ ...f.command, target: { ...f.command.target, expectedRevision: "stale" } }, {}, f.authority),
+    ).rejects.toMatchObject({ code: "REVISION_STALE" });
+    expect(await f.claimStore.batch()).toEqual([]);
+    const accepted = await f.service.submit(f.command, {}, f.authority);
+    expect(accepted).toMatchObject({ state: "resolved", replayed: false });
+    expect(await f.claimStore.batch()).toEqual([accepted.operationId]);
+    expect(await f.commits()).toHaveLength(1);
+  });
 
   it("serializes independent runtimes racing one key without adding a second commit", async () => {
     const f = await fixture();
@@ -369,6 +490,7 @@ describe("revision retry run fence", () => {
     const secondService = new RevisionInputService({
       journal: competingRuntime.journal,
       retries: competingRuntime.fenceRetries(secondClaims),
+      assertRetryFence: competingRuntime.assertRetryFence,
       stale,
       access: {
         principalId: "user",
@@ -389,6 +511,111 @@ describe("revision retry run fence", () => {
     const first = await f.submit();
     expect(await second()).toEqual(first);
     expect(await f.commits()).toHaveLength(1);
+  });
+
+  it("fences an actual child writer racing its parent for the same key and replays one accepted revision", async () => {
+    const f = await fixture();
+    const enteredClaim = deferred();
+    const publishClaim = deferred();
+    const releaseLease = deferred();
+    const claim = f.claimStore.claim.bind(f.claimStore);
+    vi.spyOn(f.claimStore, "claim").mockImplementationOnce(async (...args) => {
+      f.runtime.assertRetryFence("run");
+      enteredClaim.resolve();
+      await publishClaim.promise;
+      return claim(...args);
+    });
+    const release = f.stores.leases.release.bind(f.stores.leases);
+    vi.spyOn(f.stores.leases, "release").mockImplementationOnce(async (lease) => {
+      // Keep the winning writer's real lease until the competing process observes it.
+      await releaseLease.promise;
+      await release(lease);
+    });
+    const parent = f.submit();
+    await enteredClaim.promise;
+    const script = `
+      import { fileStores, FileRetryClaimStore } from ${JSON.stringify(new URL("../../store/src/index.ts", import.meta.url).href)};
+      import { OrcaError } from ${JSON.stringify(new URL("../../core/src/errors.ts", import.meta.url).href)};
+      import { createRevisionRuntime } from ${JSON.stringify(new URL("../src/revision-runtime.ts", import.meta.url).href)};
+      import { RegisteredRetryClaims } from ${JSON.stringify(new URL("../src/admission-retry.ts", import.meta.url).href)};
+      import { RevisionInputService, registerRevisionInputOperation } from ${JSON.stringify(new URL("../src/revision-input.ts", import.meta.url).href)};
+      const stores = fileStores(${JSON.stringify(f.dir)});
+      const faults = {
+        conflict: () => new OrcaError('RETRY_CONFLICT', 'conflict'),
+        limit: () => new OrcaError('RETRY_LIMIT', 'limit'),
+      };
+      const claimStore = new FileRetryClaimStore({storeDir: ${JSON.stringify(f.dir)}, execution: stores.execution, faults});
+      let claimCalls = 0;
+      const claim = claimStore.claim.bind(claimStore);
+      claimStore.claim = async (...args) => { claimCalls++; return claim(...args); };
+      const claims = new RegisteredRetryClaims(claimStore, faults);
+      const runtime = createRevisionRuntime({stores, authorizeExecution: async () => {}});
+      const service = new RevisionInputService({
+        journal: runtime.journal, retries: runtime.fenceRetries(claims), assertRetryFence: runtime.assertRetryFence,
+        stale: () => new OrcaError('REVISION_STALE', 'stale'),
+        access: {principalId: 'user', workspaceId: 'workspace', actor: async () => ({principalId: 'user'}),
+          read: async () => ({content: true, mutate: true}), mutate: async () => {}},
+      });
+      registerRevisionInputOperation(claims, service.submitOperation, runtime.journal);
+      registerRevisionInputOperation(claims, service.replaceOperation, runtime.journal);
+      const authority = {principalId: 'user', workspaceId: 'workspace', authorize: async () => {}};
+      const submit = () => service.submit(${JSON.stringify(f.command)}, {idempotencyKey: 'submit'}, authority);
+      const acquire = stores.leases.acquire.bind(stores.leases);
+      let announced = false;
+      stores.leases.acquire = async (request) => {
+        if (!announced) { announced = true; process.stdout.write('contending\\n'); }
+        return acquire(request);
+      };
+      let first;
+      try { first = await submit(); }
+      catch (error) { first = {state: 'refused', code: error.code}; }
+      const retry = new Promise(resolve => process.stdin.once('data', resolve));
+      process.stdout.write(JSON.stringify({first, claimCalls}) + '\\n');
+      await retry;
+      process.stdin.pause();
+      process.stdout.write(JSON.stringify(await submit()) + '\\n');
+    `;
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      cwd: process.cwd(),
+      stdio: "pipe",
+    });
+    let errors = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      errors += chunk.toString();
+    });
+    const lines = createInterface({ input: child.stdout });
+    const messages = lines[Symbol.asyncIterator]();
+    const next = async () => {
+      const line = await messages.next();
+      if (line.done) throw new Error(errors || "child writer exited before its result");
+      return line.value;
+    };
+    const finished = new Promise<number | null>((resolve) => {
+      child.once("close", resolve);
+    });
+    try {
+      expect(await next()).toBe("contending");
+      // Both submit calls are active: the parent has ownership, the child is acquiring it.
+      publishClaim.resolve();
+      expect(JSON.parse(await next())).toEqual({ first: { state: "refused", code: "RUN_LEASED" }, claimCalls: 0 });
+      releaseLease.resolve();
+      const accepted = await parent;
+      expect(accepted).toMatchObject({ state: "resolved", replayed: false });
+      child.stdin.end("retry\n");
+      expect(JSON.parse(await next())).toEqual({ ...accepted, replayed: true });
+      expect(await f.submit()).toEqual({ ...accepted, replayed: true });
+      expect(await f.claimStore.batch()).toEqual([accepted.operationId]);
+      expect(await f.commits()).toHaveLength(1);
+      expect(f.prepare).toHaveBeenCalledTimes(1);
+      expect(f.validateFresh).toHaveBeenCalledTimes(1);
+    } finally {
+      publishClaim.resolve();
+      releaseLease.resolve();
+      if (!child.stdin.writableEnded) child.stdin.end("retry\n");
+      await parent;
+      expect(await finished, errors).toBe(0);
+      lines.close();
+    }
   });
 
   it("observes a protected reader in another process before claiming a key", async () => {

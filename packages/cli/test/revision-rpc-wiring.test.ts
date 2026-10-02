@@ -197,6 +197,7 @@ edges:
   const services = createRevisionInputServices({
     journal: runtime!.journal,
     retries: runtime!.fenceRetries(app.retryClaims!),
+    assertRetryFence: runtime!.assertRetryFence,
     stale: () => new OrcaError("REVISION_STALE", "stale"),
   });
   services.register(app.retryClaims!);

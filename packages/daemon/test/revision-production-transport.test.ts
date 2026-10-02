@@ -186,6 +186,7 @@ edges:
   const services = createRevisionInputServices({
     journal: adapter.journal,
     retries: adapter.fenceRetries(retries),
+    assertRetryFence: adapter.assertRetryFence,
     stale: () => new OrcaError("REVISION_STALE", "stale"),
   });
   services.register(retries);
@@ -246,6 +247,7 @@ edges:
     const restoredServices = createRevisionInputServices({
       journal: restoredAdapter.journal,
       retries: restoredAdapter.fenceRetries(restoredRetries),
+      assertRetryFence: restoredAdapter.assertRetryFence,
       stale: () => new OrcaError("REVISION_STALE", "stale"),
     });
     restoredServices.register(restoredRetries);
@@ -962,3 +964,18 @@ it.each(["http", "ws"] as const)(
     expect(events.filter((event) => event.type === "revision.recorded" && event.payload.decision)).toHaveLength(1);
   },
 );
+
+it.each(["stale", "payload"] as const)("refuses fresh %s input before consuming its retry key", async (failure) => {
+  const f = await fixture();
+  const refused = structuredClone(f.params);
+  if (failure === "stale") refused.command.target.expectedRevision = "not-current";
+  else refused.command.payload.text = "x".repeat(1025);
+  expect(await f.http("inputs.revise", refused)).toMatchObject({
+    ok: false,
+    error: { code: failure === "stale" ? "REVISION_STALE" : "WORKFLOW_INPUT_INVALID" },
+  });
+  expect(await f.claims.batch()).toEqual([]);
+  const accepted = resolved(await f.http("inputs.revise", f.params));
+  expect(resolved(await f.http("inputs.revise", f.params)).result).toEqual(accepted.result);
+  expect(await f.http("inputs.revise", refused)).toMatchObject({ ok: false, error: { code: "RETRY_CONFLICT" } });
+});

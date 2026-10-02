@@ -538,3 +538,23 @@ failures (stale CAS, missing destination or invalid declared payload) from consu
 a new key. That remaining gap requires fresh-only validation before publication;
 unconditional preflight would incorrectly reject accepted replay after the
 boundary advances. Existing unbound records remain ambiguous and are not repaired.
+
+Fresh-only validation closes that deterministic-refusal gap in the composed
+revision service. A trusted registered-operation callback runs inside the existing
+retry catalog mutex only after the scoped key lookup misses and before any new
+claim is sealed, charged or published. Existing keys take their existing replay or
+exact-conflict path first and never validate against moving current boundaries.
+The callback asserts that the internal run fence is already held, preserving the
+run-fence → catalog-mutex ordering without inverse acquisition. It performs only
+authoritative boundary/CAS/payload validation and current-authority checks; it
+cannot create a correction, decision or retry claim. Commit uses and repeats the
+same validation. A deterministic refusal therefore consumes no new key, and a
+corrected request may use that still-unclaimed key. Once a key is claimed, exact
+command conflicts remain enforced.
+
+This is an internal callback contract, not a wire callback or persisted field.
+No RPC, record phase or serialized store format changes. Nonrevision operations
+without the hook retain their existing behavior. Crashes or failures after actual
+claim publication, including subsequent authority loss, remain explicit ambiguity;
+old unbound records are unchanged and are never deleted, rebound or automatically
+replayed. The coordinated-writer/full-store rollback requirement remains in force.

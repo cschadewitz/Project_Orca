@@ -41,6 +41,7 @@ export interface RetryContext {
 export interface RetryOperation<C, R> {
   readonly kind: "revision.submit" | "revision.replace";
   canonicalize(command: C): JsonValue;
+  validateFresh?(command: C): Promise<void>;
   prepare(command: C, context: RetryContext): Promise<R>;
   recover(command: C, context: RetryContext): Promise<R>;
 }
@@ -103,6 +104,8 @@ export interface RevisionAccess {
 export interface RevisionServiceOptions {
   journal: RevisionJournal;
   retries: RetryClaims;
+  /** Trusted composition asserts an already-held runtime fence; it must never acquire one here. */
+  assertRetryFence?: ((runId: string) => void) | undefined;
   access: RevisionAccess;
   /** Integrator injects OrcaError(REVISION_STALE); that enum is reserved on the frozen branch. */
   stale: () => OrcaError;
@@ -213,6 +216,21 @@ export class RevisionInputService {
     return {
       kind: replace ? "revision.replace" : "revision.submit",
       canonicalize: (command) => validateRevisionCommand(command, replace),
+      ...(this.opts.assertRetryFence
+        ? {
+            validateFresh: async (command: RevisionCommand | ReplacePendingRevisionCommand) => {
+              // The shared claim store calls this only after a key lookup misses, while
+              // holding its catalog mutex. Never acquire a run fence in that lock order.
+              this.opts.assertRetryFence!(command.target.runId);
+              await this.opts.access.mutate(command.target.runId);
+              await this.opts.journal.withRun(command.target.runId, async (tx) => {
+                await this.validateCurrent(command, replace, tx);
+                await this.opts.access.mutate(command.target.runId);
+                this.opts.assertRetryFence!(command.target.runId);
+              });
+            },
+          }
+        : {}),
       prepare: run,
       recover: run,
     };
@@ -247,6 +265,43 @@ export class RevisionInputService {
     await authority.authorize(command);
     await this.opts.access.mutate(command.target.runId);
   }
+  /** Pure authoritative validation shared by fresh-claim preflight and the commit. */
+  private async validateCurrent(
+    command: RevisionCommand | ReplacePendingRevisionCommand,
+    replace: boolean,
+    tx: Pick<RevisionTransaction, "boundary" | "record">,
+  ) {
+    const boundary = await tx.boundary(command.target.destinationId);
+    if (!boundary) throw new OrcaError("NOT_SUPPORTED", "This input has no revision destination");
+    const old = boundary.currentRevisionId ? await tx.record(boundary.currentRevisionId) : undefined;
+    const expected = replace
+      ? (command as ReplacePendingRevisionCommand).expectedRevision
+      : (command as RevisionCommand).target.expectedRevision;
+    if (
+      boundary.target.runId !== command.target.runId ||
+      boundary.target.expectedRevision !== expected ||
+      ["cancelled", "moved"].includes(boundary.status)
+    )
+      throw this.opts.stale();
+    if (replace) {
+      const target = (command as ReplacePendingRevisionCommand).target;
+      if (!old || old.receipt.revisionId !== target.revisionId || boundary.attemptId !== target.attemptId)
+        throw this.opts.stale();
+    } else {
+      const initial = command as RevisionCommand;
+      if (
+        initial.target.stepRunId !== boundary.target.stepRunId ||
+        initial.target.requestId !== boundary.target.requestId ||
+        initial.actionId !== boundary.capability.actionId
+      )
+        throw this.opts.stale();
+      if (initial.supersedesRevisionId !== boundary.currentRevisionId) throw this.opts.stale();
+      if (!old && boundary.status !== "waiting") throw this.opts.stale();
+    }
+    if (old && (old.delivery !== "unclaimed" || old.receipt.state !== "pending")) throw this.opts.stale();
+    const payload = applySchema(command.payload, boundary.capability);
+    return { boundary, old, payload };
+  }
   private async commit(
     command: RevisionCommand | ReplacePendingRevisionCommand,
     context: RetryContext,
@@ -257,35 +312,7 @@ export class RevisionInputService {
       await this.opts.access.mutate(command.target.runId);
       const previous = await tx.committed(context.operationId);
       if (previous) return previous;
-      const boundary = await tx.boundary(command.target.destinationId);
-      if (!boundary) throw new OrcaError("NOT_SUPPORTED", "This input has no revision destination");
-      const old = boundary.currentRevisionId ? await tx.record(boundary.currentRevisionId) : undefined;
-      const expected = replace
-        ? (command as ReplacePendingRevisionCommand).expectedRevision
-        : (command as RevisionCommand).target.expectedRevision;
-      if (
-        boundary.target.runId !== command.target.runId ||
-        boundary.target.expectedRevision !== expected ||
-        ["cancelled", "moved"].includes(boundary.status)
-      )
-        throw this.opts.stale();
-      if (replace) {
-        const target = (command as ReplacePendingRevisionCommand).target;
-        if (!old || old.receipt.revisionId !== target.revisionId || boundary.attemptId !== target.attemptId)
-          throw this.opts.stale();
-      } else {
-        const initial = command as RevisionCommand;
-        if (
-          initial.target.stepRunId !== boundary.target.stepRunId ||
-          initial.target.requestId !== boundary.target.requestId ||
-          initial.actionId !== boundary.capability.actionId
-        )
-          throw this.opts.stale();
-        if (initial.supersedesRevisionId !== boundary.currentRevisionId) throw this.opts.stale();
-        if (!old && boundary.status !== "waiting") throw this.opts.stale();
-      }
-      if (old && (old.delivery !== "unclaimed" || old.receipt.state !== "pending")) throw this.opts.stale();
-      const payload = applySchema(command.payload, boundary.capability);
+      const { boundary, old, payload } = await this.validateCurrent(command, replace, tx);
       let binding = await context.readBinding();
       if (!binding) {
         binding = {

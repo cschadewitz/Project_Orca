@@ -26,6 +26,11 @@ export interface RetryContext {
 export interface RetryOperation<C, R> {
   readonly kind: RetryOperationKind;
   canonicalize(command: C): JsonValue;
+  /** Trusted, bounded, effect-free validation before a fresh claim is published.
+   * Runs under the claim catalog mutex; any operation fence must already be held.
+   * Existing claims (including conflicts) skip this check.
+   */
+  validateFresh?(command: C): Promise<void>;
   prepare(command: C, context: RetryContext): Promise<R>;
   recover(command: C, context: RetryContext): Promise<R>;
 }
@@ -105,6 +110,8 @@ export interface RetryClaimStore {
     key: string | undefined,
     command: JsonValue,
     canonical: string,
+    /** Server-internal only; invoked after a lookup miss, before any claim mutation. */
+    validateFresh?: () => Promise<void>,
   ): Promise<{ record: RetryRecord; fresh: boolean }>;
   read(operationId: string): Promise<RetryRecord | undefined>;
   lock<T>(operationId: string, action: () => Promise<T>): Promise<T>;
