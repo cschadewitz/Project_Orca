@@ -40,6 +40,20 @@ export function rotate(values, round) {
   return [...values.slice(at), ...values.slice(0, at)];
 }
 
+/** Exact sample order: case order rotates per round; each case's cache order alternates per round. */
+export function schedule(cases, repetitions = LIMITS.repetitions) {
+  const samples = [];
+  for (let round = 0; round < repetitions; round++) {
+    for (const spec of rotate(cases, round)) {
+      // Key cache order on the case's stable plan index, never its rotated position:
+      // round + rotated position cancels the rotation for most cases.
+      for (const cache of rotate(["process-cold", "warm"], round + cases.indexOf(spec)))
+        samples.push({ round, case: spec, cache });
+    }
+  }
+  return samples;
+}
+
 export function unionMs(intervals) {
   let end = -Infinity;
   let total = 0;

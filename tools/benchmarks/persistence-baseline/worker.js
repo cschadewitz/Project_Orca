@@ -60,9 +60,28 @@ async function generate() {
   };
 }
 
+/** Every restored event and the tail window, so skipped intermediate work cannot pass as a speedup. */
+function verifyRestored({ id, page, replay }) {
+  const tail = Math.min(8, spec.history);
+  assert.deepEqual(
+    page.map((event) => event.seq),
+    Array.from({ length: tail }, (_, at) => spec.history - tail + at),
+  );
+  assert.equal(replay.length, spec.history);
+  replay.forEach((event, seq) => {
+    assert.equal(event.runId, id);
+    assert.equal(event.seq, seq);
+    if (seq === 0) {
+      assert.equal(event.type, "run.created");
+      assert.equal(event.payload.vars.secret, secret);
+    } else assert.deepEqual([event.type, event.payload.vars], ["vars.set", { secret, value: seq, blob }]);
+  });
+}
+
 async function measure() {
   assert.deepEqual(JSON.parse(await readFile(join(directory, "fixture.json"), "utf8")), { spec, seed });
   let intervals = [];
+  let restored = [];
   async function timed(label, fn) {
     const start = performance.now();
     try {
@@ -90,10 +109,12 @@ async function measure() {
       assert.equal(state.run.vars.secret, secret);
       assert.equal(state.run.vars.value, spec.history - 1);
       assert.equal(state.lastSeq, spec.history - 1);
+      restored.push({ id, page, replay });
     }
   }
   if (cache === "warm") await Promise.all(Array.from({ length: spec.readers }, reader));
   intervals = [];
+  restored = [];
   const start = performance.now();
   await Promise.all(Array.from({ length: spec.readers }, reader));
   const readWallMs = performance.now() - start;
@@ -107,7 +128,10 @@ async function measure() {
       return [label, { count: matches.length, unionMs: unionMs(matches.map((item) => [item.start, item.end])) }];
     }),
   );
-  // Oracle outside timed intervals: publication is visible, authenticated, reducible and redacted.
+  // Oracles outside timed intervals: every measured read restored the full history, and
+  // publication is visible, authenticated, reducible and redacted.
+  assert.equal(restored.length, spec.readers * spec.runs);
+  restored.forEach(verifyRestored);
   const after = await events.read(runId(0));
   assert.equal(after.length, spec.history + 1);
   assert.equal(JSON.stringify(after).includes(secret), false);

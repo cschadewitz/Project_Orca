@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { LIMITS, plan, rotate, stats, summarize, unionMs } from "./model.js";
+import { LIMITS, plan, rotate, schedule, stats, summarize, unionMs } from "./model.js";
 import { supervise, usage } from "./supervisor.js";
 
 test("demo descendants cannot discover a Git checkout above the disposable root", async () => {
@@ -73,6 +73,30 @@ test("rotations pair both cache orders and preserve all cases", () => {
   assert.deepEqual(rotate(["cold", "warm"], 0), ["cold", "warm"]);
   assert.deepEqual(rotate(["cold", "warm"], 1), ["warm", "cold"]);
   assert.deepEqual(rotate([1, 2, 3], 5), [3, 1, 2]);
+});
+
+test("the executed schedule alternates every case's cache order between adjacent rounds", () => {
+  for (const profile of ["smoke", "baseline"]) {
+    const cases = plan(profile);
+    const samples = schedule(cases);
+    assert.equal(samples.length, cases.length * 2 * LIMITS.repetitions);
+    const firsts = new Map(cases.map((spec) => [spec.id, []]));
+    for (let round = 0; round < LIMITS.repetitions; round++) {
+      const rows = samples.filter((row) => row.round === round);
+      // Each round visits every case once, as an adjacent cold/warm pair, starting at a rotated case.
+      assert.equal(rows[0].case.id, cases[round % cases.length].id);
+      for (let at = 0; at < rows.length; at += 2) {
+        assert.equal(rows[at].case.id, rows[at + 1].case.id);
+        assert.deepEqual([rows[at].cache, rows[at + 1].cache].sort(), ["process-cold", "warm"]);
+        firsts.get(rows[at].case.id).push(rows[at].cache);
+      }
+    }
+    for (const [id, orders] of firsts) {
+      assert.equal(orders.length, LIMITS.repetitions, id);
+      assert.equal(new Set(orders).size, 2, `${id} never changes cache order`);
+      for (let round = 1; round < orders.length; round++) assert.notEqual(orders[round], orders[round - 1], id);
+    }
+  }
 });
 
 test("interval union never double counts nested or concurrent calls", () => {

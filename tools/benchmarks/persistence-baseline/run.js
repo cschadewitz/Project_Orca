@@ -7,7 +7,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import { supervise, usage } from "./supervisor.js";
-import { BASELINE, LIMITS, plan, rotate, summarize } from "./model.js";
+import { BASELINE, LIMITS, plan, schedule, summarize } from "./model.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = resolve(here, "../../..");
@@ -172,24 +172,20 @@ try {
     await mkdir(fixture, { mode: 0o700 });
     report.setup.push({ case: spec, ...(await worker("generate", fixture, spec)) });
   }
-  for (let round = 0; round < LIMITS.repetitions; round++) {
-    for (const [index, spec] of rotate(cases, round).entries()) {
-      for (const cache of rotate(["process-cold", "warm"], round + index)) {
-        const sample = { round, case: spec, cache, status: "unrun" };
-        report.samples.push(sample);
-        if (performance.now() - started >= LIMITS.suiteMs) sample.reason = "suite-deadline";
-        else if (report.setup.find((row) => row.case.id === spec.id).status !== "passed")
-          sample.reason = "fixture-failed";
-        else {
-          const copy = join(root, "sample");
-          await cp(join(root, spec.id), copy, { recursive: true, errorOnExist: true, force: false });
-          await usage(root);
-          Object.assign(sample, await worker("measure", copy, spec, cache));
-          await rm(copy, { recursive: true, force: true });
-        }
-        await save();
-      }
+  for (const planned of schedule(cases)) {
+    const { case: spec, cache } = planned;
+    const sample = { ...planned, status: "unrun" };
+    report.samples.push(sample);
+    if (performance.now() - started >= LIMITS.suiteMs) sample.reason = "suite-deadline";
+    else if (report.setup.find((row) => row.case.id === spec.id).status !== "passed") sample.reason = "fixture-failed";
+    else {
+      const copy = join(root, "sample");
+      await cp(join(root, spec.id), copy, { recursive: true, errorOnExist: true, force: false });
+      await usage(root);
+      Object.assign(sample, await worker("measure", copy, spec, cache));
+      await rm(copy, { recursive: true, force: true });
     }
+    await save();
   }
   for (let round = 0; round < (options.profile === "smoke" ? 1 : LIMITS.repetitions); round++) {
     const path = join(root, `demo-${round}`);
