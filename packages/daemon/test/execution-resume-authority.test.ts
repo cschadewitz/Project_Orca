@@ -2,7 +2,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type TestContext } from "vitest";
 import { AgentRegistry, type AgentSession } from "@orca/agents";
 import {
   AgentSpecSchema,
@@ -41,6 +41,10 @@ import { submissionAuthority } from "../src/request-submission.js";
 const runtimes: ReturnType<typeof daemonExecutionRuntime>[] = [];
 const jobs: Promise<unknown>[] = [];
 const directories: string[] = [];
+let testContext: TestContext;
+beforeEach((context) => {
+  testContext = context;
+});
 afterEach(async () => {
   for (const runtime of runtimes.splice(0)) runtime.close();
   await Promise.allSettled(jobs.splice(0));
@@ -282,11 +286,57 @@ edges: [{from: s, to: gate}, {from: gate, to: end}]
   };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-async function permission(f: { reads: ReadModel }, runId: string) {
-  await vi.waitFor(async () =>
-    expect((await f.reads.inputsList({ runId })).inputs.some((input) => input.live?.state === "pending")).toBe(true),
+/** Observe publication, not interpreter speed. The existing test deadline still bounds this wait. */
+async function permission(
+  f: { reads: ReadModel; orchestrator: Orchestrator },
+  runId: string,
+  phase: "live-permission" | "rotation-attachment" | "attached-second-gate" = "live-permission",
+) {
+  const { signal, onTestFailed } = testContext;
+  const events: { type: string; seq: number }[] = [];
+  let changed = deferred();
+  const unsubscribe = f.orchestrator.subscribe(
+    (event) => {
+      events.push({ type: event.type, seq: event.seq });
+      if (events.length > 8) events.shift();
+      changed.resolve();
+    },
+    { runId },
   );
-  return (await f.reads.inputsList({ runId })).inputs.find((input) => input.live?.state === "pending")!;
+  const start = performance.now();
+  let reads = 0;
+  let inputs: { kind: string; live: string | undefined }[] = [];
+  const diagnostic = () =>
+    JSON.stringify({ phase, reads, elapsedMs: Math.round(performance.now() - start), inputs, events });
+  let aborted: string | undefined;
+  const abort = () => {
+    aborted = diagnostic();
+    changed.resolve();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  onTestFailed(() => {
+    // Only fixed phase labels, counts, enum states and the last eight public event
+    // types/sequences. Never dump inputs, identities, credentials, paths or errors.
+    if (aborted) console.error(`Permission publication interrupted: ${aborted}`);
+  });
+  try {
+    for (;;) {
+      if (signal.aborted) throw new Error(`Permission publication interrupted: ${aborted ?? diagnostic()}`);
+      // Subscribe before reading and capture a fresh wake-up before each read: an
+      // event arriving during the read must not be lost between checking and waiting.
+      changed = deferred();
+      const page = await f.reads.inputsList({ runId });
+      reads++;
+      inputs = page.inputs.slice(0, 4).map((input) => ({ kind: input.kind, live: input.live?.state }));
+      if (signal.aborted) continue;
+      const pending = page.inputs.find((input) => input.live?.state === "pending");
+      if (pending) return pending;
+      await changed.promise;
+    }
+  } finally {
+    unsubscribe();
+    signal.removeEventListener("abort", abort);
+  }
 }
 function resumeAuthority(f: Fixture, actor: MutationActor = f.currentActor) {
   return { actor, authorize: vi.fn(async () => {}) } satisfies ExecutionResumeAuthority;
@@ -326,7 +376,7 @@ it.each([false, true])(
     ]);
     const authority = resumeAuthority(f);
     const resumed = track(f.control.resumeRun({ runId: f.runId }, authority));
-    const fresh = await permission(f, f.runId);
+    const fresh = await permission(f, f.runId, "rotation-attachment");
     expect(fresh.live!.target.instanceId).toBe("boot-b");
     expect(f.sessions).toHaveLength(1);
     expect(f.answers).toEqual([]);
@@ -337,7 +387,7 @@ it.each([false, true])(
     const continued = track(
       f.control.answerInput({ runId: f.runId, requestId: again.id, optionId: "go", resume: true }, f.currentActor),
     );
-    const next = await permission(f, f.runId);
+    const next = await permission(f, f.runId, "attached-second-gate");
     expect(next.live!.target.sessionId).not.toBe(fresh.live!.target.sessionId);
     await expect(answerPermission(f, fresh)).rejects.toMatchObject({ code: "RUN_STATE" });
     await answerPermission(f, next);
