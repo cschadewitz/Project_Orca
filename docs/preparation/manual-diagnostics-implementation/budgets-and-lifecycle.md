@@ -1,84 +1,100 @@
-# Proposed budgets and one-shot lifecycle
+# Five-minute rolling buffer: sizing and safeguards
 
-All limits remain proposals. No product runtime, capture performance, memory, disk, key,
-network or native-device measurements were made. The offline checker validates a shape,
-not resource isolation.
+## Approved direction versus estimates
 
-## Synthetic size evidence
+On 2026-10-03 Casey requested configurable pre-trigger rolling metadata, default five
+minutes rather than one. Only that direction/default is approved. Runtime collection,
+tester consent, durable storage and resource ceilings are not approved by this decision.
 
-The six unchanged committed valid fixtures are 934–1,227 bytes. On 2026-10-03 a local
-Python calculation used the baseline validator's canonical `export_bytes` and
-`validate_bytes`, starting with `fixtures/valid/missing-data.json`:
+Duration alone does not set size: event rate and field sizes do. Sparse metadata at
+one event per ten seconds through one event per second gives a **roughly 10–50 KiB
+planning example**. At ten events/second, the same synthetic shape is roughly 430 KiB.
+These are uncompressed serialized JSON bytes, not measured production rates or a promised
+upper bound. Actual heap is larger and unmeasured; compression is neither assumed nor
+proposed as a way around expanded-byte limits.
 
-- Set 64 aliases to `e1`–`e64`, kind `admission`.
-- Repeat event `{offsetMs: window, phase: startup, code: startup_exited_before_handshake,
-  entityAlias: unknown}`.
-- For `one_shot`, use window 60,000 and 32 events: **9,445 bytes**, validator accepted.
-- For `rolling_snapshot`, use window 86,400,000 and 256 events: **42,480 bytes**,
-  validator accepted.
+## Reproducible synthetic arithmetic
 
-These are reproducible synthetic shapes, not maximum-size proofs or realistic event rates.
-They support retaining 256 KiB as a defensive parser/report ceiling rather than a target.
-Do not pad reports, expand the allowlist or read logs to fill space. A tighter ceiling can
-be considered after real safe-producer fixtures exist; any increase needs review.
+Start from the unchanged baseline fixture `fixtures/valid/missing-data.json`, using its
+validator's canonical `export_bytes`. Set mode `rolling_snapshot`, windowMs 300000,
+64 entities with aliases e1–e64 and kind admission. Repeat the long-enum event
+`{offsetMs: 300000, phase: startup, code: startup_exited_before_handshake,
+entityAlias: unknown}`. Indentation and final LF are included:
 
-## Recommended first-beta profile, subject to owner review
+| Five-minute assumption | Events | Serialized bytes | Old 256-event/256 KiB contract |
+| --- | ---: | ---: | --- |
+| One per ten seconds | 30 | 9,196 (9.0 KiB) | Fits |
+| Old export event ceiling | 256 | 41,966 (41.0 KiB) | Fits |
+| One per second | 300 | 48,346 (47.2 KiB) | Invalid: exceeds event cap |
+| Ten per second | 3,000 | 439,846 (429.5 KiB) | Invalid: exceeds both caps |
 
-| Bound | Proposal and reasoning |
+The 300/3,000-event rows are byte calculations, **not valid bundles under the current
+schema**. The 30/256-event cases can be validated unchanged. This shape uses roughly
+145 serialized bytes/event plus 4.8 KiB of envelope and all 64 aliases, not a maximum-size
+proof. Existing six valid fixtures are 934–1,227 bytes. Earlier examples with different
+offset digits measured 9,445 bytes at 32 events and 42,480 bytes at 256.
+
+Keeping the old newest-256 cap would omit 44 of 300 events at one/second, leaving about
+4 minutes 16 seconds of events; at ten/second, only about 26 seconds. We must not present
+that cap as adequate full-window coverage or silently retain it beneath a bigger buffer.
+
+## Proposed revised safeguards, not approved limits
+
+| Resource | Recommendation requiring review |
 | --- | --- |
-| Export | Keep 262,144 uncompressed bytes including canonical whitespace/final LF; enforce before parse, plus closed-schema depth/type/semantic checks. No archive bypass. |
-| Collection | One immutable current snapshot per explicit consent, at most 32 eligible safe events and 64 aliases. Prefer immediate snapshot; do not wait 60 seconds to accumulate history. No pre-consent event retention or timer-driven session collection. |
-| Active preparation | Keep 2,000 ms as an initial abort ceiling to test, not a proven performance SLA. One attempt, no queue/automatic retry. No CPU-heavy work on execution paths. |
-| Grant | End acquisition when the snapshot is ready; 60 seconds is the absolute consent-to-preparation bound, not a background capture window. Abort on cancellation, authority uncertainty or timeout. |
-| Ready preview | At most 600,000 ms; cancel/back/restart/unsafe elapsed time invalidates earlier. Saving uses a separate still-valid preview/save grant bound to those immutable bytes. |
-| Persistence | Zero persistent one-shot history. Keep minimized bytes in bounded main-process memory; only explicit save creates an operation-owned protected temp file and final local JSON. |
-| Overload | Drop diagnostics with honest omission/unknown information, or reject the report. Never block work, repair state, extend collection, spill raw data or retry execution. |
+| History duration | Approved default five minutes; propose configurable 1–15 whole minutes initially. Final range needs product/engineering review. |
+| Byte budget | Propose **1 MiB for the complete canonical uncompressed report**, coordinated with rolling retention and preview. Reserve envelope, aliases, formatting and omission metadata within that ceiling. Do not cap the buffer at 1 MiB of raw event records and then add unbudgeted serialization overhead. |
+| Event budget | Propose an independently tested starting ceiling of **4,096 safe events**, subject to producer-rate/heap measurement; whichever byte/event bound is reached first wins. This accommodates 3,000 events in the measured synthetic shape, not arbitrary 10/sec payloads. |
+| Per event | Existing 512 serialized-byte ceiling remains a candidate. At 4,096 such records, events alone would be 2 MiB, so the 1 MiB byte ceiling binds earlier. Never truncate free text into a safe-looking field. |
+| Alias/index budget | Keep explicitly bounded maps; original 64 export aliases needs workload review. Excess entities can cause visible omissions even when bytes/events fit. Never leak raw IDs or claim complete coverage. |
+| Collection | Off until explicit tester session opt-in. Volatile minimized metadata only; no raw history, logs, audit, disk spill or key access. Restart is off. This lifecycle is proposed, not implied by approval of the default. |
+| Preparation/preview | Proposed 2-second active preparation deadline, one attempt, and ten-minute frozen preview maximum. Final deadlines require measurement/review. No automatic retry or snapshot refresh while saving. |
 
-Collection grant expiry and preview expiry are distinct states: the one-shot acquisition
-grant ends at readiness, while the explicitly disclosed preview/save permission continues
-only for the reviewed snapshot's bounded lifetime. Before implementation, D2/D6 must resolve
-this distinction in the original state wording so a live preview neither reacquires data nor
-accidentally claims an ended acquisition grant permits new collection.
+The 1 MiB/4,096-event proposal is intentionally reversible and is not silently installed in
+the existing schema. D1 review must select matching producer, validator, preview and export
+bounds. If a byte/event ceiling evicts data, show the requested window, actual retained
+coverage and omission/saturation/unknown counts. If export preparation must drop anything
+else, disclose that additional loss separately. Never claim the configured duration
+guarantees all evidence or a root cause.
 
-## Rolling stays deferred
+Before enablement, measure safe event rates under startup, connection churn, multi-run
+load and bursts; inspect actual serialized distribution and peak heap including ring,
+indexes, validation and frozen preview copies. A serialized cap is not a heap guarantee.
+Bound work before allocation, remove oldest eligible observations or drop new ones with
+visible omissions, and leave execution unblocked. Do not broaden data collection to
+fill a budget or use compression to mask overflow.
 
-The existing 2 MiB / 2,048 events / 24 hours are unapproved. At 512 serialized bytes per
-event, 2,048 events alone reserve 1,048,576 bytes, leaving 1,048,576 bytes under 2 MiB for
-metadata, ciphertext overhead, references and all operation-owned temp files. This arithmetic
-is feasible only if the actual encoding and simultaneous write/cleanup peaks fit; it is not
-a storage benchmark. A simple full-copy rewrite could exceed the ceiling. Reserve overhead,
-bound references and prove peak usage before any future implementation.
+## Duration changes, expiry and crash behavior
 
-Twenty-four hours materially increases exposure and can include overnight use; it is not
-needed for the recommended manual snapshot. Any future rolling proposal must justify the
-support benefit, renewed explicit opt-in, independent diagnostic key/platform protection,
-retention including sleep, restart-off, revocation and verified cleanup. No key creation,
-cryptographic implementation or persistent access configuration belongs to this work.
+Decreasing the window immediately expires older records. Increasing it permits future
+retention only, never resurrects expired/pre-consent events. Use monotonic elapsed time
+accounting for sleep. Clock uncertainty, opt-out or restart conservatively invalidates
+history. Normal time-based eviction is distinct from capacity-based omission.
 
-## Exact bytes and local storage
+A volatile buffer disappears when the process crashes or restarts, along with unsaved
+previews. It cannot guarantee post-crash diagnostics. Persistent crash-surviving storage
+would need a separate bounded retention design, platform encryption/independent key
+review, native ACL tests and approval before implementation. The old 2 MiB/24-hour
+persistent proposal is not approved by the five-minute default decision.
 
-Main owns one validated canonical byte buffer, its length, digest and private generation
-token. Preview displays all bytes and derives summaries from that buffer. Renderer-supplied
-JSON, hashes, raw paths or arbitrary source selections are not authority. A local digest
-binds the frozen preview to the save operation; it is not anonymization and is not exported.
-Changing destination never recollects or reserializes. Expiry invalidates save, discards
-unsaved preview bytes and cleans only operation-owned temporary files under the reviewed
-cleanup policy. Show a fixed expiry notice; report cleanup failure rather than claiming
-all temporary data was removed.
+## Preview, save and sharing remain separate
 
-Recheck consent/save token, buffer identity, current authority and destination immediately
-before publication. An owner-only exclusively created temp file and atomic non-overwriting
-publication must preserve reviewed bytes without a path or permission TOCTOU. Reject symlink/
-reparse substitutions, unsafe ancestry/ownership, inherited broad ACLs, existing filename
-and unsupported filesystem semantics. Never chmod unrelated user directories.
+Explicit tester session consent may allow rolling collection to continue while a separate
+snapshot is previewed. Main freezes one validated canonical byte buffer, length, digest
+and private generation token. Later events cannot alter it. Save intent applies only to
+those bytes; destination changes do not recollect, refresh or extend expiry. Opt-out
+invalidates collection and unsaved preview/save authority.
 
-Windows requires tested DACL/owner handling; POSIX mode bits are not a Windows guarantee.
-The existing protected execution helper skips some mode checks on Windows and must not be
-presented as diagnostic export security. Saved JSON is intentionally plaintext under the
-tester's access controls; encryption of hypothetical rolling history would not protect a
-deliberately shared export.
+Renderer-supplied JSON, digest, raw path or arbitrary source selection is not authority.
+Recheck save token, immutable buffer, current observation/resource authority and destination
+before publication. A local digest binds bytes, does not anonymize, and is not exported.
+Expiry discards unsaved bytes and cleans operation-owned temps under the reviewed policy,
+with a fixed notice; report failed cleanup honestly.
 
-Cancellation before publication removes only operation-owned temporary files; after the
-atomic commit, report the saved file honestly. Failed cleanup is visible and bounded; never
-claim secure erasure on SSDs/backups or recall of recipient copies. No external diagnostic
-traffic, automatic attachment or sharing action accompanies save.
+Require owner-only exclusive temp creation and atomic non-overwriting publication, with
+symlink/reparse/ancestry/ACL race defenses. Reject broad inherited rights, unsafe ownership,
+existing filename and unsupported filesystem semantics. Windows needs actual DACL evidence,
+not POSIX mode claims. Do not chmod unrelated directories. Saved JSON is deliberately
+plaintext and remains under tester control. Sharing is a later tester action; no automatic
+network, email or issue upload occurs. Cancellation after publication cannot undo or
+recall a file already saved/shared.

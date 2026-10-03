@@ -39,6 +39,11 @@ Read-only source inspection is not a privacy certification or runtime test.
 
 ## Consistent observation and current authority
 
+For the approved configurable five-minute default direction, producers emit only after
+explicit tester rolling consent. This is ongoing safe-fact collection, never retroactive
+log reading. Volatile retention and final budgets still require review; export intent
+cannot authorize earlier or new background collection.
+
 A future producer returns only the closed safe schema after checking the same private
 authority and resource scope that authorized the underlying observation. Authentication
 alone, advertised method availability, a caller-supplied run ID, or possession of an old
