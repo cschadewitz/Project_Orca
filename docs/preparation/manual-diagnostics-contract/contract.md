@@ -38,8 +38,11 @@ Missing required properties, `null`, numeric strings and invented defaults fail 
 A required but unavailable fact is explicitly `unknown`, not `false`, zero, or “healthy.”
 Empty arrays mean no safe observations included, not that no failures happened. Known
 snapshot outcomes for admission/resume/protected state require the corresponding evidence
-flag `true`. Without handshake evidence `true`, daemon version/protocol and accepted auth
-must remain `unknown`. Event observations describe their own instant, so a historical
+flag `true`. Without handshake evidence `true`, daemon version/protocol, store format and
+protected-state snapshot must remain `unknown`, protected-state observation cannot be
+`true`, and authentication cannot be `accepted`. Handshake evidence is necessary for
+these store claims but does not itself supply them or authorize a store read.
+Event observations describe their own instant, so a historical
 resume failure can coexist with a current unknown snapshot.
 
 Alias assignment uses observation order inside one bundle, with a private in-memory map

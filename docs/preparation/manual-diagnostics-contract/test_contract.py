@@ -29,6 +29,9 @@ class ContractTests(unittest.TestCase):
             "duplicate-alias": "duplicate_alias", "unobserved-claim": "unobserved_claim",
             "reused-identifier": "identifier_reuse", "duplicate-key": "duplicate_key",
             "nonfinite": "non_integer_number",
+            "store-format-without-handshake": "unobserved_claim",
+            "protected-state-without-handshake": "unobserved_claim",
+            "protected-observation-without-handshake": "unobserved_claim",
         }
         for path in sorted((ROOT / "fixtures/invalid").iterdir()):
             with self.subTest(fixture=path.name):
@@ -95,6 +98,29 @@ class ContractTests(unittest.TestCase):
         candidate = copy.deepcopy(self.base)
         candidate["entities"] = [{"alias": "e1\n", "kind": "run"}]
         self.assert_rejected(export_bytes(candidate), "schema")
+
+    def test_store_claims_require_handshake(self):
+        startup = read_bundle(ROOT / "fixtures/valid/startup-unknown.json")
+        for handshake in (False, "unknown", True):
+            for state in ("available", "unavailable", "unknown"):
+                with self.subTest(handshake=handshake, protected_state=state):
+                    candidate = copy.deepcopy(startup)
+                    candidate["evidence"].update(handshake=handshake, protectedStateObservation=True)
+                    candidate["snapshot"]["protectedState"] = state
+                    if handshake is True:
+                        validate_bytes(export_bytes(candidate))
+                    else:
+                        self.assert_rejected(export_bytes(candidate), "unobserved_claim")
+            candidate = copy.deepcopy(startup)
+            candidate["evidence"]["handshake"] = handshake
+            candidate["versions"]["storeFormat"] = "config-generations-v3"
+            if handshake is True:
+                validate_bytes(export_bytes(candidate))
+            else:
+                self.assert_rejected(export_bytes(candidate), "unobserved_claim")
+        # Absence is not an assertion about store health and remains valid before handshake.
+        startup["evidence"]["protectedStateObservation"] = False
+        validate_bytes(export_bytes(startup))
 
     def test_all_object_boundaries_are_closed(self):
         # Add a canary to every concrete object, including nested protocol and event objects.

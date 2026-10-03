@@ -16,7 +16,7 @@ runtime randomness. Digests protect fixture review; they anonymize nothing.
 | --- | --- | --- |
 | [failed-resume.json](valid/failed-resume.json) | 1102 | `66cad7a0dc8f5a77e3c72e3fe9feacd46dc585dea53f2968e09bd77fd04c06ba` |
 | [missing-data.json](valid/missing-data.json) | 934 | `4703e25ed927275113e3a3d72a9139f013f11e16b521a6bdd84fe72149b37a8d` |
-| [protected-unavailable.json](valid/protected-unavailable.json) | 1130 | `3b6724d2c82f7172a1ad004212416f56a695f6d6de295ea19bb49b4674976f96` |
+| [protected-unavailable.json](valid/protected-unavailable.json) | 1125 | `7495da822ec25f9c9bddd15aa6f6673619349a3840f60e4746133c44117dfdea` |
 | [rolling.json](valid/rolling.json) | 1227 | `1fe14846fe05e6b47564b4d51fe0a5ec816f0fb92ff55545f5aa9c150159cff6` |
 | [startup-unknown.json](valid/startup-unknown.json) | 1087 | `e15c07c927bb909d8c1a542b56b355edb4282c0fd0b64e21ce7e34e92eef9c6d` |
 | [uncertain-admission.json](valid/uncertain-admission.json) | 1120 | `ac34af2ce2773312bc55b0d9971046b3f190bef7fa2ef6d6459e0d1d74f93545` |
@@ -27,7 +27,8 @@ runtime randomness. Digests protect fixture review; they anonymize nothing.
   metadata. Startup cause and all daemon facts stay unknown rather than parsing an error.
 - `uncertain-admission`, `failed-resume`, and `protected-unavailable` assume explicit future
   typed observations. They specify desired outputs and Casey escalation; they do not prove
-  these hooks exist today or authorize recovery.
+  these hooks exist today or authorize recovery. `protected-unavailable` includes synthetic
+  handshake evidence before asserting a protected-state observation.
 - `rolling` shows the proposed 24-hour window endpoints, lifecycle enums, a saturated
   budget count, and unknown unavailable count. It does not demonstrate actual retention.
 
@@ -44,6 +45,7 @@ removed. Rejection diagnostics are fixed categories and must not echo the unsafe
 | `dangling-alias` | `dangling_alias`: no unresolved alias |
 | `outside-window` | `event_order_or_window`: event outside represented time |
 | `duplicate-alias` | `duplicate_alias`: alias uniqueness across entity kinds |
+| `store-format-without-handshake`, `protected-state-without-handshake`, `protected-observation-without-handshake` | `unobserved_claim`: store facts/observation require handshake evidence |
 | `unobserved-claim` | `unobserved_claim`: known admission without observation |
 | `reused-identifier` | `identifier_reuse`: report/session IDs must differ |
 | `duplicate-key` | `duplicate_key`: parser ambiguity fails even when duplicate values agree |

@@ -41,8 +41,11 @@ review exact hook ownership and authorization under #416; this slice adds no API
 
 ## Missing and ambiguous observations
 
-Before handshake, daemon version/protocol, store state and authorization success are
-`unknown`. The app can still create a one-shot preview from known local metadata and an
+Without handshake evidence `true`, daemon version/protocol, `versions.storeFormat` and
+`snapshot.protectedState` remain `unknown`; `evidence.protectedStateObservation` cannot
+be `true`, and authentication cannot be `accepted`. A handshake alone establishes no
+store fact and authorizes no additional read. The app can still create a one-shot preview
+from known local metadata and an
 unknown startup outcome. [startup-unknown.json](fixtures/valid/startup-unknown.json)
 intentionally demonstrates this baseline limitation. The other failure fixtures assume
 future explicit typed observations and are **synthetic design inputs**, not source or

@@ -96,7 +96,9 @@ def validate_bytes(raw):
             raise Rejected("unobserved_claim")
     if evidence["handshake"] is not True:
         versions = bundle["versions"]
-        if versions["daemon"] != "unknown" or versions["daemonProtocol"] != "unknown":
+        if any(versions[field] != "unknown" for field in ("daemon", "daemonProtocol", "storeFormat")):
+            raise Rejected("unobserved_claim")
+        if evidence["protectedStateObservation"] is True or bundle["snapshot"]["protectedState"] != "unknown":
             raise Rejected("unobserved_claim")
         if bundle["snapshot"]["authentication"] == "accepted":
             raise Rejected("unobserved_claim")
