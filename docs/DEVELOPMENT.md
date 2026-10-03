@@ -40,6 +40,22 @@ See [runtime integration](runtime-foundation-integration.md) for pinned feature 
 security/storage boundaries. Run the combined suite and App smoke on the exact integration
 head before treating the independent story slices as accepted.
 
+### Desktop workflow bundle probe
+
+After `pnpm run build` and `pnpm --filter @orca/app run build:daemon`, run
+`node tools/probe-bundled-daemon.js` to reproduce the Desktop workflow's authenticated
+hello check. `desktop.yml` runs this helper on every platform before packaging; a
+nonzero exit fails the job. The helper uses the built client/protocol contracts, requires
+authentication, checks the bundle's version and owned process/store identity, bounds
+transport and child output, and cleans up its own child and synthetic workspace.
+
+For this probe, only the helper's sanitized success summary or failure code reaches the
+Actions log; raw daemon output, hello responses and temporary token files are not retained.
+This checks the standalone bundle under the runner's Node runtime. It does not prove
+packaged Electron launch on macOS/Windows, Apple Silicon execution, signing/notarization,
+Gatekeeper/TCC/accessibility behavior, or the full installed-app acceptance in #388.
+The separate Linux packaged-app smoke remains a distinct check.
+
 ## The renderer build
 
 The app is three programs with three different runtimes, and they are built by two tools:
