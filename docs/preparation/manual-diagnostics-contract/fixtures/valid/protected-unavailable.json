@@ -1,0 +1,51 @@
+{
+  "entities": [
+    {
+      "alias": "e1",
+      "kind": "run"
+    }
+  ],
+  "events": [
+    {
+      "code": "protected_state_unavailable",
+      "entityAlias": "e1",
+      "offsetMs": 0,
+      "phase": "protected_state"
+    }
+  ],
+  "evidence": {
+    "admissionObservation": "unknown",
+    "handshake": "unknown",
+    "protectedStateObservation": true,
+    "resumeObservation": "unknown"
+  },
+  "mode": "one_shot",
+  "omissions": {
+    "budget": "unknown",
+    "expired": "unknown",
+    "invalid": "unknown",
+    "unavailable": "unknown"
+  },
+  "reportId": "11111111-1111-4111-8111-111111111111",
+  "schemaVersion": 1,
+  "sessionId": "22222222-2222-4222-8222-222222222222",
+  "snapshot": {
+    "admission": "unknown",
+    "authentication": "unknown",
+    "connection": "unknown",
+    "protectedState": "unavailable",
+    "resume": "unknown"
+  },
+  "versions": {
+    "app": "unknown",
+    "appProtocol": "unknown",
+    "arch": "unknown",
+    "buildRevision": "unknown",
+    "daemon": "unknown",
+    "daemonProtocol": "unknown",
+    "os": "unknown",
+    "osVersion": "unknown",
+    "storeFormat": "unknown"
+  },
+  "windowMs": 0
+}
