@@ -1,0 +1,76 @@
+{
+  "fixture": "beta-first-job-v1",
+  "mode": "offline-scripted",
+  "status": "pass",
+  "node": "v24.21.0",
+  "platform": "linux",
+  "arch": "x64",
+  "attempts": [
+    {
+      "fixture": "beta-first-job-v1",
+      "mode": "offline-scripted",
+      "root": "<attempt-1>",
+      "workspace": "<attempt-1>/Sample α",
+      "baseline": "095676df57c3172c383fffdf22ec25ae64702c17",
+      "hashes": {
+        "README.md": "646080bfb94e94b0fcbdf267411b4a8c6ca2a703b857029ef955749c56936067",
+        "shipping.js": "f4397e480bfd679cd29ba53c3723a92adfda184acdfbcf138e8cae6fce8266da",
+        "shipping.test.js": "afdf5e654d0823a75f71665eab992791efe19c934687237f1f6cd8bce8401ec2"
+      },
+      "before": {
+        "exitCode": 1,
+        "output": "PASS zero subtotal\nPASS below threshold\nFAIL exact threshold: expected 0, got 499\nPASS above threshold\nPASS large subtotal\n4 passed; 1 failed\n"
+      },
+      "after": {
+        "exitCode": 0,
+        "output": "PASS zero subtotal\nPASS below threshold\nPASS exact threshold\nPASS above threshold\nPASS large subtotal\n5 passed; 0 failed\n"
+      },
+      "fixedHashes": {
+        "README.md": "646080bfb94e94b0fcbdf267411b4a8c6ca2a703b857029ef955749c56936067",
+        "shipping.js": "f39083a60d19fff1fcbbaccf3affe9642e400e68e12776618637f01030568936",
+        "shipping.test.js": "afdf5e654d0823a75f71665eab992791efe19c934687237f1f6cd8bce8401ec2"
+      },
+      "diff": "diff --git a/shipping.js b/shipping.js\nindex cd7f5d0..e161e1b 100644\n--- a/shipping.js\n+++ b/shipping.js\n@@ -1,5 +1,5 @@\n // Calculate a synthetic shipping fee from a nonnegative integer subtotal in cents.\n /* global exports -- Copied into a standalone CommonJS repository, outside ORCA's ESM package. */\n exports.shippingCents = function shippingCents(subtotalCents) {\n-  return subtotalCents > 5000 ? 0 : 499;\n+  return subtotalCents >= 5000 ? 0 : 499;\n };\n"
+    },
+    {
+      "fixture": "beta-first-job-v1",
+      "mode": "offline-scripted",
+      "root": "<attempt-2>",
+      "workspace": "<attempt-2>/Sample α",
+      "baseline": "095676df57c3172c383fffdf22ec25ae64702c17",
+      "hashes": {
+        "README.md": "646080bfb94e94b0fcbdf267411b4a8c6ca2a703b857029ef955749c56936067",
+        "shipping.js": "f4397e480bfd679cd29ba53c3723a92adfda184acdfbcf138e8cae6fce8266da",
+        "shipping.test.js": "afdf5e654d0823a75f71665eab992791efe19c934687237f1f6cd8bce8401ec2"
+      },
+      "before": {
+        "exitCode": 1,
+        "output": "PASS zero subtotal\nPASS below threshold\nFAIL exact threshold: expected 0, got 499\nPASS above threshold\nPASS large subtotal\n4 passed; 1 failed\n"
+      },
+      "after": {
+        "exitCode": 0,
+        "output": "PASS zero subtotal\nPASS below threshold\nPASS exact threshold\nPASS above threshold\nPASS large subtotal\n5 passed; 0 failed\n"
+      },
+      "fixedHashes": {
+        "README.md": "646080bfb94e94b0fcbdf267411b4a8c6ca2a703b857029ef955749c56936067",
+        "shipping.js": "f39083a60d19fff1fcbbaccf3affe9642e400e68e12776618637f01030568936",
+        "shipping.test.js": "afdf5e654d0823a75f71665eab992791efe19c934687237f1f6cd8bce8401ec2"
+      },
+      "diff": "diff --git a/shipping.js b/shipping.js\nindex cd7f5d0..e161e1b 100644\n--- a/shipping.js\n+++ b/shipping.js\n@@ -1,5 +1,5 @@\n // Calculate a synthetic shipping fee from a nonnegative integer subtotal in cents.\n /* global exports -- Copied into a standalone CommonJS repository, outside ORCA's ESM package. */\n exports.shippingCents = function shippingCents(subtotalCents) {\n-  return subtotalCents > 5000 ? 0 : 499;\n+  return subtotalCents >= 5000 ? 0 : 499;\n };\n"
+    }
+  ],
+  "packagedApp": "not run",
+  "realAgent": "not run",
+  "physicalHardware": "not run",
+  "evidence": "<attempt-1>/evidence/validation.json",
+  "auditBaseline": "e94bf699d9f3000de8822ed3434c1dce92b6ce19",
+  "date": "2026-10-03",
+  "gitVersion": "2.47.3",
+  "sourceHashes": {
+    "examples/beta-first-job/fixture.js": "966038a335121ce9deeef149067222355cfb496060bdc63e23459b4449684aeb",
+    "examples/beta-first-job/fixture.test.js": "1d11aaf4f58225d867e33c6ee074137e4f74b346858c92f40889bb0feae7b0e8",
+    "examples/beta-first-job/template/shipping.js": "f4397e480bfd679cd29ba53c3723a92adfda184acdfbcf138e8cae6fce8266da",
+    "examples/beta-first-job/template/shipping.test.js": "afdf5e654d0823a75f71665eab992791efe19c934687237f1f6cd8bce8401ec2",
+    "docs/preparation/beta-first-job/reference.patch": "f917b37c20170a71eff371fa02bd45110f7df1215a820094fef2c0bf48bf42c9"
+  }
+}
