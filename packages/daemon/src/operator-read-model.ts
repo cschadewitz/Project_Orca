@@ -535,12 +535,29 @@ export function operatorEventCollections(options: {
                 : undefined;
               // A legacy permission has no living invocation. Never advertise it as a durable gate.
               if (p.kind === "permission" && !live) continue;
+              // Two records suffice to disprove uniqueness; never hydrate the whole run.
+              // Do not infer a node from question text, active workflow defaults or another step.
+              const scheduled = await events.readRange(runId, {
+                types: ["step.scheduled"],
+                limit: 2,
+                match: (e) =>
+                  e.type === "step.scheduled" &&
+                  e.runId === runId &&
+                  e.seq <= endSeq &&
+                  e.payload.stepRunId === p.stepRunId,
+              });
+              const step = scheduled.length === 1 ? scheduled[0] : undefined;
+              const nodeId =
+                step?.type === "step.scheduled" && step.seq < event.seq && step.payload.nodeId
+                  ? step.payload.nodeId
+                  : undefined;
               yield {
                 id: p.requestId,
                 kind: p.kind,
                 runId,
                 stepRunId: p.stepRunId,
                 requestId: p.requestId,
+                ...(nodeId ? { nodeId } : {}),
                 text: p.question,
                 options: p.options,
                 at: event.at,
