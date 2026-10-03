@@ -11,6 +11,7 @@
 | [session-logs/](session-logs/) | read the raw event logs of selected real-agent sessions and runs, kept for reference |
 | [EXTENSIBILITY.md](EXTENSIBILITY.md) | add node types, transports, hosts, stores, human channels via plugins |
 | [ROADMAP.md](ROADMAP.md) | compare implemented capabilities with planned ship groups and dependencies |
+| [Apple Watch approvals research](preparation/apple-watch-approvals/README.md) | compare mobile alerts and remote approval options, security contracts, and proposed implementation phases |
 | [UPDATING.md](UPDATING.md) | update the desktop app and daemon with admission and compatibility checks |
 | [Historical review](../Current_State/README.md) | read the preserved 2026-09-29 snapshot and its dated reconciliation |
 | [Protocol reference](../packages/protocol/README.md) | inspect the current wire contract and version history |
