@@ -97,7 +97,7 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
     expect((await f.events(initial.runId)).filter((event) => event.type === "run.created")).toHaveLength(1);
   });
 
-  it("R03 serializes concurrent same-key writers in separate daemons and rejects a changed payload", async (ctx) => {
+  it("R03 preserves an accepted intent across concurrent same-key replays in separate daemons and rejects a changed payload", async (ctx) => {
     const first = await f.connect(transport);
     await f.requireProduction(ctx, first);
     const secondDaemon = await f.boot();
@@ -105,13 +105,19 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
     expect(second.target.instanceId).not.toBe(first.target.instanceId);
     const command = { ...(await f.guards(first)), vars: { intent: "same" } };
     const params = { target: first.target, command, retry: { idempotencyKey: "concurrent-intent" } };
+    // Each daemon has its own active generation. Accept with the daemon that
+    // issued these guards before racing retained-key replays; a fresh submission
+    // against the other daemon may correctly fail CONFIG_STALE.
+    const original = accepted(await f.mutation(first, "operator.admitRun", params));
+    expect(original.replayed).toBe(false);
     const attempts = await Promise.all([
       f.mutation(first, "operator.admitRun", params),
       f.mutation(second, "operator.admitRun", { ...params, target: second.target }),
     ]);
-    expect(new Set(attempts.map((result) => result.operationId)).size).toBe(1);
+    expect(attempts.map((result) => result.operationId)).toEqual([original.operationId, original.operationId]);
+    for (const result of attempts) expect(accepted(result)).toMatchObject({ replayed: true, result: original.result });
     const eventual = await until(
-      () => f.mutation(second, "operator.admitRun", { ...params, target: second.target }),
+      () => f.mutation(second, "operator.admission", { target: second.target, operationId: attempts[0].operationId }),
       (result) => result.state === "resolved",
       "concurrent admission settlement",
     );

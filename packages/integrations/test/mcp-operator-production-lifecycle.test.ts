@@ -229,16 +229,20 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
     );
     expect(continuation.operationId).toBe(continuation.result.operationId);
     expect(continuation.result).toMatchObject({ runId, expectedBoundary });
-    for (const method of ["operator.continuation", "operator.reconcileContinuation"] as const) {
-      expect(
-        await f.mutation(peer, method, { target: peer.target, continuationId: continuation.result.continuationId }),
-      ).toMatchObject({
-        operationId: continuation.operationId,
-        runId,
-        continuationId: continuation.result.continuationId,
-      });
-    }
+    const lookup = { target: peer.target, continuationId: continuation.result.continuationId };
+    const identity = {
+      operationId: continuation.operationId,
+      runId,
+      continuationId: continuation.result.continuationId,
+    };
+    expect(await f.mutation(peer, "operator.continuation", lookup)).toMatchObject(identity);
     await f.status(peer, runId, "succeeded");
+    // Reconciliation is a mutation, not a readiness poll: invoke it once after
+    // read-only observation proves the service has settled and released execution.
+    expect(await f.mutation(peer, "operator.reconcileContinuation", lookup)).toMatchObject({
+      ...identity,
+      state: "settled",
+    });
     const prompts = await readFile(join(f.dir, "worker-prompts.jsonl"), "utf8");
     expect(prompts).toContain("ORIGINAL TASK");
     expect(prompts).not.toContain("RATIONALE_ONLY_327");
@@ -292,7 +296,24 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
     });
     await f.status(peer, root.runId, "succeeded");
     await refused(peer, "continue_run", { ...params, retry: { idempotencyKey: "new-terminal-intent" } });
-    expect((await f.events(root.runId)).filter((event) => event.type === "continuation.recorded")).toHaveLength(1);
+    const records = (await f.observedEvents(peer, root.runId)).filter(
+      (event) => event.type === "continuation.recorded",
+    );
+    expect(records.map((event) => event.payload.continuationId)).toEqual(Array(3).fill(first.result.continuationId));
+    expect(records.map((event) => event.payload.state)).toEqual(["accepted", "accepted", "settled"]);
+    const decisions = records.filter((event) => event.payload.decision);
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]!.payload.decision).toMatchObject({
+      requestId: rootInput.requestId,
+      stepRunId: rootInput.stepRunId,
+      answer: "stop",
+    });
+    expect(
+      await f.mutation(peer, "operator.continuation", {
+        target: peer.target,
+        continuationId: first.result.continuationId,
+      }),
+    ).toMatchObject({ operationId: first.operationId, runId: root.runId, state: "settled" });
   });
 
   it("L04 submits a pinned revision, replays its receipt, validates destination and delivers protected text once", async (ctx) => {
