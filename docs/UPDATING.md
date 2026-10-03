@@ -5,6 +5,13 @@ Windows app never installs anything on an attached server. No installation comma
 exposed through daemon RPC. The additive protocol 1.8 `maintenance` method only closes
 or reopens admission; it accepts no URL, path, shell command or package name.
 
+The approved bundle ID is now `com.schadewitz.orca`. Windows deliberately retains
+`dev.orca.desktop` as its packaging override to preserve NSIS upgrades and shortcuts.
+App names and data paths are unchanged; no data migration or deletion is included.
+Existing Mac installs require native permission/Keychain continuity checks before
+distribution; see [application identity and existing installations](RELEASING.md#approved-application-identity-and-existing-installations).
+Signing and macOS automatic updates are not activated by this identity change.
+
 ## Windows bootstrap and daily use
 
 Install the matching x64 or arm64 NSIS `.exe` from a published release. ZIP builds are

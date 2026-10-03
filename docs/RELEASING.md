@@ -128,6 +128,38 @@ over the chosen workspace with `--read-only`, which is an argument to the same s
 rather than a second mechanism — so the placeholder is now only the directory the app *starts*
 on.
 
+### Approved application identity and existing installations
+
+The approved bundle ID is **`com.schadewitz.orca`** and the approved Apple Team ID is
+**`Q2FP9UY5T4`** (owner decision, 2026-10-03). The bundle ID is the default `appId` in
+`packages/app/electron-builder.yml`. The Team ID is public release configuration for
+future signing verification; recording it does not provision credentials, select a
+certificate, prove membership or activate signing/notarisation. `mac.identity: null`
+and `mac.notarize: false` remain in effect.
+
+| Surface | Effect of the bundle ID change |
+| --- | --- |
+| macOS | `CFBundleIdentifier` becomes `com.schadewitz.orca`; builder-derived helper bundle IDs follow it. `ORCA.app`, product name, DMG/ZIP targets and artifact filenames are unchanged. OS permissions, notification identity and Keychain access must be checked as a new identity, not assumed to transfer from `dev.orca.desktop`. |
+| Windows | Explicit `win.appId: dev.orca.desktop` preserves existing NSIS identity. The locked builder derives the installer GUID from that ID and uses the ID for shortcut AppUserModelID. Install/uninstall registration, installation name and updater cache naming remain stable. A Windows ID migration is deferred to a separate product decision; do not remove this override as cleanup. |
+| Linux | The default ID changes, but the current AppImage/tar.gz targets retain executable `orca`, package/product names, desktop entry and artifact filenames. This is not a Debian service/store migration. |
+| Application data | Package name `@orca/app` and product name `ORCA` are unchanged. Electron's default `userData` is name-based, not bundle-ID-based; preferences and encrypted run intents stay at the same paths. Workspace selection and `<workspace>/.orca` are unchanged. No files are moved, reset or deleted. |
+| Updates | Windows remains on its existing NSIS identity and `latest-ARCH` feed channels. This change does not enable macOS/Linux automatic updates, change feeds or publish artifacts. |
+
+For existing Mac installations, app-name/path continuity is **not** proof of identity
+continuity. Before distributing a replacement, validate old-to-new install, notifications,
+`orca://` handling, OS permissions and access to `admission-intents.enc` through the
+existing OS Keychain on a native Mac. Electron documents that [safeStorage depends on Keychain access and consistent
+code signing](https://www.electronjs.org/docs/latest/api/safe-storage); the app already
+refuses submission when saved intents cannot be decrypted/verified. Do not delete the
+journal or reset the keychain to bypass that refusal. If access cannot be retained, the
+upgrade/recovery owner must decide and validate recovery before that migration proceeds.
+This configuration change implements no migration or cleanup and makes no native upgrade
+acceptance claim. The dated preparation source audits retain the old ID as historical fact.
+
+The compatibility exception follows the builder's [NSIS identity contract](https://www.electron.build/v26/docs/nsis/).
+Focused tests resolve IDs and names with the locked builder and compare Linux desktop
+entries; they do not substitute for running old and new installers on native systems.
+
 ### Signing and notarisation are not done
 
 Both artifacts are **unsigned**, and both platforms say so to the person who downloads
@@ -140,7 +172,8 @@ them. This is a follow-up, not an oversight, and it stays written here until it 
 
   Signing needs an Apple Developer Program membership and, as repository secrets: a
   Developer ID Application certificate exported as base64 `.p12` in **`APPLE_CERTIFICATE_P12`**
-  with its passphrase in **`APPLE_CERTIFICATE_PASSWORD`**, and the team in **`APPLE_TEAM_ID`**.
+  with its passphrase in **`APPLE_CERTIFICATE_PASSWORD`**, and the approved team
+  **`Q2FP9UY5T4`** in **`APPLE_TEAM_ID`**. The approved bundle ID is **`com.schadewitz.orca`**.
   Notarisation needs an App Store Connect API key — **`APPLE_API_KEY_ID`**,
   **`APPLE_API_ISSUER`** and the `.p8` itself in **`APPLE_API_KEY`** — or, the older way, an
   Apple ID in **`APPLE_ID`** with an app-specific password in **`APPLE_APP_SPECIFIC_PASSWORD`**.
