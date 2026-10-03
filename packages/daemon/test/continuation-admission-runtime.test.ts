@@ -538,3 +538,117 @@ it.each([
   });
   expect(f.effects).not.toHaveBeenCalled();
 });
+
+it.each(["same", "separate"] as const)(
+  "preserves completed settlement when a %s-instance replay read needed before attachment",
+  async (instance) => {
+    const f = await fixture();
+    const loser = instance === "same" ? f.model : f.boot();
+    const preflight = latch(),
+      releasePreflight = latch(),
+      settling = latch(),
+      releaseSettlement = latch();
+    f.executionRuntime.checkResumeAuthority.mockImplementationOnce(async () => {
+      preflight.release();
+      await releasePreflight.wait;
+    });
+    const wrapper = vi.mocked(f.executionRuntime.withResumeAuthority);
+    const runtime = wrapper.getMockImplementation()!;
+    wrapper.mockImplementation(async (...args) => {
+      const state = await runtime(...args);
+      settling.release();
+      await releaseSettlement.wait;
+      return state;
+    });
+    try {
+      const receipt = await f.admit();
+      const replay = loser.reconcile(receipt.continuationId, f.access);
+      await preflight.wait; // Loser has read dispatch=needed and the paused boundary.
+      await f.model.reconcile(receipt.continuationId, f.access);
+      await f.entered.wait;
+      f.finish.release();
+      await settling.wait;
+      expect((await f.orc.getState(f.runId)).run.status).toBe("completed");
+      expect(await f.stores.leases.get(`run:${f.runId}`)).toBeUndefined();
+      releasePreflight.release(); // Its stale attachment now enters inner recovery.
+      expect(await replay).toMatchObject({ state: "settled" });
+      releaseSettlement.release();
+      await f.model.drain();
+      await loser.drain();
+      expect(await f.model.inspect(receipt.continuationId, f.access)).toMatchObject({ state: "settled" });
+      const events = await executionEvents(await f.stores.events.read(f.runId), f.stores.execution);
+      const markers = events.filter((event) => event.type === "continuation.recorded");
+      expect(markers.map((event) => event.payload.state)).toEqual(["accepted", "accepted", "settled"]);
+      expect(markers.filter((event) => event.payload.decision)).toHaveLength(1);
+      expect(events.filter((event) => event.type === "run.completed")).toHaveLength(1);
+      expect(f.effects).toHaveBeenCalledTimes(1);
+    } finally {
+      releasePreflight.release();
+      releaseSettlement.release();
+      f.finish.release();
+      await f.model.drain();
+      await loser.drain();
+    }
+  },
+);
+
+it.each(["fence", "store", "store-after-append"] as const)(
+  "does not classify successful execution as unsafe after settlement %s refusal",
+  async (failure) => {
+    const f = await fixture();
+    const receipt = await f.admit();
+    await f.model.reconcile(receipt.continuationId, f.access);
+    await f.entered.wait;
+    const refused = vi.fn();
+    if (failure === "fence") {
+      const acquire = f.stores.leases.acquire.bind(f.stores.leases);
+      vi.spyOn(f.stores.leases, "acquire")
+        .mockImplementationOnce(async () => {
+          refused();
+          throw new OrcaError("RUN_LEASED", "settlement fence refused");
+        })
+        .mockImplementation(acquire);
+    } else {
+      const append = f.stores.events.appendDurableUnique!.bind(f.stores.events);
+      vi.spyOn(f.stores.events, "appendDurableUnique").mockImplementationOnce(async (...args) => {
+        refused();
+        if (failure === "store-after-append") await append(...args);
+        throw new OrcaError("RUN_STATE", "settlement publication uncertain");
+      });
+    }
+    f.finish.release();
+    await f.model.drain();
+    expect(refused).toHaveBeenCalledTimes(1);
+    expect((await f.orc.getState(f.runId)).run.status).toBe("completed");
+    expect(await f.model.inspect(receipt.continuationId, f.access)).toMatchObject({
+      state: failure === "store-after-append" ? "settled" : "accepted",
+    });
+    const restarted = f.boot();
+    expect(await restarted.reconcile(receipt.continuationId, f.access)).toMatchObject({ state: "settled" });
+    expect(f.effects).toHaveBeenCalledTimes(1);
+    const markers = await f.stores.events.readRange(f.runId, { types: ["continuation.recorded"], limit: 10 });
+    expect(markers.map((event) => event.type === "continuation.recorded" && event.payload.state)).toEqual([
+      "accepted",
+      "accepted",
+      "settled",
+    ]);
+  },
+);
+
+it("uses terminal history when the execution wrapper rejects after completion", async () => {
+  const f = await fixture();
+  const wrapper = vi.mocked(f.executionRuntime.withResumeAuthority);
+  const runtime = wrapper.getMockImplementation()!;
+  wrapper.mockImplementation(async (...args) => {
+    await runtime(...args);
+    throw new OrcaError("RUN_STATE", "wrapper cleanup refused after completion");
+  });
+  const receipt = await f.admit();
+  await f.model.reconcile(receipt.continuationId, f.access);
+  await f.entered.wait;
+  f.finish.release();
+  await f.model.drain();
+  expect((await f.orc.getState(f.runId)).run.status).toBe("completed");
+  expect(await f.model.inspect(receipt.continuationId, f.access)).toMatchObject({ state: "settled" });
+  expect(f.effects).toHaveBeenCalledTimes(1);
+});

@@ -360,6 +360,16 @@ ownership boundary and reread the durable log under it. The backward-readable le
 fence and legacy-writer refusals are documented in
 [ownership compatibility](v0.5.2-ownership-compatibility.md).
 
+Durable continuation attachment and receipt settlement are separate fenced writes.
+Execution releases its lease before the final receipt write. A competing replay
+that previously read `dispatch: needed` must reread the verified journal and run
+history under the fence: a now-attached terminal run settles, while a nonterminal
+attachment with uncertain execution remains blocked as ambiguous. A fence or store
+refusal after successful execution preserves the existing receipt for later
+authorized reconciliation; it is not evidence of unsafe execution. Reconciliation
+verifies and synchronizes the durable marker without repeating the decision or
+execution. Receipt inspection remains read-only.
+
 Claims and leases answer different questions and neither replaces the other: a claim says
 who *owns a work item*, outlives the process that took it, and is never released on its
 own; a lease says who is *interpreting a run right now*, and is meant to expire.

@@ -548,6 +548,13 @@ export class ContinuationAdmissionModel {
     await this.write(next, (await this.stores.events.lastSeq(entry.receipt.runId)) ?? -1);
     return next;
   }
+  /** Caller holds the run fence and has verified the fresh attached journal entry. */
+  private async recoverAttached(entry: ContinuationEntry): Promise<ContinuationEntry> {
+    const state = reduceRun(await this.history(entry.receipt.runId));
+    return ["completed", "failed", "cancelled"].includes(state.run.status)
+      ? this.transition(entry, "settled", "settled")
+      : this.transition(entry, "blocked", "ambiguous", "unsafe-boundary");
+  }
   private async attach(
     entry: ContinuationEntry,
     authority: RetryAuthority<ContinuationCommand>,
@@ -559,11 +566,7 @@ export class ContinuationAdmissionModel {
         const fresh = await this.latest(entry.receipt.runId, entry.receipt.continuationId);
         if (!fresh) throw unavailable();
         if (fresh.dispatch === "settled" || fresh.dispatch === "ambiguous") return structuredClone(fresh.receipt);
-        const state = reduceRun(await this.history(entry.receipt.runId));
-        const terminal = ["completed", "failed", "cancelled"].includes(state.run.status);
-        const next = terminal
-          ? await this.transition(fresh, "settled", "settled")
-          : await this.transition(fresh, "blocked", "ambiguous", "unsafe-boundary");
+        const next = await this.recoverAttached(fresh);
         return structuredClone(next.receipt);
       });
     let acknowledge!: (receipt: ContinuationReceipt) => void;
@@ -614,18 +617,12 @@ export class ContinuationAdmissionModel {
             return attachment.completion;
           },
         );
-        if (attachedEntry)
-          await this.fenced(entry.receipt.runId, async () => {
-            const fresh = await this.latest(entry.receipt.runId, entry.receipt.continuationId);
-            if (fresh?.dispatch === "attached") await this.transition(fresh, "settled", "settled");
-          });
       } catch (error) {
         if (attachedEntry) {
           try {
             await this.fenced(entry.receipt.runId, async () => {
               const fresh = await this.latest(entry.receipt.runId, entry.receipt.continuationId);
-              if (fresh?.dispatch === "attached")
-                await this.transition(fresh, "blocked", "ambiguous", "unsafe-boundary");
+              if (fresh?.dispatch === "attached") await this.recoverAttached(fresh);
             });
           } catch {
             /* A competing owner must not be overwritten. Reconcile can recover later. */
@@ -649,8 +646,10 @@ export class ContinuationAdmissionModel {
             const fresh = await this.latest(entry.receipt.runId, entry.receipt.continuationId);
             if (!fresh) throw unavailable();
             if (fresh.dispatch !== "needed") {
-              if (fresh.dispatch === "attached")
-                return this.transition(fresh, "blocked", "ambiguous", "unsafe-boundary");
+              if (fresh.dispatch === "attached") {
+                await authority.authorize(entry.command);
+                return this.recoverAttached(fresh);
+              }
               await this.write(fresh, (await this.stores.events.lastSeq(entry.receipt.runId)) ?? -1);
               return fresh;
             }
@@ -660,6 +659,18 @@ export class ContinuationAdmissionModel {
         } catch {
           refuse(error);
         }
+        return;
+      }
+      // Execution has finished. A refused fence or uncertain publication here is
+      // not an execution failure: retain the journal for later fenced recovery.
+      try {
+        if (attachedEntry)
+          await this.fenced(entry.receipt.runId, async () => {
+            const fresh = await this.latest(entry.receipt.runId, entry.receipt.continuationId);
+            if (fresh?.dispatch === "attached") await this.transition(fresh, "settled", "settled");
+          });
+      } catch {
+        /* Reconciliation verifies the durable marker before publishing settlement. */
       }
     })();
     this.tasks.add(task);
