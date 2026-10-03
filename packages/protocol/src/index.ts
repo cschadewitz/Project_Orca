@@ -35,3 +35,5 @@ export * from "./revision-input.js";
 
 export * from "./operator-reads.js";
 export * from "./continuation-admission.js";
+export * from "./operator-mutations.js";
+export * from "./operator-boundary-projection.js";
