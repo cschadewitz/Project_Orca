@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   OPERATOR_METHODS,
+  OperatorMutationContracts,
   AGENT_METHODS,
   CONTROL_METHODS,
   HELLO_METHOD,
@@ -67,6 +68,7 @@ describe("the operation inventory", () => {
     const declared = new Set<string>([
       HELLO_METHOD,
       ...OPERATOR_METHODS,
+      ...Object.keys(OperatorMutationContracts),
       "runs.admit",
       "admissions.get",
       "admissions.reconcile",

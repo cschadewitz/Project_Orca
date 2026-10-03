@@ -1,7 +1,12 @@
 /** Authenticated HTTP and WebSocket daemon composition. */
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import {
   PROTOCOL_VERSION,
+  OperatorBoundaryProjectionSchema,
+  RevisionBoundaryViewSchema,
+  type OperatorPageParams,
+  type OperatorRow,
+  type OperatorBoundaryRow,
   AdmissionExecutionViewSchema,
   type AdmissionExecutionView,
   INPUTS_REVISION_ITEM_LIMIT,
@@ -75,6 +80,8 @@ export interface DaemonOptions extends MethodContext {
   operatorSources?: Pick<OperatorReadOptions, "generations" | "configStatus" | "artifact" | "artifactRun"> & {
     events: EventStore;
     leases?: LeaseStore;
+    liveState?: Parameters<typeof operatorEventCollections>[0]["liveState"];
+    liveRevision?: Parameters<typeof operatorEventCollections>[0]["liveRevision"];
     documents?: Parameters<typeof operatorLinkedDocumentCollections>[0];
     definitionFor?: Parameters<typeof operatorPinnedGraph>[0]["definitionFor"];
   };
@@ -553,6 +560,44 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       ...(sources.configStatus ? ["operator.config"] : []),
       ...(sources.artifact && sources.artifactRun ? ["operator.artifact"] : []),
     ];
+    ctx.operatorMutations = {
+      async current(invocation, method) {
+        const binding = principalOf(invocation);
+        const credentialId = binding?.principal.credentialId;
+        if (!credentialId) throw authRequired();
+        const latest = auth.credentials.current(credentialId);
+        if (!latest.ok) throw authInvalid();
+        if (
+          latest.principal.id !== binding.principal.id ||
+          latest.principal.credentialId !== credentialId ||
+          JSON.stringify(latest.principal.scope) !== JSON.stringify(binding.principal.scope) ||
+          JSON.stringify([...latest.principal.permissions].sort()) !==
+            JSON.stringify([...binding.principal.permissions].sort())
+        )
+          throw authForbidden();
+        authorizer.checkOperation(latest.principal, method, true, binding.meta);
+        return bindPrincipal({ ...invocation }, latest.principal, binding.meta);
+      },
+      async invokeLegacy(name, params, invocation, expected) {
+        const binding = principalOf(invocation);
+        const credentialId = binding?.principal.credentialId;
+        if (!credentialId) throw authRequired();
+        const latest = auth.credentials.current(credentialId);
+        if (!latest.ok) throw authInvalid();
+        if (latest.principal.id !== binding.principal.id) throw authForbidden();
+        authorizer.checkOperation(latest.principal, name, Boolean(methods[name]), binding.meta);
+        const method = methods[name];
+        if (!method) throw new OrcaError("NOT_SUPPORTED", "Operator action is unavailable");
+        return method.handle(
+          method.params.parse(params),
+          bindPrincipal(
+            { ...invocation, ...(expected ? { operatorDecisionTarget: expected } : {}) },
+            latest.principal,
+            binding.meta,
+          ),
+        );
+      },
+    };
     ctx.operatorReads = {
       methods: names,
       async model(invocation) {
@@ -572,10 +617,103 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           orcaVersion: opts.orcaVersion,
           current,
           allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
+          // A's bounded row adapter consumes this additive internal hook. Until then it is not used.
+          ...{
+            boundaryRow: async (params: OperatorPageParams, row: OperatorRow): Promise<OperatorBoundaryRow> => {
+              const check = async () => {
+                const principal = await current();
+                if (
+                  principal.id !== binding.principal.id ||
+                  !holds(principal, "runs.read") ||
+                  !params.runId ||
+                  row.runId !== params.runId ||
+                  !(await authorizer.runs.allows(principal, params.runId))
+                )
+                  throw authForbidden();
+                return principal;
+              };
+              const principal = await check();
+              const after: OperatorBoundaryRow = { ...row };
+              let declaredRevisionActionId: string | undefined;
+              if (params.collection === "runs" && row.kind === "run") {
+                if (ctx.continuationAdmissions && ctx.continuationAccess) {
+                  const expectedBoundary = await ctx.continuationAdmissions.expectedBoundary(
+                    params.runId!,
+                    await ctx.continuationAccess(invocation),
+                  );
+                  if (expectedBoundary) {
+                    after.continuationState = "available";
+                    after.expectedBoundary = expectedBoundary;
+                  } else after.continuationState = "unavailable";
+                } else after.continuationState = "unsupported";
+              } else if (params.collection === "inputs" && row.kind === "decision" && !row.live) {
+                if (
+                  !row.nodeId ||
+                  !row.stepRunId ||
+                  !row.requestId ||
+                  row.requestId !== row.id ||
+                  !row.options ||
+                  !ctx.reads
+                )
+                  throw new OrcaError("RUN_STATE", "The pinned input declaration is unavailable");
+                declaredRevisionActionId = await ctx.reads.inputRevisionActionId({
+                  id: row.id,
+                  kind: "decision",
+                  runId: params.runId!,
+                  stepRunId: row.stepRunId,
+                  nodeId: row.nodeId,
+                  options: row.options,
+                });
+                if (declaredRevisionActionId !== undefined) after.revisionActionId = declaredRevisionActionId;
+                if (holds(principal, "inputs.answer") && holds(principal, "runs.control")) {
+                  if (!declaredRevisionActionId || !opts.revisionSources) after.revisionState = "unsupported";
+                  else {
+                    // Do not turn failed protected reads into an unsupported or empty boundary.
+                    const boundaries = await opts.revisionSources.readBoundaries(params.runId!);
+                    const matching = boundaries.filter(
+                      (b) =>
+                        b.target.runId === row.runId &&
+                        b.target.stepRunId === row.stepRunId &&
+                        b.target.requestId === row.id &&
+                        b.status === "waiting",
+                    );
+                    const boundary = matching.length === 1 ? matching[0] : undefined;
+                    if (boundary) {
+                      after.revision = RevisionBoundaryViewSchema.parse({
+                        target: boundary.target,
+                        capability: boundary.capability,
+                        destinationDescription: boundary.destinationDescription,
+                      });
+                      after.revisionState = "available";
+                    } else after.revisionState = "unavailable";
+                  }
+                }
+              }
+              const latest = await check();
+              if (
+                JSON.stringify([...latest.permissions].sort()) !== JSON.stringify([...principal.permissions].sort()) ||
+                JSON.stringify(latest.scope) !== JSON.stringify(principal.scope)
+              )
+                throw authForbidden();
+              return OperatorBoundaryProjectionSchema.parse({
+                params,
+                before: row,
+                after,
+                ...(declaredRevisionActionId !== undefined ? { declaredRevisionActionId } : {}),
+              }).after;
+            },
+          },
           collections: {
             ...operatorEventCollections({
               events: sources.events,
               ...(sources.leases ? { leases: sources.leases } : {}),
+              ...(sources.liveState && sources.liveRevision
+                ? {
+                    liveState: sources.liveState,
+                    liveRevision: () =>
+                      createHmac("sha256", cursorKey).update(sources.liveRevision!()).digest("base64url"),
+                  }
+                : {}),
               allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
             }),
             ...(sources.generations ? operatorGenerationCollections(sources.generations) : {}),

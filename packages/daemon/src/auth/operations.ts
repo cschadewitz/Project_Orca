@@ -41,6 +41,8 @@ export type ResourceKind =
 export interface OperationSpec {
   /** The grant the call needs. `null`: any authenticated principal (hello, unsubscribe). */
   permission: Permission | null;
+  /** Additional operation grants, all required before parameter diagnostics and discovery. */
+  additionalPermissions?: readonly Permission[];
   resource: ResourceKind;
   /** For `workflow`: which param names the workflow. */
   param?: string;
@@ -64,6 +66,29 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "operator.config": { permission: "config.read", resource: "none" },
   "operator.preflight": { permission: "runs.start", resource: "none" },
   "operator.artifact": { permission: "artifacts.read", resource: "run" },
+
+  // Authenticated production services retain current grant and exact-resource checks.
+  // cancel/answer adapt into the existing guarded control methods after target validation.
+  "operator.submitRequest": {
+    permission: "runs.start",
+    additionalPermissions: ["plan.write"],
+    resource: "none",
+    audit: "mutation",
+  },
+  "operator.admitRun": { permission: "runs.start", resource: "none", audit: "mutation" },
+  "operator.admission": { permission: "runs.start", resource: "none" },
+  "operator.reconcileAdmission": { permission: "runs.start", resource: "none", audit: "mutation" },
+  "operator.cancel": { permission: "runs.control", resource: "none", audit: "mutation" },
+  "operator.answer": { permission: "inputs.answer", resource: "none", audit: "decision" },
+  "operator.continueRun": { permission: "runs.control", resource: "none", audit: "mutation" },
+  "operator.continuation": { permission: "runs.read", resource: "none" },
+  "operator.reconcileContinuation": { permission: "runs.control", resource: "none", audit: "mutation" },
+  "operator.revise": {
+    permission: "inputs.answer",
+    additionalPermissions: ["runs.control"],
+    resource: "none",
+    audit: "decision",
+  },
 
   "runs.list": { permission: "runs.read", resource: "run-list" },
   "runs.get": { permission: "runs.read", resource: "run" },

@@ -273,8 +273,17 @@ export class ControlModel {
     params: InputsAnswerParams,
     actor?: MutationActor,
     authority?: LiveAnswerAuthority,
+    expected?: { runId: string; requestId: string; stepRunId: string; kind: "decision" | "permission" },
   ): Promise<InputsAnswerResult> {
     const candidate = await findInput(this.orc, params.requestId, params.runId);
+    if (
+      expected &&
+      (candidate.request.runId !== expected.runId ||
+        candidate.request.id !== expected.requestId ||
+        candidate.request.stepRunId !== expected.stepRunId ||
+        candidate.request.kind !== expected.kind)
+    )
+      throw new OrcaError("RUN_STATE", "The exact decision is no longer available");
     if (candidate.request.kind === "permission") {
       return this.answerLive(params, candidate.request, candidate.state, authority);
     }

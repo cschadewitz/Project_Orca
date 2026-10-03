@@ -1043,3 +1043,28 @@ it.each(["http", "ws"] as const)(
     expect(JSON.stringify(response)).not.toContain("PRIVATE CORRECTION");
   },
 );
+
+it.each(["http", "ws"] as const)(
+  "operator revision alias uses the real protected service over %s",
+  async (transport) => {
+    const f = await fixture();
+    const call = transport === "http" ? f.http : await f.socket();
+    const discovery = OperatorDiscoverySchema.parse(result(await call("operator.discover")));
+    expect(discovery.operations).toContain("operator.revise");
+    const params = { target: discovery.target, ...f.params };
+    const accepted = resolved(await call("operator.revise", params));
+    expect(accepted.replayed).toBe(false);
+    expect(resolved(await call("operator.revise", params))).toMatchObject({ ...accepted, replayed: true });
+    expect(
+      (await f.stores.events.read("owned")).filter(
+        (event) => event.type === "revision.recorded" && event.payload.decision,
+      ),
+    ).toHaveLength(1);
+    expect(await f.http("operator.revise", params, f.bob.token)).toMatchObject({
+      ok: false,
+      error: { code: "RUN_NOT_FOUND" },
+    });
+    await f.credentials.revoke(f.alice.credential.id);
+    expect(await f.http("operator.revise", params)).toMatchObject({ ok: false, error: { code: "AUTH_INVALID" } });
+  },
+);

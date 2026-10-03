@@ -571,7 +571,9 @@ export class ReadModel {
    * authorize and filter the input first. No protected journal, payload or lease is read.
    * A legacy run without a recorded pin is deliberately not inferred from current defaults.
    */
-  async inputRevisionActionId(input: OpenInputView): Promise<string | undefined> {
+  async inputRevisionActionId(
+    input: Pick<OpenInputView, "id" | "kind" | "runId" | "stepRunId" | "nodeId" | "options" | "live">,
+  ): Promise<string | undefined> {
     if (input.kind !== "decision" || input.live) return undefined;
     const unavailable = () => new OrcaError("RUN_STATE", "The pinned input declaration is unavailable");
     const current = async () => {

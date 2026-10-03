@@ -148,6 +148,16 @@ export type HelloParams = z.infer<typeof HelloParamsSchema>;
 /** What a daemon can do; a client checks these rather than the ORCA version. */
 export const DAEMON_CAPABILITIES = [
   ...OPERATOR_METHODS,
+  "operator.submitRequest",
+  "operator.admitRun",
+  "operator.admission",
+  "operator.reconcileAdmission",
+  "operator.cancel",
+  "operator.answer",
+  "operator.continueRun",
+  "operator.continuation",
+  "operator.reconcileContinuation",
+  "operator.revise",
   "inputs.live",
   "inputs.revise",
   "inputs.revisionPending",

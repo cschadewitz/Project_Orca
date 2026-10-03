@@ -910,6 +910,12 @@ export const commands: Record<string, Command> = {
           ? { revisionSources: { services: revisionServices, readBoundaries: revisionRuntime.readBoundaries } }
           : {}),
         operatorSources: {
+          ...(liveRuntime
+            ? {
+                liveState: (target) => liveRuntime.port.inspect(target),
+                liveRevision: () => liveRuntime.port.observationRevision,
+              }
+            : {}),
           events: app.orchestrator.stores.events,
           leases: app.orchestrator.stores.leases,
           generations: app.generations,

@@ -10,6 +10,7 @@ import { builtinExecutors, completed, LocalWorkspaceProvider, Orchestrator, Paus
 import { ControlModel, ReadModel, startDaemon } from "@orca/daemon";
 import {
   PROTOCOL_VERSION,
+  OperatorDiscoverySchema,
   ContinuationReceiptSchema,
   RunsContinueResultSchema,
   RunsGetResultSchema,
@@ -43,7 +44,40 @@ const faults = {
   conflict: () => new OrcaError("RETRY_CONFLICT", "conflict"),
   limit: () => new OrcaError("RETRY_LIMIT", "limit"),
 };
-async function fixture(options: { manualDispatch?: boolean; readOnly?: boolean } = {}) {
+
+it.each(["http", "socket"] as const)(
+  "operator continuation aliases preserve real receipt and one attachment over %s",
+  async (transport) => {
+    const f = await fixture({ operator: true });
+    const call = transport === "http" ? (method: string, params: unknown) => f.http(method, params) : await f.socket();
+    const target = OperatorDiscoverySchema.parse(result(await call("operator.discover", {}))).target;
+    const receipt = RunsContinueResultSchema.parse(result(await call("operator.continueRun", { target, ...f.params })));
+    if (receipt.state !== "resolved") throw new Error("not resolved");
+    await f.entered.wait;
+    expect(f.effects).toHaveBeenCalledTimes(1);
+    expect(result(await call("operator.continueRun", { target, ...f.params }))).toMatchObject({
+      ...receipt,
+      replayed: true,
+    });
+    const lookup = { target, continuationId: receipt.result.continuationId };
+    expect(result(await call("operator.continuation", lookup))).toMatchObject({
+      continuationId: receipt.result.continuationId,
+    });
+    expect(await call("operator.reconcileContinuation", lookup)).toMatchObject({
+      ok: false,
+      error: { code: "RUN_LEASED" },
+    });
+    expect(f.effects).toHaveBeenCalledTimes(1);
+    f.finish.release();
+    await f.model.drain();
+    expect(result(await call("operator.reconcileContinuation", lookup))).toMatchObject({
+      continuationId: receipt.result.continuationId,
+      state: "settled",
+    });
+    expect(f.effects).toHaveBeenCalledTimes(1);
+  },
+);
+async function fixture(options: { manualDispatch?: boolean; readOnly?: boolean; operator?: boolean } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "orca-continuation-transport-"));
   cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const credentialsFile = join(dir, "credentials.json"),
@@ -139,7 +173,13 @@ edges:
       ...(readOnly ? {} : { control: new ControlModel({ orchestrator: orc, reads }) }),
       source: orc,
       continuationAdmissions: model,
-      submissionWorkspaceId: "transport-workspace",
+      submissionWorkspaceId: options.operator ? "4c41c2ae-8064-419a-ae88-0b1ad89ca402" : "transport-workspace",
+      ...(options.operator
+        ? {
+            workspaceId: "4c41c2ae-8064-419a-ae88-0b1ad89ca402",
+            operatorSources: { events: stores.events, leases: stores.leases },
+          }
+        : {}),
       auth: { mode: "token", credentials: currentCredentials, ownership, resolver: orchestratorResolver(orc) },
     });
     cleanups.push(async () => {

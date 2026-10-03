@@ -1,4 +1,5 @@
 /** Typed daemon dispatch, including opt-in authenticated operator projections. */
+import { createOperatorMutationMethods, type OperatorMutationComposition } from "./operator-mutations.js";
 import { z } from "zod";
 import type { OperatorReadModel } from "./operator-read-model.js";
 import type { ContinuationAdmissionModel, ContinuationAccess } from "./continuation-admission.js";
@@ -202,6 +203,10 @@ import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 import type { LiveInputChangeSource } from "./live-input-notifications.js";
 
 export interface MethodContext {
+  operatorMutations?: OperatorMutationComposition | undefined;
+  /** Internal exact decision guard; never parsed from legacy RPC params. */
+  operatorDecisionTarget?:
+    { runId: string; requestId: string; stepRunId: string; kind: "decision" | "permission" } | undefined;
   admissionExecution?:
     ((invocation: MethodContext, runId: string) => Promise<RunsGetResult["admissionExecution"]>) | undefined;
   continuationAdmissions?: ContinuationAdmissionModel | undefined;
@@ -369,6 +374,7 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
       ...(ctx.identity ? { identity: ctx.identity } : {}),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
       capabilities: [
+        ...(Object.keys(createOperatorMutationMethods(ctx)) as DaemonCapability[]),
         ...OPERATOR_METHODS.filter((name) => ctx.operatorReads?.methods.includes(name)),
         ...(ctx.continuationAdmissions && ctx.continuationAccess ? ["continuations.get" as const] : []),
         ...(ctx.control && ctx.continuationAdmissions && ctx.continuationAccess
@@ -379,7 +385,7 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
           : []),
         ...ctx.capabilities.filter(
           (c) =>
-            !OPERATOR_METHODS.includes(c as (typeof OPERATOR_METHODS)[number]) &&
+            !c.startsWith("operator.") &&
             c !== "runs.admit" &&
             c !== "admissions.get" &&
             c !== "admissions.reconcile" &&
@@ -604,7 +610,8 @@ export const workflowsValidateInputs: Method<WorkflowsValidateInputsParams, Work
 /** `inputs.answer`: record a person's answer to an open gate or permission ask, and continue. */
 export const inputsAnswer: Method<InputsAnswerParams, InputsAnswerResult> = {
   params: InputsAnswerParamsSchema,
-  handle: (params, ctx) => control(ctx).answerInput(params, ctx.mutationActor, ctx.liveAnswerAuthority),
+  handle: (params, ctx) =>
+    control(ctx).answerInput(params, ctx.mutationActor, ctx.liveAnswerAuthority, ctx.operatorDecisionTarget),
 };
 
 /** `runs.resume`: re-drive a parked run here until it parks again or finishes. */
@@ -954,5 +961,6 @@ export function methodsFor(ctx: MethodContext): MethodTable {
       if (ctx.config.canApply) table[CONFIG_APPLY_METHOD] = configApply;
     }
   }
+  Object.assign(table, createOperatorMutationMethods(ctx));
   return ctx.maintenance ? ctx.maintenance.wrap(table) : table;
 }

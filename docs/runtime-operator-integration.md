@@ -686,3 +686,14 @@ its I/O cost can therefore increase even when an ordinary read would hit that ca
 No opaque verifier, identity digest or key is persisted or exposed on the wire.
 Protected correction content still uses only the existing authorized allowlisted
 read projection.
+
+
+### Production MCP composition work (preparation 4937f4c0)
+
+The B composition supplies the ten frozen operator aliases through existing authenticated services. Admission and Request adapters preserve the actual RetryResult, including operationId and replayed; inspection does not attach execution. Explicit operator.reconcileAdmission uses the existing Request reconciliation/guarded scheduling path for a verified accepted Request, and the existing direct path for a direct admission. It does not await workflow settlement or imply that an accepted receipt is currently attached. Existing current resume authority, ownership and first-attachment guards still apply.
+
+Cancel and answer enter the installed guarded legacy methods with refreshed credentials. An internal expected decision identity checks exact run/request/step and lifetime before the existing answer path; ordinary answers use resume:false and preserve the note. External lease refusals remain explicit. Revision and continuation aliases reuse the existing durable services and their fences, keys and replay rules. No alias creates an alternative ledger or retries a mutation automatically.
+
+Live discovery uses the real coordinator's inspect method plus a read-only observation revision containing instance identity, a fresh port incarnation and a monotonic counter. Every actual registration/state/removal/close transition invalidates old snapshots; no-op requests do not. Before entering page metadata, the internal observation value is HMAC-protected with the existing cursor key; raw counter/incarnation data is not exposed. This observation value is not authority and does not restore callbacks.
+
+The bounded boundary-row hook is integration-owned, but its consumer remains A-owned. It verifies current read/resource grants before and after projection; revision metadata additionally requires current decision/control grants and the exact pinned declaration. Missing node/step evidence refuses rather than classifying the option ordinary. An undefined existing continuation boundary maps conservatively to unavailable, because the legacy reader does not distinguish unsupported from uncertain. Consumer snapshot invalidation and actual end-to-end MCP transport acceptance remain pending until A/C are combined. No fixture is counted as that acceptance.

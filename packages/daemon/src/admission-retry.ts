@@ -81,11 +81,20 @@ export class AdmissionRetryModel {
     retry: RetryOptions,
     authority: DirectAdmissionAuthority,
   ): Promise<DirectAdmissionResult & { operationId: string }> {
-    const response = await this.options.direct.admitRun(command, retry, authority);
+    const response = await this.admitRetry(command, retry, authority);
     if (response.state !== "resolved")
       throw new OrcaError("RUN_STATE", "Run admission is in progress", { ...response });
-    if (response.result.state === "accepted") this.dispatch(response.operationId, response.result.runId, authority);
     return { ...response.result, operationId: response.operationId };
+  }
+  async admitRetry(
+    command: DirectAdmissionCommand,
+    retry: RetryOptions,
+    authority: DirectAdmissionAuthority,
+  ): Promise<RetryResult<DirectAdmissionResult>> {
+    const response = await this.options.direct.admitRun(command, retry, authority);
+    if (response.state === "resolved" && response.result.state === "accepted")
+      this.dispatch(response.operationId, response.result.runId, authority);
+    return response;
   }
   inspect(operationId: string, authorities: AdmissionAuthorities): Promise<RetryResult<unknown>> {
     return this.receipt(operationId, authorities, false);

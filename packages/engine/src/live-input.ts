@@ -2,6 +2,7 @@
  * Owner-local tool decisions. The log describes the ask; only this registry can
  * deliver its answer to the original callback. A workflow gate still parks.
  */
+import { randomUUID } from "node:crypto";
 import { OrcaError, type MutationActor, type OrcaEventInput } from "@orca/core";
 import { HumanInputPending, type HumanInputPort, type HumanInputQuery } from "./human-input.js";
 
@@ -78,10 +79,17 @@ function unavailable(state: LiveInputState): OrcaError {
 export class LiveHumanInput implements HumanInputPort {
   private readonly pending = new Map<string, Pending>();
   private readonly invalidations = new Set<(target: LiveDecisionTarget) => void>();
+  private readonly observationIncarnation = randomUUID();
+  private observationCounter = 0n;
   private closed = false;
 
   constructor(readonly instanceId: string) {
     if (!instanceId) throw new OrcaError("CONFIG_INVALID", "live inputs require a daemon boot identity");
+  }
+
+  /** Internal observation token, never execution authority or a durable event cursor. */
+  get observationRevision(): string {
+    return JSON.stringify([this.instanceId, this.observationIncarnation, this.observationCounter.toString()]);
   }
 
   recordsAnswer(query: HumanInputQuery): boolean {
@@ -110,7 +118,10 @@ export class LiveHumanInput implements HumanInputPort {
         reject,
         dispose: (invalidated = false) => {
           const removed = this.pending.get(query.requestId) === entry;
-          if (removed) this.pending.delete(query.requestId);
+          if (removed) {
+            this.pending.delete(query.requestId);
+            this.observationCounter++;
+          }
           binding.signal.removeEventListener("abort", expire);
           query.signal?.removeEventListener("abort", expire);
           // Ephemeral, owner-local state only. Lease loss cannot append an event, and a
@@ -126,6 +137,7 @@ export class LiveHumanInput implements HumanInputPort {
         },
       };
       this.pending.set(query.requestId, entry);
+      this.observationCounter++;
       binding.signal.addEventListener("abort", expire, { once: true });
       query.signal?.addEventListener("abort", expire, { once: true });
     });
@@ -163,6 +175,7 @@ export class LiveHumanInput implements HumanInputPort {
       throw new OrcaError("NOT_SUPPORTED", "standing answer requires its authorized writer");
     // Claim synchronously before any await, so concurrent responders cannot both enter.
     entry.state = "accepting";
+    this.observationCounter++;
     let recorded = false;
     let attemptedWrite = false;
     try {
@@ -214,7 +227,10 @@ export class LiveHumanInput implements HumanInputPort {
         if (error instanceof OrcaError && error.code === "RUN_LEASED") {
           entry.dispose(true);
           entry.resolve(undefined);
-        } else entry.state = "pending";
+        } else {
+          entry.state = "pending";
+          this.observationCounter++;
+        }
       }
       throw error;
     }
@@ -222,6 +238,7 @@ export class LiveHumanInput implements HumanInputPort {
 
   /** Daemon shutdown; no persistence, approval, or cancellation of durable workflow gates. */
   close(): void {
+    if (!this.closed) this.observationCounter++;
     this.closed = true;
     for (const entry of this.pending.values()) {
       entry.dispose(true);
