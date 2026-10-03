@@ -18,11 +18,14 @@ import {
   OperatorPageParamsSchema,
   OperatorPreflightParamsSchema,
   OperatorRowSchema,
+  OperatorBoundaryRowSchema,
+  OperatorBoundaryProjectionSchema,
   OPERATOR_MAX_RESULT_BYTES,
   type OperatorCollection,
   type OperatorDiscovery,
   type OperatorPageParams,
-  type OperatorPageResult,
+  type OperatorBoundaryPageResult,
+  type OperatorBoundaryRow,
   type OperatorRow,
   type OperatorTarget,
 } from "@orca/protocol";
@@ -51,6 +54,16 @@ export interface OperatorReadOptions {
   configStatus?: () => Promise<GenerationStatus>;
   artifactRun?: (artifactId: string) => Promise<string | undefined>;
   artifact?: (runId: string, artifactId: string, maxBytes: number) => Promise<ArtifactsGetResult>;
+  /** Per-invocation trusted projection, only after exact-run resource authorization. */
+  boundaryRow?: (params: OperatorPageParams, row: OperatorRow) => Promise<OperatorBoundaryRow>;
+  /** Read independently from the authoritative pinned declaration, never from boundaryRow output.
+   * Undefined means confirmed absent. Unverifiable evidence must throw, not invent an action.
+   */
+  declaredRevisionActionId?: (params: OperatorPageParams, row: OperatorRow) => Promise<string | undefined>;
+  /** Covers boundary publication/identity/state and pinned declaration changes, including uncertainty.
+   * Must be stable across per-call model instances and change on every relevant publication.
+   */
+  boundaryRevision?: (params: OperatorPageParams) => Promise<string>;
   now?: () => Date;
   /** One random boot key, shared by per-call model instances; never serialized. */
   cursorKey?: Uint8Array;
@@ -77,6 +90,8 @@ export class OperatorReadModel {
   // A restart deliberately invalidates cursors. This key is not an admission ledger.
   private readonly cursorKey: Uint8Array;
   constructor(private readonly options: OperatorReadOptions) {
+    if (options.boundaryRow && (!options.boundaryRevision || !options.declaredRevisionActionId))
+      throw new OrcaError("CONFIG_INVALID", "Boundary projection requires pinned declaration and revision readers");
     this.cursorKey = options.cursorKey ?? randomBytes(32);
     if (this.cursorKey.byteLength < 32) throw new OrcaError("CONFIG_INVALID", "Operator cursor key is too short");
   }
@@ -119,7 +134,7 @@ export class OperatorReadModel {
       ),
     });
   }
-  async page(raw: OperatorPageParams): Promise<OperatorPageResult> {
+  async page(raw: OperatorPageParams): Promise<OperatorBoundaryPageResult> {
     // Operation authorization precedes schema diagnostics; collection is a closed routing discriminant.
     const p = await this.principal();
     const permission = permissions[raw?.collection];
@@ -146,26 +161,34 @@ export class OperatorReadModel {
     const binding = this.sign(
       JSON.stringify({ principal: p.id, scope: p.scope, permissions: [...p.permissions].sort(), filter }),
     );
+    const enrich = !!this.options.boundaryRow && !!params.runId && ["runs", "inputs"].includes(params.collection);
+    const boundaryRevision = enrich ? await this.options.boundaryRevision!(params) : undefined;
     const snapshot = await open(params, p);
-    const result: OperatorPageResult = {
+    const revision = enrich ? this.sign(JSON.stringify([snapshot.revision, boundaryRevision])) : snapshot.revision;
+    const result: OperatorBoundaryPageResult = {
       target: this.options.target,
       items: [],
       asOf: this.stamp(),
-      revision: snapshot.revision,
+      revision,
       truncated: false,
       restartRequired: false,
     };
     let after = -1;
     if (params.cursor) {
       const decoded = this.decode(params.cursor);
-      if (!decoded || decoded.binding !== binding || decoded.revision !== snapshot.revision)
+      if (!decoded || decoded.binding !== binding || decoded.revision !== revision) {
+        await this.unchanged(p, permission);
         return { ...result, restartRequired: true };
+      }
       after = decoded.offset;
     }
+    const projected: { before: OperatorRow; after: string }[] = [];
     let visible = -1;
     for await (const original of snapshot.rows) {
-      const row = await this.project(p, original);
-      if (!row) continue;
+      const before = await this.project(p, original);
+      if (!before) continue;
+      const afterRow = enrich ? await this.boundary(params, before, p) : OperatorBoundaryRowSchema.parse(before);
+      const row = this.boundRow(afterRow);
       visible++;
       if (visible <= after) continue;
       // Budget includes JSON escaping and worst-case MCP text/structured duplication.
@@ -174,16 +197,24 @@ export class OperatorReadModel {
         result.items.length === params.limit ||
         Buffer.byteLength(JSON.stringify(candidate)) > (OPERATOR_MAX_RESULT_BYTES - 4096) / 3
       ) {
-        result.nextCursor = this.encode({ binding, revision: snapshot.revision, offset: visible - 1 });
+        result.nextCursor = this.encode({ binding, revision, offset: visible - 1 });
         result.truncated = true;
         break;
       }
       result.items.push(row);
+      projected.push({ before, after: this.sign(JSON.stringify(afterRow)) });
     }
-    await this.unchanged(p, permission); // revocation during a scan cannot leak its result
-    const visibleAgain = await Promise.all(result.items.map((row) => this.project(p, row)));
-    if (JSON.stringify(visibleAgain) !== JSON.stringify(result.items)) throw forbidden();
-    if ((await snapshot.currentRevision()) !== snapshot.revision)
+    // Recheck original public rows and the independently pinned projection after awaited work.
+    let changed = false;
+    for (const { before, after: previous } of projected) {
+      const current = await this.project(p, before);
+      if (JSON.stringify(current) !== JSON.stringify(before)) throw forbidden();
+      if (enrich && this.sign(JSON.stringify(await this.boundary(params, before, p))) !== previous) changed = true;
+    }
+    if (enrich && (await this.options.boundaryRevision!(params)) !== boundaryRevision) changed = true;
+    if ((await snapshot.currentRevision()) !== snapshot.revision) changed = true;
+    await this.unchanged(p, permission); // also covers revocation during final awaited checks
+    if (changed)
       return {
         target: result.target,
         items: [],
@@ -194,9 +225,28 @@ export class OperatorReadModel {
       };
     return result;
   }
+  private async boundary(params: OperatorPageParams, before: OperatorRow, p: Principal): Promise<OperatorBoundaryRow> {
+    const declaration = await this.options.declaredRevisionActionId!(params, structuredClone(before));
+    const after = await this.options.boundaryRow!(params, structuredClone(before));
+    const parsed = OperatorBoundaryProjectionSchema.safeParse({
+      params,
+      before,
+      after,
+      declaredRevisionActionId: declaration,
+    });
+    if (!parsed.success) throw new ProtocolFault("PROTOCOL_MESSAGE", "Invalid operator boundary projection");
+    // Strong views are never released to an input-only viewer, even if a provider misbehaves.
+    if (parsed.data.after.revisionState && (!holds(p, "inputs.answer") || !holds(p, "runs.control"))) throw forbidden();
+    return parsed.data.after;
+  }
+  private boundRow(row: OperatorBoundaryRow): OperatorBoundaryRow {
+    if (Buffer.byteLength(JSON.stringify(row)) <= 12 * 1024) return row;
+    return { id: row.id, kind: row.kind, ...(row.runId ? { runId: row.runId } : {}), omitted: ["oversized-item"] };
+  }
   private async project(p: Principal, input: OperatorRow): Promise<OperatorRow | undefined> {
     // Strip future/raw fields first. This is an allowlist, never ad-hoc config redaction.
     const row = OperatorRowSchema.parse(input);
+    delete row.expectedBoundary;
     if (
       row.live &&
       (row.live.target.runId !== row.runId ||
