@@ -23,7 +23,7 @@ export async function probeDiscovery(profile, token, fetcher = fetch) {
   return validateDiscovery(profile, body.result);
 }
 
-export async function launch(paths, options = {}) {
+export async function checkProfile(paths, options = {}) {
   const profile = validateProfile(JSON.parse(readPrivateFile(paths.profile)));
   const token = validateCredential(
     profile,
@@ -31,6 +31,11 @@ export async function launch(paths, options = {}) {
     readPrivateFile(paths.store, 1024 * 1024),
   );
   await probeDiscovery(profile, token, options.fetcher);
+  return { profile, token };
+}
+
+export async function launch(paths, options = {}) {
+  const { profile, token } = await checkProfile(paths, options);
   const child = (options.spawn ?? spawn)(
     profile.runtime.node,
     [profile.runtime.cliEntry, "mcp", "--endpoint", profile.endpoint, "--token-env", "ORCA_MCP_TOKEN"],
@@ -56,11 +61,14 @@ export async function launch(paths, options = {}) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const args = process.argv.slice(2);
+  const checkOnly = args[0] === "--check-only";
+  if (checkOnly) args.shift();
   if (args.length !== 6 || args[0] !== "--profile" || args[2] !== "--token-file" || args[4] !== "--credential-store") {
     process.stderr.write("MCP service configuration invalid\n");
     process.exitCode = 64;
   } else {
-    launch({ profile: args[1], token: args[3], store: args[5] })
+    const paths = { profile: args[1], token: args[3], store: args[5] };
+    (checkOnly ? checkProfile(paths).then(() => 0) : launch(paths))
       .then((code) => {
         process.exitCode = code;
       })

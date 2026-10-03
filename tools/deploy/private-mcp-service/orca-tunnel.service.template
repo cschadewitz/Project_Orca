@@ -8,7 +8,9 @@ StartLimitBurst=6
 
 [Service]
 Type=simple
-ExecStart=@TUNNEL_CLIENT@ run --profile-file @TUNNEL_PROFILE@
+# Clear the manager environment before Node or tunnel-client can read it.
+# Optional proxy/CA assignments must be literal reviewed values; see the runbook.
+ExecStart=/usr/bin/env -i HOME=@SERVICE_HOME@ PATH=@REVIEWED_PATH@ LANG=C @TUNNEL_CLIENT@ run --profile-file @TUNNEL_PROFILE@
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s

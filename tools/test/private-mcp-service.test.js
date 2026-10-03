@@ -1,4 +1,5 @@
 /** Synthetic policy, launcher, and unit-template checks for private MCP supervision. */
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -14,7 +15,7 @@ import {
   validateDiscovery,
   validateProfile,
 } from "../deploy/private-mcp-service/credential-policy.js";
-import { childEnvironment, launch } from "../deploy/private-mcp-service/launch-mcp.js";
+import { checkProfile, childEnvironment, launch } from "../deploy/private-mcp-service/launch-mcp.js";
 
 const dirs = [];
 afterEach(() => {
@@ -246,6 +247,98 @@ describe("guarded launcher", () => {
     expect(await running).toBe(143);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
+  it("requires a reviewed post-start pin for a second boot and preserves every authority check", async () => {
+    const first = profile();
+    const second = profile();
+    second.target.instanceId = "33333333-3333-4333-8333-333333333333";
+    const fetcher = (result) => async () => ({
+      ok: true,
+      json: async () => ({ kind: "response", id: "service-preflight", ok: true, result }),
+    });
+    const oldPaths = files(first);
+    // Same boot (including tunnel-only restart) continues to validate.
+    await checkProfile(oldPaths, { fetcher: fetcher(discovery(first)) });
+    await checkProfile(oldPaths, { fetcher: fetcher(discovery(first)) });
+    const spawnMock = vi.fn();
+    await expect(launch(oldPaths, { fetcher: fetcher(discovery(second)), spawn: spawnMock })).rejects.toThrow(
+      /live-identity/,
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+    // Operator explicitly reviews a new profile; no automatic adoption or profile write.
+    const newPaths = files(second);
+    await checkProfile(newPaths, { fetcher: fetcher(discovery(second)) });
+    expect(JSON.parse(readFileSync(oldPaths.profile, "utf8")).target).toEqual(first.target);
+    for (const patch of [
+      { target: first.target },
+      { target: { ...second.target, workspaceId: second.target.instanceId } },
+      { principalId: "other-principal" },
+      { authentication: "local" },
+      { orcaVersion: "other-version" },
+      { scope: { ...scope, permissions: [...second.permissions, "plan.read"] } },
+      { scope: { workflows: "*", runs: "all", permissions: second.permissions } },
+    ]) {
+      await expect(checkProfile(newPaths, { fetcher: fetcher({ ...discovery(second), ...patch }) })).rejects.toThrow(
+        /live-identity/,
+      );
+    }
+  });
+  it("check-only CLI succeeds silently without spawning the configured MCP executable", () => {
+    const p = profile();
+    const paths = files(p);
+    const fixture = join(resolve(paths.profile, ".."), "discovery-fixture.mjs");
+    // Explicit synthetic fetch fixture; runtime executable paths intentionally do not exist.
+    writeFileSync(
+      fixture,
+      `globalThis.fetch = async () => ({ ok: true, json: async () => (${JSON.stringify({
+        kind: "response",
+        id: "service-preflight",
+        ok: true,
+        result: discovery(p),
+      })}) });`,
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        fixture,
+        resolve("tools/deploy/private-mcp-service/launch-mcp.js"),
+        "--check-only",
+        "--profile",
+        paths.profile,
+        "--token-file",
+        paths.token,
+        "--credential-store",
+        paths.store,
+      ],
+      { encoding: "utf8", env: { LANG: "C" } },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+  it("check-only CLI failures are secret-free and never write protocol stdout", () => {
+    const paths = files();
+    writeFileSync(paths.token, "invalid-secret-canary");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "tools/deploy/private-mcp-service/launch-mcp.js",
+        "--check-only",
+        "--profile",
+        paths.profile,
+        "--token-file",
+        paths.token,
+        "--credential-store",
+        paths.store,
+      ],
+      { encoding: "utf8", env: { LANG: "C" } },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("MCP service startup refused\n");
+  });
   it("uses no ambient credentials even if they exist in the parent", () => {
     const env = childEnvironment(profile(), token);
     expect(Object.keys(env).sort()).toEqual(["HTTPS_PROXY", "LANG", "NODE_EXTRA_CA_CERTS", "ORCA_MCP_TOKEN"].sort());
@@ -269,4 +362,64 @@ it("service templates pin one local daemon and one downstream tunnel with bounde
   expect(yaml).toMatch(/listen_addr: 127\.0\.0\.1:/);
   expect(yaml.match(/- channel: main/g)).toHaveLength(1);
   expect(yaml).not.toMatch(/server_urls:|harpoon:/);
+});
+
+it("service entry clears ambient tunnel and Node overrides before starting either runtime", () => {
+  const dir = mkdtempSync(join(tmpdir(), "orca-entry-"));
+  dirs.push(dir);
+  const preload = join(dir, "preload.cjs");
+  writeFileSync(preload, 'throw new Error("ambient preload executed");');
+  const hostile = {
+    MCP_COMMAND: "unreviewed-command",
+    MCP_SERVER_URL: "https://unreviewed.example",
+    CONTROL_PLANE_API_KEY: "secret-canary",
+    CONTROL_PLANE_BASE_URL: "https://unreviewed.example",
+    CONTROL_PLANE_TUNNEL_ID: "other-tunnel",
+    HEALTH_LISTEN_ADDR: "0.0.0.0:9999",
+    LOG_HTTP_RAW_UNSAFE: "true",
+    NODE_OPTIONS: `--require=${preload}`,
+    NODE_PATH: dir,
+    OPENAI_API_KEY: "secret-canary",
+  };
+  for (const name of ["orca-daemon", "orca-tunnel"]) {
+    const template = readFileSync(`tools/deploy/private-mcp-service/${name}.service.template`, "utf8");
+    const entry = template.split("\n").find((line) => line.startsWith("ExecStart="));
+    const prefix = entry.slice("ExecStart=".length).split(name === "orca-daemon" ? "@NODE@" : "@TUNNEL_CLIENT@")[0];
+    expect(prefix).toBe("/usr/bin/env -i HOME=@SERVICE_HOME@ PATH=@REVIEWED_PATH@ LANG=C ");
+    const [binary, ...args] = prefix
+      .trim()
+      .replace("@SERVICE_HOME@", dir)
+      .replace("@REVIEWED_PATH@", "/usr/bin:/bin")
+      .split(" ");
+    // Exercise the actual template prefix with Node as a synthetic service executable.
+    const result = spawnSync(
+      binary,
+      [...args, process.execPath, "-e", "process.stdout.write(JSON.stringify(process.env))"],
+      {
+        env: { ...process.env, ...hostile },
+        encoding: "utf8",
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({ HOME: dir, PATH: "/usr/bin:/bin", LANG: "C" });
+    const reviewed = spawnSync(
+      binary,
+      [
+        ...args,
+        "HTTPS_PROXY=http://reviewed.example:8080",
+        process.execPath,
+        "-e",
+        "process.stdout.write(process.env.HTTPS_PROXY)",
+      ],
+      {
+        env: hostile,
+        encoding: "utf8",
+      },
+    );
+    expect(reviewed.error).toBeUndefined();
+    expect(reviewed.status).toBe(0);
+    expect(reviewed.stdout).toBe("http://reviewed.example:8080");
+  }
 });
