@@ -1,16 +1,22 @@
 {
+  "coverage": {
+    "capacityLimited": true,
+    "observedWindowMs": 300000,
+    "requestedWindowMs": 300000,
+    "retainedWindowMs": 299999
+  },
   "entities": [],
   "events": [
     {
       "code": "sleep_observed",
       "entityAlias": "unknown",
-      "offsetMs": 0,
+      "offsetMs": 1,
       "phase": "lifecycle"
     },
     {
       "code": "wake_observed",
       "entityAlias": "unknown",
-      "offsetMs": 86400000,
+      "offsetMs": 300000,
       "phase": "lifecycle"
     }
   ],
@@ -51,5 +57,5 @@
     "osVersion": "15.0.0",
     "storeFormat": "unknown"
   },
-  "windowMs": 86400000
+  "windowMs": 300000
 }

@@ -1,5 +1,12 @@
 # Review decisions and implementation acceptance
 
+**Later #416 implementation revision:** see [pretrigger-buffer.md](pretrigger-buffer.md).
+The configurable five-minute default is approved; D1's remaining proposed limits are now
+1 MiB / 4,096 events / 1–15 minutes for volatile rolling history. All other D1–D8 decisions
+remain pending. The table and original preparation-only restrictions below record #421;
+they do not override the explicit request to implement this disabled first slice or claim
+its tests satisfy the full R01–R11 acceptance matrix.
+
 This preparation stops at a draft PR for review. #416 remains the pre-beta gate; #390
 consumes its accepted evidence. Proposed budgets and copy must be reviewed before any
 capture implementation or use with a tester. No new credentials, runtime changes,

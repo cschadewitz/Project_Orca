@@ -1,5 +1,11 @@
 # Manual diagnostic export contract (draft)
 
+**#416 first implementation revision:** [pretrigger-buffer.md](pretrigger-buffer.md)
+now documents an isolated, unwired app-main buffer and revised draft rolling schema.
+Only the configurable five-minute default is approved; all other policy decisions remain
+pending. The #421 baseline/scope and implementation-status statements below are the
+historical preparation record, not the scope or evidence for this later slice.
+
 Design and synthetic fixture deliverable for [#421](https://github.com/cschadewitz/Project_Orca/issues/421),
 under [#416](https://github.com/cschadewitz/Project_Orca/issues/416). **Not approved for
 capture, retention, export implementation or tester use. Parent acceptance remains open.**

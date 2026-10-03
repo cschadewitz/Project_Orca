@@ -14,7 +14,7 @@ schema version. The schema identifier is a local URN, not a fetch endpoint.
 | `schemaVersion` | Integer `1` | Proposed format, not protocol or store version |
 | `reportId`, `sessionId` | Lowercase UUIDv4, exactly 36 ASCII bytes each; distinct | Independent CSPRNG values newly generated for each preview snapshot, including retries. Session ID names this collection session only, never an agent session/daemon boot. No cross-report identifier survives |
 | `mode` | `one_shot`, `rolling_snapshot` | The particular consent that authorized this snapshot |
-| `windowMs` | Integer 0–86,400,000; one-shot maximum 60,000 | Actual monotonic window represented; not wall time or the age of a run. Unmeasurable window aborts preparation |
+| `windowMs` | Integer 0–900,000; one-shot maximum 60,000 | Actual monotonic window represented; not wall time or the age of a run. Unmeasurable window aborts preparation |
 | `versions.app`, `versions.daemon`, `versions.osVersion` | `unknown` or three dot-separated decimal components, each 1–5 digits; maximum 20 characters | Verified app metadata, authorized current handshake projection, and a typed OS version API, respectively. No prerelease/build labels, distro names, command output or coercion. A source that does not exactly fit stays `unknown` |
 | `versions.buildRevision` | `unknown` or exactly 40 lowercase hex characters | Only a verified public release source revision from sealed candidate identity; no worktree/private-project SHA, branch, pipeline URL or host build ID. Syntax alone cannot prove provenance |
 | `versions.appProtocol`, `versions.daemonProtocol` | `unknown` or closed `{major, minor}` object, each integer 0–65,535 | Compiled app protocol; current authenticated daemon observation. No fabricated daemon protocol before handshake |
@@ -28,8 +28,8 @@ schema version. The schema identifier is a local URN, not a fetch endpoint.
 | `snapshot.protectedState` | `available`, `unavailable`, `unknown` | Explicit typed observation already produced by normal execution; never open/decrypt/test keys for diagnostics |
 | `evidence.handshake`, `evidence.admissionObservation`, `evidence.resumeObservation`, `evidence.protectedStateObservation` | Boolean or `unknown` | `true`: a safe current observation is available; `false`: producer knows none is available in scope; `unknown`: cannot establish presence. Never probes excluded files. Presence does not mean success |
 | `entities` | Array of 0–64 closed `{alias, kind}` objects | In-memory remapping only; `kind` is `run`, `step`, `admission`; alias is `e1`–`e64` (1–3 characters), unique across all kinds in this bundle |
-| `events` | Array of 0–256 closed events; one-shot maximum 32 | Only safe events after relevant consent, in nondecreasing `offsetMs` order; no raw event-store scan |
-| `events[].offsetMs` | Integer 0–86,400,000, no larger than `windowMs` | Monotonic milliseconds relative to beginning of represented window; not persisted wall-clock dates |
+| `events` | Array of 0–4,096 closed events; one-shot maximum 32 | Only safe events after relevant consent, in nondecreasing `offsetMs` order; no raw event-store scan |
+| `events[].offsetMs` | Integer 0–900,000, no larger than `windowMs` | Monotonic milliseconds relative to beginning of represented window; not persisted wall-clock dates |
 | `events[].phase`, `events[].code` | Fixed enums in [failure mapping](failure-mapping.md) and schema | Phase/code combinations checked by schema; phase `unknown` only permits code `unknown` |
 | `events[].entityAlias` | `unknown` or `e1`–`e64` | Must refer to an entry in `entities`. Unavailable identity is `unknown`; overflow drops events instead of exporting original IDs |
 | `omissions.unavailable`, `omissions.invalid`, `omissions.budget`, `omissions.expired` | Integer 0–65,534, `at_least_65535`, or `unknown` | Counts of safe candidate observations omitted for that single reason; saturated at 65,535. No byte counts or inventory of excluded private sources |
@@ -53,28 +53,43 @@ at the producer boundary, but neither the map nor IDs enter retention/export. Ro
 storage uses its own random, retention-scoped references and remaps again per export.
 No correlation with another report is promised or required.
 
-## Proposed budgets (not policy approval or measurements)
+## Revised draft budgets (not policy approval or measurements)
 
-| Resource | Exact proposed ceiling | Overflow/failure behavior |
-| --- | --- | --- |
-| Export file and candidate parser input | 262,144 bytes (256 KiB), uncompressed, including all JSON whitespace and final LF | Reject before parsing beyond limit; never compress/archive to bypass it |
-| One-shot | 32 safe events, at most 60,000 ms from explicit consent, one immutable snapshot | No pre-consent history. Ends on snapshot, cancel, error or deadline; no automatic repeated sampling |
-| Rolling | 2,097,152 bytes (2 MiB) total diagnostic storage, including metadata, ciphertext, encryption overhead and temporary diagnostic files; at most 2,048 safe events | Reserve housekeeping space inside ceiling; evict oldest safe events/drop new observations with visible budget omissions. If enforcement is uncertain, stop capture |
-| Rolling time | 86,400,000 ms (24 hours) maximum per consent session and per retained event | Expire and revoke key. Restart is off and discards old buffer; no automatic carryover |
-| Export from rolling | Latest at most 256 eligible safe events within preceding 24 hours | Deterministic newest-window selection, oldest-first serialization; omission count for excluded eligible events |
-| One safe event | At most 512 serialized ASCII bytes before retention | Reject oversized safe observation; never truncate strings to make them look safe |
-| JSON nesting | At most 12 simultaneous object/array containers, checked before parsing | Reject independently of the parser's implementation limit; braces inside strings do not count |
-| Aliases | 64 in an export; at most 2,048 retention-local references in rolling storage | Bound map as well as array; drop safe events and count budget omissions |
-| Preparation/projection/validation/scan | One 2,000 ms total active deadline per attempt; input also byte/event bounded | Abort and revoke one-shot grant on exception/hang; no export/raw fallback. UI time spent reading is excluded |
-| Ready preview | Maximum 600,000 ms (10 minutes), also bounded by consent/session expiry | Invalidate bytes and return to fresh consent; suspend/resume uncertainty invalidates |
-| Attempts | One preparation at a time, no queued auto-retries | Retry is a fresh user action with fresh disclosure/consent |
+The #416 implementation slice follows #436 / PR #438's configurable five-minute
+owner direction. [pretrigger-buffer.md](pretrigger-buffer.md) records the complete
+reconciliation and pending decisions. This replaces the earlier rolling limits in this
+**unshipped** v1 draft; it does not approve D1–D8 or enable collection.
 
-The 256 KiB/2 MiB/24-hour figures originate as #416 proposals. All rows above, including
-new event/deadline caps and conservative restart behavior, require D1/D2 review before
-capture is enabled. Fixture validation enforces only bundle-shape/byte/event/window
-ceilings. It does not measure worker CPU/memory, deadlines, disk usage or retention.
-Resource isolation must keep diagnostics off execution locks/queues. Drop diagnostics
-under load; never block, cancel or mutate runs to meet these budgets.
+| Resource | Current draft ceiling / behavior |
+| --- | --- |
+| Complete rolling report, parser input and frozen snapshot | 1,048,576 bytes (1 MiB), canonical uncompressed JSON including envelope, coverage, omissions, formatting and final LF. Retention reserves this complete size before admission; snapshot has no smaller truncation cap |
+| Rolling events | At most 4,096 safe events, independently bounded by report bytes; oldest-first output, oldest eviction with visible budget omissions |
+| Rolling event age | Default 300,000 ms; configurable 1–15 whole minutes (60,000–900,000 ms). Events expire at age >= configured window. No persistent history or keys in this slice |
+| One-shot (unchanged, not implemented) | 262,144 bytes, 32 safe events, at most 60,000 ms; separate disclosure/grant |
+| One safe event | At most 512 serialized bytes; current closed enums are smaller. Never truncate source text |
+| JSON nesting | 12 containers, checked before parsing |
+| Aliases | Schema still bounds export aliases at 64. This implementation accepts no identities, keeps no identity map and emits `unknown` aliases / empty entities |
+| Preparation / preview (pending, not implemented) | Proposed 2-second active preparation deadline, one attempt at a time, ten-minute preview expiry; separate consent/save authority required |
+
+`coverage` is required only for rolling snapshots: `requestedWindowMs` is the current
+configured duration; `observedWindowMs` equals `windowMs`, bounded by session start and
+the retained time horizon (increasing duration never restores old history);
+`retainedWindowMs` is the age of the oldest retained event, or zero for an empty buffer.
+It is an event span ending at snapshot time, not proof of continuous evidence.
+`capacityLimited` says a capacity omission occurred inside the represented horizon.
+All four are typed, closed fields. Omissions are **session-cumulative**, saturating at
+`at_least_65535`; normal `expired` removals are distinct from `budget` loss. `invalid`
+counts refused primitive observations; `unavailable` remains unknown without producers.
+
+The historical 2 MiB encrypted rolling storage / 2,048 retention events / 24-hour
+session-and-event expiry proposal is superseded for this volatile slice. Persistent
+history, encryption, cleanup and consent-session lifetime still need separate decisions;
+no automatic 24-hour session policy is inferred. The old newest-256 export cutoff is
+removed for rolling reports. Unknown envelope facts stay unknown.
+
+The byte ceiling bounds serialized data, not JavaScript heap or execution latency.
+Measure ring/index/envelope/snapshot/preview overhead and producer traffic before enabling
+capture. Diagnostics must remain outside execution locks/queues and never mutate runs.
 
 ## Serialization and exact bytes
 
