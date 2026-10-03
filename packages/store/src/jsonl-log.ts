@@ -29,6 +29,7 @@
  * lets a page of a multi-megabyte `agent.update` log cost a page's worth of reading.
  */
 import { mkdir, open, readdir, readFile, stat, truncate, type FileHandle } from "node:fs/promises";
+import { isUtf8 } from "node:buffer";
 import { dirname, join } from "node:path";
 import {
   OrcaError,
@@ -279,6 +280,95 @@ export class JsonlLogDir {
       if (parent === dir) break;
       dir = parent;
     }
+  }
+
+  /**
+   * A complete bounded snapshot under the append mutex, with no execution lease. Never
+   * initializes or repairs persistence, skips corruption, logs, or trusts the tail cache.
+   * The callback only parses public records; private hydration happens after this lock.
+   */
+  readObservation<T>(
+    key: string,
+    limits: { maxRecords: number; maxBytes: number },
+    parser: JsonlParser<T>,
+  ): Promise<T[]> {
+    const { maxRecords, maxBytes } = limits;
+    if (!Number.isSafeInteger(maxRecords) || maxRecords < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1)
+      return Promise.reject(new OrcaError("RUN_STATE", "Invalid event observation limits"));
+    const prev = this.chains.get(key) ?? Promise.resolve();
+    // Observations must not emit even the append path's stale-lock warning.
+    const { onBroken: _onBroken, ...lock } = this.lock;
+    const next = prev
+      .then(() =>
+        withFileLock(
+          `${this.file(key)}.lock`,
+          async () => {
+            const file = this.file(key);
+            // FlushFileBuffers needs write access on Windows; neither flag creates a file.
+            const handle = await open(file, process.platform === "win32" ? "r+" : "r");
+            try {
+              const before = await handle.stat();
+              if (!before.isFile() || before.size === 0)
+                throw new OrcaError("RUN_STATE", "Event observation requires an existing history");
+              if (before.size > maxBytes) throw new OrcaError("RUN_STATE", "Event observation exceeds its byte limit");
+              const records: T[] = [];
+              let pos = 0;
+              let fragments: Buffer[] = [];
+              while (pos < before.size) {
+                const buffer = Buffer.allocUnsafe(Math.min(SCAN_CHUNK, before.size - pos));
+                const { bytesRead } = await handle.read(buffer, 0, buffer.length, pos);
+                if (bytesRead === 0) throw new OrcaError("RUN_STATE", "Event observation changed during its read");
+                pos += bytesRead;
+                const chunk = buffer.subarray(0, bytesRead);
+                let start = 0;
+                for (;;) {
+                  const end = chunk.indexOf(NEWLINE, start);
+                  if (end < 0) break;
+                  if (records.length >= maxRecords)
+                    throw new OrcaError("RUN_STATE", "Event observation exceeds its event limit");
+                  const last = chunk.subarray(start, end);
+                  const bytes = fragments.length ? Buffer.concat([...fragments, last]) : last;
+                  if (!isUtf8(bytes)) throw new OrcaError("RUN_STATE", "Event observation contains invalid UTF-8");
+                  fragments = [];
+                  const raw = JSON.parse(bytes.toString("utf8")) as unknown;
+                  if ((raw as { seq?: unknown } | null)?.seq !== records.length)
+                    throw new OrcaError("RUN_STATE", "Event observation sequence is inconsistent");
+                  records.push(parser.parse(raw));
+                  start = end + 1;
+                }
+                // Retain fragments once, rather than repeatedly copying a large record.
+                if (start < chunk.length) fragments.push(chunk.subarray(start));
+              }
+              if (fragments.length) throw new OrcaError("RUN_STATE", "Event observation requires complete records");
+              await handle.sync();
+              await this.syncDirectories();
+              for (const after of [await handle.stat(), await stat(file)]) {
+                if (
+                  after.dev !== before.dev ||
+                  after.ino !== before.ino ||
+                  after.size !== before.size ||
+                  after.mtimeMs !== before.mtimeMs ||
+                  after.ctimeMs !== before.ctimeMs
+                )
+                  throw new OrcaError("RUN_STATE", "Event observation changed during its read");
+              }
+              return records;
+            } finally {
+              await handle.close();
+            }
+          },
+          lock,
+        ),
+      )
+      .catch((error: unknown) => {
+        if (error instanceof OrcaError && error.code === "RUN_STATE") throw error;
+        throw new OrcaError("RUN_STATE", "Event observation could not verify complete existing history");
+      });
+    this.chains.set(
+      key,
+      next.catch(() => undefined),
+    );
+    return next;
   }
 
   private async appendLocked<T>(key: string, build: (seq: number) => T): Promise<T> {

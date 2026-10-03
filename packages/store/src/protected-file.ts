@@ -1,8 +1,9 @@
 /** Authenticated, owner-only, write-once execution records. Public history never contains their plaintext. */
 import { constants, type BigIntStats } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { OrcaError } from "@orca/core";
 
@@ -43,8 +44,212 @@ const EnvelopeSchema = z.strictObject({
 const unreadable = () =>
   new OrcaError("RUN_STATE", "protected execution record or key is missing, invalid or unreadable");
 
+interface FileObservation {
+  dir: string;
+  name: string;
+  aad: string;
+  directory?: string;
+  file?: string;
+  digest?: string;
+}
+interface NamesObservation {
+  dir: string;
+  prefix: string;
+  directory?: string;
+  names: string[];
+}
+interface PrivateObservation {
+  files: Map<string, FileObservation>;
+  enumerations: Map<string, NamesObservation>;
+  count: number;
+  maxRecords: number;
+  active: boolean;
+  failure?: OrcaError;
+}
+// Async context owns capture. Neither the ciphertext cache nor a store instance holds
+// observations, plaintext, keys, or an authority reusable by another request.
+const privateObservation = new AsyncLocalStorage<PrivateObservation>();
+class ObservationLimitError extends OrcaError {
+  constructor() {
+    super("RUN_STATE", "protected execution observation exceeds record limit");
+  }
+}
+function observationError(error: unknown): OrcaError {
+  const failure = error instanceof ObservationLimitError ? error : unreadable();
+  const scope = privateObservation.getStore();
+  if (scope) scope.failure ??= failure;
+  return failure;
+}
+function reserveObservation(scope: PrivateObservation, count: number): void {
+  if (!scope.active || scope.failure) throw scope.failure ?? unreadable();
+  if (count > scope.maxRecords - scope.count) throw observationError(new ObservationLimitError());
+  scope.count += count;
+}
+function captureFile(scope: PrivateObservation, record: FileObservation): void {
+  const id = JSON.stringify([record.dir, record.name]);
+  const previous = scope.files.get(id);
+  if (previous && JSON.stringify(previous) !== JSON.stringify(record)) throw observationError(unreadable());
+  reserveObservation(scope, previous ? 0 : 1);
+  scope.files.set(id, record);
+}
+async function optionalStat(path: string): Promise<BigIntStats | undefined> {
+  try {
+    return await lstat(path, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+function safeDirectory(info: BigIntStats): string {
+  if (!info.isDirectory() || (process.platform !== "win32" && (info.mode & 0o077n) !== 0n)) throw unreadable();
+  return directoryIdentity(info);
+}
+function safeFile(info: BigIntStats): string {
+  if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077n) !== 0n)) throw unreadable();
+  return fileIdentity(info);
+}
+
+/** Fresh reads only. Verification hashes bounded chunks, without parsing or decrypting. */
+async function inspectPrivateFile(
+  directory: string,
+  name: string,
+  readBytes: boolean,
+): Promise<{ record: FileObservation; bytes?: Buffer }> {
+  const dir = resolve(directory);
+  const path = join(dir, name);
+  const record: FileObservation = { dir, name, aad: associatedData(dir, name).toString("utf8") };
+  const directoryInfo = await optionalStat(dir);
+  if (!directoryInfo) return { record };
+  record.directory = safeDirectory(directoryInfo);
+  const info = await optionalStat(path);
+  if (!info) {
+    if (safeDirectory(await lstat(dir, { bigint: true })) !== record.directory) throw unreadable();
+    return { record };
+  }
+  record.file = safeFile(info);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    if (safeFile(await handle.stat({ bigint: true })) !== record.file) throw unreadable();
+    let bytes: Buffer | undefined;
+    let length = 0;
+    const hash = createHash("sha256");
+    if (readBytes) {
+      bytes = await handle.readFile();
+      length = bytes.length;
+      hash.update(bytes);
+    } else {
+      const chunk = Buffer.allocUnsafe(64 * 1024);
+      for (;;) {
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+        if (!bytesRead) break;
+        length += bytesRead;
+        hash.update(chunk.subarray(0, bytesRead));
+      }
+      // A key also travels through this path. Do not keep its bytes in the scratch buffer.
+      chunk.fill(0);
+    }
+    if (
+      (name === KEY_FILE && length !== 32) ||
+      safeFile(await handle.stat({ bigint: true })) !== record.file ||
+      safeFile(await lstat(path, { bigint: true })) !== record.file ||
+      safeDirectory(await lstat(dir, { bigint: true })) !== record.directory
+    ) {
+      if (name === KEY_FILE) bytes?.fill(0);
+      throw unreadable();
+    }
+    record.digest = hash.digest("hex");
+    return bytes ? { record, bytes } : { record };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function inspectPrivateNames(directory: string, prefix: string, maxNames: number): Promise<NamesObservation> {
+  const dir = resolve(directory);
+  const info = await optionalStat(dir);
+  if (!info) return { dir, prefix, names: [] };
+  const directoryStamp = safeDirectory(info);
+  const names: string[] = [];
+  for (const name of await readdir(dir)) {
+    if (name.startsWith(prefix) && name.endsWith(".json")) {
+      if (names.length >= maxNames) throw new ObservationLimitError();
+      names.push(name);
+    }
+  }
+  if (safeDirectory(await lstat(dir, { bigint: true })) !== directoryStamp) throw unreadable();
+  return { dir, prefix, directory: directoryStamp, names: names.sort() };
+}
+
+/** Filter membership, including an empty/missing directory, belongs to the observation. */
+export async function privateJsonNames(dir: string, prefix: string): Promise<string[]> {
+  const scope = privateObservation.getStore();
+  if (!scope) {
+    try {
+      return (await readdir(dir)).filter((name) => name.startsWith(prefix) && name.endsWith(".json"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw unreadable();
+    }
+  }
+  try {
+    reserveObservation(scope, 0);
+    const id = JSON.stringify([resolve(dir), prefix]);
+    const previous = scope.enumerations.get(id);
+    const record = await inspectPrivateNames(dir, prefix, previous?.names.length ?? scope.maxRecords - scope.count);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(record)) throw unreadable();
+    reserveObservation(scope, previous ? 0 : 1 + record.names.length);
+    scope.enumerations.set(id, record);
+    return [...record.names];
+  } catch (error) {
+    throw observationError(error);
+  }
+}
+
+/** The returned capability contains digests and identities only, and never serializes them. */
+export async function observePrivateReads<T>(
+  work: () => Promise<T>,
+  limits: { maxRecords: number },
+): Promise<{ value: T; verifyUnchanged(): Promise<void> }> {
+  if (privateObservation.getStore()) throw observationError(unreadable());
+  if (!Number.isSafeInteger(limits.maxRecords) || limits.maxRecords < 0) throw new ObservationLimitError();
+  const scope: PrivateObservation = {
+    files: new Map(),
+    enumerations: new Map(),
+    count: 0,
+    maxRecords: limits.maxRecords,
+    active: true,
+  };
+  let value: T;
+  try {
+    value = await privateObservation.run(scope, work);
+    if (scope.failure) throw scope.failure;
+  } finally {
+    scope.active = false;
+  }
+  const files = [...scope.files.values()];
+  const enumerations = [...scope.enumerations.values()];
+  return {
+    value,
+    async verifyUnchanged() {
+      try {
+        for (const expected of files) {
+          const { record } = await inspectPrivateFile(expected.dir, expected.name, false);
+          if (JSON.stringify(record) !== JSON.stringify(expected)) throw unreadable();
+        }
+        for (const expected of enumerations) {
+          const current = await inspectPrivateNames(expected.dir, expected.prefix, expected.names.length);
+          if (JSON.stringify(current) !== JSON.stringify(expected)) throw unreadable();
+        }
+      } catch {
+        throw unreadable();
+      }
+    },
+  };
+}
+
 /** Refuse unsafe existing directories rather than silently changing their access policy. */
 export async function privateDirectory(dir: string): Promise<void> {
+  if (privateObservation.getStore()) throw observationError(unreadable());
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const info = await lstat(dir);
   if (!info.isDirectory() || (process.platform !== "win32" && (info.mode & 0o077) !== 0)) throw unreadable();
@@ -69,6 +274,17 @@ export async function privateDirectory(dir: string): Promise<void> {
 }
 
 async function privateBytes(dir: string, name: string): Promise<Buffer | undefined> {
+  const scope = privateObservation.getStore();
+  if (scope) {
+    try {
+      reserveObservation(scope, 0);
+      const { record, bytes } = await inspectPrivateFile(dir, name, true);
+      captureFile(scope, record);
+      return bytes;
+    } catch (error) {
+      throw observationError(error);
+    }
+  }
   const path = join(dir, name);
   try {
     const directory = await lstat(dir, { bigint: true });
@@ -185,15 +401,28 @@ export async function readPrivateJson(dir: string, name: string): Promise<unknow
   try {
     const bytes = await privateBytes(dir, name);
     if (!bytes) return undefined;
-    return decodeRecord(dir, name, bytes, await keyFor(dir, false));
-  } catch {
+    const key = await keyFor(dir, false);
+    try {
+      return decodeRecord(dir, name, bytes, key);
+    } finally {
+      if (privateObservation.getStore()) key.fill(0);
+    }
+  } catch (error) {
     // Parse and authentication failures must never include source bytes or underlying exceptions.
-    throw unreadable();
+    throw observationError(error);
   }
 }
 
 /** A fresh, stable key observation for one replay call; never enters the ciphertext cache. */
 async function replayKey(dir: string): Promise<{ bytes: Buffer; directory: string; file: string }> {
+  const scope = privateObservation.getStore();
+  if (scope) {
+    reserveObservation(scope, 0);
+    const { record, bytes } = await inspectPrivateFile(dir, KEY_FILE, true);
+    captureFile(scope, record);
+    if (!bytes || !record.directory || !record.file) throw unreadable();
+    return { bytes, directory: record.directory, file: record.file };
+  }
   const path = join(dir, KEY_FILE);
   const directory = await lstat(dir, { bigint: true });
   const info = await lstat(path, { bigint: true });
@@ -237,17 +466,20 @@ export async function readPrivateJsonBatch<T>(
   names: readonly string[],
   validate: (records: unknown[]) => Promise<T>,
 ): Promise<T> {
+  let entry: Awaited<ReturnType<typeof replayKey>> | undefined;
+  let terminal: Awaited<ReturnType<typeof replayKey>> | undefined;
   try {
-    const entry = await replayKey(dir);
+    entry = await replayKey(dir);
+    const key = entry.bytes;
     const records = await Promise.all(
       names.map(async (name) => {
         const bytes = await privateBytes(dir, name);
         if (!bytes) throw unreadable();
-        return decodeRecord(dir, name, bytes, entry.bytes);
+        return decodeRecord(dir, name, bytes, key);
       }),
     );
     const result = await validate(records);
-    const terminal = await replayKey(dir);
+    terminal = await replayKey(dir);
     if (
       entry.directory !== terminal.directory ||
       entry.file !== terminal.file ||
@@ -255,8 +487,13 @@ export async function readPrivateJsonBatch<T>(
     )
       throw unreadable();
     return result;
-  } catch {
-    throw unreadable();
+  } catch (error) {
+    throw observationError(error);
+  } finally {
+    if (privateObservation.getStore()) {
+      entry?.bytes.fill(0);
+      terminal?.bytes.fill(0);
+    }
   }
 }
 

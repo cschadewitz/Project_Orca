@@ -12,7 +12,14 @@ import {
   type OrcaEventInput,
 } from "@orca/core";
 import type { WorkflowVersionStore } from "./workflow-store.js";
-import type { DurableEventAppend, EventFilter, EventListener, EventRange, EventStore } from "./event-store.js";
+import type {
+  DurableEventAppend,
+  EventFilter,
+  EventListener,
+  EventObservation,
+  EventRange,
+  EventStore,
+} from "./event-store.js";
 import { publicInputVars, redactExecutionValue, unavailable, type ExecutionStore } from "./execution-store.js";
 
 export class ProtectedEventStore implements EventStore {
@@ -24,9 +31,13 @@ export class ProtectedEventStore implements EventStore {
   ) {}
 
   /** Known typed plaintext histories require explicit migration, including inherited legacy children. */
-  private async requireSafeLegacy(runId: string, created?: OrcaEventInput): Promise<void> {
+  private async requireSafeLegacy(
+    runId: string,
+    created?: OrcaEventInput,
+    readFirst = async (id: string) => (await this.publicEvents.readRange(id, { limit: 1 }))[0],
+  ): Promise<void> {
     if (!this.workflows) return;
-    let first = created?.type === "run.created" ? created : (await this.publicEvents.readRange(runId, { limit: 1 }))[0];
+    let first = created?.type === "run.created" ? created : await readFirst(runId);
     if (first?.type !== "run.created" || first.payload.executionInputsStored) return;
     // A parent promoted after a sensitive child has a private input record and protected
     // suffix, despite its originally ordinary run.created. The integrity guard checks it.
@@ -45,24 +56,59 @@ export class ProtectedEventStore implements EventStore {
         (workflowId.includes("::") ? await this.workflows.get(workflowId.split("::")[0]!, workflowVersion) : undefined);
       if (definition && sensitiveInputNames(definition.inputSchema).length > 0) throw refuse();
       if (!parentRunId) break;
-      first = (await this.publicEvents.readRange(parentRunId, { limit: 1 }))[0];
+      first = await readFirst(parentRunId);
     }
   }
 
   /** The latest authenticated payload seals every sensitivity overlay used by this run. */
-  private async requireIntegrity(runId: string): Promise<void> {
-    const latest = (await this.publicEvents.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: 1 }))[0];
+  private async requireIntegrity(runId: string, observed?: readonly OrcaEvent[]): Promise<void> {
+    const latest = observed
+      ? observed.at(-1)
+      : (await this.publicEvents.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: 1 }))[0];
     if (latest?.executionPayloadRef) {
       await this.execution.getPayload(runId, latest.executionPayloadRef, latest.type);
       return;
     }
-    const first = (await this.publicEvents.readRange(runId, { limit: 1 }))[0];
+    const first = observed ? observed[0] : (await this.publicEvents.readRange(runId, { limit: 1 }))[0];
     if (
       first?.type === "run.created" &&
       first.payload.executionInputsStored &&
       !(await this.execution.getInputs(runId))
     )
       throw unavailable();
+  }
+
+  /** Authenticate existing sensitivity guards while keeping this snapshot entirely public. */
+  async readObservation(runId: string, limits: { maxEvents: number; maxBytes: number }): Promise<EventObservation> {
+    const read = this.publicEvents.readObservation?.bind(this.publicEvents);
+    if (!read) throw new OrcaError("RUN_STATE", "This event store has no complete event observation");
+    const bounds = { ...limits };
+    // Read first: even a missing directory must fail without an ordinary reader's init.
+    const observation = await read(runId, bounds);
+    const { events } = observation;
+    const verify = [observation.verifyUnchanged];
+    let remainingEvents = bounds.maxEvents - events.length;
+    let ancestors = 0;
+    await this.requireSafeLegacy(runId, events[0], async (id) => {
+      if (id === runId) return events[0];
+      // Legacy ancestry shares the event budget. Its explicit depth limit also bounds
+      // total bytes to at most 33 files, each with the caller's byte ceiling.
+      if (++ancestors > 32 || remainingEvents < 1)
+        throw new OrcaError("RUN_STATE", "Event observation ancestry exceeds its read limit");
+      const parent = await read(id, { maxEvents: remainingEvents, maxBytes: bounds.maxBytes });
+      remainingEvents -= parent.events.length;
+      verify.push(parent.verifyUnchanged);
+      return parent.events[0];
+    });
+    await this.requireIntegrity(runId, events);
+    return {
+      events,
+      // Public verifiers only: private authentication belongs to the first observation
+      // and the caller's separate identity check, never to this second public scan.
+      verifyUnchanged: async () => {
+        for (const check of verify) await check();
+      },
+    };
   }
 
   /** Private admission evidence only: public readers and subscribers keep the scrubbed event. */

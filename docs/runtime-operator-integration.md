@@ -632,3 +632,57 @@ the creation identity is captured, the unsent draft is retained locally but is n
 restored into an unverified target or sent automatically. Existing engine/current-
 authority refusals still apply to every actual answer. This bounded read handoff is
 not a general execution-resumption or network-failure recovery guarantee.
+
+## Observational revision reads
+
+Revision boundary and pending-content reads now use a separate non-writing journal
+projection. They do not acquire the execution writer lease. The existing writer
+journal, fence-before-claim ordering, current authority checks and CAS validation
+remain authoritative; a readable boundary is not permission or a promise that a
+later mutation can acquire a lease. An external execution owner can still refuse a
+mutation safely.
+
+The internal event-store observation API takes only the existing append/file lock.
+It reads a complete bounded history, validates record sequence, identity and tail,
+and synchronizes existing bytes with the existing platform directory-sync policy.
+It cannot initialize, append, truncate, repair, migrate or publish a record. Private
+hydration happens after that lock is released. The existing admission-only
+synchronizeEvent contract still requires its original run fence.
+
+The revision projection authenticates the captured events, relevant immutable
+publication/frontier guards, and execution-input/sensitivity identity once. All
+boundary statuses use one captured RunState. Opaque request-scoped verifiers then
+rescan public evidence and stream private ciphertext hashes, rechecking fresh key,
+source-path, ownership and sensitivity membership without decrypting another history.
+A changed identity, orphan guard, incomplete tail, missing protected material or failed sync
+returns uncertainty; it does not advertise empty history or recreate acceptance.
+Current access is checked again after final asynchronous verification before
+protected text or replacement guards are returned. Matching authenticated identities provide
+an observation of the captured version, not a guarantee that it remains current
+when a later command arrives. Coordinated rollback of all evidence and ABA changes
+outside the coordinated-writer assumptions remain undetectable limitations.
+
+An observation is limited to 100,000 events and 64 MiB of public journal bytes per
+file. Legacy ancestry validation shares the event budget across at most 32 ancestor
+files in addition to the requested run; the same per-file byte limit applies.
+Exceeding either limit is an explicit read failure requiring operator handling,
+not a permanently unsupported revision or an empty boundary. The public scan never reads an
+unbounded log and then clips it. Read-side fsync may establish durability of bytes
+already present, but cannot create an authoritative marker or accept a missing
+operation. No connection-wide discovery pause, server execution queue, new wire
+method, store-format change, mutation retry or unattended startup sweep is added.
+
+Private record and filtered-enumeration identity capture is limited to 100,000
+budget units per observation. The public byte limit is **not** an aggregate
+decrypted-payload memory budget: first-pass hydration still uses the existing
+protected reader. The projection retains one RunState/journal rather than two
+complete decrypted histories; verification streams ciphertext instead of repeating
+AES/JSON hydration. This avoids duplicate decryption/retained plaintext by design,
+not a measured universal peak-memory guarantee. Verification adds a ciphertext
+I/O pass. A strict aggregate protected-hydration budget remains a required
+performance follow-up and is not implemented by this checkpoint. Observation
+uses fresh first-pass protected reads rather than ordinary ciphertext-cache hits;
+its I/O cost can therefore increase even when an ordinary read would hit that cache.
+No opaque verifier, identity digest or key is persisted or exposed on the wire.
+Protected correction content still uses only the existing authorized allowlisted
+read projection.

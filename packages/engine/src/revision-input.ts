@@ -103,6 +103,8 @@ export interface RevisionAccess {
 }
 export interface RevisionServiceOptions {
   journal: RevisionJournal;
+  /** Optional observational projection. It must not acquire execution ownership or publish. */
+  readJournal?: Pick<RevisionJournal, "withRun"> | undefined;
   retries: RetryClaims;
   /** Trusted composition asserts an already-held runtime fence; it must never acquire one here. */
   assertRetryFence?: ((runId: string) => void) | undefined;
@@ -375,7 +377,8 @@ export class RevisionInputService {
   }
   async readPending(target: PendingRevisionTarget): Promise<PendingRevisionView> {
     await this.opts.access.read(target.runId);
-    return this.opts.journal.withRun(target.runId, async (tx) => {
+    const journal = this.opts.readJournal ?? this.opts.journal;
+    const result = await journal.withRun<PendingRevisionView>(target.runId, async (tx) => {
       const access = await this.opts.access.read(target.runId);
       const record = await exactRevision(tx, target, this.opts.stale);
       const boundary = await tx.boundary(target.destinationId);
@@ -449,6 +452,16 @@ export class RevisionInputService {
         ...(unavailableReason ? { unavailableReason } : {}),
       };
     });
+    // Observational consistency verification also awaits storage after projecting.
+    // Recheck access after that final await before returning protected text or a guard.
+    const finalAccess = await this.opts.access.read(target.runId);
+    const { payload, boundary, ...metadata } = result;
+    return {
+      ...metadata,
+      ...(finalAccess.content && payload ? { payload } : {}),
+      ...(finalAccess.content && finalAccess.mutate && boundary ? { boundary } : {}),
+      replacementAllowed: result.replacementAllowed && finalAccess.content && finalAccess.mutate,
+    };
   }
 }
 export async function exactRevision(

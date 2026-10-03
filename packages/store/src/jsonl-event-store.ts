@@ -7,6 +7,7 @@
  * with the plan journal.
  */
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   newId,
@@ -19,7 +20,13 @@ import {
   type OrcaEvent,
   type OrcaEventInput,
 } from "@orca/core";
-import { BaseEventStore, matchesRange, type EventRange, type DurableEventAppend } from "./event-store.js";
+import {
+  BaseEventStore,
+  matchesRange,
+  type EventRange,
+  type DurableEventAppend,
+  type EventObservation,
+} from "./event-store.js";
 import { JsonlLogDir } from "./jsonl-log.js";
 
 export class JsonlEventStore extends BaseEventStore {
@@ -32,6 +39,35 @@ export class JsonlEventStore extends BaseEventStore {
 
   protected write(runId: string, build: (seq: number) => OrcaEvent): Promise<OrcaEvent> {
     return this.logs.append(runId, build);
+  }
+
+  async readObservation(runId: string, limits: { maxEvents: number; maxBytes: number }): Promise<EventObservation> {
+    const bounds = { maxRecords: limits.maxEvents, maxBytes: limits.maxBytes };
+    const read = () => {
+      const ids = new Set<string>();
+      return this.logs.readObservation(runId, bounds, {
+        parse: (raw) => {
+          const event = OrcaEventSchema.parse(raw);
+          if (event.runId !== runId || ids.has(event.id))
+            throw new OrcaError("RUN_STATE", "Event observation identity is inconsistent");
+          ids.add(event.id);
+          return event;
+        },
+      });
+    };
+    const digest = (events: readonly OrcaEvent[]) => {
+      const hash = createHash("sha256");
+      for (const event of events) hash.update(JSON.stringify(event)).update("\n");
+      return hash.digest("hex");
+    };
+    const events = await read();
+    const expected = digest(events);
+    return {
+      events,
+      verifyUnchanged: async () => {
+        if (digest(await read()) !== expected) throw new OrcaError("RUN_STATE", "Event observation history changed");
+      },
+    };
   }
   /** Caller holds the run fence; the shared journal lock supplies sequence CAS and deduplication. */
   async appendDurableUnique(input: OrcaEventInput, options: DurableEventAppend): Promise<OrcaEvent> {

@@ -335,6 +335,19 @@ export interface RevisionRuntimeOptions {
   stale?: () => OrcaError;
 }
 
+/** Observation limits refuse an uncertain read; they never describe an empty boundary. */
+export const REVISION_OBSERVATION_LIMITS = { maxEvents: 100_000, maxBytes: 64 * 1024 * 1024 } as const;
+interface RevisionObservation {
+  runId: string;
+  verifyPublicUnchanged(): Promise<void>;
+  entries: RevisionJournalEntry[];
+  state: RunState;
+}
+const observationUncertain = () =>
+  new OrcaError("RUN_STATE", "Revision observation changed or is incomplete; refresh before acting", {
+    reason: "revision-observation-uncertain",
+  });
+
 export function createRevisionRuntime(options: RevisionRuntimeOptions) {
   const { stores } = options;
   const clock = options.clock ?? systemClock;
@@ -343,6 +356,7 @@ export function createRevisionRuntime(options: RevisionRuntimeOptions) {
     throw new OrcaError("NOT_SUPPORTED", "Revision runtime requires durable protected journal publication");
   const contexts = new AsyncLocalStorage<RunContext>();
   const owned = new AsyncLocalStorage<{ runId: string; active: boolean }>();
+  const observation = new AsyncLocalStorage<RevisionObservation>();
   // Only live contexts retain the selected attempt. Garbage collection bounds this by
   // attached interpreters, never all historical runs or a startup scan.
   const selected = new WeakMap<RunContext, Map<string, RevisionDeliveryTarget>>();
@@ -514,10 +528,8 @@ export function createRevisionRuntime(options: RevisionRuntimeOptions) {
     const additions = secrets.filter((secret) => !inputs.secrets.some((prior) => isDeepStrictEqual(prior, secret)));
     if (additions.length) await stores.execution.addSensitivity(runId, { sensitiveNames: [], secrets: additions });
   };
-  const status = async (runId: string, boundary: RevisionBoundary): Promise<RevisionBoundary["status"]> => {
-    ensureOwned(runId);
-    const current = await state(runId);
-    if (current.run.status === "cancelled" || contexts.getStore()?.abort.signal.aborted) return "cancelled";
+  const statusFrom = (current: RunState, boundary: RevisionBoundary): RevisionBoundary["status"] => {
+    if (current.run.status === "cancelled") return "cancelled";
     const provenance = current.run.provenance;
     if (
       !provenance ||
@@ -552,6 +564,12 @@ export function createRevisionRuntime(options: RevisionRuntimeOptions) {
     )
       return "moved";
     return boundary.currentRevisionId ? "answered" : "waiting";
+  };
+  const status = async (runId: string, boundary: RevisionBoundary): Promise<RevisionBoundary["status"]> => {
+    ensureOwned(runId);
+    const current = await state(runId);
+    if (contexts.getStore()?.abort.signal.aborted) return "cancelled";
+    return statusFrom(current, boundary);
   };
   const append = async (runId: string, entry: RevisionJournalEntry) => {
     ensureOwned(runId);
@@ -623,6 +641,55 @@ export function createRevisionRuntime(options: RevisionRuntimeOptions) {
   };
   const log: RevisionLog = { withRun, read, append, status };
   const journal = new RunRevisionJournal(log, stale);
+  const captureObservation = async (runId: string): Promise<RevisionObservation> => {
+    if (!stores.events.readObservation)
+      throw new OrcaError("NOT_SUPPORTED", "Revision observation requires a complete durable snapshot");
+    // Only the short public append lock is held while capturing. Private originals are
+    // authenticated once, through the existing shared-key/input replay batch afterward.
+    const snapshot = await stores.events.readObservation(runId, REVISION_OBSERVATION_LIMITS);
+    if (snapshot.events[0]?.type !== "run.created" || snapshot.events.some((event) => event.runId !== runId))
+      throw observationUncertain();
+    const events = await executionEvents(snapshot.events, stores.execution);
+    const entries = events.filter((event) => event.type === "revision.recorded").map(decode);
+    validateHistory(entries, runId);
+    await validatePublicationHistory(runId, entries);
+    // Retain one projection and journal, not the decrypted event array. The verifier
+    // stores only private identities/digests and never decrypts a second history.
+    return { runId, verifyPublicUnchanged: snapshot.verifyUnchanged, entries, state: reduceRun(events) };
+  };
+  const withObservation = async <T>(runId: string, work: () => Promise<T>): Promise<T> => {
+    const current = observation.getStore();
+    if (current) {
+      if (current.runId !== runId) throw observationUncertain();
+      return work();
+    }
+    if (!stores.execution.observe)
+      throw new OrcaError("NOT_SUPPORTED", "Revision observation requires protected identity verification");
+    const captured = await stores.execution.observe(() => captureObservation(runId), { maxRecords: 100_000 });
+    const result = await observation.run(captured.value, work);
+    await captured.value.verifyPublicUnchanged();
+    await captured.verifyUnchanged();
+    // These bracketing observations do not detect coordinated ABA rollback of every
+    // record or promise that a later mutation still sees the same CAS/authority.
+    return result;
+  };
+  const observed = (runId: string) => {
+    const current = observation.getStore();
+    if (!current || current.runId !== runId) throw observationUncertain();
+    return current;
+  };
+  const readJournal = new RunRevisionJournal(
+    {
+      withRun: withObservation,
+      // The journal fold clones each projected record; no extra whole-journal copy.
+      read: async (runId) => observed(runId).entries,
+      status: async (runId, boundary) => statusFrom(observed(runId).state, boundary),
+      append: async () => {
+        throw new OrcaError("RUN_STATE", "Revision observation cannot publish a mutation");
+      },
+    },
+    stale,
+  );
   const delivery = new RevisionDelivery({ journal, authorize: (runId) => options.authorizeExecution(runId), stale });
   const inContext = <T>(rc: RunContext, work: () => Promise<T>): Promise<T> => contexts.run(rc, work);
   const boundaries = async (runId: string) =>
@@ -753,6 +820,7 @@ export function createRevisionRuntime(options: RevisionRuntimeOptions) {
   };
   return {
     journal,
+    readJournal,
     runtime,
     /** Fresh-claim validation may only reuse an already-held fence, never acquire one. */
     assertRetryFence: ensureOwned,
@@ -774,15 +842,19 @@ export function createRevisionRuntime(options: RevisionRuntimeOptions) {
         });
       },
     }),
-    /** Caller supplies authenticated read scope; this is not a public endpoint. */ readBoundaries: (runId: string) =>
-      withRun(runId, async () => {
-        const out: RevisionBoundary[] = [];
-        for (const initial of await boundaries(runId))
-          await journal.withRun(runId, async (tx) => {
-            const boundary = await tx.boundary(initial.target.destinationId);
+    /** Caller supplies current authenticated read scope; no execution ownership is implied. */ readBoundaries: (
+      runId: string,
+    ) =>
+      withObservation(runId, () =>
+        readJournal.withRun(runId, async (tx) => {
+          const out: RevisionBoundary[] = [];
+          for (const entry of observed(runId).entries) {
+            if (entry.kind !== "boundary") continue;
+            const boundary = await tx.boundary(entry.boundary.target.destinationId);
             if (boundary) out.push(boundary);
-          });
-        return out;
-      }),
+          }
+          return out;
+        }),
+      ),
   };
 }

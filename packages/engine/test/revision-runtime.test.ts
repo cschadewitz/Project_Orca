@@ -128,6 +128,7 @@ async function setup(values = false) {
   const boundary = (await adapter.readBoundaries("run"))[0]!;
   const service = new RevisionInputService({
     journal: adapter.journal,
+    readJournal: adapter.readJournal,
     retries,
     stale: () => new OrcaError("REVISION_STALE", "stale"),
     access: {
@@ -309,7 +310,7 @@ describe("protected revision runtime over file stores", () => {
   it("synchronizes existing markers on read and propagates sync failures", async () => {
     const f = await setup();
     await f.submit();
-    const sync = vi.spyOn(f.stores.events, "synchronizeJournal");
+    const sync = vi.spyOn(f.stores.events, "readObservation");
     await f.adapter.readBoundaries("run");
     expect(sync).toHaveBeenCalled();
     sync.mockRejectedValueOnce(new Error("sync interrupted"));
@@ -838,4 +839,140 @@ describe("protected revision runtime over file stores", () => {
       ),
     ).rejects.toMatchObject({ code: "RUN_STATE" });
   });
+});
+
+describe("observational revision projections", () => {
+  it("reads an exact pending correction while another owner holds the execution lease", async () => {
+    const f = await setup();
+    const receipt = await f.submit();
+    const rc = await f.attach();
+    const acquire = vi.spyOn(f.stores.leases, "acquire");
+    const marker = vi.spyOn(f.stores.events, "appendDurableUnique");
+    const material = vi.spyOn(f.stores.execution, "putGeneration");
+    const payload = vi.spyOn(f.stores.execution, "putInputs");
+    try {
+      expect(await f.adapter.readBoundaries("run")).toHaveLength(1);
+      const view = await f.service.readPending({
+        runId: "run",
+        revisionId: receipt.revisionId,
+        destinationId: receipt.target.destinationId,
+        attemptId: receipt.attemptId,
+      });
+      expect(view.payload).toEqual({ kind: "text", text: "PRIVATE CORRECTION" });
+      expect(view.replacementAllowed).toBe(true);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(marker).not.toHaveBeenCalled();
+      expect(material).not.toHaveBeenCalled();
+      expect(payload).not.toHaveBeenCalled();
+      expect((await f.stores.leases.get("run:run"))?.guardedId).toBe(rc.lease!.guardedId);
+      await expect(f.submit()).rejects.toMatchObject({ code: "RUN_LEASED" });
+    } finally {
+      await f.stores.leases.release(rc.lease!);
+    }
+  });
+
+  it("never gives a writer RUN_LEASED because an observation is in flight", async () => {
+    const f = await setup();
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const snapshot = f.stores.events.readObservation!.bind(f.stores.events);
+    vi.spyOn(f.stores.events, "readObservation").mockImplementationOnce(async (...args) => {
+      const value = await snapshot(...args);
+      entered();
+      await held;
+      return value;
+    });
+    const reading = f.adapter.readBoundaries("run");
+    const rejected = expect(reading).rejects.toMatchObject({ code: "RUN_STATE" });
+    await started;
+    try {
+      expect(await f.stores.leases.get("run:run")).toBeUndefined();
+      const receipt = await f.submit();
+      expect(receipt.state).toBe("pending");
+    } finally {
+      release();
+    }
+    await rejected;
+    expect(await f.adapter.readBoundaries("run")).toHaveLength(1);
+  });
+
+  it.each(["event", "sensitivity"] as const)(
+    "refuses a projection changed during its final %s collect",
+    async (kind) => {
+      const f = await setup();
+      await f.submit();
+      const snapshot = f.stores.events.readObservation!.bind(f.stores.events);
+      vi.spyOn(f.stores.events, "readObservation").mockImplementation(async (...args) => {
+        const value = await snapshot(...args);
+        return {
+          events: value.events,
+          verifyUnchanged: async () => {
+            if (kind === "event")
+              await f.stores.events.append({ runId: "run", type: "vars.set", payload: { vars: { changed: true } } });
+            else
+              await f.stores.execution.addSensitivity("run", {
+                sensitiveNames: ["new"],
+                secrets: ["new private value"],
+              });
+            await value.verifyUnchanged();
+          },
+        };
+      });
+      await expect(f.adapter.readBoundaries("run")).rejects.toMatchObject({ code: "RUN_STATE" });
+    },
+  );
+
+  it("cannot publish even when a caller misuses the read-only journal transaction", async () => {
+    const f = await setup();
+    const receipt = await f.submit();
+    const before = await readFile(join(f.dir, "runs/run.jsonl"));
+    await expect(
+      f.adapter.readJournal.withRun("run", async (tx) => {
+        const record = await tx.record(receipt.revisionId);
+        await tx.transition(record!, record!.receipt.expectedRevision);
+      }),
+    ).rejects.toThrow("cannot publish");
+    expect(await readFile(join(f.dir, "runs/run.jsonl"))).toEqual(before);
+  });
+});
+
+it("refuses an observational result when a writer leaves a guard without its marker", async () => {
+  const f = await setup();
+  const before = await readFile(join(f.dir, "runs/run.jsonl"));
+  await expect(
+    f.adapter.readJournal.withRun("run", async () => {
+      vi.spyOn(f.stores.events, "appendDurableUnique").mockRejectedValueOnce(new Error("publication interrupted"));
+      await expect(f.submit()).rejects.toThrow("publication interrupted");
+      return "must not escape as a successful read";
+    }),
+  ).rejects.toMatchObject({ code: "RUN_STATE" });
+  expect(await readFile(join(f.dir, "runs/run.jsonl"))).toEqual(before);
+});
+
+it("refuses a partial event tail without repairing it or claiming no revision exists", async () => {
+  const f = await setup();
+  const path = join(f.dir, "runs/run.jsonl");
+  const partial = Buffer.concat([await readFile(path), Buffer.from('{"unfinished":')]);
+  await writeFile(path, partial);
+  await expect(f.adapter.readBoundaries("run")).rejects.toMatchObject({ code: "RUN_STATE" });
+  expect(await readFile(path)).toEqual(partial);
+});
+
+it("verifies observational identities without replaying decrypted payloads a second time", async () => {
+  const f = await setup();
+  await f.submit();
+  const payloads = vi.spyOn(f.stores.execution, "getPayloads");
+  const inputs = vi.spyOn(f.stores.execution, "getInputs");
+  const guards = vi.spyOn(f.stores.execution, "getGeneration");
+  let projectedCounts: number[] = [];
+  await f.adapter.readJournal.withRun("run", async () => {
+    projectedCounts = [payloads.mock.calls.length, inputs.mock.calls.length, guards.mock.calls.length];
+    expect(projectedCounts.every((count) => count > 0)).toBe(true);
+  });
+  expect([payloads.mock.calls.length, inputs.mock.calls.length, guards.mock.calls.length]).toEqual(projectedCounts);
 });

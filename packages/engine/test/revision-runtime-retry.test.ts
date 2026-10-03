@@ -175,7 +175,7 @@ edges:
   };
 }
 
-/** The actual protected read has finished; only its final lease release is paused. */
+/** A writer-owned transaction has finished its work; its final lease release is paused. */
 async function holdRead(f: Awaited<ReturnType<typeof fixture>>, read: () => Promise<unknown>) {
   const entered = deferred();
   const proceed = deferred();
@@ -195,10 +195,10 @@ async function holdRead(f: Awaited<ReturnType<typeof fixture>>, read: () => Prom
 }
 
 describe("revision retry run fence", () => {
-  it("refuses submission during an actual protected boundary read without consuming its key", async () => {
+  it("refuses submission during a writer-owned boundary transaction without consuming its key", async () => {
     const f = await fixture();
     const claim = vi.spyOn(f.claimStore, "claim");
-    const release = await holdRead(f, () => f.runtime.readBoundaries("run"));
+    const release = await holdRead(f, () => f.runtime.journal.withRun("run", () => f.runtime.readBoundaries("run")));
     try {
       await expect(f.submit()).rejects.toMatchObject({ code: "RUN_LEASED" });
       expect(claim).not.toHaveBeenCalled();
@@ -216,7 +216,7 @@ describe("revision retry run fence", () => {
   });
 
   it.each(["readBoundaries", "readPending"] as const)(
-    "refuses replacement during %s without consuming its key, then commits once",
+    "refuses replacement during a writer-owned %s transaction without consuming its key, then commits once",
     async (readMethod) => {
       const f = await fixture();
       const first = await f.submit();
@@ -224,7 +224,9 @@ describe("revision retry run fence", () => {
       const command = replacement(first.result);
       const claim = vi.spyOn(f.claimStore, "claim");
       const release = await holdRead(f, () =>
-        readMethod === "readBoundaries" ? f.runtime.readBoundaries("run") : f.service.readPending(command.target),
+        f.runtime.journal.withRun<unknown>("run", () =>
+          readMethod === "readBoundaries" ? f.runtime.readBoundaries("run") : f.service.readPending(command.target),
+        ),
       );
       const replace = () => f.service.replacePending(command, { idempotencyKey: "replace" }, f.authority);
       try {
@@ -618,7 +620,7 @@ describe("revision retry run fence", () => {
     }
   });
 
-  it("observes a protected reader in another process before claiming a key", async () => {
+  it("observes a writer-owned transaction in another process before claiming a key", async () => {
     const f = await fixture();
     const script = `
       import { fileStores } from ${JSON.stringify(new URL("../../store/src/index.ts", import.meta.url).href)};
@@ -632,7 +634,7 @@ describe("revision retry run fence", () => {
         process.stdin.pause();
         await release(lease);
       };
-      await runtime.readBoundaries('run');
+      await runtime.journal.withRun('run', () => runtime.readBoundaries('run'));
     `;
     const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
       cwd: process.cwd(),
@@ -666,4 +668,51 @@ describe("revision retry run fence", () => {
     expect(await f.submit()).toEqual({ ...first, replayed: true });
     expect(await f.commits()).toHaveLength(1);
   });
+});
+
+it("allows a writer while another process holds an observational transaction", async () => {
+  const f = await fixture();
+  const script = `
+    import { fileStores } from ${JSON.stringify(new URL("../../store/src/index.ts", import.meta.url).href)};
+    import { createRevisionRuntime } from ${JSON.stringify(new URL("../src/revision-runtime.ts", import.meta.url).href)};
+    const runtime = createRevisionRuntime({stores: fileStores(${JSON.stringify(f.dir)}), authorizeExecution: async () => {}});
+    try {
+      await runtime.readJournal.withRun('run', async () => {
+        console.log('ready');
+        await new Promise(resolve => process.stdin.once('data', resolve));
+        process.stdin.pause();
+      });
+      throw new Error('changed observation unexpectedly succeeded');
+    } catch (error) {
+      if (error.code !== 'RUN_STATE') throw error;
+    }
+  `;
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    stdio: "pipe",
+  });
+  let errors = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    errors += chunk.toString();
+  });
+  const ready = new Promise<void>((resolve, reject) => {
+    child.stdout.once("data", () => resolve());
+    child.once("error", reject);
+    child.once("exit", () => reject(new Error(errors || "observation exited before readiness")));
+  });
+  const finished = new Promise<number | null>((resolve) => {
+    child.once("exit", resolve);
+  });
+  let first;
+  try {
+    await ready;
+    expect(await f.stores.leases.get("run:run")).toBeUndefined();
+    first = await f.submit();
+    expect(first).toMatchObject({ state: "resolved", replayed: false });
+  } finally {
+    child.stdin.end("continue\n");
+    expect(await finished, errors).toBe(0);
+  }
+  expect(await f.submit()).toEqual({ ...first, replayed: true });
+  expect(await f.commits()).toHaveLength(1);
 });

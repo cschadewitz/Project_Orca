@@ -146,12 +146,13 @@ async function fixture(
   return { def, stores, orc, reads, ownership, credentials, reader, issue, row, addRun, rpc, list };
 }
 
-it("projects only the restriction for a reader while a real run lease keeps boundaries unavailable", async () => {
+it("projects only the authorized restriction while an execution lease remains held", async () => {
   const f = await fixture();
   const lease = await f.stores.leases.acquire({ resource: "run:run", holder: "interpreter" });
   try {
     const runtime = createRevisionRuntime({ stores: f.stores, authorizeExecution: async () => {} });
-    await expect(runtime.readBoundaries("run")).rejects.toMatchObject({ code: "RUN_LEASED" });
+    await expect(runtime.readBoundaries("run")).resolves.toEqual([]);
+    expect((await f.stores.leases.get("run:run"))?.guardedId).toBe(lease.guardedId);
     const page = await f.list();
     expect(page.inputs[0]).toMatchObject({ revisionActionId: "changes", id: "run-ask" });
     expect(page.inputs[0]!.revision).toBeUndefined();

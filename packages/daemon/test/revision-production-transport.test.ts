@@ -185,6 +185,7 @@ edges:
   const retries = new RegisteredRetryClaims(claims, faults);
   const services = createRevisionInputServices({
     journal: adapter.journal,
+    readJournal: adapter.readJournal,
     retries: adapter.fenceRetries(retries),
     assertRetryFence: adapter.assertRetryFence,
     stale: () => new OrcaError("REVISION_STALE", "stale"),
@@ -246,6 +247,7 @@ edges:
     );
     const restoredServices = createRevisionInputServices({
       journal: restoredAdapter.journal,
+      readJournal: restoredAdapter.readJournal,
       retries: restoredAdapter.fenceRetries(restoredRetries),
       assertRetryFence: restoredAdapter.assertRetryFence,
       stale: () => new OrcaError("REVISION_STALE", "stale"),
@@ -574,12 +576,13 @@ it("allows only schema-approved boundary fields and ignores legacy read-model en
   expect(denied.inputs[0]).not.toHaveProperty("revision");
 });
 
-it("omits an actively leased boundary but surfaces unexpected store failures", async () => {
+it("observes an actively leased boundary but surfaces unexpected store failures", async () => {
   const f = await fixture();
   const lease = await f.stores.leases.acquire({ resource: "run:owned", holder: "interpreter" });
   try {
     const page = InputsListResultSchema.parse(result(await f.http("inputs.list", { runId: "owned" })));
-    expect(page.inputs[0]).not.toHaveProperty("revision");
+    expect(page.inputs[0]?.revision?.target).toEqual(f.boundary.target);
+    expect((await f.stores.leases.get("run:owned"))?.guardedId).toBe(lease.guardedId);
   } finally {
     await f.stores.leases.release(lease);
   }
@@ -783,7 +786,7 @@ it.each(["delivered", "cancelled", "delivery-uncertain"] as const)(
   },
 );
 
-it("keeps global and leased discovery explicitly incomplete instead of claiming an empty history", async () => {
+it("keeps global discovery incomplete while exact leased observations remain readable", async () => {
   const f = await fixture();
   resolved(await f.http("inputs.revise", f.params));
   expect(result(await f.http("inputs.list"))).toMatchObject({
@@ -792,7 +795,7 @@ it("keeps global and leased discovery explicitly incomplete instead of claiming 
   const lease = await f.stores.leases.acquire({ resource: "run:owned", holder: "interpreter" });
   try {
     expect(result(await f.http("inputs.list", { revisionRunIds: ["owned"] }))).toMatchObject({
-      pendingRevisions: { items: [], incomplete: true, reason: "boundary-unavailable" },
+      pendingRevisions: { items: [expect.objectContaining({ state: "pending" })], incomplete: false },
     });
   } finally {
     await f.stores.leases.release(lease);
@@ -926,33 +929,18 @@ it.each(["credential", "ownership"] as const)(
 );
 
 it.each(["http", "ws"] as const)(
-  "keeps retry keys unclaimed during protected-read contention over %s",
+  "keeps retry keys unclaimed while an external execution owner holds the run over %s",
   async (transport) => {
     const f = await fixture();
     const call = transport === "http" ? f.http : await f.socket();
     const claim = vi.spyOn(f.claims, "claim");
-    let entered!: () => void;
-    const held = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    let resume!: () => void;
-    const released = new Promise<void>((resolve) => {
-      resume = resolve;
-    });
-    const release = f.stores.leases.release.bind(f.stores.leases);
-    vi.spyOn(f.stores.leases, "release").mockImplementationOnce(async (lease) => {
-      entered();
-      await released;
-      await release(lease);
-    });
-    const reading = f.adapter.readBoundaries("owned");
-    await held;
+    const lease = await f.stores.leases.acquire({ resource: "run:owned", holder: "external-execution-owner" });
     try {
       expect(await call("inputs.revise", f.params)).toMatchObject({ ok: false, error: { code: "RUN_LEASED" } });
       expect(claim).not.toHaveBeenCalled();
+      expect(await f.adapter.readBoundaries("owned")).toHaveLength(1);
     } finally {
-      resume();
-      await reading;
+      await f.stores.leases.release(lease);
     }
     expect(await f.stores.leases.get("run:owned")).toBeUndefined();
     const accepted = resolved(await call("inputs.revise", f.params));
@@ -979,3 +967,79 @@ it.each(["stale", "payload"] as const)("refuses fresh %s input before consuming 
   expect(resolved(await f.http("inputs.revise", f.params)).result).toEqual(accepted.result);
   expect(await f.http("inputs.revise", refused)).toMatchObject({ ok: false, error: { code: "RETRY_CONFLICT" } });
 });
+
+it.each(["http", "ws"] as const)(
+  "does not let a held authenticated observational read take the writer lease over %s",
+  async (transport) => {
+    const f = await fixture();
+    const call = transport === "http" ? f.http : await f.socket();
+    let entered!: () => void, release!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const snapshot = f.stores.events.readObservation!.bind(f.stores.events);
+    vi.spyOn(f.stores.events, "readObservation").mockImplementationOnce(async (...args) => {
+      const value = await snapshot(...args);
+      entered();
+      await held;
+      return value;
+    });
+    const reading = call("inputs.list", { runId: "owned" });
+    await enteredPromise;
+    let accepted;
+    try {
+      expect(await f.stores.leases.get("run:owned")).toBeUndefined();
+      accepted = resolved(await call("inputs.revise", f.params));
+    } finally {
+      release();
+    }
+    expect(await reading).toMatchObject({ ok: false, error: { code: "RUN_STATE" } });
+    expect(resolved(await call("inputs.revise", f.params)).operationId).toBe(accepted.operationId);
+    const target = {
+      runId: "owned",
+      revisionId: accepted.result.revisionId,
+      destinationId: accepted.result.target.destinationId,
+      attemptId: accepted.result.attemptId,
+    };
+    expect(PendingRevisionViewSchema.parse(result(await call("inputs.revisionPending", { target }))).payload).toEqual(
+      f.params.command.payload,
+    );
+    expect(
+      (await f.stores.events.read("owned")).filter(
+        (event) => event.type === "revision.recorded" && event.payload.decision,
+      ),
+    ).toHaveLength(1);
+  },
+);
+
+it.each(["http", "ws"] as const)(
+  "rechecks current authority after the final observational snapshot over %s",
+  async (transport) => {
+    const f = await fixture();
+    const call = transport === "http" ? f.http : await f.socket();
+    const accepted = resolved(await call("inputs.revise", f.params));
+    const target = {
+      runId: "owned",
+      revisionId: accepted.result.revisionId,
+      destinationId: accepted.result.target.destinationId,
+      attemptId: accepted.result.attemptId,
+    };
+    const snapshot = f.stores.events.readObservation!.bind(f.stores.events);
+    vi.spyOn(f.stores.events, "readObservation").mockImplementation(async (...args) => {
+      const value = await snapshot(...args);
+      return {
+        events: value.events,
+        verifyUnchanged: async () => {
+          await value.verifyUnchanged();
+          await f.credentials.revoke(f.alice.credential.id);
+        },
+      };
+    });
+    const response = await call("inputs.revisionPending", { target });
+    expect(response).toMatchObject({ ok: false, error: { code: "AUTH_INVALID" } });
+    expect(JSON.stringify(response)).not.toContain("PRIVATE CORRECTION");
+  },
+);

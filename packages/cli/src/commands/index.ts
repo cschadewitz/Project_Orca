@@ -883,6 +883,7 @@ export const commands: Record<string, Command> = {
         revisionRuntime && app.retryClaims && liveRuntime
           ? createRevisionInputServices({
               journal: revisionRuntime.journal,
+              readJournal: revisionRuntime.readJournal,
               retries: revisionRuntime.fenceRetries(app.retryClaims),
               assertRetryFence: revisionRuntime.assertRetryFence,
               stale: () => new OrcaError("REVISION_STALE", "Revision destination is no longer available"),

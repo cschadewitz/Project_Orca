@@ -6,6 +6,7 @@
  * the event is durable.
  */
 import { isDeepStrictEqual } from "node:util";
+import { createHash } from "node:crypto";
 import {
   newId,
   OrcaError,
@@ -59,7 +60,23 @@ export interface DurableEventAppend {
   equivalent(existing: OrcaEvent): boolean | Promise<boolean>;
 }
 
+/** Internal public evidence with a bounded verifier that never hydrates private payloads. */
+export interface EventObservation {
+  events: OrcaEvent[];
+  /** Re-read and sync public evidence, failing closed if the captured history changed. */
+  verifyUnchanged(this: void): Promise<void>;
+}
+
 export interface EventStore {
+  /**
+   * Internal observation boundary: return a complete existing public history under the
+   * append lock, without taking execution authority or repairing/creating persistence.
+   * Disk stores synchronize existing bytes before returning. Missing, incomplete or
+   * over-limit histories fail with RUN_STATE; limits never clip the returned history.
+   * Protected stores keep payloads public; the caller authenticates private evidence
+   * separately and verifies that its observation remained stable.
+   */
+  readObservation?(runId: string, limits: { maxEvents: number; maxBytes: number }): Promise<EventObservation>;
   /**
    * Internal admission boundary: verify and sync this exact existing public event without
    * publishing, reconstructing or notifying. Protected stores return its authenticated
@@ -175,6 +192,49 @@ export abstract class BaseEventStore implements EventStore {
 
 export class InMemoryEventStore extends BaseEventStore {
   private readonly runs = new Map<string, OrcaEvent[]>();
+
+  /** Complete isolated public evidence; this backend makes no disk-durability promise. */
+  async readObservation(runId: string, limits: { maxEvents: number; maxBytes: number }): Promise<EventObservation> {
+    const bounds = { ...limits };
+    const events = this.observationEvents(runId, bounds);
+    const digest = (history: readonly OrcaEvent[]) => {
+      const hash = createHash("sha256");
+      for (const event of history) hash.update(JSON.stringify(event)).update("\n");
+      return hash.digest("hex");
+    };
+    const expected = digest(events);
+    return {
+      events,
+      verifyUnchanged: async () => {
+        if (digest(this.observationEvents(runId, bounds)) !== expected)
+          throw new OrcaError("RUN_STATE", "Event observation history changed");
+      },
+    };
+  }
+
+  private observationEvents(runId: string, limits: { maxEvents: number; maxBytes: number }): OrcaEvent[] {
+    const { maxEvents, maxBytes } = limits;
+    if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1)
+      throw new OrcaError("RUN_STATE", "Invalid event observation limits");
+    const history = this.runs.get(runId);
+    if (!history?.length) throw new OrcaError("RUN_STATE", "Event observation requires an existing history");
+    if (history.length > maxEvents) throw new OrcaError("RUN_STATE", "Event observation exceeds its event limit");
+    const events: OrcaEvent[] = [];
+    const ids = new Set<string>();
+    let bytes = 0;
+    for (const raw of history) {
+      const parsed = OrcaEventSchema.safeParse(raw);
+      if (!parsed.success) throw new OrcaError("RUN_STATE", "Event observation contains an invalid record");
+      const event = parsed.data;
+      if (event.runId !== runId || event.seq !== events.length || ids.has(event.id))
+        throw new OrcaError("RUN_STATE", "Event observation history is inconsistent");
+      bytes += Buffer.byteLength(JSON.stringify(event)) + 1;
+      if (bytes > maxBytes) throw new OrcaError("RUN_STATE", "Event observation exceeds its byte limit");
+      ids.add(event.id);
+      events.push(structuredClone(event));
+    }
+    return events;
+  }
 
   /** Exact existing evidence for the memory backend; this makes no disk-durability promise. */
   async synchronizeEvent(expected: OrcaEvent): Promise<OrcaEvent> {
