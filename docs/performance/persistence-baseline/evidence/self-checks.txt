@@ -1,15 +1,16 @@
-✔ demo descendants cannot discover a Git checkout above the disposable root (125.529019ms)
-✔ supervisor retains timeout/output failures and refuses exhausted suites and disk bounds (213.836071ms)
-✔ independent axes and combined fixture stay within fixed bounds (2.857105ms)
-✔ rotations pair both cache orders and preserve all cases (0.57363ms)
-✔ interval union never double counts nested or concurrent calls (0.727503ms)
-✔ failed and unrun samples remain visible and never enter successful medians (0.96201ms)
-✔ compiled workers create protected fixtures and validate fresh and warm concurrent readers (1577.06028ms)
-ℹ tests 7
+✔ demo descendants cannot discover a Git checkout above the disposable root (121.203077ms)
+✔ supervisor retains timeout/output failures and refuses exhausted suites and disk bounds (216.330566ms)
+✔ independent axes and combined fixture stay within fixed bounds (3.287743ms)
+✔ rotations pair both cache orders and preserve all cases (0.615961ms)
+✔ the executed schedule alternates every case's cache order between adjacent rounds (2.127565ms)
+✔ interval union never double counts nested or concurrent calls (1.011343ms)
+✔ failed and unrun samples remain visible and never enter successful medians (0.937332ms)
+✔ compiled workers create protected fixtures and validate fresh and warm concurrent readers (1636.6014ms)
+ℹ tests 8
 ℹ suites 0
-ℹ pass 7
+ℹ pass 8
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 2044.312184
+ℹ duration_ms 2104.382728

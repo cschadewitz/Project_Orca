@@ -66,7 +66,10 @@ retain runtime randomness. Ciphertext identity is intentionally not reproducible
 
 Each reader lists runs, reads inputs, requests an eight-event public tail, reads the full
 public history, restores protected payloads through integrated `executionEvents`, and
-reduces the state. It checks counts, final sequence/value and public redaction. Concurrent
+reduces the state. It checks counts, final sequence/value and public redaction. After the
+workload timer stops, an untimed oracle checks every measured reader's tail-page sequence
+numbers and every restored event's run, sequence, type and payload, so omitted intermediate
+restoration cannot appear as a speedup. Concurrent
 readers each perform the same full inventory using independent calls on shared store
 instances in one process; this is not multi-process contention or daemon authorization
 load. One protected append follows the readers, then an untimed replay verifies visibility
@@ -76,10 +79,13 @@ provider. Demo timings are end-to-end; there are no phase-attribution claims for
 
 Fixtures are generated through public store exports in separate processes. Every sample
 uses a fresh copy with exactly the same starting dimensions, then deletes it. Three rounds
-rotate case order; cold/warm order alternates within each case/round. This pairs cache
-conditions at each size, not different source candidates. All rounds, including failures,
-remain recorded. Summary statistics include only passed samples, with their count and
-all outcomes alongside; three observations describe spread, not a confidence interval.
+rotate case order. Each case runs an adjacent process-cold/warm pair per round, and its
+first cache condition reverses between adjacent rounds, keyed on its stable plan index
+(`schedule()` in `model.js`; the self-check asserts this for both profiles). Three rounds
+therefore give each case both orders, but 2:1 rather than perfectly balanced. This pairs
+cache conditions at each size, not different source candidates. All rounds, including
+failures, remain recorded. Summary statistics include only passed samples, with their count
+and all outcomes alongside; three observations describe spread, not a confidence interval.
 
 **Process-cold** means a new worker with empty process-local caches, after fixture copy.
 **Warm** means one untimed complete read workload in that same worker first. Both have
@@ -95,7 +101,8 @@ of its intervals across readers. The all-operation union and whole-workload wall
 are also separate. Do not add label times: different operations overlap across readers.
 Assertions, loop work and scheduling gaps explain why operation union can be smaller
 than wall time. Workload wall excludes import/startup, fixture setup/copy, warmup and the
-post-append oracle; supervisor wall includes the whole worker. Setup and demo have their
+untimed restoration/post-append oracles, although the measured readers' results stay
+referenced until the restoration oracle runs; supervisor wall includes the whole worker. Setup and demo have their
 own outcomes and supervisor timings. Instrumentation overhead is not subtracted.
 
 | Observed label | What its duration includes | Attribution limit |
