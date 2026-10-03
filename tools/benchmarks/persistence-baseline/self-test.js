@@ -1,13 +1,35 @@
 /** Harness oracles: plans, overlap arithmetic, failure accounting and compiled fixture round trips. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { LIMITS, plan, rotate, stats, summarize, unionMs } from "./model.js";
 import { supervise, usage } from "./supervisor.js";
+
+test("demo descendants cannot discover a Git checkout above the disposable root", async () => {
+  const outer = await mkdtemp(join(tmpdir(), "orca-git-boundary-"));
+  const root = join(outer, "scratch");
+  const cwd = join(root, "demo");
+  try {
+    await mkdir(cwd, { recursive: true });
+    assert.equal(spawnSync("git", ["init", outer]).status, 0);
+    assert.equal(spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"]).status, 0);
+    const result = await supervise(
+      [
+        "-e",
+        `const {spawnSync}=require('node:child_process');
+      process.exit(spawnSync('git',['rev-parse','--show-toplevel']).status === 0 ? 1 : 0);`,
+      ],
+      { cwd, root, started: performance.now() },
+    );
+    assert.equal(result.status, "passed");
+  } finally {
+    await rm(outer, { recursive: true, force: true });
+  }
+});
 
 test("supervisor retains timeout/output failures and refuses exhausted suites and disk bounds", async () => {
   const root = await mkdtemp(join(tmpdir(), "orca-supervisor-selftest-"));

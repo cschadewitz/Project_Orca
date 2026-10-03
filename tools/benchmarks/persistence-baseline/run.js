@@ -56,9 +56,9 @@ const report = {
   },
 };
 
-const child = (args, build = false) =>
+const child = (args, build = false, cwd = source) =>
   supervise(args, {
-    cwd: source,
+    cwd,
     root,
     started,
     limits: build ? { ...LIMITS, rssBytes: LIMITS.buildRssBytes } : LIMITS,
@@ -125,6 +125,7 @@ try {
   const fs = await statfs(root);
   if (fs.bavail * fs.bsize < LIMITS.diskBytes * 2) throw new Error("blocked: less than 512 MiB free");
   report.source = {
+    branch: git("branch", "--show-current"),
     commit: git("rev-parse", "HEAD"),
     tree: git("rev-parse", "HEAD^{tree}"),
     approvedRuntimeCommit: BASELINE,
@@ -160,7 +161,7 @@ try {
   };
   const buildArgs = ["node_modules/typescript/lib/tsc.js", "-b", "tsconfig.build.json", "--force"];
   const { stdout: buildOutput, ...build } = await child(buildArgs, true);
-  report.build = { ...build, command: [process.execPath, ...buildArgs], stdoutSha256: hash(buildOutput ?? "") };
+  report.build = { ...build, stdoutSha256: hash(buildOutput ?? "") };
   if (build.status !== "passed") throw new Error("blocked: compiled build failed");
   const compiled = await artifacts();
   await writeFile(join(output, "artifacts.json"), JSON.stringify(compiled, null, 2) + "\n", { mode: 0o600 });
@@ -192,8 +193,10 @@ try {
   }
   for (let round = 0; round < (options.profile === "smoke" ? 1 : LIMITS.repetitions); round++) {
     const path = join(root, `demo-${round}`);
-    const args = ["packages/cli/dist/main.js", "demo", "--dir", path];
-    const { stdout, ...result } = await child(args);
+    await mkdir(path, { mode: 0o700 });
+    const args = [join(source, "packages/cli/dist/main.js"), "demo", "--dir", path];
+    const { stdout, ...result } = await child(args, false, path);
+    if (git("branch", "--show-current") !== report.source.branch) throw new Error("demo-changed-source-branch");
     report.demos.push({
       round,
       command: [process.execPath, ...args],
@@ -206,7 +209,11 @@ try {
   }
   report.finalUsage = await usage(root);
   const finalCompiled = await artifacts();
-  if (finalCompiled.sha256 !== compiled.sha256 || git("rev-parse", "HEAD") !== report.source.commit)
+  if (
+    finalCompiled.sha256 !== compiled.sha256 ||
+    git("rev-parse", "HEAD") !== report.source.commit ||
+    git("branch", "--show-current") !== report.source.branch
+  )
     throw new Error("source-or-artifacts-changed-during-suite");
   report.status = [...report.setup, ...report.samples, ...report.demos].every((row) => row.status === "passed")
     ? "passed"

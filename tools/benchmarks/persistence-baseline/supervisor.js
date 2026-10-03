@@ -42,7 +42,14 @@ export async function supervise(args, { cwd, root, started, limits = LIMITS }) {
     cwd,
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { PATH: process.env.PATH, HOME: root, TMPDIR: root, LANG: "C.UTF-8", NODE_ENV: "test" },
+    env: {
+      PATH: process.env.PATH,
+      HOME: root,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      NODE_ENV: "test",
+      GIT_CEILING_DIRECTORIES: root,
+    },
   });
   let stdout = "";
   let stderr = "";
@@ -103,6 +110,8 @@ export async function supervise(args, { cwd, root, started, limits = LIMITS }) {
     if (error.code !== "ESRCH") throw error;
   }
   return {
+    command: [process.execPath, "--max-old-space-size=384", ...args],
+    cwd,
     status: exit.code === 0 && !reason ? "passed" : "failed",
     ...exit,
     reason,

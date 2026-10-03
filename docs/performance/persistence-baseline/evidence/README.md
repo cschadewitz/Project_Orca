@@ -25,7 +25,8 @@ outcomes, environment, source and artifact identity, and cleanup.
   final scaling table. These used earlier harness revisions whose hashes are in their
   reports where preflight reached that stage. They are development diagnostics, not
   measurements of the final harness. The initial sandbox failure never reached build
-  or benchmark execution.
+  or benchmark execution. `ext4-unisolated-*` recorded successful store/workflow oracles
+  but failed the later isolation review; see the report narrative for that correction.
 - `self-checks.txt`: final harness self-check result.
 - `backing.txt`: observed virtual block-device model and machine type, no serial numbers.
 

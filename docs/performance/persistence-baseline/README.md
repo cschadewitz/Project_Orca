@@ -42,9 +42,10 @@ commands, limits, dimensions, raw samples, counts, outcomes and median/min/max/s
 digest is in the report. Copy only these evidence files, never scratch stores or keys.
 Stdout/stderr from the demo and build are represented by digests and lengths, not retained
 raw transcripts. A failing worker returns only an error code/name.
-The build/demo `command` fields list logical arguments; the supervisor inserts
-`--max-old-space-size=384` immediately after the Node executable for every child.
-Worker arguments are fixed by the hashed runner and the recorded dimensions/cache/seed.
+The supervisor records each child's full command, including `--max-old-space-size=384`,
+and working directory. The older tmpfs/development reports list logical build/demo
+arguments without that inserted flag; their hashed supervisor supplies it. Worker
+arguments in those older reports are fixed by the runner and recorded dimensions/cache/seed.
 
 ## Workloads and interpretation
 
@@ -138,6 +139,10 @@ not a paired comparison with it. The historical 55.7% allowance is not a current
   credentials or provider environment is forwarded. Interrupting the supervisor itself
   with SIGKILL can leave scratch state; remove only its known disposable child after
   verifying no owned process remains. Generated execution keys must never be published.
+- Demo processes run inside their disposable directory with `GIT_CEILING_DIRECTORIES`
+  set to the scratch root. This prevents the local workspace provider from discovering
+  and switching a parent checkout's branch when scratch is on the worktree filesystem.
+  The runner also verifies the original source branch after every demo and at completion.
 - No durability switch is disabled. Private file, directory and ancestor syncs use the
   production paths unchanged. Public JSONL behavior is unchanged too; do not infer a new
   whole-transaction durability guarantee from private-publication fsyncs.
