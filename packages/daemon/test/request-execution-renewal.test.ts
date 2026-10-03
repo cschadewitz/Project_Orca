@@ -1,9 +1,10 @@
 /** Admission recovery retains verified authority across a daemon bootstrap rotation. */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import type { SubmissionResult } from "@orca/core";
+import type { RunState, SubmissionResult } from "@orca/core";
 import type { ExecutionResumeAuthority } from "@orca/engine";
 import type { ResponseMessage } from "@orca/protocol";
 import { fileStores } from "@orca/store";
@@ -16,13 +17,48 @@ import { RequestSubmissionModel } from "../src/request-submission.js";
 
 const close: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
-  for (const dispose of close.splice(0).reverse()) await dispose();
+  const failures: unknown[] = [];
+  for (const dispose of close.splice(0).reverse()) {
+    try {
+      await dispose();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
   vi.restoreAllMocks();
+  if (failures.length) throw new AggregateError(failures, "Request fixture cleanup failed");
 });
 
-async function fixture() {
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((accept, refuse) => {
+    resolve = accept;
+    reject = refuse;
+  });
+  // Preserve the rejecting promise for the test and teardown, even if it fails
+  // before they await it. Background dispatch must not produce unhandled rejections.
+  void promise.catch(() => undefined);
+  return { promise, resolve, reject };
+}
+async function fixture(options: { beforeCompletion?: () => Promise<void> } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "orca-request-renewal-"));
-  close.push(() => rm(directory, { recursive: true, force: true }));
+  const boots: { closeDaemon: () => Promise<void> }[] = [];
+  const cleanupStarted = deferred<void>();
+  let cleaning: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleaning ??= (async () => {
+      cleanupStarted.resolve();
+      const results = await Promise.allSettled(boots.map((boot) => boot.closeDaemon()));
+      await rm(directory, { recursive: true, force: true });
+      const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (errors.length)
+        throw new AggregateError(
+          errors.map((result) => result.reason),
+          "Request execution failed",
+        );
+    })());
+  close.push(cleanup);
   const storeDir = join(directory, "store");
   const tokenFile = join(directory, "token");
   const credentialFile = join(directory, "credentials.json");
@@ -37,38 +73,99 @@ async function fixture() {
     const token = (await readFile(tokenFile, "utf8")).trim();
     const runtime = daemonExecutionRuntime({
       instanceId: executeWork ? "new-boot" : "old-boot",
+      workspaceId: "workspace-test",
       orchestrator: f.orc,
       credentials,
       ownership,
     });
-    close.push(() => runtime.close());
     f.orc.liveInput = runtime;
+    f.orc.admissionExecution = { authorize: (policy) => runtime.authorizeAdmissionExecution(policy) };
     const reads = new ReadModel({ orchestrator: f.orc });
-    const execute = vi.fn(async (runId: string, authority?: ExecutionResumeAuthority) => {
-      if (executeWork) await runtime.withResumeAuthority(runId, authority, () => f.orc.run(runId));
+    type Dispatch = {
+      runId?: string;
+      started: ReturnType<typeof deferred<void>>;
+      completed: ReturnType<typeof deferred<RunState | undefined>>;
+    };
+    const dispatchContext = new AsyncLocalStorage<Dispatch>();
+    const dispatches: Dispatch[] = [];
+    const tracked = (operation: () => Promise<SubmissionResult>) => {
+      const dispatch: Dispatch = { started: deferred<void>(), completed: deferred<RunState | undefined>() };
+      return dispatchContext.run(dispatch, async () => {
+        const result = await operation();
+        if (result.state === "accepted") {
+          dispatch.runId = result.runId;
+          dispatches.push(dispatch);
+        }
+        return result;
+      });
+    };
+    if (executeWork && options.beforeCompletion) {
+      const append = f.orc.stores.events.append.bind(f.orc.stores.events);
+      vi.spyOn(f.orc.stores.events, "append").mockImplementation(async (event) => {
+        if (event.type === "run.completed") await options.beforeCompletion!();
+        return append(event);
+      });
+    }
+    const execute = vi.fn((runId: string, authority?: ExecutionResumeAuthority) => {
+      const dispatch = dispatchContext.getStore();
+      if (!dispatch) throw new Error("untracked Request execution");
+      dispatch.started.resolve();
+      const work = executeWork
+        ? runtime.withResumeAuthority(runId, authority, () => f.orc.run(runId))
+        : Promise.resolve(undefined);
+      // Capture the actual interpreter promise, including lease release. Tests
+      // await this completion instead of polling a public state projection.
+      void work.then(dispatch.completed.resolve, dispatch.completed.reject);
+      return work.then(() => undefined);
     });
+    const model = new RequestSubmissionModel({
+      service: f.service,
+      checkResumeAuthority: (runId, authority) => runtime.checkResumeAuthority(runId, authority),
+      execute,
+      executionFailed: (runId) => {
+        executionFailed(runId);
+        const dispatch = dispatchContext.getStore();
+        if (!dispatch) throw new Error("untracked Request dispatch failure");
+        const error = new Error(`Request dispatch failed before execution completed: ${runId}`);
+        dispatch.started.reject(error);
+        dispatch.completed.reject(error);
+      },
+    });
+    const submit = model.submit.bind(model);
+    const reconcile = model.reconcile.bind(model);
+    model.submit = (...args) => tracked(() => submit(...args));
+    model.reconcile = (...args) => tracked(() => reconcile(...args));
+    const dispatchFor = (runId: string) => {
+      const dispatch = dispatches.find((entry) => entry.runId === runId);
+      if (!dispatch) throw new Error(`no accepted Request dispatch: ${runId}`);
+      return dispatch;
+    };
     const daemon = await startDaemon({
       orcaVersion: "test",
       capabilities: ["runs.read", "runs.control"],
       reads,
       control: new ControlModel({ orchestrator: f.orc, reads }),
       source: f.orc,
-      requestSubmissions: new RequestSubmissionModel({
-        service: f.service,
-        checkResumeAuthority: (runId, authority) => runtime.checkResumeAuthority(runId, authority),
-        execute,
-        executionFailed,
-      }),
+      requestSubmissions: model,
       submissionWorkspaceId: "workspace-test",
       auth: { mode: "token", credentials, ownership, resolver: orchestratorResolver(f.orc) },
     });
-    let closed = false;
-    const closeDaemon = async () => {
-      if (closed) return;
-      closed = true;
-      await daemon.close();
-    };
-    close.push(closeDaemon);
+    let closing: Promise<void> | undefined;
+    const closeDaemon = () =>
+      (closing ??= (async () => {
+        // Accepted calls have already scheduled workers. A worker may still be
+        // inspecting durable evidence and not have reached execute yet.
+        const results = await Promise.allSettled(dispatches.map((dispatch) => dispatch.completed.promise));
+        await daemon.close();
+        runtime.close();
+        const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+        if (errors.length)
+          throw new AggregateError(
+            errors.map((result) => result.reason),
+            "Request execution failed",
+          );
+      })());
+    boots.push({ closeDaemon });
     const rpc = async (method: string, params: unknown, bearer = token): Promise<ResponseMessage> => {
       const response = await fetch(`${daemon.url}/rpc`, {
         method: "POST",
@@ -77,19 +174,20 @@ async function fixture() {
       });
       return (await response.json()) as ResponseMessage;
     };
-    return { ...f, credentials, ownership, bootstrap, token, runtime, execute, closeDaemon, rpc };
+    return { ...f, credentials, ownership, bootstrap, token, runtime, execute, dispatchFor, closeDaemon, rpc };
   }
   const first = await boot(false);
   const reply = await first.rpc("requests.submit", { title: "Recover me", body: "Original request" });
   if (!reply.ok) throw new Error("submission failed");
   const admitted = reply.result as SubmissionResult;
   if (admitted.state !== "accepted") throw new Error("not accepted");
-  await vi.waitFor(() => expect(first.execute).toHaveBeenCalledOnce());
+  await first.dispatchFor(admitted.runId).started.promise;
+  await first.dispatchFor(admitted.runId).completed.promise;
+  expect(first.execute).toHaveBeenCalledOnce();
   expect((await first.orc.getState(admitted.runId)).run.status).toBe("created");
   await first.closeDaemon();
-  first.runtime.close();
   const second = await boot(true);
-  return { ...second, first, admitted, executionFailed };
+  return { ...second, first, admitted, executionFailed, directory, cleanup, cleanupStarted: cleanupStarted.promise };
 }
 
 it("executes the original accepted root with the same principal's current authority after restart", async () => {
@@ -99,7 +197,9 @@ it("executes the original accepted root with the same principal's current author
     ok: true,
     result: f.admitted,
   });
-  await vi.waitFor(async () => expect((await f.orc.getState(f.admitted.runId)).run.status).toBe("completed"));
+  await f.dispatchFor(f.admitted.runId).started.promise;
+  await f.dispatchFor(f.admitted.runId).completed.promise;
+  expect((await f.orc.getState(f.admitted.runId)).run.status).toBe("completed");
   expect(f.executionFailed).not.toHaveBeenCalled();
   expect(await f.orc.listRuns()).toEqual([f.admitted.runId]);
   expect(f.ownership.owner(f.admitted.runId)).toBe("owner");
@@ -142,7 +242,9 @@ it("cannot renew without run control and can retry with a fully authorized crede
   expect(await f.orc.events(f.admitted.runId)).toEqual(before);
   expect(await f.orc.listLeases()).toEqual([]);
   await f.rpc("requests.reconcile", { admissionId: f.admitted.admissionId });
-  await vi.waitFor(async () => expect((await f.orc.getState(f.admitted.runId)).run.status).toBe("completed"));
+  await f.dispatchFor(f.admitted.runId).started.promise;
+  await f.dispatchFor(f.admitted.runId).completed.promise;
+  expect((await f.orc.getState(f.admitted.runId)).run.status).toBe("completed");
   expect(f.executionFailed).not.toHaveBeenCalled();
 });
 
@@ -178,4 +280,42 @@ it("rejects revocation during asynchronous renewal preparation without attaching
   });
   expect(await f.orc.events(f.admitted.runId)).toEqual(before);
   expect(await f.orc.listLeases()).toEqual([]);
+});
+
+it("acknowledges reconciliation before slow execution completes and waits for it during teardown", async () => {
+  const held = deferred<void>();
+  const release = deferred<void>();
+  const f = await fixture({
+    beforeCompletion: async () => {
+      held.resolve();
+      await release.promise;
+    },
+  });
+  let cleanupFinished = false;
+  try {
+    expect(await f.rpc("requests.reconcile", { admissionId: f.admitted.admissionId })).toMatchObject({
+      ok: true,
+      result: f.admitted,
+    });
+    const dispatch = f.dispatchFor(f.admitted.runId);
+    await dispatch.started.promise;
+    await held.promise;
+    expect((await f.orc.getState(f.admitted.runId)).run.status).toBe("running");
+    const cleanup = f.cleanup().then(() => {
+      cleanupFinished = true;
+    });
+    await f.cleanupStarted;
+    expect(cleanupFinished).toBe(false);
+    expect((await stat(f.directory)).isDirectory()).toBe(true);
+    release.resolve();
+    const completed = await dispatch.completed.promise;
+    expect(completed?.run.status).toBe("completed");
+    expect(completed?.run.id).toBe(f.admitted.runId);
+    await cleanup;
+    expect(cleanupFinished).toBe(true);
+    await expect(stat(f.directory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(f.executionFailed).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+  }
 });

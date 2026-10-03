@@ -69,6 +69,7 @@ import {
   type Stores,
   type WorkItemClaim,
 } from "@orca/store";
+import { prepareAdmissionExecution, type AdmissionExecutionRuntime } from "./admission-execution.js";
 import { correlateRequestAdmission } from "./program/request-admission-event.js";
 import { builtinExecutors } from "./executors/index.js";
 import {
@@ -96,6 +97,13 @@ import { LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/prov
 export type SessionFactory = (options: OpenSessionOptions) => Promise<AgentSession>;
 
 export interface OrchestratorOptions {
+  /** Trusted current authority for bounded first attachment of admitted roots. */
+  admissionExecution?: AdmissionExecutionRuntime;
+  revisionRuntime?: {
+    /** Reserve exactly the declared next attempt before scheduling; refuse ambiguous replay. */
+    reserveStep(rc: RunContext, nodeId: string): Promise<string | undefined>;
+    forStep(rc: RunContext, step: StepRun): Pick<StepContext, "declareRevision" | "revisionInput">;
+  };
   stores: Stores;
   agents: AgentRegistry;
   workflows: WorkflowRegistry;
@@ -161,6 +169,9 @@ export type AgentSessionOpenedListener = (info: { runId: string; agentId: string
 export interface StartRunOptions {
   /** Server-owned Request admission metadata; never part of workflow vars or wire launch params. */
   requestAdmissionId?: string;
+  /** Trusted admission journal only; never accepted by wire schemas. */
+  admissionRunId?: string;
+  directAdmissionId?: string;
   /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
   actor?: MutationActor;
   workflowId?: string;
@@ -222,6 +233,7 @@ function canonicalJson(value: unknown): string {
 }
 
 export class Orchestrator {
+  admissionExecution: AdmissionExecutionRuntime | undefined;
   generations: ConfigurationGenerations | undefined;
   generationHumanInput: ((generation: GenerationMaterial) => HumanInputPort) | undefined;
   generationWorkspaceProvider: ((generation: GenerationMaterial) => WorkspaceProvider) | undefined;
@@ -261,6 +273,7 @@ export class Orchestrator {
   private readonly leaseTtlMs: number;
   private readonly leaseRenewMs: number | undefined;
 
+  private readonly revisionRuntime: OrchestratorOptions["revisionRuntime"];
   private readonly live = new Map<string, RunContext>();
   private readonly running = new Map<string, Promise<RunState>>();
   /**
@@ -277,6 +290,8 @@ export class Orchestrator {
   private readonly sessionOpenedListeners = new Set<AgentSessionOpenedListener>();
 
   constructor(o: OrchestratorOptions) {
+    this.admissionExecution = o.admissionExecution;
+    this.revisionRuntime = o.revisionRuntime;
     this.stores = {
       ...o.stores,
       events:
@@ -358,7 +373,22 @@ export class Orchestrator {
       if (!this.generations) throw unavailable();
       await this.generations.restore(generation.snapshot.id);
     }
-    const runId = newId("run", this.clock.now());
+    if (
+      opts.admissionRunId &&
+      (!/^run_[a-f0-9-]{36}$/.test(opts.admissionRunId) ||
+        !opts.actor ||
+        opts.parentRunId ||
+        (!opts.directAdmissionId && !opts.requestAdmissionId) ||
+        (opts.directAdmissionId && opts.requestAdmissionId))
+    )
+      throw new OrcaError("RUN_STATE", "Invalid reserved admission identity");
+    const runId = opts.admissionRunId ?? newId("run", this.clock.now());
+    if (
+      opts.admissionRunId &&
+      ((await this.stores.events.readRange(runId, { limit: 1 })).length ||
+        (await this.stores.execution.getInputs(runId)))
+    )
+      throw new OrcaError("RUN_STATE", "Reserved admission was already prepared; reconcile its original receipt");
     // A child with an explicit workspace still has to validate its parent's sealed
     // sensitivity state before copying vars. Missing overlays must never downgrade it.
     const parentFirst = opts.parentRunId
@@ -427,16 +457,25 @@ export class Orchestrator {
     await this.stores.events.append(
       opts.requestAdmissionId
         ? await correlateRequestAdmission(created, opts.requestAdmissionId, this.stores.execution)
-        : created,
+        : opts.directAdmissionId
+          ? { ...created, payload: { ...created.payload, directAdmissionId: opts.directAdmissionId } }
+          : created,
     );
     return runId;
   }
 
-  /** Execute (or resume) a run until it reaches a terminal state. Safe to call twice. */
+  /**
+   * Drive ordinary runs or first-attach admitted roots. Repeated inflight/terminal calls
+   * are safe; an admitted root with a prior start requires explicit resume/continuation.
+   */
   run(runId: string): Promise<RunState> {
+    return this.runAttachment(runId, false);
+  }
+
+  private runAttachment(runId: string, recovery: boolean): Promise<RunState> {
     const inflight = this.running.get(runId);
     if (inflight) return inflight;
-    const p = this.executeLeased(runId)
+    const p = this.executeLeased(runId, recovery)
       .then(async () => {
         const projected = this.live.get(runId)?.publicState() ?? (await this.getState(runId));
         if (isTerminal(projected)) this.cacheTerminalState(runId, projected);
@@ -485,7 +524,8 @@ export class Orchestrator {
         );
       try {
         await this.stores.leases.withOwnership(lease, async () => {
-          const fresh = reduceRun(await executionEvents(await this.stores.events.read(runId), this.stores.execution));
+          const events = await executionEvents(await this.stores.events.read(runId), this.stores.execution);
+          const fresh = reduceRun(events);
           if (isTerminal(fresh)) return;
           for (const s of openSteps(fresh))
             await this.stores.events.append({ type: "step.cancelled", runId, payload: { stepRunId: s.id } });
@@ -651,7 +691,8 @@ export class Orchestrator {
     actor?: MutationActor,
   ): Promise<HumanInputRequest> {
     // Read the durable log under ownership; a cached paused context may precede another answer.
-    const fresh = reduceRun(await executionEvents(await this.stores.events.read(runId), this.stores.execution));
+    const events = await executionEvents(await this.stores.events.read(runId), this.stores.execution);
+    const fresh = reduceRun(events);
     const request = pendingHumanInputs(fresh).find((h) => h.id === requestId);
     if (!request) throw new OrcaError("RUN_STATE", `no pending human input '${requestId}'`, { requestId });
     const state = fresh;
@@ -668,6 +709,16 @@ export class Orchestrator {
     // An answer is an option's id, never its label: a label may be reworded, and what
     // is recorded here is compared against the options again when the run is re-driven.
     const ids = request.options.map((o) => o.id);
+    const created = events.find((event) => event.type === "run.created");
+    // Preserve pre-versioning restoration; a missing recorded definition refuses before answering.
+    const definition = await this.definitionFor(
+      state.run.workflowId,
+      state.run.workflowVersion,
+      created?.type === "run.created" && created.payload.workflowStored === true,
+    );
+    const source = definition.nodes[state.steps[request.stepRunId]?.nodeId ?? ""];
+    if ((source?.type === "gate" || source?.type === "decision") && source.revision?.actionId === answer)
+      throw new OrcaError("NOT_SUPPORTED", "Use Request changes with explicit corrective input for this branch");
     if (ids.length && !ids.includes(answer)) {
       const protectedInputs = await this.stores.execution.getInputs(runId);
       throw new OrcaError(
@@ -714,7 +765,100 @@ export class Orchestrator {
       if ((await this.executionState(state.run.parentRunId)).run.status !== "paused") break;
       id = state.run.parentRunId;
     }
-    return this.run(id);
+    return this.runAttachment(id, true);
+  }
+
+  /**
+   * Internal durable-continuation attachment. The acknowledgement waits only for the
+   * fenced durable transition, never for execution. The callback already owns the
+   * mutation fence: use rc.emitOwned, not rc.emit/withOwnership or public answer/resume.
+   * It must revalidate the exact continuation boundary and persist its attached CAS.
+   * Any caller using withResumeAuthority MUST enclose the completion lifetime, not
+   * just this method's acknowledgement, so renewed authority survives execution.
+   */
+  async attachContinuation(
+    runId: string,
+    options: { beforeExecute: (rc: RunContext) => Promise<void> },
+  ): Promise<{ runId: string; completion: Promise<RunState> }> {
+    // Reserve synchronously, including against ordinary run() on this instance.
+    if (this.running.has(runId)) throw new OrcaError("RUN_LEASED", "execution is already attached");
+    let acknowledge!: () => void;
+    let refuse!: (error: unknown) => void;
+    const attached = new Promise<void>((resolve, reject) => {
+      acknowledge = resolve;
+      refuse = reject;
+    });
+    const completion = this.executeContinuationLeased(runId, options.beforeExecute, acknowledge)
+      .then(async () => {
+        const projected = this.live.get(runId)?.publicState() ?? (await this.getState(runId));
+        if (isTerminal(projected)) this.cacheTerminalState(runId, projected);
+        return projected;
+      })
+      .finally(() => {
+        this.running.delete(runId);
+        this.live.delete(runId);
+      });
+    this.running.set(runId, completion);
+    // Before acknowledgement the caller has no completion handle. After it, a
+    // detached caller still cannot generate an unhandled rejection in the daemon.
+    void completion.catch(refuse);
+    await attached;
+    return { runId, completion };
+  }
+
+  private async executeContinuationLeased(
+    runId: string,
+    beforeExecute: (rc: RunContext) => Promise<void>,
+    acknowledge: () => void,
+  ): Promise<RunState> {
+    const summary = await this.getSummary(runId);
+    if (summary.status !== "paused") throw new OrcaError("RUN_STATE", "continuation requires a paused root");
+    let rc: RunContext | undefined;
+    const held = await this.takeRunLease(runId, summary.workflowId, () => rc);
+    try {
+      rc = await this.loadContext(runId);
+      rc.lease = held.lease;
+      if (held.lost || !held.held) {
+        rc.leaseLost = true;
+        throw new OrcaError("RUN_LEASED", "continuation execution lease was lost");
+      }
+      const context = rc;
+      await context.withOwnership(async () => {
+        const first = (await this.stores.events.readRange(runId, { limit: 1 }))[0];
+        const state = context.state;
+        const last = state.steps[state.stepOrder.at(-1) ?? ""];
+        const node = last && context.definition.nodes[last.nodeId];
+        const inputs = Object.values(state.humanInputs).filter((input) => input.stepRunId === last?.id);
+        if (
+          first?.type !== "run.created" ||
+          !first.executionPayloadRef ||
+          !first.payload.workflowStored ||
+          !state.run.provenance ||
+          !this.contextGenerations.has(context) ||
+          state.run.parentRunId ||
+          state.run.status !== "paused" ||
+          !last ||
+          (last.status !== "waiting" && last.status !== "running") ||
+          !(node?.type === "gate" || (node?.type === "decision" && node.source.kind === "human")) ||
+          inputs.length !== 1 ||
+          inputs[0]!.kind !== "decision" ||
+          inputs[0]!.liveDecision
+        )
+          throw new OrcaError("RUN_STATE", "continuation requires a sealed durable root decision boundary");
+        // Execution authority is checked under the same fence as the attached marker.
+        await this.liveInput?.prepareExecution?.(runId);
+        await prepareAdmissionExecution(this.stores, context, this.admissionExecution, true);
+        await beforeExecute(context);
+      });
+      acknowledge();
+      return await this.execute(context);
+    } finally {
+      try {
+        this.liveInput?.releaseExecution?.(runId);
+      } finally {
+        await held.release();
+      }
+    }
   }
 
   // ------------------------------------------------------------------ claims
@@ -1130,7 +1274,7 @@ export class Orchestrator {
    * *writes* to a run's log happens inside here; reading and reducing it does not, because a
    * reader cannot corrupt anyone's story.
    */
-  private async executeLeased(runId: string): Promise<RunState> {
+  private async executeLeased(runId: string, recovery: boolean): Promise<RunState> {
     // The summary comes first because it is cheap - it never replays the step events - and it
     // answers both questions that have to be answered before the log is reduced: what to write
     // on the lease, and whether this run is finished. A finished run is not driven at all, so
@@ -1162,7 +1306,11 @@ export class Orchestrator {
       }
       // Terminal again only if it finished between the summary and here; releasing is enough.
       if (isTerminal(rc.state)) return rc.state;
-      await this.liveInput?.prepareExecution?.(runId);
+      const context = rc;
+      await context.withOwnership(async () => {
+        await this.liveInput?.prepareExecution?.(runId);
+        await prepareAdmissionExecution(this.stores, context, this.admissionExecution, recovery);
+      });
       return await this.execute(rc);
     } finally {
       this.liveInput?.releaseExecution?.(runId);
@@ -1279,7 +1427,7 @@ export class Orchestrator {
         if (rc.abort.signal.aborted) throw new OrcaError("CANCELLED", String(rc.abort.signal.reason ?? "cancelled"));
         const node = def.nodes[nodeId];
         if (!node) throw new OrcaError("WORKFLOW_INVALID", `node '${nodeId}' not found in ${def.id}`);
-        const stepRunId = newId("step", this.clock.now());
+        const stepRunId = (await this.revisionRuntime?.reserveStep(rc, nodeId)) ?? newId("step", this.clock.now());
         await rc.emit({
           type: "step.scheduled",
           payload: {
@@ -1414,6 +1562,7 @@ export class Orchestrator {
   private stepContext(rc: RunContext, step: StepRun, node: NodeDef): StepContext {
     const self = this;
     const ctx: StepContext = {
+      ...this.revisionRuntime?.forStep(rc, step),
       run: rc,
       step,
       nodeId: step.nodeId,

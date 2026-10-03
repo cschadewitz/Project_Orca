@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from "@orca/protocol";
 import { expect, it } from "vitest";
 import { startDaemon } from "../src/index.js";
 import { z } from "zod";
@@ -63,7 +64,7 @@ it("starts closed for activation health checks", async () => {
         kind: "request",
         id: 1,
         method: "hello",
-        params: { client: "test", protocol: { major: 1, minor: 0 } },
+        params: { client: "test", protocol: PROTOCOL_VERSION },
       }),
     });
     expect(await response.json()).toMatchObject({

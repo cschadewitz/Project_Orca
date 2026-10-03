@@ -7,8 +7,26 @@
  * with the plan journal.
  */
 import { join } from "node:path";
-import { OrcaEventSchema, type Clock, type Logger, type OrcaEvent } from "@orca/core";
-import { BaseEventStore, matchesRange, type EventRange } from "./event-store.js";
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import {
+  newId,
+  OrcaError,
+  OrcaEventSchema,
+  EventJournalCorrelationSchema,
+  type EventJournalCorrelation,
+  type Clock,
+  type Logger,
+  type OrcaEvent,
+  type OrcaEventInput,
+} from "@orca/core";
+import {
+  BaseEventStore,
+  matchesRange,
+  type EventRange,
+  type DurableEventAppend,
+  type EventObservation,
+} from "./event-store.js";
 import { JsonlLogDir } from "./jsonl-log.js";
 
 export class JsonlEventStore extends BaseEventStore {
@@ -22,6 +40,100 @@ export class JsonlEventStore extends BaseEventStore {
   protected write(runId: string, build: (seq: number) => OrcaEvent): Promise<OrcaEvent> {
     return this.logs.append(runId, build);
   }
+
+  async readObservation(runId: string, limits: { maxEvents: number; maxBytes: number }): Promise<EventObservation> {
+    const bounds = { maxRecords: limits.maxEvents, maxBytes: limits.maxBytes };
+    const read = () => {
+      const ids = new Set<string>();
+      return this.logs.readObservation(runId, bounds, {
+        parse: (raw) => {
+          const event = OrcaEventSchema.parse(raw);
+          if (event.runId !== runId || ids.has(event.id))
+            throw new OrcaError("RUN_STATE", "Event observation identity is inconsistent");
+          ids.add(event.id);
+          return event;
+        },
+      });
+    };
+    const digest = (events: readonly OrcaEvent[]) => {
+      const hash = createHash("sha256");
+      for (const event of events) hash.update(JSON.stringify(event)).update("\n");
+      return hash.digest("hex");
+    };
+    const events = await read();
+    const expected = digest(events);
+    return {
+      events,
+      verifyUnchanged: async () => {
+        if (digest(await read()) !== expected) throw new OrcaError("RUN_STATE", "Event observation history changed");
+      },
+    };
+  }
+  /** Caller holds the run fence; the shared journal lock supplies sequence CAS and deduplication. */
+  async appendDurableUnique(input: OrcaEventInput, options: DurableEventAppend): Promise<OrcaEvent> {
+    const snapshot = structuredClone(input);
+    const correlation = structuredClone(options.correlation);
+    const { record, fresh } = await this.logs.appendDurableUnique(snapshot.runId, {
+      expectedSeq: options.expectedSeq + 1,
+      stale: () =>
+        new OrcaError(
+          correlation.kind === "continuation" ? "CONTINUATION_STALE" : "REVISION_STALE",
+          "The durable journal boundary changed",
+        ),
+      findExisting: async (raw) => {
+        const event = OrcaEventSchema.parse(raw);
+        const journal = event.journal;
+        if (
+          !journal ||
+          journal.kind !== correlation.kind ||
+          journal.id !== correlation.id ||
+          journal.revision !== correlation.revision
+        )
+          return undefined;
+        if (event.runId !== snapshot.runId || event.type !== snapshot.type || !(await options.equivalent(event)))
+          throw new OrcaError("RETRY_CONFLICT", "The durable journal correlation has different material");
+        return event;
+      },
+      build: (seq) =>
+        OrcaEventSchema.parse({
+          ...snapshot,
+          journal: correlation,
+          id: newId("evt", this.clock.now()),
+          seq,
+          at: this.clock.isoNow(),
+        }),
+    });
+    if (fresh) this.publish(record);
+    return record;
+  }
+
+  async synchronizeJournal(runId: string, correlation: EventJournalCorrelation): Promise<void> {
+    const expected = EventJournalCorrelationSchema.parse(correlation);
+    await this.logs.synchronizeExisting(runId, (raw) => {
+      const event = OrcaEventSchema.parse(raw);
+      if (event.runId !== runId) throw new OrcaError("RUN_STATE", "Durable journal run identity is inconsistent");
+      const journal = event.journal;
+      return journal?.kind === expected.kind && journal.id === expected.id && journal.revision === expected.revision;
+    });
+  }
+
+  async synchronizeEvent(expected: OrcaEvent): Promise<OrcaEvent> {
+    const snapshot = OrcaEventSchema.parse(structuredClone(expected));
+    let verified: OrcaEvent | undefined;
+    await this.logs.synchronizeExisting(snapshot.runId, (raw) => {
+      const event = OrcaEventSchema.parse(raw);
+      if (event.runId !== snapshot.runId)
+        throw new OrcaError("RUN_STATE", "Durable event run identity is inconsistent");
+      if (event.id !== snapshot.id && event.seq !== snapshot.seq) return false;
+      if (!isDeepStrictEqual(event, snapshot))
+        throw new OrcaError("RUN_STATE", "The durable event has different material");
+      verified = event;
+      return true;
+    });
+    if (!verified) throw new OrcaError("RUN_STATE", "The durable event is missing");
+    return verified;
+  }
+
   read(runId: string): Promise<OrcaEvent[]> {
     return this.logs.read(runId, OrcaEventSchema);
   }

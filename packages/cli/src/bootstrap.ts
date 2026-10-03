@@ -2,6 +2,10 @@
  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
  * The CLI, the ACP facade and embedders all go through here.
  */
+import { admissionRetryFaults } from "@orca/core";
+import { FileRetryClaimStore } from "@orca/store";
+import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
+
 import { createHash, randomUUID } from "node:crypto";
 
 import { readFile, stat, realpath } from "node:fs/promises";
@@ -19,6 +23,7 @@ import {
   type Logger,
   type OrcaConfig,
   type SubmissionAuthority,
+  type RetryClaimStore,
   type TemplateRegistry,
   type WorkflowRegistry,
 } from "@orca/core";
@@ -38,18 +43,22 @@ import {
   type OrcaPlugin,
   type PluginApi,
   type RunLeaseOptions,
+  type OrchestratorOptions,
   type SessionFactory,
   type WorkspaceProvider,
   type RequestSubmissionOptions,
 } from "@orca/engine";
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
-import { fileStores, memoryStores } from "@orca/store";
+import { fileStores, memoryStores, type Stores } from "@orca/store";
+import { bindLocalAdmissionExecution } from "./admission-execution-authority.js";
 import { cliHumanInput } from "./human-input-cli.js";
 import { captureRuntimeObjects } from "./plugin-runtime.js";
 
 export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
 
 export interface BootstrapOptions {
+  /** Trusted production composition, created over these exact stores before any interpreter runs. */
+  revisionRuntime?: (stores: Stores) => NonNullable<OrchestratorOptions["revisionRuntime"]>;
   /** Bound by integration to #332 CaptureLaunch, durable admissions and verified local authority. */
   submissionAuthority?: (app: {
     config: OrcaConfig;
@@ -96,6 +105,10 @@ export interface OrcaApp {
   configFile?: string | undefined;
   orchestrator: Orchestrator;
   program: ProgramService;
+  retrySafeAdmissions?: RetrySafeAdmissionService | undefined;
+  retryClaims?: RegisteredRetryClaims | undefined;
+  retryClaimStore?: RetryClaimStore | undefined;
+  directAdmissions?: DirectAdmissionService | undefined;
   submissionAuthority?: SubmissionAuthority | undefined;
   plan: PlanService;
   workflows: WorkflowRegistry;
@@ -324,6 +337,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
 
   const orchestrator = new Orchestrator({
     stores,
+    ...(opts.revisionRuntime ? { revisionRuntime: opts.revisionRuntime(stores) } : {}),
     agents,
     workflows,
     templates,
@@ -408,7 +422,26 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   };
   const provided = await opts.requestSubmission?.({ orchestrator, config, configDir });
   const authority = provided?.authority ?? (await opts.submissionAuthority?.({ orchestrator, config, configDir }));
+  if (authority) bindLocalAdmissionExecution(orchestrator, "request", authority);
+  const retryClaimStore = opts.ephemeral
+    ? undefined
+    : new FileRetryClaimStore({
+        storeDir: resolve(configDir, config.storeDir),
+        execution: orchestrator.stores.execution,
+        faults: admissionRetryFaults,
+        limits: config.admissionRetry ?? {},
+      });
+  const retryClaims = retryClaimStore ? new RegisteredRetryClaims(retryClaimStore, admissionRetryFaults) : undefined;
+  const directAdmissions = retryClaims
+    ? new DirectAdmissionService({
+        orchestrator,
+        retries: retryClaims,
+        captureLaunch: generations.captureLaunch,
+        restoreLaunch: generations.restoreDirectLaunch,
+      })
+    : undefined;
   const submission = {
+    ...(retryClaims ? { retries: retryClaims } : {}),
     admissions: opts.ephemeral
       ? new MemoryAdmissionStore()
       : new FileAdmissionStore(resolve(configDir, config.storeDir)),
@@ -417,14 +450,22 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     ...provided,
     ...(authority ? { authority } : {}),
   };
+  const program = new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission);
   return {
     config,
     generations,
     submissionAuthority: submission?.authority,
+    retryClaims,
+    retryClaimStore,
+    directAdmissions,
+    retrySafeAdmissions:
+      directAdmissions && program.submissions
+        ? new RetrySafeAdmissionService({ requests: program.submissions, direct: directAdmissions })
+        : undefined,
     configDir,
     ...(configFile ? { configFile } : {}),
     orchestrator,
-    program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission),
+    program,
     plan,
     workflows,
     templates,

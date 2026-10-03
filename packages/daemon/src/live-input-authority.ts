@@ -45,6 +45,15 @@ export class LiveExecutionAuthorities {
     return bound.abort.signal;
   }
 
+  /** Additional operation checks use the attached actor, never a caller's replacement. */
+  allowsCurrent(runId: string, allows: (actor: Readonly<MutationActor>) => boolean): boolean {
+    const bound = this.runs.get(runId);
+    if (!bound) return false;
+    this.check(bound);
+    // Do not expose the retained actor object even to a synchronous internal check.
+    return !bound.abort.signal.aborted && allows({ ...bound.actor });
+  }
+
   revalidate(): void {
     for (const bound of new Set(this.runs.values())) this.check(bound);
   }

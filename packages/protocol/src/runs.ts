@@ -183,7 +183,17 @@ export type RunTraversalView = z.infer<typeof RunTraversalViewSchema>;
 export const RunsGetParamsSchema = z.object({ runId: z.string().min(1) });
 export type RunsGetParams = z.infer<typeof RunsGetParamsSchema>;
 
+/** Evidence about an admitted first execution, never a promise of current attachment. */
+export const AdmissionExecutionViewSchema = z.strictObject({
+  state: z.enum(["pending", "started", "uncertain"]),
+  reason: z.enum(["legacy-evidence", "evidence-unavailable"]).optional(),
+});
+export type AdmissionExecutionView = z.infer<typeof AdmissionExecutionViewSchema>;
+
 export const RunsGetResultSchema = z.object({
+  admissionExecution: AdmissionExecutionViewSchema.optional(),
+  /** Opaque server-issued CAS guard for a supported durable boundary; never an authorization grant. */
+  continuation: z.object({ expectedBoundary: z.string().min(1).max(512) }).optional(),
   provenance: RunProvenanceSchema.optional(),
   run: RunSummaryViewSchema,
   workspace: WorkspaceSchema,

@@ -1,10 +1,17 @@
 /** Private authoritative execution inputs, sensitivity overlays and payloads, separate from the public event log. */
 import { join } from "node:path";
-import { readdir } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { serialize } from "node:v8";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { OrcaError, type OrcaEventInput } from "@orca/core";
-import { readPrivateJson, readPrivateJsonBatch, writePrivateJson } from "./protected-file.js";
+import {
+  observePrivateReads,
+  privateJsonNames,
+  readPrivateJson,
+  readPrivateJsonBatch,
+  writePrivateJson,
+} from "./protected-file.js";
 
 const SensitivitySchema = z.object({ sensitiveNames: z.array(z.string()), secrets: z.array(z.unknown()) });
 const ExecutionInputsSchema = SensitivitySchema.extend({
@@ -25,6 +32,11 @@ const PayloadSchema = z.object({
 });
 
 export interface ExecutionStore {
+  /** Observe authenticated reads and later verify their same inputs without rehydrating plaintext. */
+  observe?<T>(
+    work: () => Promise<T>,
+    limits: { maxRecords: number },
+  ): Promise<{ value: T; verifyUnchanged(): Promise<void> }>;
   getGeneration(id: string): Promise<unknown>;
   putGeneration(id: string, snapshot: unknown): Promise<void>;
   getInputs(runId: string): Promise<ExecutionInputs | undefined>;
@@ -56,11 +68,77 @@ function mergeSensitivity(
 }
 
 export class InMemoryExecutionStore implements ExecutionStore {
+  private readonly observation = new AsyncLocalStorage<{
+    reads: Map<string, { digest: string; read: () => unknown }>;
+    count: number;
+    maxRecords: number;
+    active: boolean;
+    failure?: OrcaError;
+  }>();
+  async observe<T>(
+    work: () => Promise<T>,
+    limits: { maxRecords: number },
+  ): Promise<{ value: T; verifyUnchanged(): Promise<void> }> {
+    if (this.observation.getStore()) throw unavailable();
+    if (!Number.isSafeInteger(limits.maxRecords) || limits.maxRecords < 0) throw observationLimit();
+    const scope: NonNullable<ReturnType<typeof this.observation.getStore>> = {
+      reads: new Map(),
+      count: 0,
+      maxRecords: limits.maxRecords,
+      active: true,
+    };
+    let value: T;
+    try {
+      value = await this.observation.run(scope, work);
+      if (scope.failure) throw scope.failure;
+    } finally {
+      scope.active = false;
+    }
+    const reads = [...scope.reads.values()];
+    return {
+      value,
+      async verifyUnchanged() {
+        try {
+          for (const { digest, read } of reads) if (memoryDigest(read()) !== digest) throw unavailable();
+        } catch {
+          throw unavailable();
+        }
+      },
+    };
+  }
+  private observeRead(id: string, read: () => unknown, count = 1): void {
+    const scope = this.observation.getStore();
+    if (!scope) return;
+    if (!scope.active || scope.failure) throw scope.failure ?? unavailable();
+    const previous = scope.reads.get(id);
+    if (!previous && count > scope.maxRecords - scope.count) {
+      scope.failure = observationLimit();
+      throw scope.failure;
+    }
+    const digest = memoryDigest(read());
+    if (previous && previous.digest !== digest) {
+      scope.failure = unavailable();
+      throw scope.failure;
+    }
+    if (!previous) {
+      scope.count += count;
+      scope.reads.set(id, { digest, read });
+    }
+  }
+  private assertWritable(): void {
+    const scope = this.observation.getStore();
+    if (scope) {
+      scope.failure = unavailable();
+      throw scope.failure;
+    }
+  }
   private readonly generations = new Map<string, unknown>();
   async getGeneration(id: string): Promise<unknown> {
+    this.observeRead(`generation:${id}`, () => this.generations.get(id));
     return structuredClone(this.generations.get(id));
   }
   async putGeneration(id: string, snapshot: unknown): Promise<void> {
+    this.assertWritable();
     if (this.generations.has(id)) throw unavailable();
     this.generations.set(id, structuredClone(snapshot));
   }
@@ -70,6 +148,12 @@ export class InMemoryExecutionStore implements ExecutionStore {
   async getInputs(runId: string): Promise<ExecutionInputs | undefined> {
     const base = this.inputs.get(runId);
     const overlays = [...this.sensitivity.values()].filter((value) => value.runId === runId);
+    this.observeRead(`inputs:${runId}`, () => this.inputs.get(runId));
+    this.observeRead(
+      `sensitivity:${runId}`,
+      () => [...this.sensitivity.values()].filter((value) => value.runId === runId),
+      1 + overlays.length,
+    );
     if (!base) {
       if (overlays.length) throw unavailable();
       return undefined;
@@ -77,15 +161,18 @@ export class InMemoryExecutionStore implements ExecutionStore {
     return mergeSensitivity(base, overlays);
   }
   async putInputs(inputs: ExecutionInputs): Promise<void> {
+    this.assertWritable();
     if (this.inputs.has(inputs.runId)) throw unavailable();
     this.inputs.set(inputs.runId, structuredClone(inputs));
   }
   async addSensitivity(runId: string, sensitivity: ExecutionSensitivity): Promise<void> {
+    this.assertWritable();
     if (!this.inputs.has(runId)) throw unavailable();
     const ref = randomUUID();
     this.sensitivity.set(ref, structuredClone({ ...sensitivity, runId, ref }));
   }
   async putPayload(ref: string, input: OrcaEventInput): Promise<void> {
+    this.assertWritable();
     if (this.payloads.has(ref)) throw unavailable();
     const inputs = await this.getInputs(input.runId);
     if (!inputs) throw unavailable();
@@ -93,6 +180,8 @@ export class InMemoryExecutionStore implements ExecutionStore {
   }
   async getPayload(runId: string, ref: string, type: string): Promise<OrcaEventInput["payload"]> {
     const value = this.payloads.get(ref);
+    this.observeRead(`payload:${ref}`, () => this.payloads.get(ref));
+    if (this.observation.getStore()) await this.getInputs(runId);
     if (!value || value.input.runId !== runId || value.input.type !== type || !this.inputs.has(runId))
       throw unavailable();
     for (const expected of value.sensitivityRefs)
@@ -106,6 +195,12 @@ export class FileExecutionStore implements ExecutionStore {
   constructor(storeDir: string) {
     this.dir = join(storeDir, "private-execution");
   }
+  async observe<T>(
+    work: () => Promise<T>,
+    limits: { maxRecords: number },
+  ): Promise<{ value: T; verifyUnchanged(): Promise<void> }> {
+    return observePrivateReads(work, limits);
+  }
   async getGeneration(id: string): Promise<unknown> {
     return readPrivateJson(this.dir, `${encodeURIComponent(id)}.generation.json`);
   }
@@ -113,27 +208,19 @@ export class FileExecutionStore implements ExecutionStore {
     if (!(await writePrivateJson(this.dir, `${encodeURIComponent(id)}.generation.json`, snapshot))) throw unavailable();
   }
   private async overlays(runId: string): Promise<z.infer<typeof OverlaySchema>[]> {
-    let names: string[];
-    try {
-      names = await readdir(this.dir);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw unavailable();
-    }
     const prefix = `${encodeURIComponent(runId)}.sensitivity.`;
+    const names = await privateJsonNames(this.dir, prefix);
     return Promise.all(
-      names
-        .filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
-        .map(async (name) => {
-          const result = OverlaySchema.safeParse(await readPrivateJson(this.dir, name));
-          if (
-            !result.success ||
-            result.data.runId !== runId ||
-            name !== `${prefix}${encodeURIComponent(result.data.ref)}.json`
-          )
-            throw unavailable();
-          return result.data;
-        }),
+      names.map(async (name) => {
+        const result = OverlaySchema.safeParse(await readPrivateJson(this.dir, name));
+        if (
+          !result.success ||
+          result.data.runId !== runId ||
+          name !== `${prefix}${encodeURIComponent(result.data.ref)}.json`
+        )
+          throw unavailable();
+        return result.data;
+      }),
     );
   }
   async getInputs(runId: string): Promise<ExecutionInputs | undefined> {
@@ -213,6 +300,11 @@ export class FileExecutionStore implements ExecutionStore {
 }
 
 export const unavailable = () => new OrcaError("RUN_STATE", "protected execution record is missing or invalid");
+const observationLimit = () => new OrcaError("RUN_STATE", "protected execution observation exceeds record limit");
+const memoryDigest = (value: unknown): string =>
+  createHash("sha256")
+    .update(serialize(structuredClone(value)))
+    .digest("hex");
 
 /** Whole fields are hidden when any nested declaration is sensitive; siblings are not a secret-value oracle. */
 export function publicInputVars(inputs: ExecutionInputs): Record<string, unknown> {

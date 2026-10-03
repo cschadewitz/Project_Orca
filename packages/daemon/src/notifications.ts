@@ -111,6 +111,16 @@ export function notificationsFor(event: OrcaEvent, subscriptionId: string): Daem
         ...(error ? { error: { code: error.code, message: error.message } } : {}),
       },
     });
+  } else if ((event.type === "revision.recorded" || event.type === "continuation.recorded") && event.payload.decision) {
+    out.push({
+      method: INPUT_ANSWERED,
+      params: {
+        ...at,
+        requestId: event.payload.decision.requestId,
+        stepRunId: event.payload.decision.stepRunId,
+        answer: event.payload.decision.answer,
+      },
+    });
   } else if (event.type === "human.requested") {
     out.push({
       method: INPUT_OPENED,

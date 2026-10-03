@@ -108,16 +108,24 @@ jobs:
         if: matrix.node == 24
         run: pnpm run lint
 
+      # Production MCP acceptance launches the emitted daemon and MCP entry points.
+      - name: Build
+        run: pnpm run build
+
       # Coverage is measured on one leg for the same reason, and because instrumenting
       # slows the suite down. Thresholds live in vitest.config.ts, so this fails here
       # exactly when it fails locally.
       - name: Test
         if: matrix.node != 24
         run: pnpm test
+        env:
+          ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       - name: Test with coverage
         if: matrix.node == 24
         run: pnpm run test:coverage
+        env:
+          ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       # Both still run when the thresholds fail: a red build is exactly when the numbers
       # are worth reading. `hashFiles` keeps them quiet when coverage never ran at all.
@@ -140,9 +148,6 @@ jobs:
         if: ${{ !cancelled() && steps.upload-coverage.outcome == 'failure' }}
         run: |
           echo "::warning title=Coverage upload failed::Could not upload the coverage report. See the job summary for coverage results when available."
-
-      - name: Build
-        run: pnpm run build
 
       # vitest resolves @orca/* to packages/*/src via aliases, so it never exercises the
       # emitted dist graph. This catches broken exports maps and missing project references.

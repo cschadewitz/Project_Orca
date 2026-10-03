@@ -160,7 +160,7 @@ export async function askHumanInput(opts: {
   agent?: { id: string; hostId: string };
   context?: Record<string, unknown>;
   live?: LiveInputBinding;
-  onRequested?: (query: HumanInputQuery) => void;
+  onRequested?: (query: HumanInputQuery) => void | Promise<void>;
   onSettled?: (query: HumanInputQuery) => Promise<void> | void;
 }): Promise<string | undefined> {
   const { emit, stepRunId } = opts;
@@ -215,7 +215,7 @@ export async function askHumanInput(opts: {
       },
     });
     requested = true;
-    opts.onRequested?.(query);
+    await opts.onRequested?.(query);
     await emit({ type: "step.waiting", payload: { stepRunId, on: "human-input", detail: query.requestId } });
     publish();
     const answer = await (waiting ?? opts.port.ask(query));

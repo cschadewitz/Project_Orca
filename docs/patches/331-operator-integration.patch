@@ -1,0 +1,1256 @@
+diff --git a/docs/daemon-security.md b/docs/daemon-security.md
+index 9cb0bcd..a8c1686 100644
+--- a/docs/daemon-security.md
++++ b/docs/daemon-security.md
+@@ -164,6 +164,9 @@ that the two match. A method that is missing from the table is refused with
+ | `requests.admission` | `plan.write` | plus `runs.start`; own admission in this workspace | — |
+ | `requests.admissions` | `plan.write` | plus `runs.start`; own admissions in this workspace | — |
+ | `runs.start` | `runs.start` | the workflow; the new run is attributed to the caller | mutation |
++| `runs.admit` | `runs.start` | the workflow and authorized associations; prompt durable receipt | mutation |
++| `admissions.get` | `runs.start` | own operation, original grants and resources; Request also needs `plan.write` | — |
++| `admissions.reconcile` | `runs.start` | own operation, original grants/resources; attachment requires current execution authority | mutation |
+ | `runs.resume` | `runs.control` | the run | mutation |
+ | `runs.cancel` | `runs.control` | the run | mutation |
+ | `inputs.answer` | `inputs.answer` | the exact open gate and its run; `always` also needs `permissions.grant` | decision |
+diff --git a/docs/runtime-operator-parallel-contract.md b/docs/runtime-operator-parallel-contract.md
+index 25a949b..6da0126 100644
+--- a/docs/runtime-operator-parallel-contract.md
++++ b/docs/runtime-operator-parallel-contract.md
+@@ -93,6 +93,26 @@ Older `docs/patches/` files describe historical handoffs; do not reapply them.
+
+ ## Shared seam A: durable retries and prompt run admission
+
++### Coordinated review clarification
++
++The new wire `RunsAdmitResult` is `DirectAdmissionResult & { operationId: string }`.
++Prepared, accepted and recoverable-failure receipts carry that stable authorized
++reference; in-progress remains a typed `RUN_STATE` failure with operation ID and
++recovery metadata. No raw client key is exposed and legacy `runs.start` stays unchanged.
++
++Optional `runs.admit.expectedScope` contains `{ principalId, workspaceId }`, checked
++against current authenticated authority before effects and stripped before intent
++comparison. It is not authority. Neither credentials nor transient instance IDs
++participate in this fence or durable intent scope. The app consumes the existing
++`operator.discover` authenticated projection; no second discovery RPC is introduced.
++
++#331 additionally owns `packages/app/src/main/admission-intents.ts` and
++`packages/app/test/admission-retry*.test.ts`. Existing app wiring remains integrator
++owned through the reserved patch. The journal uses main-process OS-backed encryption,
++refuses unavailable or plaintext backends and requires an explicit confirmed
++abandon/new-intent action; renderer and process loss retain the original key.
++
++
+ ### Ownership and compatibility
+
+ **#331 owns the common durable retry mechanism and a deliberate nonblocking
+diff --git a/packages/app/renderer/src/palette/start-run.tsx b/packages/app/renderer/src/palette/start-run.tsx
+index 369ae03..2d729a2 100644
+--- a/packages/app/renderer/src/palette/start-run.tsx
++++ b/packages/app/renderer/src/palette/start-run.tsx
+@@ -8,13 +8,13 @@
+  *
+  * **The workflow is chosen, the vars are not asked for.** The picker lists `workflows.list`
+  * — name, id, version and node count, which is everything a row of that method carries —
+- * and the choice calls `runs.start { workflowId }` with no vars at all, so the run takes the
++ * and the choice calls durable direct admission with `{ workflowId }` with no vars at all, so the run takes the
+  * workflow's own. A vars form is specified nowhere: `orca run --var` takes arbitrary keys,
+  * `WorkflowSummaryView` does not carry the workflow's `inputs`, and a form that guessed at
+  * the keys would be inventing them (docs/design/RULES.md rule 12). The row says which vars
+  * it starts with rather than leaving a person to find out from the run.
+  *
+- * **The run is opened, not announced and left.** `runs.start` answers as soon as the run
++ * **The admitted run is opened.** Prompt admission answers as soon as the run
+  * exists, so the palette navigates to `orca://run/<id>` through the route table — the same
+  * resolver every link, crumb and palette row goes through — and the sentence goes in the
+  * app's one live region for anybody who did not see the screen change.
+@@ -37,9 +37,9 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
+     (): readonly PaletteWrite[] => [
+       {
+         scope: "global",
+-        method: "runs.start",
+-        label: "Start a run",
+-        detail: "Starts with the workflow's default vars",
++        method: "runs.admit",
++        label: "Start or recover a run",
++        detail: "Reuses retained intent; abandon it explicitly to start another run",
+         picker: {
+           label: "Which workflow?",
+           empty: "This daemon has no workflows registered.",
+@@ -57,12 +57,17 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
+             }));
+           },
+           choose: (workflowId) => {
+-            void window.orca.runs.start({ workflowId }).then((result) => {
++            const bridge = window.orca.admissionIntents;
++            if (!bridge) {
++              announce("Durable run admission is unavailable in this app.");
++              return;
++            }
++            void bridge.start(workflowId).then((result) => {
+               if (!result.ok) {
+-                announce(`The run did not start: ${result.error.message}`);
++                announce(`Run admission needs attention: ${result.error.message}`);
+                 return;
+               }
+-              announce(`${result.result.run.name} is running.`);
++              announce("The admitted run is open.");
+               onOpen(runUrl(result.result.runId));
+             });
+           },
+@@ -72,6 +77,31 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
+            thing with an action, and the alternative is a special case in the registry. */
+         action: () => {},
+       },
++      {
++        scope: "global",
++        method: "runs.admit",
++        label: "Abandon retained run intent",
++        detail: "Does not cancel existing work; the next start creates a separate run",
++        picker: {
++          label: "Which retained intent?",
++          empty: "No retained intents for this target and principal.",
++          load: async () => {
++            const result = await window.orca.admissionIntents?.list();
++            if (!result?.ok) {
++              announce(result?.error.message ?? "Durable run admission is unavailable.");
++              return [];
++            }
++            return result.result.map((row) => ({ id: row.id, label: row.workflowId }));
++          },
++          choose: (id) => {
++            void window.orca.admissionIntents?.abandon(id).then((result) => {
++              if (!result.ok) announce(result.error.message);
++              else if (result.result.abandoned) announce("Run intent abandoned. The next start creates separate work.");
++            });
++          },
++        },
++        action: () => {},
++      },
+     ],
+     [announce, onOpen],
+   );
+diff --git a/packages/app/renderer/test/fixtures.ts b/packages/app/renderer/test/fixtures.ts
+index 18c9447..45d8be3 100644
+--- a/packages/app/renderer/test/fixtures.ts
++++ b/packages/app/renderer/test/fixtures.ts
+@@ -81,6 +81,7 @@ export const HELLO: HelloResult = {
+     // Answered by a daemon with `runs.control`, and called by the palette's **Start a run**
+     // since #178: a picker of `workflows.list` and the workflow's own vars.
+     "runs.start",
++    "runs.admit",
+     // The plan surface (#169). Nine reads, and five writes that ride the same `--read-only`
+     // switch as the four above.
+     "plans.list",
+diff --git a/packages/app/renderer/test/palette-writes.test.tsx b/packages/app/renderer/test/palette-writes.test.tsx
+index ec38116..20b7d8b 100644
+--- a/packages/app/renderer/test/palette-writes.test.tsx
++++ b/packages/app/renderer/test/palette-writes.test.tsx
+@@ -37,6 +37,11 @@ afterEach(() => {
+
+ function mount(connection?: ConnectionSnapshot): void {
+   fake = installBridge(connection === undefined ? {} : { connection });
++  fake.bridge.admissionIntents = {
++    start: async (workflowId) => fake.bridge.runs.start({ workflowId }),
++    list: async () => ({ ok: true, result: [] }),
++    abandon: async () => ({ ok: true, result: { abandoned: false } }),
++  };
+   teardown.push(fake.install());
+   h = harness();
+   teardown.push(h.dispose);
+@@ -143,15 +148,34 @@ describe("cancel and resume", () => {
+ });
+
+ describe("starting a run", () => {
++  it("announces blocked secure persistence and never falls back to legacy start", async () => {
++    mount();
++    fake.bridge.admissionIntents!.start = async () => ({
++      ok: false,
++      error: {
++        code: "AGENT_TRANSPORT",
++        message: "Secure run-intent storage is unavailable. No run was submitted.",
++      },
++    });
++    await screen.findByRole("button", { name: "Attention" });
++    await open();
++    search("Start or recover a run");
++    fireEvent.keyDown(query(), { key: "Enter" });
++    const menu = await screen.findByRole("menu", { name: "Which workflow?" });
++    fireEvent.click(within(menu).getAllByRole("menuitem")[0]!);
++    await screen.findByText(/Run admission needs attention: Secure run-intent storage is unavailable/);
++    expect(callsTo("runs.start")).toHaveLength(0);
++  });
++
+   it("lists the daemon's workflows, starts the chosen one and opens the run", async () => {
+     mount();
+     await screen.findByRole("button", { name: "Attention" });
+     await open();
+
+-    search("Start a run");
++    search("Start or recover a run");
+     // The vars are not asked for and the row says so rather than leaving it to be found out.
+-    expect(rows().find((row) => row.textContent?.startsWith("Start a run"))?.textContent).toContain(
+-      "Starts with the workflow's default vars",
++    expect(rows().find((row) => row.textContent?.startsWith("Start or recover a run"))?.textContent).toContain(
++      "Reuses retained intent",
+     );
+     fireEvent.keyDown(query(), { key: "Enter" });
+
+@@ -184,7 +208,7 @@ describe("starting a run", () => {
+     await screen.findByRole("button", { name: "Attention" });
+     const regions = document.querySelectorAll("[aria-live]").length;
+     await open();
+-    search("Start a run");
++    search("Start or recover a run");
+     fireEvent.keyDown(query(), { key: "Enter" });
+     await screen.findByRole("menu", { name: "Which workflow?" });
+
+@@ -325,7 +349,7 @@ describe("what a daemon's answer takes away", () => {
+        dead one reads as broken (docs/design/40-connection-states.md). The read-only daemon
+        leaves the control methods out of `hello.methods` and the capability out of `hello`
+        together, which is why one check answers for all of them. */
+-    expect(labels().some((label) => label.startsWith("Start a run"))).toBe(false);
++    expect(labels().some((label) => label.startsWith("Start or recover a run"))).toBe(false);
+     expect(labels().some((label) => label.includes("Cancel"))).toBe(false);
+     expect(labels().some((label) => label.startsWith("Answer Ship the rollout?"))).toBe(false);
+   });
+@@ -339,7 +363,7 @@ describe("what a daemon's answer takes away", () => {
+     await screen.findByText(/No daemon/i);
+     await open();
+
+-    const row = rows().find((option) => option.textContent?.startsWith("Start a run"))!;
++    const row = rows().find((option) => option.textContent?.startsWith("Start or recover a run"))!;
+     expect(row).toBeTruthy();
+     expect(row.getAttribute("aria-disabled")).toBe("true");
+     // `useWritability()`'s sentence, verbatim and on the row — never a bare greyed line.
+@@ -380,7 +404,7 @@ describe("what a daemon's answer takes away", () => {
+     expect(labels().some((label) => label.startsWith("Waive dependency"))).toBe(false);
+     expect(labels().some((label) => label.startsWith("Decide "))).toBe(false);
+     // And the palette is the live one, with the writes this daemon *does* serve in it.
+-    expect(labels().some((label) => label.startsWith("Start a run"))).toBe(true);
++    expect(labels().some((label) => label.startsWith("Start or recover a run"))).toBe(true);
+   });
+
+   it("keeps a row whose method is served by a daemon that claims no capability", async () => {
+@@ -439,8 +463,8 @@ describe("a row that cannot be run is still a row the keyboard reaches", () => {
+        over the row would put the reason out of reach of the keyboard — which is exactly
+        what `Button` refuses to do with `disabledReason`
+        (docs/design/40-connection-states.md). */
+-    const row = search("Start a run");
+-    expect(row.textContent).toContain("Start a run");
++    const row = search("Start or recover a run");
++    expect(row.textContent).toContain("Start or recover a run");
+     expect(row.getAttribute("aria-disabled")).toBe("true");
+     expect(query().getAttribute("aria-activedescendant")).toBe(row.id);
+
+@@ -464,7 +488,7 @@ describe("a cancelled picker", () => {
+     await screen.findByRole("button", { name: "Attention" });
+     await open();
+
+-    search("Start a run");
++    search("Start or recover a run");
+     fireEvent.keyDown(query(), { key: "Enter" });
+     const menu = await screen.findByRole("menu", { name: "Which workflow?" });
+     // The field is still on screen underneath the picker: it is the one thing in this
+diff --git a/packages/app/src/bridge.ts b/packages/app/src/bridge.ts
+index e85aa0f..65abf51 100644
+--- a/packages/app/src/bridge.ts
++++ b/packages/app/src/bridge.ts
+@@ -194,6 +194,12 @@ export interface AlertActivation {
+ }
+
+ export interface OrcaBridge {
++  /** Durable palette intent ownership lives in main, never renderer memory or localStorage. */
++  admissionIntents?: {
++    start(workflowId: string): Promise<BridgeResult<{ runId: string }>>;
++    list(): Promise<BridgeResult<{ id: string; workflowId: string }[]>>;
++    abandon(id: string): Promise<BridgeResult<{ abandoned: boolean }>>;
++  };
+   daemonConnection?: DaemonConnectionBridge;
+   updates: {
+     read(): UpdateSnapshot;
+diff --git a/packages/app/src/main/index.ts b/packages/app/src/main/index.ts
+index ac3640d..5ce8347 100644
+--- a/packages/app/src/main/index.ts
++++ b/packages/app/src/main/index.ts
+@@ -18,13 +18,16 @@
+  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
+  * server for hot reload (scripts/dev.js).
+  */
++import { z } from "zod";
++import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
++import { RunsAdmitResultSchema } from "@orca/protocol";
+ import { ConnectionTarget, connectionFailure, callInConnection } from "./connection-target.js";
+ import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
+ import { Updates } from "./updates.js";
+ import { updateDriver } from "./update-driver.js";
+ import { join } from "node:path";
+ import { fileURLToPath } from "node:url";
+-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification } from "electron";
++import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage } from "electron";
+ import { rawTokens, type ThemeId } from "@orca/design";
+ import type { NotificationMessage } from "@orca/protocol";
+ import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
+@@ -92,6 +95,57 @@ function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
+ /** The client of the moment, read at call time and never captured. */
+ const client = (): DaemonClient => workspace.client;
+
++// Consume only the verified projection of operator.discover; no peer-feature source import.
++const intentDiscovery = z.object({
++  principalId: z.string().min(1),
++  authentication: z.literal("credential"),
++  target: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }),
++  operations: z.array(z.string()),
++});
++const intents = new AdmissionIntentController(
++  new AdmissionIntents(join(app.getPath("userData"), "admission-intents.enc"), safeStorage),
++  async () => {
++    const captured = client();
++    const target = workspace.connectionTarget;
++    const found = await captured.call("operator.discover", {}, intentDiscovery);
++    workspace.assertEpoch(target.epoch);
++    if (
++      !found.operations.includes("runs.admit") ||
++      !target.identity ||
++      found.target.workspaceId !== target.identity.workspaceId ||
++      found.target.instanceId !== target.identity.instanceId
++    )
++      throw new Error(
++        "The authenticated daemon target changed or retry admission is unavailable. Refresh before retrying.",
++      );
++    return {
++      scope: {
++        target: target.source === "bundled" ? `bundled:${workspace.snapshot.path}` : daemonEndpoint(target.url),
++        principalId: found.principalId,
++        workspaceId: found.target.workspaceId,
++      },
++      assertCurrent: () => workspace.assertEpoch(target.epoch),
++      admit: (params) => captured.call("runs.admit", params, RunsAdmitResultSchema),
++    };
++  },
++);
++handle("orca:admissionIntents.start", (workflowId: string) => intents.start(workflowId));
++handle("orca:admissionIntents.list", () => intents.list());
++handle("orca:admissionIntents.abandon", (id: string) =>
++  intents.abandon(id, async () => {
++    const result = await dialog.showMessageBox({
++      type: "warning",
++      buttons: ["Keep retained intent", "Abandon intent"],
++      defaultId: 0,
++      cancelId: 0,
++      message: "Abandon this run intent?",
++      detail:
++        "The original run may already exist or still be running. This does not cancel it. The next start creates a separate run with a new key.",
++    });
++    return result.response === 1;
++  }),
++);
++
+ handle("orca:hello", () => client().hello(`orca-app/${app.getVersion()}`));
+ handle("orca:runs.list", (params: Parameters<DaemonClient["runsList"]>[0]) => client().runsList(params));
+ handle("orca:runs.get", (params: Parameters<DaemonClient["runsGet"]>[0]) => client().runsGet(params));
+diff --git a/packages/app/src/preload/index.cts b/packages/app/src/preload/index.cts
+index 0d111de..9f6d5e9 100644
+--- a/packages/app/src/preload/index.cts
++++ b/packages/app/src/preload/index.cts
+@@ -46,6 +46,11 @@ const call = <T,>(channel: string, params?: unknown): Promise<BridgeResult<T>> =
+   ipcRenderer.invoke(channel, params, targetEpoch) as Promise<BridgeResult<T>>;
+
+ const bridge: OrcaBridge = {
++  admissionIntents: {
++    start: (workflowId) => call("orca:admissionIntents.start", workflowId),
++    list: () => call("orca:admissionIntents.list"),
++    abandon: (id) => call("orca:admissionIntents.abandon", id),
++  },
+   platform: process.platform,
+   daemonConnection: {
+     read: () => ipcRenderer.sendSync("orca:daemon.read") as DaemonTargetSnapshot,
+diff --git a/packages/app/test/daemon-connection-handshake.test.ts b/packages/app/test/daemon-connection-handshake.test.ts
+index 3dfbbf1..1ce012d 100644
+--- a/packages/app/test/daemon-connection-handshake.test.ts
++++ b/packages/app/test/daemon-connection-handshake.test.ts
+@@ -21,6 +21,7 @@ vi.mock("electron", async () => {
+   const { EventEmitter } = await import("node:events");
+   shell.events = new EventEmitter();
+   return {
++    safeStorage: { isEncryptionAvailable: () => false },
+     app: {
+       getPath: () => shell.directory,
+       requestSingleInstanceLock: () => true,
+diff --git a/packages/app/test/daemon-connection-integration.test.ts b/packages/app/test/daemon-connection-integration.test.ts
+index 18b04e7..b99d20d 100644
+--- a/packages/app/test/daemon-connection-integration.test.ts
++++ b/packages/app/test/daemon-connection-integration.test.ts
+@@ -44,6 +44,7 @@ vi.mock("electron", async () => {
+     },
+   };
+   return {
++    safeStorage: { isEncryptionAvailable: () => false },
+     app: {
+       getPath: (name: string) => (name === "userData" ? shell.userData : "/launch-workspace"),
+       requestSingleInstanceLock: () => true,
+diff --git a/packages/cli/src/bootstrap.ts b/packages/cli/src/bootstrap.ts
+index 80491e2..84ecc8a 100644
+--- a/packages/cli/src/bootstrap.ts
++++ b/packages/cli/src/bootstrap.ts
+@@ -2,6 +2,10 @@
+  * Bootstrap: turn `orca.config.yaml` into a wired Orchestrator + ProgramService.
+  * The CLI, the ACP facade and embedders all go through here.
+  */
++import { admissionRetryFaults } from "@orca/core";
++import { FileRetryClaimStore } from "@orca/store";
++import { RegisteredRetryClaims, DirectAdmissionService, RetrySafeAdmissionService } from "@orca/engine";
++
+ import { createHash, randomUUID } from "node:crypto";
+
+ import { readFile, stat, realpath } from "node:fs/promises";
+@@ -96,6 +100,9 @@ export interface OrcaApp {
+   configFile?: string | undefined;
+   orchestrator: Orchestrator;
+   program: ProgramService;
++  retrySafeAdmissions?: RetrySafeAdmissionService | undefined;
++  retryClaims?: RegisteredRetryClaims | undefined;
++  directAdmissions?: DirectAdmissionService | undefined;
+   submissionAuthority?: SubmissionAuthority | undefined;
+   plan: PlanService;
+   workflows: WorkflowRegistry;
+@@ -408,7 +415,27 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
+   };
+   const provided = await opts.requestSubmission?.({ orchestrator, config, configDir });
+   const authority = provided?.authority ?? (await opts.submissionAuthority?.({ orchestrator, config, configDir }));
++  const retryClaims = opts.ephemeral
++    ? undefined
++    : new RegisteredRetryClaims(
++        new FileRetryClaimStore({
++          storeDir: resolve(configDir, config.storeDir),
++          execution: orchestrator.stores.execution,
++          faults: admissionRetryFaults,
++          limits: config.admissionRetry ?? {},
++        }),
++        admissionRetryFaults,
++      );
++  const directAdmissions = retryClaims
++    ? new DirectAdmissionService({
++        orchestrator,
++        retries: retryClaims,
++        captureLaunch: generations.captureLaunch,
++        restoreLaunch: generations.restoreDirectLaunch,
++      })
++    : undefined;
+   const submission = {
++    ...(retryClaims ? { retries: retryClaims } : {}),
+     admissions: opts.ephemeral
+       ? new MemoryAdmissionStore()
+       : new FileAdmissionStore(resolve(configDir, config.storeDir)),
+@@ -417,14 +444,21 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
+     ...provided,
+     ...(authority ? { authority } : {}),
+   };
++  const program = new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission);
+   return {
+     config,
+     generations,
+     submissionAuthority: submission?.authority,
++    retryClaims,
++    directAdmissions,
++    retrySafeAdmissions:
++      directAdmissions && program.submissions
++        ? new RetrySafeAdmissionService({ requests: program.submissions, direct: directAdmissions })
++        : undefined,
+     configDir,
+     ...(configFile ? { configFile } : {}),
+     orchestrator,
+-    program: new ProgramService(orchestrator, config.program.workflow, config.program.itemWorkflow, submission),
++    program,
+     plan,
+     workflows,
+     templates,
+diff --git a/packages/cli/src/commands/index.ts b/packages/cli/src/commands/index.ts
+index bf6a045..7b65333 100644
+--- a/packages/cli/src/commands/index.ts
++++ b/packages/cli/src/commands/index.ts
+@@ -2,9 +2,16 @@
+  * CLI command implementations. Each command receives parsed positionals and
+  * flags and an output sink; `main.ts` handles argument parsing and errors.
+  */
++import { AdmissionRetryModel, neverAttached } from "@orca/daemon";
++import { admissionRetryOptions } from "./admission-retry.js";
++
+ import { admissionsCommand } from "./admissions.js";
+ import { workspaceIdentity } from "@orca/store";
+-import { localSubmissionAuthority, authorityForNewLocalIntent } from "../local-submission-authority.js";
++import {
++  localSubmissionAuthority,
++  localDirectAdmissionAuthority,
++  authorityForNewLocalIntent,
++} from "../local-submission-authority.js";
+ import { releaseAssets } from "../bootstrap.js";
+
+ import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
+@@ -445,6 +452,25 @@ export const commands: Record<string, Command> = {
+       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
+       try {
+         const workspace = ctx.flags.cwd ? { hostId: "local", cwd: String(ctx.flags.cwd) } : undefined;
++        if (app.directAdmissions && !workspace && !overrides) {
++          const retry = admissionRetryOptions(ctx.flags["idempotency-key"] as string | undefined);
++          if (ctx.flags["idempotency-key"] === undefined) ctx.err(`Retry key: ${retry.idempotencyKey}`);
++          const authority = await localDirectAdmissionAuthority(app);
++          const response = await app.directAdmissions.admitRun(
++            { workflowId, vars, ...workflowGuards(ctx) },
++            retry,
++            authority,
++          );
++          if (response.state !== "resolved" || response.result.state !== "accepted")
++            throw new OrcaError("RUN_STATE", "Run admission requires reconciliation", { ...response });
++          await authority.authorize({ workflowId });
++          return await finish(app, ctx, await app.orchestrator.run(response.result.runId));
++        }
++        if (ctx.flags["idempotency-key"] !== undefined)
++          throw new OrcaError(
++            "NOT_SUPPORTED",
++            "Keyed direct admission does not support explicit workspace or selection overrides",
++          );
+         const state = await app.orchestrator.startAndRun({
+           workflowId,
+           vars,
+@@ -487,13 +513,18 @@ export const commands: Record<string, Command> = {
+       });
+       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
+       try {
+-        const admitted = await app.program.submit({
+-          title,
+-          body,
+-          vars,
+-          ...workflowGuards(ctx),
+-          ...(overrides ? { overrides } : {}),
+-        });
++        const retry = admissionRetryOptions(ctx.flags["idempotency-key"] as string | undefined);
++        if (ctx.flags["idempotency-key"] === undefined) ctx.err(`Retry key: ${retry.idempotencyKey}\n`);
++        const admitted = await app.program.submit(
++          {
++            title,
++            body,
++            vars,
++            ...workflowGuards(ctx),
++            ...(overrides ? { overrides } : {}),
++          },
++          retry,
++        );
+         ctx.out(
+           `request ${admitted.request.id}; run ${admitted.runId}${admitted.admissionId ? `; admission ${admitted.admissionId}` : ""}`,
+         );
+@@ -754,6 +785,7 @@ export const commands: Record<string, Command> = {
+         !readOnly && authDir && app.program.submissions
+           ? new RequestSubmissionModel({
+               service: app.program.submissions,
++              shouldDispatch: (id) => neverAttached(app.orchestrator, id),
+               checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
+               execute: async (id, authority) => {
+                 const state = liveRuntime
+@@ -764,7 +796,23 @@ export const commands: Record<string, Command> = {
+               executionFailed: (id) => app.logger.error("Request execution requires recovery", { runId: id }),
+             })
+           : undefined;
++      const admissionRetries =
++        !readOnly && authDir && app.retryClaims && app.directAdmissions && app.program.submissions
++          ? new AdmissionRetryModel({
++              claims: app.retryClaims,
++              direct: app.directAdmissions,
++              requests: app.program.submissions,
++              orchestrator: app.orchestrator,
++              checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
++              execute: async (id, authority) => {
++                if (liveRuntime) await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id));
++                else await app.orchestrator.run(id);
++              },
++              executionFailed: (id) => app.logger.error("Run admission requires recovery", { runId: id }),
++            })
++          : undefined;
+       const daemon = await startDaemon({
++        admissionRetries,
+         requestSubmissions,
+         submissionWorkspaceId: workspaceId,
+         identity,
+@@ -795,6 +843,7 @@ export const commands: Record<string, Command> = {
+         // over a store with no plan advertised a capability whose nine methods `hello` did
+         // not list, and a client hid nothing on the strength of it.
+         capabilities: [
++          ...(admissionRetries ? (["runs.admit", "admissions.get", "admissions.reconcile"] as const) : []),
+           "runs.read",
+           "runs.subscribe",
+           "workflows.validateInputs",
+diff --git a/packages/cli/src/local-submission-authority.ts b/packages/cli/src/local-submission-authority.ts
+index ddf626f..8c46cbc 100644
+--- a/packages/cli/src/local-submission-authority.ts
++++ b/packages/cli/src/local-submission-authority.ts
+@@ -16,13 +16,17 @@ import {
+   OWNERSHIP_FILE,
+   readLocalToken,
+   submissionAuthority,
++  directAdmissionAuthority,
+   orchestratorResolver,
+ } from "@orca/daemon";
+-export async function localSubmissionAuthority(app: {
+-  config: OrcaConfig;
+-  configDir: string;
+-  orchestrator: Orchestrator;
+-}): Promise<SubmissionAuthority> {
++export async function localSubmissionAuthority(
++  app: {
++    config: OrcaConfig;
++    configDir: string;
++    orchestrator: Orchestrator;
++  },
++  mode: "request" | "direct" = "request",
++): Promise<SubmissionAuthority> {
+   const storeDir = resolve(app.configDir, app.config.storeDir);
+   await mkdir(storeDir, { recursive: true });
+   const workspaceId = await workspaceIdentity(storeDir);
+@@ -39,7 +43,8 @@ export async function localSubmissionAuthority(app: {
+       throw new OrcaError("RUN_STATE", "a current local client credential is required");
+     const principal = authenticated.principal;
+     const credentialId = principal.credentialId!;
+-    return submissionAuthority({
++    const factory = mode === "request" ? submissionAuthority : directAdmissionAuthority;
++    const authority = factory({
+       workspaceId,
+       actor: { principalId: principal.id, credentialId },
+       authorizer: new Authorizer({ resolver: orchestratorResolver(app.orchestrator), ownership }),
+@@ -49,6 +54,13 @@ export async function localSubmissionAuthority(app: {
+         return current.principal;
+       },
+     });
++    return {
++      ...authority,
++      authorize: (command) =>
++        authority.authorize(
++          command as import("@orca/core").SubmissionCommand & import("@orca/core").DirectAdmissionCommand,
++        ),
++    };
+   }
+   const localUser = userInfo();
+   const principalId = `os-user-${createHash("sha256")
+@@ -102,3 +114,10 @@ export function authorityForNewLocalIntent(
+     return current;
+   };
+ }
++
++export async function localDirectAdmissionAuthority(
++  app: Parameters<typeof localSubmissionAuthority>[0],
++): Promise<import("@orca/core").DirectAdmissionAuthority> {
++  const authority = await localSubmissionAuthority(app, "direct");
++  return { ...authority, authorize: (command) => authority.authorize({ title: "", body: "", ...command }) };
++}
+diff --git a/packages/cli/src/main.ts b/packages/cli/src/main.ts
+index 283844e..5859ece 100644
+--- a/packages/cli/src/main.ts
++++ b/packages/cli/src/main.ts
+@@ -48,6 +48,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
+         "template-pack": { type: "string" },
+         body: { type: "string" },
+         "body-file": { type: "string" },
++        "idempotency-key": { type: "string" },
+         dir: { type: "string" },
+         "log-level": { type: "string" },
+         note: { type: "string" },
+diff --git a/packages/core/src/config.ts b/packages/core/src/config.ts
+index d08a622..73a396f 100644
+--- a/packages/core/src/config.ts
++++ b/packages/core/src/config.ts
+@@ -52,6 +52,12 @@ export const OrcaConfigSchema = z.object({
+   version: z.literal(1).default(1),
+   /** Where event logs, artifacts and indexes are stored (relative to the config file). */
+   storeDir: z.string().default(".orca"),
++  admissionRetry: z
++    .object({
++      maxClaimsPerWorkspace: z.number().int().positive().default(100_000),
++      maxClaimsPerPrincipal: z.number().int().positive().default(10_000),
++    })
++    .optional(),
+   hosts: z.array(HostSpecSchema).default([{ id: LOCAL_HOST_ID, type: "local" }]),
+   agents: z.array(AgentSpecSchema).default([]),
+   /** Explicit role -> agent id mapping. Falls back to the first agent listing the role. */
+diff --git a/packages/core/src/errors.ts b/packages/core/src/errors.ts
+index c3a1e1f..5ba8ac4 100644
+--- a/packages/core/src/errors.ts
++++ b/packages/core/src/errors.ts
+@@ -3,6 +3,8 @@
+  * integrations, UIs) can branch on it without parsing messages.
+  */
+ export type OrcaErrorCode =
++  | "RETRY_CONFLICT"
++  | "RETRY_LIMIT"
+   | "WORKFLOW_INVALID"
+   /** Launch vars failed the selected workflow revision's input schema; details has errors and warnings. */
+   | "WORKFLOW_INPUT_INVALID"
+@@ -81,3 +83,9 @@ export function describeError(e: unknown): { code: OrcaErrorCode; message: strin
+   if (e instanceof Error) return { code: "INTERNAL", message: e.message };
+   return { code: "INTERNAL", message: String(e) };
+ }
++
++/** Shared retry refusals contain no key or command material. */
++export const admissionRetryFaults = {
++  conflict: () => new OrcaError("RETRY_CONFLICT", "Retry key is already bound to a different command"),
++  limit: () => new OrcaError("RETRY_LIMIT", "Admission retry quota reached; existing receipts remain recoverable"),
++};
+diff --git a/packages/core/src/events/events.ts b/packages/core/src/events/events.ts
+index 89beece..75b07a7 100644
+--- a/packages/core/src/events/events.ts
++++ b/packages/core/src/events/events.ts
+@@ -117,6 +117,7 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
+       requestId: z.string().optional(),
+       /** Server-owned recovery correlation, authenticated in the private creation payload. */
+       requestAdmissionId: z.string().optional(),
++      directAdmissionId: z.string().optional(),
+       workItemId: z.string().optional(),
+       parentRunId: z.string().optional(),
+       parentStepRunId: z.string().optional(),
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 07f42d7..9ad338f 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -23,3 +23,5 @@ export * from "./util/path-get.js";
+ export * from "./util/jsonl.js";
+
+ export * from "./model/run-provenance.js";
++
++export * from "./model/admission-retry.js";
+diff --git a/packages/core/src/model/request.ts b/packages/core/src/model/request.ts
+index ffc44b7..3af2dab 100644
+--- a/packages/core/src/model/request.ts
++++ b/packages/core/src/model/request.ts
+@@ -70,7 +70,11 @@ export interface SubmissionAuthority {
+ }
+
+ export interface SubmissionService {
+-  submit(command: SubmissionCommand, authority: SubmissionAuthority): Promise<SubmissionResult>;
++  submit(
++    command: SubmissionCommand,
++    authority: SubmissionAuthority,
++    retry?: import("./admission-retry.js").RetryOptions,
++  ): Promise<SubmissionResult>;
+   reconcile(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
+   inspect(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
+   list(authority: SubmissionAuthority): Promise<SubmissionResult[]>;
+diff --git a/packages/daemon/src/auth/guard.ts b/packages/daemon/src/auth/guard.ts
+index 2f91142..7316274 100644
+--- a/packages/daemon/src/auth/guard.ts
++++ b/packages/daemon/src/auth/guard.ts
+@@ -369,7 +369,7 @@ export class Authorizer {
+       case "workflow": {
+         // Linked documents are workspace resources, not made visible by owning a new run.
+         // Work-item execution may settle the plan, so reading it alone is insufficient.
+-        if (name === "runs.start") {
++        if (name === "runs.start" || name === "runs.admit") {
+           if (params.requestId !== undefined && !holds(principal, "plan.read"))
+             throw new Denied(authForbidden(), "linked-request-not-permitted");
+           if (params.workItemId !== undefined && (!holds(principal, "plan.read") || !holds(principal, "plan.write")))
+diff --git a/packages/daemon/src/auth/operations.ts b/packages/daemon/src/auth/operations.ts
+index 755fa59..f0fee7e 100644
+--- a/packages/daemon/src/auth/operations.ts
++++ b/packages/daemon/src/auth/operations.ts
+@@ -79,6 +79,9 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
+   "requests.reconcile": { permission: "plan.write", resource: "none", audit: "mutation" },
+   "requests.admission": { permission: "plan.write", resource: "none" },
+   "requests.admissions": { permission: "plan.write", resource: "none" },
++  "runs.admit": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
++  "admissions.get": { permission: "runs.start", resource: "none" },
++  "admissions.reconcile": { permission: "runs.start", resource: "none", audit: "mutation" },
+   "runs.start": { permission: "runs.start", resource: "workflow", param: "workflowId", audit: "mutation" },
+   "runs.resume": { permission: "runs.control", resource: "run", audit: "mutation" },
+   "runs.cancel": { permission: "runs.control", resource: "run", audit: "mutation" },
+@@ -122,6 +125,9 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
+  * and to nobody else.
+  */
+ export const CAPABILITY_PERMISSIONS: Readonly<Record<string, readonly Permission[]>> = {
++  "runs.admit": ["runs.start"],
++  "admissions.get": ["runs.start"],
++  "admissions.reconcile": ["runs.start"],
+   "inputs.live": ["inputs.answer"],
+   "runs.read": ["runs.read"],
+   "runs.subscribe": ["runs.read"],
+diff --git a/packages/daemon/src/control.ts b/packages/daemon/src/control.ts
+index f08f62a..53c9c8a 100644
+--- a/packages/daemon/src/control.ts
++++ b/packages/daemon/src/control.ts
+@@ -435,6 +435,13 @@ export class ControlModel {
+    * by the orchestrator before admission. It never creates a Request; requests.submit is
+    * the separate application service for decomposition/program admission.
+    */
++  async settleAdmitted(runId: string): Promise<RunsStartResult> {
++    const state = await this.orc.getState(runId);
++    if (state.run.status === "created" || state.run.status === "running")
++      await leased(runId, () => this.orc.run(runId));
++    return { runId, run: await this.runView(runId), asOf: this.clock.isoNow() };
++  }
++
+   async startRun(
+     params: RunsStartParams,
+     attributeStartedRun?: (runId: string) => void | Promise<void>,
+diff --git a/packages/daemon/src/index.ts b/packages/daemon/src/index.ts
+index be86cb3..363164b 100644
+--- a/packages/daemon/src/index.ts
++++ b/packages/daemon/src/index.ts
+@@ -34,3 +34,5 @@ export * from "./live-input-notifications.js";
+
+ export * from "./daemon-identity.js";
+ export * from "./execution-runtime.js";
++
++export * from "./admission-retry.js";
+diff --git a/packages/daemon/src/methods.ts b/packages/daemon/src/methods.ts
+index 09f574a..4069df4 100644
+--- a/packages/daemon/src/methods.ts
++++ b/packages/daemon/src/methods.ts
+@@ -28,6 +28,8 @@ import {
+   RequestsAdmissionParamsSchema,
+   RequestsAdmissionsParamsSchema,
+ } from "@orca/protocol";
++import { RunsAdmitParamsSchema, AdmissionsGetParamsSchema, AdmissionsReconcileParamsSchema } from "@orca/protocol";
++import { checkAdmissionScope, type AdmissionRetryModel, type AdmissionAuthorities } from "./admission-retry.js";
+ import type { RequestSubmissionModel } from "./request-submission.js";
+ import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
+ import type { Maintenance } from "./maintenance.js";
+@@ -179,6 +181,8 @@ export interface MethodContext {
+   liveAnswerAuthority?: LiveAnswerAuthority;
+   executionResumeAuthority?: ExecutionResumeAuthority;
+   requestSubmissions?: RequestSubmissionModel | undefined;
++  admissionRetries?: AdmissionRetryModel | undefined;
++  admissionAuthorities?: ((ctx: MethodContext) => Promise<AdmissionAuthorities>) | undefined;
+   submissionWorkspaceId?: string | undefined;
+   requestSubmissionAuthority?: ((ctx: MethodContext) => Promise<SubmissionAuthority>) | undefined;
+   identity?: { workspaceId: string; instanceId: string };
+@@ -477,7 +481,22 @@ export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
+ /** `runs.start`: a workflow and its vars. No request, no work item, no documents - by decision. */
+ export const runsStart: Method<RunsStartParams, RunsStartResult> = {
+   params: RunsStartParamsSchema,
+-  handle: (params, ctx) => control(ctx).startRun(params, ctx.attributeStartedRun, ctx.mutationActor),
++  handle: async (params, ctx) => {
++    if (!ctx.admissionRetries || !ctx.admissionAuthorities) {
++      if (params.idempotencyKey !== undefined)
++        throw new OrcaError("NOT_SUPPORTED", "Retry admission is not configured");
++      return control(ctx).startRun(params, ctx.attributeStartedRun, ctx.mutationActor);
++    }
++    const { idempotencyKey, ...command } = params;
++    const admitted = await ctx.admissionRetries.admit(
++      command,
++      idempotencyKey === undefined ? {} : { idempotencyKey },
++      await (await ctx.admissionAuthorities(ctx)).direct(),
++    );
++    if (admitted.state !== "accepted")
++      throw new OrcaError("RUN_STATE", "Run admission requires reconciliation", { ...admitted });
++    return control(ctx).settleAdmitted(admitted.runId);
++  },
+ };
+
+ /**
+@@ -669,7 +688,14 @@ export function methodsFor(ctx: MethodContext): MethodTable {
+     Object.assign(table, {
+       "requests.submit": {
+         params: RequestsSubmitParamsSchema,
+-        handle: async (params, invocation) => model.submit(params, await authority(invocation)),
++        handle: async (params, invocation) => {
++          const { idempotencyKey, ...command } = params;
++          return model.submit(
++            command,
++            await authority(invocation),
++            idempotencyKey === undefined ? {} : { idempotencyKey },
++          );
++        },
+       },
+       "requests.reconcile": {
+         params: RequestsAdmissionParamsSchema,
+@@ -686,6 +712,27 @@ export function methodsFor(ctx: MethodContext): MethodTable {
+       },
+     } satisfies MethodTable);
+   }
++  if (ctx.control && ctx.admissionRetries && ctx.admissionAuthorities) {
++    const model = ctx.admissionRetries,
++      authorities = ctx.admissionAuthorities;
++    table["runs.admit"] = {
++      params: RunsAdmitParamsSchema,
++      handle: async (params, invocation) => {
++        const { idempotencyKey, expectedScope, ...command } = params;
++        const authority = await authorities(invocation);
++        await checkAdmissionScope(expectedScope, authority);
++        return model.admit(command, idempotencyKey === undefined ? {} : { idempotencyKey }, await authority.direct());
++      },
++    };
++    table["admissions.get"] = {
++      params: AdmissionsGetParamsSchema,
++      handle: async (params, invocation) => model.inspect(params.operationId, await authorities(invocation)),
++    };
++    table["admissions.reconcile"] = {
++      params: AdmissionsReconcileParamsSchema,
++      handle: async (params, invocation) => model.reconcile(params.operationId, await authorities(invocation)),
++    };
++  }
+   if (ctx.workflowInputs) table[WORKFLOWS_VALIDATE_INPUTS_METHOD] = workflowsValidateInputs;
+   if (ctx.planControl) Object.assign(table, planControlMethods);
+   if (ctx.agents) Object.assign(table, agentMethods);
+diff --git a/packages/daemon/src/server.ts b/packages/daemon/src/server.ts
+index a35307b..997fc28 100644
+--- a/packages/daemon/src/server.ts
++++ b/packages/daemon/src/server.ts
+@@ -30,6 +30,9 @@ import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
+ import { Maintenance } from "./maintenance.js";
+ import { attachSocket } from "./socket.js";
+ import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
++import { directAdmissionAuthority } from "./admission-retry.js";
++import { holds } from "./auth/principal.js";
++import { authForbidden } from "./auth/errors.js";
+ import { submissionAuthority } from "./request-submission.js";
+ import { authInvalid, authRequired } from "./auth/errors.js";
+ import { OwnershipStore } from "./auth/ownership.js";
+@@ -178,6 +181,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
+     reads: opts.reads,
+     workflowInputs: opts.workflowInputs,
+     requestSubmissions: auth.mode === "token" ? opts.requestSubmissions : undefined,
++    admissionRetries: auth.mode === "token" ? opts.admissionRetries : undefined,
+     submissionWorkspaceId: opts.submissionWorkspaceId,
+     source: opts.source,
+     liveInputs: opts.liveInputs,
+@@ -230,6 +234,31 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
+       });
+     };
+   }
++  if (ctx.admissionRetries && ctx.submissionWorkspaceId && auth.mode === "token") {
++    const workspaceId = ctx.submissionWorkspaceId;
++    ctx.admissionAuthorities = async (invocation) => {
++      const bound = principalOf(invocation);
++      // Read calls have no mutationActor, so bind a verified actor from the authenticated context.
++      if (!bound?.principal.credentialId) throw authRequired();
++      const credentialId = bound.principal.credentialId;
++      const actor = { principalId: bound.principal.id, credentialId };
++      const principal = async () => {
++        const current = auth.credentials.current(credentialId);
++        if (!current.ok) throw authInvalid();
++        return current.principal;
++      };
++      return {
++        principalId: actor.principalId,
++        workspaceId,
++        executionAuthority: invocation.executionResumeAuthority,
++        check: async () => {
++          if (!holds(await principal(), "runs.start")) throw authForbidden();
++        },
++        request: async () => submissionAuthority({ workspaceId, actor, authorizer, principal }),
++        direct: async () => directAdmissionAuthority({ workspaceId, actor, authorizer, principal }),
++      };
++    };
++  }
+   const gate = new TransportGate(auth, host, authorizer);
+   // The guard is outermost: a caller is authorized before maintenance admission is consulted,
+   // so an unauthorized caller cannot even learn that an update is in progress.
+diff --git a/packages/daemon/test/auth-operations.test.ts b/packages/daemon/test/auth-operations.test.ts
+index cf34e16..cd7ed70 100644
+--- a/packages/daemon/test/auth-operations.test.ts
++++ b/packages/daemon/test/auth-operations.test.ts
+@@ -62,6 +62,9 @@ describe("the operation inventory", () => {
+   it("covers every method the protocol declares and the daemon answers, and nothing else", () => {
+     const declared = new Set<string>([
+       HELLO_METHOD,
++      "runs.admit",
++      "admissions.get",
++      "admissions.reconcile",
+       ...READ_METHODS,
+       ...PLAN_READ_METHODS,
+       ...CONTROL_METHODS,
+diff --git a/packages/engine/src/configuration-generation.ts b/packages/engine/src/configuration-generation.ts
+index c23b951..53d10d3 100644
+--- a/packages/engine/src/configuration-generation.ts
++++ b/packages/engine/src/configuration-generation.ts
+@@ -32,6 +32,7 @@ export type BoundLaunchOptions = Omit<
+ >;
+ export interface CapturedLaunch {
+   readonly requestAdmissionCorrelation: true;
++  readonly admissionRunIds?: true;
+   readonly generationId: string;
+   readonly workflow: Readonly<{ id: string; version: string; revision: string }>;
+   validateStartRun(options: BoundLaunchOptions): Promise<void>;
+@@ -272,7 +273,9 @@ export class ConfigurationGenerations {
+     return { outcome: "applied", status: applied, validation: { errors: [] } };
+   }
+
+-  readonly captureLaunch: CaptureLaunch = async (selection) => {
++  readonly captureLaunch = async (
++    selection: LaunchSelection,
++  ): Promise<import("./direct-admission.js").DirectCapturedLaunch> => {
+     selection = { ...selection };
+     const material = this.current; // Capture before the first await.
+     if (selection.expectedConfigGeneration !== undefined && selection.expectedConfigGeneration !== material.snapshot.id)
+@@ -297,11 +300,26 @@ export class ConfigurationGenerations {
+     );
+   };
+
++  readonly restoreDirectLaunch = async (
++    recorded: import("./direct-admission.js").RecordedDirectLaunch,
++  ): Promise<import("./direct-admission.js").DirectCapturedLaunch> => {
++    const material = await this.restore(recorded.generationId);
++    return this.captureMaterial(
++      {
++        purpose: "workflow",
++        workflowId: recorded.workflow.id,
++        workflowVersion: recorded.workflow.version,
++        expectedWorkflowRevision: recorded.workflow.revision,
++      },
++      material,
++    );
++  };
++
+   private async captureMaterial(
+     selection: LaunchSelection,
+     material: GenerationMaterial,
+     recordedRequestId?: string,
+-  ): Promise<CapturedLaunch> {
++  ): Promise<import("./direct-admission.js").DirectCapturedLaunch> {
+     const id =
+       selection.workflowId ?? (selection.purpose === "request" ? material.snapshot.config.program.workflow : undefined);
+     if (!id) throw new OrcaError("WORKFLOW_NOT_FOUND", "workflow launch requires a workflow id");
+@@ -324,7 +342,17 @@ export class ConfigurationGenerations {
+     const bound = (options: BoundLaunchOptions): StartRunOptions => {
+       if (recordedRequestId && options.requestId !== undefined && options.requestId !== recordedRequestId)
+         throw new OrcaError("RUN_STATE", "recovery Request differs from recorded admission");
+-      const { actor, workspace, workItemId, parentRunId, parentStepRunId, overrides, requestAdmissionId } = options;
++      const {
++        actor,
++        workspace,
++        workItemId,
++        parentRunId,
++        parentStepRunId,
++        overrides,
++        requestAdmissionId,
++        directAdmissionId,
++        admissionRunId,
++      } = options;
+       const requestId = recordedRequestId ?? options.requestId;
+       const vars =
+         selection.purpose === "request" &&
+@@ -342,6 +370,8 @@ export class ConfigurationGenerations {
+         ...(workspace ? { workspace: structuredClone(workspace) } : {}),
+         ...(requestId ? { requestId } : {}),
+         ...(requestAdmissionId ? { requestAdmissionId } : {}),
++        ...(directAdmissionId ? { directAdmissionId } : {}),
++        ...(admissionRunId ? { admissionRunId } : {}),
+         ...(workItemId ? { workItemId } : {}),
+         ...(parentRunId ? { parentRunId } : {}),
+         ...(parentStepRunId ? { parentStepRunId } : {}),
+@@ -350,6 +380,7 @@ export class ConfigurationGenerations {
+     };
+     return Object.freeze({
+       requestAdmissionCorrelation: true as const,
++      admissionRunIds: true as const,
+       generationId: material.snapshot.id,
+       workflow,
+       validateStartRun: async (options: BoundLaunchOptions) => {
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+index d1517fc..137e4e6 100644
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -19,3 +19,7 @@ export { RequestSubmissionService, type RequestSubmissionOptions } from "./progr
+ export * from "./program/submission-store.js";
+
+ export * from "./live-input.js";
++
++export * from "./admission-retry.js";
++
++export * from "./direct-admission.js";
+diff --git a/packages/engine/src/orchestrator.ts b/packages/engine/src/orchestrator.ts
+index f152818..7339482 100644
+--- a/packages/engine/src/orchestrator.ts
++++ b/packages/engine/src/orchestrator.ts
+@@ -161,6 +161,9 @@ export type AgentSessionOpenedListener = (info: { runId: string; agentId: string
+ export interface StartRunOptions {
+   /** Server-owned Request admission metadata; never part of workflow vars or wire launch params. */
+   requestAdmissionId?: string;
++  /** Trusted admission journal only; never accepted by wire schemas. */
++  admissionRunId?: string;
++  directAdmissionId?: string;
+   /** Only trusted in-process callers supply actor metadata; transports bind it server-side. */
+   actor?: MutationActor;
+   workflowId?: string;
+@@ -358,7 +361,22 @@ export class Orchestrator {
+       if (!this.generations) throw unavailable();
+       await this.generations.restore(generation.snapshot.id);
+     }
+-    const runId = newId("run", this.clock.now());
++    if (
++      opts.admissionRunId &&
++      (!/^run_[a-f0-9-]{36}$/.test(opts.admissionRunId) ||
++        !opts.actor ||
++        opts.parentRunId ||
++        (!opts.directAdmissionId && !opts.requestAdmissionId) ||
++        (opts.directAdmissionId && opts.requestAdmissionId))
++    )
++      throw new OrcaError("RUN_STATE", "Invalid reserved admission identity");
++    const runId = opts.admissionRunId ?? newId("run", this.clock.now());
++    if (
++      opts.admissionRunId &&
++      ((await this.stores.events.readRange(runId, { limit: 1 })).length ||
++        (await this.stores.execution.getInputs(runId)))
++    )
++      throw new OrcaError("RUN_STATE", "Reserved admission was already prepared; reconcile its original receipt");
+     // A child with an explicit workspace still has to validate its parent's sealed
+     // sensitivity state before copying vars. Missing overlays must never downgrade it.
+     const parentFirst = opts.parentRunId
+@@ -427,7 +445,9 @@ export class Orchestrator {
+     await this.stores.events.append(
+       opts.requestAdmissionId
+         ? await correlateRequestAdmission(created, opts.requestAdmissionId, this.stores.execution)
+-        : created,
++        : opts.directAdmissionId
++          ? { ...created, payload: { ...created.payload, directAdmissionId: opts.directAdmissionId } }
++          : created,
+     );
+     return runId;
+   }
+diff --git a/packages/engine/src/program/service.ts b/packages/engine/src/program/service.ts
+index 82deac0..e29a737 100644
+--- a/packages/engine/src/program/service.ts
++++ b/packages/engine/src/program/service.ts
+@@ -39,7 +39,7 @@ export interface SubmitRequestInput {
+ }
+
+ export class ProgramService {
+-  readonly submissions: SubmissionService | undefined;
++  readonly submissions: RequestSubmissionService | undefined;
+   constructor(
+     private readonly orchestrator: Orchestrator,
+     private readonly programWorkflowId = "program",
+@@ -50,11 +50,14 @@ export class ProgramService {
+     this.submissions = submission ? new RequestSubmissionService({ ...submission, orchestrator }) : undefined;
+   }
+
+-  async submit(input: SubmitRequestInput): Promise<{ request: Request; runId: string; admissionId?: string }> {
++  async submit(
++    input: SubmitRequestInput,
++    retry: import("@orca/core").RetryOptions = {},
++  ): Promise<{ request: Request; runId: string; admissionId?: string }> {
+     if (this.submissions) {
+       if (!this.submission?.authority)
+         throw new OrcaError("NOT_SUPPORTED", "Request submission requires explicit authority");
+-      const result = await this.submissions.submit(input, this.submission.authority);
++      const result = await this.submissions.submit(input, this.submission.authority, retry);
+       if (result.state !== "accepted")
+         throw new OrcaError("RUN_STATE", "Request requires reconciliation", { ...result });
+       const request = await this.orchestrator.stores.requests.get(result.requestId);
+diff --git a/packages/integrations/src/acp-facade/orca-acp-agent.ts b/packages/integrations/src/acp-facade/orca-acp-agent.ts
+index 2039be5..270d3b4 100644
+--- a/packages/integrations/src/acp-facade/orca-acp-agent.ts
++++ b/packages/integrations/src/acp-facade/orca-acp-agent.ts
+@@ -231,6 +231,13 @@ export class OrcaAcpAgent {
+   private async prompt(ctx: acp.AgentRequestContext<acp.PromptRequest>): Promise<acp.PromptResponse> {
+     const session = this.sessions.get(ctx.params.sessionId);
+     if (!session) throw acp.RequestError.invalidParams({ sessionId: ctx.params.sessionId, reason: "unknown session" });
++    const retryKey = ctx.params._meta?.["orca/idempotencyKey"];
++    if (
++      retryKey !== undefined &&
++      (typeof retryKey !== "string" || Buffer.byteLength(retryKey) < 1 || Buffer.byteLength(retryKey) > 128)
++    )
++      throw acp.RequestError.invalidParams({ reason: "orca/idempotencyKey must contain 1–128 UTF-8 bytes" });
++    const retry = typeof retryKey === "string" ? { idempotencyKey: retryKey } : {};
+     const text = ctx.params.prompt
+       .map((b) => (b.type === "text" ? b.text : b.type === "resource" && "text" in b.resource ? b.resource.text : ""))
+       .join("\n")
+@@ -311,6 +318,10 @@ export class OrcaAcpAgent {
+     let runId: string;
+     let admissionId: string | undefined;
+     let admissionAuthority: SubmissionAuthority | undefined;
++    if (retry.idempotencyKey && ((command === "run" && runWorkflowId) || session.selection.workflow))
++      throw acp.RequestError.invalidParams({
++        reason: "Keyed ACP direct launch with session workspace/selection is unsupported; use runs.admit",
++      });
+     if (command === "run" && runWorkflowId) {
+       const vars: Record<string, unknown> = {};
+       for (const kv of runArgs) {
+@@ -329,7 +340,9 @@ export class OrcaAcpAgent {
+       const command = {
+         title: title || "Untitled request",
+         body: body.join("\n").trim(),
+-        source: { kind: "acp-session" as const, sessionId: session.id },
++        source: retry.idempotencyKey
++          ? { kind: "api" as const, clientId: "orca-acp" }
++          : { kind: "acp-session" as const, sessionId: session.id },
+         ...(overrides ? { overrides } : {}),
+       };
+       if (this.opts.program.submissions) {
+@@ -338,7 +351,7 @@ export class OrcaAcpAgent {
+           : this.opts.submissionAuthority;
+         if (!admissionAuthority)
+           throw acp.RequestError.invalidParams({ reason: "Request submission authority is unavailable" });
+-        const submitted = await this.opts.program.submissions.submit(command, admissionAuthority);
++        const submitted = await this.opts.program.submissions.submit(command, admissionAuthority, retry);
+         await say(`Request ${submitted.requestId}; admission ${submitted.admissionId}: ${submitted.state}\n`);
+         if (submitted.state !== "accepted") {
+           await say(`Use /admissions reconcile ${submitted.admissionId} before starting another Request.\n`);
+diff --git a/packages/protocol/src/control.ts b/packages/protocol/src/control.ts
+index e23b4b8..3a909ed 100644
+--- a/packages/protocol/src/control.ts
++++ b/packages/protocol/src/control.ts
+@@ -155,6 +155,7 @@ export type RunsCancelResult = z.infer<typeof RunsCancelResultSchema>;
+  * `requests.submit` is the separate program/decomposition admission operation.
+  */
+ export const RunsStartParamsSchema = z.object({
++  idempotencyKey: z.string().optional(),
+   workflowId: z.string().min(1),
+   /** Merged over the workflow's own `vars`, exactly as `orca run --var` merges them. */
+   vars: z.record(z.string(), z.unknown()).default({}),
+diff --git a/packages/protocol/src/handshake.ts b/packages/protocol/src/handshake.ts
+index 1110dd0..85eba4c 100644
+--- a/packages/protocol/src/handshake.ts
++++ b/packages/protocol/src/handshake.ts
+@@ -149,6 +149,9 @@ export const DAEMON_CAPABILITIES = [
+   "inputs.live",
+   "runs.read",
+   "runs.subscribe",
++  "runs.admit",
++  "admissions.get",
++  "admissions.reconcile",
+   "runs.control",
+   "plan.read",
+   "plan.write",
+diff --git a/packages/protocol/src/index.ts b/packages/protocol/src/index.ts
+index 9c13c78..17351b9 100644
+--- a/packages/protocol/src/index.ts
++++ b/packages/protocol/src/index.ts
+@@ -28,3 +28,5 @@ export * from "./maintenance.js";
+ export * from "./request-submission.js";
+
+ export * from "./live-input.js";
++
++export * from "./admission-retry.js";
+diff --git a/packages/protocol/src/request-submission.ts b/packages/protocol/src/request-submission.ts
+index e7e1135..6971778 100644
+--- a/packages/protocol/src/request-submission.ts
++++ b/packages/protocol/src/request-submission.ts
+@@ -7,7 +7,7 @@ export const REQUESTS_SUBMIT_METHOD = "requests.submit";
+ export const REQUESTS_RECONCILE_METHOD = "requests.reconcile";
+ export const REQUESTS_ADMISSION_METHOD = "requests.admission";
+ export const REQUESTS_ADMISSIONS_METHOD = "requests.admissions";
+-export const RequestsSubmitParamsSchema = SubmissionCommandSchema;
++export const RequestsSubmitParamsSchema = SubmissionCommandSchema.extend({ idempotencyKey: z.string().optional() });
+ export const RequestsAdmissionParamsSchema = z.strictObject({ admissionId: z.string().min(1) });
+ export const RequestsAdmissionsParamsSchema = z.strictObject({});
+ export type RequestsSubmitParams = z.infer<typeof RequestsSubmitParamsSchema>;
+diff --git a/packages/protocol/test/protocol.test.ts b/packages/protocol/test/protocol.test.ts
+index 0fa7189..0abbc7b 100644
+--- a/packages/protocol/test/protocol.test.ts
++++ b/packages/protocol/test/protocol.test.ts
+@@ -103,6 +103,9 @@ describe("hello", () => {
+       "inputs.live",
+       "runs.read",
+       "runs.subscribe",
++      "runs.admit",
++      "admissions.get",
++      "admissions.reconcile",
+       "runs.control",
+       "plan.read",
+       "plan.write",
+diff --git a/packages/store/src/index.ts b/packages/store/src/index.ts
+index 67ac645..5b1c9d6 100644
+--- a/packages/store/src/index.ts
++++ b/packages/store/src/index.ts
+@@ -13,3 +13,5 @@ export * from "./execution-store.js";
+ export * from "./protected-event-store.js";
+
+ export { workspaceIdentity, renewWorkspaceIdentity } from "./workspace-identity.js";
++
++export * from "./admission-retry-store.js";

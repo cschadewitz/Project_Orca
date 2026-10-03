@@ -16,6 +16,8 @@
     "test:coverage": "vitest run --coverage",
     "app:smoke": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=smoke",
     "app:type-proof": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=type-proof",
+    "app:admission-intents": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=admission-intents",
+    "app:revision-workflow": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=revision-workflow",
     "app:type-proof:update": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=type-proof --update-snapshots",
     "lint": "eslint . && pnpm run lint:css",
     "lint:css": "node tools/eslint-config/bin/check-css-tokens.js packages/app/renderer packages/design/css/components.css",
@@ -40,6 +42,8 @@
     "prettier": "^3.9.9",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.2",
+    "@modelcontextprotocol/client": "2.2.0",
+    "@modelcontextprotocol/core": "2.2.0"
   }
 }

@@ -155,6 +155,7 @@ export type RunsCancelResult = z.infer<typeof RunsCancelResultSchema>;
  * `requests.submit` is the separate program/decomposition admission operation.
  */
 export const RunsStartParamsSchema = z.object({
+  idempotencyKey: z.string().optional(),
   workflowId: z.string().min(1),
   /** Merged over the workflow's own `vars`, exactly as `orca run --var` merges them. */
   vars: z.record(z.string(), z.unknown()).default({}),

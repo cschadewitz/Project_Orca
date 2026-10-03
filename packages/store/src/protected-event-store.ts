@@ -1,15 +1,25 @@
 /** Public event facade: save secret-bearing originals privately before publishing a scrubbed durable event. */
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   OrcaError,
   sensitiveInputNames,
   OrcaEventSchema,
+  EventJournalCorrelationSchema,
+  type EventJournalCorrelation,
   HumanInputLiveIdentitySchema,
   type OrcaEvent,
   type OrcaEventInput,
 } from "@orca/core";
 import type { WorkflowVersionStore } from "./workflow-store.js";
-import type { EventFilter, EventListener, EventRange, EventStore } from "./event-store.js";
+import type {
+  DurableEventAppend,
+  EventFilter,
+  EventListener,
+  EventObservation,
+  EventRange,
+  EventStore,
+} from "./event-store.js";
 import { publicInputVars, redactExecutionValue, unavailable, type ExecutionStore } from "./execution-store.js";
 
 export class ProtectedEventStore implements EventStore {
@@ -21,9 +31,13 @@ export class ProtectedEventStore implements EventStore {
   ) {}
 
   /** Known typed plaintext histories require explicit migration, including inherited legacy children. */
-  private async requireSafeLegacy(runId: string, created?: OrcaEventInput): Promise<void> {
+  private async requireSafeLegacy(
+    runId: string,
+    created?: OrcaEventInput,
+    readFirst = async (id: string) => (await this.publicEvents.readRange(id, { limit: 1 }))[0],
+  ): Promise<void> {
     if (!this.workflows) return;
-    let first = created?.type === "run.created" ? created : (await this.publicEvents.readRange(runId, { limit: 1 }))[0];
+    let first = created?.type === "run.created" ? created : await readFirst(runId);
     if (first?.type !== "run.created" || first.payload.executionInputsStored) return;
     // A parent promoted after a sensitive child has a private input record and protected
     // suffix, despite its originally ordinary run.created. The integrity guard checks it.
@@ -42,18 +56,20 @@ export class ProtectedEventStore implements EventStore {
         (workflowId.includes("::") ? await this.workflows.get(workflowId.split("::")[0]!, workflowVersion) : undefined);
       if (definition && sensitiveInputNames(definition.inputSchema).length > 0) throw refuse();
       if (!parentRunId) break;
-      first = (await this.publicEvents.readRange(parentRunId, { limit: 1 }))[0];
+      first = await readFirst(parentRunId);
     }
   }
 
   /** The latest authenticated payload seals every sensitivity overlay used by this run. */
-  private async requireIntegrity(runId: string): Promise<void> {
-    const latest = (await this.publicEvents.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: 1 }))[0];
+  private async requireIntegrity(runId: string, observed?: readonly OrcaEvent[]): Promise<void> {
+    const latest = observed
+      ? observed.at(-1)
+      : (await this.publicEvents.readRange(runId, { before: Number.MAX_SAFE_INTEGER, limit: 1 }))[0];
     if (latest?.executionPayloadRef) {
       await this.execution.getPayload(runId, latest.executionPayloadRef, latest.type);
       return;
     }
-    const first = (await this.publicEvents.readRange(runId, { limit: 1 }))[0];
+    const first = observed ? observed[0] : (await this.publicEvents.readRange(runId, { limit: 1 }))[0];
     if (
       first?.type === "run.created" &&
       first.payload.executionInputsStored &&
@@ -62,8 +78,150 @@ export class ProtectedEventStore implements EventStore {
       throw unavailable();
   }
 
+  /** Authenticate existing sensitivity guards while keeping this snapshot entirely public. */
+  async readObservation(runId: string, limits: { maxEvents: number; maxBytes: number }): Promise<EventObservation> {
+    const read = this.publicEvents.readObservation?.bind(this.publicEvents);
+    if (!read) throw new OrcaError("RUN_STATE", "This event store has no complete event observation");
+    const bounds = { ...limits };
+    // Read first: even a missing directory must fail without an ordinary reader's init.
+    const observation = await read(runId, bounds);
+    const { events } = observation;
+    const verify = [observation.verifyUnchanged];
+    let remainingEvents = bounds.maxEvents - events.length;
+    let ancestors = 0;
+    await this.requireSafeLegacy(runId, events[0], async (id) => {
+      if (id === runId) return events[0];
+      // Legacy ancestry shares the event budget. Its explicit depth limit also bounds
+      // total bytes to at most 33 files, each with the caller's byte ceiling.
+      if (++ancestors > 32 || remainingEvents < 1)
+        throw new OrcaError("RUN_STATE", "Event observation ancestry exceeds its read limit");
+      const parent = await read(id, { maxEvents: remainingEvents, maxBytes: bounds.maxBytes });
+      remainingEvents -= parent.events.length;
+      verify.push(parent.verifyUnchanged);
+      return parent.events[0];
+    });
+    await this.requireIntegrity(runId, events);
+    return {
+      events,
+      // Public verifiers only: private authentication belongs to the first observation
+      // and the caller's separate identity check, never to this second public scan.
+      verifyUnchanged: async () => {
+        for (const check of verify) await check();
+      },
+    };
+  }
+
+  /** Private admission evidence only: public readers and subscribers keep the scrubbed event. */
+  async synchronizeEvent(expected: OrcaEvent): Promise<OrcaEvent> {
+    if (!this.publicEvents.synchronizeEvent)
+      throw new OrcaError("NOT_SUPPORTED", "this event store has no exact event synchronization");
+    const snapshot = OrcaEventSchema.parse(structuredClone(expected));
+    const authenticate = async () => {
+      await this.requireSafeLegacy(snapshot.runId);
+      await this.requireIntegrity(snapshot.runId);
+      const events = await this.publicEvents.readRange(snapshot.runId, {
+        limit: 2,
+        match: (event) => event.id === snapshot.id || event.seq === snapshot.seq,
+      });
+      const event = events[0];
+      if (events.length !== 1 || !event || !isDeepStrictEqual(event, snapshot)) throw unavailable();
+      // Protected admission events cannot be downgraded to a public-only payload.
+      // Refuse older pre-promotion events too: this seam cannot reconstruct originals.
+      if (
+        !event.executionPayloadRef &&
+        ((event.type === "run.created" && event.payload.executionInputsStored) ||
+          (await this.execution.getInputs(snapshot.runId)))
+      )
+        throw unavailable();
+      const [restored] = await executionEvents([event], this.execution);
+      if (!restored) throw unavailable();
+      return restored;
+    };
+    const before = await authenticate();
+    const synchronized = await this.publicEvents.synchronizeEvent(snapshot);
+    if (!isDeepStrictEqual(synchronized, snapshot)) throw unavailable();
+    const after = await authenticate();
+    if (!isDeepStrictEqual(before, after)) throw unavailable();
+    return after;
+  }
+
+  /** Inspection confirms durability without allocating another private payload or public marker. */
+  async synchronizeJournal(runId: string, correlation: EventJournalCorrelation): Promise<void> {
+    if (!this.publicEvents.synchronizeJournal)
+      throw new OrcaError("NOT_SUPPORTED", "this event store has no journal synchronization");
+    const expected = EventJournalCorrelationSchema.parse(correlation);
+    const authenticate = async () => {
+      await this.requireSafeLegacy(runId);
+      await this.requireIntegrity(runId);
+      const events = await this.publicEvents.readRange(runId, {
+        limit: 2,
+        match: (event) =>
+          event.journal?.kind === expected.kind &&
+          event.journal.id === expected.id &&
+          event.journal.revision === expected.revision,
+      });
+      const event = events[0];
+      if (
+        events.length !== 1 ||
+        !event ||
+        event.runId !== runId ||
+        event.type !== `${expected.kind}.recorded` ||
+        !event.executionPayloadRef
+      )
+        throw unavailable();
+      const [restored] = await executionEvents([event], this.execution);
+      if (
+        !restored ||
+        (restored.type !== "continuation.recorded" && restored.type !== "revision.recorded") ||
+        !restored.payload.entry
+      )
+        throw unavailable();
+      return restored;
+    };
+    const before = await authenticate();
+    await this.publicEvents.synchronizeJournal(runId, expected);
+    // Fail closed if either the immutable marker or current key/material changed while
+    // syncing. This is not authority to recover a missing marker from private records.
+    if (!isDeepStrictEqual(before, await authenticate())) throw unavailable();
+  }
+
+  /** Only journal adapters under the run fence may publish an authoritative acceptance marker. */
+  async appendDurableUnique(input: OrcaEventInput, options: DurableEventAppend): Promise<OrcaEvent> {
+    if (!this.publicEvents.appendDurableUnique)
+      throw new OrcaError("NOT_SUPPORTED", "this event store has no durable journal publication");
+    if (input.type !== "revision.recorded" && input.type !== "continuation.recorded")
+      throw new OrcaError("NOT_SUPPORTED", "durable journal publication requires a journal event");
+    const inputs = await this.execution.getInputs(input.runId);
+    if (!inputs || !input.payload.entry) throw unavailable();
+    await this.requireSafeLegacy(input.runId);
+    await this.requireIntegrity(input.runId);
+    const executionPayloadRef = randomUUID();
+    await this.execution.putPayload(executionPayloadRef, input);
+    const { entry: _entry, ...metadata } = input.payload;
+    return this.publicEvents.appendDurableUnique(
+      { ...input, payload: metadata, executionPayloadRef } as OrcaEventInput,
+      {
+        ...options,
+        equivalent: async (existing) => {
+          if (!existing.executionPayloadRef || existing.type !== input.type) return false;
+          const [restored] = await executionEvents([existing], this.execution);
+          return restored !== undefined && (await options.equivalent(restored));
+        },
+      },
+    );
+  }
+
   async append(input: OrcaEventInput): Promise<OrcaEvent> {
     const inputs = await this.execution.getInputs(input.runId);
+    if (input.type === "revision.recorded" || input.type === "continuation.recorded") {
+      // Revision material is always private, including on otherwise non-sensitive runs.
+      // Runtime boundary setup must promote inputs through the existing protected store.
+      if (!inputs || !input.payload.entry) throw unavailable();
+      const executionPayloadRef = randomUUID();
+      await this.execution.putPayload(executionPayloadRef, input);
+      const { entry: _entry, ...metadata } = input.payload;
+      return this.publicEvents.append({ ...input, payload: metadata, executionPayloadRef } as OrcaEventInput);
+    }
     if (!inputs) {
       if (!this.publicOnlyRuns.has(input.runId)) {
         await this.requireSafeLegacy(input.runId, input);

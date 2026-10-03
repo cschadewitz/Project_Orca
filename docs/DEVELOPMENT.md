@@ -482,6 +482,108 @@ way.** Alongside the pictures it makes two assertions that need no baseline at a
 bundled `@font-face` ended at `error`, and that flipping the bundled-faces toggle changes
 the measured width of the declared glyphs — if it does not, the faces were never on.
 
+### Native encrypted admission-intent acceptance
+
+`pnpm run build && pnpm run app:admission-intents` runs the production Electron app and
+built authenticated daemon with disposable data. Its dedicated `admission-daemon.ts` fixture
+starts the real CLI's `serve` command over one agent-free start-to-end workflow. It does not
+depend on the separate `orca demo` program, scripted agents or request-submission seeding;
+failures in those broader demo paths are independent failures, not fixed by this fixture.
+Before starting the daemon, a separate synthetic ownership file exercises the real compiled
+`OwnershipStore.record` and `flush` methods. Its evidence contains only a passed stage or an
+allowlisted errno from `lastError` (otherwise `UNKNOWN`), never a raw cause, message or path.
+This identifies persistence failures in the current native run; it does not establish the
+cause of an earlier demo-seeding failure.
+It starts a run through the real preload
+bridge and `operator.discover`, closes the entire Electron process, then reopens the same
+profile and recovers the same retained intent and server admission. Native Electron
+`safeStorage` encryption and decryption are never substituted in the positive test. Public
+receipt identifiers, an authenticated `admissions.get` read and the server run count establish
+that replay recovers the original work. This covers restart after acceptance; it does not
+claim a separate crash-before-acknowledgement test.
+
+The temporary profile is canonicalized before Electron starts. On each process, the test
+requires matching canonical paths and matching, meaningful filesystem directory identities;
+raw string equality is recorded separately because platform path aliases can spell the same
+directory differently. Readiness, profile identity and native encryption are separate
+assertions. Missing/unreliable directory identity never counts as a match. Reports contain
+only these comparison booleans, not absolute profile paths or directory contents.
+
+The `admission-intents` Playwright project runs on the existing macOS and Windows type-proof
+runners in `app-smoke.yml`, after the independent type-proof report is uploaded. It needs a
+full build because the type proof alone only builds main/preload and serves a development
+renderer. A type-proof failure does not suppress native acceptance, and neither result is
+made optional. Reports use separate output directories and artifacts.
+
+The positive test requires genuine native secure storage. It records `isEncryptionAvailable`,
+the Electron version, and a platform-derived Keychain/DPAPI provider label. The Linux-only
+`getSelectedStorageBackend` result is not invented on macOS or Windows. Missing storage,
+encryption/decryption failure or a blocked native permission prompt fails acceptance; a skip
+or the separate negative test cannot establish a pass. The negative test changes only the
+availability function inside its disposable Electron process and verifies that the production
+bridge refuses before any `runs.admit` call or journal creation.
+
+Do not unlock/create a keychain, change ACLs, disable a sandbox, force a plaintext backend or
+automatically approve an OS permission prompt to make this gate pass. A watchdog outside
+Electron bounds native calls and can terminate only the disposable child if a prompt blocks
+graceful shutdown. Any necessary OS permission or credential entry requires human approval.
+No OS storage provisioning is part of this workflow.
+
+Evidence is allowlisted: method names/counts, public discovery and receipt identifiers,
+availability, hashes and boolean checks. The observer forwards the real client call unchanged.
+Never log request parameters, retry keys, tokens or credentials, and never upload a profile,
+daemon store, protected journal or key material. This project disables automatic traces,
+screenshots and video; it attaches only its sanitized JSON evidence and normal test report.
+
+For manual verification of a branch adding or changing this gate, select that branch as the
+workflow **definition** ref as well as supplying the desired exact checkout SHA in the `ref`
+input. Running an old `main` workflow definition with a newer checkout input does not execute
+new workflow steps and cannot establish this acceptance. Verify the run's workflow definition
+ref/SHA and the checked-out test SHA; the native job prints both before testing. Release
+verification likewise requires the intended workflow definition and tested commit.
+
+### Native revision workflow acceptance
+
+`pnpm run build && pnpm run app:revision-workflow` runs the built Electron app against
+an authenticated compiled CLI daemon with disposable data. It is a separate acceptance
+project on the existing macOS/Windows jobs, with its own result directory and artifact;
+the encrypted admission-intent tests and their verdict remain independent and unchanged.
+Select the integration branch as the workflow definition and the exact test SHA as `ref`,
+using the workflow/checkout identity evidence described above.
+
+The test uses actual renderer controls through production preload/IPC to preview the
+workflow-declared destination, Request changes, refresh and replace a reviewed correction,
+resume the run from the command palette, and answer an ordinary gate with a rationale.
+It verifies that one protected journal commit contains both the first correction and its
+exact gate decision, then exits the entire app and relaunches the same physical/canonical
+profile to recover pending protected text. It does not claim a daemon restart here.
+A second authenticated client wins a replacement CAS while the app's original request is
+held at a test-only transport timing barrier. The original request then reaches the daemon
+unchanged and receives a real `REVISION_STALE`; the UI must retain its unsent draft. A
+second timing barrier holds a real protected read during refresh, proving the checking
+state disables replacement without losing the draft. Releasing it restores the current
+correction and requires explicit review before replacement. Neither barrier fabricates
+errors, responses, identities, credentials, payloads or retry keys.
+
+One compiled ScriptedAgent receives the designated attempt. It has no state file and no
+deliverables: its prompt-recording early return precedes all counter load/save operations.
+There is no demo seed, shared read-modify-write counter, external agent or model service.
+The final prompt must contain the exact final text once, the exact revision ID and human
+provenance, and no superseded correction. Protected history must confirm that exact
+attempt once; the UI shows Delivered and disallows late replacement. A second sequential
+run sends an ordinary gate rationale and proves it remains in the decision history while
+being absent from the agent prompt and workflow values. It also verifies that the first
+run received no additional prompt.
+
+Read-only compiled store inspection runs only after the corresponding writes settle.
+Raw protected entries, prompt logs, config and credentials stay inside the disposable
+fixture. Only synthetic public IDs, digests, counts and booleans are attached. Traces,
+screenshots and videos are disabled. Profile identity evidence contains comparisons,
+never absolute paths. The same bounded process cleanup and prohibition on OS prompt
+approval, security changes or runner provisioning apply as for native intent acceptance.
+Local source/static/fixture checks cannot establish this native UI acceptance; the exact-head
+macOS and Windows steps must actually pass.
+
 ### Screenshot baselines
 
 Two specs take screenshots and they mean opposite things, which is worth being explicit

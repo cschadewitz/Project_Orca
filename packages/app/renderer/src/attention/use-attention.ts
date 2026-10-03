@@ -7,8 +7,10 @@
  * question and the options but not the run's name, not how long it has waited and not the
  * artifacts the decision is about, and the design forbids offering an answer the app cannot
  * show the basis for. So an ask the list has never seen is resolved with a single
- * `inputs.list({ runId })` — one call, scoped to one run — exactly as an unknown run is
- * resolved with one `runs.get`. Transport reattachment reconciles the snapshots once.
+ * `inputs.list({ runId })`, scoped to one run. The request is published before its step
+ * becomes waiting, so an early empty read is retried only on that step's readiness or the
+ * run pausing. Readiness during a read is coalesced into one follow-on read, never a poll.
+ * Transport reattachment reconciles the snapshots once.
  *
  * **The count is the daemon's.** `InputsListResult.waiting` is sent so that a client never
  * recounts, and this hook does not: it holds that number and moves it by the same delta it
@@ -33,6 +35,7 @@ import type { OpenInputView, ProtocolError, RunSummaryView, RunChangedParams } f
 import { useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useNotifications } from "../notifications-context.js";
 import { applyRunChanged, mergeRun, orderRuns } from "../runs/run-rows.js";
+import { useRevisions, type RevisionsFeed } from "./use-revisions.js";
 import { alertItems, invalidateLiveInput, liveInputKey, mergeInput, orderWaits } from "./items.js";
 
 export type AttentionState =
@@ -58,6 +61,8 @@ export type AttentionState =
 
 export interface AttentionFeed {
   state: AttentionState;
+  /** Correction metadata/content is separate from unanswered inputs and alerts. */
+  revisions?: RevisionsFeed;
   /** Re-read both lists: the error state's retry, and what a person reaches for after a blip. */
   reload: () => void;
   /**
@@ -85,6 +90,9 @@ export function useAttention(): AttentionFeed {
     });
   }, []);
 
+  const revisions = useRevisions(answered);
+  const observeRevisions = revisions.observeInputs;
+
   useEffect(() => {
     let live = true;
     let snapshot: Extract<AttentionState, { phase: "ready" }> | undefined;
@@ -94,7 +102,9 @@ export function useAttention(): AttentionFeed {
     const inputs = new Map<string, OpenInputView>();
     const resolvingInputs = new Set<string>();
     const resolvingRuns = new Set<string>();
-    const opened = new Map<string, Set<string>>();
+    const opened = new Map<string, Map<string, string>>();
+    const inputVersions = new Map<string, number>();
+    const waitingCursors = new Map<string, number>();
     // Connection-generation tombstones win over stale reads but never match a new turn.
     const invalidated = new Set<string>();
     pendingAnswers.current.clear();
@@ -125,27 +135,34 @@ export function useAttention(): AttentionFeed {
         waiting: Math.max(0, waiting),
       });
     };
+    const unresolved = (runId: string, stepRunId?: string) =>
+      [...(opened.get(runId) ?? [])].some(
+        ([id, step]) =>
+          (stepRunId === undefined || step === stepRunId) &&
+          !inputs.has(id) &&
+          !snapshot?.waits.some((input) => input.id === id) &&
+          !pendingAnswers.current.has(id),
+      );
     const resolveInputs = (runId: string) => {
       if (resolvingInputs.has(runId)) return;
       resolvingInputs.add(runId);
-      const requested = new Set(opened.get(runId));
+      const version = inputVersions.get(runId);
       void window.orca.inputs.list({ runId }).then((result) => {
         resolvingInputs.delete(runId);
         if (!live) return;
         if (result.ok) {
+          observeRevisions(result.result.inputs);
           for (const input of result.result.inputs) inputs.set(input.id, input);
           publish();
         }
-        // An additional ask may have opened after this snapshot was taken. Resolve only
-        // that missed batch, rather than polling the list on ordinary notifications.
-        if (
-          [...(opened.get(runId) ?? [])].some(
-            (id) => !requested.has(id) && !inputs.has(id) && !pendingAnswers.current.has(id),
-          )
-        ) {
-          resolveInputs(runId);
-        }
+        // A new ask or readiness signal may have arrived after this read began. Only
+        // that missed batch can schedule another read; an empty result alone never does.
+        if (inputVersions.get(runId) !== version && unresolved(runId)) resolveInputs(runId);
       });
+    };
+    const refreshInputs = (runId: string) => {
+      inputVersions.set(runId, (inputVersions.get(runId) ?? 0) + 1);
+      resolveInputs(runId);
     };
     const resolveRun = (runId: string) => {
       if (resolvingRuns.has(runId) || runs.has(runId)) return;
@@ -160,11 +177,18 @@ export function useAttention(): AttentionFeed {
     };
     const off = [
       stream.on("input.opened", (params) => {
-        const ids = opened.get(params.runId) ?? new Set<string>();
-        ids.add(params.requestId);
+        const ids = opened.get(params.runId) ?? new Map<string, string>();
+        if (ids.has(params.requestId)) return;
+        ids.set(params.requestId, params.stepRunId);
         opened.set(params.runId, ids);
-        if (!snapshot?.waits.some((i) => i.id === params.requestId) && !inputs.has(params.requestId))
-          resolveInputs(params.runId);
+        if (unresolved(params.runId, params.stepRunId)) refreshInputs(params.runId);
+      }),
+      stream.on("step.changed", (params) => {
+        if (params.event !== "step.waiting" || params.waitingOn !== "human-input") return;
+        const key = JSON.stringify([params.runId, params.stepRunId]);
+        if (params.seq <= (waitingCursors.get(key) ?? -1)) return;
+        waitingCursors.set(key, params.seq);
+        if (unresolved(params.runId, params.stepRunId)) refreshInputs(params.runId);
       }),
       stream.on("input.answered", (params) => {
         answered(params.requestId);
@@ -178,6 +202,7 @@ export function useAttention(): AttentionFeed {
         const previous = changes.get(params.runId);
         if (previous && previous.seq >= params.seq) return;
         changes.set(params.runId, params);
+        if (params.event === "run.paused" && unresolved(params.runId)) refreshInputs(params.runId);
         if (
           (params.status === "failed" || params.status === "running") &&
           !snapshot?.failures.some((r) => r.id === params.runId) &&
@@ -197,6 +222,7 @@ export function useAttention(): AttentionFeed {
         setState({ phase: "error", error: inputResult.error });
         return;
       }
+      observeRevisions(inputResult.result.inputs);
       snapshot = {
         phase: "ready",
         waits: inputResult.result.inputs,
@@ -211,7 +237,7 @@ export function useAttention(): AttentionFeed {
       live = false;
       off.forEach((remove) => remove());
     };
-  }, [stream, answered, attempt, generation]);
+  }, [stream, answered, attempt, generation, observeRevisions, revisions.scope]);
 
   /* The main process is told what is open, and decides what to post from it (#162). Here
      rather than in the surface because this is the one place that holds both halves, and
@@ -221,7 +247,7 @@ export function useAttention(): AttentionFeed {
     window.orca.alerts.update({ waiting: state.waiting, items: alertItems(state.waits, state.failures) });
   }, [state]);
 
-  return { state, reload, answered };
+  return { state, reload, answered, revisions };
 }
 
 /** The two lists of runs this surface holds. Neither is a tier; the failures are one. */

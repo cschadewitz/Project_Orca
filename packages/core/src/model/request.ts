@@ -67,10 +67,16 @@ export interface SubmissionAuthority {
   readonly actor: MutationActor;
   authorize(this: void, command: SubmissionCommand): Promise<void>;
   onRunAdmitted(this: void, runId: string): Promise<void>;
+  /** Verify existing exact durable ownership without attributing or repairing it. */
+  verifyRunAdmitted?(runId: string): Promise<void>;
 }
 
 export interface SubmissionService {
-  submit(command: SubmissionCommand, authority: SubmissionAuthority): Promise<SubmissionResult>;
+  submit(
+    command: SubmissionCommand,
+    authority: SubmissionAuthority,
+    retry?: import("./admission-retry.js").RetryOptions,
+  ): Promise<SubmissionResult>;
   reconcile(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
   inspect(admissionId: string, authority: SubmissionAuthority): Promise<SubmissionResult>;
   list(authority: SubmissionAuthority): Promise<SubmissionResult[]>;

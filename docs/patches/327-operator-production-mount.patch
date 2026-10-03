@@ -1,0 +1,42 @@
+--- a/packages/daemon/src/server.ts
++++ b/packages/daemon/src/server.ts
+@@ -71,6 +71,15 @@
+     services: ReturnType<typeof createRevisionInputServices>;
+     readBoundaries: ReturnType<typeof createRevisionRuntime>["readBoundaries"];
+   };
++  /** B supplies current-authority readers backed by the existing production services.
++   * No callback is installed by default; this factory is called per authenticated invocation.
++   */
++  operatorBoundaryProjection?: (
++    invocation: MethodContext,
++    current: OperatorReadOptions["current"],
++  ) => Promise<
++    Required<Pick<OperatorReadOptions, "boundaryRow" | "declaredRevisionActionId" | "boundaryRevision">>
++  >;
+   /** Explicit read projection sources, independent of the legacy unbounded read model. */
+   operatorSources?: Pick<OperatorReadOptions, "generations" | "configStatus" | "artifact" | "artifactRun"> & {
+     events: EventStore;
+@@ -566,6 +575,9 @@
+         };
+         return new OperatorReadModel({
+           ...sources,
++          ...(opts.operatorBoundaryProjection
++            ? await opts.operatorBoundaryProjection(invocation, current)
++            : {}),
+           cursorKey,
+           target: identity,
+           protocol: PROTOCOL_VERSION,
+--- a/packages/integrations/test/mcp-operator.test.ts
++++ b/packages/integrations/test/mcp-operator.test.ts
+@@ -141,7 +141,10 @@
+     const second = await connect(f.backend);
+     await second.callTool({ name: "start_workflow", arguments: args });
+     const calls = f.calls.filter((c) => c.operation === "admitRun");
+-    expect(calls.map((c) => c.input)).toEqual([args, args]);
++    expect(calls.map((c) => c.input)).toEqual([
++      MCP_OPERATIONS.admitRun.input.parse(args),
++      MCP_OPERATIONS.admitRun.input.parse(args),
++    ]);
+     expect(f.calls.some((c) => ["continueRun", "answer"].includes(c.operation))).toBe(false);
+   });
+   it("preserves every live target field and durable no-resume semantics", async () => {

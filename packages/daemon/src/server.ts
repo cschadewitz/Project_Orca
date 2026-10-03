@@ -1,3 +1,31 @@
+/** Authenticated HTTP and WebSocket daemon composition. */
+import { createHmac, randomBytes } from "node:crypto";
+import {
+  PROTOCOL_VERSION,
+  OperatorBoundaryProjectionSchema,
+  RevisionBoundaryViewSchema,
+  type OperatorPageParams,
+  type OperatorRow,
+  type OperatorBoundaryRow,
+  AdmissionExecutionViewSchema,
+  type AdmissionExecutionView,
+  INPUTS_REVISION_ITEM_LIMIT,
+  PendingRevisionTargetSchema,
+  PendingRevisionSummarySchema,
+  PendingRevisionsDiscoverySchema,
+  type PendingRevisionSummary,
+  type PendingRevisionTarget,
+} from "@orca/protocol";
+import {
+  OperatorReadModel,
+  operatorEventCollections,
+  operatorGenerationCollections,
+  operatorLinkedDocumentCollections,
+  operatorPinnedGraph,
+  eventSnapshot,
+  type OperatorReadOptions,
+} from "./operator-read-model.js";
+import type { EventStore, LeaseStore } from "@orca/store";
 /**
  * The daemon's HTTP surface: `POST /rpc` takes one request envelope and answers with one
  * response envelope; `GET /health` is for process supervisors.
@@ -13,7 +41,8 @@
  * before its body is read, and every method runs behind the guard. `GET /health` is the one
  * unauthenticated answer, and all it ever says is `{ "ok": true }`.
  */
-import { OrcaError } from "@orca/core";
+import { isOrcaError, OrcaError } from "@orca/core";
+import type { createRevisionInputServices, createRevisionRuntime } from "@orca/engine";
 import { createDaemonIdentity } from "./daemon-identity.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -30,13 +59,34 @@ import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
 import { Maintenance } from "./maintenance.js";
 import { attachSocket } from "./socket.js";
 import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
+import { directAdmissionAuthority } from "./admission-retry.js";
+import { holds } from "./auth/principal.js";
+import { authForbidden } from "./auth/errors.js";
 import { submissionAuthority } from "./request-submission.js";
+import { revisionAccess } from "./revision-input.js";
 import { authInvalid, authRequired } from "./auth/errors.js";
 import { OwnershipStore } from "./auth/ownership.js";
 import type { ResourceResolver } from "./auth/resources.js";
 import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
 
 export interface DaemonOptions extends MethodContext {
+  /** Installed protected evidence reader; never a callback that attaches execution. */
+  admissionExecutionSource?: ((runId: string) => Promise<AdmissionExecutionView | undefined>) | undefined;
+  /** Actual protected runtime and registered retry services; never a placeholder capability. */
+  revisionSources?: {
+    services: ReturnType<typeof createRevisionInputServices>;
+    readBoundaries: ReturnType<typeof createRevisionRuntime>["readBoundaries"];
+  };
+  /** Explicit read projection sources, independent of the legacy unbounded read model. */
+  operatorSources?: Pick<OperatorReadOptions, "generations" | "configStatus" | "artifact" | "artifactRun"> & {
+    events: EventStore;
+    leases?: LeaseStore;
+    liveState?: Parameters<typeof operatorEventCollections>[0]["liveState"];
+    liveRevision?: Parameters<typeof operatorEventCollections>[0]["liveRevision"];
+    documents?: Parameters<typeof operatorLinkedDocumentCollections>[0];
+    definitionFor?: Parameters<typeof operatorPinnedGraph>[0]["definitionFor"];
+  };
+
   /** Persistent store identity initialized by the owner at bootstrap. */
   workspaceId?: string;
   /**
@@ -65,6 +115,8 @@ export interface DaemonHandle {
   /** The WebSocket URL, when this daemon was given an engine feed to subscribe to. */
   socketUrl?: string | undefined;
   close: () => Promise<void>;
+  /** Bounded startup sweep; resolves only the original sealed credential, never a process owner. */
+  recoverContinuations?: (() => Promise<void>) | undefined;
 }
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -178,6 +230,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     reads: opts.reads,
     workflowInputs: opts.workflowInputs,
     requestSubmissions: auth.mode === "token" ? opts.requestSubmissions : undefined,
+    admissionRetries: auth.mode === "token" ? opts.admissionRetries : undefined,
+    continuationAdmissions: auth.mode === "token" ? opts.continuationAdmissions : undefined,
     submissionWorkspaceId: opts.submissionWorkspaceId,
     source: opts.source,
     liveInputs: opts.liveInputs,
@@ -211,6 +265,230 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           admissions: ctx.source,
         },
   );
+  if (opts.reads && typeof opts.reads.inputRevisionActionId === "function" && auth.mode === "token") {
+    const reads = opts.reads;
+    ctx.inputRevisionRestrictions = async (invocation, inputs, revisionRunIds) => {
+      const bound = principalOf(invocation);
+      const credentialId = bound?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      const principal = () => {
+        const current = auth.credentials.current(credentialId);
+        if (!current.ok) throw authInvalid();
+        if (
+          current.principal.id !== bound.principal.id ||
+          current.principal.credentialId !== credentialId ||
+          !holds(current.principal, "runs.read")
+        )
+          throw authForbidden();
+        return current.principal;
+      };
+      const authority = () => {
+        const current = principal();
+        return JSON.stringify({ permissions: [...current.permissions].sort(), scope: current.scope });
+      };
+      const original = authority();
+      const visibility = new Map<string, boolean>();
+      for (const runId of new Set([...inputs.map((input) => input.runId), ...revisionRunIds]))
+        visibility.set(runId, await authorizer.runs.allows(principal(), runId));
+      const recheck = async () => {
+        if (authority() !== original) throw authForbidden();
+        for (const [runId, allowed] of visibility)
+          if ((await authorizer.runs.allows(principal(), runId)) !== allowed) throw authForbidden();
+        if (authority() !== original) throw authForbidden();
+      };
+      const projected = [];
+      for (const input of inputs) {
+        // Filter before any private pin lookup. An authorization change during this or a
+        // later boundary/discovery read refuses the complete result, including metadata.
+        if (!visibility.get(input.runId)) continue;
+        if (authority() !== original || !(await authorizer.runs.allows(principal(), input.runId)))
+          throw authForbidden();
+        const actionId = await reads.inputRevisionActionId(input);
+        projected.push({ ...input, ...(actionId === undefined ? {} : { revisionActionId: actionId }) });
+      }
+      await recheck();
+      return { inputs: projected, recheck };
+    };
+  }
+
+  if (opts.admissionExecutionSource && auth.mode === "token") {
+    const source = opts.admissionExecutionSource;
+    ctx.admissionExecution = async (invocation, runId) => {
+      const bound = principalOf(invocation);
+      const credentialId = bound?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      const check = async () => {
+        const current = auth.credentials.current(credentialId);
+        if (!current.ok) throw authInvalid();
+        if (current.principal.id !== bound.principal.id || !holds(current.principal, "runs.read"))
+          throw authForbidden();
+        if (!(await authorizer.runs.allows(current.principal, runId))) throw authForbidden();
+      };
+      await check();
+      const projection = await source(runId);
+      await check();
+      return projection === undefined ? undefined : AdmissionExecutionViewSchema.parse(projection);
+    };
+  }
+  if (opts.revisionSources && identity && ctx.control && auth.mode === "token") {
+    const sources = opts.revisionSources;
+    const accessFor = (invocation: MethodContext) => {
+      const bound = principalOf(invocation);
+      const credentialId = bound?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      const principalId = bound.principal.id;
+      const currentPrincipal = async () => {
+        const current = auth.credentials.current(credentialId);
+        if (!current.ok) throw authInvalid();
+        if (current.principal.id !== principalId || current.principal.credentialId !== credentialId)
+          throw authForbidden();
+        return current.principal;
+      };
+      return {
+        currentPrincipal,
+        access: revisionAccess({ workspaceId: identity.workspaceId, principalId, currentPrincipal, authorizer }),
+      };
+    };
+    ctx.revisionInputs = async (invocation) => {
+      const { access } = accessFor(invocation);
+      return { service: sources.services.forAccess(access), access };
+    };
+    ctx.revisionBoundaries = async (invocation, runId) => {
+      const { currentPrincipal } = accessFor(invocation);
+      const visible = async () => {
+        const current = await currentPrincipal();
+        return (
+          holds(current, "runs.read") &&
+          holds(current, "inputs.answer") &&
+          holds(current, "runs.control") &&
+          (await authorizer.runs.allows(current, runId))
+        );
+      };
+      // inputs.list still filters inaccessible rows normally. Optional enrichment must not
+      // turn an unowned row into an exception (or read its protected boundary first).
+      if (!(await visible())) return [];
+      let boundaries;
+      try {
+        boundaries = await sources.readBoundaries(runId);
+      } catch (error) {
+        // An active interpreter can own the fence. Absence of this optional projection
+        // makes no claim about revision acceptance; unexpected store/auth failures surface.
+        if (isOrcaError(error) && error.code === "RUN_LEASED") return [];
+        throw error;
+      }
+      return (await visible()) ? boundaries : [];
+    };
+    ctx.pendingRevisionDiscovery = async (invocation, runIds) => {
+      const { currentPrincipal, access } = accessFor(invocation);
+      const visible = async (runId?: string) => {
+        const current = await currentPrincipal();
+        if (!holds(current, "runs.read")) throw authForbidden();
+        return runId === undefined || (await authorizer.runs.allows(current, runId));
+      };
+      await visible();
+      if (!runIds.length) return { items: [], incomplete: true, reason: "run-scope-required" };
+      // Reading summaries cannot materialize text, even for a caller that may separately
+      // fetch it. Retry/service authority remains pinned to the original invocation.
+      const service = sources.services.forAccess({
+        ...access,
+        read: async (runId) => {
+          await access.read(runId);
+          return { content: false, mutate: false };
+        },
+      });
+      const items: PendingRevisionSummary[] = [];
+      const omissions = new Map<string, "limit" | "boundary-unavailable">();
+      const omitted = (runId: string, reason: "limit" | "boundary-unavailable") => {
+        if (reason === "limit" || !omissions.has(runId)) omissions.set(runId, reason);
+      };
+      let inspected = 0;
+      for (const runId of runIds) {
+        // An inaccessible run contributes neither candidates, counts nor omission reasons.
+        if (!(await visible(runId))) continue;
+        let boundaries;
+        try {
+          boundaries = await sources.readBoundaries(runId);
+        } catch (error) {
+          if (isOrcaError(error) && error.code === "RUN_LEASED") {
+            if (await visible(runId)) omitted(runId, "boundary-unavailable");
+            continue;
+          }
+          throw error;
+        }
+        if (!(await visible(runId))) continue;
+        const candidates = new Map<string, PendingRevisionTarget[]>();
+        for (const boundary of boundaries) {
+          if (boundary?.currentRevisionId === undefined) continue;
+          const target = PendingRevisionTargetSchema.safeParse({
+            runId: boundary.target?.runId,
+            revisionId: boundary.currentRevisionId,
+            destinationId: boundary.target?.destinationId,
+            attemptId: boundary.attemptId,
+          });
+          if (!target.success || target.data.runId !== runId) {
+            omitted(runId, "boundary-unavailable");
+            continue;
+          }
+          const matching = candidates.get(target.data.destinationId) ?? [];
+          if (!matching.length && candidates.size >= INPUTS_REVISION_ITEM_LIMIT + 1) {
+            omitted(runId, "limit");
+            continue;
+          }
+          if (matching.length < 2) matching.push(target.data);
+          candidates.set(target.data.destinationId, matching);
+        }
+        for (const matching of candidates.values()) {
+          if (matching.length !== 1) {
+            omitted(runId, "boundary-unavailable");
+            continue;
+          }
+          if (inspected >= INPUTS_REVISION_ITEM_LIMIT) {
+            omitted(runId, "limit");
+            break;
+          }
+          const target = matching[0]!;
+          if (!(await visible(runId))) break;
+          inspected++;
+          let pending;
+          try {
+            pending = await service.readPending(target);
+          } catch (error) {
+            // Losing the fence or a concurrently superseded destination is incomplete
+            // discovery, never an invented empty/accepted history. Journal/auth faults
+            // are deliberately not folded into successful omission.
+            if (isOrcaError(error) && ["RUN_LEASED", "REVISION_STALE"].includes(error.code)) {
+              if (await visible(runId)) omitted(runId, "boundary-unavailable");
+              continue;
+            }
+            if (isOrcaError(error) && error.code === "RUN_NOT_FOUND" && !(await visible(runId))) break;
+            throw error;
+          }
+          if (!(await visible(runId))) break;
+          if (pending.state === "superseded") {
+            omitted(runId, "boundary-unavailable");
+            continue;
+          }
+          const summary = PendingRevisionSummarySchema.safeParse({
+            target: pending.target,
+            expectedRevision: pending.expectedRevision,
+            state: pending.state,
+            ...(pending.unavailableReason ? { unavailableReason: pending.unavailableReason } : {}),
+          });
+          if (summary.success) items.push(summary.data);
+          else omitted(runId, "boundary-unavailable");
+        }
+      }
+      const authorized: PendingRevisionSummary[] = [];
+      for (const item of items) if (await visible(item.target.runId)) authorized.push(item);
+      let reason: "limit" | "boundary-unavailable" | undefined;
+      for (const [runId, omission] of omissions)
+        if ((await visible(runId)) && (reason === undefined || omission === "limit")) reason = omission;
+      await visible();
+      return PendingRevisionsDiscoverySchema.parse(
+        reason ? { items: authorized, incomplete: true, reason } : { items: authorized, incomplete: false },
+      );
+    };
+  }
   if (ctx.requestSubmissions && ctx.submissionWorkspaceId && auth.mode === "token") {
     const workspaceId = ctx.submissionWorkspaceId;
     ctx.requestSubmissionAuthority = async (invocation) => {
@@ -228,6 +506,277 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           return current.principal;
         },
       });
+    };
+  }
+  if (ctx.admissionRetries && ctx.submissionWorkspaceId && auth.mode === "token") {
+    const workspaceId = ctx.submissionWorkspaceId;
+    ctx.admissionAuthorities = async (invocation) => {
+      const bound = principalOf(invocation);
+      // Read calls have no mutationActor, so bind a verified actor from the authenticated context.
+      if (!bound?.principal.credentialId) throw authRequired();
+      const credentialId = bound.principal.credentialId;
+      const actor = { principalId: bound.principal.id, credentialId };
+      const principal = async () => {
+        const current = auth.credentials.current(credentialId);
+        if (!current.ok) throw authInvalid();
+        return current.principal;
+      };
+      return {
+        principalId: actor.principalId,
+        workspaceId,
+        executionAuthority: invocation.executionResumeAuthority,
+        check: async () => {
+          if (!holds(await principal(), "runs.start")) throw authForbidden();
+        },
+        request: async () => submissionAuthority({ workspaceId, actor, authorizer, principal }),
+        direct: async () => directAdmissionAuthority({ workspaceId, actor, authorizer, principal }),
+      };
+    };
+  }
+  if (ctx.continuationAdmissions && ctx.submissionWorkspaceId && auth.mode === "token") {
+    const workspaceId = ctx.submissionWorkspaceId;
+    ctx.continuationAccess = async (invocation) => {
+      const bound = principalOf(invocation);
+      const credentialId = bound?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      return {
+        workspaceId,
+        authorizer,
+        executionAuthority: invocation.executionResumeAuthority,
+        current: async () => {
+          const current = auth.credentials.current(credentialId);
+          if (!current.ok) throw authInvalid();
+          return current.principal;
+        },
+      };
+    };
+  }
+  if (opts.operatorSources && identity && auth.mode === "token") {
+    const sources = opts.operatorSources;
+    const cursorKey = randomBytes(32);
+    const names = [
+      "operator.discover",
+      "operator.page",
+      ...(sources.generations ? ["operator.preflight"] : []),
+      ...(sources.configStatus ? ["operator.config"] : []),
+      ...(sources.artifact && sources.artifactRun ? ["operator.artifact"] : []),
+    ];
+    ctx.operatorMutations = {
+      async current(invocation, method) {
+        const binding = principalOf(invocation);
+        const credentialId = binding?.principal.credentialId;
+        if (!credentialId) throw authRequired();
+        const latest = auth.credentials.current(credentialId);
+        if (!latest.ok) throw authInvalid();
+        if (
+          latest.principal.id !== binding.principal.id ||
+          latest.principal.credentialId !== credentialId ||
+          JSON.stringify(latest.principal.scope) !== JSON.stringify(binding.principal.scope) ||
+          JSON.stringify([...latest.principal.permissions].sort()) !==
+            JSON.stringify([...binding.principal.permissions].sort())
+        )
+          throw authForbidden();
+        authorizer.checkOperation(latest.principal, method, true, binding.meta);
+        return bindPrincipal({ ...invocation }, latest.principal, binding.meta);
+      },
+      async invokeLegacy(name, params, invocation, expected) {
+        const binding = principalOf(invocation);
+        const credentialId = binding?.principal.credentialId;
+        if (!credentialId) throw authRequired();
+        const latest = auth.credentials.current(credentialId);
+        if (!latest.ok) throw authInvalid();
+        if (latest.principal.id !== binding.principal.id) throw authForbidden();
+        authorizer.checkOperation(latest.principal, name, Boolean(methods[name]), binding.meta);
+        const method = methods[name];
+        if (!method) throw new OrcaError("NOT_SUPPORTED", "Operator action is unavailable");
+        return method.handle(
+          method.params.parse(params),
+          bindPrincipal(
+            { ...invocation, ...(expected ? { operatorDecisionTarget: expected } : {}) },
+            latest.principal,
+            binding.meta,
+          ),
+        );
+      },
+    };
+    ctx.operatorReads = {
+      methods: names,
+      async model(invocation) {
+        const binding = principalOf(invocation);
+        const credentialId = binding?.principal.credentialId;
+        if (!credentialId) throw authRequired();
+        const current = async () => {
+          const check = auth.credentials.current(credentialId);
+          if (!check.ok) throw authInvalid();
+          return check.principal;
+        };
+        const checkBoundaryRun = async (params: OperatorPageParams, row?: OperatorRow) => {
+          const principal = await current();
+          if (
+            principal.id !== binding.principal.id ||
+            principal.credentialId !== credentialId ||
+            !holds(principal, "runs.read") ||
+            !params.runId ||
+            (row && row.runId !== params.runId) ||
+            !(await authorizer.runs.allows(principal, params.runId))
+          )
+            throw authForbidden();
+          return principal;
+        };
+        const sameBoundaryAuthority = async (
+          params: OperatorPageParams,
+          before: Awaited<ReturnType<typeof current>>,
+        ) => {
+          const latest = await checkBoundaryRun(params);
+          if (
+            JSON.stringify([...latest.permissions].sort()) !== JSON.stringify([...before.permissions].sort()) ||
+            JSON.stringify(latest.scope) !== JSON.stringify(before.scope)
+          )
+            throw authForbidden();
+        };
+        const declaration = async (params: OperatorPageParams, row: OperatorRow) => {
+          const principal = await checkBoundaryRun(params, row);
+          if (params.collection !== "inputs" || row.kind !== "decision" || row.live) return undefined;
+          if (!row.nodeId || !row.stepRunId || !row.requestId || row.requestId !== row.id || !row.options || !ctx.reads)
+            throw new OrcaError("RUN_STATE", "The pinned input declaration is unavailable");
+          const action = await ctx.reads.inputRevisionActionId({
+            id: row.id,
+            kind: "decision",
+            runId: params.runId!,
+            stepRunId: row.stepRunId,
+            nodeId: row.nodeId,
+            options: row.options,
+          });
+          await sameBoundaryAuthority(params, principal);
+          return action;
+        };
+        type Boundaries = Awaited<ReturnType<NonNullable<DaemonOptions["revisionSources"]>["readBoundaries"]>>;
+        let captured: { runId: string; collection: string; boundaries: Boundaries; continuation?: string } | undefined;
+        const boundaryRevision = async (params: OperatorPageParams) => {
+          const principal = await checkBoundaryRun(params);
+          const snapshot = await eventSnapshot(sources.events, params);
+          const boundaries =
+            params.collection === "inputs" &&
+            holds(principal, "inputs.answer") &&
+            holds(principal, "runs.control") &&
+            opts.revisionSources
+              ? await opts.revisionSources.readBoundaries(params.runId!)
+              : [];
+          const continuation =
+            params.collection === "runs" && ctx.continuationAdmissions && ctx.continuationAccess
+              ? await ctx.continuationAdmissions.expectedBoundary(
+                  params.runId!,
+                  await ctx.continuationAccess(invocation),
+                )
+              : undefined;
+          await sameBoundaryAuthority(params, principal);
+          if ((await snapshot.currentRevision()) !== snapshot.revision)
+            throw new OrcaError("RUN_STATE", "Operator boundary changed during observation");
+          captured = {
+            runId: params.runId!,
+            collection: params.collection,
+            boundaries,
+            ...(continuation ? { continuation } : {}),
+          };
+          return createHmac("sha256", cursorKey)
+            .update(
+              JSON.stringify([
+                identity,
+                params.runId,
+                params.collection,
+                snapshot.revision,
+                boundaries,
+                continuation ?? null,
+              ]),
+            )
+            .digest("base64url");
+        };
+        return new OperatorReadModel({
+          ...sources,
+          cursorKey,
+          target: identity,
+          protocol: PROTOCOL_VERSION,
+          orcaVersion: opts.orcaVersion,
+          current,
+          allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
+          declaredRevisionActionId: declaration,
+          boundaryRevision,
+          boundaryRow: async (params: OperatorPageParams, row: OperatorRow): Promise<OperatorBoundaryRow> => {
+            const principal = await checkBoundaryRun(params, row);
+            if (!captured || captured.runId !== params.runId || captured.collection !== params.collection)
+              throw new OrcaError("RUN_STATE", "Operator boundary observation is unavailable");
+            const after: OperatorBoundaryRow = { ...row };
+            const declaredRevisionActionId = await declaration(params, row);
+            if (params.collection === "runs" && row.kind === "run") {
+              if (!ctx.continuationAdmissions || !ctx.continuationAccess) after.continuationState = "unsupported";
+              else if (captured.continuation) {
+                after.continuationState = "available";
+                after.expectedBoundary = captured.continuation;
+              } else after.continuationState = "unavailable";
+            } else if (params.collection === "inputs" && row.kind === "decision" && !row.live) {
+              if (declaredRevisionActionId !== undefined) after.revisionActionId = declaredRevisionActionId;
+              if (holds(principal, "inputs.answer") && holds(principal, "runs.control")) {
+                if (!declaredRevisionActionId || !opts.revisionSources) after.revisionState = "unsupported";
+                else {
+                  const matching = captured.boundaries.filter(
+                    (b) =>
+                      b.target.runId === row.runId &&
+                      b.target.stepRunId === row.stepRunId &&
+                      b.target.requestId === row.id &&
+                      b.status === "waiting",
+                  );
+                  const boundary = matching.length === 1 ? matching[0] : undefined;
+                  if (boundary) {
+                    after.revision = RevisionBoundaryViewSchema.parse({
+                      target: boundary.target,
+                      capability: boundary.capability,
+                      destinationDescription: boundary.destinationDescription,
+                    });
+                    after.revisionState = "available";
+                  } else after.revisionState = "unavailable";
+                }
+              }
+            }
+            await sameBoundaryAuthority(params, principal);
+            return OperatorBoundaryProjectionSchema.parse({
+              params,
+              before: row,
+              after,
+              ...(declaredRevisionActionId !== undefined ? { declaredRevisionActionId } : {}),
+            }).after;
+          },
+          collections: {
+            ...operatorEventCollections({
+              events: sources.events,
+              ...(sources.leases ? { leases: sources.leases } : {}),
+              ...(sources.liveState && sources.liveRevision
+                ? {
+                    liveState: sources.liveState,
+                    liveRevision: () =>
+                      createHmac("sha256", cursorKey).update(sources.liveRevision!()).digest("base64url"),
+                  }
+                : {}),
+              allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
+            }),
+            ...(sources.generations ? operatorGenerationCollections(sources.generations) : {}),
+            ...(sources.documents ? operatorLinkedDocumentCollections(sources.documents) : {}),
+            ...(sources.definitionFor
+              ? {
+                  graph: operatorPinnedGraph({
+                    events: sources.events,
+                    definitionFor: sources.definitionFor,
+                    ...(sources.generations
+                      ? { active: operatorGenerationCollections(sources.generations).graph! }
+                      : {}),
+                  }),
+                }
+              : {}),
+          },
+          // Discover actual installed RPCs, not only this bounded read projection.
+          // MCP mutation aliases remain absent until their real adapters are installed.
+          operations: (principal) => authorizer.permittedMethods(principal, Object.keys(methods)),
+        });
+      },
     };
   }
   const gate = new TransportGate(auth, host, authorizer);
@@ -287,10 +836,37 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   });
   const { port } = server.address() as AddressInfo;
   const url = `http://${host}:${port}`;
+  const continuationModel = ctx.continuationAdmissions;
+  const recoverContinuations =
+    continuationModel && ctx.submissionWorkspaceId && auth.mode === "token"
+      ? async () => {
+          await continuationModel.recoverBatch(async (entry) => {
+            const credentialId = entry.actor?.credentialId;
+            if (!credentialId || entry.workspaceId !== ctx.submissionWorkspaceId) return undefined;
+            const checked = auth.credentials.current(credentialId);
+            if (!checked.ok || checked.principal.id !== entry.principalId) return undefined;
+            const principal = checked.principal;
+            if (!holds(principal, "runs.control") || (entry.command.decision && !holds(principal, "inputs.answer")))
+              return undefined;
+            if (!(await authorizer.runs.allows(principal, entry.receipt.runId))) return undefined;
+            return {
+              workspaceId: entry.workspaceId,
+              authorizer,
+              executionAuthority: authorizer.executionResumeAuthority(principal),
+              current: async () => {
+                const current = auth.credentials.current(credentialId);
+                if (!current.ok || current.principal.id !== entry.principalId) throw authInvalid();
+                return current.principal;
+              },
+            };
+          });
+        }
+      : undefined;
   return {
     host,
     port,
     url,
+    ...(recoverContinuations ? { recoverContinuations } : {}),
     ...(detachSocket ? { socketUrl: socketUrlFor(url) } : {}),
     close: async () => {
       // Sockets first: an open upgraded connection is not an HTTP connection, so

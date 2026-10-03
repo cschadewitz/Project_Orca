@@ -81,6 +81,7 @@ export const HELLO: HelloResult = {
     // Answered by a daemon with `runs.control`, and called by the palette's **Start a run**
     // since #178: a picker of `workflows.list` and the workflow's own vars.
     "runs.start",
+    "runs.admit",
     // The plan surface (#169). Nine reads, and five writes that ride the same `--read-only`
     // switch as the four above.
     "plans.list",

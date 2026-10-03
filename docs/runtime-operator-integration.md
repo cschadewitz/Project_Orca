@@ -1,0 +1,721 @@
+# Operator integration checkpoint
+
+This is the shared integration of the three parallel handoffs, not production
+acceptance of #331, #356 or #327. No main merge, release, deployment or actual Cal
+connection is included.
+
+## Current continuation composition
+
+The follow-up to the initial checkpoint production-wires `runs.continue`,
+`continuations.get` and `continuations.reconcile`. Authorized `runs.get` includes
+an optional `continuation.expectedBoundary` opaque CAS guard. The guard is issued
+only for a supported boundary and grants no authority. Parameters are the frozen
+`{command, retry}` pair; both transports use the same strict schemas.
+
+This first slice supports sealed root runs paused at durable gates or human
+decisions. It refuses live callbacks, revision-only branch answers, child/ancestor
+continuation, uncertain agent pauses and missing original generations. Legacy
+blocking control methods keep their existing behavior. Unsupported boundaries
+omit the projection rather than suggesting that a token can be invented.
+
+Admission writes one protected decision-plus-dispatch marker before returning.
+Automatic dispatch acknowledges attachment after current execution authorization
+and its durable transition, holding the same run lease through execution. Startup
+recovery processes at most 100 retry candidates per sweep and resolves only the
+original recorded credential. Missing/revoked authority becomes blocked; a new
+daemon-local owner credential is never substituted. Explicit same-principal
+reconciliation may supply current authorized execution context after rotation.
+Already-attached work after a crash is treated as ambiguous unless terminal
+history proves settlement. A competing lease is refused without writing through
+another owner's fence.
+
+Receipt lookup uses encrypted immutable locators. They are discovery hints, never
+acceptance. Startup can rebuild a missing hint only after authenticating and
+syncing its existing authoritative marker. A bound claim without a marker creates
+no acceptance, answer or execution. A cached retry result is also checked against
+the authoritative journal before being returned.
+
+Inspection authenticates and syncs an existing marker without appending, repairing
+missing records, allocating a new private payload or attaching execution. Failed
+durability verification returns `RUN_STATE` with `uncertain: true` and the original
+continuation correlation for reconciliation; it does not report accepted from
+merely readable bytes. Missing or rewound markers fail closed. Real HTTP/WebSocket
+tests cover this behavior with actual credentials and file stores.
+
+Internal continuation replay is bounded to 100,000 events, read in fixed-size
+pages; larger histories refuse with an explicit unsupported result. This limit
+does not change the bounded operator tool response limits. Generic admission
+receipt dispatch has not been broadened to continuation grants: use the dedicated
+continuation receipt methods.
+
+MCP mutation discovery remains disabled pending its bounded boundary projection
+and real adapter composition. Durable Request/direct startup dispatch, production
+revision delivery activation, Electron, independent review and actual Cal
+acceptance remain open; continuation completion does not close those gates.
+
+## Source ancestry and ownership
+
+The common frozen base is `9058fa8935ae4c999293727c005031eec93114be`.
+The integration commit preserves these feature commits as parents:
+
+- #412 revision: `ead9383caac9d1e5a37585e82239d9699c2e72c8`
+- #413 retry admissions: `b2a364b4f02712cee439c504223bce1848bea1f2`
+- #414 MCP reads: `ac081db87f056391fbce82c6165fd513bfbe97a6`
+
+The three named `docs/patches/*-operator-integration.patch` handoffs were applied
+once. Shared export, auth inventory, method registration, capability, CLI and
+bootstrap collisions were consolidated rather than applying one branch's whole
+version over another. Historical integration patches were not reapplied.
+
+The integration owner changes reserved seams and dedicated continuation files.
+Owner-authorized takeover corrections are incorporated from these immutable heads:
+
+- #412 `b50785233253940d56f5de2d426cbdc27c9ebc38`: reject explicit or implicit
+  automatic selection of the corrective branch.
+- #413 `9f9669b1e08e6b5a1afb6671828e688cdb781aa5`: retain encrypted app admission
+  intents across restart, scoped to verified principal/workspace/target, with an
+  explicit abandon confirmation and an expected-scope fence before admission.
+- #414 `b5a2c8f926135e14005cd57ddcf55020e6316322`: refuse preflight when the
+  protected active definition differs from the captured revision, and require
+  both artifact and run grants for artifact discovery.
+
+The replacement #331 reserved patch was incorporated as an old-to-new three-way
+merge, preserving the other features and continuation wiring. The #414 current
+peer fixtures retain the integration's shared `PROTOCOL_VERSION`; explicit old
+peer rejection remains unchanged. Historical preflight support is intentionally
+limited: an admissible stored definition can still return `NOT_SUPPORTED` from
+preflight when its exact trusted validation projection is unavailable.
+The shared daemon's artifact method/capability discovery independently requires both
+`runs.read` and `artifacts.read`.
+
+## What this checkpoint wires
+
+- Exact SDK server/client/core 2.2.0 dependencies and MCP exports
+- Protected retry admission bootstrap, direct admission and authorized receipt RPCs
+- Conditional operator read/preflight sources and credential-bound MCP CLI entry
+- Revision schemas, protected projection, interpreter hooks and app bridge plumbing
+- Protocol 2.0 and `operator-journals-v4`, with coordinated-upgrade documentation
+- A durable unique append primitive for the existing per-run event journal: stable
+  correlation, sequence CAS, the existing append mutex, file/directory sync before
+  success, and reconstruction after an uncertain acknowledgement
+- Protected continuation marker projection and a registered `run.continue` service
+  whose real journal/runtime adapters remain deliberately uninstalled
+
+`runs.admit` returns the stable authorized `operationId` on every resolved receipt.
+The raw client key is never a receipt. The internal `DirectAdmissionResult` and
+legacy settled `runs.start` shape remain unchanged.
+
+Capability vocabulary is not proof of implementation. Hello and method discovery
+only advertise installed implementations. Revision and continuation services and
+MCP mutation fixture callbacks are not installed by this checkpoint.
+
+## Remaining production composition
+
+1. Complete wider continuation lineage cases only after defining and testing their
+   exact boundaries; the current production slice deliberately supports roots only.
+2. Supply the real `RevisionLog` adapter, protected-input/sensitivity promotion,
+   exact reserved destination attempt and conservative delivery recovery; mount
+   Attention/inline/CLI consumers only after those boundaries are proven.
+3. Add durable Request/direct admission dispatch discovery after daemon restart,
+   sharing bounded retry discovery rather than racing independent cursors.
+   Continuation discovery is implemented; an in-memory callback alone is still
+   not startup discovery. Missing/revoked authority must stay blocked.
+4. Add thin authenticated, target-bound MCP mutation endpoints delegating to those
+   production services. Preserve their `RetryResult` envelopes; do not alias them
+   to flat legacy receipts or claim fixture-backed methods are implemented.
+5. Import and review the author fixes; re-run all combined gates on the final head.
+
+The new continuation event projects a decision and dispatch acceptance in one
+authoritative marker. Its private material uses the existing execution payload
+encryption and keys. An interrupted append is reconciled by stable correlation,
+not acknowledged from a sidecar and not answered twice. Fsync failures refuse
+acknowledgement; an existing readable marker is re-synced before retry success.
+Directory-sync behavior is platform-specific and Windows power-loss guarantees
+must not be inferred from the Linux tests.
+
+## Compatibility and refusal behavior
+
+Old clients use closed capability and event schemas. Protocol 2.0 deliberately
+rejects 1.x peers rather than presenting these changes as a compatible minor.
+New authoritative events also require the store epoch advance. Managed activation
+and recovery compare epochs; direct CLI/daemon startup does not enforce that
+release marker. Valid unknown events fail old full schema readers; filtered reads
+may bypass them. Neither behavior is a safe downgrade strategy.
+
+Stop all writers and retain a consistent complete pre-upgrade store backup and its
+matching binary. Restore the whole matching backup for rollback; binary rollback
+alone does not undo journal semantics, and work after the backup needs separate
+accounting. See [Updating](UPDATING.md).
+
+Answering a stored run whose original workflow definition is unavailable now
+refuses before recording an answer. The pending input is preserved. Legacy
+pre-versioning runs retain their documented `workflowStored` restoration path;
+no missing stored definition falls back to a newly active workflow.
+
+## Evidence and acceptance limits
+
+Initial combined root/renderer typecheck and build passed. The first broad Node
+24.19.0 run passed 2,813 tests but failed 36: scripted-agent Unix-socket `EPERM`
+blocked most end-to-end cases, and two workflow-definition cases identified the
+reserved answer-path regression corrected here. The socket-enabled retry still
+encountered that environment limitation. These runs are not green gates.
+
+Focused discovery tests cover absent/partial implementations and all combinations
+of artifact/run grants. Focused store tests cover file/directory sync failures,
+lost acknowledgement, complete and incomplete tails, stable correlation conflict,
+sequence CAS and ordinary append lock sharing. Protected tests reconstruct real
+encrypted stores and verify private command omission. Continuation service tests
+use explicitly injected journal/runtime fixtures and do not prove production
+adapter durability. Protocol tests exercise production handshake code with 1.10
+peer envelopes, not historical executable binaries.
+
+Exact-head remote CI, final Node 22/24 tests and coverage, format/lint/design/build,
+compiled CLI/runtime smoke, real Electron smoke, independent review, combined
+crash/restart acceptance and actual-Cal tests remain required. No threshold,
+authorization, key or durability check is relaxed by this checkpoint.
+
+CI #358 found eight protocol-1 fixture failures; the isolated fixture repair in
+`ae902c40c976a6c0c3497777102198f324e5cd80` passed all 67 affected tests locally.
+CI #359 then passed all 2,886 tests on both supported Node versions, and Node 22
+build/compiled smoke. Its sole failure was app Node-side coverage for three newly
+wired revision client methods. The follow-up adds 15 focused tests covering those
+exact RPC methods; thresholds and exclusions are unchanged. Fresh complete-suite
+coverage remains required on the next published head.
+
+
+## Protected revision adapter checkpoint
+
+Integration owns `packages/engine/src/revision-runtime.ts` and its dedicated
+`revision-runtime*.test.ts` coverage, plus the shared claim verification seam.
+The adapter reuses the protected run journal and held execution lease. Its
+versioned private entries support atomic gate-plus-correction publication, exact
+future attempt reservation, sensitivity promotion, replacement CAS and conservative
+claim/send accounting. This checkpoint does not yet advertise or mount revision
+mutation capabilities: production authority, transport and delivery composition
+must pass before activation.
+
+Before each publication attempt, a correlation-only guard is durably written via
+the existing protected execution store. It is not acceptance. If that guard exists
+but its authoritative marker is absent, recovery is uncertain and refuses to
+recreate the answer or deliver the correction. A bound claim with no attempted
+publication can still retry. Existing markers must be authenticated and synced
+before a cached receipt can be returned, including inspection and reconciliation.
+No second authoritative journal or encryption key lifecycle is introduced.
+
+These checks use available local evidence. Coordinated rollback of all guards,
+claims and journal records cannot always be detected. They do not establish a
+universal exactly-once guarantee; full-store backup and matching-binary rollback
+requirements still apply.
+
+The app journal rejects unavailable encryption and Linux `basic_text`; ordinary
+Electron launch smoke does not prove encrypted intent restart. Acceptance requires
+a usable unlocked OS key store, the same app user-data across restart, recovery of
+the same server run, and explicit refusal when encryption is unavailable. Mock
+safeStorage tests only establish control behavior.
+
+CI #361 on `3b8910a1b24bfe6ca3b63467cf796fa8c221ddfe` passed both Node jobs,
+including Node 24 aggregate coverage and both build/compiled smoke stages. This
+is evidence for that preceding checkpoint only. The corrected combined source
+passed 303 app tests, 70 focused admission/MCP tests and the separately enabled
+`ORCA_RETRY_INTEGRATION=1` HTTP/WebSocket test. Opt-in tests skipped by the default
+suite are not counted as acceptance evidence. Fresh exact-head CI and Electron
+validation remain required after publication.
+
+The combined review caught and fixed an app/discovery mismatch: authenticated
+`operator.discover` now reports the actual installed RPC table filtered by current
+grants, including `runs.admit` only when available. Unimplemented MCP mutation
+aliases remain absent. The enabled HTTP/WebSocket regression drives discovery,
+real admission, retained intent recovery after controller reconstruction, and
+viewer omission. The separately enabled ACP retry integration test also passes.
+
+The pre-correction local Node 24 complete-suite coverage attempt ran 3,041 passing tests,
+34 failures and 3 skips. Failures remain in source-scripted-agent/demo subprocess
+paths with observed tsx Unix-socket `EPERM`; this run is not a coverage gate pass.
+Root/renderer typecheck, repository lint/format/design and compiled build/demo
+smoke pass. Remote exact-head CI must establish the complete subprocess and
+aggregate coverage result.
+
+### Revision delivery ambiguity correction
+
+The first adapter checkpoint (`744c488` local review snapshot) had a reproduced
+rewind gap: after a delivered R1's transition markers were removed, replacing the
+restored unclaimed R1 with R2 could bypass a revision-specific claim guard. That
+snapshot was not activated or published as a branch head.
+
+The corrected guard uses one consumed boundary-version identity across submission,
+replacement and delivery transitions. Version-2 metadata binds the run, opaque
+destination, current version, exact attempt, configuration generation and workflow
+revision. Strict replay checks both consumed historical versions and the current
+frontier. Surviving attempt evidence without its advancing marker makes reads,
+replacement, reservation and delivery uncertain; it cannot be turned into a new
+revision or advertised as safely replaceable. Valid historical advancement remains
+usable. Read-only validation of prior version-1 evidence fails closed on malformed
+or mismatched metadata; this does not imply a deployed migration history.
+
+Regression evidence covers the confirmed-delivery/rewind/replacement sequence,
+including earlier refusal from pending reads, old delivery hooks and conflicting
+historical markers. Independent re-review remains an open gate. The runtime and
+its current-bound-actor authorization seam remain unmounted until the production
+composition and transport checks are complete.
+
+
+The corrected adapter's 34 runtime, 18 service and 29 receipt-recovery tests pass
+on Node 22 and Node 24. The unchanged original reproduction against the corrected
+compiled engine refuses replacement with `RUN_STATE` / `revision-publication-uncertain`
+and the original operation correlation before any second send. This is implementation
+and regression evidence; independent re-review is still open.
+
+## Native acceptance and Windows synchronization correction
+
+On `aaad75db105f6392d8cf7f9c40be955f9b2d3a86`, CI #365 passed both supported
+Node versions, including coverage/build/compiled smoke. App smoke #76 verified
+that exact checkout and workflow definition: functional smoke passed 24/24, and
+all three platform type proofs passed 6/6. Native encrypted restart acceptance
+failed before it was established. macOS reported readiness and encryption
+availability but failed literal profile-path equality; its second test failed in
+full demo setup. Windows failed during demo Request admission before Electron.
+None of those failures proves encryption unavailable.
+
+The dedicated native fixture now uses one agent-free start/end workflow served
+by the real compiled daemon, with real credentials, stores, direct admission and
+receipt inspection. It avoids unrelated demo/ACP prerequisites without replacing
+the production admission path. Profile checks compare canonical paths and physical
+directory identity, report separate sanitized booleans, and keep actual encryption
+and full-process restart mandatory. A real ownership persistence probe reports
+only a stage and allowlisted error code on failure, never paths, credentials or
+file contents. Native execution of this correction remains required.
+
+Windows `FlushFileBuffers` requires a write-capable handle
+([Microsoft API contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers));
+[libuv forwards that operation](https://github.com/libuv/libuv/blob/v1.x/src/win/fs.c#L2186).
+Ownership publication
+and existing-marker synchronization previously opened a read-only handle before
+fsync. Their Windows path now uses non-creating, non-truncating `r+` solely to
+synchronize; other platforms retain `r`. Locks, validation, sync failures and
+missing-marker refusal remain unchanged. Synchronization writes no content and
+creates no absent record. This does not add Windows directory-entry power-loss
+guarantees or change store permissions. The ownership implementation predates
+this integration: its original blob `e6852109f14955e87262b48d98798e1091693817`
+matches frozen base `9058fa8935ae4c999293727c005031eec93114be`. The original
+Windows demo's swallowed exception remains unobserved, so the observed API
+incompatibility is not presented as a confirmed diagnosis of that exception.
+
+A separate deterministic reproduction confirms a pre-existing lost-update defect
+in the scripted demo agent's shared counter file: concurrent instances can
+replace a newer test-report count with an older snapshot, making a later report
+repeat its initial false result. Source blob `b9b14987e7b49eae4b40663d70caab17e3e5c2c0`
+also matches the frozen base. This is consistent with the macOS demo's repeated
+false reports, but retained CI counter state is unavailable and the specific run's
+cause is unproven. The helper is unchanged; its defect is separate from native
+acceptance and is not resolved by fixture isolation.
+
+## Authenticated revision composition and read contracts
+
+Writable token-authenticated `serve` composes the protected adapter over the
+interpreter's exact stores before execution, then registers its two operations
+with shared retry claims. Delivery uses the daemon runtime's actual bound actor.
+The optional service is absent for unauthenticated/read-only composition; absent
+services do not acquire capabilities merely from placeholder method handlers.
+Authorized open-input views expose only a validated `RevisionBoundaryView`.
+Revision submission records the gate decision plus correction; execution remains
+a separate explicitly authorized continuation.
+
+Within the approved protocol-2 boundary, `inputs.list` adds optional
+`revisionRunIds`: 1–20 unique run IDs. Its separate optional `pendingRevisions`
+result contains at most 50 current summaries and has either:
+
+- `{items, incomplete: false}`; or
+- `{items, incomplete: true, reason}` where reason is `run-scope-required`, `limit`
+  or `boundary-unavailable`.
+
+Each item is strictly `{target, expectedRevision, state, unavailableReason?}`.
+`target` contains only run/revision/destination/attempt IDs. No protected text,
+capability/schema, provenance, generation or replacement promise is included.
+These rows do not add to `inputs` or `waiting`, nor reopen a completed gate.
+Current authority and resource visibility are checked before reading records and
+again before return; missing and denied run IDs have the same omission behavior.
+Clients batch run IDs from already-authorized run pages rather than scanning an
+unbounded global history. `runId` supplies an exact-run default for this new
+projection; it does not implicitly include descendant revision summaries even
+though the existing unanswered-input listing includes descendants. Global calls
+without revision scope report explicit incompleteness. Failed journal verification
+or revoked authority remains an error, never an empty-list success.
+
+Only each destination's current revision is discovered; superseded IDs give way
+to their replacement, and delivered/cancelled states remain inspectable. This is
+not complete revision-history pagination. Requested runs, metadata reads and
+response rows are bounded; the existing adapter still materializes each selected
+run's protected journal internally.
+
+`inputs.revisionPending` additionally permits optional `boundary`, using the
+existing strict `RevisionBoundaryView` shape. It is derived from the current
+matching pinned declaration, available only with the existing stronger current
+content/mutation grants and an eligible replacement target. Viewer metadata stays
+unchanged; private journal/configuration fields and sensitive schema defaults or
+enums are not exposed. Grants are checked again after asynchronous journal reads.
+A read response never authorizes a later replacement: the mutation still checks
+current grants, exact target/attempt and opaque CAS under the run fence.
+
+The renderer mounts an explicit correction editor in Attention and inline step
+input detail. Ordinary answer buttons, free-text answers, keyboard controls and
+palette controls cannot submit the declared revision action through
+`inputs.answer`. Pending correction cards use bounded authorized run discovery,
+remain separate from unanswered-input counts, and fetch protected replacement
+content only through `inputs.revisionPending`. Drafts survive same-target refresh
+and supersession; stale, failed-refresh and unavailable boundaries disable writes
+until explicitly reviewed against current server data. Connection changes isolate
+protected drafts. No automatic continuation is implied by submitting a correction.
+
+The CLI parser mounts `revisions discover`, `inspect`, `submit` and `replace` via
+an explicit daemon endpoint and captured token environment variable. Mutations
+require the operator's retained idempotency key and strict JSON body. It does not
+load daemon-owner credentials, discover credentials, automatically retry a write,
+or resume execution. The closed HTTP method set uses bounded request/response
+sizes, protocol negotiation, redirect refusal and sanitized uncertainty details.
+Real authenticated protected-service tests include a committed write whose HTTP
+response is lost, followed by explicit same-key recovery.
+
+Native App smoke 77 at `2a2a3cc27335144c20b6361eb50d96a440cae8fe`
+verified real safeStorage encryption and same-profile, new-process receipt recovery
+on macOS and Windows, plus zero admissions when encryption is unavailable. This
+is app restart after accepted admission. It does not establish daemon execution
+resumption, crash-before-acknowledgement recovery, or independent clearance of the
+revision journal correction. That independent re-review remains pending.
+
+Request/direct automatic startup dispatch remains outside this checkpoint. The
+bounded correctness slice below verifies existing creation evidence, protects
+first execution across all admitted entry points, and exposes truthful
+pending/uncertain status. Existing continuation startup recovery remains required
+and unchanged. Admission receipt acceptance must not be described as proof of
+execution attachment or completion.
+
+## Bounded admission execution evidence
+
+Request/direct first execution uses existing `run.created` and `run.started`
+events. It adds no event kind and no second authoritative admission journal.
+A fresh admitted root receives a versioned immutable protected execution policy
+binding its original correlation, actor/workspace, generation, workflow and exact
+creation evidence. Existing creation evidence is synchronized before acceptance.
+Accepted replay and inspection revalidate original creation, private material,
+current exact durable ownership and the Request program-root link; they do not
+re-attribute ownership, recreate linkage or repair missing policy records.
+
+Under the actual held run lease, the interpreter checks current execution
+authority and consumes one immutable attempt record before appending the existing
+start event. It synchronizes that exact event and publishes an immutable exact
+start witness before interpreter effects. An attempted publication with absent or
+rewound matching evidence stays uncertain; the record is not recreated. A start
+witness proves an earlier first-start attempt, not permission to repeat an
+interrupted effect. Healthy explicit continuation and first attachment are
+separate entry semantics. Concurrent first-start callers share only actual local
+inflight work or compete for the same run lease/fence.
+
+The optional authorized `runs.get.admissionExecution` projection has `state`
+`pending`, `started` or `uncertain`, with optional allowlisted `reason`
+`legacy-evidence` or `evidence-unavailable`. It includes no policy, actor,
+credential, generation, private command or key. `started` means verified prior
+first-start evidence, not present liveness or completion. Ordinary non-admitted
+runs omit the field. The server checks current read/resource authority before
+and after protected evidence reads. A failed evidence read yields uncertainty or
+an error, never a false empty/pending success.
+
+Legacy admitted roots without the new policy and interrupted first starts whose
+complete evidence cannot be established are not automatically dispatched.
+Automatic Request/direct startup sweeps remain deferred. Existing sealed-root
+continuation startup discovery remains installed. After-acceptance app restart
+proof is separate from daemon execution resumption. This bounded composition does
+not claim complete recovery acceptance or detection of coordinated rollback of
+all durable evidence.
+
+The records fit the already-approved unreleased protocol-2 / operator-journals-v4
+boundary, but old writers do not understand these private fences. Coordinate all
+writers; mixed-version writing and in-place downgrade are unsupported. Rollback
+requires the matching old binary and a complete pre-upgrade store backup, not
+selective journal or sidecar restoration. Managed epoch refusal and direct
+startup limitations described above remain unchanged.
+
+The preceding mounting checkpoint
+`14300fa52576b2482c36f07abc9a69ce1be4482f` passed CI 367 on both Node
+versions and App smoke 78 with exact workflow-definition and checkout provenance.
+Smoke passed 24 functional tests, six type-proof tests per OS, and two native
+admission-intent tests on each of macOS and Windows. Native artifacts again verify
+real encryption/ownership flush, matching physical/canonical profile identity,
+new-process same-receipt recovery, non-plaintext journal and zero admissions under
+unavailable encryption. That evidence belongs to the mounting checkpoint, before
+the bounded first-attachment changes in this section; it does not validate the
+later checkpoint or daemon execution resumption.
+
+## Attention readiness and read-only revision restrictions
+
+An `input.opened` notification can precede the durable gate becoming readable as
+waiting. Attention now retains the exact run/request/step identity and performs a
+scoped refresh on matching human-input `step.waiting` or `run.paused` readiness.
+Signals arriving during a read coalesce into one follow-on read. An empty result
+alone never starts polling, and answered requests and transport generations retain
+their existing invalidation rules.
+
+Within the unreleased protocol-2 boundary, `OpenInputView.revisionActionId` is an
+optional string identifying only the exact pinned gate's declared revision option.
+It is a restriction on ordinary `inputs.answer`, not a writable capability. The
+server derives it under current input-read and exact-run authorization from the
+original stored definition; it contains no protected correction text, schema,
+revision token or destination. Full revision controls still require their existing
+stronger authorized boundary. When that boundary is unavailable (including while
+the run lease is held), the ordinary controls exclude the revision option and show
+an unavailable hint rather than offering it as a normal answer.
+
+A missing, malformed or mismatched stored pin, or an older durable gate without a
+verifiable original stored definition, fails the read explicitly. The current
+`inputs.list` API reports a generic whole-read error for that authorized scope; it
+cannot return partial valid rows with a per-row unavailable reason. It does not
+silently return an empty list, guess ordinary choices, migrate historical pins or
+fall back to current workflow definitions. Legitimate stored legacy definitions
+remain supported. Live permission and non-gate inputs retain their existing paths.
+The coordinated-writer and complete-store rollback requirements above still apply.
+
+At `82b829cd00322357b881a13cb0c0203256d9e604`, CI 370 passed both Node
+versions. App smoke 80 verified the corrective native revision path on macOS and
+Windows: atomic save, same-profile new-process pending recovery, actual stale-CAS
+draft preservation, delayed-refresh draft preservation, one exact-provenance
+corrective delivery and late replacement refusal. Its later ordinary-rationale
+scenario failed when Attention's early input read stayed empty; ordinary-rationale
+and final cross-run assertions were not reached. Those results are partial native
+evidence, not full revision acceptance. The unchanged native scenario must pass
+at the corrected readiness/restriction head. Independent revision-recovery
+re-review remains pending.
+
+At readiness/restriction head `8f7302a9560892e576f712b648fd2e798611b54f`,
+CI 371 passed both Node versions (Node24: 3411 tests passed, three opt-in skips;
+coverage 91.54% statements, 83.93% branches, 93.05% functions, 94.06% lines).
+App smoke 81 completed the entire native revision scenario on macOS, including
+ordinary-rationale exclusion and the final cross-run duplicate check. Windows
+passed atomic save and same-profile pending recovery, then received an actual
+`RUN_LEASED` while the test expected `REVISION_STALE`; later assertions were not
+reached. Its artifact did not record the lease holder, so the old run's specific
+holder is not established.
+
+Protected revision inspection/discovery and mutation share an immediate run lease.
+An overlapping read can legitimately prevent a mutation from reaching its CAS
+check and yield `RUN_LEASED`. This transient read/mutation contention remains a
+limitation; test synchronization does not resolve production contention. The
+native stale-CAS scenario isolates that specific check by briefly delaying real
+app read forwarding and draining already-forwarded reads, then releases the reads
+in a finally path. It retains the real competing mutation, real stale command and
+all assertions, without retrying a mutation or accepting a different refusal as
+proof of stale-CAS behavior. Separate regression evidence covers the lease refusal
+and draft/error retention. Cross-platform acceptance requires the next exact-head
+native run; independent recovery re-review remains pending.
+
+A controlled compiled-fixture reproduction held each actual protected read route
+at its own lease-release boundary and verified the on-disk holder identity. The
+stale authenticated command returned `RUN_LEASED` while that read owned the lease;
+a distinct uncontended invocation of the same stale command after release returned
+`REVISION_STALE`, without changing the competing correction. Reusing the already
+claimed retry identity returned in-progress, so the native synchronization must not
+retry its mutation. These synthetic results establish the contention mechanism,
+not the unrecorded holder identity in the earlier Windows artifact.
+
+Further inspection confirmed that the completed lease refusal left an unbound
+`claimed` retry record after the lease disappeared. Explicit internal reconciliation
+also returned in-progress without entering recovery, and the current public admission
+receipt dispatcher refuses revision operation kinds. This is a retry-composition
+defect, not evidence that the original mutation remains running. Native timing
+isolation does not repair it. Existing ambiguous claims must not be discarded or
+replayed automatically; prospective fence-before-claim correction is tracked
+separately from the test synchronization.
+
+The prospective composition correction wraps revision retries with the runtime's
+existing internal run fence before the shared facility can claim a key. Journal
+prepare/recovery and accepted-receipt verification reuse that held internal
+context. No caller can supply a lease; no guard, marker or execution authority is
+weakened. A refused read-owned lease therefore leaves a new key unclaimed, allowing
+the same retained intent to be submitted once after contention ends. Authenticated
+HTTP/WebSocket regressions verify zero claim calls on refusal and one committed
+revision across subsequent acceptance and replay.
+
+This fence alone does not prevent later deterministic prebinding validation
+failures (stale CAS, missing destination or invalid declared payload) from consuming
+a new key. That remaining gap requires fresh-only validation before publication;
+unconditional preflight would incorrectly reject accepted replay after the
+boundary advances. Existing unbound records remain ambiguous and are not repaired.
+
+Fresh-only validation closes that deterministic-refusal gap in the composed
+revision service. A trusted registered-operation callback runs inside the existing
+retry catalog mutex only after the scoped key lookup misses and before any new
+claim is sealed, charged or published. Existing keys take their existing replay or
+exact-conflict path first and never validate against moving current boundaries.
+The callback asserts that the internal run fence is already held, preserving the
+run-fence → catalog-mutex ordering without inverse acquisition. It performs only
+authoritative boundary/CAS/payload validation and current-authority checks; it
+cannot create a correction, decision or retry claim. Commit uses and repeats the
+same validation. A deterministic refusal therefore consumes no new key, and a
+corrected request may use that still-unclaimed key. Once a key is claimed, exact
+command conflicts remain enforced.
+
+This is an internal callback contract, not a wire callback or persisted field.
+No RPC, record phase or serialized store format changes. Nonrevision operations
+without the hook retain their existing behavior. Crashes or failures after actual
+claim publication, including subsequent authority loss, remain explicit ambiguity;
+old unbound records are unchanged and are never deleted, rebound or automatically
+replayed. The coordinated-writer/full-store rollback requirement remains in force.
+
+## Revision read sequencing
+
+At `1144bb01f88575d3a66bf99912c7873b75653977`, CI 372 passed both Node
+versions (Node24: 3453 tests passed, three opt-in skips; coverage 91.58% statements,
+83.98% branches, 93.06% functions, 94.09% lines). App smoke 82 completed the full
+native revision scenario on macOS. On Windows, the initial revision was accepted,
+but two protected pending reads returned `RUN_LEASED`; the UI showed the recorded
+correction's unavailable state and explicit Refresh action. The initial content
+assertion failed before atomic-save/restart evidence collection. This was a real
+protected-read refusal, not a missing locator or observer-code defect.
+
+The revision feed previously started a protected pending read immediately after
+receipt acceptance and then immediately invalidated it while starting discovery.
+Discovery and notification-driven refreshes could overlap further lease-taking
+reads. The correction sequences the feed's protected reads in one retained queue,
+coalescing stale queued work through the existing exact identity, version and
+connection checks. A discovery request may also inspect ordinary gates and child
+runs, so per-run queues would not cover its full read scope. The queue makes no
+claim of concurrent throughput for disjoint runs.
+Receipt acceptance records metadata; authoritative discovery and a subsequent
+protected read supply content. Accepted replacement metadata synchronously removes
+its older same-slot entry, so incomplete discovery cannot displace the new receipt
+with an obsolete identity. No correction payload is invented from a receipt,
+no mutation is retried, and no empty/error result starts polling. External lease
+ownership remains a truthful unavailable result with explicit user refresh; the
+read queue does not bypass the runtime lease or expand current authority.
+
+## Ordinary-answer read handoff
+
+At `d729415a5e228275dcc075a1e183d88fcf8202aa`, CI 373 passed both Node
+versions (Node24: 3463 tests passed, three opt-in skips; coverage 91.62% statements,
+84.04% branches, 93.09% functions, 94.11% lines). Native App smoke 83 verified the
+full corrective-revision path on both operating systems, then both ordinary
+rationale answers returned `RUN_LEASED_ELSEWHERE`. The ordinary run remained
+waiting; the ordinary-rationale and final cross-run checks were not reached.
+
+A controlled compiled-daemon reproduction held an actual protected reader's lease.
+The ordinary answer refused with zero answer events and no retry claim; an explicit
+same-intent submission after release completed once, excluding rationale from the
+agent prompt. The distinct durable `runs.continue` path binds its correlation
+before taking the fence: its refusal left a bound record and same-key recovery
+completed once. That case did not reproduce the earlier unbound revision-key defect.
+The original native artifacts did not identify their lease holders.
+
+Attention and inline durable-answer controls now coordinate with their shared
+revision feed. A handoff captures the chosen option/note and exact input identity,
+pauses new protected reads, drains already-forwarded reads, and captures the
+authorized run creation identity before invoking the ordinary answer once. Live
+permission callbacks and unrelated controls remain available. Exact input-answered
+notification evidence alone does not reopen reads: it must be followed by a newer
+same-run resumed or terminal event. The real RPC settling, refusing or rejecting
+also releases the pause. These signals only coordinate reads; they never manufacture
+an answer result, retry a mutation, or bypass current server authority or leases.
+
+The existing ordinary-answer HTTP call intentionally has no finite timeout because
+it can wait through execution. A subscription reconnect does not cancel it. After a
+reconnect, one bounded current-authority `runs.events` read may establish the same
+creation event plus the exact request/step answer and later resume/terminal
+chronology. Verification requires a complete filtered page (at most 500 events),
+not a partial page, guessed status or unbounded scan. An explicit **Check pending
+answer** action repeats only that read. Denied, malformed, missing, rewound or
+mismatched evidence stays uncertain. Old-generation responses cannot supply the
+new scope's acceptance or proof; an authorized complete history is required before
+restoring the captured note into that exact input.
+
+If the original HTTP call never settles and authoritative progress cannot be
+established, correction details can remain paused indefinitely. The UI states the
+uncertainty, retains the selection and offers the read-only check; it does not show
+silent permanent loading or infer cancellation. If the connection changes before
+the creation identity is captured, the unsent draft is retained locally but is not
+restored into an unverified target or sent automatically. Existing engine/current-
+authority refusals still apply to every actual answer. This bounded read handoff is
+not a general execution-resumption or network-failure recovery guarantee.
+
+## Observational revision reads
+
+Revision boundary and pending-content reads now use a separate non-writing journal
+projection. They do not acquire the execution writer lease. The existing writer
+journal, fence-before-claim ordering, current authority checks and CAS validation
+remain authoritative; a readable boundary is not permission or a promise that a
+later mutation can acquire a lease. An external execution owner can still refuse a
+mutation safely.
+
+The internal event-store observation API takes only the existing append/file lock.
+It reads a complete bounded history, validates record sequence, identity and tail,
+and synchronizes existing bytes with the existing platform directory-sync policy.
+It cannot initialize, append, truncate, repair, migrate or publish a record. Private
+hydration happens after that lock is released. The existing admission-only
+synchronizeEvent contract still requires its original run fence.
+
+The revision projection authenticates the captured events, relevant immutable
+publication/frontier guards, and execution-input/sensitivity identity once. All
+boundary statuses use one captured RunState. Opaque request-scoped verifiers then
+rescan public evidence and stream private ciphertext hashes, rechecking fresh key,
+source-path, ownership and sensitivity membership without decrypting another history.
+A changed identity, orphan guard, incomplete tail, missing protected material or failed sync
+returns uncertainty; it does not advertise empty history or recreate acceptance.
+Current access is checked again after final asynchronous verification before
+protected text or replacement guards are returned. Matching authenticated identities provide
+an observation of the captured version, not a guarantee that it remains current
+when a later command arrives. Coordinated rollback of all evidence and ABA changes
+outside the coordinated-writer assumptions remain undetectable limitations.
+
+An observation is limited to 100,000 events and 64 MiB of public journal bytes per
+file. Legacy ancestry validation shares the event budget across at most 32 ancestor
+files in addition to the requested run; the same per-file byte limit applies.
+Exceeding either limit is an explicit read failure requiring operator handling,
+not a permanently unsupported revision or an empty boundary. The public scan never reads an
+unbounded log and then clips it. Read-side fsync may establish durability of bytes
+already present, but cannot create an authoritative marker or accept a missing
+operation. No connection-wide discovery pause, server execution queue, new wire
+method, store-format change, mutation retry or unattended startup sweep is added.
+
+Private record and filtered-enumeration identity capture is limited to 100,000
+budget units per observation. The public byte limit is **not** an aggregate
+decrypted-payload memory budget: first-pass hydration still uses the existing
+protected reader. The projection retains one RunState/journal rather than two
+complete decrypted histories; verification streams ciphertext instead of repeating
+AES/JSON hydration. This avoids duplicate decryption/retained plaintext by design,
+not a measured universal peak-memory guarantee. Verification adds a ciphertext
+I/O pass. A strict aggregate protected-hydration budget remains a required
+performance follow-up and is not implemented by this checkpoint. Observation
+uses fresh first-pass protected reads rather than ordinary ciphertext-cache hits;
+its I/O cost can therefore increase even when an ordinary read would hit that cache.
+No opaque verifier, identity digest or key is persisted or exposed on the wire.
+Protected correction content still uses only the existing authorized allowlisted
+read projection.
+
+
+### Production MCP composition work (preparation 4937f4c0)
+
+The B composition supplies the ten frozen operator aliases through existing authenticated services. Admission and Request adapters preserve the actual RetryResult, including operationId and replayed; inspection does not attach execution. Explicit operator.reconcileAdmission uses the existing Request reconciliation/guarded scheduling path for a verified accepted Request, and the existing direct path for a direct admission. It does not await workflow settlement or imply that an accepted receipt is currently attached. Existing current resume authority, ownership and first-attachment guards still apply.
+
+Cancel and answer enter the installed guarded legacy methods with refreshed credentials. An internal expected decision identity checks exact run/request/step and lifetime before the existing answer path; ordinary answers use resume:false and preserve the note. External lease refusals remain explicit. Revision and continuation aliases reuse the existing durable services and their fences, keys and replay rules. No alias creates an alternative ledger or retries a mutation automatically.
+
+Live discovery uses the real coordinator's inspect method plus a read-only observation revision containing instance identity, a fresh port incarnation and a monotonic counter. Every actual registration/state/removal/close transition invalidates old snapshots; no-op requests do not. Before entering page metadata, the internal observation value is HMAC-protected with the existing cursor key; raw counter/incarnation data is not exposed. This observation value is not authority and does not restore callbacks.
+
+The bounded boundary-row hook is integration-owned, but its consumer remains A-owned. It verifies current read/resource grants before and after projection; revision metadata additionally requires current decision/control grants and the exact pinned declaration. Missing node/step evidence refuses rather than classifying the option ordinary. An undefined existing continuation boundary maps conservatively to unavailable, because the legacy reader does not distinguish unsupported from uncertain. Consumer snapshot invalidation and actual end-to-end MCP transport acceptance remain pending until A/C are combined. No fixture is counted as that acceptance.
+
+## Combined MCP production validation
+
+The combined CI workflow builds the current source before tests on Node 22 and Node 24. Both test steps set `ORCA_MCP_REQUIRE_PRODUCTION=1`, so the production MCP acceptance suites must use the compiled daemon and transport with the real mounted services. Missing composition is a failure, not a dependency skip. Coverage thresholds and compiled smoke checks remain unchanged; separately opted-in acceptance scenarios and actual-Cal evidence retain their own gates.
+
+Fresh direct and Request admission now run the existing pure launch validation before publishing a new retry claim. Existing-key lookup, conflict detection and accepted replay still precede fresh validation, and preparation validates again after publication. Deterministic fresh refusals therefore do not consume the key; movement or failure after claim publication remains uncertain or recoverable according to the existing receipt. This change does not repair, delete or rebind older ambiguous claims.
+
+Automatic continuation reconciliation distinguishes a current-authority refusal from a competing execution lease or an uncertain store read. Only an explicit authentication/authorization error or the existing execution-resume-authority marker can publish an authority-unavailable receipt. A replay or startup-recovery attempt that encounters another owner preserves the existing journal state, allowing the original attachment to finish its own settled transition. Explicit reconciliation still reports its actual refusal; writer fences and current-authority checks are unchanged. This prospective correction does not rewrite older blocked or ambiguous receipts. Deterministic tests hold the original completion before final settlement and release a competing lease refusal at that boundary, covering both replay and startup recovery.
+
+## CI398 integration-owned test corrections
+
+CI398 exposed readiness and contention assumptions that the earlier serial production matrix did not exercise. The C author branch remains at `451a825181f8743a00cb0c6d2780d3f6227b7018`; the integration overlay is coordinated in PR431 comment5966869447. The B ordinary-answer fixture now awaits the actual scheduled execution's completion before asserting its parked input, instead of relying on Vitest's one-second polling default.
+
+Live-input readiness recognizes only the exact backing-RPC refusal `RUN_STATE` / `Event observation history changed`, with no additional details, as a changed public snapshot. It performs another authorized read within the existing bound and still requires the exact expected pending owner identity. Every other refusal, including unknown RUN_STATE, private-record corruption, incomplete histories, limits, fsync uncertainty and authorization failures, immediately propagates. Raw MCP cold-read/fault assertions are unchanged. A controlled concurrent-append diagnostic reproduced this reason and completed the original assertions after publication stopped; CI398 did not retain its original reason, so its exact interleaving remains unproven.
+
+The retry catalog uses a bounded100ms mutex. A deterministic held-catalog test proves an explicit STORE_LOCK_TIMEOUT publishes no fresh claim. Its fixture ends after refusal and cleanup; a separate fixture proves stale-generation refusal followed by one explicit retained-key fresh submission and the original accepted identity. Concurrent accepted-key replay may return the original resolved result, an in-progress envelope with the same correlation, or an explicit bounded catalog-busy refusal. Only subsequent read-only inspection proves the original accepted receipt and single run. This does not promise simultaneous fresh-writer availability or silently resend mutations. Lost-ack continuation validation likewise observes a settled or blocked receipt phase before its one explicit reconciliation, preserving truthful blocked recovery and the original decision correlation.
+
+## CI403 catalog-contention test separation
+
+CI403 passed Node24 coverage and compiled smoke, but Node22 refused the single fresh Request submission after the test released its deliberate catalog lock. The original daemon lock owner was not captured. A separate controlled diagnostic proved that continuation discovery can hold the same catalog lock while publishing an unchanged empty cursor, causing one foreground claim to time out before validation or claim publication. This demonstrates a possible mechanism, not the historical CI cause.
+
+The busy-catalog and stale-generation acceptance scenarios now use separate real-daemon fixtures. All zero-claim, retained-key, accepted-replay and one-run assertions remain; no mutation is automatically retried, and no runtime lock, timeout or recovery behavior changes. Releasing the test's own lock never establishes system-wide quiescence. Background recovery may still cause an explicit busy refusal without deliberate contention; this split does not promise guaranteed fresh-admission availability. Avoiding unnecessary cursor publication is a separate potential optimization, not an acceptance guarantee.

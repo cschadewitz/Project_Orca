@@ -188,6 +188,13 @@ export class ConfigModel {
    * reports saved versus active state; the effective policy uses active config plus the
    * current sidecar. A saved draft must never masquerade as the running permission policy.
    */
+  /** Allowlisted operator projection: never constructs the raw config editor response. */
+  async operatorStatus(): Promise<ConfigGenerationStatus> {
+    if (!this.generations) throw new OrcaError("NOT_SUPPORTED", "configuration generations are unavailable");
+    const config = await this.read("config");
+    return this.generations.status(configurationValue(config), config.revision);
+  }
+
   async get(): Promise<ConfigGetResult> {
     const config = await this.read("config");
     const permissions = await this.read("permissions");

@@ -114,33 +114,35 @@ export class RunContext {
 
   /** Promote before any exact child result returns; immutable admission vars are never rewritten. */
   async inheritSensitivity(child: ExecutionInputs): Promise<void> {
-    const update = this.sensitivityUpdate.then(() =>
-      this.withOwnership(async () => {
-        let inputs = await this.deps.stores.execution.getInputs(this.id);
-        if (!inputs) {
-          const first = (await this.deps.stores.events.readRange(this.id, { limit: 1 }))[0];
-          if (first?.type !== "run.created") throw unavailable();
-          inputs = {
-            runId: this.id,
-            workflowId: first.payload.workflowId,
-            workflowVersion: first.payload.workflowVersion,
-            vars: first.payload.vars,
-            sensitiveNames: [],
-            secrets: [],
-          };
-          await this.deps.stores.execution.putInputs(inputs);
-        }
-        const present = new Set(inputs.secrets.map((value) => JSON.stringify(value)));
-        const secrets = child.secrets.filter((value) => !present.has(JSON.stringify(value)));
-        const sensitiveNames = child.sensitiveNames.filter((name) => !inputs.sensitiveNames.includes(name));
-        if (secrets.length || sensitiveNames.length)
-          await this.deps.stores.execution.addSensitivity(this.id, { secrets, sensitiveNames });
-        this.executionInputs = await this.deps.stores.execution.getInputs(this.id);
-        if (!this.executionInputs) throw unavailable();
-      }),
-    );
+    const update = this.sensitivityUpdate.then(() => this.withOwnership(() => this.inheritSensitivityOwned(child)));
     this.sensitivityUpdate = update.catch(() => undefined);
     await update;
+  }
+
+  /** Caller already holds this context's mutation fence; never nest withOwnership. */
+  async inheritSensitivityOwned(child: ExecutionInputs): Promise<void> {
+    if (this.leaseLost) throw new OrcaError("RUN_LEASED", `ownership of run ${this.id} was lost`);
+    let inputs = await this.deps.stores.execution.getInputs(this.id);
+    if (!inputs) {
+      const first = (await this.deps.stores.events.readRange(this.id, { limit: 1 }))[0];
+      if (first?.type !== "run.created") throw unavailable();
+      inputs = {
+        runId: this.id,
+        workflowId: first.payload.workflowId,
+        workflowVersion: first.payload.workflowVersion,
+        vars: first.payload.vars,
+        sensitiveNames: [],
+        secrets: [],
+      };
+      await this.deps.stores.execution.putInputs(inputs);
+    }
+    const present = new Set(inputs.secrets.map((value) => JSON.stringify(value)));
+    const secrets = child.secrets.filter((value) => !present.has(JSON.stringify(value)));
+    const sensitiveNames = child.sensitiveNames.filter((name) => !inputs.sensitiveNames.includes(name));
+    if (secrets.length || sensitiveNames.length)
+      await this.deps.stores.execution.addSensitivity(this.id, { secrets, sensitiveNames });
+    this.executionInputs = await this.deps.stores.execution.getInputs(this.id);
+    if (!this.executionInputs) throw unavailable();
   }
 
   async withOwnership<T>(write: () => Promise<T>): Promise<T> {

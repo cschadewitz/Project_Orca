@@ -29,8 +29,10 @@
  * lets a page of a multi-megabyte `agent.update` log cost a page's worth of reading.
  */
 import { mkdir, open, readdir, readFile, stat, truncate, type FileHandle } from "node:fs/promises";
-import { join } from "node:path";
+import { isUtf8 } from "node:buffer";
+import { dirname, join } from "node:path";
 import {
+  OrcaError,
   anyJson,
   appendJsonl,
   parseJsonlLine,
@@ -47,6 +49,17 @@ export interface JsonlLogDirOptions {
   /** Where torn tails, corrupt lines and broken locks are reported. Silent by default. */
   logger?: Logger;
   lock?: FileLockOptions;
+}
+
+/** Internal persistence callbacks, never a wire API. Caller holds the run execution fence. */
+export interface DurableUniqueAppend<T> {
+  /** Next sequence observed at the authorized boundary. Checked only for a new correlation. */
+  expectedSeq: number;
+  stale?: () => Error;
+  /** Return a validated, equivalent existing record or undefined. Conflicts must throw. */
+  findExisting(record: unknown): T | undefined | Promise<T | undefined>;
+  /** May seal private execution material before returning the public marker. */
+  build(seq: number): T | Promise<T>;
 }
 
 interface Tail {
@@ -98,6 +111,259 @@ export class JsonlLogDir {
   append<T>(key: string, build: (seq: number) => T): Promise<T> {
     const prev = this.chains.get(key) ?? Promise.resolve();
     const next = prev.then(() => this.appendLocked(key, build));
+    this.chains.set(
+      key,
+      next.catch(() => undefined),
+    );
+    return next;
+  }
+
+  /**
+   * Opt-in durable CAS append. Ordinary append retains its existing behavior. A complete
+   * marker left by a lost acknowledgement is re-synced rather than appended twice. A
+   * partial final line cannot be a commit and is repaired under the ordinary log mutex.
+   * Complete corruption/gaps fail closed instead of silently rewriting run history.
+   * The caller must also hold the run fence: a log lock alone is not execution authority.
+   */
+  appendDurableUnique<T>(key: string, options: DurableUniqueAppend<T>): Promise<{ record: T; fresh: boolean }> {
+    if (!Number.isSafeInteger(options.expectedSeq) || options.expectedSeq < 0)
+      return Promise.reject(new OrcaError("RUN_STATE", "Invalid durable journal boundary"));
+    const prev = this.chains.get(key) ?? Promise.resolve();
+    const next = prev.then(async () => {
+      await this.init();
+      const file = this.file(key);
+      return withFileLock(
+        `${file}.lock`,
+        async () => {
+          const handle = await open(file, "a+");
+          try {
+            const bytes = await handle.readFile();
+            const end = bytes.lastIndexOf(NEWLINE) + 1;
+            let nextSeq = 0;
+            let existing: T | undefined;
+            for (const line of splitJsonlLines(bytes.toString("utf8", 0, end))) {
+              let raw: unknown;
+              try {
+                raw = JSON.parse(line) as unknown;
+              } catch {
+                throw new OrcaError("RUN_STATE", "Durable journal contains an invalid complete record");
+              }
+              if ((raw as { seq?: unknown } | null)?.seq !== nextSeq++)
+                throw new OrcaError("RUN_STATE", "Durable journal sequence is inconsistent");
+              const match = await options.findExisting(raw);
+              if (match !== undefined) {
+                if (existing !== undefined)
+                  throw new OrcaError("RUN_STATE", "Durable journal contains duplicate correlations");
+                existing = match;
+              }
+            }
+            // A complete JSON marker can survive a short write that omitted only its
+            // newline. Preserve its stable correlation rather than manufacture another
+            // marker/private reference. An actually incomplete JSON tail is repairable.
+            let finishExistingLine = false;
+            if (end !== bytes.length) {
+              let tail: unknown;
+              try {
+                tail = JSON.parse(bytes.toString("utf8", end)) as unknown;
+              } catch {
+                // Incomplete final JSON is not a record.
+              }
+              if (tail !== undefined) {
+                const match = await options.findExisting(tail);
+                if (match === undefined)
+                  throw new OrcaError("RUN_STATE", "A complete unrelated journal tail requires explicit recovery");
+                if (match !== undefined) {
+                  const sequence = typeof tail === "object" && tail !== null && "seq" in tail ? tail.seq : undefined;
+                  if (existing !== undefined || sequence !== nextSeq)
+                    throw new OrcaError("RUN_STATE", "Durable journal trailing correlation is inconsistent");
+                  existing = match;
+                  finishExistingLine = true;
+                }
+              }
+            }
+            if (existing === undefined && nextSeq !== options.expectedSeq)
+              throw options.stale?.() ?? new OrcaError("RUN_STATE", "Durable journal boundary changed");
+            let record = existing;
+            if (record === undefined) {
+              record = await options.build(nextSeq);
+              if ((record as { seq?: unknown } | null)?.seq !== nextSeq)
+                throw new OrcaError("RUN_STATE", "Durable journal record has an invalid sequence");
+              // Prepare completely before touching a torn tail or extending the journal.
+              const serialized = JSON.stringify(record) + "\n";
+              if (end !== bytes.length) await handle.truncate(end);
+              await handle.writeFile(serialized);
+            }
+            if (finishExistingLine) await handle.writeFile("\n");
+            // Even an existing marker might follow a previous sync failure. Never infer
+            // durability merely because its complete bytes can currently be read.
+            await handle.sync();
+            await this.syncDirectories();
+            this.tails.delete(key);
+            return { record, fresh: existing === undefined };
+          } finally {
+            // A failed write/sync must not leave an ordinary append trusting an old tail.
+            this.tails.delete(key);
+            await handle.close();
+          }
+        },
+        this.lock,
+      );
+    });
+    this.chains.set(
+      key,
+      next.catch(() => undefined),
+    );
+    return next;
+  }
+
+  /** Read-only confirmation. Missing or incomplete markers cannot be reconstructed here. */
+  synchronizeExisting(key: string, matches: (record: unknown) => boolean): Promise<void> {
+    const prev = this.chains.get(key) ?? Promise.resolve();
+    const next = prev.then(() =>
+      withFileLock(
+        `${this.file(key)}.lock`,
+        async () => {
+          // Do not initialize the directory or create/truncate a missing marker.
+          // Windows FlushFileBuffers requires a writable handle, but r+ does not
+          // create or truncate a file and this confirmation never writes through it.
+          const handle = await open(this.file(key), process.platform === "win32" ? "r+" : "r");
+          try {
+            const bytes = await handle.readFile();
+            if (bytes.length > 0 && bytes[bytes.length - 1] !== NEWLINE)
+              throw new OrcaError("RUN_STATE", "Journal synchronization requires complete records");
+            let seq = 0;
+            let found = false;
+            for (const line of splitJsonlLines(bytes.toString("utf8"))) {
+              let raw: unknown;
+              try {
+                raw = JSON.parse(line) as unknown;
+              } catch {
+                throw new OrcaError("RUN_STATE", "Durable journal contains an invalid complete record");
+              }
+              if ((raw as { seq?: unknown } | null)?.seq !== seq++)
+                throw new OrcaError("RUN_STATE", "Durable journal sequence is inconsistent");
+              if (matches(raw)) {
+                if (found) throw new OrcaError("RUN_STATE", "Durable journal contains duplicate correlations");
+                found = true;
+              }
+            }
+            if (!found) throw new OrcaError("RUN_STATE", "The durable journal marker is missing");
+            await handle.sync();
+            await this.syncDirectories();
+          } finally {
+            await handle.close();
+          }
+        },
+        this.lock,
+      ),
+    );
+    this.chains.set(
+      key,
+      next.catch(() => undefined),
+    );
+    return next;
+  }
+
+  private async syncDirectories(): Promise<void> {
+    // POSIX directory-entry durability includes newly created ancestors. Windows
+    // currently guarantees file synchronization only, as with protected-file.ts.
+    if (process.platform === "win32") return;
+    let dir = this.dir;
+    for (;;) {
+      const directory = await open(dir, "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+
+  /**
+   * A complete bounded snapshot under the append mutex, with no execution lease. Never
+   * initializes or repairs persistence, skips corruption, logs, or trusts the tail cache.
+   * The callback only parses public records; private hydration happens after this lock.
+   */
+  readObservation<T>(
+    key: string,
+    limits: { maxRecords: number; maxBytes: number },
+    parser: JsonlParser<T>,
+  ): Promise<T[]> {
+    const { maxRecords, maxBytes } = limits;
+    if (!Number.isSafeInteger(maxRecords) || maxRecords < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1)
+      return Promise.reject(new OrcaError("RUN_STATE", "Invalid event observation limits"));
+    const prev = this.chains.get(key) ?? Promise.resolve();
+    // Observations must not emit even the append path's stale-lock warning.
+    const { onBroken: _onBroken, ...lock } = this.lock;
+    const next = prev
+      .then(() =>
+        withFileLock(
+          `${this.file(key)}.lock`,
+          async () => {
+            const file = this.file(key);
+            // FlushFileBuffers needs write access on Windows; neither flag creates a file.
+            const handle = await open(file, process.platform === "win32" ? "r+" : "r");
+            try {
+              const before = await handle.stat();
+              if (!before.isFile() || before.size === 0)
+                throw new OrcaError("RUN_STATE", "Event observation requires an existing history");
+              if (before.size > maxBytes) throw new OrcaError("RUN_STATE", "Event observation exceeds its byte limit");
+              const records: T[] = [];
+              let pos = 0;
+              let fragments: Buffer[] = [];
+              while (pos < before.size) {
+                const buffer = Buffer.allocUnsafe(Math.min(SCAN_CHUNK, before.size - pos));
+                const { bytesRead } = await handle.read(buffer, 0, buffer.length, pos);
+                if (bytesRead === 0) throw new OrcaError("RUN_STATE", "Event observation changed during its read");
+                pos += bytesRead;
+                const chunk = buffer.subarray(0, bytesRead);
+                let start = 0;
+                for (;;) {
+                  const end = chunk.indexOf(NEWLINE, start);
+                  if (end < 0) break;
+                  if (records.length >= maxRecords)
+                    throw new OrcaError("RUN_STATE", "Event observation exceeds its event limit");
+                  const last = chunk.subarray(start, end);
+                  const bytes = fragments.length ? Buffer.concat([...fragments, last]) : last;
+                  if (!isUtf8(bytes)) throw new OrcaError("RUN_STATE", "Event observation contains invalid UTF-8");
+                  fragments = [];
+                  const raw = JSON.parse(bytes.toString("utf8")) as unknown;
+                  if ((raw as { seq?: unknown } | null)?.seq !== records.length)
+                    throw new OrcaError("RUN_STATE", "Event observation sequence is inconsistent");
+                  records.push(parser.parse(raw));
+                  start = end + 1;
+                }
+                // Retain fragments once, rather than repeatedly copying a large record.
+                if (start < chunk.length) fragments.push(chunk.subarray(start));
+              }
+              if (fragments.length) throw new OrcaError("RUN_STATE", "Event observation requires complete records");
+              await handle.sync();
+              await this.syncDirectories();
+              for (const after of [await handle.stat(), await stat(file)]) {
+                if (
+                  after.dev !== before.dev ||
+                  after.ino !== before.ino ||
+                  after.size !== before.size ||
+                  after.mtimeMs !== before.mtimeMs ||
+                  after.ctimeMs !== before.ctimeMs
+                )
+                  throw new OrcaError("RUN_STATE", "Event observation changed during its read");
+              }
+              return records;
+            } finally {
+              await handle.close();
+            }
+          },
+          lock,
+        ),
+      )
+      .catch((error: unknown) => {
+        if (error instanceof OrcaError && error.code === "RUN_STATE") throw error;
+        throw new OrcaError("RUN_STATE", "Event observation could not verify complete existing history");
+      });
     this.chains.set(
       key,
       next.catch(() => undefined),

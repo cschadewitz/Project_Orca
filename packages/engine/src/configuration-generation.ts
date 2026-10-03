@@ -32,6 +32,7 @@ export type BoundLaunchOptions = Omit<
 >;
 export interface CapturedLaunch {
   readonly requestAdmissionCorrelation: true;
+  readonly admissionRunIds?: true;
   readonly generationId: string;
   readonly workflow: Readonly<{ id: string; version: string; revision: string }>;
   validateStartRun(options: BoundLaunchOptions): Promise<void>;
@@ -272,7 +273,9 @@ export class ConfigurationGenerations {
     return { outcome: "applied", status: applied, validation: { errors: [] } };
   }
 
-  readonly captureLaunch: CaptureLaunch = async (selection) => {
+  readonly captureLaunch = async (
+    selection: LaunchSelection,
+  ): Promise<import("./direct-admission.js").DirectCapturedLaunch> => {
     selection = { ...selection };
     const material = this.current; // Capture before the first await.
     if (selection.expectedConfigGeneration !== undefined && selection.expectedConfigGeneration !== material.snapshot.id)
@@ -297,11 +300,26 @@ export class ConfigurationGenerations {
     );
   };
 
+  readonly restoreDirectLaunch = async (
+    recorded: import("./direct-admission.js").RecordedDirectLaunch,
+  ): Promise<import("./direct-admission.js").DirectCapturedLaunch> => {
+    const material = await this.restore(recorded.generationId);
+    return this.captureMaterial(
+      {
+        purpose: "workflow",
+        workflowId: recorded.workflow.id,
+        workflowVersion: recorded.workflow.version,
+        expectedWorkflowRevision: recorded.workflow.revision,
+      },
+      material,
+    );
+  };
+
   private async captureMaterial(
     selection: LaunchSelection,
     material: GenerationMaterial,
     recordedRequestId?: string,
-  ): Promise<CapturedLaunch> {
+  ): Promise<import("./direct-admission.js").DirectCapturedLaunch> {
     const id =
       selection.workflowId ?? (selection.purpose === "request" ? material.snapshot.config.program.workflow : undefined);
     if (!id) throw new OrcaError("WORKFLOW_NOT_FOUND", "workflow launch requires a workflow id");
@@ -324,7 +342,17 @@ export class ConfigurationGenerations {
     const bound = (options: BoundLaunchOptions): StartRunOptions => {
       if (recordedRequestId && options.requestId !== undefined && options.requestId !== recordedRequestId)
         throw new OrcaError("RUN_STATE", "recovery Request differs from recorded admission");
-      const { actor, workspace, workItemId, parentRunId, parentStepRunId, overrides, requestAdmissionId } = options;
+      const {
+        actor,
+        workspace,
+        workItemId,
+        parentRunId,
+        parentStepRunId,
+        overrides,
+        requestAdmissionId,
+        directAdmissionId,
+        admissionRunId,
+      } = options;
       const requestId = recordedRequestId ?? options.requestId;
       const vars =
         selection.purpose === "request" &&
@@ -342,6 +370,8 @@ export class ConfigurationGenerations {
         ...(workspace ? { workspace: structuredClone(workspace) } : {}),
         ...(requestId ? { requestId } : {}),
         ...(requestAdmissionId ? { requestAdmissionId } : {}),
+        ...(directAdmissionId ? { directAdmissionId } : {}),
+        ...(admissionRunId ? { admissionRunId } : {}),
         ...(workItemId ? { workItemId } : {}),
         ...(parentRunId ? { parentRunId } : {}),
         ...(parentStepRunId ? { parentStepRunId } : {}),
@@ -350,6 +380,7 @@ export class ConfigurationGenerations {
     };
     return Object.freeze({
       requestAdmissionCorrelation: true as const,
+      admissionRunIds: true as const,
       generationId: material.snapshot.id,
       workflow,
       validateStartRun: async (options: BoundLaunchOptions) => {

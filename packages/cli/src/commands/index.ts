@@ -2,9 +2,18 @@
  * CLI command implementations. Each command receives parsed positionals and
  * flags and an output sink; `main.ts` handles argument parsing and errors.
  */
+import { mcpCommand } from "./mcp.js";
+import { AdmissionRetryModel, ContinuationAdmissionModel, neverAttached } from "@orca/daemon";
+import { admissionRetryOptions } from "./admission-retry.js";
+
 import { admissionsCommand } from "./admissions.js";
-import { workspaceIdentity } from "@orca/store";
-import { localSubmissionAuthority, authorityForNewLocalIntent } from "../local-submission-authority.js";
+import { revisionsCommand } from "./revisions.js";
+import { FileContinuationLocatorStore, workspaceIdentity } from "@orca/store";
+import {
+  localSubmissionAuthority,
+  localDirectAdmissionAuthority,
+  authorityForNewLocalIntent,
+} from "../local-submission-authority.js";
 import { releaseAssets } from "../bootstrap.js";
 
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
@@ -58,7 +67,15 @@ import {
 } from "@orca/core";
 import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
-import { PausingHumanInput, PlanService, autoHumanInput, builtinExecutors } from "@orca/engine";
+import {
+  PausingHumanInput,
+  PlanService,
+  autoHumanInput,
+  builtinExecutors,
+  createRevisionRuntime,
+  createRevisionInputServices,
+  readAdmissionExecutionStatus,
+} from "@orca/engine";
 import { AgentRegistry } from "@orca/agents";
 import { RequestSubmissionModel } from "@orca/daemon";
 import { serveAcpFacade, inspectKeplerTask } from "@orca/integrations";
@@ -246,6 +263,20 @@ interface Command {
   run: (ctx: CommandContext) => Promise<number>;
 }
 export const commands: Record<string, Command> = {
+  mcp: {
+    help: "mcp [--endpoint <url>] [--token-env <name>]",
+    usage: "Authenticated MCP over stdio. Requires an explicitly supplied daemon credential; does not start a daemon.",
+    async run(ctx) {
+      const ended = new Promise<void>((resolve) => process.stdin.once("end", resolve));
+      const handle = await mcpCommand({
+        ...(typeof ctx.flags.endpoint === "string" ? { endpoint: ctx.flags.endpoint } : {}),
+        ...(typeof ctx.flags["token-env"] === "string" ? { tokenEnv: ctx.flags["token-env"] } : {}),
+      });
+      await ended;
+      await handle.close();
+      return 0;
+    },
+  },
   auth: {
     help: "auth [issue <principal>|list|rotate <credentialId>|revoke <credentialId>]  Manage this workspace's daemon credentials.",
     usage:
@@ -445,6 +476,25 @@ export const commands: Record<string, Command> = {
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
         const workspace = ctx.flags.cwd ? { hostId: "local", cwd: String(ctx.flags.cwd) } : undefined;
+        if (app.directAdmissions && !workspace && !overrides) {
+          const retry = admissionRetryOptions(ctx.flags["idempotency-key"] as string | undefined);
+          if (ctx.flags["idempotency-key"] === undefined) ctx.err(`Retry key: ${retry.idempotencyKey}`);
+          const authority = await localDirectAdmissionAuthority(app);
+          const response = await app.directAdmissions.admitRun(
+            { workflowId, vars, ...workflowGuards(ctx) },
+            retry,
+            authority,
+          );
+          if (response.state !== "resolved" || response.result.state !== "accepted")
+            throw new OrcaError("RUN_STATE", "Run admission requires reconciliation", { ...response });
+          await authority.authorize({ workflowId });
+          return await finish(app, ctx, await app.orchestrator.run(response.result.runId));
+        }
+        if (ctx.flags["idempotency-key"] !== undefined)
+          throw new OrcaError(
+            "NOT_SUPPORTED",
+            "Keyed direct admission does not support explicit workspace or selection overrides",
+          );
         const state = await app.orchestrator.startAndRun({
           workflowId,
           vars,
@@ -462,6 +512,13 @@ export const commands: Record<string, Command> = {
   admissions: {
     help: "admissions [list|inspect <id>|reconcile <id>]  Inspect or recover original local Request admissions without starting execution.",
     run: admissionsCommand,
+  },
+
+  revisions: {
+    help: "revisions <discover <runId>|inspect|submit|replace>  Inspect or record explicit corrective input through an authenticated daemon.",
+    usage:
+      "--endpoint <url> (or ORCA_DAEMON_URL) selects the daemon; --token-env <name> defaults to ORCA_DAEMON_TOKEN.\ninspect reads a PendingRevisionTarget JSON file; submit reads a RevisionCommand; replace reads a ReplacePendingRevisionCommand via --body-file <file>.\nsubmit and replace require an explicit --idempotency-key retained for that exact intent. No credentials are discovered or saved. Execution continuation is separate.\n",
+    run: revisionsCommand,
   },
 
   submit: {
@@ -487,13 +544,18 @@ export const commands: Record<string, Command> = {
       });
       const detach = attachEventPrinter(app, ctx, Boolean(ctx.flags.quiet));
       try {
-        const admitted = await app.program.submit({
-          title,
-          body,
-          vars,
-          ...workflowGuards(ctx),
-          ...(overrides ? { overrides } : {}),
-        });
+        const retry = admissionRetryOptions(ctx.flags["idempotency-key"] as string | undefined);
+        if (ctx.flags["idempotency-key"] === undefined) ctx.err(`Retry key: ${retry.idempotencyKey}\n`);
+        const admitted = await app.program.submit(
+          {
+            title,
+            body,
+            vars,
+            ...workflowGuards(ctx),
+            ...(overrides ? { overrides } : {}),
+          },
+          retry,
+        );
         ctx.out(
           `request ${admitted.request.id}; run ${admitted.runId}${admitted.admissionId ? `; admission ${admitted.admissionId}` : ""}`,
         );
@@ -671,7 +733,24 @@ export const commands: Record<string, Command> = {
         throw new OrcaError("CONFIG_INVALID", `--port must be a port number, got '${String(ctx.flags.port)}'`);
       }
       const readOnly = Boolean(ctx.flags["read-only"]);
+      let revisionRuntime: ReturnType<typeof createRevisionRuntime> | undefined;
+      const executionBinding: { current?: ReturnType<typeof daemonExecutionRuntime> } = {};
       const app = await bootstrap({
+        ...(!readOnly && !ctx.flags["unauthenticated-loopback"]
+          ? {
+              revisionRuntime: (stores) => {
+                revisionRuntime = createRevisionRuntime({
+                  stores,
+                  authorizeExecution: async (runId) => {
+                    const current = executionBinding.current;
+                    if (!current) throw new OrcaError("RUN_STATE", "Revision execution authority is unavailable");
+                    await current.authorizeExecution(runId);
+                  },
+                });
+                return revisionRuntime.runtime;
+              },
+            }
+          : {}),
         cwd: ctx.cwd,
         ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
         // Every gate parks to the log, whatever `humanInput.mode` says in the config. A
@@ -744,16 +823,24 @@ export const commands: Record<string, Command> = {
         !readOnly && authDir
           ? daemonExecutionRuntime({
               instanceId: identity.instanceId,
+              workspaceId,
               orchestrator: app.orchestrator,
               credentials: authDir.credentials,
               ownership: authDir.ownership,
             })
           : undefined;
-      if (liveRuntime) app.orchestrator.liveInput = liveRuntime;
+      if (liveRuntime) {
+        executionBinding.current = liveRuntime;
+        app.orchestrator.liveInput = liveRuntime;
+        app.orchestrator.admissionExecution = {
+          authorize: (policy) => liveRuntime.authorizeAdmissionExecution(policy),
+        };
+      }
       const requestSubmissions =
         !readOnly && authDir && app.program.submissions
           ? new RequestSubmissionModel({
               service: app.program.submissions,
+              shouldDispatch: (id) => neverAttached(app.orchestrator, id),
               checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
               execute: async (id, authority) => {
                 const state = liveRuntime
@@ -764,7 +851,87 @@ export const commands: Record<string, Command> = {
               executionFailed: (id) => app.logger.error("Request execution requires recovery", { runId: id }),
             })
           : undefined;
+      const admissionRetries =
+        !readOnly && authDir && app.retryClaims && app.directAdmissions && app.program.submissions
+          ? new AdmissionRetryModel({
+              claims: app.retryClaims,
+              direct: app.directAdmissions,
+              requests: app.program.submissions,
+              orchestrator: app.orchestrator,
+              checkResumeAuthority: async (id, authority) => liveRuntime?.checkResumeAuthority(id, authority),
+              execute: async (id, authority) => {
+                if (liveRuntime) await liveRuntime.withResumeAuthority(id, authority, () => app.orchestrator.run(id));
+                else await app.orchestrator.run(id);
+              },
+              executionFailed: (id) => app.logger.error("Run admission requires recovery", { runId: id }),
+            })
+          : undefined;
+      const continuationAdmissions =
+        !readOnly && liveRuntime && app.retryClaims && app.retryClaimStore
+          ? new ContinuationAdmissionModel({
+              claims: app.retryClaims,
+              orchestrator: app.orchestrator,
+              locators: new FileContinuationLocatorStore({
+                storeDir,
+                execution: app.orchestrator.stores.execution,
+                retries: app.retryClaimStore,
+              }),
+              executionRuntime: liveRuntime,
+            })
+          : undefined;
+      const revisionServices =
+        revisionRuntime && app.retryClaims && liveRuntime
+          ? createRevisionInputServices({
+              journal: revisionRuntime.journal,
+              readJournal: revisionRuntime.readJournal,
+              retries: revisionRuntime.fenceRetries(app.retryClaims),
+              assertRetryFence: revisionRuntime.assertRetryFence,
+              stale: () => new OrcaError("REVISION_STALE", "Revision destination is no longer available"),
+            })
+          : undefined;
+      if (revisionServices && app.retryClaims) revisionServices.register(app.retryClaims);
       const daemon = await startDaemon({
+        admissionExecutionSource: async (runId) => {
+          const status = await readAdmissionExecutionStatus(app.orchestrator.stores, runId);
+          switch (status.state) {
+            case "ordinary":
+              return undefined;
+            case "ready":
+              return { state: "pending" };
+            case "started":
+              return { state: "started" };
+            case "unknown":
+              return { state: "uncertain", reason: "legacy-evidence" };
+            case "blocked":
+              return { state: "uncertain", reason: "evidence-unavailable" };
+          }
+        },
+        ...(revisionServices && revisionRuntime
+          ? { revisionSources: { services: revisionServices, readBoundaries: revisionRuntime.readBoundaries } }
+          : {}),
+        operatorSources: {
+          ...(liveRuntime
+            ? {
+                liveState: (target) => liveRuntime.port.inspect(target),
+                liveRevision: () => liveRuntime.port.observationRevision,
+              }
+            : {}),
+          events: app.orchestrator.stores.events,
+          leases: app.orchestrator.stores.leases,
+          generations: app.generations,
+          documents: {
+            events: app.orchestrator.stores.events,
+            requests: app.orchestrator.stores.requests,
+            items: app.orchestrator.stores.workItems,
+          },
+          definitionFor: (id, version, stored) => app.orchestrator.definitionFor(id, version, stored),
+          configStatus: () => config.operatorStatus(),
+          artifactRun: async (id) => (await app.orchestrator.stores.artifacts.get(id))?.producedBy.runId,
+          artifact: (_runId, artifactId, maxBytes) => reads.artifactsGet({ artifactId, maxBytes }),
+        },
+
+        admissionRetries,
+        continuationAdmissions,
         requestSubmissions,
         submissionWorkspaceId: workspaceId,
         identity,
@@ -795,6 +962,7 @@ export const commands: Record<string, Command> = {
         // over a store with no plan advertised a capability whose nine methods `hello` did
         // not list, and a client hid nothing on the strength of it.
         capabilities: [
+          ...(admissionRetries ? (["runs.admit", "admissions.get", "admissions.reconcile"] as const) : []),
           "runs.read",
           "runs.subscribe",
           "workflows.validateInputs",
@@ -821,6 +989,19 @@ export const commands: Record<string, Command> = {
         await daemon.close();
         throw error;
       }
+      let recoveringContinuations: Promise<void> | undefined;
+      const recoverContinuations = () => {
+        if (!daemon.recoverContinuations || recoveringContinuations) return;
+        recoveringContinuations = daemon
+          .recoverContinuations()
+          .catch(() => app.logger.warn("Continuation recovery requires explicit attention"))
+          .finally(() => {
+            recoveringContinuations = undefined;
+          });
+      };
+      recoverContinuations();
+      const continuationTimer = daemon.recoverContinuations ? setInterval(recoverContinuations, 5_000) : undefined;
+      continuationTimer?.unref();
       ctx.out(
         `orca daemon ${ORCA_VERSION} listening on ${daemon.url} (protocol ${formatProtocolVersion(PROTOCOL_VERSION)})`,
       );
@@ -846,8 +1027,11 @@ export const commands: Record<string, Command> = {
         process.once("SIGINT", stop);
         process.once("SIGTERM", stop);
       });
+      if (continuationTimer) clearInterval(continuationTimer);
+      await recoveringContinuations;
       liveRuntime?.close();
       await daemon.close();
+      await continuationAdmissions?.drain();
       return 0;
     },
   },

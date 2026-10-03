@@ -427,3 +427,7 @@ Recorded as ADRs in `docs/adr/`:
 Request admission and recovery are described in [Request submission](request-submission.md).
 The admission lifecycle is shared by daemon, configured ProgramService/CLI and ACP;
 `runs.start` remains an explicit workflow launch.
+
+The inbound MCP operator adapter uses authenticated daemon projections and shared admission
+services; see [MCP operator handoff](mcp-operator.md) for the bounded read contract and
+production mutation/actual-client acceptance boundaries.

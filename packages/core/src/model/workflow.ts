@@ -11,6 +11,7 @@
  * node type appear inside any container.
  */
 import { z } from "zod";
+import { RevisionCapabilitySchema } from "./revision-input.js";
 import { AgentSelectorSchema } from "./agent.js";
 import { ArtifactRefSchema, ArtifactSpecSchema } from "./artifact.js";
 import { GateOptionSchema } from "./run.js";
@@ -114,6 +115,7 @@ export const DecisionSourceSchema = z.discriminatedUnion("kind", [
 export type DecisionSource = z.infer<typeof DecisionSourceSchema>;
 
 export const DecisionNodeSchema = NodeBaseSchema.extend({
+  revision: RevisionCapabilitySchema.optional(),
   type: z.literal("decision"),
   source: DecisionSourceSchema,
   /**
@@ -135,6 +137,7 @@ export type DecisionNode = z.infer<typeof DecisionNodeSchema>;
 
 /** Sugar for a human decision (approval gate). */
 export const GateNodeSchema = NodeBaseSchema.extend({
+  revision: RevisionCapabilitySchema.optional(),
   type: z.literal("gate"),
   question: z.string(),
   /**

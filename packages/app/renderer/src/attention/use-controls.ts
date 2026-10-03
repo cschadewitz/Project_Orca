@@ -21,6 +21,7 @@
 import { useCallback, useState } from "react";
 import type { OpenInputView } from "@orca/protocol";
 import type { AnswerRequest } from "./answer-card.js";
+import type { AnswerHandoff } from "./use-revisions.js";
 import { alwaysOutcome } from "./card-model.js";
 
 /** What the last write said, against the object it was about. */
@@ -41,6 +42,7 @@ export interface Controls {
 }
 
 export interface ControlsOptions {
+  withAnswer?: AnswerHandoff | undefined;
   /**
    * Called with the request id the moment the daemon takes an answer, so the list can drop
    * the card and move to the next one without waiting for `input.answered` to come round.
@@ -48,7 +50,7 @@ export interface ControlsOptions {
   onAnswered: (requestId: string) => void;
 }
 
-export function useControls({ onAnswered }: ControlsOptions): Controls {
+export function useControls({ onAnswered, withAnswer }: ControlsOptions): Controls {
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   const [report, setReport] = useState<ControlReport | undefined>(undefined);
 
@@ -59,7 +61,9 @@ export function useControls({ onAnswered }: ControlsOptions): Controls {
       return new Set([...current, subject]);
     });
     void call()
-      .then((result) => setReport(result))
+      .then((result) => {
+        if (result) setReport(result);
+      })
       .finally(() =>
         setPending((current) => {
           const next = new Set(current);
@@ -71,16 +75,41 @@ export function useControls({ onAnswered }: ControlsOptions): Controls {
 
   const answer = useCallback(
     (input: OpenInputView, request: AnswerRequest) => {
-      if (pending.has(input.id)) return;
-      run(input.id, async () => {
-        const result = await window.orca.inputs.answer({
-          requestId: input.id,
-          ...(input.live ? { live: input.live.target } : {}),
-          runId: input.runId,
-          optionId: request.optionId,
-          ...(request.note ? { note: request.note } : {}),
-          ...(request.always ? { always: request.always } : {}),
+      if (input.revisionActionId === request.optionId || input.revision?.capability.actionId === request.optionId) {
+        setReport({
+          subject: input.id,
+          failed: true,
+          message: "Use Request changes to record a correction for this revision branch.",
         });
+        return;
+      }
+      if (pending.has(input.id)) return;
+      const snapshot = structuredClone(input);
+      const selected = { ...request };
+      run(input.id, async () => {
+        const invoke = () =>
+          window.orca.inputs.answer({
+            requestId: snapshot.id,
+            ...(snapshot.live ? { live: snapshot.live.target } : {}),
+            runId: snapshot.runId,
+            optionId: selected.optionId,
+            ...(selected.note ? { note: selected.note } : {}),
+            ...(selected.always ? { always: selected.always } : {}),
+          });
+        let result;
+        try {
+          result =
+            withAnswer && !snapshot.live && snapshot.kind !== "permission"
+              ? await withAnswer(snapshot, selected, invoke)
+              : await invoke();
+        } catch (error) {
+          return {
+            subject: snapshot.id,
+            failed: true,
+            message: error instanceof Error ? error.message : "Answer could not be confirmed. Your note is preserved.",
+          };
+        }
+        if (!result) return undefined;
         if (!result.ok) {
           return { subject: input.id, failed: true, message: `${result.error.code}: ${result.error.message}` };
         }
@@ -93,7 +122,7 @@ export function useControls({ onAnswered }: ControlsOptions): Controls {
         };
       });
     },
-    [onAnswered, pending, run],
+    [onAnswered, pending, run, withAnswer],
   );
 
   const cancel = useCallback(

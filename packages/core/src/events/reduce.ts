@@ -225,6 +225,18 @@ export function applyEvent(state: RunState, e: OrcaEvent): RunState {
       state.humanInputs[r.id] = r;
       break;
     }
+    case "continuation.recorded":
+    case "revision.recorded": {
+      const decision = e.payload.decision;
+      if (decision) {
+        const input = state.humanInputs[decision.requestId];
+        if (!input || input.stepRunId !== decision.stepRunId || input.answer !== undefined)
+          throw new OrcaError("RUN_STATE", "journal gate decision does not match its boundary");
+        input.answer = decision.answer;
+        input.answeredAt = e.at;
+      }
+      break;
+    }
     case "human.answered": {
       const r = state.humanInputs[e.payload.requestId];
       if (r) {

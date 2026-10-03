@@ -38,6 +38,16 @@ export type StepOutcome =
 
 /** Everything an executor may need. Kept as an interface so tests can stub it. */
 export interface StepContext {
+  /** Runtime binds these to the exact durable gate and reserved destination step under its lease. */
+  declareRevision?: (query: import("../human-input.js").HumanInputQuery) => Promise<void>;
+  revisionInput?: {
+    claim(
+      render: (slot: import("../revision-delivery.js").RevisionSlot) => Promise<string>,
+    ): Promise<import("../revision-delivery.js").RevisionHandoff>;
+    beforeSend(handoff: import("../revision-delivery.js").RevisionHandoff): Promise<void>;
+    confirm(handoff: import("../revision-delivery.js").RevisionHandoff): Promise<void>;
+    uncertain(handoff: import("../revision-delivery.js").RevisionHandoff): Promise<void>;
+  };
   readonly run: RunContext;
   readonly step: StepRun;
   readonly nodeId: string;
