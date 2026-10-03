@@ -61,7 +61,10 @@ Main owns one validated canonical byte buffer, its length, digest and private ge
 token. Preview displays all bytes and derives summaries from that buffer. Renderer-supplied
 JSON, hashes, raw paths or arbitrary source selections are not authority. A local digest
 binds the frozen preview to the save operation; it is not anonymization and is not exported.
-Changing destination never recollects or reserializes.
+Changing destination never recollects or reserializes. Expiry invalidates save, discards
+unsaved preview bytes and cleans only operation-owned temporary files under the reviewed
+cleanup policy. Show a fixed expiry notice; report cleanup failure rather than claiming
+all temporary data was removed.
 
 Recheck consent/save token, buffer identity, current authority and destination immediately
 before publication. An owner-only exclusively created temp file and atomic non-overwriting
