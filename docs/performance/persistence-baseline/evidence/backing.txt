@@ -1,0 +1,5 @@
+NAME TYPE MODEL         TRAN ROTA
+sda  disk QEMU HARDDISK         1
+sdb  disk QEMU HARDDISK         1
+sr0  rom  QEMU DVD-ROM  ata     1
+Standard PC (i440FX + PIIX, 1996)
