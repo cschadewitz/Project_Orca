@@ -237,12 +237,11 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
       (row) => row.revisionState === "available",
       "revision boundary",
     );
-    for (const collection of ["runs", "inputs"] as const) {
-      for (const row of (await f.page(peer, collection)).items) {
-        expect(row).not.toHaveProperty("expectedBoundary");
-        expect(row).not.toHaveProperty("revision");
-      }
+    for (const row of (await f.page(peer, "runs")).items) {
+      expect(row).not.toHaveProperty("expectedBoundary");
+      expect(row).not.toHaveProperty("revision");
     }
+    await refused(peer, "list_approvals", { target: peer.target }, "PROTOCOL_MESSAGE");
     const first = await f.page(peer, "events", { runId, limit: 1 });
     expect(first.nextCursor).toBeTruthy();
     await f.mutation(peer, "operator.revise", {
@@ -437,7 +436,13 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
         expect(text).not.toMatch(/destinationId|expectedBoundary|revisionState/);
       } else {
         const page = OperatorBoundaryPageResultSchema.parse(result.structuredContent);
-        expect(page.restartRequired).toBe(false);
+        // The read model explicitly invalidates a snapshot if publication changes
+        // during the read. That is a restart signal, never an empty settled result.
+        if (page.restartRequired) {
+          expect(page.items).toEqual([]);
+          expect(page.truncated).toBe(false);
+          expect(page).not.toHaveProperty("nextCursor");
+        }
         for (const row of page.items) {
           expect(row.runId).toBe(runId);
           if (row.revision) expect(row.revision.target.runId).toBe(runId);
@@ -510,11 +515,15 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
           retry: { idempotencyKey: `${wire}-continue` },
         }),
       );
-      for (const method of ["operator.continuation", "operator.reconcileContinuation"] as const)
-        expect(
-          await invoke(method, { target: peer.target, continuationId: continuation.result.continuationId }),
-        ).toMatchObject({ operationId: continuation.operationId, runId });
+      const lookup = { target: peer.target, continuationId: continuation.result.continuationId };
+      const identity = {
+        operationId: continuation.operationId,
+        runId,
+        continuationId: continuation.result.continuationId,
+      };
+      expect(await invoke("operator.continuation", lookup)).toMatchObject(identity);
       await f.status(peer, runId, "succeeded");
+      expect(await invoke("operator.reconcileContinuation", lookup)).toMatchObject({ ...identity, state: "settled" });
       if (request.result.state !== "accepted") throw new Error("Backing Request not accepted");
       await f.pending(peer, request.result.runId);
       expect(await invoke("operator.cancel", { target: peer.target, runId: request.result.runId })).toMatchObject({

@@ -79,6 +79,12 @@ const EntrySchema = z.strictObject({
 const PAGE = 256;
 const MAX_EVENTS = 100_000;
 
+function authorityUnavailable(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
+  return code.startsWith("AUTH_") || (error instanceof OrcaError && error.details?.executionResumeRequired === true);
+}
+
 export class ContinuationAdmissionModel {
   private readonly scope = new AsyncLocalStorage<Scope>();
   private readonly service: ContinuationAdmissionService;
@@ -154,7 +160,10 @@ export class ContinuationAdmissionModel {
           (this.options.schedule ?? setImmediate)(() => {
             const task = this.reconcile(id, access)
               .then(() => undefined)
-              .catch(async () => {
+              .catch(async (error: unknown) => {
+                // A competing writer or uncertain store read is not loss of authority.
+                // Preserve its existing receipt so the original owner can settle it.
+                if (!authorityUnavailable(error)) return;
                 const locator = await this.options.locators.read(id);
                 if (locator) await this.blockUnavailable(locator);
               })
@@ -203,8 +212,8 @@ export class ContinuationAdmissionModel {
           continue;
         }
         await this.reconcile(entry.receipt.continuationId, access);
-      } catch {
-        await this.blockUnavailable(locator).catch(() => undefined);
+      } catch (error) {
+        if (authorityUnavailable(error)) await this.blockUnavailable(locator).catch(() => undefined);
       }
     }
   }

@@ -17,6 +17,7 @@ import {
   OperatorPreflightResultSchema,
   ResponseMessageSchema,
   RunsEventsResultSchema,
+  ContinuationReceiptSchema,
   InputsListResultSchema,
   OPERATOR_MAX_RESULT_BYTES,
   type OperatorMutationName,
@@ -542,7 +543,7 @@ export class ProductionFixture {
 
   async readyStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
     const type = { waiting: "run.paused", succeeded: "run.completed", cancelled: "run.cancelled" }[status];
-    await until(
+    const events = await until(
       () => this.observedEvents(peer, runId),
       (events) =>
         events.findLast((event) =>
@@ -552,6 +553,27 @@ export class ProductionFixture {
         )?.type === type,
       `published ${status} milestone`,
     );
+    // Completion precedes the continuation service's final fenced write. Observe
+    // that receipt through the same authorized peer before reading a settled page.
+    if (status !== "waiting") {
+      const ids = new Set(
+        events.filter((event) => event.type === "continuation.recorded").map((event) => event.payload.continuationId),
+      );
+      for (const continuationId of ids) {
+        const receipt = await until(
+          async () =>
+            ContinuationReceiptSchema.parse(
+              rpcResult(await this.rpc("continuations.get", { continuationId }, peer.token, peer.endpoint)),
+            ),
+          (receipt) => {
+            expect(receipt, "completed continuation must not become blocked").not.toMatchObject({ state: "blocked" });
+            return receipt.state === "settled";
+          },
+          "settled continuation receipt",
+        );
+        expect(receipt).toMatchObject({ runId, continuationId });
+      }
+    }
   }
 
   async boundary(peer: Peer, runId: string) {

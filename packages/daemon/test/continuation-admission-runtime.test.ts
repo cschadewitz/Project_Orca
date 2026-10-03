@@ -12,6 +12,7 @@ import { FileRetryClaimStore } from "../../store/src/admission-retry-store.js";
 import { FileContinuationLocatorStore } from "../../store/src/continuation-admission-store.js";
 import { ContinuationAdmissionModel, type ContinuationAccess } from "../src/continuation-admission.js";
 import { Authorizer } from "../src/auth/guard.js";
+import { authForbidden } from "../src/auth/errors.js";
 import { OwnershipStore } from "../src/auth/ownership.js";
 import { orchestratorResolver } from "../src/auth/resources.js";
 import type { Principal } from "../src/auth/principal.js";
@@ -451,4 +452,89 @@ it("default setImmediate scheduling dispatches without an explicit reconcile req
   f.finish.release();
   await model.drain();
   expect((await model.inspect(receipt.continuationId, f.access)).state).toBe("settled");
+});
+
+it.each(["replay", "startup"] as const)(
+  "does not turn a %s lease refusal into an authority failure during original settlement",
+  async (path) => {
+    const f = await fixture();
+    const settling = latch(),
+      releaseSettlement = latch(),
+      leaseRefused = latch(),
+      releaseRefusal = latch();
+    const wrapper = vi.mocked(f.executionRuntime.withResumeAuthority);
+    const runtime = wrapper.getMockImplementation()!;
+    wrapper.mockImplementation(async (...args) => {
+      const state = await runtime(...args);
+      settling.release();
+      await releaseSettlement.wait;
+      return state;
+    });
+    const reconcile = f.model.reconcile.bind(f.model);
+    vi.spyOn(f.model, "reconcile").mockImplementation(async (...args) => {
+      try {
+        return await reconcile(...args);
+      } catch (error) {
+        if (error instanceof OrcaError && error.code === "RUN_LEASED") {
+          leaseRefused.release();
+          await releaseRefusal.wait;
+        }
+        throw error;
+      }
+    });
+    const tasks = (f.model as unknown as { tasks: Set<Promise<void>> }).tasks;
+    try {
+      const receipt = await f.admit();
+      f.dispatch();
+      await f.entered.wait;
+      let recoveryTask: Promise<void> | undefined;
+      if (path === "startup") {
+        recoveryTask = f.model.recoverBatch(async () => f.access);
+      } else {
+        const before = new Set(tasks);
+        expect(await f.admit()).toEqual(receipt);
+        f.dispatch();
+        recoveryTask = [...tasks].find((task) => !before.has(task));
+      }
+      expect(recoveryTask).toBeDefined();
+      await leaseRefused.wait;
+      f.finish.release();
+      await settling.wait;
+      expect((await f.orc.getState(f.runId)).run.status).toBe("completed");
+      expect(await f.stores.leases.get(`run:${f.runId}`)).toBeUndefined();
+      releaseRefusal.release();
+      await recoveryTask;
+      expect(await f.model.inspect(receipt.continuationId, f.access)).toMatchObject({ state: "accepted" });
+      releaseSettlement.release();
+      await f.model.drain();
+      expect(await f.model.inspect(receipt.continuationId, f.access)).toMatchObject({ state: "settled" });
+      expect(f.effects).toHaveBeenCalledTimes(1);
+    } finally {
+      f.finish.release();
+      releaseRefusal.release();
+      releaseSettlement.release();
+      await f.model.drain();
+    }
+  },
+);
+
+it.each([
+  ["unknown journal failure", new OrcaError("RUN_STATE", "uncertain journal"), "accepted"],
+  ["current authority refusal", authForbidden(), "blocked"],
+  [
+    "current execution authority refusal",
+    new OrcaError("RUN_STATE", "resume unavailable", { executionResumeRequired: true }),
+    "blocked",
+  ],
+] as const)("classifies scheduled %s without inventing authority loss", async (_name, error, expected) => {
+  const f = await fixture();
+  const receipt = await f.admit();
+  vi.spyOn(f.model, "reconcile").mockRejectedValue(error);
+  f.dispatch();
+  await f.model.drain();
+  expect(await f.model.inspect(receipt.continuationId, f.access)).toMatchObject({
+    state: expected,
+    ...(expected === "blocked" ? { blockedReason: "authority-unavailable" } : {}),
+  });
+  expect(f.effects).not.toHaveBeenCalled();
 });

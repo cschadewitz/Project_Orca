@@ -169,8 +169,10 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       };
       const found = await discover();
       expect(found.operations).toContain("runs.admit");
-      expect(found.operations).not.toContain("operator.admitRun");
-      expect((await discover(viewer.token)).operations).not.toContain("runs.admit");
+      expect(found.operations).toContain("operator.admitRun");
+      const viewerOperations = (await discover(viewer.token)).operations;
+      expect(viewerOperations).not.toContain("runs.admit");
+      expect(viewerOperations).not.toContain("operator.admitRun");
       const encryption = {
         isEncryptionAvailable: () => true,
         getSelectedStorageBackend: () => "test-only-mock",

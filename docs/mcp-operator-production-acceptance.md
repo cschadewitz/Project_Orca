@@ -6,10 +6,11 @@ integration test files and this document. The frozen contract is
 [mcp-operator-production-contract.md](mcp-operator-production-contract.md).
 It does not install the production handlers or import A/B branches.
 
-The production matrix is **blocked until Cal's integration mounts the ten real
-aliases and authorized boundary/live-owner projections**. Passing fixture checks
-is evidence that the harness can drive the existing shared services, not acceptance
-of an absent operator alias. Actual-Cal connectivity remains separate #393 proof.
+The C branch retains the frozen preparation runtime. Combined validation uses a
+separate worktree at #434 commit `951950dbf685bd3b9054a8399346eed15b403b4c`, with only
+C-owned tests overlaid and the runtime built there. The latest combined evidence
+is recorded below; preparation-only skips remain historical evidence, not alias
+acceptance. Actual-Cal connectivity remains separate #393 proof.
 
 ## Execution
 
@@ -88,11 +89,18 @@ pages per observation). Durable inputs require their exact unanswered
 the current-instance permission publication and an exact-run `inputs.list` proving
 the pending owner and all seven identity fields; they do not require a durable
 pause. Boundary/status checks wait for the corresponding run event milestone.
+Terminal checks also inspect each observed continuation through authorized
+`continuations.get` until its receipt is settled: `run.completed` precedes the final
+fenced service write. L02 and backing-parity A11 inspect first, wait read-only for settlement, then
+reconcile once. R03 observes admission settlement with `operator.admission`, never
+by polling the admission mutation. Deliberate retained-key replay cases remain
+explicit tests, separate from readiness.
 Readiness propagates errors, does not retry mutations, uses the existing timeout,
 and never falls back to an owner's credential. The raw `page()` remains unchanged
 for cursor and fault tests; A12 deliberately reads without readiness and accepts
-only a schema-valid snapshot or bounded `RUN_STATE` refusal, then requires the
-settled revision view. A12 does not guarantee that timing exercises both outcomes.
+only a schema-valid snapshot, the explicit empty `restartRequired` response
+(no cursor and no truncation), or bounded `RUN_STATE` refusal, then requires the
+settled revision view. A restart signal is not treated as a settled empty result. A12 does not guarantee that timing exercises both outcomes.
 
 ## Executable matrix
 
@@ -108,12 +116,12 @@ R02, A09 and A11 is additional to the MCP transport parameterization.
 | F04 | 4 | Existing production answer/revision and continuation services actually execute the scripted agent and produce an artifact; rationale is excluded and corrective text reaches the prompt. |
 | L01 | 2 | All ten aliases mounted; Request identity retained, direct admission invents no Request; actual lookup/reconcile receipts and one run correlate. |
 | L02 | 2 | Exact durable answer records without resuming; duplicate refused; continuation/lookup/reconcile; rationale excluded from agent prompt; exact artifact read and byte omission. |
-| L03 | 2 | Atomic answer plus root continuation replays once; mismatched child boundary and a fresh terminal continuation refused. |
+| L03 | 2 | Atomic answer plus root continuation replays once; one continuation/operation, accepted/accepted/settled journal transitions and exactly one correlated decision; mismatched child boundary and a fresh terminal continuation refused. |
 | L04 | 2 | Pinned revision target/action; every target component and undeclared action ID checked; ordinary answer cannot bypass revision; declaration payload validation; replay/conflict; private text excluded from public history and delivered once. |
 | L05 | 2 | Cancellation receipt reflects a real cancellation of exact parent and descendants. |
 | R01 | 4 | Request and direct admission each lose an acknowledgement after commit; no automatic retry; explicit retained-key replay/lookup/reconcile matches actual receipt; changed payload conflicts. |
 | R02 | 2 | Kill/restart preserves admission correlation; old instance target refused; fresh-target replay creates no run; HTTP/WS lookup/reconcile agree. |
-| R03 | 2 | Two compiled daemon writers race one retained key; one operation/run, explicit settlement, changed payload refused. |
+| R03 | 2 | Two compiled daemons concurrently replay one already accepted retained key; one operation/run, read-only settlement, changed payload refused. |
 | R04 | 2 | Combined answer/continuation response loss, restart, stable receipt, replay and changed-decision conflict; one decision-bearing journal marker. |
 | R05 | 2 | Revision response loss and restart preserve protected pending receipt without executing or publicly exposing its payload. |
 | A01 | 2 | Revoked connected caller refused before dispatch for all ten tool names; typed HTTP 401 or bounded MCP AUTH_INVALID; open WS cannot retain authority. Executable before mounting, without proving alias-handler execution. |
@@ -121,13 +129,13 @@ R02, A09 and A11 is additional to the MCP transport parameterization.
 | A03 | 2 | Workspace/boot/run/step/input identity, caller authority injection, implicit resume and standing grants refused; cross-run artifact ID refused. |
 | A04 | 2 | All seven live identity fields; actual second daemon reports owner-unavailable; original callback accepts once and duplicate cannot deliver again. |
 | A05 | 2 | Owner death/restart expires live approval; old callback never receives an answer. |
-| A06 | 2 | No unscoped strong enrichment; bounded reads, forged cursor restart and snapshot invalidation after revision; protected text excluded. |
+| A06 | 2 | Unscoped runs omit strong enrichment and unscoped inputs are refused with PROTOCOL_MESSAGE; bounded reads, forged cursor restart and snapshot invalidation after revision; protected text excluded. |
 | A07 | 2 | Revocation while a real protected read response is held prevents late MCP publication. This is an edge publication check, not a claim about every internal daemon await. |
 | A08 | 2 | Audit binds authenticated actor and actual operation/run correlations; excludes key, rationale, credential, paths; errors exclude payload/stack/details. |
 | A09 | 2 | Backing HTTP/WS strict schemas, retry UTF-8 byte limits, target checks and receipt equality; unsupported pending-replacement surface stays absent. |
 | A10 | 2 | Ordinary boundary is unsupported; missing durable protected evidence propagates RUN_STATE as a whole-read failure without a boundary/success payload; current authentication remains required and restoring evidence restores the authorized revision view. |
 | A11 | 2 | All ten aliases succeed through both backing HTTP and WS with actual execution, Request/direct identity, continuation receipts, cancellation and revision effects. |
-| A12 | 2 | Cold revision/run reads without readiness expose a schema-valid snapshot or a bounded whole-read RUN_STATE refusal without a usable boundary; the subsequent settled revision read must succeed. |
+| A12 | 2 | Cold revision/run reads without readiness expose a schema-valid snapshot, an explicit empty restart signal without cursor/truncation, or a bounded whole-read RUN_STATE refusal without a usable boundary; the subsequent settled revision read must succeed. |
 
 Coverage limits: L03's child refusal uses a boundary from another run, so it does
 not independently establish root-only enforcement. L04 prepares action-ID mismatch,
@@ -153,7 +161,7 @@ The ten aliases are exercised positively by A11 and these MCP cases:
 | `operator.reconcileContinuation` | `reconcile_continuation` | L02, R04 |
 | `operator.revise` | `revise_input` | L04, R05 |
 
-## Initial preparation evidence and remaining gates
+## Historical initial preparation evidence
 
 Initial commit `9720e7d736bcacdd04ae3609c3ab175d91169290` was executed on 2026-10-03 with Node `24.21.0` and pnpm `12.4.2`, using a build made
 from the frozen base in this isolated checkout:
@@ -189,7 +197,7 @@ No main merge, deployment, release, credential migration, host security change o
 actual-Cal connectivity is part of this branch. No percentage, ETA or cost is
 estimated. Complete production success, CI and #393 proof remain outstanding.
 
-## Review corrections
+## Historical first review corrections
 
 Refusal responses now enforce `OPERATOR_MAX_RESULT_BYTES` and reject success
 `structuredContent`, retaining credential-leak checks. A01 accepts only the SDK's
@@ -237,3 +245,98 @@ GitHub CI currently has no run for this preparation-target PR: `ci.yml` only
 triggers for `main`. Enabling that CI path is outside C's ownership. The integrator
 must also build the compiled runtime before these tests execute. No-checks is not
 green CI, and the required full strict integration run remains outstanding.
+
+## Combined validation of remaining review corrections
+
+The updated review on #431 identified A06's incorrect unscoped-input success
+expectation, L02 reconciliation during an active execution lease, L03 counting
+journal transitions as separate continuations, and terminal reads preceding the
+continuation service's final receipt. The tests now preserve the run-scope guard,
+separate receipt inspection from reconciliation, count one logical continuation
+with three ordered public transitions and one exact decision, and wait through
+authorized read-only receipt inspection before settled MCP reads. Public event
+records intentionally omit the protected dispatch field; the expected accepted /
+accepted / settled sequence corresponds to needed / attached / settled, with the
+lookup and replay proving the same operation identity. Production code is unchanged.
+
+The combined run also exposed the same active-lease ordering in backing-parity
+A11, now corrected. A12 had assumed that a cold successful read could never require
+restart. The existing read model explicitly returns `restartRequired: true` on
+concurrent publication; A12 now asserts that exact safe response has zero items,
+no cursor and no truncation, preserving the mandatory later settled assertion and
+all error checks.
+
+R03's original fresh race was scheduling-dependent because the two daemon boots
+have different active configuration generations. A command pinned by the first
+can legitimately fail `CONFIG_STALE` on the second if it wins the fresh claim.
+R03 now first accepts with the issuer, then races explicit same-key replays in
+both daemons and checks identical operation/result, replay flags, a single run,
+and changed-payload refusal. Settlement uses read-only admission lookup. This
+establishes concurrent replay of durable intent, not simultaneous fresh admission
+under a shared generation; that latter scenario is not established by this fixture.
+
+The earlier preparation and review sections above describe their original heads,
+not the current composed validation result. No full repository, renderer/Electron,
+CI or actual-Cal acceptance is implied by this matrix.
+
+### Reproduced product defect
+
+L03 intermittently reaches `run.completed` but its continuation never reaches the
+expected settled receipt. The first combined run timed out after the existing
+15-second read-only bound on HTTP. A subsequent fresh-fixture diagnostic on the
+final test sources reproduced a **blocked** receipt after completion on stdio
+(1 passed, 1 failed, 22 name-filter exclusions). The harness now fails immediately
+on that blocked receipt; it neither reconciles it away nor retries the mutation.
+The original successful retained-key replay and single-decision assertions remain.
+
+Source inspection suggests a race in `ContinuationAdmissionModel.admit`: an
+accepted replay schedules reconciliation again, and its failure path can call
+`blockUnavailable` while the original attachment is settling. This is a suspected
+cause, not a traced proof of the exact interleaving or blocked reason. The observed
+post-completion blocked receipt is reproduced; production remediation belongs to
+the runtime owner. No product code was changed here, and a later passing matrix
+does not establish that this intermittent defect is fixed.
+
+### Exact composed execution evidence (2026-10-03)
+
+Runtime baseline: `951950dbf685bd3b9054a8399346eed15b403b4c` (#434), built in
+`/tmp/orca-431-validation`. Only the four C test files from the C commit containing
+this document were overlaid. Node `24.21.0`, pnpm `12.4.2`. No composed runtime
+source was imported into the C branch. The PR records the full C commit SHA.
+
+| Execution | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: |
+| Final full strict matrix, 374.56 seconds | 60 | 0 | 0 |
+| Final-source L03 diagnostic | 2 | 0 | 22 name-filter exclusions |
+| Final-source L03 reproduction (first fresh repeat; stopped on failure) | 1 | 1 | 22 name-filter exclusions |
+| Intermediate full strict matrix before A11/A12/R03 corrections | 56 | 4 | 0 |
+| Intermediate A12 diagnostic | 2 | 0 | 22 name-filter exclusions |
+
+The final matrix includes authority 24/24, lifecycle 24/24 and recovery 12/12;
+all ten aliases and both MCP transports executed. The intermediate failures were
+A11 HTTP `RUN_LEASED`, A12 stdio explicit snapshot restart, R03 stdio `CONFIG_STALE`,
+and L03 HTTP receipt-settlement timeout. The first three fixture expectations were
+corrected as described above; the fourth remains a reproduced product defect.
+The full matrix pass is not a claim of stable product acceptance or CI clearance.
+
+Commands (from the composed validation worktree, except C lint/format checks):
+
+```sh
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile
+pnpm exec tsc -b tsconfig.build.json
+pnpm exec tsc --noEmit
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-{lifecycle,recovery,authority}.test.ts --maxWorkers=1 --reporter=default --reporter=json --outputFile.json=/tmp/orca-431-final-results.json
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-lifecycle.test.ts -t L03 --maxWorkers=1 --reporter=default --reporter=json --outputFile.json=/tmp/orca-431-continuation-results.json
+# Reproduction uses the same L03 command with a fresh fixture and output filename:
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-lifecycle.test.ts -t L03 --maxWorkers=1 --reporter=default --reporter=json --outputFile.json=/tmp/orca-431-continuation-repeat-1.json
+pnpm exec eslint packages/integrations/test/mcp-operator-production-*.ts
+pnpm exec prettier --check packages/integrations/test/mcp-operator-production-*.ts docs/mcp-operator-production-acceptance.md
+git diff --check
+```
+
+Compiled build, root TypeScript in both C and composed checkouts, scoped ESLint,
+five-file Prettier and whitespace checks pass. An offline install lacked a cached
+tarball; the authorized frozen install succeeded. An attempted Vitest `--repeat=3`
+command was rejected before executing tests; the bounded shell-loop reproduction
+stopped after its first run failed. Neither setup failure contributes test counts.
+Reports and logs live under `/tmp/orca-431-*`; generated evidence is not committed.
