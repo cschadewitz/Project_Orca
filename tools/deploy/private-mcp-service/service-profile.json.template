@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "review": {
+    "approvedBy": "@REVIEWER@",
+    "approvedAt": "@ISO_UTC_APPROVAL_TIME@",
+    "reference": "@APPROVAL_REFERENCE@"
+  },
+  "policy": "@EXPLICIT_POLICY_CHOICE@",
+  "principal": "@DEDICATED_PRINCIPAL@",
+  "credentialId": "@CREDENTIAL_ID@",
+  "permissions": ["@REPLACE_WITH_EXACT_REVIEWED_PERMISSION_ARRAY@"],
+  "scope": { "workflows": ["@REPLACE_WITH_EXACT_REVIEWED_ROOT_WORKFLOW_IDS@"], "runs": "@REVIEWED_RUN_SCOPE@" },
+  "endpoint": "http://127.0.0.1:33871/rpc",
+  "target": { "workspaceId": "@WORKSPACE_UUID@", "instanceId": "@INSTANCE_UUID@" },
+  "runtime": {
+    "node": "@ABSOLUTE_NODE_BINARY@",
+    "cliEntry": "@ABSOLUTE_ORCA_CLI_DIST_MAIN_JS@",
+    "workspaceDir": "@ABSOLUTE_WORKSPACE_DIR@",
+    "orcaVersion": "0.6.0",
+    "commit": "3702da5b38dc449280c2837366615de741e9c45c"
+  },
+  "childEnvironment": {}
+}
