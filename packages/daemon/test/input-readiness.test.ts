@@ -122,10 +122,19 @@ edges:
         runId: "run",
         stepRunId: "gate-step",
       });
-      // Readiness of the ordinary input is not readiness of protected revision metadata.
-      await expect(adapter.readBoundaries("run")).rejects.toMatchObject({ code: "RUN_LEASED" });
+      // Complete protected metadata is observable without borrowing execution ownership.
+      const boundaries = await adapter.readBoundaries("run");
+      expect(boundaries).toHaveLength(1);
+      expect(boundaries[0]!.target).toMatchObject({
+        runId: "run",
+        stepRunId: "gate-step",
+        requestId: page.inputs[0]!.id,
+      });
+      expect(boundaries[0]!.status).toBe("waiting");
+      expect((await stores.leases.get("run:run"))?.guardedId).toBe(rc.lease.guardedId);
       await rc.emit({ type: "run.paused", payload: {} });
-      await expect(adapter.readBoundaries("run")).rejects.toMatchObject({ code: "RUN_LEASED" });
+      expect(await adapter.readBoundaries("run")).toEqual(boundaries);
+      expect((await stores.leases.get("run:run"))?.guardedId).toBe(rc.lease.guardedId);
     } finally {
       await stores.leases.release(rc.lease);
     }
