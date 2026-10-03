@@ -34,6 +34,45 @@ async function pointerCount(f: ProductionFixture): Promise<number> {
 
 describe.each(transports)("fresh admission validation over %s", (transport) => {
   for (const method of ["operator.admitRun", "operator.submitRequest"] as const)
+    it(`${method} refuses a deliberately busy catalog without publishing a fresh claim`, async () => {
+      const f = await ProductionFixture.create();
+      fixtures.push(f);
+      const first = await f.connect(transport);
+      const guards = await f.guards(first, "gate", method === "operator.submitRequest" ? "request" : "workflow");
+      const command =
+        method === "operator.submitRequest"
+          ? { ...guards, title: "Busy catalog", body: "Synthetic request", vars: {} }
+          : { ...guards, vars: {} };
+      const retry = { idempotencyKey: "retained-busy-intent" };
+      const name = method === "operator.submitRequest" ? "submit_request" : "start_workflow";
+      const params = { target: first.target, command, retry };
+      // A busy catalog refuses before publishing a fresh claim. Do not turn that
+      // availability limit into acceptance or silently resend a mutation.
+      await withFileLock(join(f.dir, "state/admission-retries/catalog.lock"), async () => {
+        const busy = await first.client.callTool({ name, arguments: params });
+        expect(busy.isError).toBe(true);
+        expect(busy).not.toHaveProperty("structuredContent");
+        const encoded = JSON.stringify(busy);
+        expect(
+          JSON.parse(
+            (busy.content as { type: string; text?: string }[]).find((item) => item.type === "text")?.text ?? "{}",
+          ),
+        ).toMatchObject({ error: { code: "STORE_LOCK_TIMEOUT" } });
+        expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
+        expect(encoded).not.toContain(retry.idempotencyKey);
+        expect(encoded).not.toContain(first.token);
+        expect(await claimCount(f)).toBe(0);
+        expect(await pointerCount(f)).toBe(0);
+      });
+      // No subsequent mutation: releasing our lock does not mean another daemon's
+      // background recovery has relinquished the shared catalog.
+      expect(await claimCount(f)).toBe(0);
+      expect(await pointerCount(f)).toBe(0);
+      expect(await f.page(first, "runs")).toMatchObject({ items: [], restartRequired: false });
+      expect(await f.page(first, "requests")).toMatchObject({ items: [], restartRequired: false });
+    });
+
+  for (const method of ["operator.admitRun", "operator.submitRequest"] as const)
     it(`${method} refuses a stale target without a claim, then accepts the original key once`, async () => {
       const f = await ProductionFixture.create();
       fixtures.push(f);
@@ -65,25 +104,8 @@ describe.each(transports)("fresh admission validation over %s", (transport) => {
       expect(await f.page(first, "requests")).toMatchObject({ items: [], restartRequired: false });
 
       const params = { target: first.target, command, retry };
-      // A busy catalog refuses before publishing a fresh claim. Do not turn that
-      // availability limit into acceptance or silently resend a mutation.
-      await withFileLock(join(f.dir, "state/admission-retries/catalog.lock"), async () => {
-        const busy = await first.client.callTool({ name, arguments: params });
-        expect(busy.isError).toBe(true);
-        expect(busy).not.toHaveProperty("structuredContent");
-        const encoded = JSON.stringify(busy);
-        expect(
-          JSON.parse(
-            (busy.content as { type: string; text?: string }[]).find((item) => item.type === "text")?.text ?? "{}",
-          ),
-        ).toMatchObject({ error: { code: "STORE_LOCK_TIMEOUT" } });
-        expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
-        expect(encoded).not.toContain(retry.idempotencyKey);
-        expect(encoded).not.toContain(first.token);
-        expect(await claimCount(f)).toBe(0);
-        expect(await pointerCount(f)).toBe(0);
-      });
-      // One explicit post-release fresh submission establishes the accepted intent.
+      // One fresh submission after the stale refusal; ordinary background contention
+      // can still refuse it. This test does not establish system-wide quiescence.
       const receipt = accepted(await f.mutation(first, method, params));
       const outcomes = await Promise.all(
         [first, second].map(async (peer) => {
