@@ -1947,53 +1947,58 @@ export class Orchestrator {
       handshake.failed(e);
       throw e;
     }
-    handshake.ok();
-    // The run's model goes on before any turn does; a model nobody offers fails the step here.
-    if (model !== undefined) {
-      try {
-        await applyModel(session, agent, model);
-      } catch (e) {
-        await session.close().catch(() => undefined);
-        throw e;
-      }
-    }
-    const applied = model ?? currentModel(session);
-    await rc.emit({
-      type: "agent.session.opened",
-      payload: {
-        stepRunId: step.id,
-        sessionId: session.id,
-        agentId: agent.id,
-        hostId: host.id,
-        cwd: rc.workspace.cwd,
-        ...(applied !== undefined ? { model: applied } : {}),
-        ...(continuity ? { continuity } : {}),
-      },
-    });
-    for (const listener of this.sessionOpenedListeners) {
-      try {
-        listener({ runId: rc.id, agentId: agent.id, session });
-      } catch (e) {
-        rc.logger.warn("agent session listener threw", { error: String(e) });
-      }
-    }
-    const close = async () => {
-      await session.close();
-      await rc
-        .emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } })
-        .catch(() => undefined);
-    };
-    if (agent.sessionMode === "per-run") {
-      const pooled = { session, current };
-      this.sessions.set(key, pooled);
-      // A pooled session whose connection went away (wedged agent killed after a cancel, or a
-      // crash) must not be handed to the next step; let that step open a fresh one instead.
-      void session.closed.then(() => {
-        if (this.sessions.get(key) === pooled) this.sessions.delete(key);
+    // Until the release function or pool takes ownership, every startup failure
+    // must close the newly created session, including a failed opened-event append.
+    try {
+      handshake.ok();
+      // The run's model goes on before any turn does; a model nobody offers fails the step here.
+      if (model !== undefined) await applyModel(session, agent, model);
+      const applied = model ?? currentModel(session);
+      await rc.emit({
+        type: "agent.session.opened",
+        payload: {
+          stepRunId: step.id,
+          sessionId: session.id,
+          agentId: agent.id,
+          hostId: host.id,
+          cwd: rc.workspace.cwd,
+          ...(applied !== undefined ? { model: applied } : {}),
+          ...(continuity ? { continuity } : {}),
+        },
       });
-      return { session, release: async () => {} };
+      for (const listener of this.sessionOpenedListeners) {
+        try {
+          listener({ runId: rc.id, agentId: agent.id, session });
+        } catch (e) {
+          rc.logger.warn("agent session listener threw", { error: String(e) });
+        }
+      }
+      const close = async () => {
+        await session.close();
+        await rc
+          .emit({ type: "agent.session.closed", payload: { stepRunId: current.step.id, sessionId: session.id } })
+          .catch(() => undefined);
+      };
+      if (agent.sessionMode === "per-run") {
+        const pooled = { session, current };
+        this.sessions.set(key, pooled);
+        // A pooled session whose connection went away (wedged agent killed after a cancel, or a
+        // crash) must not be handed to the next step; let that step open a fresh one instead.
+        void session.closed.then(() => {
+          if (this.sessions.get(key) === pooled) this.sessions.delete(key);
+        });
+        return { session, release: async () => {} };
+      }
+      return { session, release: close };
+    } catch (error) {
+      await session.close().catch((cleanupError: unknown) =>
+        rc.logger.warn("agent session startup cleanup failed", {
+          sessionId: session.id,
+          error: describeError(cleanupError),
+        }),
+      );
+      throw error;
     }
-    return { session, release: close };
   }
 
   private async closeRunSessions(runId: string): Promise<void> {

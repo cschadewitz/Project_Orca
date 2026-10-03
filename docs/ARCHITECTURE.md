@@ -395,7 +395,22 @@ prompt as `vars.upstream`. Full description: `docs/PLANNING.md`.
   pickup and workspace provisioning work identically for remote agents (`cat`,
   `test -e`, `git worktree add` over SSH).
 - `openAcpSession()` performs `initialize` → `session/new` with a handshake
-  timeout and surfaces the agent's stderr tail on failure.
+  timeout and surfaces the agent's stderr tail on failure. Handshake failure and
+  ordinary session termination share one idempotent direct-child cleanup: wait up to
+  two seconds after SIGTERM, then up to two seconds after SIGKILL. Startup therefore
+  takes at most four additional seconds to clean up after a handshake failure (subject
+  to event-loop scheduling). An already-observed exit needs no signal; concurrent closes
+  share the same operation and clear their grace timers. If exit remains unobserved,
+  cleanup fails explicitly rather than claiming the process stopped. Handshake errors
+  retain their code/message and original cause, with the separate cleanup failure in
+  `details.cleanup` and a warning in the logger. Ordinary `close()` rejects on incomplete
+  cleanup; cancellation-triggered cleanup also logs that failure.
+- The orchestrator owns a newly created session through model setup and the
+  `agent.session.opened` append, until it returns a release function or registers the
+  per-run pool entry. Startup bookkeeping failure closes that session in either mode;
+  a close failure is logged separately and never replaces the original startup error.
+  These guarantees concern only the owned direct child (the local SSH client for SSH
+  sessions), not descendant processes, remote agent exit, or daemon-wide draining.
 - Alternative transports implement `AgentSession` and are injected as
   `Orchestrator.sessionFactory` (HTTP ACP; T3 Code threads once its transport lands).
 
