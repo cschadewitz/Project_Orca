@@ -32,6 +32,8 @@ git diff --check
 Checker exit codes: `0` proposed contract pass, `1` rejected fixture, `2` unreadable
 fixture/CLI misuse. A missing Python dependency prevents the check; it is not a pass.
 The checker reports fixed reasons only, never exception messages containing input data.
+CLI misuse returns `2` and `BLOCKED: invalid_arguments` without echoing supplied arguments;
+`--help` remains available with a fixed program name.
 It opens only its local schema and the explicitly named fixture; it does not discover
 profiles, inspect stores, contact a daemon, collect evidence or send anything.
 

@@ -75,6 +75,8 @@ the exact ceiling still fails canonical form), invalid UTF-8, excessive nesting,
 fraction representations, trailing JSON, maximum and overflow event/alias counts, reversed
 time order, trailing-newline regex attacks, unknown fields at every object level and
 unobserved daemon facts. There is no multi-megabyte committed fixture or unbounded recipe.
+CLI subprocess cases also check missing/extra arguments, canary-bearing options and malformed
+help options: fixed stderr only, exit `2`, no echoed input; normal `--help` still succeeds.
 
 ## Consent and retention state oracles
 

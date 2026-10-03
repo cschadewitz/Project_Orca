@@ -23,6 +23,13 @@ class Rejected(ValueError):
     """Fixed local checker reason; contains no candidate content."""
 
 
+class FixedReasonParser(argparse.ArgumentParser):
+    """Do not echo argument values or parser exception details on CLI misuse."""
+
+    def error(self, _message):
+        self.exit(2, "BLOCKED: invalid_arguments\n")
+
+
 def unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -113,7 +120,7 @@ def read_bundle(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = FixedReasonParser(prog="validate.py", description=__doc__, allow_abbrev=False)
     parser.add_argument("bundle", type=Path)
     args = parser.parse_args()
     try:

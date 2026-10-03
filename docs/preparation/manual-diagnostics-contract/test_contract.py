@@ -2,6 +2,8 @@
 
 import copy
 import json
+import subprocess
+import sys
 import unittest
 
 from validate import MAX_BYTES, ROOT, Rejected, export_bytes, read_bundle, validate_bytes
@@ -22,6 +24,29 @@ class ContractTests(unittest.TestCase):
                 raw = path.read_bytes()
                 self.assertEqual(raw, export_bytes(validate_bytes(raw)))
                 self.assertNotIn(b"SYNTHETIC_CANARY", raw)
+
+    def test_cli_errors_do_not_echo_arguments(self):
+        canary = "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+        fixture = str(ROOT / "fixtures/valid/startup-unknown.json")
+        for arguments in (
+            [], [fixture, "--" + canary], [fixture, canary],
+            ["--help=" + canary], [canary, "--unexpected"],
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / "validate.py"), *arguments],
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "BLOCKED: invalid_arguments\n")
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "validate.py"), "--help"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("usage: validate.py", result.stdout)
+        self.assertEqual(result.stderr, "")
 
     def test_invalid_bundles(self):
         semantic = {
