@@ -211,7 +211,7 @@ test("revision controls survive restart and conflict, then deliver the reviewed 
     const discovery = OperatorDiscoverySchema.parse(await daemon.rpc("operator.discover"));
     expect(discovery.authentication).toBe("credential");
     const input = await startRevisionRun(daemon, "corrective-run");
-    const boundary = input.revision!;
+    const boundary = input.revision;
     let launched = await launch(daemon, profile);
     app = launched.app;
     evidence.firstProfile = launched.identity;
@@ -415,7 +415,7 @@ test("revision controls survive restart and conflict, then deliver the reviewed 
     });
     evidence.lateReplacementRefused = true;
 
-    const ordinary = await startRevisionRun(daemon, "ordinary-run");
+    const ordinary = await startRevisionRun(daemon, "ordinary-run", false);
     const gate = page.getByRole("region", { name: `gate, ${fixture.question}` });
     await expect(gate).toBeVisible();
     await gate.getByRole("button", { name: /Continue unchanged/ }).click();

@@ -4,7 +4,12 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { InputsListResultSchema, type RevisionReceipt } from "@orca/protocol";
+import {
+  InputsListResultSchema,
+  RunsStartResultSchema,
+  type OpenInputView,
+  type RevisionReceipt,
+} from "@orca/protocol";
 import type { RevisionJournalEntry } from "../../../engine/src/revision-input.js";
 import { startAdmissionDaemon, type AdmissionDaemon, type OwnershipProbeEvidence } from "./admission-daemon.js";
 
@@ -83,12 +88,54 @@ export function startRevisionDaemon(report: (evidence: OwnershipProbeEvidence) =
 }
 
 /** Seed only an actual parked gate. The acceptance test performs its decisions through the UI. */
-export async function startRevisionRun(daemon: AdmissionDaemon, marker: string) {
-  await daemon.rpc("runs.start", { workflowId: REVISION_FIXTURE.workflowId, vars: { marker } });
-  const inputs = InputsListResultSchema.parse(await daemon.rpc("inputs.list"));
-  const input = inputs.inputs.find((candidate) => candidate.question === REVISION_FIXTURE.question);
-  if (!input?.revision) throw new Error("The compiled revision fixture did not expose its declared gate");
-  return input;
+export function startRevisionRun(
+  daemon: AdmissionDaemon,
+  marker: string,
+  requireRevision?: true,
+): Promise<OpenInputView & { revision: NonNullable<OpenInputView["revision"]> }>;
+export function startRevisionRun(
+  daemon: AdmissionDaemon,
+  marker: string,
+  requireRevision: false,
+): Promise<OpenInputView>;
+export async function startRevisionRun(daemon: AdmissionDaemon, marker: string, requireRevision = true) {
+  const { runId } = RunsStartResultSchema.pick({ runId: true }).parse(
+    await daemon.rpc("runs.start", { workflowId: REVISION_FIXTURE.workflowId, vars: { marker } }),
+  );
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const inputs = InputsListResultSchema.parse(await daemon.rpc("inputs.list", { runId }));
+    const matching = inputs.inputs.filter(
+      (candidate) =>
+        candidate.runId === runId &&
+        candidate.nodeId === "review" &&
+        candidate.kind === "decision" &&
+        !candidate.live &&
+        candidate.question === REVISION_FIXTURE.question,
+    );
+    if (matching.length > 1) throw new Error("The compiled revision fixture exposed an ambiguous exact-run gate");
+    const input = matching[0];
+    if (input) {
+      if (input.revisionActionId !== "changes")
+        throw new Error("The compiled revision fixture gate lacks its declared action restriction");
+      if (
+        input.revision &&
+        (input.revision.target.runId !== runId ||
+          input.revision.target.stepRunId !== input.stepRunId ||
+          input.revision.target.requestId !== input.id ||
+          input.revision.capability.actionId !== "changes" ||
+          input.revision.capability.destinationNodeId !== REVISION_FIXTURE.destination)
+      )
+        throw new Error("The compiled revision fixture exposed a mismatched revision boundary");
+      if (!requireRevision || input.revision) return input;
+    }
+    const missing = input ? "revision boundary" : "gate";
+    if (Date.now() >= deadline)
+      throw new Error(`The compiled revision fixture did not expose its exact-run ${missing}`);
+    // Read-only readiness: a protected optional boundary can be omitted while another
+    // reader holds its lease. Never restart the run or substitute a same-question gate.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 export function pendingTarget(receipt: RevisionReceipt) {
