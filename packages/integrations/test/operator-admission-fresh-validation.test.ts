@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { OPERATOR_MAX_RESULT_BYTES, RunsEventsResultSchema } from "@orca/protocol";
+import { OPERATOR_MAX_RESULT_BYTES, OperatorMutationContracts, RunsEventsResultSchema } from "@orca/protocol";
+import { withFileLock } from "../../store/src/file-lock.js";
 import { ProductionFixture, accepted, rpcResult, transports, until } from "./mcp-operator-production-fixture.js";
 
 const fixtures: ProductionFixture[] = [];
@@ -63,11 +64,63 @@ describe.each(transports)("fresh admission validation over %s", (transport) => {
       expect(await f.page(first, "runs")).toMatchObject({ items: [], restartRequired: false });
       expect(await f.page(first, "requests")).toMatchObject({ items: [], restartRequired: false });
 
-      // Both concurrent fresh callers use the target whose pinned generation is current.
       const params = { target: first.target, command, retry };
-      const replies = await Promise.all([f.mutation(first, method, params), f.mutation(first, method, params)]);
-      expect(new Set(replies.map((reply) => reply.operationId)).size).toBe(1);
+      // A busy catalog refuses before publishing a fresh claim. Do not turn that
+      // availability limit into acceptance or silently resend a mutation.
+      await withFileLock(join(f.dir, "state/admission-retries/catalog.lock"), async () => {
+        const busy = await first.client.callTool({ name, arguments: params });
+        expect(busy.isError).toBe(true);
+        expect(busy).not.toHaveProperty("structuredContent");
+        const encoded = JSON.stringify(busy);
+        expect(
+          JSON.parse(
+            (busy.content as { type: string; text?: string }[]).find((item) => item.type === "text")?.text ?? "{}",
+          ),
+        ).toMatchObject({ error: { code: "STORE_LOCK_TIMEOUT" } });
+        expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
+        expect(encoded).not.toContain(retry.idempotencyKey);
+        expect(encoded).not.toContain(first.token);
+        expect(await claimCount(f)).toBe(0);
+        expect(await pointerCount(f)).toBe(0);
+      });
+      // One explicit post-release fresh submission establishes the accepted intent.
       const receipt = accepted(await f.mutation(first, method, params));
+      const outcomes = await Promise.all(
+        [first, second].map(async (peer) => {
+          const response = await peer.client.callTool({ name, arguments: { ...params, target: peer.target } });
+          expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
+          if (response.isError) {
+            expect(response).not.toHaveProperty("structuredContent");
+            const encoded = JSON.stringify(response);
+            expect(
+              JSON.parse(
+                (response.content as { type: string; text?: string }[]).find((item) => item.type === "text")?.text ??
+                  "{}",
+              ),
+            ).toMatchObject({ error: { code: "STORE_LOCK_TIMEOUT" } });
+            expect(encoded).not.toContain(retry.idempotencyKey);
+            expect(encoded).not.toContain(peer.token);
+            return;
+          }
+          const replay = OperatorMutationContracts[method].result.parse(response.structuredContent);
+          expect(response.structuredContent).toEqual(replay);
+          expect(replay.operationId).toBe(receipt.operationId);
+          if (replay.state === "resolved")
+            expect(accepted(replay)).toMatchObject({ replayed: true, result: receipt.result });
+          else
+            expect(replay).toEqual({
+              state: "in-progress",
+              operationId: receipt.operationId,
+              recovery: "inspect-or-retry",
+            });
+        }),
+      );
+      expect(outcomes).toHaveLength(2);
+      expect(
+        accepted(
+          await f.mutation(first, "operator.admission", { target: first.target, operationId: receipt.operationId }),
+        ),
+      ).toMatchObject({ operationId: receipt.operationId, result: receipt.result });
       expect(await claimCount(f)).toBe(1);
       await until(
         async () =>

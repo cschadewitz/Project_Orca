@@ -69,8 +69,14 @@ edges: [{from: start, to: gate}, {from: gate, to: end, when: "choice == 'approve
   });
   const tasks = new Set<Promise<void>>();
   const failures: unknown[] = [];
+  let observeFirstExecution!: (completion: Promise<void>) => void;
+  const firstExecution = new Promise<void>((resolve) => {
+    observeFirstExecution = resolve;
+  });
+  void firstExecution.catch(() => {});
   const execute = (runId: string, authority?: ExecutionResumeAuthority) => {
     const task = runtime.withResumeAuthority(runId, authority, () => f.orc.run(runId)).then(() => {});
+    observeFirstExecution(task);
     tasks.add(task);
     void task.finally(() => tasks.delete(task)).catch(() => {});
     return task;
@@ -161,6 +167,7 @@ edges: [{from: start, to: gate}, {from: gate, to: end, when: "choice == 'approve
     credentials,
     stores,
     failures,
+    firstExecution,
     runtime,
     discovery,
     setRequestDispatch: (enabled: boolean) => {
@@ -264,12 +271,12 @@ it("ordinary answers retain exact step identity, explicit lease refusal, note an
   );
   if (admitted.state !== "resolved" || admitted.result.state !== "accepted") throw new Error("not admitted");
   const runId = admitted.result.runId;
-  let input: { id: string; stepRunId: string } | undefined;
-  await vi.waitFor(async () => {
-    const page = value(await f.call("inputs.list", { runId })) as { inputs: { id: string; stepRunId: string }[] };
-    input = page.inputs[0];
-    expect(input).toBeDefined();
-  });
+  // Admission acknowledges durable acceptance before its scheduled interpreter parks.
+  // Observe that actual execution completion instead of assuming a one-second window.
+  await f.firstExecution;
+  const page = value(await f.call("inputs.list", { runId })) as { inputs: { id: string; stepRunId: string }[] };
+  const input = page.inputs[0];
+  expect(input).toBeDefined();
   const decision = {
     lifetime: "durable",
     runId,

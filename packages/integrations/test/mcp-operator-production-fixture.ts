@@ -529,10 +529,13 @@ export class ProductionFixture {
         requestId: requested.payload.requestId,
       };
       const input = await until(
-        async () =>
-          InputsListResultSchema.parse(
-            rpcResult(await this.rpc("inputs.list", { runId }, peer.token, peer.endpoint)),
-          ).inputs.find((row) => row.runId === runId && row.id === expected.requestId),
+        async () => {
+          const observed = readinessRpcResult(await this.rpc("inputs.list", { runId }, peer.token, peer.endpoint));
+          if (observed.changed) return undefined;
+          return InputsListResultSchema.parse(observed.result).inputs.find(
+            (row) => row.runId === runId && row.id === expected.requestId,
+          );
+        },
         (row) => row?.live?.state === "pending",
         "current live permission owner",
       );
@@ -755,6 +758,18 @@ export async function authenticationRefused(peer: Peer, name: string, args: obje
     expect(text).not.toContain(peer.token);
     return text;
   }
+}
+
+/** Only the known public snapshot-change refusal is transient readiness, never a successful empty page. */
+export function readinessRpcResult(response: ResponseMessage): { changed: true } | { changed: false; result: unknown } {
+  if (
+    !response.ok &&
+    response.error.code === "RUN_STATE" &&
+    response.error.message === "Event observation history changed" &&
+    response.error.details === undefined
+  )
+    return { changed: true };
+  return { changed: false, result: rpcResult(response) };
 }
 
 export function rpcResult(response: ResponseMessage): unknown {

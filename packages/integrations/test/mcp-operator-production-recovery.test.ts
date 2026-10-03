@@ -1,6 +1,6 @@
 /** Durable receipts across response loss, real process restart and concurrent production writers. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OperatorMutationContracts } from "@orca/protocol";
+import { OperatorMutationContracts, OPERATOR_MAX_RESULT_BYTES } from "@orca/protocol";
 import {
   ProductionFixture,
   accepted,
@@ -110,19 +110,48 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
     // against the other daemon may correctly fail CONFIG_STALE.
     const original = accepted(await f.mutation(first, "operator.admitRun", params));
     expect(original.replayed).toBe(false);
-    const attempts = await Promise.all([
-      f.mutation(first, "operator.admitRun", params),
-      f.mutation(second, "operator.admitRun", { ...params, target: second.target }),
-    ]);
-    expect(attempts.map((result) => result.operationId)).toEqual([original.operationId, original.operationId]);
-    for (const result of attempts) expect(accepted(result)).toMatchObject({ replayed: true, result: original.result });
+    await Promise.all(
+      [first, second].map(async (peer) => {
+        const response = await peer.client.callTool({
+          name: "start_workflow",
+          arguments: { ...params, target: peer.target },
+        });
+        const encoded = JSON.stringify(response);
+        expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
+        expect(encoded).not.toContain(peer.token);
+        expect(encoded).not.toContain(params.retry.idempotencyKey);
+        if (response.isError) {
+          // The bounded catalog mutex can refuse before loading the existing correlation.
+          // This is not acceptance; the original receipt is still verified below by read.
+          expect(response).not.toHaveProperty("structuredContent");
+          expect(
+            JSON.parse(
+              (response.content as { type: string; text?: string }[]).find((item) => item.type === "text")?.text ??
+                "{}",
+            ),
+          ).toMatchObject({ error: { code: "STORE_LOCK_TIMEOUT" } });
+          return;
+        }
+        const result = OperatorMutationContracts["operator.admitRun"].result.parse(response.structuredContent);
+        expect(response.structuredContent).toEqual(result);
+        expect(result.operationId).toBe(original.operationId);
+        if (result.state === "resolved")
+          expect(accepted(result)).toMatchObject({ replayed: true, result: original.result });
+        else
+          expect(result).toEqual({
+            state: "in-progress",
+            operationId: original.operationId,
+            recovery: "inspect-or-retry",
+          });
+      }),
+    );
     const eventual = await until(
-      () => f.mutation(second, "operator.admission", { target: second.target, operationId: attempts[0].operationId }),
+      () => f.mutation(second, "operator.admission", { target: second.target, operationId: original.operationId }),
       (result) => result.state === "resolved",
       "concurrent admission settlement",
     );
     const receipt = accepted(eventual);
-    expect(receipt.replayed).toBe(true);
+    expect(receipt).toMatchObject({ replayed: true, operationId: original.operationId, result: original.result });
     await refused(
       second,
       "start_workflow",
@@ -165,11 +194,17 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
       operationId: first.operationId,
       result: { continuationId: first.result.continuationId, runId },
     });
-    for (const method of ["operator.continuation", "operator.reconcileContinuation"] as const) {
-      expect(
-        await f.mutation(restarted, method, { target: restarted.target, continuationId: first.result.continuationId }),
-      ).toMatchObject({ continuationId: first.result.continuationId, operationId: first.operationId, runId });
-    }
+    const lookup = { target: restarted.target, continuationId: first.result.continuationId };
+    const identity = { continuationId: first.result.continuationId, operationId: first.operationId, runId };
+    const inspected = await until(
+      () => f.mutation(restarted, "operator.continuation", lookup),
+      (receipt) => receipt.state === "settled" || receipt.state === "blocked",
+      "observed continuation recovery phase",
+    );
+    expect(inspected).toMatchObject(identity);
+    // Recovery may still hold the execution lease after the original acceptance
+    // receipt is replayed. Inspect first, then request reconciliation exactly once.
+    expect(await f.mutation(restarted, "operator.reconcileContinuation", lookup)).toMatchObject(identity);
     await refused(
       restarted,
       "continue_run",
