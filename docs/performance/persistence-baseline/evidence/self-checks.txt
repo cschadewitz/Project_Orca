@@ -1,0 +1,14 @@
+✔ supervisor retains timeout/output failures and refuses exhausted suites and disk bounds (233.363514ms)
+✔ independent axes and combined fixture stay within fixed bounds (2.908236ms)
+✔ rotations pair both cache orders and preserve all cases (0.637884ms)
+✔ interval union never double counts nested or concurrent calls (0.806004ms)
+✔ failed and unrun samples remain visible and never enter successful medians (1.088041ms)
+✔ compiled workers create protected fixtures and validate fresh and warm concurrent readers (1707.007445ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2075.573869
