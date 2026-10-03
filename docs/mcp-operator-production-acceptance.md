@@ -1,0 +1,167 @@
+# Production MCP acceptance — ownership C
+
+Base: `4937f4c083c572d07b840258724ef600368a7a5d`. Branch:
+`test/327-production-acceptance-c`. This branch changes only the four C-owned
+integration test files and this document. The frozen contract is
+[mcp-operator-production-contract.md](mcp-operator-production-contract.md).
+It does not install the production handlers or import A/B branches.
+
+The production matrix is **blocked until Cal's integration mounts the ten real
+aliases and authorized boundary/live-owner projections**. Passing fixture checks
+is evidence that the harness can drive the existing shared services, not acceptance
+of an absent operator alias. Actual-Cal connectivity remains separate #393 proof.
+
+## Execution
+
+Use Node >=22 and the repository's pinned pnpm. Install the frozen lockfile, then
+build in this checkout. The fixture intentionally launches the compiled CLI in
+separate Node processes, bypassing Vitest's source aliases for the runtime under test.
+It fails if compiled entry points are absent. Rebuild after integrating runtime changes;
+do not point these tests at another checkout's `dist` directory.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm exec tsc -b tsconfig.build.json
+pnpm exec tsc --noEmit
+pnpm exec eslint packages/integrations/test/mcp-operator-production-*.ts
+pnpm exec prettier --check packages/integrations/test/mcp-operator-production-*.ts docs/mcp-operator-production-acceptance.md
+
+# Preparation report: discover the real deployment; mark missing mounts BLOCKED/skipped.
+pnpm exec vitest run packages/integrations/test/mcp-operator-production-{lifecycle,recovery,authority}.test.ts --maxWorkers=1
+
+# Release/integration acceptance: missing production mounts are failures, never skips.
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-{lifecycle,recovery,authority}.test.ts --maxWorkers=1
+
+# Machine-readable evidence, without adding generated reports to the branch.
+pnpm exec vitest run packages/integrations/test/mcp-operator-production-{lifecycle,recovery,authority}.test.ts --maxWorkers=1 --reporter=json --outputFile=/tmp/orca-mcp-production-results.json
+
+# Select one row by its stable ID, e.g. response loss or exact live identity.
+pnpm exec vitest run packages/integrations/test/mcp-operator-production-recovery.test.ts -t R01 --maxWorkers=1
+pnpm exec vitest run packages/integrations/test/mcp-operator-production-authority.test.ts -t A04 --maxWorkers=1
+```
+
+Loopback listeners and child processes must be permitted by the runner. A sandbox
+`listen EPERM`, build failure, malformed discovery, crashed child, refused preflight,
+or failed fixture is a **failure**, not a production dependency skip. Only successful,
+authenticated discovery plus `tools/list` proving a required alias is absent can
+trigger a dependency skip. Once all aliases are mounted, boundary/state/assertion
+failures stay red; the harness does not skip them.
+
+## Runtime and isolation
+
+`mcp-operator-production-fixture.ts` creates a new temporary config, disk store,
+auth directory and workflows for every test. It runs compiled `orca serve` with
+token authentication and port zero. A separate compiled credential-store process
+issues/revokes only synthetic fixture credentials. The persistent test principal
+is separate from the daemon's bootstrap credential so restarting or opening a
+second daemon cannot accidentally rotate the test caller. No host/workspace
+credentials or access policy are read or changed.
+
+The stdio client launches compiled `orca mcp`. The HTTP client sends real
+Streamable HTTP requests over a loopback private bridge into the compiled
+`createOperatorHttpHandler`, with its fixed HTTPS origin and the caller's bearer
+credential. The bridge adapts Node HTTP requests to Fetch requests; it neither
+manufactures responses nor supplies privileged credentials. This tests the
+supported private-bridge handler path, not public TLS termination or deployment.
+HTTP/WS backing RPCs use the same authenticated compiled daemon.
+
+The workloads are gates, a declared corrective-input gate, a parent with a parked
+child, and an ACP agent that asks permission. The existing compiled scripted agent
+is a synthetic workload, not a mutation handler. Production bootstrap constructs
+the actual admission, retry, continuation, revision, execution-authority, ownership,
+lease, journal, audit and credential services. There are no `vi.mock` replacements,
+in-memory MCP transports, discovery fixtures or injected mutation callbacks.
+
+Fault injection is outside those services: a forwarding proxy consumes a genuine
+daemon response and drops the acknowledgement; another holds a genuine response
+while a credential is revoked; a process is killed/restarted; two daemon processes
+write one store; or one protected payload file is temporarily moved. Response-loss
+tests retain the original real receipt for correlation and count forwarded writes
+to detect automatic adapter retries. Test cleanup closes clients/listeners/processes
+and removes synthetic state. The process environment excludes ambient ORCA settings,
+agent credentials and `NODE_OPTIONS`.
+
+## Executable matrix
+
+Each row runs over **both stdio and authenticated HTTP MCP**. Counts include both
+transports. Row IDs are executable `-t` selectors. Backing HTTP/WS coverage in F01,
+R02, A09 and A11 is additional to the MCP transport parameterization.
+
+| ID | Count | Executable acceptance |
+| --- | ---: | --- |
+| F01 | 2 | Actual authenticated discovery and tool inventory agree with daemon hello and HTTP/WS discovery. No advertised substitute capabilities. |
+| F02 | 2 | Real preflight and existing direct admission park a gate; bounded event pages preserve distinct IDs and one persisted run. |
+| F03 | 6 | Existing production services create revision, live permission and parent/child workloads; protected boundary and live callback readiness are real. |
+| F04 | 4 | Existing production answer/revision and continuation services actually execute the scripted agent and produce an artifact; rationale is excluded and corrective text reaches the prompt. |
+| L01 | 2 | All ten aliases mounted; Request identity retained, direct admission invents no Request; actual lookup/reconcile receipts and one run correlate. |
+| L02 | 2 | Exact durable answer records without resuming; duplicate refused; continuation/lookup/reconcile; rationale excluded from agent prompt; exact artifact read and byte omission. |
+| L03 | 2 | Atomic answer plus root continuation replays once; child continuation and a fresh terminal continuation refused. |
+| L04 | 2 | Pinned revision target/action; every target component checked; ordinary answer cannot bypass revision; declaration payload validation; replay/conflict; private text excluded from public history and delivered once. |
+| L05 | 2 | Cancellation receipt reflects a real cancellation of exact parent and descendants. |
+| R01 | 4 | Request and direct admission each lose an acknowledgement after commit; no automatic retry; explicit retained-key replay/lookup/reconcile matches actual receipt; changed payload conflicts. |
+| R02 | 2 | Kill/restart preserves admission correlation; old instance target refused; fresh-target replay creates no run; HTTP/WS lookup/reconcile agree. |
+| R03 | 2 | Two compiled daemon writers race one retained key; one operation/run, explicit settlement, changed payload refused. |
+| R04 | 2 | Combined answer/continuation response loss, restart, stable receipt, replay and changed-decision conflict; one decision-bearing journal marker. |
+| R05 | 2 | Revision response loss and restart preserve protected pending receipt without executing or publicly exposing its payload. |
+| A01 | 2 | Revoked connected caller refused for all ten aliases before malformed-input diagnostics; open WS cannot retain authority. |
+| A02 | 2 | Current grant combinations and owner/workflow scope; weak readers receive restriction-only action ID and no revision view; continuation disclosure matches authorized `runs.get`. |
+| A03 | 2 | Workspace/boot/run/step/input identity, caller authority injection, implicit resume and standing grants refused; cross-run artifact ID refused. |
+| A04 | 2 | All seven live identity fields; actual second daemon reports owner-unavailable; original callback accepts once and duplicate cannot deliver again. |
+| A05 | 2 | Owner death/restart expires live approval; old callback never receives an answer. |
+| A06 | 2 | No unscoped strong enrichment; bounded reads, forged cursor restart and snapshot invalidation after revision; protected text excluded. |
+| A07 | 2 | Revocation while a real protected read response is held prevents late MCP publication. This is an edge publication check, not a claim about every internal daemon await. |
+| A08 | 2 | Audit binds authenticated actor and actual operation/run correlations; excludes key, rationale, credential, paths; errors exclude payload/stack/details. |
+| A09 | 2 | Backing HTTP/WS strict schemas, retry UTF-8 byte limits, target checks and receipt equality; unsupported pending-replacement surface stays absent. |
+| A10 | 2 | Ordinary boundary is unsupported; loss of protected revision evidence is unavailable, never an empty/unsupported success; projection revision changes and restores. |
+| A11 | 2 | All ten aliases succeed through both backing HTTP and WS with actual execution, Request/direct identity, continuation receipts, cancellation and revision effects. |
+
+The ten aliases are exercised positively by A11 and these MCP cases:
+
+| RPC | MCP tool | Principal cases |
+| --- | --- | --- |
+| `operator.submitRequest` | `submit_request` | L01, R01 |
+| `operator.admitRun` | `start_workflow` | L01–L05, R01–R03 |
+| `operator.admission` | `get_admission` | L01, R01, R02 |
+| `operator.reconcileAdmission` | `reconcile_admission` | L01, R01, R02 |
+| `operator.cancel` | `cancel_run` | L05, A03 |
+| `operator.answer` | `respond_to_approval` | L02, A04 |
+| `operator.continueRun` | `continue_run` | L02–L04, R04 |
+| `operator.continuation` | `get_continuation` | L02, R04 |
+| `operator.reconcileContinuation` | `reconcile_continuation` | L02, R04 |
+| `operator.revise` | `revise_input` | L04, R05 |
+
+## Preparation evidence and remaining gates
+
+Executed on 2026-10-03 with Node `24.21.0` and pnpm `12.4.2`, using a build made
+from the frozen base in this isolated checkout:
+
+| Check | Passed | Failed | Skipped / unrun | Result |
+| --- | ---: | ---: | --- | --- |
+| Complete preparation matrix, 58 tests | 14 | 0 | 44 dependency skips; their production bodies are unrun | All F rows pass; all L/R/A rows blocked on the real mount. |
+| Strict gate diagnostic, lifecycle `-t L01` | 0 | 2 expected dependency failures | 22 excluded by the name selector | Nonzero exit; stdio and HTTP both report all ten aliases missing. |
+| Compiled build (`tsc -b tsconfig.build.json`) | — | — | — | Passed. |
+| Root TypeScript including tests (`tsc --noEmit`) | — | — | — | Passed. |
+| ESLint on the four new test files | — | — | — | Passed. |
+| Prettier on the five owned files | — | — | — | Passed. |
+
+The full matrix took 185.45 seconds; the strict diagnostic took 6.80 seconds.
+Local machine-readable reports are `/tmp/orca-327-production-results.json` and
+`/tmp/orca-327-strict-results.json` (generated evidence, not committed fixtures).
+The diagnostic used:
+
+```sh
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-lifecycle.test.ts -t L01 --maxWorkers=1
+```
+
+F rows establish fixture readiness only. L/R/A bodies remain unexecuted because
+production discovery exposes none of the ten mutation/receipt aliases. There are
+no unexpected failures in the final preparation run. The full strict matrix,
+production-body results after Cal's integration, the unrelated full repository
+suite, renderer/Electron checks and actual-Cal #393 proof are **unrun**. The strict
+command is the required acceptance command after Cal integrates; a preparation-mode
+green exit is insufficient. The two expected strict-gate failures do not establish
+that the blocked production bodies pass or fail.
+
+No main merge, deployment, release, credential migration, host security change or
+actual-Cal connectivity is part of this branch. No percentage, ETA or cost is
+estimated. Complete production success, CI and #393 proof remain outstanding.
