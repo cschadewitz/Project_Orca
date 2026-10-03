@@ -15,8 +15,11 @@ Agents are anything that speaks the [Agent Client Protocol (ACP)](https://agentc
 — Claude Code, Codex, Gemini CLI, OpenCode, … — running **locally or on another
 machine over SSH**. ORCA itself can be exposed **as an ACP agent**, so GitKraken
 Kepler, Zed or any ACP client can drive it like a single agent (proxy mode).
-T3 Code is *not* an ACP client today, so neither direction of the T3 Code
-integration works yet — it is groundwork (see `docs/INTEGRATIONS.md`).
+T3 Code now has an ACP Registry client, but running ORCA through it still needs a
+supported provider definition and end-to-end verification. ORCA's adapter for driving
+T3 threads remains incomplete and needs current contract validation as well as a
+transport (see [integrations](docs/INTEGRATIONS.md#t3-code-integration-status) and the
+[comparative review](docs/research/t3-code-comparison-2026-10-03.md)).
 
 ```
                     ┌──────────────────────────── ORCA ─────────────────────────────┐

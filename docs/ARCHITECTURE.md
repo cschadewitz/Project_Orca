@@ -404,10 +404,12 @@ prompt as `vars.upstream`. Full description: `docs/PLANNING.md`.
 See `docs/INTEGRATIONS.md`. Short version: ORCA is transport‑ and host‑agnostic;
 it is **an ACP agent to the tools above it** and **an ACP client to the agents
 below it**. Kepler launches `orca acp` like any agent; ORCA in turn launches
-Claude Code / Codex on the task's worktrees (locally or over SSH). T3 Code is
-not ACP in either direction: it cannot launch `orca acp`, and adapting its
-threads as `AgentSession`s over its WebSocket RPC is groundwork, not a working
-transport.
+Claude Code / Codex on the task's worktrees (locally or over SSH). T3 Code now
+implements an ACP Registry client; a supported ORCA provider definition and lifecycle
+verification are still needed before claiming compatibility. Adapting T3 threads as
+`AgentSession`s over its WebSocket RPC remains groundwork: the adapter needs current
+v2 contracts, lifecycle/workspace mapping and transport. See the dated
+[comparison and evidence](research/t3-code-comparison-2026-10-03.md).
 
 ## Key design decisions
 

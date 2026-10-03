@@ -7,6 +7,7 @@
 | [PLANNING.md](PLANNING.md) | understand the long‑term plan: dependencies across requests, the risk matrix, decision matrices, the scheduler and `orca plan` |
 | [WORKFLOWS.md](WORKFLOWS.md) | write or change a workflow (node types, routing, completion policies, templates) |
 | [INTEGRATIONS.md](INTEGRATIONS.md) | run ORCA inside Kepler, use agents over SSH, or read where the T3 Code groundwork stands |
+| [ORCA and T3 Code review](research/t3-code-comparison-2026-10-03.md) | compare pinned implementations, product gaps, engineering lessons and prioritized improvements |
 | [REAL-AGENT-TEST.md](REAL-AGENT-TEST.md) | set ORCA up against a real coding agent on one machine and drive it from Kepler |
 | [session-logs/](session-logs/) | read the raw event logs of selected real-agent sessions and runs, kept for reference |
 | [EXTENSIBILITY.md](EXTENSIBILITY.md) | add node types, transports, hosts, stores, human channels via plugins |
