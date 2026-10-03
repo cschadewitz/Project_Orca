@@ -14,7 +14,7 @@ import { AttentionSurface } from "../src/attention/attention-surface.js";
 import { InlineAsksProvider, StepAsks } from "../src/attention/inline-asks.js";
 import { useAttention, type AttentionFeed } from "../src/attention/use-attention.js";
 import { useControls, type Controls } from "../src/attention/use-controls.js";
-import { RUNS } from "./fixtures.js";
+import { RUNS, EVENTS } from "./fixtures.js";
 import { FIVE_GATES, INPUTS_AS_OF } from "./fixtures-inputs.js";
 import { harness, installBridge, stubMatchMedia, type Harness } from "./harness.js";
 import type { FakeBridge } from "./fake-bridge.js";
@@ -133,6 +133,15 @@ beforeEach(() => {
   open = [gate];
   summaries = [];
   fake.script({
+    "runs.events": (params) => ({
+      ok: true as const,
+      result: {
+        events: [{ ...EVENTS["run-parent"]![0]!, runId: params.runId }],
+        hasMore: false,
+        lastSeq: 20,
+        asOf: INPUTS_AS_OF,
+      },
+    }),
     "runs.list": () => ({
       ok: true,
       result: { runs: [{ ...RUNS[0]!, id: "run-1", status: "running" }], total: 1, asOf: INPUTS_AS_OF },
@@ -1115,4 +1124,454 @@ it("does not redirect an old scoped callback onto a new connection with matching
   ).rejects.toThrow(/unavailable/);
   expect(revise).not.toHaveBeenCalled();
   expect(replace).not.toHaveBeenCalled();
+});
+
+it("drains its protected discovery before sending one ordinary answer with the captured note", async () => {
+  mount();
+  const region = await screen.findByRole("region", { name: "gate, Ship release 1?" });
+  const held = deferred<void>();
+  let leased = false;
+  fake.script({
+    "inputs.list": async (params) => {
+      if (params.revisionRunIds) {
+        leased = true;
+        await held.promise;
+        leased = false;
+      }
+      return {
+        ok: true as const,
+        result: {
+          inputs: open,
+          waiting: open.length,
+          asOf: INPUTS_AS_OF,
+          pendingRevisions: { items: [], incomplete: false as const },
+        },
+      };
+    },
+    "inputs.answer": () => ({
+      ok: false,
+      error: {
+        code: leased ? "RUN_LEASED_ELSEWHERE" : "INPUT_ANSWERED",
+        message: "Synthetic refusal; preserve the note",
+      },
+    }),
+  });
+  act(() => feed.revisions!.refresh("run-1"));
+  await waitFor(() => expect(leased).toBe(true));
+  fireEvent.click(within(region).getByRole("button", { name: /Approve/ }));
+  region.focus();
+  fireEvent.keyDown(region, { key: "Enter", code: "Enter", shiftKey: true });
+  fireEvent.change(within(region).getByLabelText("Note"), { target: { value: "Keep this ordinary rationale" } });
+  fireEvent.click(within(region).getByRole("button", { name: "Answer" }));
+  try {
+    await act(async () => {});
+    expect(fake.calls.filter((call) => call.method === "inputs.answer")).toHaveLength(0);
+  } finally {
+    await act(async () => held.resolve());
+  }
+  await waitFor(() => expect(fake.calls.filter((call) => call.method === "inputs.answer")).toHaveLength(1));
+  expect(fake.calls.find((call) => call.method === "inputs.answer")!.params).toMatchObject({
+    runId: "run-1",
+    requestId: gate.id,
+    optionId: "approve",
+    note: "Keep this ordinary rationale",
+  });
+  expect(within(region).getByLabelText<HTMLInputElement>("Note").value).toBe("Keep this ordinary rationale");
+});
+
+function handoffCreated() {
+  return { ...EVENTS["run-parent"]![0]!, runId: "run-1" };
+}
+function handoffAnswerEvent(seq = 21) {
+  return {
+    id: "ordinary-answer",
+    runId: "run-1",
+    seq,
+    at: INPUTS_AS_OF,
+    type: "human.answered" as const,
+    payload: { requestId: gate.id, stepRunId: gate.stepRunId, answer: "approve" },
+  };
+}
+function handoffProgressEvent(seq = 22) {
+  return { id: "ordinary-resume", runId: "run-1", seq, at: INPUTS_AS_OF, type: "run.resumed" as const, payload: {} };
+}
+function notifyOrdinaryAnswer(seq = 21, requestId = gate.id) {
+  act(() =>
+    fake.notify({
+      kind: "notification",
+      method: "input.answered",
+      params: {
+        subscriptionId: "attention",
+        runId: gate.runId,
+        stepRunId: gate.stepRunId,
+        requestId,
+        answer: "approve",
+        seq,
+        at: INPUTS_AS_OF,
+      },
+    }),
+  );
+}
+function notifyAnswerProgress(seq = 22, runId = gate.runId) {
+  act(() =>
+    fake.notify({
+      kind: "notification",
+      method: "run.changed",
+      params: { subscriptionId: "attention", runId, seq, at: INPUTS_AS_OF, event: "run.resumed", status: "running" },
+    }),
+  );
+}
+function reconnectAnswer(generation = 2) {
+  act(() =>
+    fake.connect({
+      state: "live",
+      since: INPUTS_AS_OF,
+      generation,
+      capabilities: ["runs.read", "runs.control"],
+      methods,
+    }),
+  );
+}
+async function directAnswerHandoff() {
+  mount();
+  await screen.findByRole("region", { name: "gate, Ship release 1?" });
+  await act(async () => {});
+  const settled = deferred<{ ok: boolean }>();
+  const invoke = vi.fn(() => settled.promise);
+  let response!: Promise<{ ok: boolean } | undefined>;
+  act(() => {
+    response = feed.revisions!.withAnswer!(gate, { optionId: "approve", note: "Captured ordinary note" }, invoke);
+  });
+  await waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+  return { settled, invoke, response };
+}
+
+it("releases reads only after exact ordered answer and resume evidence, without fabricating RPC acceptance", async () => {
+  const call = await directAnswerHandoff();
+  const before = fake.calls.filter((item) => item.method === "inputs.list").length;
+  act(() => feed.revisions!.refresh("run-1"));
+  notifyAnswerProgress(22, "other-run");
+  notifyOrdinaryAnswer(19);
+  notifyOrdinaryAnswer(21);
+  await act(async () => {});
+  expect(fake.calls.filter((item) => item.method === "inputs.list")).toHaveLength(before);
+  expect(screen.getByText(/earlier answer is still unconfirmed/)).toBeTruthy();
+  notifyAnswerProgress(22);
+  await waitFor(() =>
+    expect(fake.calls.filter((item) => item.method === "inputs.list").length).toBeGreaterThan(before),
+  );
+  expect(screen.getByText(/Run progress was verified/)).toBeTruthy();
+  expect(call.invoke).toHaveBeenCalledOnce();
+  call.settled.resolve({ ok: true });
+  expect(await call.response).toEqual({ ok: true });
+});
+
+it("does not release a handoff for reversed lifecycle evidence or an unrelated request", async () => {
+  const call = await directAnswerHandoff();
+  const before = fake.calls.filter((item) => item.method === "inputs.list").length;
+  notifyAnswerProgress(22);
+  notifyOrdinaryAnswer(21);
+  notifyOrdinaryAnswer(23, "other-request");
+  notifyAnswerProgress(24);
+  await act(async () => {});
+  expect(fake.calls.filter((item) => item.method === "inputs.list")).toHaveLength(before);
+  call.settled.resolve({ ok: false });
+  expect(await call.response).toEqual({ ok: false });
+  await waitFor(() =>
+    expect(fake.calls.filter((item) => item.method === "inputs.list").length).toBeGreaterThan(before),
+  );
+  expect(feed.revisions?.answerDraft?.(gate)?.note).toBe("Captured ordinary note");
+});
+
+it.each(["partial", "mismatch", "denied", "missing-answer", "reversed"] as const)(
+  "retains reconnect uncertainty for %s history and permits an explicit verified history check",
+  async (failure) => {
+    const call = await directAnswerHandoff();
+    let valid = false;
+    fake.script({
+      "runs.events": () => {
+        if (!valid && failure === "denied")
+          return { ok: false as const, error: { code: "AUTH_FORBIDDEN" as const, message: "Denied" } };
+        const created = handoffCreated();
+        return {
+          ok: true as const,
+          result: {
+            events:
+              !valid && failure === "missing-answer"
+                ? [created, handoffProgressEvent()]
+                : [
+                    !valid && failure === "mismatch" ? { ...created, id: "different-history" } : created,
+                    handoffAnswerEvent(),
+                    handoffProgressEvent(!valid && failure === "reversed" ? 20 : 22),
+                  ],
+            hasMore: !valid && failure === "partial",
+            lastSeq: 22,
+            asOf: INPUTS_AS_OF,
+          },
+        };
+      },
+    });
+    const reads = fake.calls.filter((item) => item.method === "inputs.list").length;
+    reconnectAnswer();
+    await screen.findByText(/earlier answer is still unconfirmed/);
+    await act(async () => {});
+    expect(call.invoke).toHaveBeenCalledOnce();
+    // Ordinary Attention reload is independent, but protected revision reads remain paused.
+    const protectedBefore = fake.calls.filter(
+      (item) => item.method === "inputs.list" && (item.params as { revisionRunIds?: string[] }).revisionRunIds,
+    ).length;
+    act(() => feed.revisions!.refresh("run-1"));
+    await act(async () => {});
+    expect(
+      fake.calls.filter(
+        (item) => item.method === "inputs.list" && (item.params as { revisionRunIds?: string[] }).revisionRunIds,
+      ),
+    ).toHaveLength(protectedBefore);
+    expect(fake.calls.filter((item) => item.method === "inputs.list").length).toBeGreaterThanOrEqual(reads);
+    valid = true;
+    fireEvent.click(screen.getByRole("button", { name: "Check pending answer" }));
+    await screen.findByText(/Run progress was verified/);
+    await waitFor(() =>
+      expect(
+        fake.calls.filter(
+          (item) => item.method === "inputs.list" && (item.params as { revisionRunIds?: string[] }).revisionRunIds,
+        ).length,
+      ).toBeGreaterThan(protectedBefore),
+    );
+    call.settled.resolve({ ok: true });
+    expect(await call.response).toBeUndefined();
+    expect(call.invoke).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([true, false])(
+  "keeps an old HTTP answer uncertain across reconnect until its real late result (ok=%s)",
+  async (ok) => {
+    const call = await directAnswerHandoff();
+    reconnectAnswer();
+    await screen.findByText(/earlier answer is still unconfirmed/);
+    await waitFor(() => expect(feed.revisions?.answerDraft?.(gate)?.note).toBe("Captured ordinary note"));
+    expect(screen.getByLabelText<HTMLInputElement>("Note").value).toBe("Captured ordinary note");
+    call.settled.resolve({ ok });
+    expect(await call.response).toBeUndefined();
+    expect(call.invoke).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByText(/details are paused/)).toBeNull());
+  },
+);
+
+it("cancels an unsent queued answer on reconnect and restores its verified note without invoking it", async () => {
+  mount();
+  await screen.findByRole("region", { name: "gate, Ship release 1?" });
+  const held = deferred<void>();
+  let reading = false;
+  fake.script({
+    "inputs.list": async (params) => {
+      if (params.revisionRunIds && !reading) {
+        reading = true;
+        await held.promise;
+      }
+      return {
+        ok: true as const,
+        result: {
+          inputs: open,
+          waiting: open.length,
+          asOf: INPUTS_AS_OF,
+          pendingRevisions: { items: [], incomplete: false as const },
+        },
+      };
+    },
+  });
+  act(() => feed.revisions!.refresh("run-1"));
+  await waitFor(() => expect(reading).toBe(true));
+  const invoke = vi.fn(async () => ({ ok: true }));
+  let result!: Promise<{ ok: boolean } | undefined>;
+  act(() => {
+    result = feed.revisions!.withAnswer!(gate, { optionId: "approve", note: "Unsent retained note" }, invoke);
+  });
+  await waitFor(() => expect(fake.calls.some((item) => item.method === "runs.events")).toBe(true));
+  await act(async () => {});
+  reconnectAnswer();
+  expect(await result).toBeUndefined();
+  await screen.findByText(/earlier answer was not sent/);
+  await waitFor(() => expect(feed.revisions?.answerDraft?.(gate)?.note).toBe("Unsent retained note"));
+  expect(invoke).not.toHaveBeenCalled();
+  await act(async () => held.resolve());
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+it("keeps unrelated ordinary controls and live permission callbacks usable while an old answer is pending", async () => {
+  const call = await directAnswerHandoff();
+  const permission = vi.fn(async () => ({ ok: true }));
+  expect(
+    await feed.revisions!.withAnswer!(
+      { ...gate, kind: "permission", id: "live-ask" },
+      { optionId: "allow" },
+      permission,
+    ),
+  ).toEqual({ ok: true });
+  expect(permission).toHaveBeenCalledOnce();
+  const other = vi.fn(async () => ({ ok: true }));
+  expect(
+    await feed.revisions!.withAnswer!(
+      { ...gate, id: "other-ask", stepRunId: "other-step" },
+      { optionId: "approve", note: "Other note" },
+      other,
+    ),
+  ).toEqual({ ok: true });
+  expect(other).toHaveBeenCalledOnce();
+  act(() => controls.cancel("other-run"));
+  await waitFor(() => expect(fake.calls.some((item) => item.method === "runs.cancel")).toBe(true));
+  expect(call.invoke).toHaveBeenCalledOnce();
+  call.settled.resolve({ ok: false });
+  await call.response;
+});
+
+it.each(["run.completed", "run.failed", "run.cancelled"] as const)(
+  "releases only reads on exact %s progress while keeping the answer response pending",
+  async (event) => {
+    const call = await directAnswerHandoff();
+    notifyOrdinaryAnswer();
+    act(() =>
+      fake.notify({
+        kind: "notification",
+        method: "run.changed",
+        params: {
+          subscriptionId: "attention",
+          runId: gate.runId,
+          seq: 22,
+          at: INPUTS_AS_OF,
+          event,
+          status: event === "run.completed" ? "succeeded" : event === "run.failed" ? "failed" : "cancelled",
+        },
+      }),
+    );
+    await screen.findByText(/Run progress was verified/);
+    expect(call.invoke).toHaveBeenCalledOnce();
+    call.settled.resolve({ ok: false });
+    expect(await call.response).toEqual({ ok: false });
+  },
+);
+
+it("does not borrow a late successful history read across a later authority generation", async () => {
+  const call = await directAnswerHandoff();
+  const oldHistory = deferred<Awaited<ReturnType<OrcaBridge["runs"]["events"]>>>();
+  let checks = 0;
+  fake.script({
+    "runs.events": async () => {
+      checks++;
+      return checks === 1
+        ? oldHistory.promise
+        : { ok: false as const, error: { code: "AUTH_FORBIDDEN" as const, message: "Revoked" } };
+    },
+  });
+  reconnectAnswer(2);
+  await waitFor(() => expect(checks).toBe(1));
+  reconnectAnswer(3);
+  await act(async () =>
+    oldHistory.resolve({
+      ok: true,
+      result: {
+        events: [handoffCreated(), handoffAnswerEvent(), handoffProgressEvent()],
+        hasMore: false,
+        lastSeq: 22,
+        asOf: INPUTS_AS_OF,
+      },
+    }),
+  );
+  await waitFor(() => expect(checks).toBe(2));
+  await screen.findByText(/earlier answer is still unconfirmed/);
+  expect(feed.revisions?.answerDraft?.(gate)).toBeUndefined();
+  expect(screen.queryByLabelText("Note")).toBeNull();
+  call.settled.resolve({ ok: false });
+  expect(await call.response).toBeUndefined();
+  expect(call.invoke).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])(
+  "ordinary pointer answers use the shared read handoff in both mounts (inline=%s)",
+  async (inline) => {
+    mount(inline);
+    const region = await screen.findByRole("region", { name: "gate, Ship release 1?" });
+    const held = deferred<void>();
+    let entered = false;
+    fake.script({
+      "inputs.list": async (params) => {
+        if (params.revisionRunIds && !entered) {
+          entered = true;
+          await held.promise;
+        }
+        return {
+          ok: true as const,
+          result: {
+            inputs: open,
+            waiting: open.length,
+            asOf: INPUTS_AS_OF,
+            pendingRevisions: { items: [], incomplete: false as const },
+          },
+        };
+      },
+      "inputs.answer": () => ({
+        ok: false,
+        error: { code: "RUN_LEASED_ELSEWHERE", message: "External owner remains busy" },
+      }),
+    });
+    act(() => feed.revisions!.refresh("run-1"));
+    await waitFor(() => expect(entered).toBe(true));
+    fireEvent.click(within(region).getByRole("button", { name: /Approve/ }));
+    fireEvent.click(within(region).getByRole("button", { name: "Answer" }));
+    await act(async () => {});
+    expect(fake.calls.filter((item) => item.method === "inputs.answer")).toHaveLength(0);
+    await act(async () => held.resolve());
+    await screen.findByText(/RUN_LEASED_ELSEWHERE: External owner remains busy/);
+    expect(fake.calls.filter((item) => item.method === "inputs.answer")).toHaveLength(1);
+    expect(
+      within(region)
+        .getByRole("button", { name: /Approve/ })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  },
+);
+
+it("invalidates draft restoration when an explicit current-authority history check is denied", async () => {
+  const call = await directAnswerHandoff();
+  expect(feed.revisions?.answerDraft?.(gate)?.note).toBe("Captured ordinary note");
+  fake.script({
+    "runs.events": () => ({ ok: false, error: { code: "AUTH_FORBIDDEN", message: "Current reader denied" } }),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Check pending answer" }));
+  await waitFor(() => expect(feed.revisions?.answerDraft?.(gate)).toBeUndefined());
+  notifyOrdinaryAnswer();
+  notifyAnswerProgress();
+  await screen.findByText(/earlier answer is still unconfirmed/);
+  call.settled.resolve({ ok: false });
+  await call.response;
+});
+
+it("cleanup never resends or publishes a late answer after its mounted feed leaves", async () => {
+  const call = await directAnswerHandoff();
+  const before = fake.calls.length;
+  cleanup();
+  call.settled.resolve({ ok: true });
+  expect(await call.response).toBeUndefined();
+  expect(call.invoke).toHaveBeenCalledOnce();
+  await act(async () => {});
+  expect(fake.calls.length).toBe(before);
+});
+
+it("a rejected ordinary answer releases protected reads and leaves its draft available", async () => {
+  mount();
+  await screen.findByRole("region", { name: "gate, Ship release 1?" });
+  const invoke = vi.fn(async () => {
+    throw new Error("Transport response unavailable");
+  });
+  await expect(
+    feed.revisions!.withAnswer!(gate, { optionId: "approve", note: "Keep rejected note" }, invoke),
+  ).rejects.toThrow("Transport response unavailable");
+  expect(feed.revisions?.answerDraft?.(gate)?.note).toBe("Keep rejected note");
+  const before = fake.calls.filter((item) => item.method === "inputs.list").length;
+  act(() => feed.revisions!.refresh("run-1"));
+  await waitFor(() =>
+    expect(fake.calls.filter((item) => item.method === "inputs.list").length).toBeGreaterThan(before),
+  );
+  expect(invoke).toHaveBeenCalledOnce();
 });

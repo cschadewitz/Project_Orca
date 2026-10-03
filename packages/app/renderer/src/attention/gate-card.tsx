@@ -48,6 +48,7 @@ export function GateCard({ input, artifactsReady, revisions, ...rest }: GateCard
   return (
     <>
       <AnswerCard
+        retainedAnswer={revisions?.answerDraft?.(input)}
         id={input.id}
         tone="gate"
         eyebrow={

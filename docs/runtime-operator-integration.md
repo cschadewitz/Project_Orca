@@ -585,3 +585,50 @@ with an obsolete identity. No correction payload is invented from a receipt,
 no mutation is retried, and no empty/error result starts polling. External lease
 ownership remains a truthful unavailable result with explicit user refresh; the
 read queue does not bypass the runtime lease or expand current authority.
+
+## Ordinary-answer read handoff
+
+At `d729415a5e228275dcc075a1e183d88fcf8202aa`, CI 373 passed both Node
+versions (Node24: 3463 tests passed, three opt-in skips; coverage 91.62% statements,
+84.04% branches, 93.09% functions, 94.11% lines). Native App smoke 83 verified the
+full corrective-revision path on both operating systems, then both ordinary
+rationale answers returned `RUN_LEASED_ELSEWHERE`. The ordinary run remained
+waiting; the ordinary-rationale and final cross-run checks were not reached.
+
+A controlled compiled-daemon reproduction held an actual protected reader's lease.
+The ordinary answer refused with zero answer events and no retry claim; an explicit
+same-intent submission after release completed once, excluding rationale from the
+agent prompt. The distinct durable `runs.continue` path binds its correlation
+before taking the fence: its refusal left a bound record and same-key recovery
+completed once. That case did not reproduce the earlier unbound revision-key defect.
+The original native artifacts did not identify their lease holders.
+
+Attention and inline durable-answer controls now coordinate with their shared
+revision feed. A handoff captures the chosen option/note and exact input identity,
+pauses new protected reads, drains already-forwarded reads, and captures the
+authorized run creation identity before invoking the ordinary answer once. Live
+permission callbacks and unrelated controls remain available. Exact input-answered
+notification evidence alone does not reopen reads: it must be followed by a newer
+same-run resumed or terminal event. The real RPC settling, refusing or rejecting
+also releases the pause. These signals only coordinate reads; they never manufacture
+an answer result, retry a mutation, or bypass current server authority or leases.
+
+The existing ordinary-answer HTTP call intentionally has no finite timeout because
+it can wait through execution. A subscription reconnect does not cancel it. After a
+reconnect, one bounded current-authority `runs.events` read may establish the same
+creation event plus the exact request/step answer and later resume/terminal
+chronology. Verification requires a complete filtered page (at most 500 events),
+not a partial page, guessed status or unbounded scan. An explicit **Check pending
+answer** action repeats only that read. Denied, malformed, missing, rewound or
+mismatched evidence stays uncertain. Old-generation responses cannot supply the
+new scope's acceptance or proof; an authorized complete history is required before
+restoring the captured note into that exact input.
+
+If the original HTTP call never settles and authoritative progress cannot be
+established, correction details can remain paused indefinitely. The UI states the
+uncertainty, retains the selection and offers the read-only check; it does not show
+silent permanent loading or infer cancellation. If the connection changes before
+the creation identity is captured, the unsent draft is retained locally but is not
+restored into an unverified target or sent automatically. Existing engine/current-
+authority refusals still apply to every actual answer. This bounded read handoff is
+not a general execution-resumption or network-failure recovery guarantee.

@@ -71,7 +71,7 @@ export interface AttentionSurfaceProps {
 
 export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfaceProps): JSX.Element {
   const { state, reload, answered } = feed;
-  const controls = useControls({ onAnswered: answered });
+  const controls = useControls({ onAnswered: answered, withAnswer: feed.revisions?.withAnswer });
   const writability = useWritability();
   const live = connection === "live";
 
@@ -221,6 +221,12 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
         </section>
       )}
 
+      {feed.revisions?.answerNotice && (
+        <div role="status">
+          <Text style="caption">{feed.revisions.answerNotice}</Text>
+          <Button onClick={() => feed.revisions?.checkPendingAnswer?.()}>Check pending answer</Button>
+        </div>
+      )}
       {feed.revisions && (feed.revisions.items.length > 0 || feed.revisions.notice) && (
         <section className="orca-attn__section" aria-label="Recorded corrections">
           <Text style="eyebrow" as="h2">

@@ -8,10 +8,12 @@ import type {
   RevisionCommand,
   ReplacePendingRevisionCommand,
   RevisionResult,
+  RunsEventsResult,
 } from "@orca/protocol";
 import { INPUTS_REVISION_RUN_LIMIT } from "@orca/protocol";
 import { useConnection, useSubscriptionGeneration } from "../chrome/use-connection.js";
 import { useWorkspace } from "../chrome/use-workspace.js";
+import type { AnswerRequest } from "./answer-card.js";
 import { useNotifications } from "../notifications-context.js";
 import { pendingTarget } from "./revision-input-model.js";
 
@@ -25,12 +27,73 @@ export interface AttentionRevision {
   reading: boolean;
   error?: string;
 }
+export type AnswerHandoff = <T extends { ok: boolean }>(
+  input: OpenInputView,
+  selected: AnswerRequest,
+  invoke: () => Promise<T>,
+) => Promise<T | undefined>;
+interface AnswerPause {
+  input: Pick<OpenInputView, "runId" | "stepRunId" | "id">;
+  scope: string;
+  issued: boolean;
+  settled: boolean;
+  accepted: boolean;
+  draft: AnswerRequest;
+  released: boolean;
+  release(): void;
+  wait: Promise<void>;
+  cancel(): void;
+  cancelled: Promise<void>;
+  creationId?: string;
+  creationSeq?: number;
+  startSeq?: number;
+  seenSeq?: number;
+  answeredSeq?: number | undefined;
+  verifiedScope?: string;
+  checkedScope?: string;
+  checking: boolean;
+}
+const progressEvents = new Set(["run.resumed", "run.completed", "run.failed", "run.cancelled"]);
+const historyTypes = ["run.created", "human.answered", ...progressEvents];
+function creation(page: RunsEventsResult, runId: string) {
+  if (page.hasMore || page.events.length !== 1) return undefined;
+  const event = page.events[0];
+  return event?.type === "run.created" && event.runId === runId && page.lastSeq >= event.seq ? event : undefined;
+}
+/** One complete filtered snapshot, never partial pages or a guessed current run status. */
+function answerProgress(page: RunsEventsResult, pause: AnswerPause) {
+  if (page.hasMore || pause.startSeq === undefined) return undefined;
+  let last = -1;
+  for (const event of page.events) {
+    if (event.runId !== pause.input.runId || event.seq <= last || !historyTypes.includes(event.type)) return undefined;
+    last = event.seq;
+  }
+  if (page.lastSeq < last) return undefined;
+  const created = page.events.filter((event) => event.type === "run.created");
+  if (created.length !== 1 || created[0]!.id !== pause.creationId || created[0]!.seq !== pause.creationSeq)
+    return undefined;
+  const answered = page.events.find(
+    (event) =>
+      event.type === "human.answered" &&
+      event.seq > pause.startSeq! &&
+      event.payload.requestId === pause.input.id &&
+      event.payload.stepRunId === pause.input.stepRunId,
+  );
+  const progressed =
+    answered && page.events.some((event) => event.seq > answered.seq && progressEvents.has(event.type));
+  return { answeredSeq: answered?.seq, progressed: Boolean(progressed), lastSeq: page.lastSeq };
+}
+
 export interface RevisionsFeed {
   scope: string;
   supported: boolean;
   items: readonly AttentionRevision[];
   notice?: string;
   observeInputs: (inputs: readonly OpenInputView[]) => void;
+  withAnswer?: AnswerHandoff;
+  answerDraft?: (input: OpenInputView) => AnswerRequest | undefined;
+  answerNotice?: string;
+  checkPendingAnswer?: () => void;
   refresh: (runId?: string) => void;
   submit: (command: RevisionCommand, key: string) => Promise<RevisionResult>;
   replace: (command: ReplacePendingRevisionCommand, key: string) => Promise<RevisionResult>;
@@ -61,8 +124,19 @@ interface Controller {
   refresh: RevisionsFeed["refresh"];
   submit: RevisionsFeed["submit"];
   replace: RevisionsFeed["replace"];
+  withAnswer: AnswerHandoff;
+  checkPendingAnswer(): void;
+  recheckAnswers(): void;
 }
-const EMPTY: Controller = { observe: () => {}, refresh: () => {}, submit: unsupported, replace: unsupported };
+const EMPTY: Controller = {
+  observe: () => {},
+  refresh: () => {},
+  submit: unsupported,
+  replace: unsupported,
+  withAnswer: async () => undefined,
+  checkPendingAnswer: () => {},
+  recheckAnswers: () => {},
+};
 
 export function useRevisions(onAnswered: (requestId: string) => void): RevisionsFeed {
   const connection = useConnection();
@@ -88,6 +162,10 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
   // Discovery can enrich gates outside revisionRunIds, including child runs. Serialize
   // all protected reads in this feed, across effect restarts and reconnects too.
   const protectedReads = useRef<Promise<void>>(Promise.resolve());
+  const activeProtectedRead = useRef<Promise<unknown> | undefined>(undefined);
+  const answerPauses = useRef(new Set<AnswerPause>());
+  const [, setAnswerVersion] = useState(0);
+  const answerChanged = useCallback(() => setAnswerVersion((value) => value + 1), []);
   const retained = useRef<
     | {
         scope: string;
@@ -121,7 +199,20 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
     const pendingVersions = new Map<string, number>();
     const writes = new Set<string>();
     const protectedRead = <T>(current: () => boolean, read: () => Promise<T>) => {
-      const result = protectedReads.current.then(() => (active() && current() ? read() : undefined));
+      const result = protectedReads.current.then(async () => {
+        if (!active() || !current()) return undefined;
+        while ([...answerPauses.current].some((pause) => !pause.released)) {
+          await Promise.all([...answerPauses.current].filter((pause) => !pause.released).map((pause) => pause.wait));
+          if (!active() || !current()) return undefined;
+        }
+        const response = read();
+        activeProtectedRead.current = response;
+        try {
+          return await response;
+        } finally {
+          if (activeProtectedRead.current === response) activeProtectedRead.current = undefined;
+        }
+      });
       // A refused or rejected read releases the lane, without scheduling a retry.
       protectedReads.current = result.then(
         () => {},
@@ -410,7 +501,126 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
           }
         });
     };
+    const checkAnswers = async (explicit: boolean) => {
+      for (const pause of answerPauses.current) {
+        if (!pause.creationId || pause.checking || (!explicit && pause.checkedScope === scope)) continue;
+        pause.checkedScope = scope;
+        delete pause.verifiedScope;
+        pause.checking = true;
+        answerChanged();
+        try {
+          // This existing read uses current authorization and takes no revision lease.
+          const result = await window.orca.runs.events({ runId: pause.input.runId, types: historyTypes, limit: 500 });
+          if (!active() || !result.ok) continue;
+          const proof = answerProgress(result.result, pause);
+          if (!proof) continue;
+          pause.verifiedScope = scope;
+          pause.answeredSeq = proof.answeredSeq;
+          pause.seenSeq = proof.lastSeq;
+          if (proof.progressed) pause.release();
+        } catch {
+          /* Unavailable history is uncertainty, never permission to resend. */
+        } finally {
+          pause.checking = false;
+          answerChanged();
+          if (!active()) controller.current.recheckAnswers();
+        }
+      }
+    };
+    const withAnswer: AnswerHandoff = async (input, selected, invoke) => {
+      if (!active() || window.orca.connection.read().state !== "live") return undefined;
+      if (!readable || input.live || input.kind === "permission") return invoke();
+      const existing = [...answerPauses.current].filter(
+        (pause) => pause.input.runId === input.runId && pause.input.id === input.id,
+      );
+      if (existing.some((pause) => !pause.settled)) return undefined;
+      for (const previous of existing) answerPauses.current.delete(previous);
+      let release!: () => void;
+      let cancel!: () => void;
+      const pause: AnswerPause = {
+        input: { runId: input.runId, stepRunId: input.stepRunId, id: input.id },
+        scope,
+        issued: false,
+        settled: false,
+        accepted: false,
+        draft: structuredClone(selected),
+        released: false,
+        checking: false,
+        wait: new Promise<void>((done) => {
+          release = done;
+        }),
+        cancelled: new Promise<void>((done) => {
+          cancel = done;
+        }),
+        release: () => {
+          if (!pause.released) {
+            pause.released = true;
+            release();
+            answerChanged();
+          }
+        },
+        cancel: () => {
+          if (!pause.issued) {
+            cancel();
+            pause.release();
+          }
+        },
+      };
+      answerPauses.current.add(pause);
+      answerChanged();
+      try {
+        // Only already-forwarded reads need draining. Other ordinary answers and live
+        // permission callbacks remain independent; queued reads wait for every pause.
+        const draining = activeProtectedRead.current?.then(
+          () => {},
+          () => {},
+        );
+        const identityRead = window.orca.runs
+          .events({ runId: input.runId, types: ["run.created"], limit: 2 })
+          .then((result) => {
+            if (!active()) return false;
+            const identity = result.ok ? creation(result.result, input.runId) : undefined;
+            if (!identity || !result.ok) return false;
+            pause.creationId = identity.id;
+            pause.creationSeq = identity.seq;
+            pause.startSeq = result.result.lastSeq;
+            pause.seenSeq = result.result.lastSeq;
+            pause.verifiedScope = scope;
+            pause.checkedScope = scope;
+            return true;
+          });
+        const prepared = await Promise.race([
+          Promise.all([draining, identityRead]),
+          pause.cancelled.then(() => undefined),
+        ]);
+        if (!active()) return undefined;
+        if (!prepared?.[1])
+          throw new Error(
+            "Answer was not sent because the current run identity could not be verified. Your note is preserved.",
+          );
+        pause.issued = true;
+        answerChanged();
+        const response = await invoke();
+        pause.accepted = response.ok;
+        return active() ? response : undefined;
+      } catch (error) {
+        if (!active()) return undefined;
+        throw error;
+      } finally {
+        pause.settled = true;
+        pause.release();
+        if (pause.accepted) answerPauses.current.delete(pause);
+        answerChanged();
+      }
+    };
     controller.current = {
+      withAnswer,
+      recheckAnswers: () => {
+        void checkAnswers(false);
+      },
+      checkPendingAnswer: () => {
+        void checkAnswers(true);
+      },
       observe: (inputs) => {
         const newRuns = new Set<string>();
         for (const input of inputs) {
@@ -432,23 +642,85 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
     publish();
     loadPage();
     const off = [
-      stream.on("input.answered", ({ runId }) => {
-        if (knownRuns.has(runId)) discover([runId]);
+      stream.on("input.answered", (event) => {
+        for (const pause of answerPauses.current) {
+          if (
+            !pause.issued ||
+            pause.released ||
+            pause.verifiedScope !== scope ||
+            event.runId !== pause.input.runId ||
+            event.seq <= (pause.seenSeq ?? -1)
+          )
+            continue;
+          pause.seenSeq = event.seq;
+          if (
+            event.requestId === pause.input.id &&
+            event.stepRunId === pause.input.stepRunId &&
+            event.seq > (pause.startSeq ?? Infinity)
+          )
+            pause.answeredSeq = event.seq;
+        }
+        if (knownRuns.has(event.runId)) discover([event.runId]);
       }),
-      stream.on("run.changed", ({ runId }) => {
-        if (knownRuns.has(runId)) discover([runId]);
+      stream.on("run.changed", (event) => {
+        for (const pause of answerPauses.current) {
+          if (
+            !pause.issued ||
+            pause.released ||
+            pause.verifiedScope !== scope ||
+            event.runId !== pause.input.runId ||
+            event.seq <= (pause.seenSeq ?? -1)
+          )
+            continue;
+          pause.seenSeq = event.seq;
+          if (pause.answeredSeq !== undefined && event.seq > pause.answeredSeq && progressEvents.has(event.event))
+            pause.release();
+        }
+        if (knownRuns.has(event.runId)) discover([event.runId]);
       }),
       stream.on("event.appended", ({ runId, event }) => {
         if (knownRuns.has(runId) && event.type.startsWith("revision.")) discover([runId]);
       }),
     ];
+    void checkAnswers(false);
     return () => {
       live = false;
+      for (const pause of answerPauses.current) if (pause.scope === scope && !pause.issued) pause.cancel();
       controller.current = EMPTY;
       off.forEach((remove) => remove());
     };
   }, [scope, readable, supported, connection.state, stream, onAnswered, generation]);
 
+  const withAnswer = useCallback<AnswerHandoff>(
+    (input, selected, invoke) => controller.current.withAnswer(input, selected, invoke),
+    [],
+  );
+  const answerDraft = (input: OpenInputView) => {
+    const pause = [...answerPauses.current].find(
+      (entry) =>
+        entry.verifiedScope === currentScope() &&
+        entry.input.runId === input.runId &&
+        entry.input.id === input.id &&
+        entry.input.stepRunId === input.stepRunId,
+    );
+    return pause?.draft;
+  };
+  const checkPendingAnswer = useCallback(() => controller.current.checkPendingAnswer(), []);
+  const outstandingAnswers = [...answerPauses.current];
+  const answerNotice =
+    outstandingAnswers.length === 0
+      ? undefined
+      : outstandingAnswers.some((pause) => pause.checking)
+        ? "Checking the earlier answer against current run history. No answer will be resent."
+        : outstandingAnswers.some((pause) => pause.issued && !pause.released)
+          ? "An earlier answer is still unconfirmed. Correction details are paused; other controls and permission answers remain available. Check pending answer to inspect the run history."
+          : outstandingAnswers.some((pause) => !pause.issued && !pause.settled)
+            ? "Waiting for read verification before sending the selected answer. Your note is retained."
+            : outstandingAnswers.some((pause) => !pause.issued)
+              ? "An earlier answer was not sent. Its note is retained; review the current gate before sending."
+              : outstandingAnswers.some((pause) => !pause.settled)
+                ? "Run progress was verified, but the earlier answer response is still pending. No answer will be resent."
+                : "The earlier answer could not be confirmed. Your note is retained; review the current gate before answering again.";
   const observeInputs = useCallback<RevisionsFeed["observeInputs"]>((inputs) => controller.current.observe(inputs), []);
   const refresh = useCallback<RevisionsFeed["refresh"]>((runId) => controller.current.refresh(runId), []);
   const submit = useCallback<RevisionsFeed["submit"]>(
@@ -471,6 +743,10 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
     items: snapshot.scope === scope ? snapshot.items : [],
     ...(snapshot.scope === scope && snapshot.notice ? { notice: snapshot.notice } : {}),
     observeInputs,
+    withAnswer,
+    answerDraft,
+    checkPendingAnswer,
+    ...(answerNotice ? { answerNotice } : {}),
     refresh,
     submit,
     replace,

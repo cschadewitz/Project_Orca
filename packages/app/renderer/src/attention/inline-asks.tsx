@@ -17,6 +17,7 @@ import { createContext, useContext, useEffect, useMemo, type JSX, type ReactNode
 import { useWritability } from "../chrome/use-connection.js";
 import { PendingCorrection } from "./revision-card.js";
 import { revisionSlotKey } from "./use-revisions.js";
+import { Button, Text } from "../ui/index.js";
 import { GateCard } from "./gate-card.js";
 import { PermissionCard } from "./permission-card.js";
 import type { AttentionFeed } from "./use-attention.js";
@@ -31,7 +32,7 @@ const InlineAsksContext = createContext<InlineAsks | undefined>(undefined);
 
 /** Wraps the surfaces that may render a card inline. `App.tsx` holds the feed it is given. */
 export function InlineAsksProvider({ feed, children }: { feed: AttentionFeed; children: ReactNode }): JSX.Element {
-  const controls = useControls({ onAnswered: feed.answered });
+  const controls = useControls({ onAnswered: feed.answered, withAnswer: feed.revisions?.withAnswer });
   const value = useMemo(() => ({ feed, controls }), [feed, controls]);
   return <InlineAsksContext.Provider value={value}>{children}</InlineAsksContext.Provider>;
 }
@@ -61,12 +62,18 @@ export function StepAsks({ runId, stepRunId }: StepAsksProps): JSX.Element | nul
   }, [refresh, runId, revisions?.scope]);
   const corrections =
     revisions?.items.filter((entry) => entry.summary.target.runId === runId && entry.stepRunId === stepRunId) ?? [];
-  if (!inline || (asks.length === 0 && corrections.length === 0)) return null;
+  if (!inline || (asks.length === 0 && corrections.length === 0 && !revisions?.answerNotice)) return null;
 
   const { controls } = inline;
   const cannotWrite = writability.can ? undefined : writability.reason;
   return (
     <div className="orca-step__asks">
+      {revisions?.answerNotice && (
+        <div role="status">
+          <Text style="caption">{revisions.answerNotice}</Text>
+          <Button onClick={() => revisions.checkPendingAnswer?.()}>Check pending answer</Button>
+        </div>
+      )}
       {asks.map((input) => {
         /* `focused` is deliberately false here. The card's number keys belong to the card
            that has the keyboard, and on this surface that is the run tree or the output
