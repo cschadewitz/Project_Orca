@@ -22,6 +22,7 @@ import {
   operatorGenerationCollections,
   operatorLinkedDocumentCollections,
   operatorPinnedGraph,
+  eventSnapshot,
   type OperatorReadOptions,
 } from "./operator-read-model.js";
 import type { EventStore, LeaseStore } from "@orca/store";
@@ -609,6 +610,87 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           if (!check.ok) throw authInvalid();
           return check.principal;
         };
+        const checkBoundaryRun = async (params: OperatorPageParams, row?: OperatorRow) => {
+          const principal = await current();
+          if (
+            principal.id !== binding.principal.id ||
+            principal.credentialId !== credentialId ||
+            !holds(principal, "runs.read") ||
+            !params.runId ||
+            (row && row.runId !== params.runId) ||
+            !(await authorizer.runs.allows(principal, params.runId))
+          )
+            throw authForbidden();
+          return principal;
+        };
+        const sameBoundaryAuthority = async (
+          params: OperatorPageParams,
+          before: Awaited<ReturnType<typeof current>>,
+        ) => {
+          const latest = await checkBoundaryRun(params);
+          if (
+            JSON.stringify([...latest.permissions].sort()) !== JSON.stringify([...before.permissions].sort()) ||
+            JSON.stringify(latest.scope) !== JSON.stringify(before.scope)
+          )
+            throw authForbidden();
+        };
+        const declaration = async (params: OperatorPageParams, row: OperatorRow) => {
+          const principal = await checkBoundaryRun(params, row);
+          if (params.collection !== "inputs" || row.kind !== "decision" || row.live) return undefined;
+          if (!row.nodeId || !row.stepRunId || !row.requestId || row.requestId !== row.id || !row.options || !ctx.reads)
+            throw new OrcaError("RUN_STATE", "The pinned input declaration is unavailable");
+          const action = await ctx.reads.inputRevisionActionId({
+            id: row.id,
+            kind: "decision",
+            runId: params.runId!,
+            stepRunId: row.stepRunId,
+            nodeId: row.nodeId,
+            options: row.options,
+          });
+          await sameBoundaryAuthority(params, principal);
+          return action;
+        };
+        type Boundaries = Awaited<ReturnType<NonNullable<DaemonOptions["revisionSources"]>["readBoundaries"]>>;
+        let captured: { runId: string; collection: string; boundaries: Boundaries; continuation?: string } | undefined;
+        const boundaryRevision = async (params: OperatorPageParams) => {
+          const principal = await checkBoundaryRun(params);
+          const snapshot = await eventSnapshot(sources.events, params);
+          const boundaries =
+            params.collection === "inputs" &&
+            holds(principal, "inputs.answer") &&
+            holds(principal, "runs.control") &&
+            opts.revisionSources
+              ? await opts.revisionSources.readBoundaries(params.runId!)
+              : [];
+          const continuation =
+            params.collection === "runs" && ctx.continuationAdmissions && ctx.continuationAccess
+              ? await ctx.continuationAdmissions.expectedBoundary(
+                  params.runId!,
+                  await ctx.continuationAccess(invocation),
+                )
+              : undefined;
+          await sameBoundaryAuthority(params, principal);
+          if ((await snapshot.currentRevision()) !== snapshot.revision)
+            throw new OrcaError("RUN_STATE", "Operator boundary changed during observation");
+          captured = {
+            runId: params.runId!,
+            collection: params.collection,
+            boundaries,
+            ...(continuation ? { continuation } : {}),
+          };
+          return createHmac("sha256", cursorKey)
+            .update(
+              JSON.stringify([
+                identity,
+                params.runId,
+                params.collection,
+                snapshot.revision,
+                boundaries,
+                continuation ?? null,
+              ]),
+            )
+            .digest("base64url");
+        };
         return new OperatorReadModel({
           ...sources,
           cursorKey,
@@ -617,91 +699,51 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
           orcaVersion: opts.orcaVersion,
           current,
           allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
-          // A's bounded row adapter consumes this additive internal hook. Until then it is not used.
-          ...{
-            boundaryRow: async (params: OperatorPageParams, row: OperatorRow): Promise<OperatorBoundaryRow> => {
-              const check = async () => {
-                const principal = await current();
-                if (
-                  principal.id !== binding.principal.id ||
-                  !holds(principal, "runs.read") ||
-                  !params.runId ||
-                  row.runId !== params.runId ||
-                  !(await authorizer.runs.allows(principal, params.runId))
-                )
-                  throw authForbidden();
-                return principal;
-              };
-              const principal = await check();
-              const after: OperatorBoundaryRow = { ...row };
-              let declaredRevisionActionId: string | undefined;
-              if (params.collection === "runs" && row.kind === "run") {
-                if (ctx.continuationAdmissions && ctx.continuationAccess) {
-                  const expectedBoundary = await ctx.continuationAdmissions.expectedBoundary(
-                    params.runId!,
-                    await ctx.continuationAccess(invocation),
+          declaredRevisionActionId: declaration,
+          boundaryRevision,
+          boundaryRow: async (params: OperatorPageParams, row: OperatorRow): Promise<OperatorBoundaryRow> => {
+            const principal = await checkBoundaryRun(params, row);
+            if (!captured || captured.runId !== params.runId || captured.collection !== params.collection)
+              throw new OrcaError("RUN_STATE", "Operator boundary observation is unavailable");
+            const after: OperatorBoundaryRow = { ...row };
+            const declaredRevisionActionId = await declaration(params, row);
+            if (params.collection === "runs" && row.kind === "run") {
+              if (!ctx.continuationAdmissions || !ctx.continuationAccess) after.continuationState = "unsupported";
+              else if (captured.continuation) {
+                after.continuationState = "available";
+                after.expectedBoundary = captured.continuation;
+              } else after.continuationState = "unavailable";
+            } else if (params.collection === "inputs" && row.kind === "decision" && !row.live) {
+              if (declaredRevisionActionId !== undefined) after.revisionActionId = declaredRevisionActionId;
+              if (holds(principal, "inputs.answer") && holds(principal, "runs.control")) {
+                if (!declaredRevisionActionId || !opts.revisionSources) after.revisionState = "unsupported";
+                else {
+                  const matching = captured.boundaries.filter(
+                    (b) =>
+                      b.target.runId === row.runId &&
+                      b.target.stepRunId === row.stepRunId &&
+                      b.target.requestId === row.id &&
+                      b.status === "waiting",
                   );
-                  if (expectedBoundary) {
-                    after.continuationState = "available";
-                    after.expectedBoundary = expectedBoundary;
-                  } else after.continuationState = "unavailable";
-                } else after.continuationState = "unsupported";
-              } else if (params.collection === "inputs" && row.kind === "decision" && !row.live) {
-                if (
-                  !row.nodeId ||
-                  !row.stepRunId ||
-                  !row.requestId ||
-                  row.requestId !== row.id ||
-                  !row.options ||
-                  !ctx.reads
-                )
-                  throw new OrcaError("RUN_STATE", "The pinned input declaration is unavailable");
-                declaredRevisionActionId = await ctx.reads.inputRevisionActionId({
-                  id: row.id,
-                  kind: "decision",
-                  runId: params.runId!,
-                  stepRunId: row.stepRunId,
-                  nodeId: row.nodeId,
-                  options: row.options,
-                });
-                if (declaredRevisionActionId !== undefined) after.revisionActionId = declaredRevisionActionId;
-                if (holds(principal, "inputs.answer") && holds(principal, "runs.control")) {
-                  if (!declaredRevisionActionId || !opts.revisionSources) after.revisionState = "unsupported";
-                  else {
-                    // Do not turn failed protected reads into an unsupported or empty boundary.
-                    const boundaries = await opts.revisionSources.readBoundaries(params.runId!);
-                    const matching = boundaries.filter(
-                      (b) =>
-                        b.target.runId === row.runId &&
-                        b.target.stepRunId === row.stepRunId &&
-                        b.target.requestId === row.id &&
-                        b.status === "waiting",
-                    );
-                    const boundary = matching.length === 1 ? matching[0] : undefined;
-                    if (boundary) {
-                      after.revision = RevisionBoundaryViewSchema.parse({
-                        target: boundary.target,
-                        capability: boundary.capability,
-                        destinationDescription: boundary.destinationDescription,
-                      });
-                      after.revisionState = "available";
-                    } else after.revisionState = "unavailable";
-                  }
+                  const boundary = matching.length === 1 ? matching[0] : undefined;
+                  if (boundary) {
+                    after.revision = RevisionBoundaryViewSchema.parse({
+                      target: boundary.target,
+                      capability: boundary.capability,
+                      destinationDescription: boundary.destinationDescription,
+                    });
+                    after.revisionState = "available";
+                  } else after.revisionState = "unavailable";
                 }
               }
-              const latest = await check();
-              if (
-                JSON.stringify([...latest.permissions].sort()) !== JSON.stringify([...principal.permissions].sort()) ||
-                JSON.stringify(latest.scope) !== JSON.stringify(principal.scope)
-              )
-                throw authForbidden();
-              return OperatorBoundaryProjectionSchema.parse({
-                params,
-                before: row,
-                after,
-                ...(declaredRevisionActionId !== undefined ? { declaredRevisionActionId } : {}),
-              }).after;
-            },
+            }
+            await sameBoundaryAuthority(params, principal);
+            return OperatorBoundaryProjectionSchema.parse({
+              params,
+              before: row,
+              after,
+              ...(declaredRevisionActionId !== undefined ? { declaredRevisionActionId } : {}),
+            }).after;
           },
           collections: {
             ...operatorEventCollections({

@@ -85,6 +85,9 @@ export class RequestSubmissionService implements SubmissionService {
             canonicalJson({ ...normalized, title: input.title, vars: parsed.data.vars ?? {} }, false),
           ) as JsonValue;
         },
+        validateFresh: async (command) => {
+          await this.validateLaunch(command, this.authority());
+        },
         prepare: async (command, context) => {
           const binding = {
             admissionId: `admission_${randomUUID()}`,
@@ -210,11 +213,12 @@ export class RequestSubmissionService implements SubmissionService {
     if (retry.idempotencyKey !== undefined) throw new OrcaError("NOT_SUPPORTED", "Retry admission is not configured");
     return this.prepare(input, authority);
   }
-  private async prepare(
+  /** In-memory validation only; provisional identities are never reserved or persisted. */
+  private async validateLaunch(
     input: SubmissionCommand,
     authority: SubmissionAuthority,
-    reservation?: { admissionId: string; requestId: string; context: RetryContext },
-  ): Promise<SubmissionResult> {
+    reservation?: { admissionId: string; requestId: string },
+  ) {
     // Operation/resource authority precedes schema diagnostics. Never accept authority from input.
     await authority.authorize(input);
     const parsed = SubmissionCommandSchema.safeParse(input);
@@ -244,6 +248,16 @@ export class RequestSubmissionService implements SubmissionService {
     const options = this.options(command, request, authority, id, reservedRunId);
     await captured.validateStartRun(options);
     await authority.authorize(resolved);
+    return { command, captured, id, request, reservedRunId };
+  }
+  private async prepare(
+    input: SubmissionCommand,
+    authority: SubmissionAuthority,
+    reservation?: { admissionId: string; requestId: string; context: RetryContext },
+  ): Promise<SubmissionResult> {
+    // Recheck moving state after claim publication. Failures here remain explicit
+    // uncertainty on the original reservation, never a reason to reuse its key.
+    const { command, captured, id, request, reservedRunId } = await this.validateLaunch(input, authority, reservation);
     const record: Admission = {
       id,
       requestId: request.id,

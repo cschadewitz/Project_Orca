@@ -141,7 +141,10 @@ describe("MCP operator adapter", () => {
     const second = await connect(f.backend);
     await second.callTool({ name: "start_workflow", arguments: args });
     const calls = f.calls.filter((c) => c.operation === "admitRun");
-    expect(calls.map((c) => c.input)).toEqual([args, args]);
+    expect(calls.map((c) => c.input)).toEqual([
+      MCP_OPERATIONS.admitRun.input.parse(args),
+      MCP_OPERATIONS.admitRun.input.parse(args),
+    ]);
     expect(f.calls.some((c) => ["continueRun", "answer"].includes(c.operation))).toBe(false);
   });
   it("preserves every live target field and durable no-resume semantics", async () => {

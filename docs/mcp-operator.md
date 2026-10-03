@@ -1,23 +1,56 @@
 # ORCA MCP operator interface (#327)
 
-This is the implementation handoff against **9058fa8935ae4c999293727c005031eec93114be**.
-It implements one inbound adapter under `packages/integrations/src/mcp/`, bounded daemon
-projections, the CLI helper, and reference-client tests. The exact reserved-file patch is
-[`patches/327-operator-integration.patch`](patches/327-operator-integration.patch).
-Apply that patch only in the integrator's checkout. It supplies dependencies/exports,
-CLI registration, authenticated daemon read composition and the operation inventory.
-The feature branch intentionally leaves those reserved files unchanged.
+This draft A handoff starts from **4937f4c083c572d07b840258724ef600368a7a5d** and follows
+[mcp-operator-production-contract.md](mcp-operator-production-contract.md). The MCP consumer
+uses the exact ten `OperatorMutationContracts` schemas and `OperatorBoundaryPageResultSchema`.
+It retains real retry envelopes, Request/direct identity, production lookup formats and
+128-byte UTF-8 retry keys. No adapter-local runtime or retry ledger is introduced.
 
-**This is a read-capable draft handoff, not complete #327 or Cal acceptance.** The mutation
-schemas and tools consume the frozen admission, revision and continuation shapes; their
-production backend implementations belong to the combined integration with #331/#356 and
-the parent-owned continuation service. They are absent from production discovery until
-wired. The patch does not detach a legacy blocking RPC or add another retry ledger.
-Actual Cal connection, account choice, private bridge and deployment evidence remain
-[#391](https://github.com/cschadewitz/Project_Orca/issues/391),
-[#392](https://github.com/cschadewitz/Project_Orca/issues/392) and
-[#393](https://github.com/cschadewitz/Project_Orca/issues/393). No deployment, credential
-creation, public listener or persistent access is performed by this change.
+Reserved changes are supplied, **unapplied**, in
+[`patches/327-operator-production-mount.patch`](patches/327-operator-production-mount.patch).
+The patch adds an optional per-authenticated-invocation projection factory to daemon composition
+and corrects one existing test expectation for the production direct-command `vars: {}` default.
+It installs no service and advertises no mutation aliases. The older integration patch is
+historical and must not be applied to this preparation base.
+
+**Cal owns B integration; #327 remains draft and incomplete pending production acceptance.**
+B must supply the ten real mutation adapters, receipt-preserving model methods, conditional
+registries/auth/audit wiring, current-authority boundary readers, and live-owner invalidation.
+C's real lifecycle/recovery/authority evidence and actual-Cal acceptance remain dependencies.
+No main merge, deployment, credentials or access changes are included.
+
+### Trusted projection mount
+
+A adds three internal `OperatorReadOptions` hooks; B supplies them together:
+
+- `boundaryRow(params, row)` returns only the original authorized row plus allowlisted boundary
+  fields. It closes over the authenticated invocation and existing production read services.
+- `declaredRevisionActionId(params, row)` independently reads the exact pinned declaration.
+  Never derive this from `boundaryRow` output or an unpinned active workflow. `undefined` means
+  confirmed absence; unverifiable declaration evidence must refuse, rather than invent an action.
+- `boundaryRevision(params)` supplies a stable opaque publication revision covering boundary
+  identity/state, declaration, protected evidence and uncertainty. It must change on relevant
+  publications even without a public event append, remain stable across per-call model instances,
+  and detect rewind/replacement. This is an invalidation reader, not another journal.
+
+A mount lacking either trusted reader fails with `CONFIG_INVALID`. The model calls the hooks
+only for authorized exact-run `runs`/`inputs` pages and validates `OperatorBoundaryProjectionSchema`
+against the independently read action ID. Contradictions, changed identity/base fields, undeclared
+actions and unexpected callback fields fail with `PROTOCOL_MESSAGE` without echoing their content.
+A weak input viewer can receive the restriction-only action ID; stronger revision state/view
+requires `runs.read`, `inputs.answer` and `runs.control`, plus B's current resource/workflow checks.
+B must preserve `unavailable` for uncertain protected evidence and propagate unexpected failures.
+A bare empty observational array is not proof of `unsupported`.
+
+Boundary revisions participate in signed page cursors. Emitted projections are reread before
+publication; boundary/source changes return an empty `restartRequired` page, and current principal
+checks run after awaited final checks. Enrichment is bounded before page sizing: the existing
+12 KiB row summary, 100-row maximum, 64 KiB command and 256 KiB serialized MCP limits remain.
+Plain source rows cannot independently publish a continuation guard. Pending replacement/history
+and protected pending revision text remain unsupported by these tools.
+
+The schemas can carry a 64 KiB revision payload, but the complete serialized MCP command still
+has a 64 KiB transport ceiling, including its envelope and JSON escaping.
 
 ## Local setup after integration
 
@@ -94,13 +127,13 @@ There are no generic RPC, config-edit, shell, file-read, credential, grant or le
 | `get_admission`, `reconcile_admission` | `operator.admission/reconcileAdmission` → sealed #331 operation | operationId |
 | `cancel_run` | `operator.cancel` → shared run control | runId, optional reason |
 | `respond_to_approval` | `operator.answer` → exact shared input control | discriminated decision (below) |
-| `continue_run` | `operator.continueRun` → parent ContinuationService.admit | frozen ContinuationCommand, retry |
+| `continue_run` | `operator.continueRun` → parent ContinuationService.admit | production ContinuationCommand, retry |
 | `get_continuation`, `reconcile_continuation` | `operator.continuation/reconcileContinuation` | continuationId |
-| `revise_input` | `operator.revise` → #356 RevisionInputService.submit | frozen RevisionCommand, retry |
+| `revise_input` | `operator.revise` → #356 RevisionInputService.submit | production RevisionCommand, retry |
 
 The integration patch registers **only the five read/preflight operations**. The remaining
 named endpoints are typed adapter contracts for combined integration, not claims that those
-endpoints already exist. Their shared service commands/receipts follow the frozen contract;
+endpoints already exist. Their shared service commands/receipts follow the production contract;
 the adapter's outer `target` guard is not passed as a workflow variable. It is checked by the
 server before mutation. Production registration must use the same schemas for HTTP and WS,
 current verified invocation authority, existing resource checks and mutation/decision audit.
@@ -228,8 +261,7 @@ Before enabling mutation endpoint discovery, the integrator must:
    HTTP/WS parity, full runtime/build/UI checks and actual-Cal evaluation on the final combined SHA.
 
 These obligations are already allocated in the frozen contract and related issues; this handoff
-creates no duplicate ledger, auth service or deployment story. Native feature-only CI cannot
-compile the new exported protocol symbols/SDK until the reserved dependency/export patch is applied.
+creates no duplicate ledger, auth service or deployment story. The preparation base already exports the shared schemas and pins the SDK dependencies.
 
 ## Reference flow and evidence boundaries
 
@@ -251,47 +283,37 @@ production mutation wiring, durable retry crash boundaries or continuation dispa
 remain **blocked for combined/actual-client acceptance**, not passed by transport conformance.
 
 
-## Reproducing the feature integration checks
+## Reproducing A's checks
 
-Use a disposable checkout of this feature commit based on the frozen start SHA. The reserved
-patch belongs to the parent integration; do not apply it to the exclusive-file feature branch.
+Use Node 22 or 24 and the frozen lockfile. Keep the mount patch unapplied on A's branch.
 
 ```sh
-git apply --check docs/patches/327-operator-integration.patch
-git apply docs/patches/327-operator-integration.patch
-pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile --ignore-scripts
 pnpm run typecheck
-pnpm run format:check
-pnpm run lint
-pnpm run design:check
-VITEST_MAX_WORKERS=2 pnpm test
-pnpm run build
-```
-
-The focused reference suite, on both supported Node versions, is:
-
-```sh
 pnpm exec vitest run \
+  packages/protocol/test/mcp-operator-mutation-contract.test.ts \
+  packages/protocol/test/operator-preparation-contract.test.ts \
   packages/protocol/test/mcp-operator-schemas.test.ts \
+  packages/daemon/test/mcp-operator-boundary-projection.test.ts \
   packages/daemon/test/mcp-operator-reads.test.ts \
-  packages/integrations/test/mcp-operator.test.ts \
+  packages/integrations/test/mcp-operator-production-contract.test.ts \
   packages/integrations/test/mcp-operator-daemon.test.ts \
   packages/cli/test/mcp-operator.test.ts --maxWorkers=2
+git apply --check docs/patches/327-operator-production-mount.patch
 ```
 
-This checkout validates the feature plus its proposed reserved wiring. It is not the final
-combined #331/#356/continuation SHA. The full Node 22 suite, coverage on both versions, real Electron smoke,
-independent review, combined crash/restart races and actual-Cal evidence remain parent gates.
+The existing `mcp-operator.test.ts` has one obsolete raw-command equality assertion: production
+parsing adds `command.vars: {}`. Its reserved correction is in the patch; all other tests in
+that file pass. A's new reconnect test checks the normalized command against the shared schema
+and preserves the real replay flag. Do not relax the production schema to satisfy the old fixture.
+These consumer/projection tests do not replace B/C service-backed acceptance or actual-Cal evidence.
 
-
-Feature verification on 2 October 2026 UTC, with the supplied patch applied:
-
-- Node **24.21.0**: full suite **2,777 passed, one skipped** across 238 files, using
-  `VITEST_MAX_WORKERS=2`; no timeout thresholds were increased.
-- Node **22.23.2** and **24.21.0**: all **31** focused MCP tests passed on each runtime.
-- `typecheck`, `format:check`, `lint`, `design:check` and `build` passed. The renderer build
-  retained its existing large-chunk warning.
-- A compiled `orca mcp` subprocess, official SDK stdio reference client and token-authenticated
-  test daemon passed discovery and a run-event read on both Node versions.
-- `git apply --check` passed against the frozen start tree. Reserved tracked files on the
-  feature branch were unchanged; only the separately supplied patch edits those files.
+Verification on 3 October 2026 UTC: the eight-suite command above passed **78 tests** on
+Node **22.23.2** and **24.21.0**, including the authenticated loopback daemon test. After
+bounding retained projection evidence to hashes, the 14 boundary tests passed again on
+Node 24; Node 22's 78-test run already included that change. Repository `typecheck` (including
+renderer), `lint` (including CSS), changed TypeScript formatting and `git diff --check` passed.
+`git apply --check` passed for the production mount patch, which remains unapplied.
+The additional existing MCP adapter suite passed 13 tests and failed the one normalization
+expectation documented above. Full runtime/UI/build and production lifecycle acceptance were
+not rerun as part of A's consumer/projection handoff.

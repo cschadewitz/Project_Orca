@@ -90,7 +90,8 @@ it("admits a direct run without fabricating a Request or driving execution; retr
     await f.service.admitRun({ workflowId: "program", vars: {} }, { idempotencyKey: "intent" }, f.authority),
   ).toEqual({ ...first, replayed: true });
   expect((await f.orc.events(ids[0]!)).length).toBe(events);
-  expect(f.capture).toHaveBeenCalledTimes(1);
+  // Fresh validation and preparation each capture; accepted replay does neither.
+  expect(f.capture).toHaveBeenCalledTimes(2);
   expect(f.start).toHaveBeenCalledTimes(1);
 });
 it("reconciles original run after ownership interruption", async () => {

@@ -3,16 +3,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OrcaError } from "@orca/core";
-import { FileExecutionStore } from "@orca/store";
+import { FileExecutionStore, fileStores } from "@orca/store";
 import type { RetryContext, RetryOperation } from "../../core/src/model/admission-retry.js";
 import { FileRetryClaimStore } from "../../store/src/admission-retry-store.js";
 import { RegisteredRetryClaims, canonicalJson } from "../src/admission-retry.js";
+import { DirectAdmissionService, type DirectCapturedLaunch } from "../src/direct-admission.js";
+import { RequestSubmissionService } from "../src/program/request-submission.js";
+import { FileAdmissionStore } from "../src/program/submission-store.js";
+import { submissionFixture } from "./request-submission-fixture.js";
 
 const directories: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true });
 });
+
 const faults = {
   conflict: () => new OrcaError("RETRY_CONFLICT", "Conflict"),
   limit: () => new OrcaError("RETRY_LIMIT", "Limit"),
@@ -222,5 +227,210 @@ describe("registered fresh retry validation", () => {
     expect(validate).not.toHaveBeenCalled();
     expect(prepare).not.toHaveBeenCalled();
     expect(await store.batch()).toEqual([existing.record.operationId]);
+  });
+});
+
+type AdmissionKind = "direct" | "request";
+async function admissionFixture() {
+  const dir = await mkdtemp(join(tmpdir(), "orca-admission-fresh-"));
+  directories.push(dir);
+  const f = submissionFixture(fileStores(dir), new FileAdmissionStore(dir), {
+    strictInputs: true,
+    nativeCorrelation: true,
+  });
+  await f.ready();
+  const capture = vi.fn(f.generations.captureLaunch);
+  const directAuthority = { ...f.authority, authorize: vi.fn(async () => {}) };
+  const services = () => {
+    const store = new FileRetryClaimStore({
+      storeDir: dir,
+      execution: f.stores.execution,
+      faults,
+      lockTimeoutMs: 2_000,
+    });
+    const claims = new RegisteredRetryClaims(store, faults);
+    const direct = new DirectAdmissionService({
+      orchestrator: f.orc,
+      retries: claims,
+      captureLaunch: capture,
+      restoreLaunch: f.generations.restoreDirectLaunch,
+    });
+    const request = new RequestSubmissionService({
+      orchestrator: f.orc,
+      admissions: f.admissions,
+      retries: claims,
+      captureLaunch: capture,
+      restoreLaunch: f.generations.restoreLaunch,
+    });
+    const submit = (
+      kind: AdmissionKind,
+      patch: {
+        expectedConfigGeneration?: string;
+        expectedWorkflowRevision?: string;
+        vars?: Record<string, unknown>;
+      } = {},
+    ) =>
+      kind === "direct"
+        ? direct.admitRun({ workflowId: "program", ...patch }, { idempotencyKey: "same-intent" }, directAuthority)
+        : request.submitRetry(
+            { title: "A Request", body: "body", ...patch },
+            { idempotencyKey: "same-intent" },
+            f.authority,
+          );
+    return { store, claims, direct, request, submit };
+  };
+  const start = vi.spyOn(f.orc, "startRun");
+  const run = vi.spyOn(f.orc, "run");
+  const mutations = [
+    vi.spyOn(f.orc.stores.events, "append"),
+    vi.spyOn(f.stores.execution, "putInputs"),
+    vi.spyOn(f.stores.execution, "putPayload"),
+    vi.spyOn(f.stores.requests, "put"),
+    vi.spyOn(f.admissions.records, "put"),
+    vi.mocked(f.authority.onRunAdmitted),
+    start,
+    run,
+  ];
+  const generationsWritten = vi.spyOn(f.stores.execution, "putGeneration");
+  return { ...f, ...services(), dir, capture, directAuthority, services, mutations, generationsWritten, start, run };
+}
+async function expectNoAdmission(f: Awaited<ReturnType<typeof admissionFixture>>) {
+  // Also proves a rejected validator releases the catalog mutex and leaves no journal or key pointer.
+  expect(await readdir(join(f.dir, "admission-retries"))).toEqual([]);
+  expect(await f.store.batch()).toEqual([]);
+  expect(await f.admissions.records.list()).toEqual([]);
+  expect(await f.stores.requests.list()).toEqual([]);
+  expect(await f.orc.listRuns()).toEqual([]);
+  for (const mutation of f.mutations) expect(mutation).not.toHaveBeenCalled();
+  // The existing shared store may initialize its lookup salt, never a sealed claim or launch material.
+  expect(f.generationsWritten.mock.calls.every(([id]) => id === "admission-retry-lookup")).toBe(true);
+}
+
+describe.each(["direct", "request"] as const)("fresh %s admission", (kind) => {
+  it.each([
+    { name: "stale config", patch: { expectedConfigGeneration: "stale-generation" }, code: "CONFIG_STALE" },
+    { name: "stale workflow", patch: { expectedWorkflowRevision: "stale-revision" }, code: "WORKFLOW_INVALID" },
+    { name: "invalid input", patch: { vars: { unknown: "invalid" } }, code: "WORKFLOW_INPUT_INVALID" },
+  ])("refuses $name before publication, then admits the corrected same key once", async ({ patch, code }) => {
+    const f = await admissionFixture();
+    await expect(f.submit(kind, patch)).rejects.toMatchObject({ code });
+    await expectNoAdmission(f);
+    const first = await f.submit(kind);
+    expect(first).toMatchObject({ state: "resolved", replayed: false, result: { state: "accepted" } });
+    expect(await f.submit(kind)).toEqual({ ...first, replayed: true });
+    expect(await f.store.batch()).toEqual([first.operationId]);
+    expect(await f.orc.listRuns()).toHaveLength(1);
+    expect(await f.admissions.records.list()).toHaveLength(kind === "request" ? 1 : 0);
+    expect(await f.stores.requests.list()).toHaveLength(kind === "request" ? 1 : 0);
+    expect(f.start).toHaveBeenCalledTimes(1);
+    expect(f.run).not.toHaveBeenCalled();
+  });
+
+  it("refuses unsupported providers without consuming the key", async () => {
+    const f = await admissionFixture();
+    f.capture.mockImplementationOnce(async (selection) => {
+      const launch = await f.generations.captureLaunch(selection);
+      return {
+        ...launch,
+        ...(kind === "direct" ? { admissionRunIds: undefined } : { requestAdmissionCorrelation: undefined }),
+      } as unknown as DirectCapturedLaunch;
+    });
+    await expect(f.submit(kind)).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+    await expectNoAdmission(f);
+    expect(await f.submit(kind)).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+    expect(await f.orc.listRuns()).toHaveLength(1);
+  });
+
+  it("rechecks revoked authority after fresh validation before publishing", async () => {
+    const f = await admissionFixture();
+    let revoked = false;
+    const authorize = async () => {
+      if (revoked) throw new OrcaError("RUN_STATE", "Authority revoked");
+    };
+    vi.mocked(f.authority.authorize).mockImplementation(authorize);
+    f.directAuthority.authorize.mockImplementation(authorize);
+    f.capture.mockImplementationOnce(async (selection) => {
+      const launch = await f.generations.captureLaunch(selection);
+      return {
+        ...launch,
+        validateStartRun: async (options) => {
+          await launch.validateStartRun(options);
+          revoked = true;
+        },
+      };
+    });
+    await expect(f.submit(kind)).rejects.toThrow("Authority revoked");
+    await expectNoAdmission(f);
+    revoked = false;
+    expect(await f.submit(kind)).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+    expect(await f.orc.listRuns()).toHaveLength(1);
+  });
+
+  it("replays accepted intent and rejects changed commands after the current generation moves", async () => {
+    const f = await admissionFixture();
+    const expectedConfigGeneration = f.generations.current.snapshot.id;
+    const first = await f.submit(kind, { expectedConfigGeneration });
+    expect(first).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+    const applied = await f.generations.apply(
+      f.generations.current.snapshot.config,
+      "new-config-revision",
+      expectedConfigGeneration,
+      false,
+      async () => {},
+    );
+    expect(applied.outcome).toBe("applied");
+    expect(f.generations.current.snapshot.id).not.toBe(expectedConfigGeneration);
+    f.capture.mockClear();
+    for (const mutation of f.mutations) mutation.mockClear();
+    f.generationsWritten.mockClear();
+    expect(await f.submit(kind, { expectedConfigGeneration })).toEqual({ ...first, replayed: true });
+    await expect(f.submit(kind, { expectedConfigGeneration, vars: { token: "changed" } })).rejects.toMatchObject({
+      code: "RETRY_CONFLICT",
+    });
+    expect(f.capture).not.toHaveBeenCalled();
+    for (const mutation of f.mutations) expect(mutation).not.toHaveBeenCalled();
+    expect(f.generationsWritten).not.toHaveBeenCalled();
+    expect(await f.store.batch()).toEqual([first.operationId]);
+    expect(await f.orc.listRuns()).toHaveLength(1);
+  });
+
+  it("serializes compatible callers through separate file claim stores and publishes once", async () => {
+    const f = await admissionFixture();
+    const other = f.services();
+    const [first, second] = await Promise.all([f.submit(kind), other.submit(kind)]);
+    expect(first).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+    expect(second).toMatchObject({ state: "resolved", operationId: first.operationId });
+    if (first.state !== "resolved" || second.state !== "resolved") throw new Error("admissions did not resolve");
+    expect(second.result).toEqual(first.result);
+    expect(await f.store.batch()).toEqual([first.operationId]);
+    expect(await f.orc.listRuns()).toHaveLength(1);
+    expect(await f.stores.requests.list()).toHaveLength(kind === "request" ? 1 : 0);
+    expect(f.start).toHaveBeenCalledTimes(1);
+    expect(f.capture).toHaveBeenCalledTimes(2);
+    expect(f.run).not.toHaveBeenCalled();
+  });
+
+  it("retains explicit uncertainty when prepare revalidation fails after publication", async () => {
+    const f = await admissionFixture();
+    f.capture
+      .mockImplementationOnce(f.generations.captureLaunch)
+      .mockRejectedValueOnce(new OrcaError("CONFIG_STALE", "generation moved after claim publication"));
+    await expect(f.submit(kind)).rejects.toMatchObject({ code: "CONFIG_STALE" });
+    const [operationId] = await f.store.batch();
+    expect(operationId).toBeDefined();
+    const record = await f.store.read(operationId!);
+    expect(record?.phase).toBe(kind === "direct" ? "claimed" : "bound");
+    const retried = await f.submit(kind);
+    expect(retried).toMatchObject(
+      kind === "direct"
+        ? { state: "in-progress", operationId }
+        : { state: "resolved", operationId, result: { state: "recoverable-failure" } },
+    );
+    expect(f.capture).toHaveBeenCalledTimes(2);
+    expect((await f.store.read(operationId!))?.binding).toEqual(record?.binding);
+    expect(await f.orc.listRuns()).toEqual([]);
+    expect(await f.admissions.records.list()).toEqual([]);
+    expect(await f.stores.requests.list()).toEqual([]);
+    for (const mutation of f.mutations) expect(mutation).not.toHaveBeenCalled();
   });
 });

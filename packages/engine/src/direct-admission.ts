@@ -83,6 +83,9 @@ export class DirectAdmissionService {
             ),
           ) as JsonValue;
         },
+        validateFresh: async (command) => {
+          await this.validateLaunch(command);
+        },
         prepare: (command, context) => this.prepare(command, context),
         recover: (command, context) => this.recover(command, context),
       },
@@ -111,7 +114,8 @@ export class DirectAdmissionService {
       }),
     );
   }
-  private async prepare(command: DirectAdmissionCommand, context: RetryContext): Promise<DirectAdmissionResult> {
+  /** Read-only preflight, repeated during preparation after the retry claim is published. */
+  private async validateLaunch(command: DirectAdmissionCommand): Promise<DirectCapturedLaunch> {
     const { workflowId, workflowVersion, expectedWorkflowRevision, expectedConfigGeneration } = command;
     const launch = await this.options.captureLaunch({
       purpose: "workflow",
@@ -122,13 +126,17 @@ export class DirectAdmissionService {
     });
     if (!launch.admissionRunIds)
       throw new OrcaError("NOT_SUPPORTED", "Direct launch provider must support reserved run identities");
+    await launch.validateStartRun(this.launchOptions(command, this.authority().actor));
+    return launch;
+  }
+  private async prepare(command: DirectAdmissionCommand, context: RetryContext): Promise<DirectAdmissionResult> {
+    const launch = await this.validateLaunch(command);
     const binding = {
       admissionId: `direct_${randomUUID()}`,
       runId: `run_${randomUUID()}`,
       materialId: `direct-material-${randomUUID()}`,
     };
     const authority = this.authority();
-    await launch.validateStartRun(this.launchOptions(command, authority.actor));
     // Bind before any admission effects. An interrupted unsealed reservation stays recoverable,
     // never recaptures current defaults or substitutes a different run.
     await context.bind(binding);

@@ -285,7 +285,8 @@ describe("retry-safe Request reservation", () => {
         { ...f.authority, actor: { principalId: "owner", credentialId: "rotated" } },
       ),
     ).toEqual({ ...first, replayed: true });
-    expect(f.capture).toHaveBeenCalledTimes(1);
+    // Fresh validation and preparation each capture; accepted replay does neither.
+    expect(f.capture).toHaveBeenCalledTimes(2);
     expect(await f.stores.requests.list()).toHaveLength(1);
     expect(await f.orc.listRuns()).toHaveLength(1);
   });

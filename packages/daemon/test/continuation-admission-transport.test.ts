@@ -51,6 +51,10 @@ it.each(["http", "socket"] as const)(
     const f = await fixture({ operator: true });
     const call = transport === "http" ? (method: string, params: unknown) => f.http(method, params) : await f.socket();
     const target = OperatorDiscoverySchema.parse(result(await call("operator.discover", {}))).target;
+    expect(result(await call("operator.page", { target, collection: "runs", runId: f.runId }))).toMatchObject({
+      items: [{ id: f.runId, continuationState: "available", expectedBoundary: f.params.command.expectedBoundary }],
+      restartRequired: false,
+    });
     const receipt = RunsContinueResultSchema.parse(result(await call("operator.continueRun", { target, ...f.params })));
     if (receipt.state !== "resolved") throw new Error("not resolved");
     await f.entered.wait;

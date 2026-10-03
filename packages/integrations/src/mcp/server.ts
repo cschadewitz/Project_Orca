@@ -140,7 +140,9 @@ export function createOperatorServer(backend: AuthenticatedOperatorBackend): Ser
   let epoch = 0;
   let identity: string | undefined;
   const discover = async () => {
-    const current = await backend.call("discover", {});
+    const parsed = MCP_OPERATIONS.discover.output.safeParse(await backend.call("discover", {}));
+    if (!parsed.success) throw new ProtocolFault("PROTOCOL_MESSAGE", "Invalid operator discovery");
+    const current = parsed.data;
     const next = `${current.principalId}:${current.target.workspaceId}:${current.target.instanceId}`;
     if (identity !== next) {
       identity = next;
@@ -196,9 +198,11 @@ export function createOperatorServer(backend: AuthenticatedOperatorBackend): Ser
       const result =
         tool.operation === "discover" ? discovery : await backend.call<McpOperation>(tool.operation, input);
       // No cached target authority. Check boot/workspace/revocation again before publishing a late response.
-      await discover();
+      const latest = await discover();
       if (epoch !== callEpoch)
         return errorResult("RUN_STATE", "Connection changed; inspect the original operation before retrying");
+      if (!allowed(tool, latest) || JSON.stringify(latest.scope) !== JSON.stringify(discovery.scope))
+        return errorResult("AUTH_FORBIDDEN", "Operator authority changed during the call");
       const safe = MCP_OPERATIONS[tool.operation].output.safeParse(result);
       if (!safe.success) return errorResult("PROTOCOL_MESSAGE", "Backend returned an invalid operator result");
       const output: CallToolResult = {
