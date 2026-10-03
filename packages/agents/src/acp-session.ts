@@ -11,6 +11,7 @@ import { isAbsolute, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
 import {
+  describeError,
   newId,
   OrcaError,
   silentLogger,
@@ -20,6 +21,7 @@ import {
   type Logger,
   type SessionConfigOption,
 } from "@orca/core";
+import { processCleanup } from "./process-cleanup.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import type { AgentHost, AgentProcessHandle } from "./host.js";
 import { loadEffectivePermissionPolicy, resolvePermission } from "./permissions.js";
@@ -214,6 +216,28 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   const closed = conn.closed.then(() => undefined);
   void closed.then(() => activeTurn?.abort.abort("agent connection closed"));
   void proc.exited.then(() => activeTurn?.abort.abort("agent process exited"));
+  const cleanupProcess = processCleanup(proc);
+  /** Startup failure, close and cancellation all share one bounded cleanup. */
+  let terminating: Promise<void> | undefined;
+  const terminate = (reason?: unknown): Promise<void> => {
+    if (terminating) return terminating;
+    terminating = (async () => {
+      activeTurn?.abort.abort("session closed");
+      if (activeTurn?.grace) clearTimeout(activeTurn.grace);
+      listeners.clear();
+      try {
+        conn.close(reason);
+      } catch {
+        /* Still retain responsibility for the child if transport close fails. */
+      }
+      await cleanupProcess();
+    })();
+    // Cancellation can initiate shutdown without an awaiting caller.
+    void terminating.catch((error: unknown) =>
+      logger.warn("agent session cleanup failed", { sessionId: id, error: describeError(error) }),
+    );
+    return terminating;
+  };
   const handshakeTimeout = opts.handshakeTimeoutMs ?? 30_000;
 
   const withTimeout = <T>(p: Promise<T>, ms: number, what: string): Promise<T> =>
@@ -294,15 +318,30 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     }
     opts.onSessionContinuity?.(continuity);
   } catch (e) {
-    proc.kill();
-    conn.close(e);
-    if (e instanceof OrcaError) throw e;
-    throw new OrcaError(
-      "AGENT_PROTOCOL",
-      `ACP handshake with '${opts.agent.id}' failed: ${(e as Error).message}`,
-      { stderr: proc.stderrTail() },
-      { cause: e },
-    );
+    const failure =
+      e instanceof OrcaError
+        ? e
+        : new OrcaError(
+            "AGENT_PROTOCOL",
+            `ACP handshake with '${opts.agent.id}' failed: ${(e as Error).message}`,
+            { stderr: proc.stderrTail() },
+            { cause: e },
+          );
+    try {
+      await terminate(e);
+    } catch (cleanupError) {
+      // Keep the handshake as the primary failure and retain it as the cause.
+      throw new OrcaError(
+        failure.code,
+        failure.message,
+        {
+          ...failure.details,
+          cleanup: describeError(cleanupError),
+        },
+        { cause: failure },
+      );
+    }
+    throw failure;
   }
 
   const cancelGraceMs = opts.cancelGraceMs ?? opts.agent.cancelGraceMs;
@@ -319,36 +358,6 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
     /** Rejects the turn from outside the ACP request (the agent is wedged). */
     fail: (e: Error) => void;
   }
-
-  /**
-   * Tear the session down: close the connection (which rejects the in-flight
-   * `session/prompt` request) and stop the process, escalating to SIGKILL when
-   * it ignores SIGTERM. Idempotent; concurrent callers share one shutdown.
-   */
-  let terminating: Promise<void> | undefined;
-  const terminate = (reason?: unknown): Promise<void> => {
-    if (terminating) return terminating;
-    activeTurn?.abort.abort("session closed");
-    terminating = (async () => {
-      try {
-        conn.close(reason);
-      } catch {
-        /* ignore */
-      }
-      proc.kill();
-      const exitedInTime = await Promise.race([
-        proc.exited.then(() => true),
-        new Promise<boolean>((r) => setTimeout(() => r(false), 2000)),
-      ]);
-      if (!exitedInTime) {
-        // Escalate: the agent ignored SIGTERM (or is wedged). The handle's kill()
-        // is a no-op once the process has exited, so this is safe to call blindly.
-        proc.kill("SIGKILL");
-        await proc.exited;
-      }
-    })();
-    return terminating;
-  };
 
   /**
    * Ask the agent to end the current turn, and stop waiting for it if it does not.
