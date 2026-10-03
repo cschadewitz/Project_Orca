@@ -1,0 +1,190 @@
+{
+  "kind": "synthetic-contract-cases",
+  "cases": [
+    {
+      "id": "nested-secret",
+      "injectAt": ["snapshot", "resume"],
+      "value": {
+        "outer": {
+          "token": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+        }
+      },
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "base64-secret",
+      "injectAt": ["snapshot", "resume"],
+      "value": "U1lOVEhFVElDX0NBTkFSWV9ET19OT1RfRVhQT1JU",
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "percent-encoded-secret",
+      "injectAt": ["snapshot", "resume"],
+      "value": "%53%59%4E%54%48%45%54%49%43%5F%43%41%4E%41%52%59%5F%44%4F%5F%4E%4F%54%5F%45%58%50%4F%52%54",
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "fragmented-secret",
+      "injectAt": ["snapshot", "resume"],
+      "value": ["SYNTHETIC_", "CANARY_", "DO_NOT_EXPORT"],
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "unicode-escaped-secret",
+      "injectAt": ["snapshot", "resume"],
+      "value": "\\u0053\\u0059\\u004e\\u0054\\u0048\\u0045\\u0054\\u0049\\u0043\\u005f\\u0043\\u0041\\u004e\\u0041\\u0052\\u0059\\u005f\\u0044\\u004f\\u005f\\u004e\\u004f\\u0054\\u005f\\u0045\\u0058\\u0050\\u004f\\u0052\\u0054",
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "posix-path",
+      "injectAt": ["snapshot", "resume"],
+      "value": "/Users/synthetic/PrivateProject/source.ts",
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "windows-path",
+      "injectAt": ["snapshot", "resume"],
+      "value": "C:\\Users\\Synthetic\\PrivateProject\\source.ts",
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "unc-path",
+      "injectAt": ["snapshot", "resume"],
+      "value": "\\\\fixture-host.invalid\\private\\source.ts",
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "url-and-header",
+      "injectAt": ["snapshot", "resume"],
+      "value": {
+        "url": "https://fixture.invalid/private",
+        "Authorization": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "error-and-cause",
+      "injectAt": ["snapshot", "resume"],
+      "value": {
+        "message": "SYNTHETIC_CANARY_DO_NOT_EXPORT",
+        "stack": "synthetic stack /Users/synthetic/private",
+        "cause": {
+          "token": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+        }
+      },
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "ciphertext",
+      "injectAt": ["snapshot", "resume"],
+      "value": {
+        "ciphertext": "SYNTHETIC_NOT_CIPHERTEXT",
+        "nonce": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "title",
+      "injectAt": ["snapshot", "resume"],
+      "value": "Synthetic private project title",
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "predictable-id-hash",
+      "injectAt": ["snapshot", "resume"],
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "host-ip",
+      "injectAt": ["snapshot", "resume"],
+      "value": "192.0.2.42",
+      "expectedValidation": "schema",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "huge-newline-free",
+      "injectAt": ["snapshot", "resume"],
+      "repeat": {
+        "text": "SYNTHETIC_CONTENT_",
+        "count": 20000
+      },
+      "expectedValidation": "byte_limit",
+      "sourcePolicy": "exclude_without_read",
+      "runtimeStatus": "not_run"
+    }
+  ],
+  "pipelineCases": [
+    {
+      "id": "sanitizer-throws",
+      "fault": "synthetic_throw",
+      "expected": "abort_no_export_no_raw_fallback",
+      "execution": "unchanged",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "sanitizer-hangs",
+      "fault": "synthetic_never_resolves",
+      "deadlineMs": 2000,
+      "expected": "abort_no_export_no_raw_fallback",
+      "execution": "unchanged",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "scan-throws",
+      "fault": "synthetic_scan_throw",
+      "expected": "abort_no_export_no_raw_fallback",
+      "execution": "unchanged",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "scan-hangs",
+      "fault": "synthetic_scan_never_resolves",
+      "deadlineMs": 2000,
+      "expected": "abort_no_export_no_raw_fallback",
+      "execution": "unchanged",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "unexpected-field-at-projection",
+      "fault": "synthetic_unknown_field",
+      "expected": "abort_no_export_no_raw_fallback",
+      "execution": "unchanged",
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "missing-optional-evidence",
+      "fault": "typed_observation_unavailable",
+      "expected": "unknown_with_unavailable_count",
+      "execution": "unchanged",
+      "runtimeStatus": "not_run"
+    }
+  ]
+}

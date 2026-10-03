@@ -1,0 +1,353 @@
+{
+  "kind": "design-oracles-not-runtime-results",
+  "cases": [
+    {
+      "id": "default-off",
+      "trace": ["fresh_start", "normal_run"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "denied-consent",
+      "trace": ["open_consent", "decline", "normal_run"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "one-shot",
+      "trace": ["open_consent", "allow_once", "snapshot_ready", "choose_destination", "confirm_export"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "one_local_file",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "one-shot-not-sticky",
+      "trace": ["open_consent", "allow_once", "snapshot_ready", "confirm_export", "new_failure"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "one_local_file",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "one-shot-expiry",
+      "trace": ["open_consent", "allow_once", "advance_monotonic_60000"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "cancel-before-capture",
+      "trace": ["open_consent", "cancel"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "cancel-preview",
+      "trace": ["allow_once", "snapshot_ready", "cancel"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "back-retry",
+      "trace": ["allow_once", "snapshot_ready", "back", "retry_without_new_consent"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "save-cancel",
+      "trace": ["allow_once", "snapshot_ready", "save_dialog_cancel"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "rolling-separate",
+      "trace": ["decline_one_shot", "open_rolling_consent", "allow_rolling", "safe_event"],
+      "expected": {
+        "capture": "rolling",
+        "storage": "encrypted_bounded",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "rolling-preview",
+      "trace": ["allow_rolling", "safe_event", "allow_snapshot", "snapshot_ready", "confirm_export"],
+      "expected": {
+        "capture": "rolling",
+        "storage": "encrypted_bounded",
+        "exports": "one_local_file",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "rolling-opt-out",
+      "trace": ["allow_rolling", "safe_event", "opt_out"],
+      "expected": {
+        "capture": "off",
+        "storage": "purged_key_revoked",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "opt-out-preview",
+      "trace": ["allow_rolling", "allow_snapshot", "snapshot_ready", "opt_out", "confirm_export"],
+      "expected": {
+        "capture": "off",
+        "storage": "purged_key_revoked",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "restart",
+      "trace": ["allow_rolling", "safe_event", "restart"],
+      "expected": {
+        "capture": "off",
+        "storage": "purged_key_revoked",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "expiry",
+      "trace": ["allow_rolling", "safe_event", "advance_monotonic_86400000"],
+      "expected": {
+        "capture": "off",
+        "storage": "purged_key_revoked",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "clock-back",
+      "trace": ["allow_rolling", "safe_event", "wall_clock_back_3600000"],
+      "expected": {
+        "capture": "rolling",
+        "storage": "encrypted_bounded",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "clock-forward",
+      "trace": ["allow_rolling", "safe_event", "wall_clock_forward_172800000"],
+      "expected": {
+        "capture": "rolling",
+        "storage": "encrypted_bounded",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "clock-uncertain",
+      "trace": ["allow_rolling", "safe_event", "monotonic_discontinuity"],
+      "expected": {
+        "capture": "off",
+        "storage": "purged_key_revoked",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "sleep-expiry",
+      "trace": ["allow_rolling", "safe_event", "sleep_86400001", "wake"],
+      "expected": {
+        "capture": "off",
+        "storage": "purged_key_revoked",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "buffer-full",
+      "trace": ["allow_rolling", "fill_buffer_2097152", "safe_event"],
+      "expected": {
+        "capture": "rolling",
+        "storage": "bounded_drop_visible",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "disk-full",
+      "trace": ["allow_rolling", "safe_event", "disk_full"],
+      "expected": {
+        "capture": "off",
+        "storage": "purge_pending_key_revoked",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "delete-failure",
+      "trace": ["allow_rolling", "safe_event", "opt_out_delete_denied"],
+      "expected": {
+        "capture": "off",
+        "storage": "purge_pending_key_revoked",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "key-unavailable",
+      "trace": ["allow_rolling", "diagnostic_key_unavailable"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "acl-unverifiable",
+      "trace": ["allow_rolling", "acl_unverifiable"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "export-full-disk",
+      "trace": ["allow_once", "snapshot_ready", "confirm_export", "disk_full"],
+      "expected": {
+        "capture": "off",
+        "storage": "temporary_cleanup_pending",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "sanitizer-failure",
+      "trace": ["allow_once", "sanitizer_throws"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "sanitizer-hang",
+      "trace": ["allow_once", "sanitizer_hangs", "deadline_2000"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "retry-after-failure",
+      "trace": ["allow_once", "sanitizer_throws", "retry_without_new_consent"],
+      "expected": {
+        "capture": "off",
+        "storage": "none",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    },
+    {
+      "id": "key-revocation-failure",
+      "trace": ["allow_rolling", "safe_event", "opt_out_key_revoke_denied"],
+      "expected": {
+        "capture": "off",
+        "storage": "purge_pending_key_revocation_pending",
+        "exports": "none",
+        "externalDiagnosticRequests": 0,
+        "executionMutations": 0
+      },
+      "runtimeStatus": "not_run"
+    }
+  ]
+}

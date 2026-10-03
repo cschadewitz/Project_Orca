@@ -1,0 +1,481 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orca:manual-diagnostics:1:draft",
+  "title": "Manual diagnostic bundle v1 \u2014 unapproved proposal",
+  "$comment": "Design only. Semantic/byte checks in validate.py are also mandatory. All sample identities are synthetic.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "reportId",
+    "sessionId",
+    "mode",
+    "windowMs",
+    "versions",
+    "snapshot",
+    "evidence",
+    "entities",
+    "events",
+    "omissions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "reportId": {
+      "$ref": "#/$defs/uuid"
+    },
+    "sessionId": {
+      "$ref": "#/$defs/uuid"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["one_shot", "rolling_snapshot"]
+    },
+    "windowMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400000
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app",
+        "daemon",
+        "buildRevision",
+        "appProtocol",
+        "daemonProtocol",
+        "storeFormat",
+        "os",
+        "osVersion",
+        "arch"
+      ],
+      "properties": {
+        "app": {
+          "$ref": "#/$defs/version"
+        },
+        "daemon": {
+          "$ref": "#/$defs/version"
+        },
+        "buildRevision": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 40,
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}(?![\\s\\S])"
+            },
+            {
+              "const": "unknown"
+            }
+          ]
+        },
+        "appProtocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "daemonProtocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "storeFormat": {
+          "type": "string",
+          "enum": ["config-generations-v3", "unknown"]
+        },
+        "os": {
+          "type": "string",
+          "enum": ["darwin", "win32", "linux", "unknown"]
+        },
+        "osVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "arch": {
+          "type": "string",
+          "enum": ["arm64", "x64", "unknown"]
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connection", "authentication", "admission", "resume", "protectedState"],
+      "properties": {
+        "connection": {
+          "type": "string",
+          "enum": ["live", "reconnecting", "disconnected", "mismatch", "file", "unknown"]
+        },
+        "authentication": {
+          "type": "string",
+          "enum": ["accepted", "required", "invalid", "forbidden", "unknown"]
+        },
+        "admission": {
+          "type": "string",
+          "enum": ["accepted", "uncertain", "recoverable_failure", "unknown"]
+        },
+        "resume": {
+          "type": "string",
+          "enum": ["succeeded", "failed", "unknown"]
+        },
+        "protectedState": {
+          "type": "string",
+          "enum": ["available", "unavailable", "unknown"]
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handshake", "admissionObservation", "resumeObservation", "protectedStateObservation"],
+      "properties": {
+        "handshake": {
+          "$ref": "#/$defs/presence"
+        },
+        "admissionObservation": {
+          "$ref": "#/$defs/presence"
+        },
+        "resumeObservation": {
+          "$ref": "#/$defs/presence"
+        },
+        "protectedStateObservation": {
+          "$ref": "#/$defs/presence"
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alias", "kind"],
+        "properties": {
+          "alias": {
+            "$ref": "#/$defs/alias"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["run", "step", "admission"]
+          }
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["offsetMs", "phase", "code", "entityAlias"],
+        "properties": {
+          "offsetMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400000
+          },
+          "phase": {
+            "type": "string",
+            "enum": ["startup", "connection", "admission", "resume", "protected_state", "lifecycle", "run", "unknown"]
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "startup_spawn_failed",
+              "startup_exited_before_handshake",
+              "startup_handshake_timeout",
+              "connection_unavailable",
+              "connection_lost",
+              "protocol_mismatch",
+              "authentication_required",
+              "authentication_invalid",
+              "authorization_denied",
+              "admission_uncertain",
+              "admission_recoverable_failure",
+              "resume_failed",
+              "protected_state_unavailable",
+              "app_started",
+              "app_stopping",
+              "sleep_observed",
+              "wake_observed",
+              "run_failed",
+              "unknown"
+            ]
+          },
+          "entityAlias": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/alias"
+              },
+              {
+                "const": "unknown"
+              }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "startup"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "startup_spawn_failed",
+                    "startup_exited_before_handshake",
+                    "startup_handshake_timeout",
+                    "unknown"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "connection"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "connection_unavailable",
+                    "connection_lost",
+                    "protocol_mismatch",
+                    "authentication_required",
+                    "authentication_invalid",
+                    "authorization_denied",
+                    "unknown"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "admission"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": ["admission_uncertain", "admission_recoverable_failure", "unknown"]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "resume"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": ["resume_failed", "unknown"]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "protected_state"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": ["protected_state_unavailable", "unknown"]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "lifecycle"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": ["app_started", "app_stopping", "sleep_observed", "wake_observed", "unknown"]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "run"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": ["run_failed", "unknown"]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "unknown"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": ["unknown"]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "omissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unavailable", "invalid", "budget", "expired"],
+      "properties": {
+        "unavailable": {
+          "$ref": "#/$defs/count"
+        },
+        "invalid": {
+          "$ref": "#/$defs/count"
+        },
+        "budget": {
+          "$ref": "#/$defs/count"
+        },
+        "expired": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "version": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 20,
+          "pattern": "^[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}(?![\\s\\S])"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "protocol": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["major", "minor"],
+          "properties": {
+            "major": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "minor": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          }
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    },
+    "uuid": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
+    },
+    "alias": {
+      "type": "string",
+      "maxLength": 3,
+      "pattern": "^e([1-9]|[1-5][0-9]|6[0-4])(?![\\s\\S])"
+    },
+    "count": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65534
+        },
+        {
+          "type": "string",
+          "enum": ["at_least_65535", "unknown"]
+        }
+      ]
+    },
+    "presence": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "const": "unknown"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "one_shot"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "windowMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 60000
+          },
+          "events": {
+            "maxItems": 32
+          }
+        }
+      }
+    }
+  ]
+}
