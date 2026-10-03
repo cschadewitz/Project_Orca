@@ -40,7 +40,7 @@ export class PretriggerBuffer {
   private head = 0;
   private size = 0;
   private bytes = DIAGNOSTIC_ENVELOPE_BYTES;
-  private sessionId: string | undefined;
+  private collecting = false;
   private lastTime = 0;
   private historyStart = 0;
   private lastCapacityLoss = -Infinity;
@@ -66,7 +66,7 @@ export class PretriggerBuffer {
   }
 
   get enabled(): boolean {
-    return this.sessionId !== undefined;
+    return this.collecting;
   }
 
   /** New explicit session only. Repeated start cannot refresh/reset existing history. */
@@ -75,7 +75,7 @@ export class PretriggerBuffer {
     const now = this.readTime();
     if (now === undefined) return false;
     this.historyStart = now;
-    this.sessionId = randomUUID();
+    this.collecting = true;
     return true;
   }
 
@@ -85,7 +85,7 @@ export class PretriggerBuffer {
     this.ring.fill(undefined);
     this.head = this.size = 0;
     this.bytes = DIAGNOSTIC_ENVELOPE_BYTES;
-    this.sessionId = undefined;
+    this.collecting = false;
     this.lastTime = this.historyStart = 0;
     this.lastCapacityLoss = -Infinity;
     this.budget = this.expired = this.invalid = 0;
@@ -131,11 +131,12 @@ export class PretriggerBuffer {
   /** Freeze one complete canonical report synchronously; later collection cannot change it. */
   snapshot(): FrozenDiagnosticSnapshot | undefined {
     const now = this.tick();
-    if (now === undefined || this.sessionId === undefined) return undefined;
+    if (now === undefined) return undefined;
     const oldest = this.ring[this.head];
+    // Exported identities belong only to this snapshot, including preparation retries.
     const report = diagnosticReport(
       randomUUID(),
-      this.sessionId,
+      randomUUID(),
       {
         requestedWindowMs: this.minutes * 60_000,
         observedWindowMs: now - this.historyStart,

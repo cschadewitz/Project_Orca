@@ -165,23 +165,29 @@ describe("volatile diagnostic pre-trigger buffer", () => {
     expect(subject.snapshot()!.byteLength).toBeLessThanOrEqual(DIAGNOSTIC_LIMITS.maxReportBytes);
   });
 
-  it("does not reset an active session, and uses fresh random identities after opt-out", () => {
+  it("does not reset an active session and refreshes exported identities for every snapshot", () => {
     let now = 0;
     const subject = buffer({ now: () => now });
     subject.start();
     subject.record("run", "run_failed");
     const first = report(subject);
+    // A preparation retry with unchanged history and clock still needs fresh IDs.
+    const retry = report(subject);
+    expect(retry.events).toEqual(first.events);
+    expect(retry.coverage).toEqual(first.coverage);
     now = 1000;
     subject.start();
     const second = report(subject);
-    expect(second.sessionId).toBe(first.sessionId);
-    expect(second.reportId).not.toBe(first.reportId);
-    expect(second.reportId).not.toBe(second.sessionId);
+    expect(second.events).toEqual(first.events);
     expect(second.coverage.observedWindowMs).toBe(1000);
     subject.stop();
     subject.start();
     const next = report(subject);
-    expect(next.sessionId).not.toBe(first.sessionId);
+    const ids = [first, retry, second, next].flatMap(({ reportId, sessionId }) => [reportId, sessionId]);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) {
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    }
     expect(next.events).toEqual([]);
     expect(next.omissions).toMatchObject({ budget: 0, expired: 0, invalid: 0 });
   });

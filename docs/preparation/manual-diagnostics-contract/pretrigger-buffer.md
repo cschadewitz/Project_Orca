@@ -36,7 +36,9 @@ sleep. No platform sleep integration or consent-session duration is claimed here
 The append path uses precomputed enum byte reservations, bounded counters and ring
 operations, with no full-buffer serialization. A snapshot serializes at most one bounded
 ring synchronously into immutable canonical text; later recording/configuration/expiry
-cannot change it. It returns the complete JSON and its byte length, without an event
+cannot change it. Each snapshot generates independent fresh `reportId` and `sessionId`
+values, including retries over unchanged history; collection state retains no identifier.
+It returns the complete JSON and its byte length, without an event
 cutoff at snapshot time. This is not a preview/save grant: future main-process preview
 ownership must limit copies, expire/revoke them on opt-out and bind save to those bytes.
 No UI, local save implementation or preparation deadline is included.
