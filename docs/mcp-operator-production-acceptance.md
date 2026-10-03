@@ -81,9 +81,22 @@ to detect automatic adapter retries. Test cleanup closes clients/listeners/proce
 and removes synthetic state. The process environment excludes ambient ORCA settings,
 agent credentials and `NODE_OPTIONS`.
 
+Settled assertions first use bounded `runs.events` reads with the same peer token
+and endpoint (500 events per page, following `hasMore`/`nextCursor`, at most ten
+pages per observation). Durable inputs require their exact unanswered
+`human.requested`, matching `step.waiting`, then `run.paused`. Live inputs require
+the current-instance permission publication and an exact-run `inputs.list` proving
+the pending owner and all seven identity fields; they do not require a durable
+pause. Boundary/status checks wait for the corresponding run event milestone.
+Readiness propagates errors, does not retry mutations, uses the existing timeout,
+and never falls back to an owner's credential. The raw `page()` remains unchanged
+for cursor and fault tests; A12 deliberately reads without readiness and accepts
+only a schema-valid snapshot or bounded `RUN_STATE` refusal, then requires the
+settled revision view. A12 does not guarantee that timing exercises both outcomes.
+
 ## Executable matrix
 
-Each row runs over **both stdio and authenticated HTTP MCP**. Counts include both
+The current matrix contains 60 cases. Each row runs over **both stdio and authenticated HTTP MCP**. Counts include both
 transports. Row IDs are executable `-t` selectors. Backing HTTP/WS coverage in F01,
 R02, A09 and A11 is additional to the MCP transport parameterization.
 
@@ -95,15 +108,15 @@ R02, A09 and A11 is additional to the MCP transport parameterization.
 | F04 | 4 | Existing production answer/revision and continuation services actually execute the scripted agent and produce an artifact; rationale is excluded and corrective text reaches the prompt. |
 | L01 | 2 | All ten aliases mounted; Request identity retained, direct admission invents no Request; actual lookup/reconcile receipts and one run correlate. |
 | L02 | 2 | Exact durable answer records without resuming; duplicate refused; continuation/lookup/reconcile; rationale excluded from agent prompt; exact artifact read and byte omission. |
-| L03 | 2 | Atomic answer plus root continuation replays once; child continuation and a fresh terminal continuation refused. |
-| L04 | 2 | Pinned revision target/action; every target component checked; ordinary answer cannot bypass revision; declaration payload validation; replay/conflict; private text excluded from public history and delivered once. |
+| L03 | 2 | Atomic answer plus root continuation replays once; mismatched child boundary and a fresh terminal continuation refused. |
+| L04 | 2 | Pinned revision target/action; every target component and undeclared action ID checked; ordinary answer cannot bypass revision; declaration payload validation; replay/conflict; private text excluded from public history and delivered once. |
 | L05 | 2 | Cancellation receipt reflects a real cancellation of exact parent and descendants. |
 | R01 | 4 | Request and direct admission each lose an acknowledgement after commit; no automatic retry; explicit retained-key replay/lookup/reconcile matches actual receipt; changed payload conflicts. |
 | R02 | 2 | Kill/restart preserves admission correlation; old instance target refused; fresh-target replay creates no run; HTTP/WS lookup/reconcile agree. |
 | R03 | 2 | Two compiled daemon writers race one retained key; one operation/run, explicit settlement, changed payload refused. |
 | R04 | 2 | Combined answer/continuation response loss, restart, stable receipt, replay and changed-decision conflict; one decision-bearing journal marker. |
 | R05 | 2 | Revision response loss and restart preserve protected pending receipt without executing or publicly exposing its payload. |
-| A01 | 2 | Revoked connected caller refused for all ten aliases before malformed-input diagnostics; open WS cannot retain authority. |
+| A01 | 2 | Revoked connected caller refused before dispatch for all ten tool names; typed HTTP 401 or bounded MCP AUTH_INVALID; open WS cannot retain authority. Executable before mounting, without proving alias-handler execution. |
 | A02 | 2 | Current grant combinations and owner/workflow scope; weak readers receive restriction-only action ID and no revision view; continuation disclosure matches authorized `runs.get`. |
 | A03 | 2 | Workspace/boot/run/step/input identity, caller authority injection, implicit resume and standing grants refused; cross-run artifact ID refused. |
 | A04 | 2 | All seven live identity fields; actual second daemon reports owner-unavailable; original callback accepts once and duplicate cannot deliver again. |
@@ -112,8 +125,18 @@ R02, A09 and A11 is additional to the MCP transport parameterization.
 | A07 | 2 | Revocation while a real protected read response is held prevents late MCP publication. This is an edge publication check, not a claim about every internal daemon await. |
 | A08 | 2 | Audit binds authenticated actor and actual operation/run correlations; excludes key, rationale, credential, paths; errors exclude payload/stack/details. |
 | A09 | 2 | Backing HTTP/WS strict schemas, retry UTF-8 byte limits, target checks and receipt equality; unsupported pending-replacement surface stays absent. |
-| A10 | 2 | Ordinary boundary is unsupported; loss of protected revision evidence is unavailable, never an empty/unsupported success; projection revision changes and restores. |
+| A10 | 2 | Ordinary boundary is unsupported; missing durable protected evidence propagates RUN_STATE as a whole-read failure without a boundary/success payload; current authentication remains required and restoring evidence restores the authorized revision view. |
 | A11 | 2 | All ten aliases succeed through both backing HTTP and WS with actual execution, Request/direct identity, continuation receipts, cancellation and revision effects. |
+| A12 | 2 | Cold revision/run reads without readiness expose a schema-valid snapshot or a bounded whole-read RUN_STATE refusal without a usable boundary; the subsequent settled revision read must succeed. |
+
+Coverage limits: L03's child refusal uses a boundary from another run, so it does
+not independently establish root-only enforcement. L04 prepares action-ID mismatch,
+five target-component mismatches and empty/oversize UTF-8/wrong-kind refusals; valid
+structured-values and depth-limit workloads remain unrun/unimplemented here. A10
+covers revision evidence failure and restoration, not continuation uncertainty or
+a typed transient-unavailability classification. A07 checks the publication edge,
+not every awaited daemon authorization boundary. These limits remain integration
+follow-up within #327; this matrix is not a claim of complete production acceptance.
 
 The ten aliases are exercised positively by A11 and these MCP cases:
 
@@ -130,9 +153,9 @@ The ten aliases are exercised positively by A11 and these MCP cases:
 | `operator.reconcileContinuation` | `reconcile_continuation` | L02, R04 |
 | `operator.revise` | `revise_input` | L04, R05 |
 
-## Preparation evidence and remaining gates
+## Initial preparation evidence and remaining gates
 
-Executed on 2026-10-03 with Node `24.21.0` and pnpm `12.4.2`, using a build made
+Initial commit `9720e7d736bcacdd04ae3609c3ab175d91169290` was executed on 2026-10-03 with Node `24.21.0` and pnpm `12.4.2`, using a build made
 from the frozen base in this isolated checkout:
 
 | Check | Passed | Failed | Skipped / unrun | Result |
@@ -153,7 +176,7 @@ The diagnostic used:
 ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-lifecycle.test.ts -t L01 --maxWorkers=1
 ```
 
-F rows establish fixture readiness only. L/R/A bodies remain unexecuted because
+In that initial run, F rows establish fixture readiness only. L/R/A bodies remained unexecuted because
 production discovery exposes none of the ten mutation/receipt aliases. There are
 no unexpected failures in the final preparation run. The full strict matrix,
 production-body results after Cal's integration, the unrelated full repository
@@ -165,3 +188,52 @@ that the blocked production bodies pass or fail.
 No main merge, deployment, release, credential migration, host security change or
 actual-Cal connectivity is part of this branch. No percentage, ETA or cost is
 estimated. Complete production success, CI and #393 proof remain outstanding.
+
+## Review corrections
+
+Refusal responses now enforce `OPERATOR_MAX_RESULT_BYTES` and reject success
+`structuredContent`, retaining credential-leak checks. A01 accepts only the SDK's
+`SdkHttpError` with HTTP status 401 (or an ordinary MCP `AUTH_INVALID` refusal), not
+message matching or arbitrary thrown errors. The SDK error message/data are also
+bounded and checked for credential leakage. A01 can run before production mounting
+because authentication must precede tool lookup. Passing it proves that edge for
+all ten requested names, not execution of the absent mutation handlers.
+
+A10 now requires a whole-read `RUN_STATE` refusal for missing durable protected
+payloads, forbids a usable boundary/success payload, checks revocation during and
+after the fault, and verifies that restoring the file restores the authorized
+revision view. It does not turn generic store errors into successful `unavailable`
+rows. A10, the new L04 action mismatch and A12 remain blocked on real integration.
+The readiness helpers are exercised through F02–F04 with real services on the
+preparation branch; their use by production aliases still requires the integrated
+strict run.
+
+Final review validation on 2026-10-03, Node `24.21.0` / pnpm `12.4.2`:
+
+| Check | Passed | Failed | Skipped / unrun |
+| --- | ---: | ---: | --- |
+| Complete preparation matrix, 60 tests | 16 | 0 | 44 dependency skips; production bodies unrun |
+| Strict A01, both transports | 2 | 0 | 22 excluded by the name selector |
+| Strict L03/L04/R03/A10/A12 diagnostic | 0 | 10 expected missing-mount failures | 50 excluded by the name selector; selected production bodies unrun |
+| Compiled build, root TypeScript, scoped ESLint, five-file Prettier and diff whitespace | All passed | 0 | — |
+
+The full preparation matrix took 230.38 seconds. F01–F04 contribute 14 passes;
+A01 contributes two authentication-edge passes. A02–A12, all L rows and all R rows
+remain blocked. An intermediate readiness-development run had 12 passes, four
+fixture failures and 44 dependency skips: it incorrectly expected preparation MCP
+live-owner hooks and a single child event rather than spawn/finish rows. Those
+assumptions were corrected before the final run; production ownership assertions
+remain in A04. Reports are `/tmp/orca-327-review-production-results.json`,
+`/tmp/orca-327-review-a01-results.json` and `/tmp/orca-327-review-strict-results.json`.
+The earlier development report is `/tmp/orca-327-review-development-results.json`.
+These are generated local evidence, not committed fixtures. Targeted strict commands:
+
+```sh
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-authority.test.ts -t A01 --maxWorkers=1
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-{lifecycle,recovery,authority}.test.ts -t 'L03|L04|R03|A10|A12' --maxWorkers=1
+```
+
+GitHub CI currently has no run for this preparation-target PR: `ci.yml` only
+triggers for `main`. Enabling that CI path is outside C's ownership. The integrator
+must also build the compiled runtime before these tests execute. No-checks is not
+green CI, and the required full strict integration run remains outstanding.

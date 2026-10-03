@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { Client, SdkHttpError, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { expect, type TestContext } from "vitest";
 import {
@@ -16,6 +16,8 @@ import {
   OperatorBoundaryPageResultSchema,
   OperatorPreflightResultSchema,
   ResponseMessageSchema,
+  RunsEventsResultSchema,
+  InputsListResultSchema,
   OPERATOR_MAX_RESULT_BYTES,
   type OperatorMutationName,
   type OperatorMutationParams,
@@ -444,16 +446,116 @@ export class ProductionFixture {
   }
 
   async pending(peer: Peer, runId: string) {
-    return (
-      await until(
-        () => this.page(peer, "inputs", { runId }),
-        (page) => page.items.length > 0,
-        "real pending input",
-      )
-    ).items[0]!;
+    const requested = await this.readyInput(peer, runId);
+    const page = await this.page(peer, "inputs", { runId });
+    const input = page.items.find((row) => row.requestId === requested.payload.requestId);
+    expect(input).toMatchObject({ runId, stepRunId: requested.payload.stepRunId });
+    if (requested.payload.liveDecision)
+      expect(input?.live).toEqual({
+        state: "pending",
+        target: {
+          ...requested.payload.liveDecision,
+          runId,
+          stepRunId: requested.payload.stepRunId,
+          requestId: requested.payload.requestId,
+        },
+      });
+    return input!;
+  }
+
+  /** Bounded authorized observation only; never read disk or borrow the fixture owner's token. */
+  async observedEvents(peer: Peer, runId: string) {
+    const events: ReturnType<typeof RunsEventsResultSchema.parse>["events"] = [];
+    let after: number | undefined;
+    for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
+      const page = RunsEventsResultSchema.parse(
+        rpcResult(await this.rpc("runs.events", { runId, after, limit: 500 }, peer.token, peer.endpoint)),
+      );
+      expect(page.events.length).toBeLessThanOrEqual(500);
+      for (const event of page.events) {
+        expect(event.runId).toBe(runId);
+        expect(event.seq).toBeGreaterThan(after ?? -1);
+        after = event.seq;
+        events.push(event);
+      }
+      if (!page.hasMore) return events;
+      expect(page.events.length).toBeGreaterThan(0);
+      expect(page.nextCursor).toBe(after);
+    }
+    throw new Error("Fixture readiness exceeded its 5000-event observation bound");
+  }
+
+  /** Wait for publication milestones before asserting a settled MCP projection. Errors propagate. */
+  async readyInput(peer: Peer, runId: string) {
+    const requested = await until(
+      async () => {
+        const events = await this.observedEvents(peer, runId);
+        const request = events.findLast(
+          (event) =>
+            event.type === "human.requested" &&
+            !events.some(
+              (answer) => answer.type === "human.answered" && answer.payload.requestId === event.payload.requestId,
+            ),
+        );
+        if (request?.type !== "human.requested") return undefined;
+        const waiting = events.find(
+          (event) =>
+            event.seq > request.seq &&
+            event.type === "step.waiting" &&
+            event.payload.stepRunId === request.payload.stepRunId &&
+            event.payload.on === "human-input" &&
+            event.payload.detail === request.payload.requestId,
+        );
+        if (!waiting) return undefined;
+        if (
+          !request.payload.liveDecision &&
+          !events.some((event) => event.type === "run.paused" && event.seq > waiting.seq)
+        )
+          return undefined;
+        return request;
+      },
+      (request) => request !== undefined,
+      "exact unanswered input publication",
+    );
+    if (!requested) throw new Error("Missing published request");
+    if (requested.payload.liveDecision) {
+      expect(requested.payload.kind).toBe("permission");
+      expect(requested.payload.liveDecision.instanceId).toBe(peer.target.instanceId);
+      const expected = {
+        ...requested.payload.liveDecision,
+        runId,
+        stepRunId: requested.payload.stepRunId,
+        requestId: requested.payload.requestId,
+      };
+      const input = await until(
+        async () =>
+          InputsListResultSchema.parse(
+            rpcResult(await this.rpc("inputs.list", { runId }, peer.token, peer.endpoint)),
+          ).inputs.find((row) => row.runId === runId && row.id === expected.requestId),
+        (row) => row?.live?.state === "pending",
+        "current live permission owner",
+      );
+      expect(input?.live?.target).toEqual(expected);
+    }
+    return requested;
+  }
+
+  async readyStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+    const type = { waiting: "run.paused", succeeded: "run.completed", cancelled: "run.cancelled" }[status];
+    await until(
+      () => this.observedEvents(peer, runId),
+      (events) =>
+        events.findLast((event) =>
+          ["run.started", "run.resumed", "run.paused", "run.completed", "run.failed", "run.cancelled"].includes(
+            event.type,
+          ),
+        )?.type === type,
+      `published ${status} milestone`,
+    );
   }
 
   async boundary(peer: Peer, runId: string) {
+    await this.readyStatus(peer, runId, "waiting");
     const page = await until(
       () => this.page(peer, "runs", { runId }),
       (page) => page.items[0]?.continuationState === "available",
@@ -462,7 +564,8 @@ export class ProductionFixture {
     return page.items[0]!.expectedBoundary!;
   }
 
-  async status(peer: Peer, runId: string, status: string) {
+  async status(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+    await this.readyStatus(peer, runId, status);
     return until(
       () => this.page(peer, "runs", { runId }),
       (page) => page.items[0]?.status === status,
@@ -609,10 +712,27 @@ export async function tool(client: Client, name: string, args: object): Promise<
 export async function refused(peer: Peer, name: string, args: object, code?: string) {
   const result = await peer.client.callTool({ name, arguments: { ...args } });
   expect(result.isError).toBe(true);
+  expect(result).not.toHaveProperty("structuredContent");
   const text = JSON.stringify(result);
+  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
   if (code) expect(text).toContain(code);
   expect(text).not.toContain(peer.token);
   return text;
+}
+
+/** Accept only the SDK's typed HTTP 401 or the ordinary bounded MCP auth refusal. */
+export async function authenticationRefused(peer: Peer, name: string, args: object) {
+  try {
+    return await refused(peer, name, args, "AUTH_INVALID");
+  } catch (error) {
+    if (peer.transport !== "http" || !(error instanceof SdkHttpError) || error.status !== 401) throw error;
+    // Error.message is not a status code. Include it explicitly because Error fields
+    // are not all enumerable, and bound/check the SDK's public data as well.
+    const text = JSON.stringify({ name: error.name, message: error.message, data: error.data });
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
+    expect(text).not.toContain(peer.token);
+    return text;
+  }
 }
 
 export function rpcResult(response: ResponseMessage): unknown {

@@ -124,6 +124,7 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
       "RETRY_CONFLICT",
     );
     expect((await f.events(receipt.result.runId)).filter((event) => event.type === "run.created")).toHaveLength(1);
+    await f.readyStatus(second, receipt.result.runId, "waiting");
     const runs = await f.page(second, "runs");
     expect(runs.items).toHaveLength(1);
   });

@@ -81,22 +81,23 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
         ),
       );
       if (admitted.state !== "accepted") throw new Error("Fixture workload was not admitted");
-      if (workflowId !== "live")
-        await until(
-          () => f.events(admitted.runId),
-          (events) => events.some((event) => event.type === "run.paused"),
-          "parked workload",
-        );
-      else await f.pending(peer, admitted.runId);
+      let inputRunId = admitted.runId;
+      if (workflowId === "parent") {
+        await f.readyStatus(peer, admitted.runId, "waiting");
+        const children = await f.page(peer, "children", { runId: admitted.runId });
+        const child = children.items.find((row) => row.kind === "child.spawned");
+        expect(child?.childRunId).toBeTruthy();
+        inputRunId = child!.childRunId!;
+      }
+      // The preparation does not wire MCP live-owner projections. Readiness proves
+      // the real callback through inputs.list; A04 asserts MCP ownership after mount.
+      await f.readyInput(peer, inputRunId);
       // These are fixture proofs through the existing service; they do not accept an absent alias.
       const inputs = await until(
         async () =>
-          rpcResult(
-            await f.rpc(
-              "inputs.list",
-              workflowId === "revision" ? { runId: admitted.runId, revisionRunIds: [admitted.runId] } : {},
-            ),
-          ) as { inputs: { runId: string; live?: { state: string }; revision?: unknown }[] },
+          rpcResult(await f.rpc("inputs.list", { runId: inputRunId }, peer.token, peer.endpoint)) as {
+            inputs: { runId: string; live?: { state: string }; revision?: unknown }[];
+          },
         (value) => value.inputs.length > 0 && (workflowId !== "revision" || value.inputs[0]?.revision !== undefined),
         "production workload input",
       );
@@ -115,11 +116,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
       );
       if (admitted.state !== "accepted") throw new Error("Fixture workload was not admitted");
       const runId = admitted.runId;
-      await until(
-        () => f.events(runId),
-        (events) => events.some((event) => event.type === "run.paused"),
-        "durable pause",
-      );
+      await f.readyInput(peer, runId);
       const input = InputsListResultSchema.parse(rpcResult(await f.rpc("inputs.list", { runId }))).inputs[0]!;
       if (workflowId === "revision") {
         expect(input.revision).toBeDefined();
@@ -255,10 +252,11 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
     expect(bounded).not.toHaveProperty("text");
   });
 
-  it("L03 admits answer plus root continuation once and refuses terminal or child continuation", async (ctx) => {
+  it("L03 admits answer plus root continuation once and refuses terminal or mismatched-child continuation", async (ctx) => {
     const peer = await f.connect(transport);
     await f.requireProduction(ctx, peer);
     const parent = await f.start(peer, "parent");
+    await f.readyStatus(peer, parent.runId, "waiting");
     const children = await until(
       () => f.page(peer, "children", { runId: parent.runId }),
       (page) => page.items.length > 0,
@@ -269,6 +267,8 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
     const root = await f.start(peer);
     const rootInput = await f.pending(peer, root.runId);
     const parentBoundary = await f.boundary(peer, root.runId);
+    // This proves refusal of a cross-run boundary. It does not independently prove
+    // the root-only restriction: boundary mismatch is already sufficient to refuse.
     await refused(peer, "continue_run", {
       target: peer.target,
       command: { runId: childId, expectedBoundary: parentBoundary },
@@ -323,6 +323,11 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
         retry: { idempotencyKey: `wrong-${field}` },
       });
     }
+    await refused(peer, "revise_input", {
+      ...params,
+      command: { ...params.command, actionId: "undeclared-action" },
+      retry: { idempotencyKey: "wrong-action" },
+    });
     await refused(peer, "respond_to_approval", {
       target: peer.target,
       decision: {
@@ -369,6 +374,7 @@ describe.each(transports)("compiled production lifecycle via %s", (transport) =>
     const peer = await f.connect(transport);
     await f.requireProduction(ctx, peer);
     const { runId } = await f.start(peer, "parent");
+    await f.readyStatus(peer, runId, "waiting");
     const children = await until(
       () => f.page(peer, "children", { runId }),
       (page) => page.items.length > 0,

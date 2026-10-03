@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   OperatorDiscoverySchema,
+  OperatorBoundaryPageResultSchema,
+  OPERATOR_MAX_RESULT_BYTES,
   OperatorMutationContracts,
   type OperatorMutationName,
   type OperatorMutationParams,
@@ -13,6 +15,7 @@ import {
 import {
   ProductionFixture,
   aliases,
+  authenticationRefused,
   refused,
   resolved,
   rpcResult,
@@ -30,20 +33,16 @@ afterEach(async () => {
 });
 
 describe.each(transports)("compiled production authority via %s", (transport) => {
-  it("A01 rechecks revocation for all ten aliases on an already connected client before argument diagnostics", async (ctx) => {
+  it("A01 rechecks revocation before dispatch for all ten tool names on an already connected client", async () => {
     const issued = await f.issue({ principal: "revocable", preset: "owner" });
     const peer = await f.connect(transport, issued.token);
-    await f.requireProduction(ctx, peer);
+    // Authentication precedes tool lookup, so this edge check is executable even
+    // before mutation mounting. It does not claim that any alias handler ran.
+    await peer.client.listTools();
     const socket = await f.socket(issued.token);
     await f.revoke(issued.credential.id);
     for (const name of Object.values(aliases)) {
-      // HTTP may reject authentication at the transport; stdio returns the safe tool error.
-      try {
-        await refused(peer, name, { secret: "PRIVATE_MALFORMED_INPUT" }, "AUTH_INVALID");
-      } catch (error) {
-        if (transport !== "http" || !(error instanceof Error) || !/401|Unauthorized/i.test(error.message)) throw error;
-        expect(error.message).not.toContain(issued.token);
-      }
+      await authenticationRefused(peer, name, { secret: "PRIVATE_MALFORMED_INPUT" });
     }
     const response = await socket("operator.cancel", { target: peer.target, runId: "not-an-authority" }).catch(
       (error: unknown) => {
@@ -186,7 +185,10 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
     const ownerEndpoint = peer.endpoint;
     await f.boot();
     const observer = await f.connect(transport);
-    const observed = await f.pending(observer, runId);
+    // Publication was established on the actual owner above; this different instance
+    // must expose owner-unavailable, not satisfy the current-owner readiness check.
+    const observed = (await f.page(observer, "inputs", { runId })).items[0]!;
+    expect(observed.requestId).toBe(input.requestId);
     expect(observed.live?.state).toBe("owner-unavailable");
     await refused(observer, "respond_to_approval", {
       target: observer.target,
@@ -216,7 +218,8 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
     await f.stop(f.daemon, "SIGKILL");
     await f.boot();
     const restarted = await f.connect(transport);
-    const current = await f.pending(restarted, runId);
+    const current = (await f.page(restarted, "inputs", { runId })).items[0]!;
+    expect(current.requestId).toBe(input.requestId);
     expect(["expired", "owner-unavailable"]).toContain(current.live?.state);
     await refused(restarted, "respond_to_approval", {
       target: restarted.target,
@@ -369,7 +372,7 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
     expect(discovery.operations).not.toContain("operator.replaceRevision");
   });
 
-  it("A10 distinguishes unsupported boundaries from unverifiable protected evidence and invalidates the projection revision", async (ctx) => {
+  it("A10 propagates missing protected evidence as a whole-read failure and restores authorized revision reads", async (ctx) => {
     const peer = await f.connect(transport);
     await f.requireProduction(ctx, peer);
     const ordinary = await f.start(peer);
@@ -383,6 +386,8 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
       "confirmed protected boundary",
     );
     const before = await f.page(peer, "inputs", { runId });
+    const reader = await f.issue({ principal: "fault-reader", preset: "owner" });
+    const revocable = await f.connect(transport, reader.token);
     // Remove one real protected publication payload, retaining its public marker. This is
     // isolated disk fault injection, not a fake callback or an invented empty boundary list.
     const raw = (await readFile(join(f.dir, "state/runs", `${runId}.jsonl`), "utf8"))
@@ -398,15 +403,51 @@ describe.each(transports)("compiled production authority via %s", (transport) =>
     );
     await rename(file, `${file}.held`);
     try {
-      const unavailable = await f.page(peer, "inputs", { runId });
-      expect(unavailable.items).toHaveLength(1);
-      expect(unavailable.items[0]?.revisionState).toBe("unavailable");
-      expect(unavailable.items[0]).not.toHaveProperty("revision");
-      expect(unavailable.revision).not.toBe(before.revision);
+      // Generic RUN_STATE from missing durable evidence is not a typed transient
+      // unavailability signal. The authorized whole read must fail, not emit a row.
+      const failure = await refused(peer, "list_approvals", { target: peer.target, runId }, "RUN_STATE");
+      expect(failure).not.toMatch(/destinationId|expectedBoundary|revisionState/);
+      await f.revoke(reader.credential.id);
+      await authenticationRefused(revocable, "list_approvals", { target: revocable.target, runId });
     } finally {
       await rename(`${file}.held`, file);
     }
-    expect((await f.page(peer, "inputs", { runId })).items[0]?.revisionState).toBe("available");
+    const restored = await f.page(peer, "inputs", { runId });
+    expect(restored.items[0]?.revisionState).toBe("available");
+    expect(restored.items[0]?.revision).toEqual(before.items[0]?.revision);
+    await authenticationRefused(revocable, "list_approvals", { target: revocable.target, runId });
+  });
+
+  it("A12 keeps cold-read uncertainty safe without waiting, retrying or turning store failures into empty success", async (ctx) => {
+    const peer = await f.connect(transport);
+    await f.requireProduction(ctx, peer);
+    const { runId } = await f.start(peer, "revision");
+    // Deliberately no readiness phase. Timing may yield a valid snapshot or a safe
+    // refusal; this does not claim that every run hits a concurrent-publication race.
+    for (const name of ["list_approvals", "list_runs"]) {
+      const result = await peer.client.callTool({ name, arguments: { target: peer.target, runId } });
+      const text = JSON.stringify(result);
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
+      expect(text).not.toContain(peer.token);
+      expect(text).not.toContain(f.dir);
+      expect(text).not.toMatch(/"(?:stack|details)"/);
+      if (result.isError) {
+        expect(result).not.toHaveProperty("structuredContent");
+        expect(text).toContain("RUN_STATE");
+        expect(text).not.toMatch(/destinationId|expectedBoundary|revisionState/);
+      } else {
+        const page = OperatorBoundaryPageResultSchema.parse(result.structuredContent);
+        expect(page.restartRequired).toBe(false);
+        for (const row of page.items) {
+          expect(row.runId).toBe(runId);
+          if (row.revision) expect(row.revision.target.runId).toBe(runId);
+          if (row.revisionState !== "available") expect(row).not.toHaveProperty("revision");
+          if (row.continuationState !== "available") expect(row).not.toHaveProperty("expectedBoundary");
+        }
+      }
+    }
+    // A cold read cannot replace the subsequent, stronger settled assertion.
+    expect((await f.pending(peer, runId)).revisionState).toBe("available");
   });
 
   it("A11 executes all ten aliases successfully through both backing transports using real receipts and effects", async (ctx) => {
