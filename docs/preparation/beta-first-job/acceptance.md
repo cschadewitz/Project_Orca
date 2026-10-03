@@ -4,6 +4,9 @@ Preparation for [#420](https://github.com/cschadewitz/Project_Orca/issues/420), 
 slice of #386 consumed by #389's guide and #390's consented walkthrough. Exact audited
 main baseline: `e94bf699d9f3000de8822ed3434c1dce92b6ce19` (2026-10-03).
 The initial origin/main fetch and Kepler sync matched that SHA; no rebase was needed.
+A later non-force branch merge incorporates reviewed main
+`3e895c7ea60f367ef1199a1044613dbd0ebc9d6e` (#433's artifact-shortcut fix);
+the fixture implementation and recorded offline source hashes are unchanged.
 Owned paths are only `examples/beta-first-job/` and `docs/preparation/beta-first-job/`.
 No runtime, app, adapter, permission, manifest, CI or release behavior changes here.
 
@@ -111,3 +114,8 @@ already own the integration gaps; no duplicate issue is needed. Mac current-OS M
 physical tests remain separate from hosted/source validation. Windows needs its own
 recorded results. Neither platform is certified by this preparation, and parent
 acceptance remains open.
+
+Invited-beta sign-off also requires accepted #416 previewable manual diagnostics,
+consumed by #386/#389/#390. This does not block offline fixture preparation. Keep
+synthetic code, diffs and test output in the separate fixture evidence record; #416's
+diagnostic export excludes those contents and still requires its own consent and preview.

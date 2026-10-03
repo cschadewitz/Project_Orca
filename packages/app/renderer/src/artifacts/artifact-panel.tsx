@@ -26,7 +26,7 @@
  * - **Diff gutters are text, never colour alone** (rule 4). `+` and `−` are in the line;
  *   `.orca-diff__line--add` / `--del` tint it as the third channel.
  */
-import { useEffect, useMemo, useState, type JSX } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, type JSX } from "react";
 import type { RunsGetResult } from "@orca/protocol";
 import { useKeyboard } from "../keyboard-context.js";
 import { Menu, StateView, Text, Time, textClass, type MenuItem } from "../ui/index.js";
@@ -80,8 +80,10 @@ export function ArtifactPanel({ target }: ArtifactPanelProps): JSX.Element {
 
   /* `[` and `]` step the version. Registered in the `panel` scope for as long as the panel
      is showing an artifact, so they cannot collide with a list's keys underneath and so
-     the palette lists them with the rest. */
-  useEffect(() => {
+     the palette lists them with the rest. The map listens outside React, so refresh its
+     closures during layout: a key after commit must see the versions on screen, even
+     before passive effects flush. */
+  useLayoutEffect(() => {
     const at = versions.findIndex((a) => a.version === target.version);
     const step = (delta: number): void => {
       const next = versions[at + delta];
