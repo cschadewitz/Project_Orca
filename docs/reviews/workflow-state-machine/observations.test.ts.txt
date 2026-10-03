@@ -1,0 +1,173 @@
+/** Historical observations, not desired-behavior regression tests. See README.md. */
+import { describe, expect, it } from "vitest";
+import { AgentRegistry, LocalHost } from "@orca/agents";
+import {
+  parseWorkflow,
+  TemplateRegistry,
+  WorkflowRegistry,
+  validateWorkflow,
+  evaluateCondition,
+  reduceRun,
+} from "@orca/core";
+import { builtinExecutors, completed, LocalWorkspaceProvider, Orchestrator, PausingHumanInput } from "@orca/engine";
+import { memoryStores } from "@orca/store";
+
+function make(nodes: Record<string, unknown>, edges: unknown[], vars: Record<string, unknown> = {}) {
+  const def = parseWorkflow(
+    JSON.stringify({
+      id: "audit",
+      name: "audit",
+      start: "s",
+      nodes: { s: { type: "start" }, ...nodes, e: { type: "end" } },
+      edges,
+      vars,
+    }),
+    "audit.json",
+  );
+  const stores = memoryStores();
+  let executions = 0;
+  const orc = new Orchestrator({
+    stores,
+    agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })),
+    workflows: new WorkflowRegistry().register(def),
+    templates: new TemplateRegistry(),
+    workspaceProvider: new LocalWorkspaceProvider("/tmp"),
+    humanInput: new PausingHumanInput(),
+    executors: builtinExecutors().register({
+      type: "custom:audit",
+      execute: async () => {
+        executions++;
+        return completed();
+      },
+    }),
+  });
+  return { def, stores, orc, executions: () => executions };
+}
+async function prefix(h: ReturnType<typeof make>, nodeId: string, nodeType: string) {
+  const runId = await h.orc.startRun({ workflowId: "audit" });
+  await h.stores.events.append({ runId, type: "run.started", payload: {} });
+  await h.stores.events.append({
+    runId,
+    type: "step.scheduled",
+    payload: { stepRunId: "interrupted", nodeId, nodeType, attempt: 1 },
+  });
+  await h.stores.events.append({
+    runId,
+    type: "step.started",
+    payload: { stepRunId: "interrupted", inputArtifactIds: [] },
+  });
+  return runId;
+}
+const body = {
+  graph: { start: "s", nodes: { s: { type: "start" }, e: { type: "end" } }, edges: [{ from: "s", to: "e" }] },
+};
+
+describe("historical audit: observations at e8678eb", () => {
+  it("resumes beyond a persisted non-retryable failure and maxAttempts=1", async () => {
+    const h = make({ n: { type: "custom:audit", maxAttempts: 1 } }, [
+      { from: "s", to: "n" },
+      { from: "n", to: "e" },
+    ]);
+    const runId = await prefix(h, "n", "custom:audit");
+    await h.stores.events.append({
+      runId,
+      type: "step.failed",
+      payload: {
+        stepRunId: "interrupted",
+        error: { code: "WORKFLOW_INVALID", message: "must not retry" },
+        willRetry: false,
+      },
+    });
+    const state = await h.orc.run(runId);
+    expect(h.executions()).toBe(1);
+    expect(Object.values(state.steps).find((s) => s.nodeId === "n" && s.attempt === 2)?.status).toBe("completed");
+    expect(state.run.status).toBe("completed");
+  });
+  it("reapplies an already committed vars.set after an interrupted set step", async () => {
+    const h = make(
+      { n: { type: "set", vars: { count: "=vars.count + 1" } } },
+      [
+        { from: "s", to: "n" },
+        { from: "n", to: "e" },
+      ],
+      { count: 0 },
+    );
+    const runId = await prefix(h, "n", "set");
+    await h.stores.events.append({ runId, type: "vars.set", payload: { vars: { count: 1 } } });
+    expect((await h.orc.run(runId)).run.vars.count).toBe(2);
+  });
+  it("an empty-list condition is false for edges but auto-approves gates", async () => {
+    expect(evaluateCondition("[]", {})).toBe(false);
+    const h = make({ n: { type: "gate", question: "approve?", autoApproveWhen: "[]" } }, [
+      { from: "s", to: "n" },
+      { from: "n", to: "e" },
+    ]);
+    const state = await h.orc.startAndRun({ workflowId: "audit" });
+    expect(state.run.status).toBe("completed");
+    expect(Object.values(state.steps).find((s) => s.nodeId === "n")?.result?.choice).toBe("approve");
+  });
+  it("until false exhausts its limit and completes with ok=true", async () => {
+    const h = make({ n: { type: "loop", mode: "until", condition: "false", maxIterations: 2, body } }, [
+      { from: "s", to: "n" },
+      { from: "n", to: "e" },
+    ]);
+    const state = await h.orc.startAndRun({ workflowId: "audit" });
+    expect(state.run.status).toBe("completed");
+    expect(Object.values(state.steps).find((s) => s.nodeId === "n")?.result?.data).toMatchObject({
+      iterations: 2,
+      ok: true,
+    });
+  });
+  it("join:any stays paused even after another branch succeeds", async () => {
+    const gated = {
+      graph: {
+        start: "s",
+        nodes: { s: { type: "start" }, g: { type: "gate", question: "approve?" }, e: { type: "end" } },
+        edges: [
+          { from: "s", to: "g" },
+          { from: "g", to: "e" },
+        ],
+      },
+    };
+    const h = make(
+      {
+        n: {
+          type: "parallel",
+          branches: { parked: gated, success: body },
+          join: "any",
+          concurrency: 1,
+          failFast: true,
+        },
+      },
+      [
+        { from: "s", to: "n" },
+        { from: "n", to: "e" },
+      ],
+    );
+    const state = await h.orc.startAndRun({ workflowId: "audit" });
+    expect(state.run.status).toBe("paused");
+    expect(
+      Object.values(state.steps)
+        .find((s) => s.nodeId === "n")
+        ?.children.map((c) => c.status),
+    ).toEqual(["paused", "completed"]);
+  });
+  it("validation accepts a reachable endless cycle with an unreachable end", () => {
+    const h = make({ n: { type: "set", vars: {} } }, [
+      { from: "s", to: "n" },
+      { from: "n", to: "n" },
+    ]);
+    const v = validateWorkflow(h.def);
+    expect(v.ok).toBe(true);
+    expect(v.warnings.some((w) => w.message.includes("unreachable"))).toBe(true);
+  });
+  it("reducer permits resuming a terminal run and retains its terminal outcome", async () => {
+    const h = make({}, [{ from: "s", to: "e" }]);
+    const state = await h.orc.startAndRun({ workflowId: "audit" });
+    const events = await h.stores.events.read(state.run.id);
+    const last = events.at(-1)!;
+    const projected = reduceRun([...events, { ...last, type: "run.resumed", seq: last.seq + 1, payload: {} }]);
+    expect(projected.run.status).toBe("running");
+    expect(projected.run.outcome).toBe("success");
+  });
+});

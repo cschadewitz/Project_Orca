@@ -13,6 +13,7 @@
 | [ROADMAP.md](ROADMAP.md) | compare implemented capabilities with planned ship groups and dependencies |
 | [UPDATING.md](UPDATING.md) | update the desktop app and daemon with admission and compatibility checks |
 | [Historical review](../Current_State/README.md) | read the preserved 2026-09-29 snapshot and its dated reconciliation |
+| [Workflow state machine audit](reviews/workflow-state-machine/README.md) | review the 2026-10-03 mathematical assessment, reproduced recovery defects, and existing issue coverage |
 | [Protocol reference](../packages/protocol/README.md) | inspect the current wire contract and version history |
 | [adr/](adr/) | the architectural decision records, including daemon boundaries and permission sidecars |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | build, test, and review the code base |
