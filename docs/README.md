@@ -11,6 +11,7 @@
 | [session-logs/](session-logs/) | read the raw event logs of selected real-agent sessions and runs, kept for reference |
 | [EXTENSIBILITY.md](EXTENSIBILITY.md) | add node types, transports, hosts, stores, human channels via plugins |
 | [ROADMAP.md](ROADMAP.md) | compare implemented capabilities with planned ship groups and dependencies |
+| [Triggered workflows proposal](preparation/triggered-workflows/architecture.md) | review the unapproved design for unattended PR-feedback workflows and its proposed backlog |
 | [UPDATING.md](UPDATING.md) | update the desktop app and daemon with admission and compatibility checks |
 | [Historical review](../Current_State/README.md) | read the preserved 2026-09-29 snapshot and its dated reconciliation |
 | [Protocol reference](../packages/protocol/README.md) | inspect the current wire contract and version history |
