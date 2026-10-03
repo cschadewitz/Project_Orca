@@ -58,9 +58,26 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       runtime = execution;
       app.orchestrator.liveInput = execution;
       app.orchestrator.admissionExecution = { authorize: (policy) => execution.authorizeAdmissionExecution(policy) };
-      const execute = vi.fn(async (runId: string, authority?: ExecutionResumeAuthority) => {
-        const state = await execution.withResumeAuthority(runId, authority, () => app.orchestrator.run(runId));
-        await app.program.settle(state);
+      const completions = new Map<string, { done: Promise<void>; begin: (task: Promise<void>) => void }>();
+      const completionFor = (runId: string) => {
+        const existing = completions.get(runId);
+        if (existing) return existing;
+        let begin!: (task: Promise<void>) => void;
+        const done = new Promise<void>((resolve) => {
+          begin = resolve;
+        });
+        void done.catch(() => {});
+        const completion = { done, begin };
+        completions.set(runId, completion);
+        return completion;
+      };
+      const execute = vi.fn((runId: string, authority?: ExecutionResumeAuthority) => {
+        const task = (async () => {
+          const state = await execution.withResumeAuthority(runId, authority, () => app.orchestrator.run(runId));
+          await app.program.settle(state);
+        })();
+        completionFor(runId).begin(task);
+        return task;
       });
       const executionFailed = vi.fn();
       const requestService = app.program.submissions as RequestSubmissionService;
@@ -122,10 +139,9 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       if (!first.ok) throw new Error("not admitted");
       const receipt = first.result as { runId: string; operationId: string };
       expect(ownership.owner(receipt.runId)).toBe("alice");
-      await vi.waitFor(async () => {
-        expect(execute).toHaveBeenCalledTimes(1);
-        expect((await app.orchestrator.getState(receipt.runId)).run.status).toBe("completed");
-      });
+      await completionFor(receipt.runId).done;
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect((await app.orchestrator.getState(receipt.runId)).run.status).toBe("completed");
       const second = await new Promise<ResponseMessage>((resolve) => {
         socket!.addEventListener("message", (event) => {
           const frame = JSON.parse(String(event.data)) as ResponseMessage;
@@ -150,9 +166,8 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       expect(one).toMatchObject({ ok: true, result: { state: "accepted" } });
       if (!one.ok) throw new Error("Request not admitted");
       const requestReceipt = one.result as { runId: string };
-      await vi.waitFor(async () =>
-        expect((await app.orchestrator.getState(requestReceipt.runId)).run.status).toBe("completed"),
-      );
+      await completionFor(requestReceipt.runId).done;
+      expect((await app.orchestrator.getState(requestReceipt.runId)).run.status).toBe("completed");
       const two = await http("requests.submit", request);
       expect(two).toEqual(one);
       expect(await app.orchestrator.stores.requests.list()).toHaveLength(1);
@@ -196,9 +211,8 @@ it.skipIf(process.env.ORCA_RETRY_INTEGRATION !== "1")(
       const palette = await controller().start("program");
       expect(await controller().start("program")).toEqual(palette);
       expect(await controller().list()).toHaveLength(1);
-      await vi.waitFor(async () =>
-        expect((await app.orchestrator.getState(palette.runId)).run.status).toBe("completed"),
-      );
+      await completionFor(palette.runId).done;
+      expect((await app.orchestrator.getState(palette.runId)).run.status).toBe("completed");
       await new Promise<void>((resolve) => setImmediate(resolve));
       await Promise.all(execute.mock.results.map((result) => result.value));
       expect(executionFailed).not.toHaveBeenCalled();

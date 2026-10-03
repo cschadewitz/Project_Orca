@@ -335,9 +335,8 @@ it("Request inspection never attaches and explicit reconciliation reuses one acc
     await f.call("operator.reconcileAdmission", { target: f.target, operationId: receipt.operationId }),
   );
   expect(reconciled).toMatchObject({ state: "resolved", operationId: receipt.operationId, result: receipt.result });
-  await vi.waitFor(async () =>
-    expect((await f.stores.events.read(runId)).some((e) => e.type === "run.completed")).toBe(true),
-  );
+  await f.firstExecution;
+  expect((await f.stores.events.read(runId)).some((e) => e.type === "run.completed")).toBe(true);
   value(await f.call("operator.reconcileAdmission", { target: f.target, operationId: receipt.operationId }));
   await new Promise<void>((r) => setImmediate(r));
   expect((await f.stores.events.read(runId)).filter((e) => e.type === "run.started")).toHaveLength(1);
@@ -356,9 +355,8 @@ it("live snapshot metadata is opaque, stable, and invalidated by actual port mov
   );
   if (admitted.state !== "resolved" || admitted.result.state !== "accepted") throw new Error("not admitted");
   const runId = admitted.result.runId;
-  await vi.waitFor(async () =>
-    expect((value(await f.call("inputs.list", { runId })) as { inputs: unknown[] }).inputs).toHaveLength(1),
-  );
+  await f.firstExecution;
+  expect((value(await f.call("inputs.list", { runId })) as { inputs: unknown[] }).inputs).toHaveLength(1);
   const params = { target: f.target, collection: "inputs", runId };
   const raw = f.runtime.port.observationRevision;
   const first = value(await f.call("operator.page", params)) as { revision: string; items: unknown[] };

@@ -54,8 +54,15 @@ async function fixture() {
       return current.principal;
     },
   });
-  const execute = vi.fn(async (runId: string) => {
-    await app.orchestrator.run(runId);
+  let observeExecution!: (completion: Promise<void>) => void;
+  const executionComplete = new Promise<void>((resolve) => {
+    observeExecution = resolve;
+  });
+  void executionComplete.catch(() => {});
+  const execute = vi.fn((runId: string) => {
+    const task = app.orchestrator.run(runId).then(() => {});
+    observeExecution(task);
+    return task;
   });
   const failed = vi.fn();
   const model = new AdmissionRetryModel({
@@ -90,6 +97,7 @@ async function fixture() {
     authority,
     model,
     execute,
+    executionComplete,
     failed,
     control,
     authorities,
@@ -126,7 +134,8 @@ it.each(["admit", "reconcile"] as const)("%s dispatch executes a real admitted r
           return accepted.result;
         })();
   if (receipt.state !== "accepted") throw new Error("not accepted");
-  await vi.waitFor(async () => expect((await f.orchestrator.getState(receipt.runId)).run.status).toBe("completed"));
+  await f.executionComplete;
+  expect((await f.orchestrator.getState(receipt.runId)).run.status).toBe("completed");
   await f.model.admit({ workflowId: "workflow" }, { idempotencyKey: "intent" }, f.authority);
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(f.execute).toHaveBeenCalledTimes(1);
