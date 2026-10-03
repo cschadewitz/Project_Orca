@@ -95,6 +95,14 @@ fenced service write. L02 and backing-parity A11 inspect first, wait read-only f
 reconcile once. R03 observes admission settlement with `operator.admission`, never
 by polling the admission mutation. Deliberate retained-key replay cases remain
 explicit tests, separate from readiness.
+On terminal receipt failure, the fixture emits bounded, failure-only diagnostics:
+the last 32 public run/continuation milestones (sequence, type and receipt state),
+receipt state and blocked reason, lease-file presence, and an allowlisted error code.
+Lease-file presence is a snapshot, not proof of live ownership. These reads use the
+same authorized peer for events and receipts; the lease probe only checks file
+existence. Diagnostics never open protected payloads or print credentials, rationale,
+raw errors or subprocess output, and never trigger reconciliation. A failed event
+reread falls back to the already observed event sequence.
 Readiness propagates errors, does not retry mutations, uses the existing timeout,
 and never falls back to an owner's credential. The raw `page()` remains unchanged
 for cursor and fault tests; A12 deliberately reads without readiness and accepts
@@ -340,3 +348,24 @@ tarball; the authorized frozen install succeeded. An attempted Vitest `--repeat=
 command was rejected before executing tests; the bounded shell-loop reproduction
 stopped after its first run failed. Neither setup failure contributes test counts.
 Reports and logs live under `/tmp/orca-431-*`; generated evidence is not committed.
+
+### Continuation settlement correction (#443)
+
+The fix starts from accepted main `3702da5b38dc449280c2837366615de741e9c45c`.
+The observed #442 merge `9639c5a4bc8cb8de192c3ecc6952358b4c2249a8` has the
+same continuation runtime blob (`008a7419826729f07849ffbec6818abe9eb6f796`).
+Deterministic barriers reproduce blocked receipts on that runtime when a replay
+reads dispatch-needed before the winner attaches, then enters inner recovery
+after completion but before settlement. Both same-model and separate-model cases
+fail. Refusing the final settlement fence or store append independently reproduces
+the same receipt corruption. These establish concrete defects, not the exact
+interleaving of the original CI failure.
+
+Recovery now checks terminal history under the existing writer fence, and
+post-execution settlement publication failures preserve a recoverable receipt.
+Tests also cover lost acknowledgement after a durable settlement append and an
+execution-wrapper rejection after terminal publication. The existing strict L03
+checks, authority classification, unsafe-boundary rejection, journal verification,
+single decision and single execution remain in force. The #443 PR records bounded
+Node 22/24 baseline samples and validation against its final commit; passing random
+samples alone are not evidence that a race is fixed.

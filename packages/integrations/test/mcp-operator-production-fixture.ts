@@ -28,6 +28,7 @@ import {
   type ResponseMessage,
 } from "@orca/protocol";
 import type { IssueOptions } from "../../daemon/src/auth/credentials.js";
+import { continuationDiagnostics } from "./continuation-diagnostics.js";
 
 export const aliases = {
   "operator.submitRequest": "submit_request",
@@ -563,18 +564,39 @@ export class ProductionFixture {
         events.filter((event) => event.type === "continuation.recorded").map((event) => event.payload.continuationId),
       );
       for (const continuationId of ids) {
-        const receipt = await until(
-          async () =>
-            ContinuationReceiptSchema.parse(
-              rpcResult(await this.rpc("continuations.get", { continuationId }, peer.token, peer.endpoint)),
-            ),
-          (receipt) => {
-            expect(receipt, "completed continuation must not become blocked").not.toMatchObject({ state: "blocked" });
-            return receipt.state === "settled";
-          },
-          "settled continuation receipt",
-        );
-        expect(receipt).toMatchObject({ runId, continuationId });
+        let lastReceipt: ReturnType<typeof ContinuationReceiptSchema.parse> | undefined;
+        try {
+          const receipt = await until(
+            async () =>
+              (lastReceipt = ContinuationReceiptSchema.parse(
+                rpcResult(await this.rpc("continuations.get", { continuationId }, peer.token, peer.endpoint)),
+              )),
+            (receipt) => {
+              expect(receipt, "completed continuation must not become blocked").not.toMatchObject({ state: "blocked" });
+              return receipt.state === "settled";
+            },
+            "settled continuation receipt",
+          );
+          expect(receipt).toMatchObject({ runId, continuationId });
+        } catch (error) {
+          // Failure-only reads, with the same peer and bounded event paging. Never
+          // reconcile, open protected entries, or print subprocess output here.
+          const latest = await this.observedEvents(peer, runId).catch(() => events);
+          const leaseFilePresent = await access(
+            join(this.dir, "state/leases", `${encodeURIComponent(`run:${runId}`)}.json`),
+          ).then(
+            () => true,
+            (failure: unknown) =>
+              failure && typeof failure === "object" && "code" in failure && failure.code === "ENOENT"
+                ? false
+                : ("unavailable" as const),
+          );
+          console.error(
+            "Continuation settlement failure",
+            JSON.stringify(continuationDiagnostics(latest, lastReceipt, leaseFilePresent, error)),
+          );
+          throw error;
+        }
       }
     }
   }
