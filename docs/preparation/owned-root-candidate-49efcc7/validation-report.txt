@@ -32,16 +32,39 @@ Commands and results
    Initial sandbox run: 13 fixture daemons exited during startup before assertions, with no daemon output. See acceptance-tests.log.
    Repeat with temporary loopback/socket permission: passed, 2 files, 13 tests, 105.86 s. See acceptance-tests-escalated.log. No skips permitted by ORCA_MCP_REQUIRE_PRODUCTION=1.
 9. mise exec -- node .candidate-tmp/validate-proposal.mjs
-   Passed: workflow v3 schema/graph validation, configuration schema validation, and a synthetic render showing workspace.cwd and workspace.branch resolve. This script used only the inactive proposal files.
+   Passed in the original preparation: workflow v3 schema/graph validation, configuration schema validation, and a synthetic render showing workspace.cwd and workspace.branch resolve. This was a disposable scratch script; the published, expanded validator below supersedes it.
+10. mise exec -- node --check docs/preparation/owned-root-candidate-49efcc7/validate-proposal.mjs
+    Passed: script syntax.
+11. mise exec -- node docs/preparation/owned-root-candidate-49efcc7/validate-proposal.mjs
+    Passed: inactive config and workflow v3 schema/graph, full-SHA base/expectedHead pin, first-smoke input validation (and mismatched-pin rejection), and synthetic prompt render. Uses the already compiled candidate core; no build or install.
+12. git -C /home/casey/.local/share/orca-worktrees/mac-beta-codex cat-file -t 8875f4585d7e5cd038ec974f5c6c270f8c5f01c3
+    Passed: commit.
+13. git -C /home/casey/.local/share/orca-worktrees/mac-beta-codex rev-parse HEAD
+    Passed: 8875f4585d7e5cd038ec974f5c6c270f8c5f01c3.
+14. git -C /home/casey/.local/share/orca-worktrees/mac-beta-codex status --short
+    Passed: empty output; read-only source checkout remained clean.
+15. mise exec -- pnpm exec prettier --check docs/preparation/owned-root-candidate-49efcc7/orca-workspace.proposed.yaml docs/preparation/owned-root-candidate-49efcc7/work-v3.proposed.yaml docs/preparation/owned-root-candidate-49efcc7/first-smoke-inputs.json docs/preparation/owned-root-candidate-49efcc7/first-smoke.md docs/preparation/owned-root-candidate-49efcc7/validate-proposal.mjs
+    Failed for work-v3.proposed.yaml (the proposal is JSON-formatted YAML, while Prettier parses its .yaml extension as YAML) and the new script. The script was formatted; the JSON-formatted workflow remains intentionally unchanged in layout to keep the proposal diff reviewable. This targeted check is not a passing full format:check result.
+16. mise exec -- pnpm exec prettier --check docs/preparation/owned-root-candidate-49efcc7/orca-workspace.proposed.yaml docs/preparation/owned-root-candidate-49efcc7/first-smoke-inputs.json docs/preparation/owned-root-candidate-49efcc7/first-smoke.md docs/preparation/owned-root-candidate-49efcc7/validate-proposal.mjs
+    Passed after formatting the new script.
+17. git diff --check
+    Passed for the revised tracked proposal files.
+18. git diff --cached --check
+    Passed for all six staged handoff files, including the newly added validator and smoke proposal.
 
 The accompanying log copies have only trailing whitespace and extra terminal blank lines removed.
 
 All <candidate> abbreviations above expand to the exact checkout path above. Test scratch was <candidate>/.candidate-tmp. The compiled acceptance fixture creates its own temporary configuration, Git repository/worktrees, disk store, loopback endpoints and issued synthetic credentials there; its child process environment excludes ambient ORCA endpoints, tokens, plugins, NODE_OPTIONS and agent credentials. Scripted test agents only were used. No installed runtime, live ORCA home, daemon, tunnel, credentials, real agent, or live store was changed.
 
 Inactive proposal
-- orca-workspace.proposed.yaml is only a candidate replacement for the workspace block in /home/casey/.orca-codex-work/orca.yaml. It selects the built-in local Linux git-worktree provider with isolateRoots: true, a sibling root-worktree directory, and cal/mac-beta-codex as the current trusted base ref. Per-run branches are orca/roots/<runId>. The current repository has no refs/heads/main, so relying on the provider's default baseBranch would fail.
-- work-v3.proposed.yaml retains workflow ID cal-codex-work and versions it from 2 to 3. It replaces the fixed checkout/branch instructions with recorded workspace.cwd and workspace.branch, removes the fixed expectedBranch input/enum and the fixed branch report validator, and keeps expectedHead as a per-task guard. Node/edge topology and deliverable paths/kinds remain the same. The branch result field remains required, but its dynamic equality with the recorded workspace branch needs caller review because the validator accepts only static values.
+- orca-workspace.proposed.yaml is only a candidate replacement for the workspace block in /home/casey/.orca-codex-work/orca.yaml. It selects the built-in local Linux git-worktree provider with isolateRoots: true, a sibling root-worktree directory, and the verified full task-source commit 8875f4585d7e5cd038ec974f5c6c270f8c5f01c3 as the initial baseBranch. Per-run branches are orca/roots/<runId>. The current repository has no refs/heads/main, so relying on the provider's default baseBranch would fail.
+- work-v3.proposed.yaml retains workflow ID cal-codex-work and versions it from 2 to 3. It uses recorded workspace.cwd and workspace.branch instead of a fixed checkout/branch, removes the fixed expectedBranch input/enum and fixed branch report validator, and pins expectedHead's enum to the same full SHA as baseBranch. Its pre-edit prompt checks the recorded owned-root base too. It assigns one agent per task/run and allows independent runs only within an owner-set admission/capacity limit. This is an operational bound, not a concurrency control enforced by this workflow schema; review the admission mechanism and capacity before permitting overlap. Node/edge topology and deliverable paths/kinds remain the same. The branch result field remains required, but its dynamic equality with the recorded workspace branch needs caller review because the validator accepts only static values.
+- validate-proposal.mjs is the published read-only proposal validator. first-smoke-inputs.json and first-smoke.md define an inactive Git/shell-only first smoke for a fresh root without node_modules. No smoke run or real agent launch occurred. If the source advances, update and review baseBranch, expectedHead enum and smoke expectedHead together.
 - The existing private credential and auth files were left unchanged and are excluded from this handoff. The scoped client retains the six grants runs.read, artifacts.read, workflows.read, runs.start, runs.control and inputs.answer, limited to workflow cal-codex-work and owned runs. Check validity at approval time.
+
+Static checks not run
+- No separate `mise exec -- pnpm run typecheck` was run; the successful build did run `tsc -b tsconfig.build.json`, but that is not the standalone typecheck script (which also checks the renderer).
+- `mise exec -- pnpm run lint`, `mise exec -- pnpm run format:check`, and `mise exec -- pnpm run design:check` were not run. Nor was the full `mise exec -- pnpm test` suite. The original preparation request specified the build, five targeted source suites, and two compiled acceptance suites; those results are above. This documentation-only revision did not rebuild or repeat them. The targeted Prettier failure in command 15 is disclosed above.
 
 Compatibility and rollback for review
 - Root isolation works only with the built-in local host on Linux. The live codex-worker and workspace both declare hostId local; any SSH/custom-host substitution must be refused. Owned-root receipts and ready markers live in the repository's Git common directory, while worktrees are under the proposed sibling directory. Validate the actual parent paths and approved base ref before activation.
