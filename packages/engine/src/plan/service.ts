@@ -157,6 +157,8 @@ export class PlanService {
   private readonly extractors: SignalExtractor[];
   /** Tail of the mutation chain per plan; see `withPlan`. */
   private readonly locks = new Map<string, Promise<unknown>>();
+  /** Failed dependency passes must be retried even if the next intake changes nothing. */
+  private readonly pendingReconciliations = new Set<string>();
 
   constructor(opts: PlanServiceOptions) {
     this.stores = opts.stores;
@@ -668,7 +670,16 @@ export class PlanService {
    * journal records *when* each dependency cleared. Idempotent.
    */
   async reconcile(planId: string, origin: PlanOrigin = SYSTEM): Promise<{ satisfied: string[]; failed: string[] }> {
-    return this.withPlan(planId, () => this.reconcileLocked(planId, origin));
+    return this.withPlan(planId, async () => {
+      try {
+        const result = await this.reconcileLocked(planId, origin);
+        this.pendingReconciliations.delete(planId);
+        return result;
+      } catch (error) {
+        this.pendingReconciliations.add(planId);
+        throw error;
+      }
+    });
   }
 
   private async reconcileLocked(
@@ -1216,6 +1227,9 @@ export class PlanService {
     artifact: Artifact,
     ctx: { planId: string; workItemId?: string | undefined; runId?: string | undefined },
   ): Promise<{ risks: Risk[]; decisions: Decision[]; dependencies: Dependency[]; issues: string[] }> {
+    // Retry failures from an earlier pass. A failure during this intake keeps the
+    // marker for replay, including when decision evaluation persisted before throwing.
+    const retryReconcile = this.pendingReconciliations.has(ctx.planId);
     const signals = extractPlanSignals(artifact, [defaultSignalExtractor, ...this.extractors]);
     const origin: PlanOrigin = {
       kind: "artifact",
@@ -1266,7 +1280,7 @@ export class PlanService {
         }
       }
     }
-    if (applied.changed || out.dependencies.length) await this.reconcile(ctx.planId, origin);
+    if (applied.changed || out.dependencies.length || retryReconcile) await this.reconcile(ctx.planId, origin);
     if (out.issues.length) {
       this.logger.warn("plan signals with issues", { artifact: artifact.id, issues: out.issues });
       await this.journal({

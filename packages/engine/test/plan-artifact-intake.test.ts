@@ -42,6 +42,69 @@ async function make() {
 }
 
 describe("artifact intake change detection (#105)", () => {
+  it.each([1, 2])("recovers request-only decision replay after %i failed reconciliation reads", async (failures) => {
+    const { service, stores, ctx, reconcile, snapshot } = await make();
+    const decision = await service.upsertDecision(
+      ctx.planId,
+      { key: "store", title: "Store", options: [{ key: "a", name: "A" }], blocks: ["a"] },
+      human,
+    );
+    const otherPlan = await service.ensurePlan({ key: "other" });
+    await service.upsertRisk(otherPlan.id, { key: "known", title: "Known" }, human);
+    const matrix: Artifact = {
+      ...artifact({ key: "store", title: "Store", chosen: "a" }),
+      kind: "decision-matrix",
+    };
+    const run = { id: ctx.runId, requestId: "req_1" }; // No recordProduced recovery pass.
+    for (let i = 0; i < failures; i++) {
+      snapshot.mockImplementationOnce(async () => {
+        expect(await stores.plan.decisions.get(decision.id)).toMatchObject({ status: "decided", chosen: "a" });
+        throw new Error("transient snapshot failure");
+      });
+    }
+
+    expect(await service.onArtifactRecorded(run, matrix)).toEqual([
+      expect.stringMatching(/decision 'store'.*transient snapshot failure/),
+    ]);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(await stores.plan.dependencies.list((d) => d.planId === ctx.planId)).toEqual([
+      expect.objectContaining({ status: "open" }),
+    ]);
+
+    // Pending recovery belongs to this plan, and survives another failed replay.
+    await service.ingestArtifact(artifact({ risks: ["known"] }), { planId: otherPlan.id });
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    for (let i = 1; i < failures; i++) {
+      expect(await service.onArtifactRecorded(run, matrix)).toEqual([
+        expect.stringMatching(/plan intake failed: transient snapshot failure/),
+      ]);
+    }
+    expect(await service.onArtifactRecorded(run, matrix)).toEqual([]);
+    expect(reconcile).toHaveBeenCalledTimes(failures + 1);
+    expect(await stores.plan.dependencies.list((d) => d.planId === ctx.planId)).toEqual([
+      expect.objectContaining({ status: "satisfied" }),
+    ]);
+    const journal = await service.journalOf(ctx.planId);
+    expect(journal.filter((e) => e.type === "decision.resolved")).toHaveLength(1);
+    expect(journal.filter((e) => e.type === "dependency.resolved")).toHaveLength(1);
+    expect(journal.filter((e) => e.type === "signals.rejected")).toEqual([
+      expect.objectContaining({
+        payload: {
+          artifactId: matrix.id,
+          runId: run.id,
+          issues: [expect.stringMatching(/decision 'store'.*transient snapshot failure/)],
+        },
+      }),
+    ]);
+
+    reconcile.mockClear();
+    snapshot.mockClear();
+    expect(await service.onArtifactRecorded(run, matrix)).toEqual([]);
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(await service.journalOf(ctx.planId)).toEqual(journal);
+  });
+
   it("returns known risks, open decisions and duplicate dependencies without writing or reconciling", async () => {
     const { clock, stores, service, ctx, reconcile, snapshot } = await make();
     const spec = artifact({
