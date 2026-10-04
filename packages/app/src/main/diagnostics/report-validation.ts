@@ -4,6 +4,7 @@ import { allowedEvent, DIAGNOSTIC_LIMITS, type DiagnosticCount } from "./profile
 import { canonicalJson, diagnosticReport, type DiagnosticReport } from "./snapshot.js";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const identifier = (v: unknown): v is string => typeof v === "string" && v.length === 36 && uuid.test(v);
 const integer = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 const count = (v: unknown): v is DiagnosticCount => v === "at_least_65535" || (integer(v) && v < 65_535);
 export function validateDiagnosticReport(bytes: Buffer, freshIds = false): Buffer {
@@ -13,8 +14,8 @@ export function validateDiagnosticReport(bytes: Buffer, freshIds = false): Buffe
   if (
     !r ||
     typeof r !== "object" ||
-    !uuid.test(r.reportId) ||
-    !uuid.test(r.sessionId) ||
+    !identifier(r.reportId) ||
+    !identifier(r.sessionId) ||
     r.reportId === r.sessionId ||
     !r.coverage ||
     !r.omissions ||
