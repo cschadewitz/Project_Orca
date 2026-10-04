@@ -24,6 +24,9 @@ repository/common directory, frozen commit, branch and path. Only a successful
 Git registration check publishes the separate `.json.ready` marker, which records
 the worktree's Git administration directory. A moving base branch is never used
 as the argument to `worktree add` after that reservation.
+The receipt file, receipts directory and its parent Git common directory are
+synced before Git mutation. A publication or sync failure retains any evidence
+already written and prevents the Git effect.
 
 Reuse and execution attachment verify the receipt, marker, canonical paths,
 absence of symlinks, actual Git worktree registration, common repository, branch,
@@ -33,6 +36,13 @@ rewritten base or a changed branch is refused. An existing directory or branch
 without this ownership evidence is never adopted. There is no force removal,
 reset or shared-checkout fallback for opted-in roots. `release` refuses owned
 root removal.
+Execution preflight runs under the execution lease's mutation fence before
+first-start attempt/witness persistence or continuation attachment CAS and
+acknowledgement. A refused preflight leaves first-start evidence unconsumed; a
+continuation remains blocked with dispatch still needed, not ambiguously attached.
+After restoring the original valid registration, retry or reconcile the same
+identity. This does not authorize retrying uncertain provisioning or an already
+consumed first start.
 
 ## Recovery contract
 
@@ -64,6 +74,10 @@ The new ownership implementation requires the built-in local host on Linux.
 Remote/custom hosts and other platforms fail closed for opted-in roots. Existing
 WorkItem provider behavior is unchanged. Captured configuration reconstructs the
 built-in provider after restart, without behavior-bearing plugins.
+The selected execution host must also be a built-in local host on Linux with the
+workspace's recorded host ID. This is checked before creating or returning a
+pooled session, including role overrides and children inheriting owned workspaces.
+A local workspace paired with an SSH agent is refused; no remote support is added.
 
 These are accidental collision and recovery safeguards within a trusted local
 filesystem. Receipts are private-mode files outside the agent's worktree, but Git

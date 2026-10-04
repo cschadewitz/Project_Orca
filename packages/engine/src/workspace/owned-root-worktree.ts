@@ -113,6 +113,14 @@ export class OwnedRootWorktree {
     if ((await git(repo, "for-each-ref", "--format=%(refname)", `refs/heads/${branch}`)).length) throw refuse();
     await mkdir(receipts, { recursive: true, mode: 0o700 });
     await publish(receiptPath, receipt);
+    // The reservation is not durable until its directory entry in the Git common
+    // directory is durable too. Failure retains evidence and must precede Git effects.
+    const parent = await open(commonDir, "r");
+    try {
+      await parent.sync();
+    } finally {
+      await parent.close();
+    }
     // From here every failure retains the reservation. Never add again without a ready marker.
     await mkdir(root, { recursive: true });
     await noSymlinks(path);

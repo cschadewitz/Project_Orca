@@ -116,6 +116,57 @@ it.each(["before-add", "after-add"])(
   },
 );
 
+it.each(["parent-sync", "receipt-sync"])("retains evidence before Git on %s failure", async (boundary) => {
+  const f = await rootFixture();
+  const before = git(f.repo, "worktree", "list", "--porcelain");
+  const open = fs.open;
+  const synced: string[] = [];
+  const target = boundary === "parent-sync" ? join(f.repo, ".git") : f.receipt;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const file = await open(...args);
+    const sync = file.sync.bind(file);
+    vi.spyOn(file, "sync").mockImplementation(async () => {
+      synced.push(String(args[0]));
+      if (args[0] === target) throw new Error("injected sync failure");
+      await sync();
+    });
+    return file;
+  });
+  await expect(f.provider.provision(f.input)).rejects.toThrow("injected sync failure");
+  expect(synced).toContain(target);
+  expect(await fs.readFile(f.receipt, "utf8")).toContain(f.input.runId);
+  expect(git(f.repo, "worktree", "list", "--porcelain")).toBe(before);
+  expect(git(f.repo, "for-each-ref", "--format=%(refname)", `refs/heads/orca/roots/${f.input.runId}`)).toBe("");
+  await expect(fs.stat(join(f.options.worktreeRoot, f.input.runId))).rejects.toMatchObject({ code: "ENOENT" });
+  vi.restoreAllMocks();
+  await expect(f.provider.provision(f.input)).rejects.toThrow();
+  expect(git(f.repo, "worktree", "list", "--porcelain")).toBe(before);
+});
+
+it("syncs the receipt and its directory and parent before the first Git mutation", async () => {
+  const f = await rootFixture();
+  const open = fs.open;
+  const synced: string[] = [];
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const file = await open(...args);
+    const sync = file.sync.bind(file);
+    vi.spyOn(file, "sync").mockImplementation(async () => {
+      await sync();
+      synced.push(String(args[0]));
+    });
+    return file;
+  });
+  const mkdir = fs.mkdir;
+  vi.spyOn(fs, "mkdir").mockImplementation(async (...args: Parameters<typeof fs.mkdir>) => {
+    if (args[0] === f.options.worktreeRoot) {
+      expect(synced).toEqual([f.receipt, join(f.repo, ".git", "orca-root-workspaces"), join(f.repo, ".git")]);
+      expect(git(f.repo, "worktree", "list", "--porcelain")).not.toContain(f.input.runId);
+    }
+    return mkdir(...args);
+  });
+  await f.provider.provision(f.input);
+});
+
 it.each(["directory", "dirty-worktree", "symlink", "branch"])("refuses unowned %s without cleanup", async (kind) => {
   const f = await rootFixture();
   const path = join(f.options.worktreeRoot, f.input.runId);
