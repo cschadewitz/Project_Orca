@@ -44,6 +44,17 @@ and protected pending revision text remain unsupported by these tools.
 The schemas can carry a 64 KiB revision payload, but the complete serialized MCP command still
 has a 64 KiB transport ceiling, including its envelope and JSON escaping.
 
+## Proposed host-resource read (#491)
+
+The injected-source draft adds `get_daemon_resources` → `operator.hostResources` with
+only the discovered `target` parameter. It returns #495's shared v1 host snapshot.
+**The separate `host.telemetry.read` permission is a proposal requiring review.** No
+preset includes it, and the normal CLI composition does not mount the operation or a
+collector. Caller-visible workstream summaries additionally require `runs.read` and a
+bounded authorized source; aggregate counts from a host snapshot are discarded.
+See [the access-policy proposal](host-resource-access-policy.md) for the bounds, exact
+fixture pin, ownership split and remaining production/actual-agent integration gaps.
+
 ## Local setup on current main
 
 Use Node 22 or 24, build ORCA, and use an **already approved, explicit ORCA credential**:

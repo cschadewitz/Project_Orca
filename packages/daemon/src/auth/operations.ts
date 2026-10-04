@@ -63,6 +63,7 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "operator.discover": { permission: null, resource: "none" },
   // The closed collection discriminant selects a grant; OperatorReadModel checks it before diagnostics.
   "operator.page": { permission: null, resource: "none" },
+  "operator.hostResources": { permission: "host.telemetry.read", resource: "none" },
   "operator.config": { permission: "config.read", resource: "none" },
   "operator.preflight": { permission: "runs.start", resource: "none" },
   "operator.artifact": { permission: "artifacts.read", resource: "run" },
@@ -163,8 +164,17 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
  * and to nobody else.
  */
 export const CAPABILITY_PERMISSIONS: Readonly<Record<string, readonly Permission[]>> = {
-  "operator.discover": ["runs.read", "artifacts.read", "workflows.read", "runs.start", "config.read", "plan.read"],
+  "operator.discover": [
+    "host.telemetry.read",
+    "runs.read",
+    "artifacts.read",
+    "workflows.read",
+    "runs.start",
+    "config.read",
+    "plan.read",
+  ],
   "operator.page": ["runs.read", "artifacts.read", "workflows.read", "config.read", "plan.read"],
+  "operator.hostResources": ["host.telemetry.read"],
   "operator.config": ["config.read"],
   "operator.preflight": ["runs.start"],
   "operator.artifact": ["artifacts.read"],

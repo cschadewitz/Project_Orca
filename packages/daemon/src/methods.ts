@@ -203,6 +203,8 @@ import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 import type { LiveInputChangeSource } from "./live-input-notifications.js";
 
 export interface MethodContext {
+  /** Internal authenticated mount; never a collector constructed by the method table. */
+  hostResourceRead?: (params: unknown, invocation: MethodContext) => Promise<unknown>;
   operatorMutations?: OperatorMutationComposition | undefined;
   /** Internal exact decision guard; never parsed from legacy RPC params. */
   operatorDecisionTarget?:
@@ -375,7 +377,10 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
       capabilities: [
         ...(Object.keys(createOperatorMutationMethods(ctx)) as DaemonCapability[]),
-        ...OPERATOR_METHODS.filter((name) => ctx.operatorReads?.methods.includes(name)),
+        ...(ctx.hostResourceRead ? ["operator.hostResources" as const] : []),
+        ...OPERATOR_METHODS.filter(
+          (name) => name !== "operator.hostResources" && ctx.operatorReads?.methods.includes(name),
+        ),
         ...(ctx.continuationAdmissions && ctx.continuationAccess ? ["continuations.get" as const] : []),
         ...(ctx.control && ctx.continuationAdmissions && ctx.continuationAccess
           ? (["runs.continue", "continuations.reconcile"] as const)
@@ -825,6 +830,12 @@ export const agentMethods: MethodTable = {
 export function methodsFor(ctx: MethodContext): MethodTable {
   const operator = ctx.operatorReads;
   const table: MethodTable = ctx.reads ? { ...methods } : { [HELLO_METHOD]: hello };
+  if (ctx.hostResourceRead) {
+    table["operator.hostResources"] = {
+      params: z.unknown(),
+      handle: (p, call) => ctx.hostResourceRead!(p, call),
+    };
+  }
   if (operator) {
     const available: MethodTable = {
       "operator.discover": {

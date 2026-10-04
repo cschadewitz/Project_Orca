@@ -127,8 +127,8 @@ Presets are expanded into the record at issue time:
 
 | Preset     | Permissions                                                                 | Scope                    |
 | ---------- | --------------------------------------------------------------------------- | ------------------------ |
-| `owner`    | All of them.                                                                | Unrestricted.            |
-| `operator` | Everything except `config.*`, `permissions.grant` and `daemon.maintenance`. | Unrestricted.            |
+| `owner`    | All existing operator grants; excludes explicit opt-in host telemetry. | Unrestricted.            |
+| `operator` | Existing operator grants except `config.*`, `permissions.grant` and `daemon.maintenance`; excludes `host.telemetry.read`. | Unrestricted.            |
 | `viewer`   | `runs.read`, `artifacts.read`, `workflows.read`, `plan.read`, `agents.read`. | Unrestricted.            |
 | `client`   | `runs.read`, `artifacts.read`, `workflows.read`, `runs.start`, `runs.control`, `inputs.answer`. | `{ workflows: "*", runs: "owned" }`; narrow `workflows` at issue time. |
 
@@ -152,6 +152,7 @@ that the two match. A method that is missing from the table is refused with
 | `operator.page` | any authenticated principal | Closed collection selects its grant in OperatorReadModel before validation; resource filtering precedes pagination. | — |
 | `operator.config` | `config.read` | Allowlisted generation status only. | — |
 | `operator.preflight` | `runs.start` | Authorized workflow and captured generation; no side effects. | — |
+| `operator.hostResources` | `host.telemetry.read` | Explicit injected source only; separate caller-visible runs.read checks; proposed policy in host-resource-access-policy.md. | — |
 | `operator.artifact` | `artifacts.read` | Exact run/artifact relation, plus runs.read; bounded sensitive-content projection. | — |
 | `operator.submitRequest` | `runs.start` | Also requires `plan.write` before validation; current target, workspace Request admission and authorized workflow. | mutation |
 | `operator.admitRun` | `runs.start` | Current target, authorized workflow and linked Request/work-item grants. | mutation |

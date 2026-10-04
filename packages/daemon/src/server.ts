@@ -61,6 +61,7 @@ import { attachSocket } from "./socket.js";
 import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
 import { directAdmissionAuthority } from "./admission-retry.js";
 import { holds } from "./auth/principal.js";
+import { HostResourceReadModel, type HostResourceReadSource } from "./operator-host-resources.js";
 import { authForbidden } from "./auth/errors.js";
 import { submissionAuthority } from "./request-submission.js";
 import { revisionAccess } from "./revision-input.js";
@@ -70,6 +71,8 @@ import type { ResourceResolver } from "./auth/resources.js";
 import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
 
 export interface DaemonOptions extends MethodContext {
+  /** Opt-in contract seam only. Normal CLI composition does not install a resource collector. */
+  hostResourceSource?: HostResourceReadSource;
   /** Installed protected evidence reader; never a callback that attaches execution. */
   admissionExecutionSource?: ((runId: string) => Promise<AdmissionExecutionView | undefined>) | undefined;
   /** Actual protected runtime and registered retry services; never a placeholder capability. */
@@ -550,6 +553,46 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         },
       };
     };
+  }
+  if (opts.hostResourceSource && identity && auth.mode === "token") {
+    const resources = new HostResourceReadModel(identity, opts.hostResourceSource);
+    ctx.hostResourceRead = (params, invocation) => {
+      const binding = principalOf(invocation);
+      const credentialId = binding?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      return resources.read(params, {
+        current: () => {
+          const latest = auth.credentials.current(credentialId);
+          if (!latest.ok) throw authInvalid();
+          if (latest.principal.id !== binding.principal.id || latest.principal.credentialId !== credentialId)
+            throw authForbidden();
+          return latest.principal;
+        },
+        allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
+      });
+    };
+    // A host-only mount still needs authenticated discovery; no unrelated run sources are implied.
+    if (!opts.operatorSources)
+      ctx.operatorReads = {
+        methods: ["operator.discover"],
+        model: async (invocation) =>
+          new OperatorReadModel({
+            target: identity,
+            protocol: PROTOCOL_VERSION,
+            orcaVersion: ctx.orcaVersion,
+            current: async () => {
+              const binding = principalOf(invocation);
+              if (!binding?.principal.credentialId) throw authRequired();
+              const latest = auth.credentials.current(binding.principal.credentialId);
+              if (!latest.ok) throw authInvalid();
+              if (latest.principal.id !== binding.principal.id) throw authForbidden();
+              return latest.principal;
+            },
+            allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
+            collections: {},
+            operations: (principal) => authorizer.permittedMethods(principal, Object.keys(methods)),
+          }),
+      };
   }
   if (opts.operatorSources && identity && auth.mode === "token") {
     const sources = opts.operatorSources;

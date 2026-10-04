@@ -458,3 +458,8 @@ The admission lifecycle is shared by daemon, configured ProgramService/CLI and A
 The inbound MCP operator adapter uses authenticated daemon projections and shared admission
 services; see [MCP operator handoff](mcp-operator.md) for the bounded read contract and
 production mutation/actual-client acceptance boundaries.
+
+The injected host-resource MCP read is a bounded, separately authorized composition seam;
+its [access-policy proposal](host-resource-access-policy.md) requires review before production
+mounting or grants. The shared snapshot and fixtures are pinned to #495; the daemon/MCP slice
+constructs no collector and supplies no runtime workstream index.

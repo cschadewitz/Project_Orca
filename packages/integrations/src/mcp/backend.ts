@@ -1,6 +1,12 @@
 /** Authenticated private-daemon RPC client for the closed operator API. */
 import { OrcaError } from "@orca/core";
-import { ProtocolFault, PROTOCOL_VERSION, OPERATOR_MAX_RESULT_BYTES, ResponseMessageSchema } from "@orca/protocol";
+import {
+  ProtocolFault,
+  PROTOCOL_VERSION,
+  OPERATOR_MAX_RESULT_BYTES,
+  HOST_RESOURCE_LIMITS,
+  ResponseMessageSchema,
+} from "@orca/protocol";
 import {
   MCP_OPERATIONS,
   type AuthenticatedOperatorBackend,
@@ -94,8 +100,20 @@ export class DaemonOperatorBackend implements AuthenticatedOperatorBackend {
         backendCode: parsed.data.error.code,
       });
     }
+    if (
+      operation === "hostResources" &&
+      Buffer.byteLength(JSON.stringify(parsed.data.result)) > HOST_RESOURCE_LIMITS.snapshotBytes
+    )
+      throw new ProtocolFault("PROTOCOL_MESSAGE", "Invalid or oversized resource observation");
     const result = spec.output.safeParse(parsed.data.result);
     if (!result.success) throw new ProtocolFault("PROTOCOL_MESSAGE", "Invalid operator response");
+    if (
+      operation === "hostResources" &&
+      "daemonInstanceId" in result.data &&
+      "target" in input &&
+      result.data.daemonInstanceId !== input.target.instanceId
+    )
+      throw new OrcaError("RUN_STATE", "Resource target changed; discover again");
     if ("protocol" in result.data && result.data.protocol.major !== PROTOCOL_VERSION.major)
       throw new ProtocolFault("PROTOCOL_VERSION", "Unsupported daemon protocol major version");
     return result.data as McpOutput<K>;
