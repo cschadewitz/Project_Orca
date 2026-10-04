@@ -115,29 +115,11 @@ jobs:
       - name: Build the bundled daemon
         run: pnpm --filter @orca/app run build:daemon
 
-      # The daemon artifact, proven to run on this platform before anything is packaged
-      # around it. A bundle that cannot start is the failure that would otherwise only show
-      # up as a desktop app whose status bar reads disconnected, on someone else's machine.
-      - name: The bundled daemon answers hello
-        shell: bash
-        run: |
-          set -euo pipefail
-          workspace=$(mktemp -d)
-          # Let the OS bind a free port so concurrent jobs cannot answer for each other.
-          node packages/app/dist/daemon/orca-daemon.mjs --cwd "$workspace" serve --port 0 > daemon.log 2>&1 &
-          daemon=$!
-          trap 'kill "$daemon" 2>/dev/null || true' EXIT
-          body='{"kind":"request","id":1,"method":"hello","params":{"client":"desktop-ci/0","protocol":{"major":1,"minor":0}}}'
-          for _ in $(seq 1 60); do
-            url=$(sed -n 's/.*listening on \(http:\/\/127\.0\.0\.1:[0-9]*\).*/\1/p' daemon.log | head -n 1)
-            if [ -n "$url" ] && curl -sS --fail -X POST "$url/rpc" \
-              -H 'content-type: application/json' -d "$body" -o hello.json; then
-              break
-            fi
-            sleep 1
-          done
-          cat hello.json
-          grep -q '"ok":true' hello.json
+      # Authenticate the freshly built standalone bundle on every runner before packaging.
+      # The helper owns its child and disposable workspace, bounds waits/output, and prints
+      # only sanitized evidence. This is not packaged-app or signed native Mac acceptance.
+      - name: The bundled daemon answers authenticated hello
+        run: node tools/probe-bundled-daemon.js
 
       # electron-builder finds packages/app/electron-builder.yml by name; `-c.` overrides one
       # value in it. `exec` rather than `run package` so that no stray `--` reaches yargs.
@@ -246,8 +228,6 @@ jobs:
           name: desktop-${{ matrix.name }}-logs
           path: |
             app.log
-            daemon.log
-            hello.json
           if-no-files-found: ignore
           # Release calls supply a ref; PR and standalone outputs only need one week.
           retention-days: ${{ inputs.ref && 14 || 7 }}

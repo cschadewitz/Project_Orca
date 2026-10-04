@@ -1,0 +1,49 @@
+{
+  "entities": [],
+  "events": [
+    {
+      "code": "unknown",
+      "entityAlias": "unknown",
+      "offsetMs": 1000,
+      "phase": "startup"
+    }
+  ],
+  "evidence": {
+    "admissionObservation": "unknown",
+    "handshake": false,
+    "protectedStateObservation": "unknown",
+    "resumeObservation": "unknown"
+  },
+  "mode": "one_shot",
+  "omissions": {
+    "budget": "unknown",
+    "expired": "unknown",
+    "invalid": "unknown",
+    "unavailable": "unknown"
+  },
+  "reportId": "11111111-1111-4111-8111-111111111111",
+  "schemaVersion": 1,
+  "sessionId": "22222222-2222-4222-8222-222222222222",
+  "snapshot": {
+    "admission": "unknown",
+    "authentication": "unknown",
+    "connection": "disconnected",
+    "protectedState": "unknown",
+    "resume": "unknown"
+  },
+  "versions": {
+    "app": "0.6.0",
+    "appProtocol": {
+      "major": 1,
+      "minor": 10
+    },
+    "arch": "arm64",
+    "buildRevision": "unknown",
+    "daemon": "unknown",
+    "daemonProtocol": "unknown",
+    "os": "darwin",
+    "osVersion": "15.0.0",
+    "storeFormat": "config-generations-v3"
+  },
+  "windowMs": 1000
+}

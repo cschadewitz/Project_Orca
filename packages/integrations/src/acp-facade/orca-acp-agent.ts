@@ -231,6 +231,13 @@ export class OrcaAcpAgent {
   private async prompt(ctx: acp.AgentRequestContext<acp.PromptRequest>): Promise<acp.PromptResponse> {
     const session = this.sessions.get(ctx.params.sessionId);
     if (!session) throw acp.RequestError.invalidParams({ sessionId: ctx.params.sessionId, reason: "unknown session" });
+    const retryKey = ctx.params._meta?.["orca/idempotencyKey"];
+    if (
+      retryKey !== undefined &&
+      (typeof retryKey !== "string" || Buffer.byteLength(retryKey) < 1 || Buffer.byteLength(retryKey) > 128)
+    )
+      throw acp.RequestError.invalidParams({ reason: "orca/idempotencyKey must contain 1–128 UTF-8 bytes" });
+    const retry = typeof retryKey === "string" ? { idempotencyKey: retryKey } : {};
     const text = ctx.params.prompt
       .map((b) => (b.type === "text" ? b.text : b.type === "resource" && "text" in b.resource ? b.resource.text : ""))
       .join("\n")
@@ -311,6 +318,10 @@ export class OrcaAcpAgent {
     let runId: string;
     let admissionId: string | undefined;
     let admissionAuthority: SubmissionAuthority | undefined;
+    if (retry.idempotencyKey && ((command === "run" && runWorkflowId) || session.selection.workflow))
+      throw acp.RequestError.invalidParams({
+        reason: "Keyed ACP direct launch with session workspace/selection is unsupported; use runs.admit",
+      });
     if (command === "run" && runWorkflowId) {
       const vars: Record<string, unknown> = {};
       for (const kv of runArgs) {
@@ -329,7 +340,9 @@ export class OrcaAcpAgent {
       const command = {
         title: title || "Untitled request",
         body: body.join("\n").trim(),
-        source: { kind: "acp-session" as const, sessionId: session.id },
+        source: retry.idempotencyKey
+          ? { kind: "api" as const, clientId: "orca-acp" }
+          : { kind: "acp-session" as const, sessionId: session.id },
         ...(overrides ? { overrides } : {}),
       };
       if (this.opts.program.submissions) {
@@ -338,7 +351,7 @@ export class OrcaAcpAgent {
           : this.opts.submissionAuthority;
         if (!admissionAuthority)
           throw acp.RequestError.invalidParams({ reason: "Request submission authority is unavailable" });
-        const submitted = await this.opts.program.submissions.submit(command, admissionAuthority);
+        const submitted = await this.opts.program.submissions.submit(command, admissionAuthority, retry);
         await say(`Request ${submitted.requestId}; admission ${submitted.admissionId}: ${submitted.state}\n`);
         if (submitted.state !== "accepted") {
           await say(`Use /admissions reconcile ${submitted.admissionId} before starting another Request.\n`);

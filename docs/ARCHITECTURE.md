@@ -360,6 +360,16 @@ ownership boundary and reread the durable log under it. The backward-readable le
 fence and legacy-writer refusals are documented in
 [ownership compatibility](v0.5.2-ownership-compatibility.md).
 
+Durable continuation attachment and receipt settlement are separate fenced writes.
+Execution releases its lease before the final receipt write. A competing replay
+that previously read `dispatch: needed` must reread the verified journal and run
+history under the fence: a now-attached terminal run settles, while a nonterminal
+attachment with uncertain execution remains blocked as ambiguous. A fence or store
+refusal after successful execution preserves the existing receipt for later
+authorized reconciliation; it is not evidence of unsafe execution. Reconciliation
+verifies and synchronizes the durable marker without repeating the decision or
+execution. Receipt inspection remains read-only.
+
 Claims and leases answer different questions and neither replaces the other: a claim says
 who *owns a work item*, outlives the process that took it, and is never released on its
 own; a lease says who is *interpreting a run right now*, and is meant to expire.
@@ -395,7 +405,22 @@ prompt as `vars.upstream`. Full description: `docs/PLANNING.md`.
   pickup and workspace provisioning work identically for remote agents (`cat`,
   `test -e`, `git worktree add` over SSH).
 - `openAcpSession()` performs `initialize` → `session/new` with a handshake
-  timeout and surfaces the agent's stderr tail on failure.
+  timeout and surfaces the agent's stderr tail on failure. Handshake failure and
+  ordinary session termination share one idempotent direct-child cleanup: wait up to
+  two seconds after SIGTERM, then up to two seconds after SIGKILL. Startup therefore
+  takes at most four additional seconds to clean up after a handshake failure (subject
+  to event-loop scheduling). An already-observed exit needs no signal; concurrent closes
+  share the same operation and clear their grace timers. If exit remains unobserved,
+  cleanup fails explicitly rather than claiming the process stopped. Handshake errors
+  retain their code/message and original cause, with the separate cleanup failure in
+  `details.cleanup` and a warning in the logger. Ordinary `close()` rejects on incomplete
+  cleanup; cancellation-triggered cleanup also logs that failure.
+- The orchestrator owns a newly created session through model setup and the
+  `agent.session.opened` append, until it returns a release function or registers the
+  per-run pool entry. Startup bookkeeping failure closes that session in either mode;
+  a close failure is logged separately and never replaces the original startup error.
+  These guarantees concern only the owned direct child (the local SSH client for SSH
+  sessions), not descendant processes, remote agent exit, or daemon-wide draining.
 - Alternative transports implement `AgentSession` and are injected as
   `Orchestrator.sessionFactory` (HTTP ACP; T3 Code threads once its transport lands).
 
@@ -427,3 +452,7 @@ Recorded as ADRs in `docs/adr/`:
 Request admission and recovery are described in [Request submission](request-submission.md).
 The admission lifecycle is shared by daemon, configured ProgramService/CLI and ACP;
 `runs.start` remains an explicit workflow launch.
+
+The inbound MCP operator adapter uses authenticated daemon projections and shared admission
+services; see [MCP operator handoff](mcp-operator.md) for the bounded read contract and
+production mutation/actual-client acceptance boundaries.

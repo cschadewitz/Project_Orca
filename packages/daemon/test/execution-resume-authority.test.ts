@@ -2,11 +2,11 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type TestContext } from "vitest";
 import { AgentRegistry, type AgentSession } from "@orca/agents";
 import {
   AgentSpecSchema,
-  RequestSchema,
+  parseOrcaConfig,
   TemplateRegistry,
   WorkflowRegistry,
   parseWorkflow,
@@ -14,6 +14,10 @@ import {
   type MutationActor,
 } from "@orca/core";
 import {
+  ConfigurationGenerations,
+  RequestSubmissionService,
+  MemoryAdmissionStore,
+  FileAdmissionStore,
   LocalWorkspaceProvider,
   Orchestrator,
   PausingHumanInput,
@@ -24,6 +28,7 @@ import {
 import { fileStores, memoryStores, type Stores } from "@orca/store";
 import { ControlModel, ReadModel, startDaemon } from "@orca/daemon";
 import {
+  Authorizer,
   CredentialStore,
   MemoryAuditSink,
   OwnershipStore,
@@ -31,10 +36,15 @@ import {
   type IssueOptions,
 } from "../src/auth/index.js";
 import { daemonExecutionRuntime } from "../src/execution-runtime.js";
+import { submissionAuthority } from "../src/request-submission.js";
 
 const runtimes: ReturnType<typeof daemonExecutionRuntime>[] = [];
 const jobs: Promise<unknown>[] = [];
 const directories: string[] = [];
+let testContext: TestContext;
+beforeEach((context) => {
+  testContext = context;
+});
 afterEach(async () => {
   for (const runtime of runtimes.splice(0)) runtime.close();
   await Promise.allSettled(jobs.splice(0));
@@ -143,14 +153,16 @@ async function fixture(
       parseWorkflow(`
 id: visible
 name: Visible
-start: ${options.initialAgent ? "oldWork" : "gate"}
+start: s
 nodes:
+  s: {type: start}
   ${options.initialAgent ? "oldWork: {type: agent, agent: worker, prompt: Old turn}" : ""}
   gate: {type: gate, question: Continue?, options: [go]}
   work: {type: agent, agent: worker, prompt: Fresh turn}
   ${options.secondGate ? "again: {type: gate, question: Continue again?, options: [go]}\n  more: {type: agent, agent: worker, prompt: Another turn}" : ""}
   end: {type: end}
 edges:
+  - {from: s, to: ${options.initialAgent ? "oldWork" : "gate"}}
   ${options.initialAgent ? "- {from: oldWork, to: gate}" : ""}
   - {from: gate, to: work}
   - {from: work, to: ${options.secondGate ? "again" : "end"}}
@@ -161,14 +173,15 @@ edges:
       parseWorkflow(`
 id: private-child
 name: Child
-start: gate
+start: s
 nodes:
+  s: {type: start}
   gate: {type: gate, question: Child?, options: [go]}
   end: {type: end}
-edges: [{from: gate, to: end}]
+edges: [{from: s, to: gate}, {from: gate, to: end}]
 `),
     );
-  function boot(instanceId: string, stores: Stores, credentials: CredentialStore, ownership: OwnershipStore) {
+  async function boot(instanceId: string, stores: Stores, credentials: CredentialStore, ownership: OwnershipStore) {
     const orchestrator = new Orchestrator({
       stores,
       agents,
@@ -179,24 +192,67 @@ edges: [{from: gate, to: end}]
       humanInput: new PausingHumanInput(),
       logger: silentLogger,
     });
-    const runtime = daemonExecutionRuntime({ instanceId, orchestrator, credentials, ownership, revalidateMs: 60_000 });
+    if (options.request) {
+      const generations = new ConfigurationGenerations({
+        store: stores.execution,
+        workflows: stores.workflows,
+        loadAssets: async () => ({ workflows: workflows.list(), templates: [] }),
+        admission: {
+          validateStartRun: (input, material) => orchestrator.validateStartRun(input, material),
+          startRun: (input, material) => orchestrator.startRun(input, material),
+        },
+      });
+      await generations.initialize(
+        parseOrcaConfig({
+          agents: [AgentSpecSchema.parse({ id: "worker", command: "unused", permissions: { default: "ask" } })],
+          program: { workflow: "visible" },
+        }),
+        "fixture",
+      );
+      orchestrator.generations = generations;
+    }
+    const runtime = daemonExecutionRuntime({
+      instanceId,
+      workspaceId: "workspace",
+      orchestrator,
+      credentials,
+      ownership,
+      revalidateMs: 60_000,
+    });
     runtimes.push(runtime);
     orchestrator.liveInput = runtime;
+    orchestrator.admissionExecution = { authorize: (policy) => runtime.authorizeAdmissionExecution(policy) };
     const reads = new ReadModel({ orchestrator });
     return { orchestrator, runtime, reads, control: new ControlModel({ orchestrator, reads }) };
   }
-  const first = boot("boot-a", originalStores, originalCredentials, originalOwnership);
-  if (options.request)
-    await originalStores.requests.put(
-      RequestSchema.parse({ id: "request", title: "Task", body: "", createdAt: "now", updatedAt: "now" }),
-    );
-  const runId = await first.orchestrator.startRun({
-    workflowId: "visible",
-    actor,
-    ...(options.request ? { requestId: "request", requestAdmissionId: "admission" } : {}),
-  });
-  originalOwnership.record(runId, "alice");
-  await originalOwnership.flush(runId);
+  const first = await boot("boot-a", originalStores, originalCredentials, originalOwnership);
+  let runId: string;
+  if (options.request) {
+    const generations = first.orchestrator.generations!;
+    const submissions = new RequestSubmissionService({
+      orchestrator: first.orchestrator,
+      admissions: options.disk ? new FileAdmissionStore(storeDir) : new MemoryAdmissionStore(),
+      captureLaunch: generations.captureLaunch,
+      restoreLaunch: generations.restoreLaunch,
+    });
+    const authority = submissionAuthority({
+      workspaceId: "workspace",
+      actor,
+      authorizer: new Authorizer({ ownership: originalOwnership, resolver: orchestratorResolver(first.orchestrator) }),
+      principal: async () => {
+        const current = originalCredentials.current(original.credentialId);
+        if (!current.ok) throw new Error("fixture credential unavailable");
+        return current.principal;
+      },
+    });
+    const admitted = await submissions.submit({ title: "Task", body: "", workflowId: "visible" }, authority);
+    if (admitted.state !== "accepted") throw new Error("fixture admission failed");
+    runId = admitted.runId;
+  } else {
+    runId = await first.orchestrator.startRun({ workflowId: "visible", actor });
+    originalOwnership.record(runId, "alice");
+    await originalOwnership.flush(runId);
+  }
   const initial = track(first.orchestrator.run(runId));
   const oldInput = options.initialAgent ? await permission(first, runId) : undefined;
   if (oldInput) first.runtime.close();
@@ -210,7 +266,7 @@ edges: [{from: gate, to: end}]
   const rotated = await credentials.bootstrap(grants, tokenFile);
   const token = (await readFile(tokenFile, "utf8")).trim();
   const currentActor = { principalId: "alice", credentialId: rotated.credentialId };
-  const second = boot("boot-b", stores, credentials, ownership);
+  const second = await boot("boot-b", stores, credentials, ownership);
   return {
     ...second,
     first,
@@ -230,11 +286,57 @@ edges: [{from: gate, to: end}]
   };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-async function permission(f: { reads: ReadModel }, runId: string) {
-  await vi.waitFor(async () =>
-    expect((await f.reads.inputsList({ runId })).inputs.some((input) => input.live?.state === "pending")).toBe(true),
+/** Observe publication, not interpreter speed. The existing test deadline still bounds this wait. */
+async function permission(
+  f: { reads: ReadModel; orchestrator: Orchestrator },
+  runId: string,
+  phase: "live-permission" | "rotation-attachment" | "attached-second-gate" = "live-permission",
+) {
+  const { signal, onTestFailed } = testContext;
+  const events: { type: string; seq: number }[] = [];
+  let changed = deferred();
+  const unsubscribe = f.orchestrator.subscribe(
+    (event) => {
+      events.push({ type: event.type, seq: event.seq });
+      if (events.length > 8) events.shift();
+      changed.resolve();
+    },
+    { runId },
   );
-  return (await f.reads.inputsList({ runId })).inputs.find((input) => input.live?.state === "pending")!;
+  const start = performance.now();
+  let reads = 0;
+  let inputs: { kind: string; live: string | undefined }[] = [];
+  const diagnostic = () =>
+    JSON.stringify({ phase, reads, elapsedMs: Math.round(performance.now() - start), inputs, events });
+  let aborted: string | undefined;
+  const abort = () => {
+    aborted = diagnostic();
+    changed.resolve();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  onTestFailed(() => {
+    // Only fixed phase labels, counts, enum states and the last eight public event
+    // types/sequences. Never dump inputs, identities, credentials, paths or errors.
+    if (aborted) console.error(`Permission publication interrupted: ${aborted}`);
+  });
+  try {
+    for (;;) {
+      if (signal.aborted) throw new Error(`Permission publication interrupted: ${aborted ?? diagnostic()}`);
+      // Subscribe before reading and capture a fresh wake-up before each read: an
+      // event arriving during the read must not be lost between checking and waiting.
+      changed = deferred();
+      const page = await f.reads.inputsList({ runId });
+      reads++;
+      inputs = page.inputs.slice(0, 4).map((input) => ({ kind: input.kind, live: input.live?.state }));
+      if (signal.aborted) continue;
+      const pending = page.inputs.find((input) => input.live?.state === "pending");
+      if (pending) return pending;
+      await changed.promise;
+    }
+  } finally {
+    unsubscribe();
+    signal.removeEventListener("abort", abort);
+  }
 }
 function resumeAuthority(f: Fixture, actor: MutationActor = f.currentActor) {
   return { actor, authorize: vi.fn(async () => {}) } satisfies ExecutionResumeAuthority;
@@ -274,7 +376,7 @@ it.each([false, true])(
     ]);
     const authority = resumeAuthority(f);
     const resumed = track(f.control.resumeRun({ runId: f.runId }, authority));
-    const fresh = await permission(f, f.runId);
+    const fresh = await permission(f, f.runId, "rotation-attachment");
     expect(fresh.live!.target.instanceId).toBe("boot-b");
     expect(f.sessions).toHaveLength(1);
     expect(f.answers).toEqual([]);
@@ -285,7 +387,7 @@ it.each([false, true])(
     const continued = track(
       f.control.answerInput({ runId: f.runId, requestId: again.id, optionId: "go", resume: true }, f.currentActor),
     );
-    const next = await permission(f, f.runId);
+    const next = await permission(f, f.runId, "attached-second-gate");
     expect(next.live!.target.sessionId).not.toBe(fresh.live!.target.sessionId);
     await expect(answerPermission(f, fresh)).rejects.toMatchObject({ code: "RUN_STATE" });
     await answerPermission(f, next);

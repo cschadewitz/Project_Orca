@@ -273,8 +273,17 @@ export class ControlModel {
     params: InputsAnswerParams,
     actor?: MutationActor,
     authority?: LiveAnswerAuthority,
+    expected?: { runId: string; requestId: string; stepRunId: string; kind: "decision" | "permission" },
   ): Promise<InputsAnswerResult> {
     const candidate = await findInput(this.orc, params.requestId, params.runId);
+    if (
+      expected &&
+      (candidate.request.runId !== expected.runId ||
+        candidate.request.id !== expected.requestId ||
+        candidate.request.stepRunId !== expected.stepRunId ||
+        candidate.request.kind !== expected.kind)
+    )
+      throw new OrcaError("RUN_STATE", "The exact decision is no longer available");
     if (candidate.request.kind === "permission") {
       return this.answerLive(params, candidate.request, candidate.state, authority);
     }
@@ -435,6 +444,13 @@ export class ControlModel {
    * by the orchestrator before admission. It never creates a Request; requests.submit is
    * the separate application service for decomposition/program admission.
    */
+  async settleAdmitted(runId: string): Promise<RunsStartResult> {
+    const state = await this.orc.getState(runId);
+    if (state.run.status === "created" || state.run.status === "running")
+      await leased(runId, () => this.orc.run(runId));
+    return { runId, run: await this.runView(runId), asOf: this.clock.isoNow() };
+  }
+
   async startRun(
     params: RunsStartParams,
     attributeStartedRun?: (runId: string) => void | Promise<void>,

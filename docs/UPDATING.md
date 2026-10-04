@@ -5,6 +5,13 @@ Windows app never installs anything on an attached server. No installation comma
 exposed through daemon RPC. The additive protocol 1.8 `maintenance` method only closes
 or reopens admission; it accepts no URL, path, shell command or package name.
 
+The approved bundle ID is now `com.schadewitz.orca`. Windows deliberately retains
+`dev.orca.desktop` as its packaging override to preserve NSIS upgrades and shortcuts.
+App names and data paths are unchanged; no data migration or deletion is included.
+Existing Mac installs require native permission/Keychain continuity checks before
+distribution; see [application identity and existing installations](RELEASING.md#approved-application-identity-and-existing-installations).
+Signing and macOS automatic updates are not activated by this identity change.
+
 ## Windows bootstrap and daily use
 
 Install the matching x64 or arm64 NSIS `.exe` from a published release. ZIP builds are
@@ -251,6 +258,31 @@ Only the expected version, exact protocol and required capabilities passing hell
 admission to reopen. All runtime parts and shipped assets move together.
 
 ### Recovery and store compatibility
+
+The operator-runtime integration uses **protocol 2.0** and **store epoch
+`operator-journals-v4`**, replacing protocol 1.10 / `config-generations-v3`.
+Upgrade clients and daemons together. Old hello capability schemas are closed, and
+`revision.recorded` adds an event old event schemas cannot parse; these are not
+backward-compatible wire additions. Optional operator, admission and revision methods
+remain conditional on installed providers and caller authority, not new globally required
+release capabilities.
+
+The epoch check belongs to the **managed release updater**, which refuses activation and
+recovery across different epochs. Direct CLI and daemon startup do **not** enforce
+`release-compatibility.json`; successfully starting an old binary is not proof it can read
+or safely write an upgraded store. Old full-schema event readers throw on a valid but
+unknown event such as `revision.recorded`; filtered readers may bypass that event and
+appear to work. Neither outcome is a supported downgrade or a compatibility guarantee.
+
+Before the first upgraded writer runs, stop admission, finish active work, stop every
+writer and take a complete, consistent pre-upgrade backup of both stores and all associated
+state listed below. Retain the matching old binary and pinned toolchain and validate the
+restore offline. The backup must include private/protected event payloads and all admission,
+continuation and revision journals, not merely public event logs. Do not mix individual
+files from old and upgraded stores. Rollback requires restoring that entire matching
+backup before starting the old binary; writes made after the backup require separate
+reconciliation and are not recovered by switching binaries. A direct in-place downgrade
+of an upgraded store is unsupported.
 
 `release-compatibility.json` carries the store epoch. Changing any writer so old binaries
 cannot safely read its writes requires changing that epoch and a store changelog fragment.

@@ -155,10 +155,10 @@ describe("authorized typed launch admission", () => {
       JSON.stringify(absent.error).replaceAll("absent", "ID"),
     );
     expect(validate).not.toHaveBeenCalled();
-    const hello = await h.rpc(h.client, "hello", { client: "test", protocol: { major: 1, minor: 8 } });
+    const hello = await h.rpc(h.client, "hello", { client: "test", protocol: { major: 2, minor: 0 } });
     expect(hello.result?.methods).toContain("workflows.validateInputs");
     expect(hello.result?.capabilities).toContain("workflows.validateInputs");
-    const viewerHello = await h.rpc(h.viewer, "hello", { client: "test", protocol: { major: 1, minor: 8 } });
+    const viewerHello = await h.rpc(h.viewer, "hello", { client: "test", protocol: { major: 2, minor: 0 } });
     expect(viewerHello.result?.methods).not.toContain("workflows.validateInputs");
     expect(viewerHello.result?.capabilities).not.toContain("workflows.validateInputs");
   });

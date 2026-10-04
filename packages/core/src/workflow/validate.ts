@@ -2,6 +2,7 @@
  * Static validation of workflow definitions. Runs at load time and from
  * `orca validate` so authoring mistakes surface before any agent is spawned.
  */
+import { validateRevisionCapability } from "../model/revision-input.js";
 import { checkExpression } from "../expr/index.js";
 import type { NodeDef, WorkflowDefinition, WorkflowGraph } from "../model/workflow.js";
 import { checkTemplate } from "../template/render.js";
@@ -67,6 +68,10 @@ function validateGraph(
   const err = (p: string, message: string) => errors.push({ path: p, message });
   const warn = (p: string, message: string) => warnings.push({ path: p, message });
   const ids = Object.keys(graph.nodes);
+  for (const [id, node] of Object.entries(graph.nodes)) {
+    if ((node.type === "gate" || node.type === "decision") && node.revision)
+      errors.push(...validateRevisionCapability(graph, id, node.revision).errors);
+  }
 
   const start = graph.nodes[graph.start];
   if (!start) err(`${path}.start`, `start node '${graph.start}' does not exist`);

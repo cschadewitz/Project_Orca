@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentRegistry } from "@orca/agents";
 import { parseWorkflow, RequestSchema, TemplateRegistry, WorkflowRegistry, type MutationActor } from "@orca/core";
-import { HumanInputPending, LocalWorkspaceProvider, Orchestrator, type LiveDecisionTarget } from "@orca/engine";
+import {
+  HumanInputPending,
+  LocalWorkspaceProvider,
+  Orchestrator,
+  type LiveDecisionTarget,
+  type AdmissionExecutionPolicy,
+} from "@orca/engine";
 import { memoryStores } from "@orca/store";
 import { CredentialStore, OwnershipStore, type IssueOptions, type Permission } from "../src/auth/index.js";
 import { ControlModel } from "../src/control.js";
@@ -59,6 +65,7 @@ edges: []
   const orchestrator = new Orchestrator(options);
   const runtime = daemonExecutionRuntime({
     instanceId: "boot",
+    workspaceId: "workspace",
     orchestrator,
     credentials,
     ownership,
@@ -390,4 +397,78 @@ it("requires authenticated material at an intermediate parent hop", async () => 
   );
   await expect(f.runtime.prepareExecution(grandchild)).rejects.toMatchObject({ code: "RUN_STATE" });
   expect(f.runtime.executionSignal(grandchild).aborted).toBe(true);
+});
+
+function admissionPolicy(f: Fixture, runId: string, kind: "direct" | "request" = "direct"): AdmissionExecutionPolicy {
+  return {
+    schemaVersion: 1,
+    mode: "bounded-first-attachment",
+    generationDigest: "generation-digest",
+    binding: {
+      kind,
+      admissionId: "admission",
+      runId,
+      workspaceId: "workspace",
+      actor: f.actor,
+      generationId: "generation",
+      workflow: { id: "visible", version: "1", revision: "revision" },
+      ...(kind === "request" ? { requestId: "request" } : {}),
+    },
+    creation: {
+      eventId: "event",
+      eventSeq: 0,
+      executionPayloadRef: "payload",
+      eventDigest: "event-digest",
+      payloadDigest: "payload-digest",
+    },
+  };
+}
+it("first admission attachment uses the bound actor with launch grants, without revision-only grants", async () => {
+  const f = await fixture({ permissions: ["runs.start"] });
+  const id = await f.root();
+  const policy = admissionPolicy(f, id);
+  await expect(f.runtime.authorizeAdmissionExecution(policy)).rejects.toMatchObject({ code: "RUN_STATE" });
+  await f.runtime.prepareExecution(id);
+  await expect(f.runtime.authorizeAdmissionExecution(policy)).resolves.toBeUndefined();
+  await expect(f.runtime.authorizeExecution(id)).rejects.toMatchObject({ code: "RUN_STATE" });
+  const wrongActor = { ...policy, binding: { ...policy.binding, actor: { ...f.actor, credentialId: "other" } } };
+  await expect(f.runtime.authorizeAdmissionExecution(wrongActor)).rejects.toMatchObject({ code: "RUN_STATE" });
+  const wrongWorkspace = { ...policy, binding: { ...policy.binding, workspaceId: "other" } };
+  await expect(f.runtime.authorizeAdmissionExecution(wrongWorkspace)).rejects.toMatchObject({ code: "RUN_STATE" });
+});
+it("first Request attachment requires plan.write but does not require inputs.answer", async () => {
+  const f = await fixture({ permissions: ["runs.start", "plan.write"], scope: { workflows: "*", runs: "all" } });
+  await f.stores.requests.put(
+    RequestSchema.parse({ id: "request", title: "Task", body: "", createdAt: "now", updatedAt: "now" }),
+  );
+  const id = await f.orchestrator.startRun({
+    workflowId: "visible",
+    actor: f.actor,
+    requestId: "request",
+    requestAdmissionId: "admission",
+  });
+  f.ownership.record(id, "alice");
+  await f.runtime.prepareExecution(id);
+  const policy = admissionPolicy(f, id, "request");
+  await expect(f.runtime.authorizeAdmissionExecution(policy)).resolves.toBeUndefined();
+  const current = f.credentials.current(f.original.credential.id);
+  if (!current.ok) throw new Error("missing fixture credential");
+  vi.spyOn(f.credentials, "current").mockReturnValue({
+    ok: true,
+    principal: { ...current.principal, permissions: new Set(["runs.start"]) },
+  });
+  await expect(f.runtime.authorizeAdmissionExecution(policy)).rejects.toMatchObject({ code: "RUN_STATE" });
+});
+it("first attachment rechecks revocation after durable ownership verification", async () => {
+  const f = await fixture({ permissions: ["runs.start"] });
+  const id = await f.root();
+  await f.runtime.prepareExecution(id);
+  const verify = f.ownership.verify.bind(f.ownership);
+  vi.spyOn(f.ownership, "verify").mockImplementation(async (...args) => {
+    await verify(...args);
+    await f.credentials.revoke(f.original.credential.id);
+  });
+  await expect(f.runtime.authorizeAdmissionExecution(admissionPolicy(f, id))).rejects.toMatchObject({
+    code: "RUN_STATE",
+  });
 });

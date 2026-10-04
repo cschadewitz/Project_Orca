@@ -13,7 +13,9 @@
 # overrides it. The workflow passes `--config.extraMetadata.version=<root version>`, because
 # the repository releases in lockstep from the root package.json and the packages under
 # packages/ do not carry the release version (docs/RELEASING.md).
-appId: dev.orca.desktop
+# Approved bundle identity; Apple Team ID Q2FP9UY5T4 is documented in docs/RELEASING.md.
+# This does not activate signing. Windows retains its installed identity below.
+appId: com.schadewitz.orca
 productName: ORCA
 artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
 copyright: ORCA contributors
@@ -94,6 +96,9 @@ mac:
   notarize: false
 
 win:
+  # Preserve existing NSIS upgrade/uninstall GUID and shortcut AppUserModelID.
+  # Changing this requires a separate Windows migration decision (docs/RELEASING.md).
+  appId: dev.orca.desktop
   target:
     - target: nsis
       arch: [x64, arm64]

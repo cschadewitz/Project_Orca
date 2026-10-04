@@ -1,3 +1,20 @@
+/** Typed daemon dispatch, including opt-in authenticated operator projections. */
+import { createOperatorMutationMethods, type OperatorMutationComposition } from "./operator-mutations.js";
+import { z } from "zod";
+import type { OperatorReadModel } from "./operator-read-model.js";
+import type { ContinuationAdmissionModel, ContinuationAccess } from "./continuation-admission.js";
+import {
+  RunsContinueParamsSchema,
+  ContinuationsGetParamsSchema,
+  ContinuationsReconcileParamsSchema,
+} from "@orca/protocol";
+import {
+  OPERATOR_METHODS,
+  OperatorTargetSchema,
+  OperatorPreflightParamsSchema,
+  OperatorArtifactParamsSchema,
+  type OperatorPageParams,
+} from "@orca/protocol";
 /**
  * The method table: one entry per protocol method, each validating its params with the
  * schema the protocol package publishes and returning a result the same package types.
@@ -22,12 +39,22 @@ import {
   type ConfigApplyResult,
 } from "@orca/protocol";
 
+import {
+  InputsReviseParamsSchema,
+  InputsReplaceRevisionParamsSchema,
+  InputsRevisionPendingParamsSchema,
+  RevisionBoundaryViewSchema,
+} from "@orca/protocol";
+import type { RevisionInputService, RevisionAccess, RevisionBoundary } from "@orca/engine";
+import { revisionAuthority } from "./revision-input.js";
 import type { SubmissionAuthority } from "@orca/core";
 import {
   RequestsSubmitParamsSchema,
   RequestsAdmissionParamsSchema,
   RequestsAdmissionsParamsSchema,
 } from "@orca/protocol";
+import { RunsAdmitParamsSchema, AdmissionsGetParamsSchema, AdmissionsReconcileParamsSchema } from "@orca/protocol";
+import { checkAdmissionScope, type AdmissionRetryModel, type AdmissionAuthorities } from "./admission-retry.js";
 import type { RequestSubmissionModel } from "./request-submission.js";
 import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
 import type { Maintenance } from "./maintenance.js";
@@ -130,6 +157,7 @@ import {
   type InputsAnswerParams,
   type InputsAnswerResult,
   type InputsListResult,
+  type PendingRevisionsDiscovery,
   type ItemsListResult,
   type JournalListResult,
   type PlanGetResult,
@@ -175,10 +203,44 @@ import type { PlanChangeSource, SubscriptionSource } from "./subscriptions.js";
 import type { LiveInputChangeSource } from "./live-input-notifications.js";
 
 export interface MethodContext {
+  operatorMutations?: OperatorMutationComposition | undefined;
+  /** Internal exact decision guard; never parsed from legacy RPC params. */
+  operatorDecisionTarget?:
+    { runId: string; requestId: string; stepRunId: string; kind: "decision" | "permission" } | undefined;
+  admissionExecution?:
+    ((invocation: MethodContext, runId: string) => Promise<RunsGetResult["admissionExecution"]>) | undefined;
+  continuationAdmissions?: ContinuationAdmissionModel | undefined;
+  continuationAccess?: ((ctx: MethodContext) => Promise<ContinuationAccess>) | undefined;
+  /** Bound to the original authenticated invocation; absent without production sources. */
+  operatorReads?: { methods: readonly string[]; model(ctx: MethodContext): Promise<OperatorReadModel> };
+  /** Only install after protected journal, #331 claims, exact attempt dispatch and live auth are wired. */
+  revisionInputs?:
+    | ((invocation: MethodContext) => Promise<{
+        service: Pick<RevisionInputService, "submit" | "readPending" | "replacePending">;
+        access: RevisionAccess;
+      }>)
+    | undefined;
+  /** Authenticated optional enrichment; each run is authorized before protected reads. */
+  revisionBoundaries?: ((invocation: MethodContext, runId: string) => Promise<readonly RevisionBoundary[]>) | undefined;
+  /** Current input-read authorization; filters rows before projecting restriction-only action IDs. */
+  inputRevisionRestrictions?:
+    | ((
+        invocation: MethodContext,
+        inputs: InputsListResult["inputs"],
+        revisionRunIds: readonly string[],
+      ) => Promise<{
+        inputs: InputsListResult["inputs"];
+        recheck(): Promise<void>;
+      }>)
+    | undefined;
+  pendingRevisionDiscovery?:
+    ((invocation: MethodContext, runIds: readonly string[]) => Promise<PendingRevisionsDiscovery>) | undefined;
   liveInputs?: LiveInputChangeSource | undefined;
   liveAnswerAuthority?: LiveAnswerAuthority;
   executionResumeAuthority?: ExecutionResumeAuthority;
   requestSubmissions?: RequestSubmissionModel | undefined;
+  admissionRetries?: AdmissionRetryModel | undefined;
+  admissionAuthorities?: ((ctx: MethodContext) => Promise<AdmissionAuthorities>) | undefined;
   submissionWorkspaceId?: string | undefined;
   requestSubmissionAuthority?: ((ctx: MethodContext) => Promise<SubmissionAuthority>) | undefined;
   identity?: { workspaceId: string; instanceId: string };
@@ -312,7 +374,32 @@ export const hello: Method<{ client: string; protocol: { major: number; minor: n
       ...(ctx.identity ? { identity: ctx.identity } : {}),
       ...(ctx.storeDir ? { storeDir: ctx.storeDir } : {}),
       capabilities: [
-        ...ctx.capabilities.filter((c) => c !== "workflows.validateInputs" && c !== "inputs.live"),
+        ...(Object.keys(createOperatorMutationMethods(ctx)) as DaemonCapability[]),
+        ...OPERATOR_METHODS.filter((name) => ctx.operatorReads?.methods.includes(name)),
+        ...(ctx.continuationAdmissions && ctx.continuationAccess ? ["continuations.get" as const] : []),
+        ...(ctx.control && ctx.continuationAdmissions && ctx.continuationAccess
+          ? (["runs.continue", "continuations.reconcile"] as const)
+          : []),
+        ...(ctx.control && ctx.admissionRetries && ctx.admissionAuthorities
+          ? (["runs.admit", "admissions.get", "admissions.reconcile"] as const)
+          : []),
+        ...ctx.capabilities.filter(
+          (c) =>
+            !c.startsWith("operator.") &&
+            c !== "runs.admit" &&
+            c !== "admissions.get" &&
+            c !== "admissions.reconcile" &&
+            c !== "runs.continue" &&
+            c !== "continuations.get" &&
+            c !== "continuations.reconcile" &&
+            c !== "workflows.validateInputs" &&
+            c !== "inputs.live" &&
+            c !== "inputs.revise" &&
+            c !== "inputs.revisionPending" &&
+            c !== "inputs.replaceRevision",
+        ),
+        ...(ctx.revisionInputs ? ["inputs.revisionPending" as const] : []),
+        ...(ctx.revisionInputs && ctx.control ? ["inputs.revise" as const, "inputs.replaceRevision" as const] : []),
         ...(ctx.control?.supportsLiveInputs ? ["inputs.live" as const] : []),
         ...(ctx.workflowInputs ? ["workflows.validateInputs" as const] : []),
       ],
@@ -330,7 +417,17 @@ export const runsList: Method<Parameters<ReadModel["runsList"]>[0], RunsListResu
 /** `runs.get`: one run's tree - steps, attempts, children, artifacts. */
 export const runsGet: Method<Parameters<ReadModel["runsGet"]>[0], RunsGetResult> = {
   params: RunsGetParamsSchema,
-  handle: (params, ctx) => reads(ctx).runsGet(params),
+  handle: async (params, ctx) => {
+    const result = await reads(ctx).runsGet(params);
+    const admissionExecution = await ctx.admissionExecution?.(ctx, params.runId);
+    if (admissionExecution) result.admissionExecution = admissionExecution;
+    if (!ctx.continuationAdmissions || !ctx.continuationAccess) return result;
+    const expectedBoundary = await ctx.continuationAdmissions.expectedBoundary(
+      params.runId,
+      await ctx.continuationAccess(ctx),
+    );
+    return expectedBoundary ? { ...result, continuation: { expectedBoundary } } : result;
+  },
 };
 
 /** `runs.events`: one page of a run's log, by sequence number, forwards or backwards. */
@@ -342,7 +439,61 @@ export const runsEvents: Method<Parameters<ReadModel["runsEvents"]>[0], RunsEven
 /** `inputs.list`: the gates and permission asks waiting on a person. */
 export const inputsList: Method<Parameters<ReadModel["inputsList"]>[0], InputsListResult> = {
   params: InputsListParamsSchema,
-  handle: (params, ctx) => reads(ctx).inputsList(params),
+  handle: async (params, ctx) => {
+    const result = { ...(await reads(ctx).inputsList(params)) };
+    delete result.pendingRevisions;
+    const revisionRunIds = params.revisionRunIds ?? (params.runId === undefined ? [] : [params.runId]);
+    const clean = result.inputs.map((row) => {
+      const input = { ...row };
+      // Only authenticated projections may install these fields, never a legacy read model.
+      delete input.revision;
+      delete input.revisionActionId;
+      return input;
+    });
+    const restricted = ctx.inputRevisionRestrictions
+      ? await ctx.inputRevisionRestrictions(ctx, clean, revisionRunIds)
+      : { inputs: clean, recheck: undefined };
+    const boundaries = new Map<string, readonly RevisionBoundary[]>();
+    const inputs = [];
+    for (const input of restricted.inputs) {
+      if (ctx.revisionBoundaries && input.kind === "decision" && !input.live) {
+        if (!boundaries.has(input.runId)) boundaries.set(input.runId, await ctx.revisionBoundaries(ctx, input.runId));
+        const matching = boundaries
+          .get(input.runId)!
+          .filter(
+            (boundary) =>
+              boundary?.target?.runId === input.runId &&
+              boundary.target.stepRunId === input.stepRunId &&
+              boundary.target.requestId === input.id,
+          );
+        // Ambiguity is not permission to choose a destination. Status and public fields
+        // must agree with this exact open input; private journal fields never cross RPC.
+        const boundary = matching.length === 1 ? matching[0] : undefined;
+        if (boundary?.status === "waiting") {
+          const view = RevisionBoundaryViewSchema.safeParse({
+            target: boundary.target,
+            capability: boundary.capability,
+            destinationDescription: boundary.destinationDescription,
+          });
+          if (view.success && input.options.some((option) => option.id === view.data.capability.actionId))
+            input.revision = view.data;
+        }
+      }
+      inputs.push(input);
+    }
+    const pendingRevisions = ctx.pendingRevisionDiscovery
+      ? await ctx.pendingRevisionDiscovery(ctx, revisionRunIds)
+      : undefined;
+    // Recheck all row and discovery-run visibility after every awaited enrichment. Changed
+    // authority refuses the whole response, including protected metadata and omission counts.
+    await restricted.recheck?.();
+    return {
+      ...result,
+      inputs,
+      waiting: inputs.length,
+      ...(pendingRevisions ? { pendingRevisions } : {}),
+    };
+  },
 };
 
 /** `claims.list`: who owns which work item, and whether that run is still alive. */
@@ -459,7 +610,8 @@ export const workflowsValidateInputs: Method<WorkflowsValidateInputsParams, Work
 /** `inputs.answer`: record a person's answer to an open gate or permission ask, and continue. */
 export const inputsAnswer: Method<InputsAnswerParams, InputsAnswerResult> = {
   params: InputsAnswerParamsSchema,
-  handle: (params, ctx) => control(ctx).answerInput(params, ctx.mutationActor, ctx.liveAnswerAuthority),
+  handle: (params, ctx) =>
+    control(ctx).answerInput(params, ctx.mutationActor, ctx.liveAnswerAuthority, ctx.operatorDecisionTarget),
 };
 
 /** `runs.resume`: re-drive a parked run here until it parks again or finishes. */
@@ -477,7 +629,22 @@ export const runsCancel: Method<RunsCancelParams, RunsCancelResult> = {
 /** `runs.start`: a workflow and its vars. No request, no work item, no documents - by decision. */
 export const runsStart: Method<RunsStartParams, RunsStartResult> = {
   params: RunsStartParamsSchema,
-  handle: (params, ctx) => control(ctx).startRun(params, ctx.attributeStartedRun, ctx.mutationActor),
+  handle: async (params, ctx) => {
+    if (!ctx.admissionRetries || !ctx.admissionAuthorities) {
+      if (params.idempotencyKey !== undefined)
+        throw new OrcaError("NOT_SUPPORTED", "Retry admission is not configured");
+      return control(ctx).startRun(params, ctx.attributeStartedRun, ctx.mutationActor);
+    }
+    const { idempotencyKey, ...command } = params;
+    const admitted = await ctx.admissionRetries.admit(
+      command,
+      idempotencyKey === undefined ? {} : { idempotencyKey },
+      await (await ctx.admissionAuthorities(ctx)).direct(),
+    );
+    if (admitted.state !== "accepted")
+      throw new OrcaError("RUN_STATE", "Run admission requires reconciliation", { ...admitted });
+    return control(ctx).settleAdmitted(admitted.runId);
+  },
 };
 
 /**
@@ -656,7 +823,34 @@ export const agentMethods: MethodTable = {
  * daemon will not answer is a method it does not advertise.
  */
 export function methodsFor(ctx: MethodContext): MethodTable {
+  const operator = ctx.operatorReads;
   const table: MethodTable = ctx.reads ? { ...methods } : { [HELLO_METHOD]: hello };
+  if (operator) {
+    const available: MethodTable = {
+      "operator.discover": {
+        params: z.strictObject({}),
+        handle: async (_p, call) => (await operator.model(call)).discover(),
+      },
+      // Collection routing is authorized inside the model BEFORE its schema diagnostics.
+      "operator.page": {
+        params: z.unknown(),
+        handle: async (p, call) => (await operator.model(call)).page(p as OperatorPageParams),
+      },
+      "operator.config": {
+        params: z.strictObject({ target: OperatorTargetSchema }),
+        handle: async (p, call) => (await operator.model(call)).config(p.target),
+      },
+      "operator.preflight": {
+        params: OperatorPreflightParamsSchema,
+        handle: async (p, call) => (await operator.model(call)).preflight(p),
+      },
+      "operator.artifact": {
+        params: OperatorArtifactParamsSchema,
+        handle: async (p, call) => (await operator.model(call)).artifact(p),
+      },
+    };
+    for (const name of operator.methods) if (available[name]) table[name] = available[name]!;
+  }
   if (ctx.reads?.plans) Object.assign(table, planMethods);
   if (ctx.source) {
     table[SUBSCRIBE_METHOD] = subscribe;
@@ -669,7 +863,14 @@ export function methodsFor(ctx: MethodContext): MethodTable {
     Object.assign(table, {
       "requests.submit": {
         params: RequestsSubmitParamsSchema,
-        handle: async (params, invocation) => model.submit(params, await authority(invocation)),
+        handle: async (params, invocation) => {
+          const { idempotencyKey, ...command } = params;
+          return model.submit(
+            command,
+            await authority(invocation),
+            idempotencyKey === undefined ? {} : { idempotencyKey },
+          );
+        },
       },
       "requests.reconcile": {
         params: RequestsAdmissionParamsSchema,
@@ -686,6 +887,68 @@ export function methodsFor(ctx: MethodContext): MethodTable {
       },
     } satisfies MethodTable);
   }
+  if (ctx.control && ctx.admissionRetries && ctx.admissionAuthorities) {
+    const model = ctx.admissionRetries,
+      authorities = ctx.admissionAuthorities;
+    table["runs.admit"] = {
+      params: RunsAdmitParamsSchema,
+      handle: async (params, invocation) => {
+        const { idempotencyKey, expectedScope, ...command } = params;
+        const authority = await authorities(invocation);
+        await checkAdmissionScope(expectedScope, authority);
+        return model.admit(command, idempotencyKey === undefined ? {} : { idempotencyKey }, await authority.direct());
+      },
+    };
+    table["admissions.get"] = {
+      params: AdmissionsGetParamsSchema,
+      handle: async (params, invocation) => model.inspect(params.operationId, await authorities(invocation)),
+    };
+    table["admissions.reconcile"] = {
+      params: AdmissionsReconcileParamsSchema,
+      handle: async (params, invocation) => model.reconcile(params.operationId, await authorities(invocation)),
+    };
+  }
+  if (ctx.continuationAdmissions && ctx.continuationAccess) {
+    const model = ctx.continuationAdmissions;
+    const access = ctx.continuationAccess;
+    table["continuations.get"] = {
+      params: ContinuationsGetParamsSchema,
+      handle: async (params, invocation) => model.inspect(params.continuationId, await access(invocation)),
+    };
+    if (ctx.control) {
+      table["runs.continue"] = {
+        params: RunsContinueParamsSchema,
+        handle: async (params, invocation) => model.admit(params.command, params.retry, await access(invocation)),
+      };
+      table["continuations.reconcile"] = {
+        params: ContinuationsReconcileParamsSchema,
+        handle: async (params, invocation) => model.reconcile(params.continuationId, await access(invocation)),
+      };
+    }
+  }
+  if (ctx.revisionInputs) {
+    const authenticated = ctx.revisionInputs;
+    table["inputs.revisionPending"] = {
+      params: InputsRevisionPendingParamsSchema,
+      handle: async (params, invocation) => (await authenticated(invocation)).service.readPending(params.target),
+    };
+    if (ctx.control) {
+      table["inputs.revise"] = {
+        params: InputsReviseParamsSchema,
+        handle: async (params, invocation) => {
+          const { service, access } = await authenticated(invocation);
+          return service.submit(params.command, params.retry, revisionAuthority(access));
+        },
+      };
+      table["inputs.replaceRevision"] = {
+        params: InputsReplaceRevisionParamsSchema,
+        handle: async (params, invocation) => {
+          const { service, access } = await authenticated(invocation);
+          return service.replacePending(params.command, params.retry, revisionAuthority(access));
+        },
+      };
+    }
+  }
   if (ctx.workflowInputs) table[WORKFLOWS_VALIDATE_INPUTS_METHOD] = workflowsValidateInputs;
   if (ctx.planControl) Object.assign(table, planControlMethods);
   if (ctx.agents) Object.assign(table, agentMethods);
@@ -698,5 +961,6 @@ export function methodsFor(ctx: MethodContext): MethodTable {
       if (ctx.config.canApply) table[CONFIG_APPLY_METHOD] = configApply;
     }
   }
+  Object.assign(table, createOperatorMutationMethods(ctx));
   return ctx.maintenance ? ctx.maintenance.wrap(table) : table;
 }

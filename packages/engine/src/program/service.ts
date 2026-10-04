@@ -39,7 +39,7 @@ export interface SubmitRequestInput {
 }
 
 export class ProgramService {
-  readonly submissions: SubmissionService | undefined;
+  readonly submissions: RequestSubmissionService | undefined;
   constructor(
     private readonly orchestrator: Orchestrator,
     private readonly programWorkflowId = "program",
@@ -50,11 +50,14 @@ export class ProgramService {
     this.submissions = submission ? new RequestSubmissionService({ ...submission, orchestrator }) : undefined;
   }
 
-  async submit(input: SubmitRequestInput): Promise<{ request: Request; runId: string; admissionId?: string }> {
+  async submit(
+    input: SubmitRequestInput,
+    retry: import("@orca/core").RetryOptions = {},
+  ): Promise<{ request: Request; runId: string; admissionId?: string }> {
     if (this.submissions) {
       if (!this.submission?.authority)
         throw new OrcaError("NOT_SUPPORTED", "Request submission requires explicit authority");
-      const result = await this.submissions.submit(input, this.submission.authority);
+      const result = await this.submissions.submit(input, this.submission.authority, retry);
       if (result.state !== "accepted")
         throw new OrcaError("RUN_STATE", "Request requires reconciliation", { ...result });
       const request = await this.orchestrator.stores.requests.get(result.requestId);

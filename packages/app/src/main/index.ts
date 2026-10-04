@@ -18,13 +18,16 @@
  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
  * server for hot reload (scripts/dev.js).
  */
+import { z } from "zod";
+import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
+import { RunsAdmitResultSchema } from "@orca/protocol";
 import { ConnectionTarget, connectionFailure, callInConnection } from "./connection-target.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates } from "./updates.js";
 import { updateDriver } from "./update-driver.js";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage } from "electron";
 import { rawTokens, type ThemeId } from "@orca/design";
 import type { NotificationMessage } from "@orca/protocol";
 import type { AlertItem, AlertsUpdate, BridgeResult, ConnectionSnapshot, WorkspaceSnapshot } from "../bridge.js";
@@ -92,6 +95,57 @@ function handle<P, R>(channel: string, run: (params: P) => Promise<R>): void {
 /** The client of the moment, read at call time and never captured. */
 const client = (): DaemonClient => workspace.client;
 
+// Consume only the verified projection of operator.discover; no peer-feature source import.
+const intentDiscovery = z.object({
+  principalId: z.string().min(1),
+  authentication: z.literal("credential"),
+  target: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }),
+  operations: z.array(z.string()),
+});
+const intents = new AdmissionIntentController(
+  new AdmissionIntents(join(app.getPath("userData"), "admission-intents.enc"), safeStorage),
+  async () => {
+    const captured = client();
+    const target = workspace.connectionTarget;
+    const found = await captured.call("operator.discover", {}, intentDiscovery);
+    workspace.assertEpoch(target.epoch);
+    if (
+      !found.operations.includes("runs.admit") ||
+      !target.identity ||
+      found.target.workspaceId !== target.identity.workspaceId ||
+      found.target.instanceId !== target.identity.instanceId
+    )
+      throw new Error(
+        "The authenticated daemon target changed or retry admission is unavailable. Refresh before retrying.",
+      );
+    return {
+      scope: {
+        target: target.source === "bundled" ? `bundled:${workspace.snapshot.path}` : daemonEndpoint(target.url),
+        principalId: found.principalId,
+        workspaceId: found.target.workspaceId,
+      },
+      assertCurrent: () => workspace.assertEpoch(target.epoch),
+      admit: (params) => captured.call("runs.admit", params, RunsAdmitResultSchema),
+    };
+  },
+);
+handle("orca:admissionIntents.start", (workflowId: string) => intents.start(workflowId));
+handle("orca:admissionIntents.list", () => intents.list());
+handle("orca:admissionIntents.abandon", (id: string) =>
+  intents.abandon(id, async () => {
+    const result = await dialog.showMessageBox({
+      type: "warning",
+      buttons: ["Keep retained intent", "Abandon intent"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "Abandon this run intent?",
+      detail:
+        "The original run may already exist or still be running. This does not cancel it. The next start creates a separate run with a new key.",
+    });
+    return result.response === 1;
+  }),
+);
+
 handle("orca:hello", () => client().hello(`orca-app/${app.getVersion()}`));
 handle("orca:runs.list", (params: Parameters<DaemonClient["runsList"]>[0]) => client().runsList(params));
 handle("orca:runs.get", (params: Parameters<DaemonClient["runsGet"]>[0]) => client().runsGet(params));
@@ -127,6 +181,13 @@ handle("orca:journal.list", (params: Parameters<DaemonClient["journalList"]>[0])
 // reads do; what makes them different is on the other two sides - the daemon refuses them
 // without the run's lease, and the renderer asks `useWritability()` before offering the
 // control at all. `runs.start` needs no lease: there is no run to hold one yet.
+handle("orca:inputs.revise", (params: Parameters<DaemonClient["inputsRevise"]>[0]) => client().inputsRevise(params));
+handle("orca:inputs.revisionPending", (params: Parameters<DaemonClient["inputsRevisionPending"]>[0]) =>
+  client().inputsRevisionPending(params),
+);
+handle("orca:inputs.replaceRevision", (params: Parameters<DaemonClient["inputsReplaceRevision"]>[0]) =>
+  client().inputsReplaceRevision(params),
+);
 handle("orca:inputs.answer", (params: Parameters<DaemonClient["inputsAnswer"]>[0]) => client().inputsAnswer(params));
 handle("orca:runs.cancel", (params: Parameters<DaemonClient["runsCancel"]>[0]) => client().runsCancel(params));
 handle("orca:runs.resume", (params: Parameters<DaemonClient["runsResume"]>[0]) => client().runsResume(params));

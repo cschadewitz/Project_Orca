@@ -8,13 +8,13 @@
  *
  * **The workflow is chosen, the vars are not asked for.** The picker lists `workflows.list`
  * — name, id, version and node count, which is everything a row of that method carries —
- * and the choice calls `runs.start { workflowId }` with no vars at all, so the run takes the
+ * and the choice calls durable direct admission with `{ workflowId }` with no vars at all, so the run takes the
  * workflow's own. A vars form is specified nowhere: `orca run --var` takes arbitrary keys,
  * `WorkflowSummaryView` does not carry the workflow's `inputs`, and a form that guessed at
  * the keys would be inventing them (docs/design/RULES.md rule 12). The row says which vars
  * it starts with rather than leaving a person to find out from the run.
  *
- * **The run is opened, not announced and left.** `runs.start` answers as soon as the run
+ * **The admitted run is opened.** Prompt admission answers as soon as the run
  * exists, so the palette navigates to `orca://run/<id>` through the route table — the same
  * resolver every link, crumb and palette row goes through — and the sentence goes in the
  * app's one live region for anybody who did not see the screen change.
@@ -37,9 +37,9 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
     (): readonly PaletteWrite[] => [
       {
         scope: "global",
-        method: "runs.start",
-        label: "Start a run",
-        detail: "Starts with the workflow's default vars",
+        method: "runs.admit",
+        label: "Start or recover a run",
+        detail: "Reuses retained intent; abandon it explicitly to start another run",
         picker: {
           label: "Which workflow?",
           empty: "This daemon has no workflows registered.",
@@ -57,12 +57,17 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
             }));
           },
           choose: (workflowId) => {
-            void window.orca.runs.start({ workflowId }).then((result) => {
+            const bridge = window.orca.admissionIntents;
+            if (!bridge) {
+              announce("Durable run admission is unavailable in this app.");
+              return;
+            }
+            void bridge.start(workflowId).then((result) => {
               if (!result.ok) {
-                announce(`The run did not start: ${result.error.message}`);
+                announce(`Run admission needs attention: ${result.error.message}`);
                 return;
               }
-              announce(`${result.result.run.name} is running.`);
+              announce("The admitted run is open.");
               onOpen(runUrl(result.result.runId));
             });
           },
@@ -70,6 +75,31 @@ export function PaletteStartRun({ onOpen }: PaletteStartRunProps): JSX.Element |
         /* Unreachable: a row with a picker opens the picker instead of running, and a
            keyless command has no key to dispatch to. It is here because a command is a
            thing with an action, and the alternative is a special case in the registry. */
+        action: () => {},
+      },
+      {
+        scope: "global",
+        method: "runs.admit",
+        label: "Abandon retained run intent",
+        detail: "Does not cancel existing work; the next start creates a separate run",
+        picker: {
+          label: "Which retained intent?",
+          empty: "No retained intents for this target and principal.",
+          load: async () => {
+            const result = await window.orca.admissionIntents?.list();
+            if (!result?.ok) {
+              announce(result?.error.message ?? "Durable run admission is unavailable.");
+              return [];
+            }
+            return result.result.map((row) => ({ id: row.id, label: row.workflowId }));
+          },
+          choose: (id) => {
+            void window.orca.admissionIntents?.abandon(id).then((result) => {
+              if (!result.ok) announce(result.error.message);
+              else if (result.result.abandoned) announce("Run intent abandoned. The next start creates separate work.");
+            });
+          },
+        },
         action: () => {},
       },
     ],

@@ -3,6 +3,8 @@
  * integrations, UIs) can branch on it without parsing messages.
  */
 export type OrcaErrorCode =
+  | "RETRY_CONFLICT"
+  | "RETRY_LIMIT"
   | "WORKFLOW_INVALID"
   /** Launch vars failed the selected workflow revision's input schema; details has errors and warnings. */
   | "WORKFLOW_INPUT_INVALID"
@@ -29,6 +31,9 @@ export type OrcaErrorCode =
   | "WORKFLOW_VERSION_NOT_FOUND"
   | "RUN_NOT_FOUND"
   | "RUN_STATE"
+  /** Expected revision/destination/attempt no longer accepts this mutation. */
+  | "REVISION_STALE"
+  | "CONTINUATION_STALE"
   /** Another interpreter holds the run's single-writer lease; see store/lease-store.ts. */
   | "RUN_LEASED"
   | "CLAIM_NOT_FOUND"
@@ -81,3 +86,9 @@ export function describeError(e: unknown): { code: OrcaErrorCode; message: strin
   if (e instanceof Error) return { code: "INTERNAL", message: e.message };
   return { code: "INTERNAL", message: String(e) };
 }
+
+/** Shared retry refusals contain no key or command material. */
+export const admissionRetryFaults = {
+  conflict: () => new OrcaError("RETRY_CONFLICT", "Retry key is already bound to a different command"),
+  limit: () => new OrcaError("RETRY_LIMIT", "Admission retry quota reached; existing receipts remain recoverable"),
+};

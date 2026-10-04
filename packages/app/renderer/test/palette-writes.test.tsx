@@ -37,6 +37,11 @@ afterEach(() => {
 
 function mount(connection?: ConnectionSnapshot): void {
   fake = installBridge(connection === undefined ? {} : { connection });
+  fake.bridge.admissionIntents = {
+    start: async (workflowId) => fake.bridge.runs.start({ workflowId }),
+    list: async () => ({ ok: true, result: [] }),
+    abandon: async () => ({ ok: true, result: { abandoned: false } }),
+  };
   teardown.push(fake.install());
   h = harness();
   teardown.push(h.dispose);
@@ -143,15 +148,34 @@ describe("cancel and resume", () => {
 });
 
 describe("starting a run", () => {
+  it("announces blocked secure persistence and never falls back to legacy start", async () => {
+    mount();
+    fake.bridge.admissionIntents!.start = async () => ({
+      ok: false,
+      error: {
+        code: "AGENT_TRANSPORT",
+        message: "Secure run-intent storage is unavailable. No run was submitted.",
+      },
+    });
+    await screen.findByRole("button", { name: "Attention" });
+    await open();
+    search("Start or recover a run");
+    fireEvent.keyDown(query(), { key: "Enter" });
+    const menu = await screen.findByRole("menu", { name: "Which workflow?" });
+    fireEvent.click(within(menu).getAllByRole("menuitem")[0]!);
+    await screen.findByText(/Run admission needs attention: Secure run-intent storage is unavailable/);
+    expect(callsTo("runs.start")).toHaveLength(0);
+  });
+
   it("lists the daemon's workflows, starts the chosen one and opens the run", async () => {
     mount();
     await screen.findByRole("button", { name: "Attention" });
     await open();
 
-    search("Start a run");
+    search("Start or recover a run");
     // The vars are not asked for and the row says so rather than leaving it to be found out.
-    expect(rows().find((row) => row.textContent?.startsWith("Start a run"))?.textContent).toContain(
-      "Starts with the workflow's default vars",
+    expect(rows().find((row) => row.textContent?.startsWith("Start or recover a run"))?.textContent).toContain(
+      "Reuses retained intent",
     );
     fireEvent.keyDown(query(), { key: "Enter" });
 
@@ -184,7 +208,7 @@ describe("starting a run", () => {
     await screen.findByRole("button", { name: "Attention" });
     const regions = document.querySelectorAll("[aria-live]").length;
     await open();
-    search("Start a run");
+    search("Start or recover a run");
     fireEvent.keyDown(query(), { key: "Enter" });
     await screen.findByRole("menu", { name: "Which workflow?" });
 
@@ -325,7 +349,7 @@ describe("what a daemon's answer takes away", () => {
        dead one reads as broken (docs/design/40-connection-states.md). The read-only daemon
        leaves the control methods out of `hello.methods` and the capability out of `hello`
        together, which is why one check answers for all of them. */
-    expect(labels().some((label) => label.startsWith("Start a run"))).toBe(false);
+    expect(labels().some((label) => label.startsWith("Start or recover a run"))).toBe(false);
     expect(labels().some((label) => label.includes("Cancel"))).toBe(false);
     expect(labels().some((label) => label.startsWith("Answer Ship the rollout?"))).toBe(false);
   });
@@ -339,7 +363,7 @@ describe("what a daemon's answer takes away", () => {
     await screen.findByText(/No daemon/i);
     await open();
 
-    const row = rows().find((option) => option.textContent?.startsWith("Start a run"))!;
+    const row = rows().find((option) => option.textContent?.startsWith("Start or recover a run"))!;
     expect(row).toBeTruthy();
     expect(row.getAttribute("aria-disabled")).toBe("true");
     // `useWritability()`'s sentence, verbatim and on the row — never a bare greyed line.
@@ -380,7 +404,7 @@ describe("what a daemon's answer takes away", () => {
     expect(labels().some((label) => label.startsWith("Waive dependency"))).toBe(false);
     expect(labels().some((label) => label.startsWith("Decide "))).toBe(false);
     // And the palette is the live one, with the writes this daemon *does* serve in it.
-    expect(labels().some((label) => label.startsWith("Start a run"))).toBe(true);
+    expect(labels().some((label) => label.startsWith("Start or recover a run"))).toBe(true);
   });
 
   it("keeps a row whose method is served by a daemon that claims no capability", async () => {
@@ -439,8 +463,8 @@ describe("a row that cannot be run is still a row the keyboard reaches", () => {
        over the row would put the reason out of reach of the keyboard — which is exactly
        what `Button` refuses to do with `disabledReason`
        (docs/design/40-connection-states.md). */
-    const row = search("Start a run");
-    expect(row.textContent).toContain("Start a run");
+    const row = search("Start or recover a run");
+    expect(row.textContent).toContain("Start or recover a run");
     expect(row.getAttribute("aria-disabled")).toBe("true");
     expect(query().getAttribute("aria-activedescendant")).toBe(row.id);
 
@@ -464,7 +488,7 @@ describe("a cancelled picker", () => {
     await screen.findByRole("button", { name: "Attention" });
     await open();
 
-    search("Start a run");
+    search("Start or recover a run");
     fireEvent.keyDown(query(), { key: "Enter" });
     const menu = await screen.findByRole("menu", { name: "Which workflow?" });
     // The field is still on screen underneath the picker: it is the one thing in this

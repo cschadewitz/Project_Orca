@@ -136,7 +136,7 @@ describe("workflow version pinning (#179)", () => {
     });
   }
 
-  it("refuses to resume a run whose version is neither stored nor on disk, naming what exists", async () => {
+  it("refuses an answer before effects when its recorded workflow is unavailable", async () => {
     const stores = memoryStores();
     const { runId, queryId } = await park(stores);
     // The stored copy goes away (a store copied without its workflows directory, say).
@@ -145,12 +145,14 @@ describe("workflow version pinning (#179)", () => {
       workflows: { ...stores.workflows, get: async () => undefined, versions: async () => [] },
     };
     const second = make(V2, lost);
-    await second.answer(queryId, "go", runId);
-    await expect(second.resume(runId)).rejects.toMatchObject({
+    const before = await stores.events.read(runId);
+    await expect(second.answer(queryId, "go", runId)).rejects.toMatchObject({
       code: "WORKFLOW_VERSION_NOT_FOUND",
       message: expect.stringContaining("available: 2"),
       details: { id: "pinned", version: "1", available: ["2"] },
     });
+    expect(await stores.events.read(runId)).toEqual(before);
+    expect(await second.pendingInputs(runId)).toHaveLength(1);
   });
 
   it("a run from before versioning resumes on whatever file is current", async () => {

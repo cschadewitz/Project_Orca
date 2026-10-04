@@ -93,6 +93,26 @@ Older `docs/patches/` files describe historical handoffs; do not reapply them.
 
 ## Shared seam A: durable retries and prompt run admission
 
+### Coordinated review clarification
+
+The new wire `RunsAdmitResult` is `DirectAdmissionResult & { operationId: string }`.
+Prepared, accepted and recoverable-failure receipts carry that stable authorized
+reference; in-progress remains a typed `RUN_STATE` failure with operation ID and
+recovery metadata. No raw client key is exposed and legacy `runs.start` stays unchanged.
+
+Optional `runs.admit.expectedScope` contains `{ principalId, workspaceId }`, checked
+against current authenticated authority before effects and stripped before intent
+comparison. It is not authority. Neither credentials nor transient instance IDs
+participate in this fence or durable intent scope. The app consumes the existing
+`operator.discover` authenticated projection; no second discovery RPC is introduced.
+
+#331 additionally owns `packages/app/src/main/admission-intents.ts` and
+`packages/app/test/admission-retry*.test.ts`. Existing app wiring remains integrator
+owned through the reserved patch. The journal uses main-process OS-backed encryption,
+refuses unavailable or plaintext backends and requires an explicit confirmed
+abandon/new-intent action; renderer and process loss retain the original key.
+
+
 ### Ownership and compatibility
 
 **#331 owns the common durable retry mechanism and a deliberate nonblocking
@@ -939,6 +959,34 @@ New method capability names equal their exact RPC names and appear only when the
 production implementation is wired and the current principal has its grants.
 
 ## Publication and handoff
+
+### Integration clarifications approved 2 October 2026
+
+- The new wire `runs.admit` receipt is `DirectAdmissionResult & {operationId: string}`.
+  Every resolved prepared/accepted/recoverable-failure receipt retains that safe
+  retry correlation; an in-progress response uses a typed non-success envelope.
+  The internal result and settled legacy `runs.start` shape are unchanged. The
+  client idempotency key is never returned as a receipt or used as authority.
+- The combined implementation crosses an explicit protocol **2.0** and
+  **operator-journals-v4** store boundary. Old clients have closed capability and
+  event schemas; this is not a backward-compatible minor. Client and server upgrade
+  together. Managed activation/recovery checks epochs, while direct startup does
+  not enforce the release marker. Rollback requires the complete pre-upgrade store
+  backup and its matching binary; epoch equality is not a downgrade guarantee.
+- The supported continuation boundary is exposed as optional authorized
+  `runs.get.continuation.expectedBoundary`; the token is an opaque CAS guard, not
+  permission. `runs.continue` accepts `{command, retry}`, and dedicated continuation
+  inspection/reconciliation names the returned continuation ID. Initial production
+  composition is restricted to sealed root durable gates/human decisions, with
+  unsupported or ambiguous lineage omitted/refused explicitly. Wider acceptance
+  remains subject to the original gates below.
+- One protected authoritative event commits decision plus dispatch intent.
+  Existing-file synchronization must complete before accepted acknowledgement or
+  inspection. Private locator/index records are never authority: missing markers
+  cannot be rebuilt from a cached receipt or index. Recovery may repair only the
+  locator after verifying the original marker, preserving correlation and current
+  authority. No second execution store, encryption key lifecycle or owner fallback
+  is introduced.
 
 The coordinator publishes only this preparation document against the exact merged
 base after final review, then records its full commit SHA in #331/#356/#327 and

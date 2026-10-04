@@ -98,6 +98,9 @@ A credential holds a list of these permissions:
 | `workflows.read`     | Workflow definitions; `workflows.changed`.                                 |
 | `runs.start`         | Start runs; the reserved launch-input preflight.                           |
 | `runs.control`       | Resume and cancel runs.                                                    |
+| `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
+| `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
+| `inputs.revisionPending` | `runs.read` | exact run; payload also requires `inputs.answer` and `runs.control` | — |
 | `inputs.answer`      | Answer one open gate or permission ask, once.                              |
 | `permissions.grant`  | Answer a permission ask with `always`, which writes a standing rule.       |
 | `claims.release`     | Release a work-item claim.                                                 |
@@ -148,6 +151,21 @@ that the two match. A method that is missing from the table is refused with
 
 | Method | Permission | Resource check | Audited |
 | --- | --- | --- | --- |
+| `operator.discover` | any authenticated principal | Credential-only safe target and implemented operation discovery. | — |
+| `operator.page` | any authenticated principal | Closed collection selects its grant in OperatorReadModel before validation; resource filtering precedes pagination. | — |
+| `operator.config` | `config.read` | Allowlisted generation status only. | — |
+| `operator.preflight` | `runs.start` | Authorized workflow and captured generation; no side effects. | — |
+| `operator.artifact` | `artifacts.read` | Exact run/artifact relation, plus runs.read; bounded sensitive-content projection. | — |
+| `operator.submitRequest` | `runs.start` | Also requires `plan.write` before validation; current target, workspace Request admission and authorized workflow. | mutation |
+| `operator.admitRun` | `runs.start` | Current target, authorized workflow and linked Request/work-item grants. | mutation |
+| `operator.admission` | `runs.start` | Current target and own operation in this workspace; original grants/resources, including `plan.write` for Request receipts. | — |
+| `operator.reconcileAdmission` | `runs.start` | Same receipt authority; attachment separately requires current execution authority. | mutation |
+| `operator.cancel` | `runs.control` | Current target, then existing guarded `runs.cancel` checks the exact run. | mutation |
+| `operator.answer` | `inputs.answer` | Current target, then existing guarded `inputs.answer` checks the exact durable or live decision. | decision |
+| `operator.continueRun` | `runs.control` | Current target, sealed run and issued boundary; an included decision also requires `inputs.answer`. | mutation |
+| `operator.continuation` | `runs.read` | Current target and the sealed receipt's run; locator IDs grant no authority. | — |
+| `operator.reconcileContinuation` | `runs.control` | Current target, original principal and run; original decision also needs `inputs.answer`, with separate execution-authority checks. | mutation |
+| `operator.revise` | `inputs.answer` | Also requires `runs.control` before validation; current target, exact durable run/input and declared destination. | decision |
 | `hello` | any authenticated principal | `methods` and `capabilities` are filtered to what the principal may use; `storeDir` needs `config.read` | — |
 | `runs.list` | `runs.read` | filtered to visible runs; `total` and paging recomputed | — |
 | `runs.get` | `runs.read` | the run | — |
@@ -164,7 +182,13 @@ that the two match. A method that is missing from the table is refused with
 | `requests.admission` | `plan.write` | plus `runs.start`; own admission in this workspace | — |
 | `requests.admissions` | `plan.write` | plus `runs.start`; own admissions in this workspace | — |
 | `runs.start` | `runs.start` | the workflow; the new run is attributed to the caller | mutation |
+| `runs.admit` | `runs.start` | the workflow and authorized associations; prompt durable receipt | mutation |
+| `admissions.get` | `runs.start` | own operation, original grants and resources; Request also needs `plan.write` | — |
+| `admissions.reconcile` | `runs.start` | own operation, original grants/resources; attachment requires current execution authority | mutation |
 | `runs.resume` | `runs.control` | the run | mutation |
+| `runs.continue` | `runs.control` | exact sealed run and issued boundary; an included decision also requires `inputs.answer` | mutation |
+| `continuations.get` | `runs.read` | the sealed receipt's run; a locator or CAS token is not authority | — |
+| `continuations.reconcile` | `runs.control` | original principal and run; original decision also requires `inputs.answer`, execution authority is rechecked separately | mutation |
 | `runs.cancel` | `runs.control` | the run | mutation |
 | `inputs.answer` | `inputs.answer` | the exact open gate and its run; `always` also needs `permissions.grant` | decision |
 | `claims.release` | `claims.release` | the claim's owning run | mutation |
@@ -384,6 +408,12 @@ subscription, and which `always` decision was chosen. A record never contains va
 answer text, configuration text, params payloads, URLs, or any credential secret. The
 credential id is public and is the only credential-related value recorded. If an append
 fails, the error is reported on stderr and the next append is still attempted.
+
+Operator mutation audit targets include allowlisted workspace/instance, command, exact decision
+and service receipt correlation IDs, including IDs nested in `command.target`, `decision.live`
+and resolved retry results. The actor always comes from the authenticated principal. Raw retry
+keys, guard tokens, option/answer text, Request bodies, revision payloads, notes and supplied
+actors are excluded. Admission/continuation lookup reads are not mutation-audited; refusals are.
 
 ## Client migration
 

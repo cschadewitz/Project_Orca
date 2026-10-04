@@ -7,7 +7,7 @@
  * a screenshot that is not text. So the diff below is a real `v2 → v3`, and the omitted
  * body is the one `artifacts.get` actually declines.
  */
-import { useEffect } from "react";
+import { Profiler, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DockedPanel } from "../src/chrome/docked-panel.js";
@@ -27,17 +27,19 @@ function Opener({ target }: { target: ArtifactTarget }): null {
   return null;
 }
 
-function renderPanel(target: ArtifactTarget): void {
+function renderPanel(target: ArtifactTarget, onRender: () => void = () => {}): void {
   h = harness();
   teardown.push(h.dispose);
   const { Providers } = h;
   render(
-    <Providers>
-      <ArtifactPanelProvider>
-        <Opener target={target} />
-        <DockedPanel onClose={() => {}} />
-      </ArtifactPanelProvider>
-    </Providers>,
+    <Profiler id="panel" onRender={onRender}>
+      <Providers>
+        <ArtifactPanelProvider>
+          <Opener target={target} />
+          <DockedPanel onClose={() => {}} />
+        </ArtifactPanelProvider>
+      </Providers>
+    </Profiler>,
   );
 }
 
@@ -176,6 +178,30 @@ describe("the artifact panel", () => {
     press("[");
     await waitFor(() => expect(diffLines()).toHaveLength(0));
     expect(versionButtons()[1]!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it.each([
+    { version: 3, compareWith: 2, key: "[", expected: 2 },
+    { version: 2, compareWith: 1, key: "]", expected: 3 },
+  ])("handles $key as soon as the v$version diff is committed", async ({ version, compareWith, key, expected }) => {
+    let pressed = false;
+    renderPanel({ runId: "run-art", name: "spec", version, compareWith }, () => {
+      if (!pressed && diffLines().length > 0) {
+        pressed = true;
+        // The public commit callback runs after layout and before passive effects.
+        // Dispatch natively, as KeyboardMap listens on window outside React.
+        panel().dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key,
+            code: key === "[" ? "BracketLeft" : "BracketRight",
+            bubbles: true,
+          }),
+        );
+      }
+    });
+    await waitFor(() => expect(pressed).toBe(true));
+    await waitFor(() => expect(versionButtons()[expected - 1]!.getAttribute("aria-pressed")).toBe("true"));
+    expect(diffLines()).toHaveLength(0);
   });
 
   it("says so, with the code, when the daemon answers the version list badly", async () => {

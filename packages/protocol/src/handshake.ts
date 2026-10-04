@@ -5,6 +5,7 @@
  * (read-only, no subscriptions, …) instead of failing on the first real call.
  */
 import { z } from "zod";
+import { OPERATOR_METHODS } from "./operator-reads.js";
 import { ProtocolVersionSchema } from "./version.js";
 import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
@@ -146,9 +147,29 @@ export type HelloParams = z.infer<typeof HelloParamsSchema>;
 
 /** What a daemon can do; a client checks these rather than the ORCA version. */
 export const DAEMON_CAPABILITIES = [
+  ...OPERATOR_METHODS,
+  "operator.submitRequest",
+  "operator.admitRun",
+  "operator.admission",
+  "operator.reconcileAdmission",
+  "operator.cancel",
+  "operator.answer",
+  "operator.continueRun",
+  "operator.continuation",
+  "operator.reconcileContinuation",
+  "operator.revise",
   "inputs.live",
+  "inputs.revise",
+  "inputs.revisionPending",
+  "inputs.replaceRevision",
   "runs.read",
   "runs.subscribe",
+  "runs.admit",
+  "admissions.get",
+  "admissions.reconcile",
+  "runs.continue",
+  "continuations.get",
+  "continuations.reconcile",
   "runs.control",
   "plan.read",
   "plan.write",

@@ -27,3 +27,5 @@ export * from "./events/events.js";
 export * from "./events/reduce.js";
 
 export * from "./model/run-provenance.js";
+
+export * from "./model/revision-input.js";

@@ -41,6 +41,8 @@ export interface AnswerRequest {
 }
 
 export interface AnswerCardProps {
+  /** Previously selected ordinary answer, restored only after current scope/identity verification. */
+  retainedAnswer?: AnswerRequest | undefined;
   /** The input's id: the card's DOM id, and what an answer names. */
   id: string;
   tone: "gate" | "permission";
@@ -52,6 +54,8 @@ export interface AnswerCardProps {
   /** The exact command or path, verbatim and in mono. Permission asks only. */
   command?: string | undefined;
   options: readonly GateOption[];
+  /** A separate revision form owns this option; it is never an ordinary answer. */
+  excludedOptionId?: string | undefined;
   /** The artifacts the decision is about, as chips that open the docked panel. */
   refs?: ReactNode;
   /**
@@ -80,13 +84,15 @@ export interface AnswerCardProps {
 }
 
 export function AnswerCard({
+  retainedAnswer,
   id,
   tone,
   eyebrow,
   question,
   subtitle,
   command,
-  options,
+  options: offeredOptions,
+  excludedOptionId,
   refs,
   placement,
   artifactsReady = true,
@@ -103,11 +109,25 @@ export function AnswerCard({
   /* Memoised on the options themselves: the bound list is what `useCardKeys` registers
      from, and a new array each render would mean four shortcuts unregistered and
      re-registered on every push. */
+  const options = useMemo(
+    () => offeredOptions.filter((option) => option.id !== excludedOptionId),
+    [offeredOptions, excludedOptionId],
+  );
   const bound = useMemo(() => bindOptions(options), [options]);
   const [selected, setSelected] = useState<string | undefined>(() => defaultSelection(options));
   const [note, setNote] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
   const [text, setText] = useState("");
+  const edited = useRef(false);
+  const restored = useRef(false);
+  useEffect(() => {
+    if (!retainedAnswer || edited.current || restored.current) return;
+    restored.current = true;
+    if (options.some((option) => option.id === retainedAnswer.optionId)) setSelected(retainedAnswer.optionId);
+    else if (isFreeText(offeredOptions) && excludedOptionId === undefined) setText(retainedAnswer.optionId);
+    setNote(retainedAnswer.note ?? "");
+    setNoteOpen(Boolean(retainedAnswer.note));
+  }, [retainedAnswer, options, offeredOptions, excludedOptionId]);
   useUpdateDraft(Boolean(note || text || selected !== defaultSelection(options)));
   const noteField = useRef<HTMLInputElement | null>(null);
 
@@ -126,7 +146,7 @@ export function AnswerCard({
     if (noteOpen) noteField.current?.focus();
   }, [noteOpen]);
 
-  const free = isFreeText(options);
+  const free = isFreeText(offeredOptions) && excludedOptionId === undefined;
   const answerValue = free ? text.trim() : selected;
 
   /* Two reasons, and they disable different things. `blocked` is about the card as a whole
@@ -143,12 +163,21 @@ export function AnswerCard({
   const submitBlocked = blocked ?? (answerValue ? undefined : free ? "type an answer first" : "choose an option first");
 
   const send = (over: Partial<AnswerRequest> = {}): void => {
-    if (submitBlocked !== undefined || !answerValue) return;
+    if (
+      submitBlocked !== undefined ||
+      !answerValue ||
+      answerValue === excludedOptionId ||
+      (!free && !options.some((option) => option.id === answerValue))
+    )
+      return;
     onAnswer({ optionId: answerValue, ...(note.trim() ? { note: note.trim() } : {}), ...over });
   };
 
   useCardKeys(bound, focused && !pending, {
-    select: setSelected,
+    select: (value) => {
+      edited.current = true;
+      setSelected(value);
+    },
     submit: () => send(),
     submitWithNote: () => (noteOpen && note.trim() ? send() : setNoteOpen(true)),
     ...(goToRun ? { goToRun } : {}),
@@ -191,7 +220,10 @@ export function AnswerCard({
             <input
               className={`orca-input ${textClass("body")}`}
               value={text}
-              onChange={(event) => setText(event.target.value)}
+              onChange={(event) => {
+                edited.current = true;
+                setText(event.target.value);
+              }}
               aria-label="Answer"
             />
           </label>
@@ -206,7 +238,10 @@ export function AnswerCard({
               aria-pressed={option.id === selected}
               disabled={blocked !== undefined}
               {...(blocked !== undefined ? { disabledReason: blocked } : {})}
-              onClick={() => setSelected(option.id)}
+              onClick={() => {
+                edited.current = true;
+                setSelected(option.id);
+              }}
             >
               {digit !== undefined && <kbd className={`orca-kbd ${textClass("mono-id")}`}>{digit}</kbd>}
               {option.label}
@@ -272,7 +307,10 @@ export function AnswerCard({
               className={`orca-input ${textClass("body")}`}
               value={note}
               aria-label="Note"
-              onChange={(event) => setNote(event.target.value)}
+              onChange={(event) => {
+                edited.current = true;
+                setNote(event.target.value);
+              }}
               /* The field's own submit key. The map's `⇧Enter` cannot reach here — a bare
                  key in a text entry types rather than dispatching, which is what stops `J`
                  in a query field from moving a list three layers down (`keyboard-map.ts`). */

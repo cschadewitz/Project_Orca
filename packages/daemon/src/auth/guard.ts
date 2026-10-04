@@ -166,14 +166,24 @@ export class Authorizer {
       this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", "request-submission-not-permitted");
       throw authForbidden();
     }
+    if (
+      (method === "inputs.revise" || method === "inputs.replaceRevision") &&
+      (!holds(principal, "inputs.answer") || !holds(principal, "runs.control"))
+    ) {
+      this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", "revision-not-permitted");
+      throw authForbidden();
+    }
     const spec = OPERATIONS[method];
     if (!spec) {
       if (!exists) return;
       this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", "operation-not-inventoried");
       throw authForbidden();
     }
-    if (spec.permission && !holds(principal, spec.permission)) {
-      this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", `missing-permission:${spec.permission}`);
+    const missing = [spec.permission, ...(spec.additionalPermissions ?? [])].find(
+      (permission) => permission !== null && !holds(principal, permission),
+    );
+    if (missing) {
+      this.deny(principal, meta, method, undefined, "AUTH_FORBIDDEN", `missing-permission:${missing}`);
       throw authForbidden();
     }
   }
@@ -185,9 +195,37 @@ export class Authorizer {
       return (
         spec !== undefined &&
         (!spec.permission || holds(principal, spec.permission)) &&
-        (!name.startsWith("requests.") || holds(principal, "runs.start"))
+        (spec.additionalPermissions ?? []).every((permission) => holds(principal, permission)) &&
+        (name !== "operator.artifact" || holds(principal, "runs.read")) &&
+        (!name.startsWith("requests.") || holds(principal, "runs.start")) &&
+        (!(name === "inputs.revise" || name === "inputs.replaceRevision") || holds(principal, "runs.control"))
       );
     });
+  }
+
+  /** Same credential-pinned authority for transport calls and trusted durable recovery. */
+  executionResumeAuthority(principal: Principal): NonNullable<MethodContext["executionResumeAuthority"]> {
+    return {
+      actor: {
+        principalId: principal.id,
+        ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
+      },
+      authorize: async (origin) => {
+        if (!this.currentPrincipal) throw authRequired();
+        const current = this.currentPrincipal(principal);
+        if (
+          current.id !== principal.id ||
+          current.credentialId !== principal.credentialId ||
+          current.id !== origin.actor.principalId ||
+          !holds(current, "runs.control") ||
+          !holds(current, "runs.start") ||
+          (origin.request && !holds(current, "plan.write")) ||
+          !workflowAllowed(current.scope, origin.workflowId)
+        )
+          throw authForbidden();
+        if (!(await this.runs.allows(current, origin.rootId))) throw runNotFound(origin.rootId);
+      },
+    };
   }
 
   /** Attribute a root run to a principal. The integration seam for `ControlModel.startRun`. */
@@ -244,27 +282,7 @@ export class Authorizer {
                     throw inputNotFound(target.requestId, target.runId);
                 },
               },
-              executionResumeAuthority: {
-                actor: {
-                  principalId: principal.id,
-                  ...(principal.credentialId ? { credentialId: principal.credentialId } : {}),
-                },
-                authorize: async (origin) => {
-                  if (!this.currentPrincipal) throw authRequired();
-                  const current = this.currentPrincipal(principal);
-                  if (
-                    current.id !== principal.id ||
-                    current.credentialId !== principal.credentialId ||
-                    current.id !== origin.actor.principalId ||
-                    !holds(current, "runs.control") ||
-                    !holds(current, "runs.start") ||
-                    (origin.request && !holds(current, "plan.write")) ||
-                    !workflowAllowed(current.scope, origin.workflowId)
-                  )
-                    throw authForbidden();
-                  if (!(await this.runs.allows(current, origin.rootId))) throw runNotFound(origin.rootId);
-                },
-              },
+              executionResumeAuthority: this.executionResumeAuthority(principal),
               attributeStartedRun: async (runId) => {
                 this.attributeRun(runId, principal);
                 await this.runs.ownership.flush(runId);
@@ -286,6 +304,8 @@ export class Authorizer {
               this.deny(principal, meta, name, params, code ?? "AUTH_FORBIDDEN", e.reason);
               throw e.error;
             }
+            if (name.startsWith("operator.") && ["AUTH_REQUIRED", "AUTH_INVALID", "AUTH_FORBIDDEN"].includes(codeOf(e)))
+              this.deny(principal, meta, name, params, codeOf(e), "operator-authority-refused");
             if (spec.audit) this.operation(principal, meta, name, params, "failed", codeOf(e));
             throw e;
           }
@@ -369,7 +389,7 @@ export class Authorizer {
       case "workflow": {
         // Linked documents are workspace resources, not made visible by owning a new run.
         // Work-item execution may settle the plan, so reading it alone is insufficient.
-        if (name === "runs.start") {
+        if (name === "runs.start" || name === "runs.admit") {
           if (params.requestId !== undefined && !holds(principal, "plan.read"))
             throw new Denied(authForbidden(), "linked-request-not-permitted");
           if (params.workItemId !== undefined && (!holds(principal, "plan.read") || !holds(principal, "plan.write")))
@@ -414,6 +434,13 @@ export class Authorizer {
       // The store's path on disk is the configuration's business.
       ...(storeDir !== undefined && holds(principal, "config.read") ? { storeDir } : {}),
       capabilities: result.capabilities.filter((c) => {
+        if (c === "inputs.revise" || c === "inputs.replaceRevision")
+          return holds(principal, "inputs.answer") && holds(principal, "runs.control");
+        if (c === "operator.artifact") return holds(principal, "artifacts.read") && holds(principal, "runs.read");
+        if (c === "inputs.revisionPending") return holds(principal, "runs.read");
+        // Operator capabilities name individual methods; every operation grant is required.
+        if (c.startsWith("operator.") && OPERATIONS[c]?.permission)
+          return this.permittedMethods(principal, [c]).length === 1;
         const needs = CAPABILITY_PERMISSIONS[c];
         return needs ? needs.some((p) => holds(principal, p)) : everything;
       }),
@@ -620,7 +647,7 @@ export class Authorizer {
       transport: meta.transport,
       ...(principal ? { actor: actorOf(principal) } : {}),
       ...(operation ? { operation } : {}),
-      target: targetOf(params),
+      target: operationTarget(operation, params),
       outcome: "denied",
       code,
       reason,
@@ -672,8 +699,10 @@ export class Authorizer {
       transport: meta.transport,
       actor: actorOf(principal),
       operation: name,
-      target: targetOf(
+      target: operationTarget(
+        name,
         params,
+        result,
         resultRun && resultRun !== (params as { runId?: string })?.runId ? { resultRunId: resultRun } : undefined,
       ),
       outcome,
@@ -681,6 +710,66 @@ export class Authorizer {
       remote: meta.remote,
     });
   }
+}
+
+/** Read fixed structural paths only. Retry keys, arbitrary payloads and caller actors never enter audit. */
+function operationTarget(
+  name: string | undefined,
+  params: unknown,
+  result?: unknown,
+  legacyExtra?: Record<string, string | undefined>,
+): Record<string, string> | undefined {
+  if (
+    !name ||
+    ![
+      "operator.submitRequest",
+      "operator.admitRun",
+      "operator.admission",
+      "operator.reconcileAdmission",
+      "operator.cancel",
+      "operator.answer",
+      "operator.continueRun",
+      "operator.continuation",
+      "operator.reconcileContinuation",
+      "operator.revise",
+    ].includes(name)
+  )
+    return targetOf(params, legacyExtra);
+  const object = (value: unknown): Record<string, unknown> =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const out: Record<string, string> = {};
+  const ids = (value: unknown, keys: readonly string[]) => {
+    const source = object(value);
+    for (const key of keys) if (typeof source[key] === "string") out[key] = source[key].slice(0, 200);
+  };
+  const input = object(params);
+  const command = object(input.command);
+  const decision = object(input.decision);
+  ids(input.target, ["workspaceId", "instanceId"]);
+  ids(input, ["runId", "operationId", "continuationId"]);
+  ids(command, ["workflowId", "requestId", "workItemId", "runId", "actionId", "supersedesRevisionId"]);
+  ids(command.target, ["runId", "stepRunId", "requestId", "destinationId"]);
+  ids(command.decision, ["requestId"]);
+  ids(decision, ["runId", "stepRunId", "requestId"]);
+  ids(decision.live, ["runId", "stepRunId", "requestId", "sessionId", "turnId", "invocationId"]);
+  const liveInstanceId = object(decision.live).instanceId;
+  if (typeof liveInstanceId === "string") out.liveInstanceId = liveInstanceId.slice(0, 200);
+
+  // Service receipts carry correlation IDs at the top level or in a resolved retry result.
+  // Preserve a caller's target when a service returns a different resulting run/request.
+  const receiptIds = ["operationId", "continuationId", "admissionId", "revisionId", "attemptId"] as const;
+  const output = object(result);
+  ids(output, receiptIds);
+  ids(output.result, receiptIds);
+  for (const receipt of [output, object(output.result)]) {
+    for (const key of ["runId", "requestId"] as const) {
+      const value = receipt[key];
+      if (typeof value !== "string") continue;
+      const destination = out[key] && out[key] !== value ? (key === "runId" ? "resultRunId" : "resultRequestId") : key;
+      out[destination] = value.slice(0, 200);
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function codeOf(e: unknown): string {

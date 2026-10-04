@@ -46,6 +46,11 @@ const call = <T,>(channel: string, params?: unknown): Promise<BridgeResult<T>> =
   ipcRenderer.invoke(channel, params, targetEpoch) as Promise<BridgeResult<T>>;
 
 const bridge: OrcaBridge = {
+  admissionIntents: {
+    start: (workflowId) => call("orca:admissionIntents.start", workflowId),
+    list: () => call("orca:admissionIntents.list"),
+    abandon: (id) => call("orca:admissionIntents.abandon", id),
+  },
   platform: process.platform,
   daemonConnection: {
     read: () => ipcRenderer.sendSync("orca:daemon.read") as DaemonTargetSnapshot,
@@ -102,6 +107,9 @@ const bridge: OrcaBridge = {
     start: (params) => call("orca:runs.start", params),
   },
   inputs: {
+    revise: (params) => call("orca:inputs.revise", params),
+    revisionPending: (params) => call("orca:inputs.revisionPending", params),
+    replaceRevision: (params) => call("orca:inputs.replaceRevision", params),
     list: (params = {}) => call("orca:inputs.list", params),
     answer: (params) => call("orca:inputs.answer", params),
   },
