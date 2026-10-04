@@ -175,6 +175,7 @@ it("permits old-target preview disposal only from the current window document wi
   vi.stubEnv("ORCA_DAEMON_URL", "http://localhost:9999");
   const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
   const initialize = vi.spyOn(RecoveryController.prototype, "initialize");
+  const choices = vi.spyOn(RecoveryController.prototype, "setEnabled");
   await import("../src/main/index.js");
   const workspace = shell.workspace!;
   const oldEpoch = workspace.connectionTarget.epoch;
@@ -204,6 +205,7 @@ it("permits old-target preview disposal only from the current window document wi
   });
   for (const [method, params] of [
     ["status", undefined],
+    ["setEnabled", { enabled: false, scopeVersion: 1 }],
     ["preparePreview", { source: "current" }],
     ["save", { handle, destinationToken: token }],
   ] as const) {
@@ -223,6 +225,7 @@ it("permits old-target preview disposal only from the current window document wi
   ).toEqual({ ok: false, code: "stale_preview" });
   expect(await invoke("closePreview", { handle: "invalid-handle" })).toEqual({ ok: false, code: "refused" });
   expect(initialize).not.toHaveBeenCalled();
+  expect(choices).not.toHaveBeenCalled();
   expect(shell.keyWrap).not.toHaveBeenCalled();
   expect(shell.keyUnwrap).not.toHaveBeenCalled();
   expect(await readdir(directory)).toEqual([]);

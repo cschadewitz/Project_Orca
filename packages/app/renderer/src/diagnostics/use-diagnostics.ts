@@ -20,7 +20,8 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   const [disposal, setDisposal] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
-  const [sessionOff, setSessionOff] = useState(false);
+  const authoritativeStatus = useRef<DiagnosticsStatus | undefined>(undefined);
+  const offFeedback = useRef(false);
   const authority = useRef(0);
   const handle = useRef<string | undefined>(undefined);
   const disposalHandle = useRef<string | undefined>(undefined);
@@ -32,6 +33,7 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   const say = useCallback(
     (code: DiagnosticResultCode) => {
       const text = DIAGNOSTICS_MESSAGES[code];
+      offFeedback.current = false;
       setMessage(text);
       announce(text);
     },
@@ -56,7 +58,12 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     (next: DiagnosticsStatus) => {
       if (!mounted.current) return;
       pushed.current += 1;
+      authoritativeStatus.current = next;
       setStatus(next);
+      if (next.enabled && offFeedback.current) {
+        offFeedback.current = false;
+        setMessage(undefined);
+      }
       if (
         (handle.current !== undefined && (!next.enabled || next.activePreviewHandle !== handle.current)) ||
         (preparing.current && (!next.enabled || next.code === "stale_preview" || next.code === "expired"))
@@ -117,30 +124,34 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   }, [bridge, disposal, receive, say]);
 
   const runStatus = useCallback(
-    async (action: () => Promise<DiagnosticsResult<DiagnosticsStatus>>, turningOff = false, enabling = false) => {
+    async (action: () => Promise<DiagnosticsResult<DiagnosticsStatus>>, turningOff = false) => {
       const epoch = authority.current;
       // Feedback belongs to the explicit action that produced it, not its successor.
+      offFeedback.current = false;
       setMessage(undefined);
       setBusy(true);
+      const reportOffFailure = () => {
+        // Local text disposal does not prove that main accepted consent revocation.
+        const text =
+          authoritativeStatus.current?.enabled === false
+            ? "Off for this session; the setting or cleanup could not be completed."
+            : "Revocation could not be confirmed. Local diagnostics may remain on.";
+        offFeedback.current = true;
+        setMessage(text);
+        announce(text);
+      };
       try {
         const result = await action();
         if (!mounted.current || epoch !== authority.current) return;
         if (result.ok) {
           receive(result.value);
           say(result.value.code);
-          if (enabling && result.value.enabled) setSessionOff(false);
-        } else if (turningOff) {
-          const text = "Off for this session; the setting or cleanup could not be completed.";
-          setMessage(text);
-          announce(text);
-        } else say(result.code);
+        } else if (turningOff) reportOffFailure();
+        else say(result.code);
       } catch {
         if (mounted.current && epoch === authority.current) {
-          if (turningOff) {
-            const text = "Off for this session; the setting or cleanup could not be completed.";
-            setMessage(text);
-            announce(text);
-          } else say("unavailable");
+          if (turningOff) reportOffFailure();
+          else say("unavailable");
         }
       } finally {
         if (mounted.current && epoch === authority.current) setBusy(disposalHandle.current !== undefined);
@@ -218,13 +229,11 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     destination,
     busy,
     message,
-    sessionOff,
     prepare,
     choose,
     close,
-    enable: () => bridge && runStatus(() => bridge.setEnabled(true, DIAGNOSTICS_SCOPE), false, true),
+    enable: () => bridge && runStatus(() => bridge.setEnabled(true, DIAGNOSTICS_SCOPE)),
     off: () => {
-      setSessionOff(true);
       clear();
       return bridge && runStatus(() => bridge.setEnabled(false, DIAGNOSTICS_SCOPE), true);
     },

@@ -11,7 +11,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
   const bridge = supplied ?? (window.orca as typeof window.orca & { diagnostics?: DiagnosticsBridge })?.diagnostics;
   const state = useDiagnostics(bridge);
   const status = state.status;
-  const enabled = status?.enabled === true && !state.sessionOff;
+  const enabled = status?.enabled === true;
   const available =
     enabled &&
     status !== undefined &&
@@ -111,7 +111,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
             )}
           </ConfigField>
           <Text style="caption" as="p">
-            {DIAGNOSTICS_MESSAGES[state.sessionOff && status.code === "ready" ? "off" : status.code]}
+            {DIAGNOSTICS_MESSAGES[status.code]}
           </Text>
           {status.lastSaveOutcome === "saved" && status.saveAdmittedBeforeRevocation && (
             <Text style="caption" as="p">

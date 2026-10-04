@@ -338,15 +338,69 @@ describe("exact preview and separate local Save", () => {
     expect(screen.queryAllByText(oldSuccess)).toHaveLength(0);
   });
 
-  it("clears the view even when durable opt-out fails and says only off for this session", async () => {
+  it.each(["transport", "stale_preview"] as const)(
+    "disposes the view but does not claim Off when revocation is unconfirmed by %s",
+    async (failure) => {
+      const f = fakeBridge(enabled);
+      await open(f);
+      vi.mocked(f.bridge.closePreview).mockResolvedValueOnce({ ok: false, code: "stale_preview" });
+      if (failure === "transport")
+        vi.mocked(f.bridge.setEnabled).mockRejectedValueOnce(new Error("PRIVATE transport detail"));
+      else vi.mocked(f.bridge.setEnabled).mockResolvedValueOnce({ ok: false, code: "stale_preview" });
+      fireEvent.click(screen.getByRole("button", { name: "Delete all and turn off" }));
+      expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+      await screen.findByText("Revocation could not be confirmed. Local diagnostics may remain on.");
+      expect(screen.getByText("Local diagnostics: On")).toBeTruthy();
+      expect(screen.queryByText("Local diagnostics: Off")).toBeNull();
+      expect(document.body.textContent).not.toContain("Off for this session");
+      expect(document.body.textContent).not.toContain("PRIVATE");
+      act(() => f.emit({ ...f.state(), enabled: true, code: "ready" }));
+      expect(screen.getByText("Local diagnostics: On")).toBeTruthy();
+      expect(screen.queryByText("Revocation could not be confirmed. Local diagnostics may remain on.")).toBeNull();
+      expect(document.body.textContent).not.toContain("Off for this session");
+      expect(f.bridge.save).not.toHaveBeenCalled();
+      expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle);
+    },
+  );
+
+  it("uses authoritative disabled status for failed durable opt-out and clears its feedback on explicit enable", async () => {
     const f = fakeBridge(enabled);
     await open(f);
-    vi.mocked(f.bridge.setEnabled).mockResolvedValueOnce({ ok: false, code: "cleanup_pending" });
+    vi.mocked(f.bridge.setEnabled).mockImplementationOnce(async () => {
+      f.emit({ ...f.state(), enabled: false, code: "cleanup_pending", cleanupPending: true });
+      return { ok: false, code: "cleanup_pending" };
+    });
     fireEvent.click(screen.getByRole("button", { name: "Delete all and turn off" }));
     await screen.findByText("Off for this session; the setting or cleanup could not be completed.");
+    expect(screen.getByText("Local diagnostics: Off")).toBeTruthy();
+    act(() => f.emit({ ...f.state(), enabled: false, code: "off", cleanupPending: false }));
+    expect(screen.getByText("Off for this session; the setting or cleanup could not be completed.")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
     expect(f.bridge.save).not.toHaveBeenCalled();
     expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Enable local diagnostics" }).hasAttribute("disabled")).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Enable local diagnostics" }));
+    await screen.findByText("Local diagnostics: On");
+    act(() => f.emit({ ...f.state(), enabled: true, code: "ready" }));
+    expect(document.body.textContent).not.toContain("Off for this session");
+  });
+
+  it("clears session-only off failure feedback when main reports diagnostics On again", async () => {
+    const f = fakeBridge(enabled);
+    mount(f.bridge);
+    await screen.findByText("Local diagnostics: On");
+    vi.mocked(f.bridge.setEnabled).mockImplementationOnce(async () => {
+      f.emit({ ...f.state(), enabled: false, code: "cleanup_pending", cleanupPending: true });
+      return { ok: false, code: "cleanup_pending" };
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete all and turn off" }));
+    await screen.findByText("Off for this session; the setting or cleanup could not be completed.");
+    act(() => f.emit({ ...f.state(), enabled: true, code: "ready", cleanupPending: false }));
+    expect(screen.getByText("Local diagnostics: On")).toBeTruthy();
+    expect(screen.queryByText("Local diagnostics: Off")).toBeNull();
+    expect(document.body.textContent).not.toContain("Off for this session");
   });
 });
 
