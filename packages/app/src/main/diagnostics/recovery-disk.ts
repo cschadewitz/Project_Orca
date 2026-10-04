@@ -362,6 +362,47 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     await this.options.native.replace(this.path("manifest.json.tmp"), this.path("manifest.json"));
     this.manifest = manifest;
   }
+  private async authenticatedManifest(bytes?: Buffer): Promise<{ manifest: Manifest; control: Buffer }> {
+    bytes ??= await this.read("manifest.json");
+    if (!bytes) throw new Error("unavailable");
+    const envelope: unknown = JSON.parse(bytes.toString("utf8"));
+    if (
+      !isObject(envelope) ||
+      !keysExactly(envelope, ["payload", "mac"]) ||
+      typeof envelope.mac !== "string" ||
+      !/^[a-f0-9]{64}$/.test(envelope.mac) ||
+      !validManifest(envelope.payload, this.scope)
+    )
+      throw new Error("unavailable");
+    const manifest = envelope.payload;
+    const control = await this.unprotect("control.key", "control", manifest.epoch, manifest.epoch, "");
+    const mac = createHmac("sha256", control).update(json(manifest)).digest();
+    if (!timingSafeEqual(mac, Buffer.from(envelope.mac, "hex"))) {
+      control.fill(0);
+      throw new Error("unavailable");
+    }
+    return { manifest, control };
+  }
+  private async verifyRecordEnvelope(record: RecordHeader): Promise<void> {
+    const expected = json(record);
+    if (expected.length > CONTROL_LIMIT) throw new Error("unavailable");
+    const file = await open(this.path(`slot-${record.slot}.bin`), constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const stat = await file.stat();
+      if (stat.size !== record.bytes + expected.length + 32) throw new Error("unavailable");
+      const prefix = Buffer.alloc(expected.length + 4);
+      let position = 0;
+      while (position < prefix.length) {
+        const { bytesRead } = await file.read(prefix, position, prefix.length - position, position);
+        if (!bytesRead) throw new Error("unavailable");
+        position += bytesRead;
+      }
+      if (prefix.readUInt32BE(0) !== expected.length || !prefix.subarray(4).equals(expected))
+        throw new Error("unavailable");
+    } finally {
+      await file.close();
+    }
+  }
   open(now: BootReading): Promise<boolean> {
     return this.serialized(async () => {
       await this.acquire();
@@ -386,19 +427,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         );
         await this.commit({ version: 1, scopeVersion: this.scope, epoch, generation: 0 });
       } else {
-        const envelope: unknown = JSON.parse(bytes.toString("utf8"));
-        if (
-          !isObject(envelope) ||
-          !keysExactly(envelope, ["payload", "mac"]) ||
-          typeof envelope.mac !== "string" ||
-          !/^[a-f0-9]{64}$/.test(envelope.mac) ||
-          !validManifest(envelope.payload, this.scope)
-        )
-          throw new Error("unavailable");
-        const manifest = envelope.payload;
-        this.control = await this.unprotect("control.key", "control", manifest.epoch, manifest.epoch, "");
-        const mac = createHmac("sha256", this.control).update(json(manifest)).digest();
-        if (!timingSafeEqual(mac, Buffer.from(envelope.mac, "hex"))) throw new Error("unavailable");
+        const { manifest, control } = await this.authenticatedManifest(bytes);
+        this.control?.fill(0);
+        this.control = control;
         this.manifest = manifest;
         // Only the authenticated predecessor can survive interrupted replacement.
         await this.remove("manifest.json.tmp");
@@ -430,6 +461,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     });
   }
   private async cleanUnreferenced(): Promise<void> {
+    if (!this.manifest || !this.control) throw new Error("unavailable");
     const used = new Set([this.manifest?.current?.slot, this.manifest?.previous?.slot]);
     for (const slot of [0, 1, 2] as const)
       if (!used.has(slot)) {
@@ -438,6 +470,62 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       }
     // Interrupted manifest replacement cannot promote its contents.
     await this.remove("manifest.json.tmp");
+  }
+  /** Bounded maintenance does not promote a current session, decrypt reports,
+   * mutate export obligations, or create replacement authority over lost keys.
+   */
+  maintain(now: BootReading): Promise<boolean> {
+    return this.serialized(async () => {
+      if (!this.active || !this.manifest || !this.control) throw new Error("unavailable");
+      await this.acquire();
+      await this.inspect();
+      if (!(await this.setting()).enabled) throw new Error("off");
+      if (!(await this.options.native.writersStopped(this.root))) throw new Error("cleanup_pending");
+      // A failed replacement may have committed. Re-read the authenticated disk
+      // authority before choosing orphan files; cached roles cannot decide this.
+      const { manifest, control } = await this.authenticatedManifest();
+      if (manifest.epoch !== this.manifest.epoch || manifest.generation < this.manifest.generation) {
+        control.fill(0);
+        throw new Error("unavailable");
+      }
+      this.control.fill(0);
+      this.control = control;
+      this.manifest = manifest;
+      const certain = this.reading(now);
+      const { current, previous, ...authority } = manifest;
+      const retainedCurrent = current && certain && this.eligible(current, now) ? current : undefined;
+      const retainedPrevious = previous && certain && this.eligible(previous, now) ? previous : undefined;
+      if (current !== retainedCurrent || previous !== retainedPrevious) {
+        const revoked: Manifest = {
+          ...authority,
+          ...(retainedCurrent ? { current: retainedCurrent } : {}),
+          ...(retainedPrevious ? { previous: retainedPrevious } : {}),
+        };
+        // Durable revocation precedes unlink. A failed unlink stays pending and
+        // the next maintenance attempt retries only the now-unreferenced files.
+        await this.remove("manifest.json.tmp");
+        await this.commit(revoked, () => this.active);
+      }
+      // Check referenced wrappers without opening report plaintext. Missing or
+      // lost keys cannot yield a false successful cleanup or ready status.
+      for (const record of [this.manifest.current, this.manifest.previous])
+        if (record) {
+          const key = await this.unprotect(
+            `session-${record.slot}.key`,
+            "session",
+            record.epoch,
+            record.keyId,
+            record.sessionId,
+          );
+          key.fill(0);
+          await this.verifyRecordEnvelope(record);
+        }
+      if (!this.active) throw new Error("off");
+      await this.cleanUnreferenced();
+      await this.remove("control.key.tmp");
+      if (!certain) throw new Error("age_uncertain");
+      return this.manifest.previous !== undefined;
+    });
   }
   checkpoint(bytes: Buffer, anchor: BootReading, admit: () => boolean): Promise<void> {
     return this.serialized(async () => {
