@@ -139,8 +139,12 @@ filesystem work cannot block execution.
 Opt-out stops capture and advances authority before asynchronous cleanup. It attempts deletion of
 ORCA-owned history, previews and diagnostics-only key material; it never deletes shared
 app material or user exports. Report durable opt-out success only after the disabled
-setting and revocation are persisted. A persistence failure instead says “Off for this
-session; the setting or cleanup could not be completed.” An app crash before durable
+setting and revocation are persisted. Only confirmed logical revocation followed by
+a persistence failure says “Off for this session; the setting or cleanup could not
+be completed.” A transport failure or stale request rejected before main accepts
+revocation instead says it could not be confirmed and diagnostics may remain on.
+Local preview disposal provides no revocation evidence; later authoritative On
+status removes stale Off feedback. An app crash before durable
 disable is a limitation to test, not guaranteed crash-proof revocation. Re-enabling waits
 for old-state cleanup and cannot resurrect an old operation. Discard
 deletes the selected retained source and its preview without silently changing the

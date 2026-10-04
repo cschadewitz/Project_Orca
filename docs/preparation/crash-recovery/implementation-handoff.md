@@ -67,9 +67,88 @@ UI feedback clears at the next explicit action, and same-document exact-handle
 disposal remains possible after a target switch without granting new authority.
 This review does not substitute for a fresh review of the final SHA.
 
+## PR comment follow-up
+
+The [delivered-scope review](https://github.com/cschadewitz/Project_Orca/pull/470#issuecomment-5979140255)
+reviewed `56c75a5d62ef8b4a962d3ab71d8aac2d29716f3a`. Each finding was reproduced
+or traced before a separate correction. The runtime candidate after this follow-up
+is `51c4f68ae7e60ae1c7fe941308a3e8801b017e8e`; PR metadata records the final
+documentation head and current base. The following corrections preserve decisions
+1–9, the five-minute default and the disabled production boundary.
+
+| Review item | Correction and regression evidence |
+| --- | --- |
+| Timeout before native admission | `9f3dbee7ffc38f3aa8192fe5a89de8c4121a14e8` revokes the epoch, preview and destination on timeout while retaining busy work and reservations. The new test fails on the reviewed controller and prevents publication after releasing the paused admission. Already-admitted late saved/refused tests remain green. |
+| Unconfirmed opt-out displayed as Off | `d00e9fa93b699a4552a6e9b3042acbd52b6b232e` removes the optimistic consent override. Local disposal is immediate; only authoritative disabled status supports session-only Off feedback. Transport rejection, stale-epoch rejection before controller invocation, later enabled status and genuine durable-off failure are tested. |
+| Completed Save refusal strands previews | `f8fc8dba73559ea701c6b30a25f9b5c311e126ed` permits fresh previews after a safe completed refusal. `23f4c7234fff700cd7e99d06431c4a9c1c87eaf6` adds actual Linux no-overwrite refusal tests through close/expiry and maintenance, preserving consent, retained history, prior exports and a raced destination. UI tests require a fresh picker and separate Save. |
+| Coerced report identities | `6279c050d4053662dfd0bd4e5a7ac9bd5088a2a1` requires primitive UUID strings of the exact length before regex and identity checks. Array-valued and equal identities fail before both normal and recovered fresh-ID validation. |
+| Incorrect retained coverage | `40f8f268d83874207dfb13e668c12476d3e2a211` requires zero coverage for no events, otherwise observed coverage minus the first retained event offset. Empty/nonempty malformed fixtures fail both validator paths; an actual encrypted malformed prior checkpoint is rejected before refreshed recovery IDs. |
+
+The [decision-9 owner handoff](https://github.com/cschadewitz/Project_Orca/pull/470#issuecomment-5977246655)
+was also rechecked. `cabe22c2b9953cc55b9a12505891e7a388345933` reconciles the
+observation oracle with authorized opt-out summary removal: durable disabled state,
+independent writer-cessation/staging-cleanup evidence and no unresolved operation
+must precede a committed removal. Failed removal, late callbacks, reservations and
+restart non-recreation have explicit tests. `290a09cf445ff7ffbcab035465d2ea48ab6eafb4`
+adds actual SIGKILL interruptions immediately before/after summary unlink and with
+a newer unresolved operation; existing user exports remain unchanged.
+
+Two related cleanup gaps found during this audit were corrected:
+
+- `a3c67969579ec0cbbbb79a2a8eb4d42c0ea989e5` allows durable opt-out and independent
+  diagnostics-key/ciphertext cleanup when the fixed staging entry is unsafe, only
+  under proven writer cessation and the existing byte/entry limits. It never
+  follows or removes an unsafe stage or changes user files. New capture, export
+  and re-enabling remain blocked; invalid off state, missing cessation proof,
+  unsafe other entries and oversized directories refuse this narrow exception.
+- `51c4f68ae7e60ae1c7fe941308a3e8801b017e8e` rereads the durable export journal
+  after cleanup. A failed startup read cannot leave an empty cached state that
+  later bypasses acknowledgement. Newly discovered operation IDs cannot inherit
+  an old known outcome. Actual crash/restart regressions exercise both cleanup
+  retry and set-enabled entry points with an unsafe stage, then stage repair.
+
+A fresh read-only reviewer found the cached-obligation bypass at
+`a3c67969579ec0cbbbb79a2a8eb4d42c0ea989e5` and found no remaining finding in that
+narrow fix scope at `51c4f68ae7e60ae1c7fe941308a3e8801b017e8e`. This is source
+review, without a test rerun, full-head approval or native acceptance.
+
+## Follow-up validation
+
+At `51c4f68ae7e60ae1c7fe941308a3e8801b017e8e`, the focused aggregate passed
+**189/189 tests across 10 files**, one worker, 93.02 seconds. It covers recovery
+integration/storage/disk, report validation, pretrigger buffering, main IPC,
+renderer lifecycle and preparation helpers/oracle (now 32 oracle tests).
+The complete unrelated runtime suite was not rerun for this review follow-up.
+
+```sh
+TMPDIR=/home/casey/kepler/tasks/e3aae8ed-274c-4dbc-93b8-484849709314/test-tmp mise exec -- node node_modules/vitest/vitest.mjs run packages/app/test/recovery-integration.test.ts packages/app/test/recovery-storage.test.ts packages/app/test/recovery-disk.test.ts packages/app/test/report-validation.test.ts packages/app/test/pretrigger-buffer.test.ts packages/app/test/daemon-connection-integration.test.ts packages/app/renderer/test/diagnostics.test.tsx packages/app/test/recovery-preparation --maxWorkers=1
+```
+
+Workspace and renderer no-emit typechecks, build typecheck and Vite renderer build
+pass for this follow-up (331 modules, 675.70 kB generated JS; the existing >500 kB
+warning remains). Fourteen changed code paths passed unchanged ESLint config in
+two bounded main/renderer groups; the final controller/test delta was rechecked.
+Full Prettier, CSS-token, generated-design and 12 Python contract fixtures pass;
+Markdown is excluded by repository policy. Final documentation links and diff
+whitespace were checked separately.
+
+The first follow-up aggregate at `a3c67969579ec0cbbbb79a2a8eb4d42c0ea989e5`
+returned 182 passes and five failures: two storage-test 30-second timeouts and
+three existing fixture actions exceeding their short operation deadlines during
+shared-host load and concurrent local checks. The seven related cases passed
+unchanged in an isolated rerun (8.08 seconds); the final aggregate above also
+passed. No production deadline, assertion or test timeout was relaxed. Red
+regressions also demonstrated the original timeout, identity, coverage, unsafe
+stage cleanup and cached-obligation failures before their respective fixes.
+
 ## Evidence and limits
 
-Runtime freeze: `602c97e2faf4f5b9e62fe14f5ba40d48c981f5b5`. Later handoff/measurement commits change documentation only. PR #470 records its final head and base. Numerical evidence is in [workload-linux.json](workload-linux.json).
+The following original integration evidence is historical. Its runtime freeze
+was `602c97e2faf4f5b9e62fe14f5ba40d48c981f5b5`; the subsequent original handoff
+commit `0d34bc4d673cfbbe5fcbc10e5426f5603931ae26` changed documentation only.
+The review follow-up above changes runtime behavior. Numerical evidence in
+[workload-linux.json](workload-linux.json) remains attributed to the original
+`602c97e2faf4f5b9e62fe14f5ba40d48c981f5b5` probe; it was not rerun or relabeled.
 
 Actual checks:
 

@@ -373,6 +373,10 @@ Metadata may retain one bounded summary across restarts; it supplies no capture/
 Never erase an unacknowledged current operation to make space. An acknowledgement
 commit replaces that current obligation with the summary atomically; the next
 intent retains the summary. No path retention is needed for duplicate protection.
+After a failed startup metadata read, an empty in-memory state proves nothing.
+Reread the bounded durable journal after cleanup before reporting completion or
+admitting new capture. An unreadable journal stays blocked; a newly discovered
+operation cannot inherit a known outcome from another operation ID.
 
 Crash before acknowledgement commit leaves `unknown_blocked`/`unknown_ready`, after
 fresh safety checks; a safely committed acknowledgement leaves `acknowledged_unknown`.
