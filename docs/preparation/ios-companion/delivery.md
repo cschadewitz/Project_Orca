@@ -22,7 +22,17 @@ Publish an accurate privacy policy and App Store privacy disclosures covering de
 
 ## Proposed implementation slices
 
-Each row is an outcome with its acceptance and non-goal. These are draft slice names, **not new issues or milestone assignments**. Attach the shared work to the owners below before creating any issue. A future primary `ship-group:ios-companion` could identify client release work after agreement; notification/shared-runtime slices should retain their own single primary group and cross-reference it.
+Each row preserves the original research slice names, acceptance and estimates. Existing [milestone 24](https://github.com/cschadewitz/Project_Orca/milestone/24) now tracks the read-only pilot under `ship-group:ios-readonly-pilot`; use the mapping below rather than creating duplicate issues. The P/N decomposition is not itself an implementation or release commitment.
+
+| Existing pilot work | Current state and research mapping |
+| --- | --- |
+| [#471](https://github.com/cschadewitz/Project_Orca/issues/471), merged [#479](https://github.com/cschadewitz/Project_Orca/pull/479) | Closed preparation: contracts, synthetic fixtures and device plan. Covers preparation within P0, not its native/network/device spike acceptance. |
+| [#472](https://github.com/cschadewitz/Project_Orca/issues/472) | Open: P1 mobile enrollment and read-only projections. |
+| [#473](https://github.com/cschadewitz/Project_Orca/issues/473) | Open: P2 SwiftUI read-only monitoring/recovery; connected acceptance still needs P1. |
+| [#475](https://github.com/cschadewitz/Project_Orca/issues/475) | Open: N1 generic APNs delivery and Watch mirroring, shared with #459. |
+| [#477](https://github.com/cschadewitz/Project_Orca/issues/477) | Open: P5a physical-device, security, accessibility, signing, privacy and support evidence. Preparation does not satisfy this gate. |
+
+P3/P4/P5b command work remains later, including #474/#476/#478; native Watch approvals and Android implementation are outside the pilot. The [prior review response](https://github.com/cschadewitz/Project_Orca/pull/461#issuecomment-5975078127) already addressed the P5a/P5b split, Low Power Mode and shared-contract clarifications. Those distinctions remain in force.
 
 | Slice | Outcome, acceptance and non-goal | Hard prerequisites | Estimate |
 | --- | --- | --- | ---: |
@@ -61,11 +71,11 @@ State was inspected 3 October and refreshed 4 October before publication. Existi
 | [#338](https://github.com/cschadewitz/Project_Orca/issues/338), [#339](https://github.com/cschadewitz/Project_Orca/issues/339), [#399](https://github.com/cschadewitz/Project_Orca/issues/399), open | Store contracts, SQLite and retry retention | Contained notification-outbox conformance and command tombstone retention; no mandatory SQLite migration or duplicate generic store. |
 | [#340](https://github.com/cschadewitz/Project_Orca/issues/340), [#357](https://github.com/cschadewitz/Project_Orca/issues/357), open | General operations/history and recovery | Phone shows bounded facts and truthful receipt states; advanced recovery remains these owners. |
 | [#449–#454](https://github.com/cschadewitz/Project_Orca/issues/449), [#350](https://github.com/cschadewitz/Project_Orca/issues/350), open | Trigger intake/admission/execution and external-effect publication | Consume run/attention facts; do not route APNs acknowledgements into triggers or implement a second publication outbox. Trigger development is a soft coordination dependency. |
-| [#460](https://github.com/cschadewitz/Project_Orca/issues/460), open | Direct root-run Git isolation, including fixed base/owned workspace recovery | Reuse before allowing root workflows that edit shared repositories; a narrow safe catalog can be accepted independently. |
+| [#460](https://github.com/cschadewitz/Project_Orca/issues/460), closed through merged [#462](https://github.com/cschadewitz/Project_Orca/pull/462) | Contained opt-in local Linux root-worktree foundation, merged as `49efcc7236ac127c952bb1f7a50fc6ef72f7df84`; fixed base, ownership and fail-closed recovery | Reuse before relevant code-editing root workflows; require supported-profile acceptance. This is not a sandbox or full #449/#453 execution, feedback/publication or live-activation acceptance; those issues remain open. |
 | [#391–#393](https://github.com/cschadewitz/Project_Orca/issues/391), open | Actual-Cal private MCP bridge/acceptance | Related operational experience only; mobile connectivity is a separate contract and does not inherit its service-principal authority. |
 | [#162](https://github.com/cschadewitz/Project_Orca/issues/162), closed; Watch [#459](https://github.com/cschadewitz/Project_Orca/pull/459), draft | Desktop notification tiers exist; mobile/Watch proposal owns new delivery work | Share N1/provider/outbox/enrollment and handoff once. iPhone UX/client and distribution are this proposal's additional scope. |
 
-Before filing implementation issues, refresh this inventory, agree the P/N slice ownership with the Watch author, use the feature template and reference the actual accepted prerequisites. The new uncovered outcomes are the native phone client/build pipeline, mobile enrollment/facade, decision/cancel hardening, and shared APNs delivery. Keep each small outcome's scope, non-goals and observable failure acceptance; do not reopen closed foundation issues or duplicate #443/#460.
+Use the existing milestone 24 issues above for the native read-only phone, enrollment/facade, shared APNs and pilot acceptance outcomes. Before any additional implementation planning, refresh the inventory, coordinate P/N ownership with the Watch author and reference accepted prerequisites. Keep command hardening separate; do not duplicate existing pilot issues or reopen closed #443/#460 foundations.
 
 ## Cost assumptions and operating budget
 
@@ -118,7 +128,7 @@ Keep server/TypeScript checks on existing Linux CI. Add pinned macOS/Xcode build
 
 | Decision | Recommended starting choice | What changes if declined |
 | --- | --- | --- |
-| Apple focus and staffing | SwiftUI; name a Swift/Xcode owner; no Android promise in v1 | React Native/Expo if Android within a year or TypeScript staffing dominates; same backend gates |
+| Apple focus (selected) and staffing (open) | Owner selected SwiftUI/Apple first, Android later; name a Swift/Xcode owner | Stack alternatives remain historical rationale, not an undecided choice; staffing and any later platform change require explicit ownership/decision |
 | Devices and support floor | Inventory actual devices, aim for iOS 18+, test minimum/current; mirrored Watch alerts only | Restrict private pilot to newer OS or defer incompatible Watch; never infer compatibility from simulator |
 | Connection and operations | Tailscale plus authenticated HTTPS; named host/VPN/revocation operator | Prove native managed-edge login or fund relay/on-call; do not substitute existing OpenAI MCP tunnel |
 | Identity and visibility | Dedicated device credentials for actual human principal, selected workflows; explicit cross-owner visibility choice | Exact-run/delegation policy refinement under #328 before exposure |
