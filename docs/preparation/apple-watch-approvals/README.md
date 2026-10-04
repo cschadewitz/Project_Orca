@@ -6,6 +6,27 @@ deployment. No runtime changes or new issues accompany this document.
 
 ## Recommendation
 
+**Direction refresh, 4 October 2026:** the owner selected
+[SwiftUI, Apple first and Android later](https://github.com/cschadewitz/Project_Orca/pull/461#issuecomment-5976265449),
+with one shared platform-neutral backend and APNs for the Apple phase.
+[Milestone 24](https://github.com/cschadewitz/Project_Orca/milestone/24) now tracks
+the read-only iPhone pilot with generic mirrored Watch alerts. Preparation
+[#471](https://github.com/cschadewitz/Project_Orca/issues/471) is complete through
+merged [#479](https://github.com/cschadewitz/Project_Orca/pull/479); enrollment and
+projections [#472](https://github.com/cschadewitz/Project_Orca/issues/472), SwiftUI
+monitoring [#473](https://github.com/cschadewitz/Project_Orca/issues/473), APNs
+[#475](https://github.com/cschadewitz/Project_Orca/issues/475) and physical pilot
+acceptance [#477](https://github.com/cschadewitz/Project_Orca/issues/477) remain open.
+Preparation is not an implemented client, delivery proof or native Watch approval.
+Swift ownership, actual hardware/OS, route, visibility and signing/APNs custody
+remain open. Phone commands and native Watch decisions remain later work.
+
+### Original recommendation and alternatives
+
+The following rationale and platform comparison preserve the original research.
+The Pushover-first and web-versus-native choices below are historical alternatives;
+they do not override the selected SwiftUI/APNs read-only pilot above.
+
 Start with **generic Watch alerts and authenticated review on the iPhone**.
 Use Pushover for a small alert-only pilot if its privacy/vendor tradeoff is
 acceptable. Then build a thin ORCA iPhone companion and a narrow approval gateway,
@@ -55,7 +76,7 @@ a distributed release, actual-Cal acceptance or deployed homelab configuration.
 | [#328](https://github.com/cschadewitz/Project_Orca/issues/328), [#318](https://github.com/cschadewitz/Project_Orca/issues/318) | #328 remains open; #318 is closed. Token authentication, operation/resource guards, credential lifecycle and target identity are integrated via [#371](https://github.com/cschadewitz/Project_Orca/pull/371)/[#397](https://github.com/cschadewitz/Project_Orca/pull/397). | Mobile enrollment, per-device revocation and a deliberately smaller HTTPS facade. No second principal model. |
 | [#237](https://github.com/cschadewitz/Project_Orca/issues/237), merged [#383](https://github.com/cschadewitz/Project_Orca/pull/383)/[#397](https://github.com/cschadewitz/Project_Orca/pull/397) | [Live input continuity](../../live-input-continuity.md) distinguishes durable gates from original-process ACP callbacks. | Do not reconstruct an expired callback from a push or turn it into a durable gate. Owner availability must be reread. |
 | [#327](https://github.com/cschadewitz/Project_Orca/issues/327), [#331](https://github.com/cschadewitz/Project_Orca/issues/331), [#356](https://github.com/cschadewitz/Project_Orca/issues/356), merged [#415](https://github.com/cschadewitz/Project_Orca/pull/415) | [Operator mutations](../../../packages/daemon/src/operator-mutations.ts) delegate to shared controls; [continuation schemas](../../../packages/protocol/src/continuation-admission.ts) carry CAS boundaries and durable retry receipts. | Mobile transport must preserve these envelopes. Answer-only/live calls do not already have the continuation service's retry receipt. Revision composition remains desktop-only in the initial mobile scope. |
-| [#443](https://github.com/cschadewitz/Project_Orca/issues/443), open [#448](https://github.com/cschadewitz/Project_Orca/pull/448) | Known continuation settlement race remains open at inspection. | Fix and strict acceptance evidence are a hard gate for mobile answer-and-continue; neither alerts nor answer-only research needs that fix. |
+| [#443](https://github.com/cschadewitz/Project_Orca/issues/443), closed; merged [#448](https://github.com/cschadewitz/Project_Orca/pull/448) | The race was open at the original inspection; #448 merged as `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`, closing #443. | Future mobile answer-and-continue must include the fix and retain strict continuation/security regressions on its supported integration head. Upstream evidence is not mobile/device acceptance. |
 | [#338](https://github.com/cschadewitz/Project_Orca/issues/338), [#339](https://github.com/cschadewitz/Project_Orca/issues/339), [#399](https://github.com/cschadewitz/Project_Orca/issues/399) | Store/conformance, SQLite and retention follow-ons. Existing file locks and protected journals are usable foundations. | Define a contained delivery-outbox contract under these owners; no mandatory SQLite migration or new authoritative approval ledger. |
 | [#363](https://github.com/cschadewitz/Project_Orca/issues/363), [#340](https://github.com/cschadewitz/Project_Orca/issues/340), [#357](https://github.com/cschadewitz/Project_Orca/issues/357) | Sensitive projections, operations/history and broader recovery ownership. | Allowlisted mobile content, delivery health and receipt correlation; no duplicate general dashboard/recovery project. |
 | [#391](https://github.com/cschadewitz/Project_Orca/issues/391)–[#393](https://github.com/cschadewitz/Project_Orca/issues/393), merged [#446](https://github.com/cschadewitz/Project_Orca/pull/446) | Private MCP access has its own audience, supervised service and dedicated service-principal design. | It is not a generic mobile endpoint, mobile identity provider or per-human audit proof. Do not reuse its credential or assume phone/Watch routing through it. |
@@ -407,7 +428,10 @@ different content conflicts. Acceptance is restricted to currently supported
 sealed **root durable** boundaries; live callbacks, child/ancestor continuation,
 uncertain pauses and missing generations are unsupported. Do not fall back to
 legacy long-running `inputs.answer` with implicit resume, which is unsuitable for
-mobile background execution limits. #443 must be resolved and verified first.
+mobile background execution limits. #443 is closed through merged #448; future
+implementation must include that fix and retain its strict replay/settlement,
+current-authority, writer-fence, single-decision and single-execution regressions.
+This documentation refresh runs no runtime or mobile acceptance tests.
 
 For answer-only/live there is no equivalent existing retry receipt. An explicitly
 scoped experimental stage may send once, retain non-secret intent correlation and reconcile through authorized
@@ -482,7 +506,12 @@ check supplements current server authorization; it never replaces it.
 
 ## Phases and proposed issue-sized slices
 
-These are draft slices, not filed issues or release commitments. Use the existing
+These original M slices remain a research decomposition, not release commitments.
+Milestone 24 and #471/#479 now cover read-only preparation; #472/#473/#475/#477
+track its remaining implementation and acceptance. Do not duplicate that work.
+The original Pushover/web alternatives below are superseded for this pilot by the
+selected SwiftUI/APNs direction; later command/Watch slices remain proposals.
+Use the existing
 [feature template](../../../.github/ISSUE_TEMPLATE/feature.md), retain metadata on
 related work, and select one primary ship group per eventual issue. Proposed
 groups are `ship-group:mobile-alerts`, `ship-group:phone-approvals`, and later
@@ -495,7 +524,7 @@ groups are `ship-group:mobile-alerts`, `ship-group:phone-approvals`, and later
 | M2 — mobile identity and restricted gateway | Enrollment/revocation and exact human mapping; bounded read-only inbox over chosen private route. Prove no cross-user/workspace access, no owner fallback and revocation on active sessions. | Integrated #328/#318; M0 identity/route decision. Coordinate #363 projections. | General daemon proxy, tunnel reuse, OAuth platform from scratch. |
 | M3 — shared exact-decision boundary | Validate answer-only presentation revision/immutability and current user/device authority under the shared fence; extend the legacy durable path where needed. Preserve exact answer and uncertain-result semantics. Expose supported durable decisions through gateway. Prove stale/concurrent/revocation/lost-response cases and protected actor audit. | M2, integrated #237/#327; coordinate narrowly scoped #328 contract work. | Alternate approval ledger, live permission enablement, standing grants. |
 | M4 — iPhone review client | Native inbox/enrollment, safe deep links, Review-only mirrored notifications, server-confirmed record-only outcome and explicit unknown state. Choose mobile web instead only as an agreed scope substitution. | M2/M3; M0 hardware/distribution. M1 needed for alert-integrated acceptance, not UI fixtures. | Watch decision UI, background RPC, both native and web in one slice. |
-| M5 — explicit durable answer-and-continue | Preserve `{command,retry}`, expected boundary, status lookup and separate resume/completion states; prove single decision/execution and restart/lost-ack recovery. | M3/M4; existing #331/#356 services; **#443/#448 correction and strict acceptance**. | Child/live/unsupported continuation or automatic mutation retries. |
+| M5 - explicit durable answer-and-continue | Preserve `{command,retry}`, expected boundary, status lookup and separate resume/completion states; prove single decision/execution and restart/lost-ack recovery. | M3/M4; existing #331/#356 services; **merged #448 fix with strict continuation/security regressions retained on the supported implementation head**. | Child/live/unsupported continuation or automatic mutation retries. |
 | M6 — native Watch low-risk review | Enroll a distinct device, fetch/confirm an allowlisted decision via HTTPS, and show truthful receipt. Test accidental taps, stale screen, expiry and concurrent phone decision on physical Watch. | M0/M2/M3/M4; M5 only if Watch offers continuation. Exact live support, if later desired, is another bounded extension. | Consequential actions, “always”, universal callback support. |
 | M7 — independent connectivity and operations | If phone-off use is still needed, verify direct APNs/HTTPS and dedicated relay/private route, revocation, outbox health, upgrades and signing expiry; document the supported hardware matrix. | M6 and separate topology/security decision. Related #392 supervision, #340/#357 visibility/recovery. | Treating iPhone VPN as Watch VPN or promising offline approvals. |
 
@@ -509,9 +538,12 @@ privacy/support evidence. M4/M5 send-once/unknown experiments cannot bypass P3
 receipt/recovery acceptance or claim the completed write MVP. Watch escalation
 never expands the phone action allowlist.
 
-Smallest rollout: M0/M1 for awareness; M2–M4 for phone decisions; M5 only after its
-existing blocker is resolved; M6/M7 only if use justifies maintenance. The
-Pushover pilot can be replaced by native APNs without changing M3. M1 and M2 can
+Current first delivery is the milestone 24 read-only SwiftUI/APNs pilot, with
+M0 hardware/route evidence and P5a acceptance still required. Phone decisions
+under M2-M5 remain later work, including shared authority/receipt acceptance and
+regressions for the already-merged #448 fix; M6/M7 need separate native Watch
+and physical-hardware acceptance. The historical Pushover alternative does not
+change M3's contract. M1 and M2 can
 proceed independently after contracts agree; phone/Watch fixtures can develop
 against frozen schemas while services are built. Final acceptance follows the
 real integrated services, not mocks.
@@ -520,8 +552,9 @@ Hard dependency order is acyclic: `M0 → M2 → M3 → M4 → M5`, with `M1 →
 for alert integration, `M4 → M6 → M7`, and optional `M5 → M6` only for Watch
 continuation. M1 has no M0 implementation dependency when using a fake provider;
 real hardware acceptance does. Existing integrated contracts are prerequisites
-already present, not demands to close their entire parent issues. #443 is an
-external unresolved gate for continuation. Full trigger execution, SQLite,
+already present, not demands to close their entire parent issues. #443 is closed;
+including merged #448 and retaining strict continuation/security regression
+evidence remain requirements for later mobile continuation. Full trigger execution, SQLite,
 general secret catalogs (#335–#337) and actual-Cal #393 are related, not mandatory
 dependencies of mobile alerts/phone review. Recheck live inventory before filing.
 
@@ -563,9 +596,10 @@ or missed alerts leave desktop/phone inboxes as the authoritative fallback.
    Family Setup. Use Apple's [compatibility matrix](https://support.apple.com/en-us/118490).
    Is the phone normally carried, left on elsewhere or powered off? Is outdoor
    cellular necessary, and with which region/carrier/plan?
-2. **First client:** Pushover awareness pilot followed by native iPhone (recommended),
-   or mobile web review/PWA to minimize native maintenance? Is native Watch approval
-   still needed after trying alerts? Who has a supported Mac/Xcode and owns builds?
+2. **Selected client and remaining ownership:** SwiftUI/Apple-first with APNs is
+   selected; Android is later without a schedule or staffing commitment. Pushover
+   and web/PWA remain historical alternatives. Is native Watch approval still
+   needed after the read-only pilot? Who has a supported Mac/Xcode and owns builds?
 3. **Authority:** Which ORCA human principal and root workflows may mobile inspect
    and answer? Is workflow-scoped `runs:all` acceptable for trigger-created work?
    Which exact semantics qualify for Watch, including rejection? Which operations
@@ -579,7 +613,14 @@ or missed alerts leave desktop/phone inboxes as the authoritative fallback.
    signing channel and tolerated renewal work. Choose a budget for hosting, service
    fees, carrier and ongoing device testing.
 6. **Implementation gate:** Agree exact revision/receipt ownership with existing
-   approval maintainers, #443 acceptance for continuation, and outbox correlation
+   approval maintainers, retained #448 continuation/security regressions, and outbox correlation
    with triggered-workflow owners before authorizing slices. No issue creation,
    implementation, credentials, deployment or live notifications follow merely
    from publishing this research PR.
+
+This refresh completes the source-status item left outstanding in the
+[author's prior response](https://github.com/cschadewitz/Project_Orca/pull/459#issuecomment-5975083175).
+The original runtime inspection SHA remains historical; this branch is not
+rebased onto the fix. Upstream #448 evidence does not establish phone commands,
+native Watch operation or physical-device acceptance. Documentation CI is only
+change classification with runtime jobs skipped, not runtime or device validation.
