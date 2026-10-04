@@ -2,7 +2,7 @@
 import { access, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { RECOVERY_LIMITS } from "../src/main/diagnostics/recovery-contract.js";
+import { RECOVERY_LIMITS, type ExportState } from "../src/main/diagnostics/recovery-contract.js";
 import { DIAGNOSTIC_LIMITS } from "../src/main/diagnostics/profile.js";
 import { withSyntheticProfile } from "./recovery-preparation/crash-harness.js";
 import { barrier, inspectPrivateRoot } from "./recovery-preparation/filesystem-evidence.js";
@@ -11,6 +11,8 @@ import {
   enableAndPreview,
   value,
   SyntheticKeys,
+  ControlledNative,
+  compiledFixtureHelper,
   cleanupFixtureHelper,
 } from "./recovery-preparation/implementation-fixture.js";
 import { crashImplementationAt } from "./recovery-preparation/process-fixture.js";
@@ -19,6 +21,119 @@ const linux = process.platform === "linux";
 afterAll(cleanupFixtureHelper);
 
 describe.runIf(linux)("real export adapter conformance (Linux disposable filesystem)", () => {
+  it.each(["before-optout-summary-removal", "after-optout-summary-removal"] as const)(
+    "process crash %s respects durable summary removal and preserves earlier exports",
+    async (boundary) => {
+      await withSyntheticProfile(async (profile) => {
+        const crashed = await crashImplementationAt(profile, boundary);
+        expect(crashed.signal).toBe("SIGKILL");
+        const evidence = crashed.evidence;
+        if (!evidence) throw new Error("Actual opt-out crash omitted its bounded observation evidence");
+        const root = join(profile, "private");
+        const metadata = join(root, "export.json");
+        const expectedSummary = {
+          id: evidence.acknowledgedId,
+          outcome: "unknown",
+          acknowledged: true,
+          olderUnknowns: false,
+        };
+        const keys = new SyntheticKeys();
+        keys.usable = false;
+        const wrapped = vi.spyOn(keys, "wrap");
+        const unwrapped = vi.spyOn(keys, "unwrap");
+        const native = new ControlledNative(await compiledFixtureHelper());
+        let retainedMetadata: Buffer | undefined;
+        if (boundary === "before-optout-summary-removal") {
+          retainedMetadata = await readFile(metadata);
+          expect((JSON.parse(retainedMetadata.toString("utf8")) as ExportState).summary).toEqual(expectedSummary);
+          native.beforeRemove = async (path) => {
+            if (path === metadata) throw new Error("Synthetic summary-removal cleanup failure");
+          };
+        } else await expect(access(metadata)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await readFile(join(profile, "report.json"))).toEqual(Buffer.from(evidence.publishedText));
+
+        const fixture = await implementationFixture(profile, { keys, native });
+        expect((await fixture.disk.readSetting()).enabled).toBe(false);
+        expect(fixture.controller.status().enabled).toBe(false);
+        expect(fixture.controller.status().previous).toBe(false);
+        expect(fixture.controller.record("run", "run_failed")).toBe(false);
+        expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+        expect(fixture.native.publishCalls).toBe(0);
+        expect(fixture.picker.calls).toBe(0);
+        expect(wrapped).not.toHaveBeenCalled();
+        expect(unwrapped).not.toHaveBeenCalled();
+        if (boundary === "before-optout-summary-removal") {
+          expect(fixture.controller.status().acknowledgedUnknown).toBe(true);
+          expect(fixture.controller.status().cleanupPending).toBe(true);
+          expect((await fixture.disk.readExportState()).summary).toEqual(expectedSummary);
+          expect((await fixture.controller.retryCleanup()).ok).toBe(false);
+          expect(await readFile(metadata)).toEqual(retainedMetadata);
+          native.beforeRemove = undefined;
+          value(await fixture.controller.retryCleanup());
+        } else {
+          expect(fixture.controller.status().acknowledgedUnknown).toBe(false);
+          await expect(access(metadata)).rejects.toMatchObject({ code: "ENOENT" });
+          value(await fixture.controller.retryCleanup());
+          await expect(access(metadata)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect((await fixture.disk.readExportState()).summary).toBeUndefined();
+        expect((await fixture.disk.readExportState()).current).toBeUndefined();
+        expect(fixture.controller.status().cleanupPending).toBe(false);
+        const bounded = await inspectPrivateRoot(root);
+        expect(bounded.entries).toBeLessThanOrEqual(RECOVERY_LIMITS.entries);
+        expect(bounded.exportMetadataBytes).toBeLessThanOrEqual(RECOVERY_LIMITS.cleanupBytes);
+        expect([...bounded.files.keys()].some((name) => /^slot-|^session-/.test(name))).toBe(false);
+        await expect(access(join(root, "export-stage.tmp"))).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await readFile(join(profile, "report.json"))).toEqual(Buffer.from(evidence.publishedText));
+        expect(fixture.native.publishCalls).toBe(0);
+        expect(fixture.picker.calls).toBe(0);
+        expect(wrapped).not.toHaveBeenCalled();
+        expect(unwrapped).not.toHaveBeenCalled();
+        await fixture.controller.cleanExit();
+      });
+    },
+  );
+
+  it("an opt-out process crash cannot erase a newer unresolved Save behind an older acknowledgement", async () => {
+    await withSyntheticProfile(async (profile) => {
+      const crashed = await crashImplementationAt(profile, "optout-unresolved");
+      expect(crashed.signal).toBe("SIGKILL");
+      const evidence = crashed.evidence;
+      if (!evidence?.unresolvedId) throw new Error("Actual crash omitted its newer unresolved-operation evidence");
+      const keys = new SyntheticKeys();
+      keys.usable = false;
+      const fixture = await implementationFixture(profile, { keys });
+      expect(fixture.controller.status().enabled).toBe(false);
+      expect(fixture.controller.status().cleanupPending).toBe(true);
+      expect(fixture.controller.status().unknownOperation).toBe(evidence.unresolvedId);
+      expect(fixture.controller.record("run", "run_failed")).toBe(false);
+      expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+      expect((await fixture.disk.readExportState()).current?.id).toBe(evidence.unresolvedId);
+      expect((await fixture.disk.readExportState()).summary?.id).toBe(evidence.acknowledgedId);
+      value(await fixture.controller.retryCleanup());
+      value(await fixture.controller.acknowledgeUnknown(evidence.acknowledgedId));
+      expect((await fixture.disk.readExportState()).current?.id).toBe(evidence.unresolvedId);
+      expect(fixture.controller.status().unknownOperation).toBe(evidence.unresolvedId);
+      expect(fixture.controller.status().cleanupPending).toBe(true);
+      const bounded = await inspectPrivateRoot(fixture.root);
+      expect(bounded.entries).toBeLessThanOrEqual(RECOVERY_LIMITS.entries);
+      expect(bounded.exportMetadataBytes).toBeLessThanOrEqual(RECOVERY_LIMITS.cleanupBytes);
+      expect([...bounded.files.keys()].some((name) => /^slot-|^session-/.test(name))).toBe(false);
+      await expect(access(join(fixture.root, "export-stage.tmp"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(join(profile, "report.json"))).toEqual(Buffer.from(evidence.publishedText));
+      value(await fixture.controller.acknowledgeUnknown(evidence.unresolvedId));
+      expect((await fixture.disk.readExportState()).current).toBeUndefined();
+      expect((await fixture.disk.readExportState()).summary).toBeUndefined();
+      expect(fixture.controller.status().cleanupPending).toBe(false);
+      expect(fixture.native.publishCalls).toBe(0);
+      expect(fixture.picker.calls).toBe(0);
+      expect(await readFile(join(profile, "report.json"))).toEqual(Buffer.from(evidence.publishedText));
+      await expect(access(join(profile, "unknown-report.json"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(join(profile, "unresolved-report.json"))).rejects.toMatchObject({ code: "ENOENT" });
+      await fixture.controller.cleanExit();
+    });
+  });
+
   it.each(["before-stage-identity", "before-stage-write"])(
     "crash %s requires recorded identity before cleanup can release staging",
     async (boundary) => {
