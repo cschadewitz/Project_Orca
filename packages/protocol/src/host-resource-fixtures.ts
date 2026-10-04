@@ -89,7 +89,6 @@ export function hostResourceFixture(
     s.cpuLimit = { status: "unsupported", source: "linux-cgroup-v2", reason: "unsupported-source" };
     s.memoryLimit = { status: "permission-denied", source: "linux-cgroup-v2", reason: "permission-denied" };
     s.swapActivity = { status: "unavailable", source: "linux-proc-vmstat", reason: "timeout" };
-    s.capabilities = ["cpu", "memory", "swap", "storage"];
   }
   if (kind === "stale") {
     s.ageMs = 20_000;

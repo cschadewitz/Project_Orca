@@ -38,6 +38,7 @@ describe("shared host resource contract", () => {
       "storage-pressure",
     ]);
     expect(hostResourceFixture("partial").warnings.map((w) => w.code)).toEqual(["partial-data"]);
+    expect(hostResourceFixture("partial").capabilities).toEqual(healthy.capabilities);
     expect(hostResourceFixture("stale").warnings.map((w) => w.code)).toEqual(["stale-data"]);
     expect(resourceWarnings(healthy)).toEqual(healthy.warnings);
   });
