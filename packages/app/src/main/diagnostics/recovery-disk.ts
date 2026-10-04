@@ -75,6 +75,11 @@ export interface RecoveryDiskOptions {
  * retain their reservation until this operation actually settles.
  */
 export class NodeRecoveryDisk implements RecoveryDisk {
+  revoke(): void {
+    this.active = false;
+    this.revoked = true;
+    this.maintenanceEpoch++;
+  }
   private readonly root: string;
   private readonly scope: number;
   private tail: Promise<void> = Promise.resolve();

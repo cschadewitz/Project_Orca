@@ -98,8 +98,8 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
         expect(off.ok ? off.value.cleanupPending : true).toBe(true);
         value(await fixture.controller.closePreview(preview.handle));
         pending.release();
-        expect((await fixture.disk.readSetting()).enabled).toBe(false);
         await waitFor(() => fixture.controller.status().payloadReservedBytes === 0);
+        expect((await fixture.disk.readSetting()).enabled).toBe(false);
         value(await fixture.controller.retryCleanup());
         if (lateResult === "saved") expect(await readFile(fixture.picker.destination, "utf8")).toBe(preview.text);
         else await expect(access(fixture.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
@@ -251,20 +251,30 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
     });
   });
 
-  it("known committed Save stays saved when record cleanup fails and retry never republishes", async () => {
+  it.each(["failure", "hang"])("known committed Save stays saved during completion-record %s", async (fault) => {
     await withSyntheticProfile(async (profile) => {
-      const fixture = await implementationFixture(profile);
+      const fixture = await implementationFixture(profile, { timeoutMs: 500 });
       const preview = await enableAndPreview(fixture);
       const destination = value(await fixture.controller.chooseDestination(preview.handle));
+      const pending = barrier();
       fixture.native.beforeReplace = async (source, destination) => {
-        if (destination.endsWith("export.json") && (await readFile(source, "utf8")) === "{}")
-          throw new Error("Synthetic completion-record failure");
+        if (!destination.endsWith("export.json") || (await readFile(source, "utf8")) !== "{}") return;
+        if (fault === "failure") throw new Error("Synthetic completion-record failure");
+        await pending.wait();
       };
-      await fixture.controller.save(preview.handle, destination.token);
+      const saving = fixture.controller.save(preview.handle, destination.token);
+      if (fault === "hang") await enteredWithin(pending.entered);
+      await saving;
       expect(await readFile(fixture.picker.destination)).toEqual(Buffer.from(preview.text));
       expect(fixture.controller.status().lastSaveOutcome).toBe("saved");
       expect(fixture.controller.status().cleanupPending).toBe(true);
+      expect(fixture.controller.status().code).toBe("cleanup_pending");
       fixture.native.beforeReplace = undefined;
+      if (fault === "hang") {
+        expect((await fixture.controller.retryCleanup()).ok).toBe(false);
+        pending.release();
+        await waitFor(() => fixture.controller.status().code === "saved");
+      }
       value(await fixture.controller.retryCleanup());
       expect(fixture.controller.status().lastSaveOutcome).toBe("saved");
       expect(fixture.controller.status().cleanupPending).toBe(false);
@@ -592,6 +602,10 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
         await Promise.all([change, off]);
         expect(fixture.controller.status().enabled).toBe(false);
         expect((await fixture.disk.readSetting()).enabled).toBe(false);
+        if (boundary === "minutes") {
+          expect(fixture.controller.status().minutes).toBe(10);
+          expect((await fixture.disk.readSetting()).minutes).toBe(10);
+        }
         expect(fixture.controller.record("run", "run_failed")).toBe(false);
         await fixture.controller.retryCleanup();
         expect(

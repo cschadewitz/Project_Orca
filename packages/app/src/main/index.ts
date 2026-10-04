@@ -107,6 +107,10 @@ const diagnosticHandle = (
       // A workspace switch may revoke its old target epoch before DOM removal;
       // acknowledge removal from this same verified document without initialization.
       if (disposalOnly) return await run(parsed.data);
+      // Opt-out revokes in the controller before any initialization wait. Its
+      // current sender, target and strict consent parameters were verified above.
+      if (method === "setEnabled" && (parsed.data as { enabled: boolean }).enabled === false)
+        return await run(parsed.data);
       await diagnostics.initialize();
       if (!currentSender() || epoch !== workspace.connectionTarget.epoch)
         return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;

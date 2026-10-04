@@ -505,8 +505,11 @@ export class RecoveryController {
       return success(this.status());
     })();
     return this.bound(work, "publication_pending", () => {
-      this.code = "unknown_blocked";
-      this.lastSaveOutcome = "unknown";
+      if (this.lastSaveOutcome === "saved" || this.lastSaveOutcome === "refused") this.code = "cleanup_pending";
+      else {
+        this.code = "unknown_blocked";
+        this.lastSaveOutcome = "unknown";
+      }
       this.cleanupPending = true;
       // Work remains charged/busy until underlying completion; no new Save/ack.
       this.emit();
@@ -588,6 +591,7 @@ export class RecoveryController {
     this.emit();
   }
   revokeAuthority(): void {
+    this.options.disk.revoke();
     this.revokePreviewAuthority();
     this.ring.stop();
     if (this.timer) clearInterval(this.timer);
@@ -607,7 +611,15 @@ export class RecoveryController {
   private persistDisabled(): Promise<void> {
     if (this.disableWrite) return this.disableWrite;
     this.disableFailed = true;
-    const write = this.options.disk.writeSetting({ ...this.setting, enabled: false });
+    const write = (async () => {
+      // Logical revocation has already happened. Read the serialized setting
+      // before persisting off so startup/a completed minutes change cannot be
+      // replaced with the constructor's default retention preference.
+      const persisted = await this.options.disk.readSetting();
+      const next = { ...this.setting, minutes: persisted.minutes, enabled: false };
+      await this.options.disk.writeSetting(next);
+      if (!this.setting.enabled) this.setting = { ...this.setting, minutes: next.minutes };
+    })();
     this.disableWrite = write;
     void write.then(
       () => {
@@ -648,7 +660,7 @@ export class RecoveryController {
     this.exportState = persisted;
   }
   private async mutate(run: () => Promise<void>): Promise<DiagnosticsResult<DiagnosticsStatus>> {
-    if (this.busy) return failure(this.liveExport ? "publication_pending" : "cleanup_pending");
+    if (this.busy || this.disableWrite) return failure(this.liveExport ? "publication_pending" : "cleanup_pending");
     this.busy = true;
     const work = (async (): Promise<DiagnosticsResult<DiagnosticsStatus>> => {
       try {

@@ -27,6 +27,8 @@ export interface ExportState {
   summary?: ExportSummary;
 }
 export interface RecoveryDisk {
+  /** Synchronous consent fence; no filesystem/key access and no new authority. */
+  revoke(): void;
   readSetting(): Promise<DiagnosticsSetting>;
   writeSetting(setting: DiagnosticsSetting): Promise<void>;
   /** Verify control authority; promote eligible unclean current, retain previous on clean exit. */

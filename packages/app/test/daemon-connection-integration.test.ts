@@ -137,6 +137,38 @@ beforeEach(() => {
   shell.keyUnwrap.mockClear();
 });
 
+it("dispatches verified opt-out before diagnostics initialization while opt-in waits", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-diagnostics-revocation-ipc-"));
+  shell.userData = directory;
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const initialize = vi.spyOn(RecoveryController.prototype, "initialize").mockReturnValue(waiting);
+  const revoked = vi.spyOn(RecoveryController.prototype, "revokeAuthority");
+  const choices = vi.spyOn(RecoveryController.prototype, "setEnabled");
+  await import("../src/main/index.js");
+  const sender = shell.webContents!;
+  const event = { sender, senderFrame: sender.mainFrame };
+  const epoch = shell.workspace!.connectionTarget.epoch;
+  const invoke = (enabled: boolean) =>
+    shell.handlers.get("orca:diagnostics.setEnabled")!(event, { enabled, scopeVersion: 1 }, epoch);
+  const off = invoke(false);
+  expect(revoked).toHaveBeenCalledOnce();
+  expect(initialize).not.toHaveBeenCalled();
+  // The shipping native adapter refuses persistence; logical revocation still
+  // occurs immediately and the cleanup failure remains visible.
+  expect(await off).toMatchObject({ ok: false, code: "cleanup_pending" });
+  const on = invoke(true);
+  expect(initialize).toHaveBeenCalledOnce();
+  expect(choices).toHaveBeenCalledTimes(1);
+  release();
+  await on;
+  expect(choices).toHaveBeenCalledTimes(2);
+  expect(await readdir(directory)).toEqual([]);
+});
+
 it("permits old-target preview disposal only from the current window document without initializing diagnostics", async () => {
   directory = await mkdtemp(join(tmpdir(), "orca-diagnostics-disposal-ipc-"));
   shell.userData = directory;
