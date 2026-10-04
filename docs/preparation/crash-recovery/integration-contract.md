@@ -27,11 +27,14 @@ The user authorized conservative engineering selection within these choices. Any
 material retention, consent, collection, sharing or exposure change returns to
 **Casey and Cal**. Do not turn a proposed budget into an accepted measurement.
 
-The owner explicitly approved reboot-limited recovery in the 4 October 2026 task
-follow-up. That availability choice is settled; native clock verification is still
+The owner explicitly approved reboot-limited recovery in
+[decision 7](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976357825). That availability choice is settled; native clock verification is still
 required. The export-cleanup correction below is a **recommendation awaiting Casey
 and Cal review**, not approval to implement those paths. It supersedes RC1's
 key-dependent external cleanup locator as a proposal.
+[Decision 8](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976828540)
+approves the explicit bounded Save-again behavior below, replacing the indefinite
+unknown-outcome block. This does not approve the other storage/privacy exceptions.
 
 ## Ownership, exact inputs and integration order
 
@@ -262,7 +265,7 @@ only off/cleanup status. No recovery action resumes agents or waits for daemon h
 Conceptual bridge methods: `status`, `setEnabled(choice, scopeVersion)`,
 `preparePreview(current|previous)`, `closePreview(handle)`,
 `chooseDestination(handle)`, `save(handle, destinationToken)`,
-`discardPrevious` and `retryCleanup`. Main validates the current sender/window/target
+`discardPrevious`, `retryCleanup` and `acknowledgeUnknown(operationHandle)`. Main validates the current sender/window/target
 and epoch for each. Renderer never supplies report JSON, ciphertext, key, source path
 or arbitrary writable path; the native picker owns the destination token. These are
 reviewed seams to implement later, not new exported runtime APIs in this patch.
@@ -298,8 +301,9 @@ unresolved native writer still prevents cleanup success and new Save admission.
 
 Temporary plaintext can survive failed cleanup or app exit until a safe retry;
 there is no forensic erasure guarantee. The same-filesystem destination restriction,
-residual plaintext exposure and unknown-publication handling require Casey and Cal's
-review before implementing export/cleanup/key-retention paths.
+residual plaintext exposure and key-independent metadata still require Casey and Cal's
+review before implementing export/cleanup/key-retention paths. The bounded Save-again
+behavior is approved separately; exact copy and native proof remain review gates.
 
 Serialize final publication admission with all revocations. Immediately before native
 no-replace publication dispatch, recheck epoch, source/preview deadline, sender,
@@ -313,6 +317,90 @@ After restart, the proposal retains no destination locator: report unknown, neve
 infer success from a missing staging file, scan for the export, retry or overwrite. A hung publication keeps its single slot/reservation until resolved.
 Cleanup failure is separate from save failure. Never claim “nothing saved” on timeout.
 Repeated Save shares one operation result; no duplicate file or fresh collection.
+The explicit acknowledgement flow below admits a separate new operation, never a retry.
+
+## Acknowledge unknown outcome and save again
+
+This is the owner-approved direction in decision 8 and the task follow-up. It
+supersedes the indefinite block in `edb66b4`; it does not reconcile the missing
+publication result. Keep the earlier result `unknown`, separately from acknowledgement,
+cleanup and any new Save result. No timeout, restart, missing filename, elapsed time,
+opt-in or user click can prove that native work stopped or staging was removed safely.
+
+| State / transition | Required evidence and effect |
+| --- | --- |
+| `unknown_blocked` | Hold the old operation slot/reservations. Old native/process work may still write, or staging safety/cleanup is unresolved. Acknowledge and new Save are refused. Late known completion is reported honestly before acknowledgement; it cannot restore revoked authority. |
+| `unknown_ready` | Main proves all old writers cannot write, validates the bounded recorded staging identity and safe parent/ownership, and confirms the owned file removed or safely absent. Keep the outcome unknown and block a new Save until acknowledgement commits. |
+| Explicit `Acknowledge and save again` → `acknowledged_unknown` | Under the serialized gate recheck evidence, sender/epoch and exact old-operation handle; durably replace the bounded record with acknowledgement plus the unchanged unknown outcome. Only after commit release the old reservation/slot. Failure or uncertain commit stays blocked; no picker, write, consent change or Save is triggered by this action. |
+| Separate new Save | Require current consent/scope and unexpired exact-byte preview; explicitly choose destination again and show it, then require a new Save action. Allocate a fresh operation ID and atomically replace current intent while preserving the bounded unknown-history record. No old destination/save token or old effect is reused. |
+
+Proof of cessation must cover every process/worker/native handle capable of writing:
+a settled native completion or confirmed termination plus reviewed platform evidence
+that no surviving writer can later publish. A new main process, PID check, lock acquisition
+or worker-termination request alone is insufficient. A valid committed acknowledgement records the completed old-operation safety checks;
+it is not necessary to reconstruct retired historical file/process identities. On
+restart freshly verify the private fixed slot is safely empty and no current or
+incomplete operation can write. Unexpected staging or ambiguous current state still
+blocks: the summary is not a bypass. Unknown or malformed identity/state, a moved
+root, failed unlink or uncertain writer cessation fails closed.
+Absence is checked through verified native directory/identity state; it never establishes
+a Save outcome. Lost keys do not bypass any check and are not required for locating the
+proposed fixed slot. Opt-out, expiry and consent/preview revocation remain independent.
+
+Before acknowledgement show: “The earlier export may already exist. ORCA cannot
+confirm its result and will not find, change or delete that file. After safe cleanup,
+you can acknowledge the unknown result and choose to save again.” The button is
+**Acknowledge and save again**; adjacent copy says it does not save a file. Disable
+it with a safe reason while work or cleanup is unresolved. Offer current Preview if
+needed, then a fresh picker and separate final Save; acknowledgement never renews a
+preview or grants consent. Repeat the earlier-export warning before the new Save.
+Exact wording/accessibility remain for review; the behavior is approved.
+
+“New destination” means freshly selected and currently nonexistent, not proven
+historically different: no historical destination path is retained for comparison.
+Never reuse the old token. Recheck under atomic native no-overwrite publication;
+if a possible earlier export occupies that filename, refuse it unchanged. A later
+Save's success never changes the earlier unknown result.
+
+### Bounded acknowledgement and interruption
+
+Use one current-operation record and one latest acknowledged-unknown summary in
+the same bounded cleanup envelope; at most one atomic replacement copy. All copies
+of intent, staging identity and acknowledgement metadata together stay within the
+existing **8 KiB** sub-budget of the **64 KiB** control allowance and **16-entry**
+ceiling; no per-acknowledgement files or append-only ledger. The summary contains
+only the most recent opaque acknowledged operation ID, fixed `outcome: unknown`,
+`acknowledged: true`, and a boolean `olderUnknowns` (saturating, never a count).
+No report bytes, hashes, timestamps, destination paths or keys. Preserve it across
+new-operation intent replacement and known success/failure; replacing it on a later
+acknowledgement folds the older unknown into the boolean, never into success.
+UI says only the latest acknowledged unknown is detailed and older unknowns may
+exist; it must not imply a complete export history.
+
+Proposed metadata retention is one bounded summary across restarts and opt-out;
+it supplies no capture/save authority. Its persistence is part of the still-open
+key-independent metadata privacy review, not blanket approval from decision 8.
+Never erase an unacknowledged current operation to make space. An acknowledgement
+commit replaces that current obligation with the summary atomically; the next
+intent retains the summary. No path retention is needed for duplicate protection.
+
+Crash before acknowledgement commit leaves `unknown_blocked`/`unknown_ready`, after
+fresh safety checks; a safely committed acknowledgement leaves `acknowledged_unknown`.
+Interrupted replacement admits only a complete valid predecessor or committed successor;
+malformed/ambiguous records stay blocked, never infer acknowledgement. A crash after
+commit but before in-memory reservation release cannot cause a second release or
+publication: reconstruct reservations from verified physical state and bounded records.
+A crash while preparing the new intent recovers either acknowledged idle state or
+one new unresolved operation; never automatically dispatch either operation.
+
+Repeated acknowledgement for the same handle is idempotent while it is retained;
+older/stale handles return stale with no mutation. Repeated new Save joins the same
+new operation or returns already-in-progress; it cannot allocate another ID or file.
+Callbacks carry their operation ID and epoch and may never mutate a newer operation,
+release its reservation, or erase its prior-unknown summary. A delayed callback is not
+proof that native work remained alive: writer cessation must already have been proven.
+If cessation cannot be proven, acknowledgement remains blocked. The acknowledged
+record remains unknown; do not silently relabel it from stale callbacks.
 
 ## Content, failure and review gates
 

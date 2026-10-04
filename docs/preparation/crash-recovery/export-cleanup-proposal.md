@@ -3,7 +3,10 @@
 4 October 2026; responds to [review items 1 and 2](https://github.com/cschadewitz/Project_Orca/pull/470#issuecomment-5976309663)
 on `026e217e9efd32bb587bdc7c7ca5d97ab9007357`. **Proposal only; Casey and Cal's
 technical/privacy review remains required before these paths are implemented.**
-The task follow-up approves reboot-limited recovery; that choice is not reopened.
+[Decision 7](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976357825)
+approves reboot-limited recovery; [decision 8](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976828540)
+approves bounded explicit Save again after an unknown result. Neither choice is
+reopened; the remaining storage/exposure mechanisms still need review.
 No runtime code, activation, peer implementation import or native acceptance is added.
 
 ## Smallest viable alternatives
@@ -45,7 +48,8 @@ intent record, then exclusively create an empty staging file with restrictive ri
 Verify native directory/file/volume identity, regular-file type and single-link state;
 persist that identity before writing plaintext. Flush the exact frozen bytes and close
 or retain only the handle required by the reviewed publication primitive. The record
-contains only version, opaque operation ID, phase and local staging identities: no
+contains only version, opaque operation ID, phase, local staging identities and the
+contract's bounded acknowledged-unknown summary: no
 report content, digest, key, boot/capture metadata or destination path. It is not a
 checkpoint authority or a replacement for authenticated capture manifests. Filesystem
 protection, not a retained diagnostics key, protects this cleanup-only record. A
@@ -79,23 +83,38 @@ unknown and do not scan or reconstruct a destination path.
 | Opt-out | Immediately revoke logical authority and persist disable/revocation per contract. Drain/fence existing work and attempt deletion of both session and control wrappers without waiting for export cleanup merely to preserve its locator. Failed wrapper unlink or unsettled key work is reported as key cleanup pending. No new key or intentional cleanup-key retention. |
 | Failed staging unlink / unsafe or moved root | At most the reserved staging payload and bounded record remain; key deletion proceeds independently. Show cleanup pending, retain reservation, block new Save and old-state reuse; no search, forced access or automatic repair. |
 | Timeout / interrupted publication | Retain operation slot and reservations; an already-dispatched call may complete later. A crash can leave a published user file or staging plus the record. Report unknown until evidence resolves it; never delete the user file or infer “nothing saved.” |
-| Successful cleanup | After writers settle and verified staging removal is confirmed, report temporary cleanup complete separately from keys, durable opt-out and publication outcome. Delete cleanup metadata only when its outcome obligation is settled. |
+| Successful cleanup | After writers settle and verified staging removal is confirmed, report temporary cleanup complete separately from keys, durable opt-out and publication outcome. Retire current cleanup identity only after its outcome is known or its still-unknown result is explicitly acknowledged under the contract; preserve the bounded unknown summary. |
 
 No diagnostics key is deliberately retained solely for export cleanup. This does not
 promise instantaneous zeroization: live native operations, failed wrapper deletion,
 backups and runtime copies have the existing disclosed limits. Plaintext may survive
 while ORCA is closed or cleanup fails; no physical/forensic erasure is promised.
 
-The minimal proposal deliberately leaves an unknown post-crash publication blocking
-another Save, even when staging cleanup succeeds. Do not clear that block by opt-in,
-restart, timeout or a missing file. Supporting user-assisted reconciliation/reset would
-need a separately reviewed extension; do not silently add persistent destination paths.
-This availability limitation is part of the owner decision, not a claim of full recovery.
+## Approved acknowledgement replaces the indefinite block
+
+The [authoritative state-transition contract](integration-contract.md#acknowledge-unknown-outcome-and-save-again)
+implements decision 8 as preparation, not runtime code. Compared with `edb66b4`'s
+indefinite block, acknowledgement can remove only the new-Save admission block; it
+never establishes the previous publication result.
+
+| Stage | Rule |
+| --- | --- |
+| Unknown, old work or staging unresolved | Block acknowledgement and new Save, hold reservations; timeout/missing file/user click proves nothing. |
+| Unknown, proven no future old writes and verified cleared staging | Show the previous-export warning and enable explicit acknowledgement, still no Save. |
+| Durable acknowledgement committed | Keep prior result unknown, release only cleared old resources, invalidate old destination/save tokens; no automatic picker, Save or consent. |
+| Separately authorized new Save | Current valid exact preview, fresh picker/token, currently nonexistent filename, separate final Save, fresh operation ID, atomic no-overwrite. Keep possible earlier exports untouched. |
+
+One latest acknowledged-unknown summary plus a boolean for older unknowns replaces
+unbounded per-operation history. It shares the cleanup envelope and existing byte/entry
+budget. No old destination paths or report data; the UI discloses that only the latest
+unknown has detail. The contract specifies durable replacement, acknowledgement failure,
+crash recovery, callback fencing and repeated-click idempotence. Proposed summary
+retention across restart/opt-out is still part of the metadata privacy review.
 
 ## Bounds and observable ordering
 
 Retain the 4 MiB encrypted workspace/control allowance plus at most one 1 MiB export
-slot: 5 MiB total unsaved owned logical bytes. Cleanup metadata and its replacement
+slot: 5 MiB total unsaved owned logical bytes. Cleanup and acknowledgement metadata and all replacement
 copies together consume at most 8 KiB of the existing 64 KiB control allowance. Count
 all files, staging directory and replacement entries within the existing 16-entry
 ceiling. At most one Save, one staging payload and one cleanup operation; no generational
@@ -103,8 +122,9 @@ accumulation. Unknown/oversized/unsafe remnants block allocation, not accounting
 Memory remains within the contract's existing 8 MiB controlled-payload ledger and
 32 MiB measured target. Neither is newly measured here.
 
-Failed cleanup and unknown publication retain full reservations; a timeout does not
-free the native slot. One bounded startup cleanup attempt and explicit retry only.
+Failed cleanup and unknown publication retain full reservations until either a known
+outcome is safely settled or the contract's explicit acknowledgement commits after
+writer cessation and verified staging cleanup. A timeout never frees the native slot. One bounded startup cleanup attempt and explicit retry only.
 No execution locks, key prompts on the execution path, uploads or raw diagnostics logs.
 
 - Revocation before native dispatch prevents publication, including after intent or
@@ -128,13 +148,18 @@ OS/build/filesystem. The existing six helpers only test orchestration/fixture pl
 | Existing destination, symlink/junction/reparse race, moved destination or staging root, replaced file ID or extra hardlink | Refuse unsafe mutation; preserve unrelated/user files; no path-only deletion or scanning. Cross-filesystem/unsupported targets fail before plaintext. |
 | Denied unlink, full disk, corrupt/oversized/missing cleanup record, interrupted record replacement | Full reservation remains charged; at most one slot, no new Save, accurate cleanup pending. |
 | Barrier before and after dispatch; opt-out/expiry/window loss; timeout then late success/failure | Both ordering cases and exact-byte export; no restored authority, duplicated save, premature release or false cleanup success. |
-| Crash after possible publication with missing stage | Publication stays unknown despite successful staging cleanup; no final-file deletion, destination search or blind retry. |
+| Crash after possible publication with missing stage | Publication stays unknown; missing stage alone permits neither acknowledgement nor new Save. With proven writer cessation, verified staging cleanup and durable explicit acknowledgement, permit only a separately authorized new operation. No final-file deletion, destination search or blind retry. |
+| Crash before/after acknowledgement replacement, reservation release and fresh intent | Valid predecessor or committed successor only; ambiguous state blocks; no automatic dispatch or duplicate release. |
+| Repeated acknowledgement/Save, stale callbacks, expired preview, old picker token | Idempotent acknowledgement, one new operation at most, no renewed consent/preview; old result remains unknown. |
+| Existing earlier export and filename collision during fresh publication | Earlier bytes remain unchanged; no-overwrite refuses collision; a newly selected nonexistent filename can succeed without resolving earlier unknown. |
+| Many successive unknown outcomes | One current record and one latest unknown summary with olderUnknowns boolean, no per-event ledger; all copies fit 8 KiB/64 KiB/16-entry bounds; disclose compacted history. |
 | Packaged Mac and Windows, another ordinary OS account | Restrictive rights before first byte, cross-account read/write denial, ancestry/identity and no-replace race tests; actual filesystem behavior, not Node mode bits or Linux mocks. |
 
 ## Decision requested before implementation
 
 Casey and Cal: review the fixed private slot, no cleanup-key retention, same-filesystem
-Save restriction, bounded unencrypted identity record, residual plaintext cleanup risk,
-and conservative unresolved-publication block together. The dispatch consistency fix
+Save restriction, bounded unencrypted identity/acknowledgement records and their
+retention, and residual plaintext cleanup risk together. The bounded explicit
+Save-again direction is already approved; exact copy and native proof remain open. The dispatch consistency fix
 addresses contradictory prose; implementing the associated paths remains gated. Keep
 #416, technical/privacy review and fresh independent/native acceptance open.

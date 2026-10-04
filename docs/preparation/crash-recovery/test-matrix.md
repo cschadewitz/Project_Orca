@@ -10,7 +10,10 @@ main/full-app crash, up-to-24-hour retention, approximately five-second checkpoi
 cadence with one write in flight, a complete uncompressed canonical report of at
 most 1 MiB and at most 8,192 events, and an OS-protected diagnostics-only key.
 Technical/privacy review, actual user consent, independent review and native
-acceptance remain separate gates. A test plan passing review is not an implemented
+acceptance remain separate gates. [Decision 8](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976828540)
+approves explicit acknowledgement and a separate new Save after proven writer cessation
+and verified staging cleanup; it does not resolve the earlier unknown result.
+A test plan passing review is not an implemented
 or activated feature.
 
 The helper code in `packages/app/test/recovery-preparation/` tests only disposable
@@ -18,6 +21,14 @@ child-process crash orchestration and synthetic byte fixtures. It does **not**
 exercise a diagnostics implementation or establish any observation below. Do not
 count these six helper tests as recovery coverage. The product choices supersede
 the earlier per-session restart re-consent and proposed 4,096-event ceiling.
+
+The test-only `export-observations.ts` oracle checks independently supplied observations
+for unsafe acknowledgement, release, dispatch, callback, prior-file and accounting
+behavior. Its mutation tests verify that these assertions detect selected violations;
+they do not execute a storage coordinator, native adapter or durable acknowledgement.
+Seven explicitly pending adapter cases cover C21–C26. A future adapter must gather
+writer/file/record evidence independently of reported UI/controller state and exercise
+real boundaries; a hand-written passing trace cannot establish native or runtime safety.
 
 ## Frozen engineering parameters to verify
 
@@ -34,6 +45,7 @@ with Casey and Cal.
 | Memory | At most 8 MiB explicitly owned payload buffers across operations, plus a measured 32 MiB incremental heapUsed + external acceptance target across processes (arrayBuffers reported as a subset, not added twice; RSS/native costs separate). The latter is not a hard JavaScript heap guarantee. |
 | Work | Two-second preparation deadline, ten-second key/file operation deadline, no snapshot queue, no second operation while timed-out work remains alive. Deadline handling must not pretend to interrupt synchronous CPU work or uncancellable OS calls. |
 | Keys | Independent per-session diagnostics data key, OS-wrapped through the selected asynchronous safeStorage adapter; verify missing/rotated key behavior and native identity separately. |
+| Acknowledgement | No admission until old writers cannot write, staging verified cleared and explicit acknowledgement durably committed; current consent/preview and fresh picker/Save remain necessary. One current record plus one latest unknown summary/olderUnknowns boolean; all metadata copies within existing 8 KiB/64 KiB/16-entry bounds. |
 | Save authority | Serialized publication commit dispatch wins over later revocation. Earlier revocation prevents dispatch. Once dispatched, a pending publication cannot be reported as cancelled; report actual completion/failure and cleanup state. |
 
 ## Automated contract cases
@@ -67,6 +79,12 @@ contract is reviewed and implemented, with `--maxWorkers=1`.
 | C18 | Maximum report/events with simultaneous ring, serialization, encryption, decryption, preview, IPC/renderer copies and local save | Account for all retained copies, bounded queue cardinality and operation overlap. Instrument allocation/high-water behavior and measure heap/RSS externally; the 1 MiB serialized limit is never presented as a RAM guarantee. No unlimited preview, promise or timer accumulation. |
 | C19 | Cross-app restart/reboot, clock uncertainty while picker is open, restore an old disk/key pair, failed delete followed by relaunch | Durable opt-out/revocation overrides stale checkpoint/manifest copies; coordinated whole-profile rollback is outside the threat model. Apply clock/replay limits honestly; document platform limitations instead of claiming forensic erasure or stronger same-user protection. |
 | C20 | Plaintext export staging, target replacement/link race, restricted-access failure, cancellation and crash before/after final publication | Capture/checkpoint files and their temps stay encrypted. Under the pending export-cleanup proposal, plaintext occupies one fixed private slot with durable intent and verified identity before plaintext write. Test cleanup with every diagnostics key lost/unavailable/deleted; no external locator or retained cleanup key. Test same-filesystem restriction, intent/identity/publication crash gaps, unsafe/moved paths, failed unlink and new-Save refusal while unresolved. No overwrite/path substitution outside selected authority; cleanup failure does not claim success. |
+| C21 | Timeout/native call still pending; request acknowledgement repeatedly; then inject late success/failure and stale completion after a newer operation | Pending or uncertain old writer blocks acknowledgement and new Save, retaining reservations. A real late outcome before acknowledgement is reported honestly; old callbacks cannot mutate new state, release its reservation or change an acknowledged unknown. Test revocation both before and after dispatch. |
+| C22 | Writer cessation proven; staging unlink denied, identity substituted, root moved, cleanup record unsafe; repeat with all diagnostics keys lost | Acknowledgement cannot bypass cleanup/identity checks, and missing name alone is insufficient. No external scan/key retention; new Save remains blocked until verified owned staging is safely cleared. |
+| C23 | Kill before/after acknowledgement write, flush/replacement, reservation release and next intent; fail acknowledgement persistence | Recover valid predecessor or committed successor only, otherwise block. No implicit acknowledgement, auto-replay, double release or new write from restart. A committed acknowledgement records completed old checks; restart freshly verifies the fixed slot empty and no current/incomplete operation capable of writing, never bypassing unexpected state. |
+| C24 | Repeated/stale acknowledgement and Save clicks; old picker token, expired preview, consent revocation between actions | At most one durable acknowledgement and one independently authorized new operation. Current exact preview and fresh picker token are required; acknowledgement grants no consent, extends no TTL and dispatches nothing. Old operation ID never reused. |
+| C25 | Earlier unknown Save actually produced a user file; acknowledge after safe cleanup, then select its existing name, race creation at new name, finally choose a nonexistent name | Earlier export bytes remain unchanged throughout; native atomic no-overwrite refuses both collisions. New Save at fresh selected nonexistent name can succeed; its bytes match current preview and earlier result stays unknown. No durable old destination path or automatic retry. |
+| C26 | Many unknown → safe cleanup → acknowledge → new Save cycles, crashes during compaction, known later success and opt-out/restart | One current operation plus one latest unknown summary/olderUnknowns boolean only, all replacement copies charged; <=8 KiB cleanup metadata inside 64 KiB/16 entries. No accumulating files/IDs/paths; latest unknown remains explicit, older uncertainty shown without pretending complete history. Unacknowledged obligation never dropped for space. |
 
 ## Adversarial schedules and assertions
 
@@ -116,6 +134,14 @@ prevent another Save. A cancellation that loses to dispatch must report the even
 outcome honestly, without restoring revoked authority. Verify exported user files survive later opt-out/expiry and that an
 existing destination is never destroyed on a failed save.
 
+For C21–C26, record native dispatches and file identities independently of controller
+status; a synthetic state machine cannot prove its own safety. Include late callbacks
+after confirmed cessation separately from an OS writer that is still capable of writing.
+Use barriers at acknowledgement commit and fresh-intent replacement. Assert complete
+prior-export bytes before/after every action and preserve old unknown alongside a
+known new result. Missing/corrupt records, identity failure and uncertain termination
+are refusals, never a shortcut to an acknowledgement-ready state.
+
 For C14, scan only disposable profiles with
 `filesContainingSyntheticBytes`; fail when its explicit scan guard prevents
 complete inspection. Pair this with inspection of decoded canonical content,
@@ -130,7 +156,7 @@ not executable acceptance evidence or permission to implement before review.
 
 | Environment | Required pass | Current status |
 | --- | --- | --- |
-| Focused Vitest, `--maxWorkers=1` | C01–C15 and C17–C20 against final integrated head; exact SHA, command, counts and contract constants | Not run: implementation absent |
+| Focused Vitest, `--maxWorkers=1` | C01–C15 and C17–C26 against final integrated head; exact SHA, command, counts and contract constants | Not run: implementation absent |
 | Paired execution workload | Serialized bytes, aggregate owned disk bytes, copy/queue peaks, heap/RSS, checkpoint latency, event-loop delay, omissions and actual retained coverage | Not run at approved 8,192 events; #455 is earlier synthetic Linux/tmpfs evidence |
 | Network observation | Instrument or externally observe built process across C16, including denied/cancel paths | Not run |
 | Packaged macOS | Signed identity, native Keychain behavior, owner-only file access, path/link safety, crash restart, actual checkpoint latency, accessibility and no network | Not run |

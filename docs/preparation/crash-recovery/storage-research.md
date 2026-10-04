@@ -71,4 +71,13 @@ can be located without either key; wrapper deletion failures are reported separa
 A verified same-filesystem no-replace move is required; other destinations are refused.
 This is pending owner/technical review, not an implemented adapter. Dispatch orders
 non-cancellable publication against revocation; late completion never restores authority.
-Unknown outcomes and failed cleanup retain their reservations and block new Saves.
+Unknown outcomes and failed cleanup retain their reservations and block new Saves
+until the authoritative contract's safe acknowledgement transition applies.
+[Decision 8](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976828540)
+approves explicit acknowledgement only after proven writer cessation and verified
+staging cleanup; durable acknowledgement preserves the unknown result. The next Save
+is separate, with current preview/consent, fresh operation and picker token, and a
+newly selected nonexistent filename. One latest unknown summary and an olderUnknowns
+boolean bound history inside the existing cleanup budget; no destination history,
+automatic retry or deletion of a possible earlier export. Summary retention and the
+remaining storage/privacy exceptions still require review.

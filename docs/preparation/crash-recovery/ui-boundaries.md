@@ -110,7 +110,9 @@ path. Its 1 MiB allowance remains separate from the 4 MiB retained-store ceiling
 Only verified same-filesystem native no-replace publication is supported; explain
 unsupported destinations before creating plaintext. Cleanup needs no retained diagnostics
 key. Failed cleanup can leave plaintext in the private slot and blocks new Save; unknown
-publication is reported separately. This proposal needs Casey and Cal review before
+publication is reported separately. Decision 8 permits the explicit acknowledgement
+flow below without changing the earlier unknown result. Remaining storage exceptions
+need Casey and Cal review before
 implementation, including its destination restriction and residual plaintext exposure.
 
 ## Save, discard, opt-out and replacement races
@@ -128,7 +130,7 @@ filesystem work cannot block execution.
 | --- | --- |
 | Opt-out, discard, expiry or recovered-candidate replacement wins before publication dispatch | Revoke affected previews and queued writes immediately; cancel publication, remove operation-owned temporary files and show cancellation or cleanup pending. No stale Save success. |
 | Publication dispatch wins before revocation | Show save pending until completion. If successful, report that Save was admitted before revocation and subsequently completed. The user-owned export remains; deletion must not claim to remove it. If publication fails, report failure and cleanup outcome. |
-| Native completion is unknown after deadline or interruption | Show publication outcome unknown; reconcile the same operation before another Save. Do not claim either successful deletion or that no file was written. |
+| Native completion is unknown after deadline or interruption | Show publication outcome unknown. Block while old work or staging remains unresolved; after proven cessation and verified cleanup offer explicit acknowledgement under the contract, then a separate new Save. Acknowledgement does not reconcile the missing outcome or mean no file was written. |
 | A recovered candidate is replaced after its preview was prepared | Invalidate that source generation's preview and destination token. Never substitute new bytes into the old handle. Routine CURRENT checkpoint refreshes leave a pinned current-session preview unchanged. |
 | Picker returns after cancel, target change or opt-out | Ignore its destination; no write and no restored authority. |
 
@@ -179,10 +181,17 @@ content. #386/#389 retain onboarding/support ownership.
   export files and diagnostics keys. An earlier save may still complete. Saved files
   remain yours. Cleanup failures will be shown; diagnostics keys are not kept merely
   to find temporary files.”
-- Pending Save: “Diagnostics are off. An earlier save is still pending.” Late success:
+- Pending Save after opt-out: “Diagnostics are off. An earlier save is still pending.” Late success:
   “The save started before diagnostics were turned off and has now completed. ORCA
   will not delete that file.” Unknown outcome: “ORCA cannot confirm whether the earlier
-  save completed. Another save is blocked while its outcome is unresolved.”
+  save completed. It may already exist. ORCA will not find, change or delete that file.”
+- Save-again acknowledgement (decision 8): button `Acknowledge and save again`.
+  “After ORCA confirms that the earlier operation cannot write and safely finishes
+  cleanup, you can acknowledge the unknown result. This does not save a file. Review
+  a current preview, choose a filename again, then select Save.” Show the reason when
+  the button is disabled: earlier work may still write, or cleanup is unresolved.
+  On commit: “Earlier result: unknown (acknowledged).” Before the next Save repeat:
+  “An earlier export may already exist and will not be deleted.”
 - Expiry: “Expired history cannot be opened. ORCA removes expired files when it next runs;
   it cannot remove them while closed.”
 - Cleanup failure: “Diagnostics access is disabled. Some local diagnostic files could not
@@ -190,6 +199,24 @@ content. #386/#389 retain onboarding/support ownership.
   this exception next to opt-out/Save status when applicable, and report key-wrapper
   cleanup separately from file cleanup and unknown publication. Do not claim secure erasure of storage, snapshots or
   backups; do not surface a raw exception as the explanation.
+
+Acknowledgement is a main-validated, operation/epoch-bound action. It does not close
+an unknown result as success, failure or cancellation. A valid current preview may
+be reused; a stale/expired preview needs explicit preparation again. Always discard
+the old destination/save token and require fresh native selection, then separate final
+Save. “New” means freshly selected and currently nonexistent, not historically different.
+No-overwrite refuses any earlier export at that name. Opt-out/scope/expiry gates still
+apply; the acknowledgement action does not turn capture on or renew a preview.
+
+While acknowledgement persistence is pending, disable duplicate action; repeated
+requests are idempotent and never open a picker or save. Failed/uncertain acknowledgement
+persistence remains blocked. Show the acknowledgement as complete only after durable
+commit and revalidated cleanup/writer cessation. After restart never resume Save
+silently. A newer successful Save leaves the earlier acknowledged result unknown.
+Only the latest acknowledged unknown is detailed; if older outcomes are compacted,
+show “Other earlier exports may also exist; ORCA does not keep a complete export history.”
+The bounded summary survives restart/opt-out as proposed housekeeping metadata; that
+retention and exact copy remain for privacy review, not new consent or acceptance.
 
 ## Interaction and acceptance sketch
 
@@ -213,7 +240,9 @@ content. #386/#389 retain onboarding/support ownership.
   cancellation. Assert encrypted-only capture/checkpoint staging; separately test the
   explicit export temporary file's permissions, byte identity, lifetime and cleanup.
   Assert no diagnostic network path or execution mutation. Use bounded workers and
-  disposable synthetic profiles. Test matching consent restart, mismatched scope, and
+  disposable synthetic profiles. Add the acknowledgement/crash/repeated-click/previous-file
+  cases C21–C26; verify failed cleanup/live native work cannot be bypassed.
+  Test matching consent restart, mismatched scope, and
   late replies after each per-process epoch change.
 - Packaged Mac/Windows tests must verify actual picker, permissions, key access, restart
   and screen-reader behavior. Linux/mock tests and #455's tmpfs results cannot establish
