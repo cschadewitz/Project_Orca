@@ -26,7 +26,8 @@ no production switch, unsigned fallback or promotion output.
 
 ## Source contract and unresolved decisions
 
-The baseline is `e94bf699d9f3000de8822ed3434c1dce92b6ce19`. The field names and
+The original baseline is `e94bf699d9f3000de8822ed3434c1dce92b6ce19`, reconciled with
+main at `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`. The field names and
 semantics come exclusively from the [delivery v1 artifact contract](../../../../docs/preparation/native-mac-delivery/artifact-contract.md).
 The [testing fixture contract](../../../../docs/preparation/native-mac-testing/fixture-contracts.md)
 supplies negative cases. There is no second delivery manifest or extension field.
@@ -35,11 +36,12 @@ The separate `--fixture-app` input is a test-side observation, not a manifest fi
 No field-name conflict was found between these two documents at the baseline. Both
 still describe a proposal. The testing document's reference to #405 being absent
 from audited main is historical; this work reads the delivery document at the
-requested baseline. Production publisher approval (D1), macOS support (D4), version
-mapping (D5), and review/ownership decisions (D6) remain unresolved. Synthetic values
-do not resolve them. In particular:
+requested baseline. Main now records approved bundle and Team IDs under D1;
+certificate/authority verification, macOS support (D4), version mapping (D5), and
+review/ownership decisions (D6) are not established by these fixtures. Synthetic
+values do not resolve them. In particular:
 
-- `dev.orca.desktop`, `darwin`, `arm64`, the `gha:RUN_ID:RUN_ATTEMPT:mac-arm64`
+- `com.schadewitz.orca`, `darwin`, `arm64`, the `gha:RUN_ID:RUN_ATTEMPT:mac-arm64`
   syntax and daemon resource path are the documented v1 constants.
 - `bundleShortVersion` and `bundleVersion` are opaque strings compared **verbatim**
   with the synthetic plist. No mapping from SemVer is inferred. `0007.02` is
@@ -52,7 +54,8 @@ do not resolve them. In particular:
 - Signing declarations require nonempty team/authority, a digest, `true` hardened
   runtime and `passed` verification. They cannot establish an expected publisher,
   validate a certificate or prove any signature. The production wrong-team check
-  remains a native/approved-publisher check, not a fabricated identity allowlist.
+  remains a native/approved-publisher check. The fixture deliberately retains an
+  invented Team ID rather than claiming the approved publisher signed its bytes.
 - Notary logs and verification reports have no fixed machine-readable schema in
   delivery v1. Their references, bytes and digests are checked; their contents are
   not interpreted as Apple results. No competing report schema is introduced.

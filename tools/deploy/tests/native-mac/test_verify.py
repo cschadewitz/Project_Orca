@@ -84,6 +84,14 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(before, {p.relative_to(self.fixture): p.read_bytes()
                                   for p in self.fixture.rglob("*") if p.is_file()})
 
+    def test_legacy_bundle_id_rejected_even_when_all_fixture_records_agree(self):
+        self.manifest["identity"]["bundleId"] = "dev.orca.desktop"
+        self.bind_identity()
+        plist = plistlib.loads(self.plist_path.read_bytes())
+        plist["CFBundleIdentifier"] = "dev.orca.desktop"
+        self.plist_path.write_bytes(plistlib.dumps(plist))
+        self.fails("identity.bundleId: expected com.schadewitz.orca")
+
     def test_candidate_mode_rejected_even_without_files(self):
         result = self.cli("--mode", "candidate")
         self.assertEqual(result.returncode, 2)

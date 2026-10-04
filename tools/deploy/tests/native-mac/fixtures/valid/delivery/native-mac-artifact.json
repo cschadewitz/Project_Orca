@@ -4,7 +4,7 @@
   "identity": {
     "schemaVersion": 1,
     "releaseVersion": "0.0.0-fixture.1",
-    "bundleId": "dev.orca.desktop",
+    "bundleId": "com.schadewitz.orca",
     "platform": "darwin",
     "arch": "arm64",
     "sourceCommit": "0123456789abcdef0123456789abcdef01234567",
@@ -32,7 +32,7 @@
       "macos": "0.0.0"
     }
   },
-  "identitySha256": "e171bf0019a2d919b4453c75ac305e4fa8d3e84cfdbf6ec6cef9f82f660cb857",
+  "identitySha256": "b4392df84a3a6f269130b0855c3a3bce9e3b0a3189e92a6e36d2189a75e21304",
   "artifacts": [
     {
       "format": "dmg",

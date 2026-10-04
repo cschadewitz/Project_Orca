@@ -116,7 +116,7 @@ def validate_identity(identity):
                   "builtAt appVersion bundleShortVersion bundleVersion daemon protocol storeEpoch toolchain", "identity")
     schema(identity["schemaVersion"], "identity")
     matching(identity["releaseVersion"], SEMVER, "identity.releaseVersion")
-    require(identity["bundleId"] == "dev.orca.desktop", "identity.bundleId: expected dev.orca.desktop (v1)")
+    require(identity["bundleId"] == "com.schadewitz.orca", "identity.bundleId: expected com.schadewitz.orca (v1)")
     require(identity["platform"] == "darwin", "identity.platform: expected darwin")
     require(identity["arch"] == "arm64", "identity.arch: expected arm64")
     matching(identity["sourceCommit"], r"[0-9a-f]{40}", "identity.sourceCommit")
