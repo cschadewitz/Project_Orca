@@ -472,8 +472,14 @@ async function excludedOutput(f, excluded, targetKind, hiddenKind) {
   const metadata = path.join(f.c.root, excluded);
   const hidden = path.join(metadata, "pkg");
   await fs.mkdir(hidden, { recursive: true });
-  if (hiddenKind === "hardlink") await fs.link(path.join(f.c.cache, "content"), path.join(hidden, "shared"));
-  else await directoryLink(f.c.cache, path.join(hidden, "escape"));
+  if (hiddenKind === "hardlink") {
+    // Keep the seed/source/tool inventories unchanged so revalidation reaches
+    // the final output audit instead of rejecting a multiply linked cache file.
+    const outside = path.join(f.area, "outside-root-package");
+    await fs.writeFile(outside, "synthetic shared package bytes", { flag: "wx" });
+    await fs.link(outside, path.join(hidden, "shared"));
+    assert.equal((await fs.stat(path.join(hidden, "shared"))).nlink, 2);
+  } else await directoryLink(f.c.cache, path.join(hidden, "escape"));
   await directoryLink(targetKind === "root" ? metadata : hidden, path.join(f.c.root, "node_modules/pkg"));
 }
 
@@ -484,6 +490,8 @@ for (const excluded of [".git", ".orca"]) {
         const f = await fixture(t);
         await fs.mkdir(path.join(f.c.root, "node_modules"));
         await excludedOutput(f, excluded, targetKind, hiddenKind);
+        assert.equal(await cacheFingerprint(f.c.cache), f.c.cacheDigest);
+        assert.deepEqual(await fingerprint(f.c.root), { inputs: f.c.inputs, sourceDigest: f.c.sourceDigest });
         await rejects(() => preparedFingerprint(f.c.root), "OUTPUT_SYMLINK");
       });
     }
@@ -514,6 +522,8 @@ linuxTest("excluded dependency targets retain reservation without publishing pre
         prepare(plan, async (spec) => {
           await success(spec);
           await excludedOutput(f, excluded, "descendant", "hardlink");
+          assert.equal(await cacheFingerprint(f.c.cache), f.c.cacheDigest);
+          assert.deepEqual(await fingerprint(f.c.root), { inputs: f.c.inputs, sourceDigest: f.c.sourceDigest });
           return { exitCode: 0, cacheComplete: true };
         }),
       "OUTPUT_SYMLINK",
