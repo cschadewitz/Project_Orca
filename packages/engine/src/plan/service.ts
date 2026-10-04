@@ -11,6 +11,7 @@
  * sees the plan updated with that step's signals. Nothing here talks to agents.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isDeepStrictEqual } from "node:util";
 import {
   compactSchedule,
   computeSchedule,
@@ -139,6 +140,11 @@ export interface UpstreamContext {
 }
 
 const SYSTEM: PlanOrigin = { kind: "system" };
+
+/** Shared by intake's locked upserts so mutations survive a later rejected signal. */
+interface SignalChanges {
+  changed: boolean;
+}
 
 /** The plan locks the current async context already owns (see `PlanService.withPlan`). */
 const ownedLocks = new AsyncLocalStorage<ReadonlySet<string>>();
@@ -780,6 +786,7 @@ export class PlanService {
     raw: RiskInputLike,
     origin: PlanOrigin,
     opts: { resolveSlug?: (slug: string) => WorkItem | undefined; extraAffects?: string[] },
+    applied: SignalChanges = { changed: false },
   ): Promise<Risk> {
     const input = RiskInputSchema.parse(raw);
     const matrix = (await this.requirePlan(planId)).riskMatrix;
@@ -826,6 +833,7 @@ export class PlanService {
         ...(input.owner ? { owner: input.owner } : {}),
       };
       await this.stores.plan.risks.put(risk);
+      applied.changed = true;
       await this.journal({ type: "risk.raised", planId, origin, payload: { risk } });
       return risk;
     }
@@ -845,7 +853,9 @@ export class PlanService {
     const mergedTriggers = [...new Set([...cur.triggers, ...input.triggers])];
     if (mergedTriggers.length !== cur.triggers.length) changes.triggers = mergedTriggers;
     if (Object.keys(changes).length === 0) return cur;
-    return this.updateRisk(planId, cur.id, changes, origin);
+    const risk = await this.updateRisk(planId, cur.id, changes, origin);
+    applied.changed = true;
+    return risk;
   }
 
   async updateRisk(
@@ -890,7 +900,12 @@ export class PlanService {
     return this.withPlan(planId, () => this.upsertDecisionLocked(planId, input, origin));
   }
 
-  private async upsertDecisionLocked(planId: string, input: DecisionInputLike, origin: PlanOrigin): Promise<Decision> {
+  private async upsertDecisionLocked(
+    planId: string,
+    input: DecisionInputLike,
+    origin: PlanOrigin,
+    applied: SignalChanges = { changed: false },
+  ): Promise<Decision> {
     const parsed = DecisionInputSchema.parse(input);
     const now = this.clock.isoNow();
     let dec = (await this.stores.plan.decisions.list((d) => d.planId === planId && d.key === parsed.key))[0];
@@ -913,17 +928,18 @@ export class PlanService {
         ...(parsed.dueBy ? { dueBy: parsed.dueBy } : {}),
       };
       await this.stores.plan.decisions.put(dec);
+      applied.changed = true;
       await this.journal({ type: "decision.opened", planId, origin, payload: { decision: dec } });
     } else if (dec.status !== "decided") {
       const changes: Partial<Decision> = {};
       if (parsed.title !== dec.title && parsed.title !== parsed.key) changes.title = parsed.title;
       if (parsed.question && parsed.question !== dec.question) changes.question = parsed.question;
       if (parsed.context && parsed.context !== dec.context) changes.context = parsed.context;
-      if (parsed.criteria.length && JSON.stringify(parsed.criteria) !== JSON.stringify(dec.criteria))
+      if (parsed.criteria.length && !isDeepStrictEqual(parsed.criteria, dec.criteria))
         changes.criteria = parsed.criteria;
-      if (parsed.options.length && JSON.stringify(parsed.options) !== JSON.stringify(dec.options))
-        changes.options = parsed.options;
-      if (parsed.consequences.length) changes.consequences = parsed.consequences;
+      if (parsed.options.length && !isDeepStrictEqual(parsed.options, dec.options)) changes.options = parsed.options;
+      if (parsed.consequences.length && !isDeepStrictEqual(parsed.consequences, dec.consequences))
+        changes.consequences = parsed.consequences;
       if (parsed.scale !== dec.scale && input.scale !== undefined) changes.scale = parsed.scale;
       if (Object.keys(changes).length) {
         const invalidated =
@@ -932,6 +948,7 @@ export class PlanService {
         dec = { ...dec, ...changes, updatedAt: now };
         if (invalidated) delete dec.result;
         await this.stores.plan.decisions.put(dec);
+        applied.changed = true;
         await this.journal({
           type: "decision.updated",
           planId,
@@ -949,14 +966,16 @@ export class PlanService {
     // Slugs in `blocks` become dependencies when the caller registers items; here we only handle already-known items.
     for (const slug of parsed.blocks) {
       const item = await this.findItem(planId, slug);
-      if (item)
-        await this.addDependencyRecord(
+      if (item) {
+        const dependency = await this.addDependencyRecord(
           planId,
           item.id,
           { kind: "decision", decisionId: dec.id },
           { type: "blocks", requiredBy: DEPENDENCY_START_PHASE, rationale: `decision ${dec.key} must be made first` },
           origin,
         );
+        if (dependency) applied.changed = true;
+      }
     }
     if (parsed.chosen && dec.status !== "decided") {
       const decided = await this.evaluateDecision(
@@ -969,6 +988,7 @@ export class PlanService {
         },
         origin,
       );
+      applied.changed = true;
       return decided.decision;
     }
     return dec;
@@ -1208,19 +1228,20 @@ export class PlanService {
       dependencies: [] as Dependency[],
       issues: [...signals.issues],
     };
+    const applied: SignalChanges = { changed: false };
     // Each signal is applied on its own: a rejected one (an unknown `chosen`,
     // say) is reported, not allowed to drop the signals behind it.
     for (const r of signals.risks) {
       const extraAffects = r.affects.length === 0 && ctx.workItemId ? [ctx.workItemId] : [];
       try {
-        out.risks.push(await this.upsertRisk(ctx.planId, r, origin, { extraAffects }));
+        out.risks.push(await this.upsertRiskLocked(ctx.planId, r, origin, { extraAffects }, applied));
       } catch (e) {
         out.issues.push(`risk '${r.key}': ${(e as Error).message}`);
       }
     }
     for (const d of signals.decisions) {
       try {
-        out.decisions.push(await this.upsertDecision(ctx.planId, d, origin));
+        out.decisions.push(await this.upsertDecisionLocked(ctx.planId, d, origin, applied));
       } catch (e) {
         out.issues.push(`decision '${d.key}': ${(e as Error).message}`);
       }
@@ -1245,7 +1266,7 @@ export class PlanService {
         }
       }
     }
-    if (out.risks.length || out.decisions.length || out.dependencies.length) await this.reconcile(ctx.planId, origin);
+    if (applied.changed || out.dependencies.length) await this.reconcile(ctx.planId, origin);
     if (out.issues.length) {
       this.logger.warn("plan signals with issues", { artifact: artifact.id, issues: out.issues });
       await this.journal({
