@@ -1,7 +1,7 @@
 /** Real encrypted fs/coordinator schedules on disposable Linux profiles; not native acceptance. */
 import { access, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { RECOVERY_LIMITS } from "../src/main/diagnostics/recovery-contract.js";
 import { DIAGNOSTIC_LIMITS } from "../src/main/diagnostics/profile.js";
 import { withSyntheticProfile } from "./recovery-preparation/crash-harness.js";
@@ -275,6 +275,54 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
     });
   });
 
+  it.each(["saved", "refused"] as const)(
+    "a new admitted rejection after earlier %s remains unknown until explicit acknowledgement",
+    async (earlierOutcome) => {
+      await withSyntheticProfile(async (profile) => {
+        const fixture = await implementationFixture(profile);
+        const first = await enableAndPreview(fixture);
+        const firstPath = fixture.picker.destination;
+        const firstDestination = value(await fixture.controller.chooseDestination(first.handle));
+        if (earlierOutcome === "refused") fixture.native.publication = () => Promise.resolve("refused");
+        value(await fixture.controller.save(first.handle, firstDestination.token));
+        expect(fixture.controller.status().lastSaveOutcome).toBe(earlierOutcome);
+        if (earlierOutcome === "saved") expect(await readFile(firstPath)).toEqual(Buffer.from(first.text));
+        else await expect(access(firstPath)).rejects.toMatchObject({ code: "ENOENT" });
+        expect((await fixture.disk.readExportState()).current).toBeUndefined();
+        value(await fixture.controller.closePreview(first.handle));
+
+        const second = value(await fixture.controller.preparePreview("current"));
+        fixture.picker.destination = join(profile, "new-unknown-report.json");
+        const secondDestination = value(await fixture.controller.chooseDestination(second.handle));
+        fixture.native.publication = () => Promise.reject(new Error("Synthetic admitted adapter rejection"));
+        // ControlledNative invokes the real controller admission callback before this rejection.
+        await fixture.controller.save(second.handle, secondDestination.token);
+        const id = fixture.controller.status().unknownOperation;
+        expect(id).toBeDefined();
+        expect(fixture.controller.status().lastSaveOutcome).toBe("unknown");
+        expect(fixture.controller.status().code).toBe("unknown_blocked");
+        expect((await fixture.disk.readExportState()).current?.id).toBe(id);
+
+        value(await fixture.controller.retryCleanup());
+        expect(fixture.controller.status().lastSaveOutcome).toBe("unknown");
+        expect(fixture.controller.status().code).toBe("unknown_ready");
+        expect((await fixture.disk.readExportState()).current?.id).toBe(id);
+        expect((await fixture.controller.chooseDestination(second.handle)).ok).toBe(false);
+        expect((await fixture.disk.readExportState()).summary).toBeUndefined();
+        expect(fixture.native.publishCalls).toBe(2);
+
+        value(await fixture.controller.acknowledgeUnknown(id!));
+        const state = await fixture.disk.readExportState();
+        expect(state.current).toBeUndefined();
+        expect(state.summary).toEqual({ id, outcome: "unknown", acknowledged: true, olderUnknowns: false });
+        expect(fixture.native.publishCalls).toBe(2);
+        if (earlierOutcome === "saved") expect(await readFile(firstPath)).toEqual(Buffer.from(first.text));
+        else await expect(access(firstPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await fixture.controller.cleanExit();
+      });
+    },
+  );
+
   it("all real metadata replacement copies remain bounded and unknown history saturates in one summary", async () => {
     await withSyntheticProfile(async (profile) => {
       const fixture = await implementationFixture(profile);
@@ -313,6 +361,104 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
 });
 
 describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", () => {
+  it("an unresolved export after restart expires crashed history without creating capture authority", async () => {
+    await withSyntheticProfile(async (profile) => {
+      expect((await crashImplementationAt(profile, "checkpoint-and-unknown")).signal).toBe("SIGKILL");
+      const root = join(profile, "private");
+      const originalManifest = await readFile(join(root, "manifest.json"));
+      const committed = JSON.parse(originalManifest.toString("utf8")) as {
+        payload: { current: { slot: number } };
+      };
+      const oldSlot = committed.payload.current.slot;
+      const keys = new SyntheticKeys();
+      const wrapped = vi.spyOn(keys, "wrap");
+      const intervals = vi.spyOn(globalThis, "setInterval");
+      let fixture: Awaited<ReturnType<typeof implementationFixture>>;
+      let tick: (() => void) | undefined;
+      try {
+        fixture = await implementationFixture(profile, {
+          keys,
+          reading: { bootId: "synthetic-boot", elapsedMs: 2000 },
+        });
+        const scheduled = intervals.mock.calls.find((call) => call[1] === RECOVERY_LIMITS.checkpointMs);
+        if (scheduled && typeof scheduled[0] === "function") tick = scheduled[0];
+      } finally {
+        intervals.mockRestore();
+      }
+      if (!tick) throw new Error("Actual unresolved-restart expiry timer was not installed");
+      const id = fixture.controller.status().unknownOperation;
+      expect(id).toBeDefined();
+      expect(fixture.controller.status().enabled).toBe(true);
+      expect(fixture.controller.status().previous).toBe(false);
+      expect(fixture.controller.record("run", "run_failed")).toBe(false);
+      expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+      expect(await readFile(join(root, "manifest.json"))).toEqual(originalManifest);
+      expect(wrapped).not.toHaveBeenCalled();
+      expect(fixture.picker.calls).toBe(0);
+      expect(fixture.native.publishCalls).toBe(0);
+
+      const maintain = fixture.disk.maintain.bind(fixture.disk);
+      let maintenanceFinished = false;
+      const maintenance = vi.spyOn(fixture.disk, "maintain").mockImplementation(async (reading) => {
+        const result = await maintain(reading);
+        maintenanceFinished = true;
+        return result;
+      });
+      fixture.clock.reading.elapsedMs = 1100 + RECOVERY_LIMITS.retentionMs;
+      tick();
+      await waitFor(() => maintenanceFinished);
+      expect(maintenance).toHaveBeenCalledTimes(1);
+      await expect(access(join(root, `slot-${oldSlot}.bin`))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(join(root, `session-${oldSlot}.key`))).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fixture.disk.readExportState()).current?.id).toBe(id);
+      expect(wrapped).not.toHaveBeenCalled();
+      expect(fixture.controller.record("run", "run_failed")).toBe(false);
+      expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+      expect(fixture.picker.calls).toBe(0);
+      expect(fixture.native.publishCalls).toBe(0);
+      maintenance.mockRestore();
+      await fixture.controller.cleanExit();
+    });
+  });
+  it("the installed five-second timer expires old history while an unresolved export blocks checkpoints", async () => {
+    await withSyntheticProfile(async (profile) => {
+      await crashImplementationAt(profile, "checkpoint-committed");
+      const intervals = vi.spyOn(globalThis, "setInterval");
+      let fixture: Awaited<ReturnType<typeof implementationFixture>>;
+      let tick: (() => void) | undefined;
+      try {
+        fixture = await implementationFixture(profile, { reading: { bootId: "synthetic-boot", elapsedMs: 2000 } });
+        const scheduled = intervals.mock.calls.find((call) => call[1] === RECOVERY_LIMITS.checkpointMs);
+        if (scheduled && typeof scheduled[0] === "function") tick = scheduled[0];
+      } finally {
+        intervals.mockRestore();
+      }
+      if (!tick) throw new Error("Actual recovery timer was not installed");
+      expect(fixture.controller.status().previous).toBe(true);
+      const committed = JSON.parse(await readFile(join(fixture.root, "manifest.json"), "utf8")) as {
+        payload: { previous: { slot: number } };
+      };
+      const oldSlot = committed.payload.previous.slot;
+      const preview = value(await fixture.controller.preparePreview("current"));
+      const destination = value(await fixture.controller.chooseDestination(preview.handle));
+      fixture.native.publication = () => Promise.resolve("unknown");
+      await fixture.controller.save(preview.handle, destination.token);
+      const id = fixture.controller.status().unknownOperation;
+      expect(id).toBeDefined();
+      value(await fixture.controller.closePreview(preview.handle));
+      fixture.clock.reading.elapsedMs = 1100 + RECOVERY_LIMITS.retentionMs;
+      tick();
+      await waitFor(() => !fixture.controller.status().previous);
+      await expect(access(join(fixture.root, `slot-${oldSlot}.bin`))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(join(fixture.root, `session-${oldSlot}.key`))).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fixture.disk.readExportState()).current?.id).toBe(id);
+      expect(fixture.native.publishCalls).toBe(1);
+      expect(fixture.controller.record("run", "run_failed")).toBe(true);
+      value(await fixture.controller.retryCleanup());
+      value(await fixture.controller.acknowledgeUnknown(id!));
+      await fixture.controller.cleanExit();
+    });
+  });
   it.each(["failure", "hang"])(
     "durable opt-out %s stays visible and repeated requests do not allocate new writers",
     async (fault) => {

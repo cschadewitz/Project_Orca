@@ -30,9 +30,9 @@ if (boundary === "maximum-checkpoint-committed") {
   await reached(boundary);
 }
 const preview = await enableAndPreview(fixture);
-if (boundary === "checkpoint-committed") {
+if (boundary === "checkpoint-committed" || boundary === "checkpoint-and-unknown") {
   await fixture.controller.checkpoint();
-  await reached(boundary);
+  if (boundary === "checkpoint-committed") await reached(boundary);
 }
 if (boundary === "before-checkpoint-manifest" || boundary === "after-checkpoint-manifest") {
   await fixture.controller.checkpoint();
@@ -64,6 +64,7 @@ if (boundary === "before-stage-write") {
 await fixture.controller.save(preview.handle, destination.token);
 const id = fixture.controller.status().unknownOperation;
 if (id === undefined) throw new Error("No actual unresolved operation");
+if (boundary === "checkpoint-and-unknown") await reached(boundary);
 await fixture.controller.retryCleanup();
 if (boundary === "before-ack") {
   fixture.native.beforeReplace = async (_source, destination) => {
