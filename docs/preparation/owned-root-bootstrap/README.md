@@ -3,11 +3,16 @@
 This is an **inactive preparation pilot**, implemented in
 `tools/deploy/owned-root-bootstrap/prepare.mjs`. It has no CLI, subprocess runner,
 ACP adapter integration, installation step, service change, or activation switch.
-Only Node standard-library code and synthetic fixtures have been exercised.
+It provides Node standard-library plan construction and synthetic filesystem checks.
 Controller preparation must finish before the existing ACP adapter starts an
 agent. This helper grants the agent no additional permissions or run capacity.
 
 ## Review and local verification
+
+Admission and preparation support Linux only: executable bits, UID ownership and
+mode 0700 are required. Other platforms reject both entry points with `PLATFORM`
+before reading a contract or creating state. Inventory helpers remain portable.
+This is an explicit restriction, not a substitute for Linux acceptance evidence.
 
 From the assigned execution directory with an installed Node >=22:
 
@@ -19,9 +24,13 @@ node --test --test-isolation=none --test-reporter=tap tools/deploy/owned-root-bo
 
 Tests create `.synthetic-*` fixtures beneath the helper directory and remove only
 their own fixtures afterward. They never invoke Git, pnpm, ACP, network services,
-or real credentials. Interrupted fixture state is asserted before cleanup. No
-full pnpm, lint, typecheck, build, app smoke, or repository suite is claimed in
-this dependency-free execution root.
+or real credentials. Interrupted fixture state is asserted before cleanup.
+`tools/test/owned-root-bootstrap.test.js` runs these Node tests through the existing
+Vitest/CI lane. Linux must pass all 12 admission tests and four portable inventory
+tests; only the unsupported-platform rejection test skips. Windows and macOS run
+five tests and explicitly skip the 12 Linux admission tests. A green result with
+those skips is not Linux acceptance. These tests do not prove package-manager,
+build, app smoke, or live bootstrap readiness.
 
 ## Contract and trust boundary
 
@@ -47,6 +56,8 @@ The dependency input map uses sorted insertion order. Inventory hashes cover
 sorted arrays of relative paths, kinds, modes, and regular-file SHA-256 hashes.
 Source excludes `.git`, `.orca`, and only the enumerated package `node_modules`
 outputs. These metadata/report exclusions are not permission to change them.
+Install lifecycle hooks, including `preprepare` and `postprepare`, are rejected
+in workspace manifests even though the planned invocation also disables scripts.
 Symlinks, special files, and multiply linked regular files in source or seed
 are rejected. Hook/private configuration names are rejected without reading
 their contents. The helper is intentionally unsuitable for repositories needing
