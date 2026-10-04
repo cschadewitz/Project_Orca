@@ -322,6 +322,75 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
     });
   });
 
+  it.each(["close", "expiry"] as const)(
+    "known native refusal permits a fresh preview and picker after %s without resetting consent or history",
+    async (disposal) => {
+      await withSyntheticProfile(async (profile) => {
+        const fixture = await implementationFixture(profile);
+        const first = await enableAndPreview(fixture);
+        const priorPath = fixture.picker.destination;
+        const firstDestination = value(await fixture.controller.chooseDestination(first.handle));
+        value(await fixture.controller.save(first.handle, firstDestination.token));
+        value(await fixture.controller.closePreview(first.handle));
+        await fixture.controller.checkpoint();
+        const consent = await fixture.disk.readSetting();
+        const setEnabled = vi.spyOn(fixture.controller, "setEnabled");
+        const discardPrevious = vi.spyOn(fixture.controller, "discardPrevious");
+        const refused = value(await fixture.controller.preparePreview("current"));
+        const refusedPath = join(profile, "refused-report.json");
+        fixture.picker.destination = refusedPath;
+        const destination = value(await fixture.controller.chooseDestination(refused.handle));
+        const priorUserContent = "Synthetic user file created after the picker, before native admission";
+        fixture.native.beforePublish = () => writeFile(refusedPath, priorUserContent, { flag: "wx" });
+        // The real Linux adapter must refuse this destination collision; it has
+        // no modeled publication result and must not overwrite the user file.
+        value(await fixture.controller.save(refused.handle, destination.token));
+        fixture.native.beforePublish = undefined;
+        expect(fixture.controller.status().lastSaveOutcome).toBe("refused");
+        expect(fixture.controller.status().code).toBe("refused");
+        expect(fixture.controller.status().cleanupPending).toBe(false);
+        expect((await fixture.disk.readExportState()).current).toBeUndefined();
+        expect(fixture.native.publishCalls).toBe(2);
+        expect(await readFile(refusedPath, "utf8")).toBe(priorUserContent);
+        if (disposal === "expiry") {
+          fixture.clock.reading.elapsedMs += RECOVERY_LIMITS.previewMs;
+          expect(fixture.controller.status().activePreviewHandle).toBeUndefined();
+          expect(fixture.controller.status().payloadReservedBytes).toBe(RECOVERY_LIMITS.exportBytes);
+          expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+        }
+        value(await fixture.controller.closePreview(refused.handle));
+        expect(fixture.controller.status().payloadReservedBytes).toBe(0);
+        expect(fixture.controller.record("run", "run_failed")).toBe(true);
+        const maintain = vi.spyOn(fixture.disk, "maintain");
+        const checkpoint = vi.spyOn(fixture.disk, "checkpoint");
+        await fixture.controller.checkpoint();
+        expect(maintain).toHaveBeenCalledTimes(1);
+        expect(checkpoint).toHaveBeenCalledTimes(1);
+        expect(fixture.controller.status().lastSaveOutcome).toBe("refused");
+        expect(fixture.controller.status().code).toBe("refused");
+        expect(await fixture.disk.readSetting()).toEqual(consent);
+        const history = await inspectPrivateRoot(fixture.root);
+        expect([...history.files.keys()].some((name) => /^slot-[012]\.bin$/.test(name))).toBe(true);
+        const fresh = value(await fixture.controller.preparePreview("current"));
+        expect(fresh.handle).not.toBe(refused.handle);
+        expect(fresh.text).toContain("run_failed");
+        fixture.picker.destination = join(profile, "fresh-report.json");
+        const selected = value(await fixture.controller.chooseDestination(fresh.handle));
+        expect(selected.token).not.toBe(destination.token);
+        expect(fixture.picker.calls).toBe(3);
+        expect(fixture.native.publishCalls).toBe(2);
+        expect(fixture.controller.status().lastSaveOutcome).toBe("refused");
+        expect(setEnabled).not.toHaveBeenCalled();
+        expect(discardPrevious).not.toHaveBeenCalled();
+        expect(await readFile(priorPath)).toEqual(Buffer.from(first.text));
+        expect(await readFile(refusedPath, "utf8")).toBe(priorUserContent);
+        await expect(access(fixture.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
+        value(await fixture.controller.closePreview(fresh.handle));
+        await fixture.controller.cleanExit();
+      });
+    },
+  );
+
   it("failed cleanup, unsafe identity and key loss never bypass acknowledgement", async () => {
     await withSyntheticProfile(async (profile) => {
       const fixture = await implementationFixture(profile);
