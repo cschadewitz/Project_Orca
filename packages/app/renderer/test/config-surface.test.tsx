@@ -340,7 +340,8 @@ describe("what the connection changes", () => {
     await screen.findByRole("region", { name: "Agents" });
     expect(screen.getByText(/Not connected — this is the last the daemon said/)).toBeTruthy();
     // The values dim; the labels around them do not.
-    expect(document.querySelector(".orca-config__body")?.classList.contains("orca-stale-value")).toBe(true);
+    expect(document.querySelector(".orca-config__form")?.classList.contains("orca-stale-value")).toBe(true);
+    expect(screen.getByRole("region", { name: "Local diagnostics" }).closest(".orca-stale-value")).toBeNull();
   });
 
   /**
