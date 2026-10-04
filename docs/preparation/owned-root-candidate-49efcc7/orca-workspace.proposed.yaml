@@ -1,0 +1,10 @@
+# Inactive replacement for only the workspace block of ~/.orca-codex-work/orca.yaml.
+# baseBranch is the trusted source ref; each run receives its own orca/roots/<runId> branch.
+workspace:
+  provider: git-worktree
+  repo: /home/casey/.local/share/orca-worktrees/mac-beta-codex
+  worktreeRoot: /home/casey/.local/share/orca-worktrees/cal-codex-roots
+  baseBranch: cal/mac-beta-codex
+  branchPrefix: orca/
+  isolateRoots: true
+  hostId: local

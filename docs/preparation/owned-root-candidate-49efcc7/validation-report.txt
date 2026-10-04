@@ -1,0 +1,50 @@
+Project_Orca candidate validation — 2026-10-04 UTC
+
+Candidate and build identity
+Host: agent-01, Linux 6.12.107+deb13-cloud-amd64 x86_64 GNU/Linux
+Checkout: /srv/dev/worktrees/Project_Orca-prepare-49efcc7-candidate-validation-81dde16f
+Branch: kepler/prepare-49efcc7-candidate-validation
+HEAD: 49efcc7236ac127c952bb1f7a50fc6ef72f7df84
+Commit subject: feat(engine): isolate opt-in root runs in owned Git worktrees (#460) (#462)
+Root package version: 0.6.0
+Lockfile SHA-256: 0a840533d8974ad2397ad297dfeb7f60bf9ec088728e3fb6680e3d65b62be5a4
+Compiled dist identity: 1009 files under packages/*/dist; SHA-256 of sorted relative-path sha256sum manifest: ffc4e42345db96f5103613ac3a82be16409770f9b6df1a14c755d1a00b6aaf5f
+Manifest command: find packages -type f -path '*/dist/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum
+Key outputs: packages/cli/dist/main.js SHA-256 0978c7dd9f1a074827b69c2972d7824b0544f3c2db55fedcc040f7b5d3358bd1; packages/engine/dist/workspace/owned-root-worktree.js SHA-256 ef7861dfa9e894a04087fc78d1313b4054051c735d82b613e25cba338b2814a; packages/integrations/dist/mcp/transport.js SHA-256 21634ac36203d939f27aea4ce0e51ab6d0c4007c5ea67544b1f027399aaa71c6.
+Tool versions: mise 2026.9.7; Node v24.21.0; pnpm 12.4.2; TypeScript 7.0.2; Vitest 5.0.2; Git 2.47.3.
+
+Commands and results
+1. ELECTRON_SKIP_BINARY_DOWNLOAD=1 mise exec -- pnpm install --frozen-lockfile --offline
+   Failed: offline shared cache lacked xmlbuilder@15.1.1. No lockfile change.
+2. ELECTRON_SKIP_BINARY_DOWNLOAD=1 mise exec -- pnpm install --frozen-lockfile
+   Stopped after registry DNS failures in sandbox.
+3. ELECTRON_SKIP_BINARY_DOWNLOAD=1 mise exec -- pnpm install --frozen-lockfile --store-dir /tmp/orca-49efcc7-pnpm-store --fetch-retries=0
+   Exited 2: this pnpm install does not accept --fetch-retries.
+4. ELECTRON_SKIP_BINARY_DOWNLOAD=1 mise exec -- pnpm install --frozen-lockfile --store-dir /tmp/orca-49efcc7-pnpm-store
+   Stopped after /tmp filled; only that disposable store was removed.
+5. TMPDIR=<candidate>/.candidate-tmp ELECTRON_SKIP_BINARY_DOWNLOAD=1 mise exec -- pnpm install --frozen-lockfile --store-dir <candidate>/.candidate-store --reporter=append-only
+   Passed with network permission: lockfile accepted, 461 packages downloaded and installed, esbuild postinstall completed. See install.log.
+6. TMPDIR=<candidate>/.candidate-tmp mise exec -- pnpm run build
+   Passed: tsc -b tsconfig.build.json and @orca/app renderer Vite build. Nonfatal renderer chunk-size warning. See build.log.
+7. TMPDIR=<candidate>/.candidate-tmp mise exec -- pnpm exec vitest run packages/engine/test/owned-root-worktree.test.ts packages/engine/test/owned-root-host.test.ts packages/daemon/test/owned-root-attachment.test.ts packages/engine/test/admission-retry-direct.test.ts packages/cli/test/config-generation-bootstrap.test.ts --maxWorkers=2
+   Passed: 5 files, 71 tests, 32.30 s. See targeted-tests.log.
+8. TMPDIR=<candidate>/.candidate-tmp ORCA_MCP_REQUIRE_PRODUCTION=1 mise exec -- pnpm exec vitest run packages/integrations/test/mcp-root-worktree.test.ts packages/integrations/test/mcp-operator-production-recovery.test.ts --maxWorkers=1
+   Initial sandbox run: 13 fixture daemons exited during startup before assertions, with no daemon output. See acceptance-tests.log.
+   Repeat with temporary loopback/socket permission: passed, 2 files, 13 tests, 105.86 s. See acceptance-tests-escalated.log. No skips permitted by ORCA_MCP_REQUIRE_PRODUCTION=1.
+9. mise exec -- node .candidate-tmp/validate-proposal.mjs
+   Passed: workflow v3 schema/graph validation, configuration schema validation, and a synthetic render showing workspace.cwd and workspace.branch resolve. This script used only the inactive proposal files.
+
+The accompanying log copies have only trailing whitespace and extra terminal blank lines removed.
+
+All <candidate> abbreviations above expand to the exact checkout path above. Test scratch was <candidate>/.candidate-tmp. The compiled acceptance fixture creates its own temporary configuration, Git repository/worktrees, disk store, loopback endpoints and issued synthetic credentials there; its child process environment excludes ambient ORCA endpoints, tokens, plugins, NODE_OPTIONS and agent credentials. Scripted test agents only were used. No installed runtime, live ORCA home, daemon, tunnel, credentials, real agent, or live store was changed.
+
+Inactive proposal
+- orca-workspace.proposed.yaml is only a candidate replacement for the workspace block in /home/casey/.orca-codex-work/orca.yaml. It selects the built-in local Linux git-worktree provider with isolateRoots: true, a sibling root-worktree directory, and cal/mac-beta-codex as the current trusted base ref. Per-run branches are orca/roots/<runId>. The current repository has no refs/heads/main, so relying on the provider's default baseBranch would fail.
+- work-v3.proposed.yaml retains workflow ID cal-codex-work and versions it from 2 to 3. It replaces the fixed checkout/branch instructions with recorded workspace.cwd and workspace.branch, removes the fixed expectedBranch input/enum and the fixed branch report validator, and keeps expectedHead as a per-task guard. Node/edge topology and deliverable paths/kinds remain the same. The branch result field remains required, but its dynamic equality with the recorded workspace branch needs caller review because the validator accepts only static values.
+- The existing private credential and auth files were left unchanged and are excluded from this handoff. The scoped client retains the six grants runs.read, artifacts.read, workflows.read, runs.start, runs.control and inputs.answer, limited to workflow cal-codex-work and owned runs. Check validity at approval time.
+
+Compatibility and rollback for review
+- Root isolation works only with the built-in local host on Linux. The live codex-worker and workspace both declare hostId local; any SSH/custom-host substitution must be refused. Owned-root receipts and ready markers live in the repository's Git common directory, while worktrees are under the proposed sibling directory. Validate the actual parent paths and approved base ref before activation.
+- Existing captured v2 runs retain their captured provider/workflow; changing current configuration does not convert them into isolated roots. Review/drain active or pending runs and confirm generation retention before any switch. The new workflow assumes workspace.branch is present; activation should pair v3 only with the isolated provider.
+- The feature intentionally fails closed on incomplete provisioning or changed Git registration. It has no automatic repair/removal; retain receipts, branches, worktrees, private inputs and run records for manual reconciliation. Agent execution is not an OS sandbox and same-user Git metadata remains mutable.
+- Before an approved runtime/configuration switch, preserve a consistent backup of the current binary, configuration/workflow, credential/key material and store. A simple binary downgrade is not a verified rollback once new root records or captured generations exist. If any new admission occurs, preserve its owned worktree and receipt and use a reviewed, compatible restore/recovery procedure; never force-remove or reset it. No store migration or live activation was performed here.
