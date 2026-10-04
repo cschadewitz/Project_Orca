@@ -17,4 +17,5 @@
 | [adr/](adr/) | the architectural decision records, including daemon boundaries and permission sidecars |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | build, test, and review the code base |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | plan issues, reuse existing work, group coherent outcomes and make dependencies explicit |
+| [SwiftUI read-only pilot preparation](preparation/swiftui-readonly-pilot/README.md) | review iPhone screens, portable synthetic contracts, device prerequisites and the milestone 24 spike handoff |
 | [RELEASING.md](RELEASING.md) | cut a release: the versioning policy, what counts as breaking, and the milestone‑driven flow |
