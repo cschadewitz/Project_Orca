@@ -18,3 +18,4 @@
 | [DEVELOPMENT.md](DEVELOPMENT.md) | build, test, and review the code base |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | plan issues, reuse existing work, group coherent outcomes and make dependencies explicit |
 | [RELEASING.md](RELEASING.md) | cut a release: the versioning policy, what counts as breaking, and the milestone‑driven flow |
+| [iOS companion research](preparation/ios-companion/README.md) | compare mobile frameworks and review the proposed phone scope, shared Watch contracts, security, costs and acceptance gates |
