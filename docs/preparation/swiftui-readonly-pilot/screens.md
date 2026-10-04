@@ -47,7 +47,8 @@ Connection state names/glyphs come from
 Fixture playback is labeled “Synthetic preview”, never file mode or live ORCA.
 Do not inherit the desktop semantics' `writes: queued` presentation: mobile writes
 are absent in every state. New enums are protocol incompatibility, not a ninth run
-status. All eight canonical run statuses have examples in `runs.json`.
+status. All eight canonical run statuses have examples in the `runs` packet in
+[fixtures/packets.json](fixtures/packets.json).
 
 ## Native accessibility/design review gate
 
