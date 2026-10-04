@@ -1,0 +1,436 @@
+{
+  "session": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "session",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "protocol": {
+        "major": 2,
+        "minor": 0
+      },
+      "mode": "read-only",
+      "capabilities": ["runs.read", "approvals.read", "artifacts.read", "invalidations.read"],
+      "visibility": {
+        "runs": "owned",
+        "workflowIds": ["synthetic-workflow"]
+      }
+    }
+  },
+  "runs": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "runs",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "items": [
+        {
+          "id": "synthetic-run-running",
+          "workflowId": "synthetic-workflow",
+          "title": "Synthetic running example",
+          "status": "running",
+          "updatedAt": "2026-10-04T10:00:00Z",
+          "observedSeq": 10,
+          "steps": [
+            {
+              "stepRunId": "synthetic-step-live",
+              "nodeId": "permission",
+              "status": "running"
+            }
+          ],
+          "artifacts": []
+        },
+        {
+          "id": "synthetic-run-waiting",
+          "workflowId": "synthetic-workflow",
+          "title": "Synthetic waiting example",
+          "status": "waiting",
+          "updatedAt": "2026-10-04T10:00:00Z",
+          "observedSeq": 11,
+          "steps": [
+            {
+              "stepRunId": "synthetic-step-review",
+              "nodeId": "review",
+              "status": "waiting"
+            }
+          ],
+          "artifacts": [
+            {
+              "runId": "synthetic-run-waiting",
+              "stepRunId": "synthetic-step-review",
+              "artifactId": "synthetic-artifact-review"
+            }
+          ]
+        },
+        {
+          "id": "synthetic-run-succeeded",
+          "workflowId": "synthetic-workflow",
+          "title": "Synthetic succeeded example",
+          "status": "succeeded",
+          "updatedAt": "2026-10-04T10:00:00Z",
+          "observedSeq": 12,
+          "steps": [
+            {
+              "stepRunId": "synthetic-step-review",
+              "nodeId": "review",
+              "status": "succeeded"
+            }
+          ],
+          "artifacts": []
+        },
+        {
+          "id": "synthetic-run-failed",
+          "workflowId": "synthetic-workflow",
+          "title": "Synthetic failed example",
+          "status": "failed",
+          "updatedAt": "2026-10-04T10:00:00Z",
+          "observedSeq": 13,
+          "steps": [
+            {
+              "stepRunId": "synthetic-step-review",
+              "nodeId": "review",
+              "status": "failed"
+            }
+          ],
+          "artifacts": []
+        },
+        {
+          "id": "synthetic-run-cancelled",
+          "workflowId": "synthetic-workflow",
+          "title": "Synthetic cancelled example",
+          "status": "cancelled",
+          "updatedAt": "2026-10-04T10:00:00Z",
+          "observedSeq": 14,
+          "steps": [
+            {
+              "stepRunId": "synthetic-step-review",
+              "nodeId": "review",
+              "status": "cancelled"
+            }
+          ],
+          "artifacts": []
+        },
+        {
+          "id": "synthetic-run-blocked",
+          "workflowId": "synthetic-workflow",
+          "title": "Synthetic blocked example",
+          "status": "blocked",
+          "updatedAt": "2026-10-04T10:00:00Z",
+          "observedSeq": 15,
+          "steps": [
+            {
+              "stepRunId": "synthetic-step-review",
+              "nodeId": "review",
+              "status": "blocked"
+            }
+          ],
+          "artifacts": []
+        },
+        {
+          "id": "synthetic-run-held",
+          "workflowId": "synthetic-workflow",
+          "title": "Synthetic held example",
+          "status": "held",
+          "updatedAt": "2026-10-04T10:00:00Z",
+          "observedSeq": 16,
+          "steps": [
+            {
+              "stepRunId": "synthetic-step-review",
+              "nodeId": "review",
+              "status": "held"
+            }
+          ],
+          "artifacts": []
+        },
+        {
+          "id": "synthetic-run-stale",
+          "workflowId": "synthetic-workflow",
+          "title": "Synthetic stale example",
+          "status": "stale",
+          "updatedAt": "2026-10-04T10:00:00Z",
+          "observedSeq": 17,
+          "steps": [
+            {
+              "stepRunId": "synthetic-step-review",
+              "nodeId": "review",
+              "status": "stale"
+            }
+          ],
+          "artifacts": []
+        }
+      ],
+      "nextCursor": null,
+      "truncated": false,
+      "restartRequired": false
+    }
+  },
+  "approvals": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "approvals",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "items": [
+        {
+          "runId": "synthetic-run-waiting",
+          "stepRunId": "synthetic-step-review",
+          "requestId": "synthetic-input-durable",
+          "lifetime": "durable",
+          "status": "pending",
+          "summary": "Review the synthetic test report on desktop.",
+          "ownerAvailability": "available",
+          "evidence": "complete",
+          "artifacts": [
+            {
+              "runId": "synthetic-run-waiting",
+              "stepRunId": "synthetic-step-review",
+              "artifactId": "synthetic-artifact-review"
+            }
+          ]
+        },
+        {
+          "runId": "synthetic-run-running",
+          "stepRunId": "synthetic-step-live",
+          "requestId": "synthetic-input-live",
+          "lifetime": "live",
+          "status": "pending",
+          "summary": "A synthetic live permission ask was last observed.",
+          "ownerAvailability": "unknown",
+          "evidence": "redacted",
+          "artifacts": []
+        }
+      ],
+      "nextCursor": null,
+      "truncated": false,
+      "restartRequired": false
+    }
+  },
+  "artifact": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "artifact",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "runId": "synthetic-run-waiting",
+      "stepRunId": "synthetic-step-review",
+      "artifactId": "synthetic-artifact-review",
+      "contentRevision": "synthetic-content-1",
+      "mediaType": "text/markdown",
+      "availability": "available",
+      "text": "# Synthetic review\n\nTwo synthetic checks passed. No real workspace was inspected.\n\n<script>doNotExecute()</script>\n![Do not fetch](https://example.invalid/image)\n[Do not navigate](file:///synthetic-only)\n",
+      "truncated": false
+    }
+  },
+  "connected": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "connection",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "state": "live",
+      "freshness": "fresh",
+      "lastSuccessAt": "2026-10-04T10:00:00Z",
+      "reason": "none"
+    }
+  },
+  "offline": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "connection",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "state": "disconnected",
+      "freshness": "stale",
+      "lastSuccessAt": "2026-10-04T10:00:00Z",
+      "reason": "offline"
+    }
+  },
+  "reconnecting": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "connection",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "state": "reconnecting",
+      "freshness": "stale",
+      "lastSuccessAt": "2026-10-04T10:00:00Z",
+      "reason": "recovering"
+    }
+  },
+  "offline-empty": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "connection",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "state": "disconnected",
+      "freshness": "none",
+      "lastSuccessAt": null,
+      "reason": "offline"
+    }
+  },
+  "changed": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "invalidation",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "collection": "runs",
+      "runId": "synthetic-run-waiting",
+      "seq": 13,
+      "reason": "changed"
+    }
+  },
+  "live-expired": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "invalidation",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "collection": "approvals",
+      "runId": "synthetic-run-running",
+      "seq": null,
+      "reason": "live-expired"
+    }
+  },
+  "revoked": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "error",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "code": "REVOKED",
+      "retryable": false
+    }
+  },
+  "unavailable": {
+    "schema": {
+      "major": 1,
+      "minor": 0
+    },
+    "kind": "error",
+    "context": {
+      "workspaceId": "11111111-1111-4111-8111-111111111111",
+      "instanceId": "22222222-2222-4222-8222-222222222222",
+      "principalId": "synthetic-human-a",
+      "enrollmentId": "synthetic-phone-a",
+      "policyRevision": "synthetic-policy-1"
+    },
+    "asOf": "2026-10-04T10:00:00Z",
+    "revision": "synthetic-revision-1",
+    "data": {
+      "code": "UNAVAILABLE",
+      "retryable": true
+    }
+  }
+}

@@ -1,0 +1,2 @@
+# Isolated preparation checks; no application dependency or runtime integration.
+jsonschema==4.19.2

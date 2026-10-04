@@ -1,0 +1,470 @@
+[
+  {
+    "id": "happy-read",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "session",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "runs",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "approvals",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "artifact",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "connected",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": [
+      "Read-only screens show synthetic data.",
+      "Artifact URLs/HTML stay inert. No network effect beyond allowed reads."
+    ]
+  },
+  {
+    "id": "cold-offline",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "offline-empty",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": ["No cache, no zero-count success, read retry available."]
+  },
+  {
+    "id": "cached-offline",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "session",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "runs",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "approvals",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "offline",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": ["Last observed timestamps remain visible. No run-status rewrite or mutation queue."]
+  },
+  {
+    "id": "empty-and-error",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "empty-runs",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "empty-approvals",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "unavailable",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": ["Empty successes are distinct from failed read; retry preserves eligible prior data."]
+  },
+  {
+    "id": "gap-and-old-response",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "session",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "runs",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "begin-read",
+        "ticket": "old",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "gap",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "begin-read",
+        "ticket": "new",
+        "generation": 2
+      },
+      {
+        "event": "deliver",
+        "fixture": "newer-run",
+        "ticket": "new",
+        "generation": 2
+      },
+      {
+        "event": "deliver",
+        "fixture": "runs",
+        "ticket": "old",
+        "generation": 1
+      }
+    ],
+    "expected": [
+      "Old response discarded; waiting run remains succeeded at seq 20.",
+      "Approval snapshot also required before Attention becomes fresh."
+    ]
+  },
+  {
+    "id": "duplicate-and-independent-run",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "runs",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "duplicate",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "other-run",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": ["Waiting seq 11 is already covered; running seq 11 requires its own read."]
+  },
+  {
+    "id": "suspension-and-new-boot",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "session",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "approvals",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "background"
+      },
+      {
+        "event": "foreground",
+        "generation": 2
+      },
+      {
+        "event": "deliver",
+        "fixture": "new-boot",
+        "ticket": "discover-2",
+        "generation": 2
+      },
+      {
+        "event": "deliver",
+        "fixture": "approvals",
+        "ticket": "old",
+        "generation": 1
+      }
+    ],
+    "expected": ["Old generation dropped; clear prior live-current claims; fetch fresh authorized snapshots."]
+  },
+  {
+    "id": "revocation-during-read",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "session",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "begin-read",
+        "ticket": "pending",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "revoked",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "runs",
+        "ticket": "pending",
+        "generation": 1
+      }
+    ],
+    "expected": ["Cancel requests, advance generation, purge cache; late response cannot restore data."]
+  },
+  {
+    "id": "wrong-identity",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "session",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "wrong-host",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "wrong-principal",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "wrong-enrollment",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": ["All foreign context blocked before display/cache. No automatic enrollment switch."]
+  },
+  {
+    "id": "policy-and-pagination",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "session",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "partial-page",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "new-policy",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "restart-page",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": ["Old scope pages discarded; reset cursor and fetch page one under current policy."]
+  },
+  {
+    "id": "ephemeral-invalidation",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "approvals",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "live-expired",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "expired-live",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": ["Null seq never advances run cursor. Reread removes pending claim; no action offered."]
+  },
+  {
+    "id": "evidence-omission",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "missing-evidence",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "artifact-missing",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "artifact-redacted",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "artifact-truncated",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "artifact-substitution",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": ["Missing/redacted/truncated context explicit; wrong binding rejected, no text substitution."]
+  },
+  {
+    "id": "cache-expiry",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "runs",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "offline",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "advance-monotonic-seconds",
+        "seconds": 901
+      }
+    ],
+    "expected": ["Protected summaries expire, show no saved data; failed reads never extend TTL."]
+  },
+  {
+    "id": "capability-and-version",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "missing-capability",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "write-looking-capability",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "incompatible-protocol",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": ["Unavailable surfaces explained; unknown capabilities grant nothing; mismatch blocks new reads."]
+  },
+  {
+    "id": "untrusted-notification",
+    "steps": [
+      {
+        "event": "notification-hint",
+        "route": "synthetic-input-durable"
+      },
+      {
+        "event": "deliver",
+        "fixture": "denied",
+        "ticket": "read-1",
+        "generation": 1
+      }
+    ],
+    "expected": [
+      "Hint cannot select endpoint or principal. Authenticated fetch denied; no action/approval or content leak."
+    ]
+  },
+  {
+    "id": "buffer-overflow",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "runs",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "invalidation-burst",
+        "count": 101
+      }
+    ],
+    "expected": ["Bound buffer at 100, discard pending tickets and perform full authorized snapshot recovery."]
+  },
+  {
+    "id": "quiet-data-is-stale",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "runs",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "connected",
+        "ticket": "read-1",
+        "generation": 1
+      },
+      {
+        "event": "advance-monotonic-seconds",
+        "seconds": 61
+      }
+    ],
+    "expected": [
+      "Transport may still be live while data becomes stale. No periodic polling and no invented lease-stale status."
+    ]
+  }
+]

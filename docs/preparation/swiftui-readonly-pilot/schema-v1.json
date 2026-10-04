@@ -1,0 +1,619 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orca.invalid/preparation/mobile-read-v1.schema.json",
+  "title": "Proposed mobile read boundary v1 (consumer schema; not deployed)",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "#/$defs/version"
+    },
+    "kind": {
+      "enum": ["session", "runs", "approvals", "artifact", "connection", "invalidation", "error"]
+    },
+    "context": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/context"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "asOf": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "data": {}
+  },
+  "required": ["schema", "kind", "context", "asOf", "revision", "data"],
+  "additionalProperties": true,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "session"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/session"
+          },
+          "context": {
+            "$ref": "#/$defs/context"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "runs"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/runs"
+          },
+          "context": {
+            "$ref": "#/$defs/context"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "approvals"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/approvals"
+          },
+          "context": {
+            "$ref": "#/$defs/context"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "artifact"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/artifact"
+          },
+          "context": {
+            "$ref": "#/$defs/context"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "connection"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/connection"
+          },
+          "context": {
+            "$ref": "#/$defs/context"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "invalidation"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/invalidation"
+          },
+          "context": {
+            "$ref": "#/$defs/context"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/error"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "version": {
+      "type": "object",
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["major", "minor"],
+      "additionalProperties": true
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "instanceId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "enrollmentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "policyRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": ["workspaceId", "instanceId", "principalId", "enrollmentId", "policyRevision"],
+      "additionalProperties": true
+    },
+    "reference": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "stepRunId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "artifactId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": ["runId", "stepRunId", "artifactId"],
+      "additionalProperties": true
+    },
+    "step": {
+      "type": "object",
+      "properties": {
+        "stepRunId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "status": {
+          "enum": ["running", "waiting", "succeeded", "failed", "cancelled", "blocked", "held", "stale"]
+        }
+      },
+      "required": ["stepRunId", "nodeId", "status"],
+      "additionalProperties": true
+    },
+    "run": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "workflowId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "status": {
+          "enum": ["running", "waiting", "succeeded", "failed", "cancelled", "blocked", "held", "stale"]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "observedSeq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          },
+          "maxItems": 100
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          },
+          "maxItems": 100
+        }
+      },
+      "required": ["id", "workflowId", "title", "status", "updatedAt", "observedSeq", "steps", "artifacts"],
+      "additionalProperties": true
+    },
+    "approval": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "stepRunId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "lifetime": {
+          "enum": ["durable", "live"]
+        },
+        "status": {
+          "enum": ["pending", "answered", "expired"]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "ownerAvailability": {
+          "enum": ["available", "unavailable", "unknown"]
+        },
+        "evidence": {
+          "enum": ["complete", "missing", "redacted", "truncated"]
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "runId",
+        "stepRunId",
+        "requestId",
+        "lifetime",
+        "status",
+        "summary",
+        "ownerAvailability",
+        "evidence",
+        "artifacts"
+      ],
+      "additionalProperties": true
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "object",
+          "properties": {
+            "major": {
+              "const": 2
+            },
+            "minor": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": ["major", "minor"],
+          "additionalProperties": true
+        },
+        "mode": {
+          "const": "read-only"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "maxItems": 32
+        },
+        "visibility": {
+          "type": "object",
+          "properties": {
+            "runs": {
+              "enum": ["owned", "all"]
+            },
+            "workflowIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "maxItems": 100
+            }
+          },
+          "required": ["runs", "workflowIds"],
+          "additionalProperties": true
+        }
+      },
+      "required": ["protocol", "mode", "capabilities", "visibility"],
+      "additionalProperties": true
+    },
+    "connection": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": ["live", "reconnecting", "disconnected", "mismatch"]
+        },
+        "freshness": {
+          "enum": ["fresh", "stale", "none"]
+        },
+        "lastSuccessAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "enum": ["none", "offline", "recovering", "expired-cache", "protocol", "denied", "unavailable"]
+        }
+      },
+      "required": ["state", "freshness", "lastSuccessAt", "reason"],
+      "additionalProperties": true
+    },
+    "invalidation": {
+      "type": "object",
+      "properties": {
+        "collection": {
+          "enum": ["runs", "approvals"]
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "enum": ["changed", "live-expired", "membership", "policy"]
+        }
+      },
+      "required": ["collection", "runId", "seq", "reason"],
+      "additionalProperties": true
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "DENIED",
+            "REVOKED",
+            "IDENTITY_MISMATCH",
+            "UNAVAILABLE",
+            "CAPABILITY_MISSING",
+            "MALFORMED",
+            "TOO_LARGE",
+            "PROTOCOL_MISMATCH"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": ["code", "retryable"],
+      "additionalProperties": true
+    },
+    "runs": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          },
+          "maxItems": 100
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "restartRequired": {
+          "type": "boolean"
+        }
+      },
+      "required": ["items", "nextCursor", "truncated", "restartRequired"],
+      "additionalProperties": true
+    },
+    "approvals": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/approval"
+          },
+          "maxItems": 100
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "restartRequired": {
+          "type": "boolean"
+        }
+      },
+      "required": ["items", "nextCursor", "truncated", "restartRequired"],
+      "additionalProperties": true
+    },
+    "artifact": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "stepRunId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "artifactId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "contentRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "mediaType": {
+          "enum": ["text/plain", "text/markdown", "application/octet-stream"]
+        },
+        "availability": {
+          "enum": ["available", "redacted", "missing", "binary", "tooLarge"]
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": ["runId", "stepRunId", "artifactId", "contentRevision", "mediaType", "availability", "truncated"],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "availability": {
+                "const": "available"
+              }
+            }
+          },
+          "then": {
+            "required": ["text"]
+          },
+          "else": {
+            "not": {
+              "required": ["text"]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
