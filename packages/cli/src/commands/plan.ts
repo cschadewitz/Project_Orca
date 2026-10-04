@@ -29,6 +29,7 @@ import {
   type RiskStatus,
 } from "@orca/core";
 import type { PlanService } from "@orca/engine";
+import { formatPlanEvent } from "../format-plan-event.js";
 import { bootstrap } from "../bootstrap.js";
 import { attachEventPrinter, finish, type CommandContext } from "./index.js";
 import { workflowGuards } from "./launch-options.js";
@@ -242,34 +243,7 @@ export async function planCommand(ctx: CommandContext): Promise<number> {
           ctx.out(JSON.stringify(e));
           continue;
         }
-        const pl = e.payload as Record<string, unknown>;
-        const what =
-          e.type === "work-item.added"
-            ? (pl.workItem as { slug: string }).slug
-            : e.type === "work-item.updated"
-              ? `${slug(pl.workItemId as string)} ${JSON.stringify(pl.changes)}`
-              : e.type === "dependency.added"
-                ? `${slug((pl.dependency as { from: string }).from)} -> ${JSON.stringify((pl.dependency as { target: unknown }).target)}`
-                : e.type === "dependency.resolved"
-                  ? `${pl.dependencyId} ${pl.status}${pl.resolution ? `: ${pl.resolution}` : ""}`
-                  : e.type === "risk.raised"
-                    ? (pl.risk as { key: string }).key
-                    : e.type === "risk.updated"
-                      ? `${pl.riskId} ${JSON.stringify(pl.changes)}`
-                      : e.type === "decision.opened"
-                        ? (pl.decision as { key: string }).key
-                        : e.type === "decision.resolved"
-                          ? `${pl.decisionId} = ${pl.chosen} (${pl.decidedBy})`
-                          : e.type === "schedule.computed"
-                            ? `ready: ${(pl.ready as string[]).map(slug).join(", ") || "-"}; waiting: ${(pl.waiting as string[]).length}; held: ${(pl.held as string[]).length}`
-                            : e.type === "dispatch.started" ||
-                                e.type === "dispatch.finished" ||
-                                e.type === "dispatch.deferred"
-                              ? `${slug(pl.workItemId as string)}${pl.status ? ` ${pl.status}` : ""}${pl.reason ? ` ${pl.reason}` : ""}`
-                              : JSON.stringify(pl);
-        ctx.out(
-          `${e.at.slice(0, 19)} ${String(e.seq).padStart(4)} ${pad(e.type, 20)} ${pad(e.origin.kind, 13)} ${what}`,
-        );
+        ctx.out(formatPlanEvent(e, slug));
       }
       return 0;
     }

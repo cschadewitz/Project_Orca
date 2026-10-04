@@ -1,5 +1,6 @@
 /** Executors for start, end, set, decision and gate nodes. */
 import {
+  coerceWorkflowString,
   evaluateVars,
   OrcaError,
   type DecisionNode,
@@ -143,7 +144,13 @@ export const decisionExecutor: NodeExecutor<DecisionNode> = {
   async execute(ctx) {
     const { raw, source } = await resolveChoice(ctx);
     let choice =
-      typeof raw === "boolean" ? (raw ? "true" : "false") : raw === undefined || raw === null ? undefined : String(raw);
+      typeof raw === "boolean"
+        ? raw
+          ? "true"
+          : "false"
+        : raw === undefined || raw === null
+          ? undefined
+          : coerceWorkflowString(raw);
     const ids = optionIds(ctx.node);
     if (choice === undefined || !ids.includes(choice)) {
       if (!ctx.node.defaultOption)

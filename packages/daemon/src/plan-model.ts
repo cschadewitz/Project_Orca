@@ -24,6 +24,7 @@
  * evaluation travels on the view beside the stored status instead (`DependencyView`).
  */
 import {
+  planEventSummary,
   DEPENDENCY_START_PHASE,
   OrcaError,
   compactSchedule,
@@ -309,35 +310,7 @@ function dependencyView(
  * as the journal recorded it.
  */
 export function journalSummary(entry: PlanEvent, slug: (id: string) => string): string {
-  const p = entry.payload as Record<string, unknown>;
-  switch (entry.type) {
-    case "work-item.added":
-      return (p["workItem"] as { slug: string }).slug;
-    case "work-item.updated":
-      return `${slug(p["workItemId"] as string)} ${JSON.stringify(p["changes"])}`;
-    case "dependency.added": {
-      const dep = p["dependency"] as { from: string; target: unknown };
-      return `${slug(dep.from)} -> ${JSON.stringify(dep.target)}`;
-    }
-    case "dependency.resolved":
-      return `${String(p["dependencyId"])} ${String(p["status"])}${p["resolution"] ? `: ${String(p["resolution"])}` : ""}`;
-    case "risk.raised":
-      return (p["risk"] as { key: string }).key;
-    case "risk.updated":
-      return `${String(p["riskId"])} ${JSON.stringify(p["changes"])}`;
-    case "decision.opened":
-      return (p["decision"] as { key: string }).key;
-    case "decision.resolved":
-      return `${String(p["decisionId"])} = ${String(p["chosen"])} (${String(p["decidedBy"])})`;
-    case "schedule.computed":
-      return `ready: ${(p["ready"] as string[]).map(slug).join(", ") || "-"}; waiting: ${(p["waiting"] as string[]).length}; held: ${(p["held"] as string[]).length}`;
-    case "dispatch.started":
-    case "dispatch.finished":
-    case "dispatch.deferred":
-      return `${slug(p["workItemId"] as string)}${p["status"] ? ` ${String(p["status"])}` : ""}${p["reason"] ? ` ${String(p["reason"])}` : ""}`;
-    default:
-      return JSON.stringify(p);
-  }
+  return planEventSummary(entry, slug);
 }
 
 export interface PlanModelOptions {

@@ -1,88 +1,77 @@
 /** Human-readable rendering of events and run state for the terminal. */
-import {
-  pendingHumanInputs,
-  toGateOption,
-  type GateOptionInput,
-  type HumanInputRequest,
-  type OrcaEvent,
-  type RunState,
-} from "@orca/core";
+import { EventPayload, pendingHumanInputs, type HumanInputRequest, type OrcaEvent, type RunState } from "@orca/core";
 
-export function formatEvent(e: OrcaEvent): string {
+export function formatEvent(e: Pick<OrcaEvent, "at" | "runId"> & { type: string; payload: unknown }): string {
   const t = e.at.slice(11, 19);
-  const p = e.payload as Record<string, unknown>;
+  const p = new EventPayload(e.payload);
   switch (e.type) {
     case "run.created":
-      return `${t} run ${e.runId} created (workflow ${String(p.workflowId)})`;
+      return `${t} run ${e.runId} created (workflow ${p.text("workflowId")})`;
     case "run.completed":
-      return `${t} run ${e.runId} completed: ${String(p.outcome)}`;
+      return `${t} run ${e.runId} completed: ${p.text("outcome")}`;
     case "run.failed":
-      return `${t} run ${e.runId} FAILED: ${(p.error as { message: string }).message}`;
+      return `${t} run ${e.runId} FAILED: ${p.record("error").text("message")}`;
     case "run.cancelled":
       return `${t} run ${e.runId} cancelled`;
     case "run.paused":
-      return `${t} run ${e.runId} paused${p.reason ? `: ${String(p.reason)}` : ""}`;
+      return `${t} run ${e.runId} paused${p.optionalText("reason") ? `: ${p.text("reason")}` : ""}`;
     case "run.resumed":
       return `${t} run ${e.runId} resumed`;
     case "step.scheduled":
-      return `${t}   ▶ ${String(p.nodeId)} (${String(p.nodeType)}, attempt ${String(p.attempt)})`;
+      return `${t}   ▶ ${p.text("nodeId")} (${p.text("nodeType")}, attempt ${p.text("attempt")})`;
     case "step.completed": {
-      const r = p.result as { choice?: string; artifactIds: string[] };
-      return `${t}   ✔ ${stepName(e)}${r.choice ? ` → ${r.choice}` : ""}${r.artifactIds.length ? ` [${r.artifactIds.length} artifact(s)]` : ""}`;
+      const r = p.record("result");
+      return `${t}   ✔ ${p.optionalText("stepRunId").replace(/^step_/, "step ")}${r.optionalText("choice") ? ` → ${r.optionalText("choice")}` : ""}${r.list("artifactIds").length ? ` [${r.list("artifactIds").length} artifact(s)]` : ""}`;
     }
     case "step.failed":
-      return `${t}   ✖ ${stepName(e)}: ${(p.error as { message: string }).message}${p.willRetry ? " (retrying)" : ""}`;
+      return `${t}   ✖ ${p.optionalText("stepRunId").replace(/^step_/, "step ")}: ${p.record("error").text("message")}${p.flag("willRetry") ? " (retrying)" : ""}`;
     case "step.inputs":
-      return `${t}     ⬓ inputs ${(p.artifactIds as string[]).join(", ")}`;
+      return `${t}     ⬓ inputs ${p.strings("artifactIds").join(", ")}`;
     case "step.waiting":
-      return `${t}   … waiting on ${String(p.on)}${p.detail ? ` (${String(p.detail)})` : ""}`;
+      return `${t}   … waiting on ${p.text("on")}${p.optionalText("detail") ? ` (${p.text("detail")})` : ""}`;
     case "agent.session.opened":
-      return `${t}     session ${String(p.sessionId)} agent=${String(p.agentId)}${p.model ? ` model=${String(p.model)}` : ""} host=${String(p.hostId)} cwd=${String(p.cwd)}`;
+      return `${t}     session ${p.text("sessionId")} agent=${p.text("agentId")}${p.optionalText("model") ? ` model=${p.text("model")}` : ""} host=${p.text("hostId")} cwd=${p.text("cwd")}`;
     case "agent.turn.started":
-      return `${t}     prompt (${String(p.promptHash).slice(0, 8)}) follow-up=${String(p.followUp)}`;
+      return `${t}     prompt (${p.text("promptHash", 8)}) follow-up=${p.text("followUp")}`;
     case "agent.turn.completed":
-      return `${t}     turn ended: ${String(p.stopReason)} in ${String(p.durationMs)}ms`;
+      return `${t}     turn ended: ${p.text("stopReason")} in ${p.text("durationMs")}ms`;
     case "agent.update": {
-      const u = p.update as { kind: string; text?: string; title?: string; status?: string };
-      if (u.kind === "agent_message_chunk")
-        return `${t}     │ ${(u.text ?? "").trim().split("\n").join("\n           │ ")}`;
-      if (u.kind === "tool_call" || u.kind === "tool_call_update")
-        return `${t}     ⚙ ${u.title ?? ""} ${u.status ?? ""}`.trimEnd();
-      return `${t}     [${u.kind}]`;
+      const u = p.record("update");
+      if (u.text("kind") === "agent_message_chunk")
+        return `${t}     │ ${u.optionalText("text").trim().split("\n").join("\n           │ ")}`;
+      if (u.text("kind") === "tool_call" || u.text("kind") === "tool_call_update")
+        return `${t}     ⚙ ${u.optionalText("title")} ${u.optionalText("status")}`.trimEnd();
+      return `${t}     [${u.text("kind")}]`;
     }
     case "agent.permission":
-      return `${t}     permission "${String(p.title)}" → ${String(p.decision)}`;
+      return `${t}     permission "${p.text("title")}" → ${p.text("decision")}`;
     case "artifact.recorded": {
-      const a = p.artifact as { kind: string; name: string; version: number; path?: string };
-      return `${t}     ⬒ artifact ${a.name} (${a.kind} v${a.version}) ${a.path ?? ""}`;
+      const a = p.record("artifact");
+      return `${t}     ⬒ artifact ${a.text("name")} (${a.text("kind")} v${a.text("version")}) ${a.optionalText("path")}`;
     }
     case "artifact.rejected":
-      return `${t}     ⚠ artifact ${String(p.kind)} rejected: ${String(p.reason)}`;
+      return `${t}     ⚠ artifact ${p.text("kind")} rejected: ${p.text("reason")}`;
     case "plan.signals.rejected":
-      return `${t}     ⚠ plan signals rejected: ${(p.issues as string[]).join("; ")}`;
+      return `${t}     ⚠ plan signals rejected: ${p.strings("issues").join("; ")}`;
     case "decision.resolved":
-      return `${t}     decision: ${String(p.choice)} (${String(p.source)})`;
+      return `${t}     decision: ${p.text("choice")} (${p.text("source")})`;
     case "human.requested":
-      return `${t}     ? ${String(p.question)} [${optionLabels(p.options).join(" | ")}]`;
+      return `${t}     ? ${p.text("question")} [${p.optionLabels("options").join(" | ")}]`;
     case "human.answered":
-      return `${t}     ! answered: ${String(p.answer)}`;
+      return `${t}     ! answered: ${p.text("answer")}`;
     case "child.spawned":
-      return `${t}     ↳ child run ${String(p.childRunId)}${p.branch ? ` (${String(p.branch)})` : ""}`;
+      return `${t}     ↳ child run ${p.text("childRunId")}${p.optionalText("branch") ? ` (${p.text("branch")})` : ""}`;
     case "child.finished":
-      return `${t}     ↲ child run ${String(p.childRunId)} ${String(p.status)}${p.outcome ? `/${String(p.outcome)}` : ""}`;
+      return `${t}     ↲ child run ${p.text("childRunId")} ${p.text("status")}${p.optionalText("outcome") ? `/${p.text("outcome")}` : ""}`;
     case "branch.skipped":
-      return `${t}     ⤫ branch ${String(p.branch)} ${p.reason === "claimed" ? "claimed by another run" : `skipped (${String(p.reason)})`}`;
+      return `${t}     ⤫ branch ${p.text("branch")} ${p.optionalText("reason") === "claimed" ? "claimed by another run" : `skipped (${p.text("reason")})`}`;
     case "loop.iteration":
-      return `${t}     ↻ iteration ${String(p.iteration)}`;
+      return `${t}     ↻ iteration ${p.text("iteration")}`;
     case "vars.set":
-      return `${t}     vars ${Object.keys(p.vars as object).join(", ")}`;
+      return `${t}     vars ${p.record("vars").keys().join(", ")}`;
     default:
       return `${t}     ${e.type}`;
   }
-}
-
-function stepName(e: OrcaEvent): string {
-  return String((e.payload as { stepRunId?: string }).stepRunId ?? "").replace(/^step_/, "step ");
 }
 
 /** Which agent (and model, when recorded) opened a session for each step, from `agent.session.opened`. */
@@ -136,15 +125,6 @@ export function formatRunState(s: RunState, agents: StepAgents = new Map()): str
     for (const h of pending) lines.push(`  ${formatPendingInput(h)}`);
   }
   return lines.join("\n");
-}
-
-/**
- * What a person reads. `formatEvent` is handed raw payloads, which on a log
- * written before v0.4.0 are bare strings; `toGateOption` is the one place that
- * knows a string is its own label.
- */
-function optionLabels(options: unknown): string[] {
-  return Array.isArray(options) ? options.map((o) => toGateOption(o as GateOptionInput).label) : [];
 }
 
 export function formatPendingInput(h: HumanInputRequest): string {

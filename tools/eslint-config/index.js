@@ -63,12 +63,6 @@ export default tseslint.config(
       // `Promise<T> | T` is how the ports say "sync or async, we await either way".
       "@typescript-eslint/no-redundant-type-constituents": "off",
 
-      // Event payloads are `unknown` on the way out of the log, and the CLI renders them
-      // with `String(...)` on purpose. Turning these on means typing payload access first
-      // -- see the follow-up issue rather than 20 inline disables.
-      "@typescript-eslint/no-base-to-string": "off",
-      "@typescript-eslint/restrict-template-expressions": "off",
-
       // `const self = this` is how the orchestrator builds a StepContext of closures.
       "@typescript-eslint/no-this-alias": ["error", { allowedNames: ["self"] }],
 

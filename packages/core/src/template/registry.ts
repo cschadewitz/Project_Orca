@@ -39,7 +39,10 @@ export function parsePromptTemplate(text: string, fallbackId?: string): PromptTe
     meta,
   });
   if (!parsed.success)
-    throw new OrcaError("TEMPLATE_RENDER", `invalid template ${String(id ?? fallbackId)}: ${parsed.error.message}`);
+    throw new OrcaError(
+      "TEMPLATE_RENDER",
+      `invalid template ${typeof id === "string" ? id : (fallbackId ?? "[invalid id]")}: ${parsed.error.message}`,
+    );
   return parsed.data;
 }
 

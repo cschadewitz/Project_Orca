@@ -67,7 +67,9 @@ function answer(id: string, question: JevQuestion, raw: unknown, problems: strin
     return undefined;
   }
   if (raw.type !== undefined && raw.type !== question.type) {
-    problems.push(`${at}: type is '${String(raw.type)}', asked for '${question.type}'`);
+    problems.push(
+      `${at}: type is '${typeof raw.type === "string" ? raw.type : "[invalid]"}', asked for '${question.type}'`,
+    );
     return undefined;
   }
   switch (question.type) {

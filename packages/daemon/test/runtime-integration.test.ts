@@ -211,7 +211,15 @@ describe("authorized typed launch admission", () => {
     let id = 0;
     const call = (method: string, params: unknown) =>
       new Promise<{ ok: boolean; result?: Record<string, unknown>; error?: { code: string } }>((resolve) => {
-        socket.once("message", (data) => resolve(JSON.parse(String(data)) as never));
+        socket.once("message", (data) =>
+          resolve(
+            JSON.parse(
+              (Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data)).toString(
+                "utf8",
+              ),
+            ) as never,
+          ),
+        );
         socket.send(JSON.stringify({ kind: "request", id: ++id, method, params }));
       });
     const good = await call("workflows.validateInputs", { workflowId: "typed", vars: { count: 3 } });

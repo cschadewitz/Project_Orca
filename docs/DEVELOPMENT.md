@@ -242,9 +242,22 @@ that copy while `tsc` keeps using 7. Nothing else in the workspace sees TypeScri
 Revisit this once typescript-eslint supports 7.x.
 
 Type-aware rules are on, minus the ones that fight this codebase's idioms — async ports
-that implement a synchronous method, `unknown` event payloads rendered with `String(...)`,
-conditional spreads under `exactOptionalPropertyTypes`. Each exception is commented in
+that implement a synchronous method and conditional spreads under
+`exactOptionalPropertyTypes`. Each exception is commented in
 the config with the reason; that comment is the argument to beat if you want it back.
+
+`no-base-to-string` and `restrict-template-expressions` are enabled. Event display reads
+through `EventPayload` (`packages/core/src/events/event-payload.ts`): primitives retain
+their spelling, object/array display fields become `[invalid]`, optional absent fields stay
+absent, and gate options accept both legacy strings and current labelled objects. Structured
+journal fields use explicit JSON serialization. This is a tolerant display boundary, not a
+replacement for execution validation; it does not rewrite stored events or change redaction.
+CLI and daemon plan summaries share `planEventSummary`.
+
+Workflow expressions and executor routing retain their historical JavaScript coercion through
+`coerceWorkflowString`. Its single, documented line-level `no-base-to-string` exception
+preserves that language contract, including object and array values. Do not use it for event
+display; the expression and display regression tests intentionally enforce different behavior.
 
 One local rule, `orca/file-header-comment`, enforces the first convention below.
 

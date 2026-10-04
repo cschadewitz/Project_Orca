@@ -9,3 +9,5 @@ export {
   type ExprFunction,
   type EvalOptions,
 } from "./evaluate.js";
+
+export * from "./coerce.js";

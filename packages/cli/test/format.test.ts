@@ -5,12 +5,12 @@
  * snapshot.
  */
 import { describe, expect, it } from "vitest";
-import { toGateOption, type HumanInputRequest, type OrcaEvent, type RunState } from "@orca/core";
+import { toGateOption, type HumanInputRequest, type RunState } from "@orca/core";
 import { formatEvent, formatPaused, formatPendingInput, formatRunState } from "../src/format.js";
 
-/** The union is exhaustive over payloads; tests care about rendering, not about re-typing each one. */
-function ev(type: string, payload: Record<string, unknown>, runId = "run_1"): OrcaEvent {
-  return { id: "ev_1", seq: 1, runId, at: "2026-01-02T03:04:05.678Z", type, payload } as unknown as OrcaEvent;
+/** Rendering accepts raw legacy payloads without pretending they passed execution validation. */
+function ev(type: string, payload: unknown, runId = "run_1") {
+  return { id: "ev_1", seq: 1, runId, at: "2026-01-02T03:04:05.678Z", type, payload };
 }
 
 const AT = "03:04:05";
@@ -139,6 +139,70 @@ describe("formatEvent", () => {
 
   it("falls back to the bare event type for anything it has no line for", () => {
     expect(formatEvent(ev("run.started", {}))).toBe(`${AT}     run.started`);
+  });
+
+  it.each([
+    ["run.created", { workflowId: { secret: "canary" } }],
+    ["run.completed", { outcome: ["canary"] }],
+    ["run.failed", { error: { message: { secret: "canary" } } }],
+    ["run.paused", { reason: { secret: "canary" } }],
+    ["step.scheduled", { nodeId: {}, nodeType: [], attempt: {} }],
+    ["step.completed", { stepRunId: {}, result: { choice: {}, artifactIds: [] } }],
+    ["step.inputs", { artifactIds: ["art_1", { secret: "canary" }] }],
+    ["step.waiting", { on: {}, detail: {} }],
+    ["agent.session.opened", { sessionId: {}, agentId: {}, model: {}, hostId: {}, cwd: {} }],
+    ["agent.turn.started", { promptHash: {}, followUp: 0 }],
+    ["agent.turn.completed", { stopReason: {}, durationMs: {} }],
+    ["agent.update", { update: { kind: "agent_message_chunk", text: { secret: "canary" } } }],
+    ["agent.update", { update: { kind: "tool_call", title: {}, status: {} } }],
+    ["agent.permission", { title: {}, decision: {} }],
+    ["artifact.recorded", { artifact: { name: {}, kind: {}, version: {}, path: {} } }],
+    ["artifact.rejected", { kind: {}, reason: {} }],
+    ["plan.signals.rejected", { issues: ["bad ref", { secret: "canary" }] }],
+    ["decision.resolved", { choice: {}, source: {} }],
+    ["human.requested", { question: {}, options: [null, { id: "ship", label: { secret: "canary" } }] }],
+    ["human.answered", { answer: { secret: "canary" } }],
+    ["child.spawned", { childRunId: {}, branch: {} }],
+    ["child.finished", { childRunId: {}, status: {}, outcome: {} }],
+    ["branch.skipped", { branch: {}, reason: {} }],
+    ["loop.iteration", { iteration: {} }],
+  ] satisfies [string, unknown][])("safely renders malformed %s fields", (type, payload) => {
+    const before = JSON.stringify(payload);
+    const line = formatEvent(ev(type, payload));
+    expect(line).toContain("[invalid]");
+    expect(line).not.toContain("[object Object]");
+    expect(line).not.toContain("canary");
+    expect(JSON.stringify(payload)).toBe(before);
+  });
+
+  it.each([null, undefined, 1, "old", [], {}])("tolerates missing or malformed nested payloads: %j", (payload) => {
+    for (const type of [
+      "run.failed",
+      "step.completed",
+      "agent.update",
+      "artifact.recorded",
+      "human.requested",
+      "vars.set",
+    ])
+      expect(() => formatEvent(ev(type, payload))).not.toThrow();
+  });
+
+  it("keeps legacy and current gate labels and redacted public values without revealing hidden fields", () => {
+    expect(
+      formatEvent(
+        ev("human.requested", {
+          question: "Proceed?",
+          options: ["hold", { id: "ship", label: "Ship now" }],
+          context: { secret: "canary" },
+        }),
+      ),
+    ).toBe(`${AT}     ? Proceed? [hold | Ship now]`);
+    expect(formatEvent(ev("human.answered", { answer: "[redacted]", note: "canary" }))).toBe(
+      `${AT}     ! answered: [redacted]`,
+    );
+    expect(formatEvent(ev("vars.set", { vars: { token: "canary" } }))).toBe(`${AT}     vars token`);
+    for (const type of ["continuation.recorded", "revision.recorded", "future.event"])
+      expect(formatEvent(ev(type, { entry: { secret: "canary" } }))).toBe(`${AT}     ${type}`);
   });
 });
 

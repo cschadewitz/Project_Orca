@@ -238,7 +238,7 @@ describe("authenticated HTTP backend and transport", () => {
     return vi.fn<typeof fetch>(async (_url, init) => {
       if (new Headers(init?.headers).get("authorization") !== "Bearer caller-token")
         return new Response(null, { status: 401 });
-      const call = JSON.parse(String(init?.body)) as { id: string; method: string };
+      const call = JSON.parse(typeof init?.body === "string" ? init.body : "") as { id: string; method: string };
       return Response.json({ kind: "response", id: call.id, ok: true, result: discovery() });
     });
   }
