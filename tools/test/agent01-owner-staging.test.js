@@ -23,3 +23,15 @@ it("owner stager passes synthetic safety checks without executing its host entry
     }),
   ).not.toThrow();
 });
+
+it("hardening probe passes pure and mocked checks without any real manager or procfs access", () => {
+  expect(() =>
+    execFileSync(
+      process.platform === "win32" ? "python" : "python3",
+      ["-B", "tools/deploy/test_agent01_hardening.py"],
+      {
+        stdio: "pipe",
+      },
+    ),
+  ).not.toThrow();
+});

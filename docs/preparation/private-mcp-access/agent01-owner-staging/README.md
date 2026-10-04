@@ -1,5 +1,10 @@
 # Owner staging packet — no installation or live acceptance
 
+Follow-up: the owner reports staging/syntax success and independent official Node
+verification. See [the separate disposable hardening probe](hardening-probe.md) for
+that evidence and its exact proposed effects. It supersedes the historical Node gap
+below; the original staging script and rendered files remain unchanged.
+
 The three sibling unit/profile files are exact LF output of `render-agent01.js`
 at merged source **`1199f7e4705d904f3f5dfda32a2644d0b8346e01`** (PR484).
 They retain that proposal unchanged, including the separate daemon/MCP pins, current
