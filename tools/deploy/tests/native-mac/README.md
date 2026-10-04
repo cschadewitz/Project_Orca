@@ -5,6 +5,26 @@ production candidates nor satisfies either issue's native Mac acceptance criteri
 Python 3.9+ and its standard library are sufficient; no dependencies, credentials,
 network, Apple tools, archive extraction or subprocesses are used by the validator.
 
+To check an identity from the isolated #464 producer, pass its **fixture-only** output
+and the same staged daemon bytes to `make_fixture.py`:
+
+```sh
+python3 tools/deploy/tests/native-mac/make_fixture.py \
+  --producer-output /tmp/orca-producer-output \
+  --daemon packages/app/dist/daemon/orca-daemon.mjs \
+  /tmp/orca-produced-fixture
+python3 tools/deploy/native-mac-verify.py --mode fixture \
+  --fixture-app /tmp/orca-produced-fixture/ORCA.app \
+  /tmp/orca-produced-fixture/delivery
+```
+
+The adapter checks the producer's local fixture receipt and byte hashes before
+copying the frozen test fixture. It stamps the produced identity and daemon into a
+separate synthetic app, updates its plist, manifest, artifact stub names and checksums.
+The existing validator alone checks the resulting fixture. The DMG/ZIP files remain
+unexecuted stubs and the evidence remains invented shape data. The producer-to-validator
+test is `tools/test/native-mac-validator-integration.test.js` (run with Vitest).
+
 From the repository root:
 
 ```sh

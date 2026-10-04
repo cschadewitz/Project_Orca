@@ -1,7 +1,8 @@
 # Credential-free signing foundation (#464)
 
 Implemented from freshly fetched main
-`94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`. This is an isolated producer and
+`94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`, then integrated with reviewed main
+`b9b8807252e39c506c24b17ec0c637701e4a68d1`. This is an isolated producer and
 locked-builder compatibility exercise for [#385](https://github.com/cschadewitz/Project_Orca/issues/385).
 It does not satisfy signed delivery or [#388](https://github.com/cschadewitz/Project_Orca/issues/388)
 packaged acceptance. Both parents stay open. #464 is registered as a native sub-issue of #385.
@@ -115,39 +116,47 @@ old bundle/wrong team, x64, missing/number-coerced plist version, tool ranges, i
 timestamp and fixture-as-candidate attempts. Mocked orchestration proves code paths,
 not native behavior. Exact check outcomes and implementation SHA belong in the draft PR.
 
-## Single-validator integration and remaining gates
+## Single-validator fixture integration and remaining gates
 
-[#442](https://github.com/cschadewitz/Project_Orca/pull/442) was reverified at
-`0065ded06d175382612e3d1ffd38484c2c4f4b9b`, after its history-preserving merge of
-main `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`. It is still open/draft and not
-integrated into main. The historical Mac-ID mismatch found at its earlier
-`604330c7d0857f303b107cd044cc81fba55ee051` head is **resolved**: its validator now
-requires `com.schadewitz.orca`; its owner reports 37 passing fixture tests including
-self-consistent legacy-ID rejection. Those Python results were not independently rerun
-here. Windows separately retains `dev.orca.desktop`.
+[#442](https://github.com/cschadewitz/Project_Orca/pull/442) merged into main at
+`b9b8807252e39c506c24b17ec0c637701e4a68d1`. Its
+`tools/deploy/native-mac-verify.py` remains the single manifest and synthetic-app
+validator. The test-only `make_fixture.py` adapter accepts a producer output directory
+and the exact staged daemon bytes, checks the local fixture receipt and hashes, copies
+the frozen fixture, then replaces the synthetic identity, daemon, plist strings and
+derived manifest/checksums. Container files and signing/notary/stapling declarations
+remain synthetic stubs. The adapter does not assert that either container includes the
+app and does not validate candidate artifacts.
 
-No branch or validator files were imported; no competing manifest validator was built.
-The exact-field v1 identity remains the producer's output seam, including opaque plist
-strings. Consumer CLI is `--mode fixture --fixture-app PATH DELIVERY`; candidate mode
-rejects before I/O. Synthetic signing declarations remain shape-only: the producer's
-public expected Team ID in its separate local receipt is not an observed publisher or
-an addition to the sealed identity/manifest schema. After reviewed integration on main
-or an explicitly agreed branch, exercise generated identity through the existing single
-fixture validator. That end-to-end acceptance item is still blocked, not passed; the
-resolved legacy-ID mismatch is no longer its blocker.
+After producing identity with the command above, exercise the shared validator:
+
+```sh
+python3 tools/deploy/tests/native-mac/make_fixture.py \
+  --producer-output <new-fixture-directory> \
+  --daemon packages/app/dist/daemon/orca-daemon.mjs \
+  <new-synthetic-fixture-directory>
+python3 tools/deploy/native-mac-verify.py --mode fixture \
+  --fixture-app <new-synthetic-fixture-directory>/ORCA.app \
+  <new-synthetic-fixture-directory>/delivery
+```
+
+`tools/test/native-mac-validator-integration.test.js` runs the producer's assembly
+function through this adapter and the validator, including changed-identity, daemon
+and plist negatives. The Python validator's 37 focused cases still cover malformed
+manifests and candidate-mode refusal. The producer's public expected Team ID in its
+separate local receipt is not an observed publisher or an addition to the sealed
+identity/manifest schema. Windows separately retains `dev.orca.desktop`.
 
 The next ordered work remains in #464/#385/#388 rather than duplicate issues:
 
-1. Complete reviewed integration of #442; connect synthetic output to
-   its fixture builder and all existing negative cases. Keep candidate mode rejected.
-2. Resolve publisher/certificate authority, D4 supported macOS, D5 version mapping and
+1. Resolve publisher/certificate authority, D4 supported macOS, D5 version mapping and
    D6 ownership; verify protection availability, trusted source/workflow controls,
    environment, native runner and notary method. Missing inputs must continue to block.
-3. With shared-config ownership and separate activation authorization, construct an
+2. With shared-config ownership and separate activation authorization, construct an
    explicit arm64 effective config, review minimal entitlements for Electron and
    RunAsNode daemon, insert/verify identity before signing, and prove native hooks.
    Do not use a concatenating overlay as an architecture restriction.
-4. Separately verify signatures, expected team/certificate, final entitlements,
+3. Separately verify signatures, expected team/certificate, final entitlements,
    hardened runtime, notarization/stapling, both extracted container copies and actual
    packaged execution. Prepackaged container creation must not mutate the accepted app.
 
