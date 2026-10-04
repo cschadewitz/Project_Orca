@@ -512,7 +512,9 @@ export class RecoveryController {
       }
       this.cleanupPending = true;
       // Work remains charged/busy until underlying completion; no new Save/ack.
-      this.emit();
+      // A timed-out operation must never gain publication admission later.
+      // Already admitted native work can still finish and report its real result.
+      this.revokePreviewAuthority();
     });
   }
   async acknowledgeUnknown(id: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {

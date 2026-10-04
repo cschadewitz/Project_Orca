@@ -68,6 +68,71 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
     },
   );
 
+  it("a Save timeout before admission revokes preview authority while retaining the live worker reservation", async () => {
+    await withSyntheticProfile(async (profile) => {
+      const fixture = await implementationFixture(profile, { timeoutMs: 500 });
+      const preview = await enableAndPreview(fixture);
+      const destination = value(await fixture.controller.chooseDestination(preview.handle));
+      const pending = barrier();
+      let admittedPublications = 0;
+      fixture.native.beforePublish = () => pending.wait();
+      fixture.native.publication = async (stage, path) => {
+        admittedPublications += 1;
+        const { moveNoReplace } = await import("./recovery-preparation/implementation-fixture.js");
+        return moveNoReplace(stage, path);
+      };
+      const saving = fixture.controller.save(preview.handle, destination.token);
+      try {
+        await enteredWithin(pending.entered);
+        expect(await saving).toEqual({ ok: false, code: "publication_pending" });
+        expect(fixture.controller.status().activePreviewHandle).toBeUndefined();
+        expect(fixture.controller.status().payloadReservedBytes).toBe(2 * RECOVERY_LIMITS.exportBytes);
+        expect(fixture.controller.status().cleanupPending).toBe(true);
+        expect(fixture.controller.status().saveAdmittedBeforeRevocation).toBe(false);
+        expect(admittedPublications).toBe(0);
+        expect(await readFile(join(fixture.root, "export-stage.tmp"))).toEqual(Buffer.from(preview.text));
+        expect(await fixture.controller.chooseDestination(preview.handle)).toEqual({
+          ok: false,
+          code: "stale_preview",
+        });
+        expect(await fixture.controller.retryCleanup()).toEqual({ ok: false, code: "publication_pending" });
+        expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+        expect(fixture.picker.calls).toBe(1);
+      } catch (error) {
+        // A red regression must still settle its own real disk worker before
+        // removing the disposable profile or starting another test.
+        pending.release();
+        value(await fixture.controller.closePreview(preview.handle));
+        await waitFor(() => fixture.controller.status().payloadReservedBytes === 0);
+        await fixture.controller.cleanExit();
+        throw error;
+      } finally {
+        pending.release();
+      }
+      // Releasing the adapter alone must refuse admission; no renderer disposal
+      // or explicit revocation is allowed to rescue this timed-out operation.
+      await waitFor(() => fixture.controller.status().payloadReservedBytes === RECOVERY_LIMITS.exportBytes);
+      expect(admittedPublications).toBe(0);
+      expect(fixture.native.publishCalls).toBe(1);
+      expect(fixture.controller.status().lastSaveOutcome).toBe("refused");
+      expect(fixture.controller.status().saveAdmittedBeforeRevocation).toBe(false);
+      expect(fixture.controller.status().cleanupPending).toBe(false);
+      expect((await fixture.disk.readExportState()).current).toBeUndefined();
+      await expect(access(join(fixture.root, "export-stage.tmp"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(fixture.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
+      value(await fixture.controller.closePreview(preview.handle));
+      expect(fixture.controller.status().payloadReservedBytes).toBe(0);
+      expect(await fixture.controller.save(preview.handle, destination.token)).toEqual({
+        ok: false,
+        code: "publication_pending",
+      });
+      expect((await fixture.controller.save(preview.handle, "new-token")).ok).toBe(false);
+      expect(fixture.native.publishCalls).toBe(1);
+      value(await fixture.controller.retryCleanup());
+      await fixture.controller.cleanExit();
+    });
+  });
+
   it.each(["saved", "refused"] as const)(
     "live timeout blocks acknowledgement and late %s survives opt-out honestly",
     async (lateResult) => {
