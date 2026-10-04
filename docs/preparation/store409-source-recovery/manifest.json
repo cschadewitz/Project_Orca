@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "issue": 409,
+  "purpose": "Source-recovery inputs for review and three-way reconciliation; not an application-source change.",
+  "publicationParent": "e1db2049e4a9b4a26a9f66e16e6891f8caf131d6",
+  "reportedHistoricalProvenance": {
+    "runId": "run_cb0bd9b0-aff9-4af0-8e5e-bade0b0c2570",
+    "base": "eab8e29643a4e36b13d5005cc760ecc5e1f061c8",
+    "implementation": "b9241e81174b34f8e4367a5be5a5ad7554bb88a9",
+    "finalDocumentation": "8875f4585d7e5cd038ec974f5c6c270f8c5f01c3",
+    "rawCommitObjectsAvailable": false,
+    "qualification": "Commit identities, parentage, authorship and historical association remain exporter-report claims; raw commit objects were not exported or independently verified."
+  },
+  "byteVerification": {
+    "historicalPatchAndFinals": "Exported bytes independently checked against SHA-256, lengths, and Git blob IDs where reported. Publication preserves those exact bytes.",
+    "reconstructedBase": "Two base source files were reconstructed by reverse git apply in an isolated data-only directory; every reported length, SHA-256 and Git blob ID matched. Test and documentation paths were absent in that reconstructed base.",
+    "scope": "No source-behavior validation, application tests, installation, deployment or live acceptance is claimed by this publication."
+  },
+  "mapping": [
+    {
+      "repositoryPath": "packages/store/src/protected-file.ts",
+      "baseInput": "base/packages/store/src/protected-file.ts",
+      "baseStatus": "present",
+      "finalInput": "final/packages/store/src/protected-file.ts"
+    },
+    {
+      "repositoryPath": "packages/store/src/execution-store.ts",
+      "baseInput": "base/packages/store/src/execution-store.ts",
+      "baseStatus": "present",
+      "finalInput": "final/packages/store/src/execution-store.ts"
+    },
+    {
+      "repositoryPath": "packages/store/test/protected-replay-diagnostics.test.ts",
+      "baseInput": null,
+      "baseStatus": "absent",
+      "finalInput": "final/packages/store/test/protected-replay-diagnostics.test.ts"
+    },
+    {
+      "repositoryPath": "docs/protected-replay-error-contract.md",
+      "baseInput": null,
+      "baseStatus": "absent",
+      "finalInput": "final/docs/protected-replay-error-contract.md"
+    }
+  ],
+  "files": [
+    {
+      "relativePath": "historical.patch",
+      "bytes": 20087,
+      "sha256": "e5cd82c95ac139102f1d1651b2b45ed5042a9a07a8cb5178fd8ef476a5bdc7ef",
+      "gitBlobSha1": "6e336fb2c11134dd5a248a4241590e1b51f97e4c"
+    },
+    {
+      "relativePath": "final/packages/store/src/protected-file.ts",
+      "bytes": 22277,
+      "sha256": "3a6c2127b2c8945f5dd08765a87078aa46c5aa4e94aa582fb674d9016d7a5906",
+      "gitBlobSha1": "9076b67b5d23a3b32e0bcd2d408f2dc7f57c78df"
+    },
+    {
+      "relativePath": "final/packages/store/src/execution-store.ts",
+      "bytes": 15206,
+      "sha256": "6af66c0ab93a6fc1740f515c2c58108b760ee2d7e0ef530d32803bf4b67aa2f5",
+      "gitBlobSha1": "eacd305dbeafc2f4a32d37730e4f40d1ad6c9e98"
+    },
+    {
+      "relativePath": "final/packages/store/test/protected-replay-diagnostics.test.ts",
+      "bytes": 11047,
+      "sha256": "48f0070c9b919ea857f8f12a778635674405f3eec8d97dd952081cd0a07822e3",
+      "gitBlobSha1": "3e82629bce7f4892870bd7991fee6a7058479f1f"
+    },
+    {
+      "relativePath": "final/docs/protected-replay-error-contract.md",
+      "bytes": 3198,
+      "sha256": "12ecf428e68d55e04707ae79cc26dd61a967d7daf51c678157b2ee5b8c082822",
+      "gitBlobSha1": "7087c19af56abf2e45cd6ddbbf153921d417196b"
+    },
+    {
+      "relativePath": "base/packages/store/src/execution-store.ts",
+      "bytes": 15198,
+      "sha256": "00a53b86fc6b9e0b3da674db3baa979fdf33e4d1bf72d200f3cc80323c8bced8",
+      "gitBlobSha1": "362f6edd734e8a0e5eb98e9cdb5eb324c8af6ebf"
+    },
+    {
+      "relativePath": "base/packages/store/src/protected-file.ts",
+      "bytes": 20732,
+      "sha256": "67ba599c37d15883250684f280dc77812fc661d19befedd1a1b660d494c1060e",
+      "gitBlobSha1": "c523ed8f22c56799c19064b1ee96e481d789b550"
+    }
+  ]
+}
