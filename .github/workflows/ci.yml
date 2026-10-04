@@ -31,8 +31,9 @@ jobs:
           # Three-dot diff below needs the merge base, so the full history.
           fetch-depth: 0
 
-      # Documentation is `docs/**` and any Markdown outside `templates/`. The prompt
-      # templates are Markdown too, but the engine loads them and the tests and the
+      # Documentation is `docs/**` except JavaScript, and Markdown outside `templates/`.
+      # Executable documentation validators need lint and tests just like other tooling.
+      # Prompt templates are Markdown too, but the engine loads them and the tests and the
       # `demo` smoke test read them, so they count as code. Anything else counts as code.
       # When the base commit is unknown (first push of a branch, or a force-push that
       # rewrote it away) the job errs on the side of running everything.
@@ -48,7 +49,7 @@ jobs:
             exit 0
           fi
           code_paths=$(git diff --name-only "$BASE...$HEAD" \
-            | awk '!/^docs\// && !(/\.md$/ && !/^templates\//)')
+            | awk '/^docs\/.*\.(js|mjs|cjs|jsx)$/ || (!/^docs\// && !(/\.md$/ && !/^templates\//))')
           if [ -n "$code_paths" ]; then
             echo "code changed:"; printf '  %s\n' $code_paths
             echo "code=true" >> "$GITHUB_OUTPUT"
