@@ -1,0 +1,8 @@
+
+ RUN  v5.0.2 /srv/dev/worktrees/Project_Orca-prepare-49efcc7-candidate-validation-81dde16f
+
+
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+   Start at  04:14:37
+   Duration  105.86s (tests 98%, import 1%, transform 1%)
