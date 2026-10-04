@@ -58,7 +58,11 @@
               "status": "running"
             }
           ],
-          "artifacts": []
+          "artifacts": [],
+          "detailCompleteness": {
+            "steps": "complete",
+            "artifacts": "complete"
+          }
         },
         {
           "id": "synthetic-run-waiting",
@@ -80,7 +84,11 @@
               "stepRunId": "synthetic-step-review",
               "artifactId": "synthetic-artifact-review"
             }
-          ]
+          ],
+          "detailCompleteness": {
+            "steps": "complete",
+            "artifacts": "complete"
+          }
         },
         {
           "id": "synthetic-run-succeeded",
@@ -96,7 +104,11 @@
               "status": "succeeded"
             }
           ],
-          "artifacts": []
+          "artifacts": [],
+          "detailCompleteness": {
+            "steps": "complete",
+            "artifacts": "complete"
+          }
         },
         {
           "id": "synthetic-run-failed",
@@ -112,7 +124,11 @@
               "status": "failed"
             }
           ],
-          "artifacts": []
+          "artifacts": [],
+          "detailCompleteness": {
+            "steps": "complete",
+            "artifacts": "complete"
+          }
         },
         {
           "id": "synthetic-run-cancelled",
@@ -128,7 +144,11 @@
               "status": "cancelled"
             }
           ],
-          "artifacts": []
+          "artifacts": [],
+          "detailCompleteness": {
+            "steps": "complete",
+            "artifacts": "complete"
+          }
         },
         {
           "id": "synthetic-run-blocked",
@@ -144,7 +164,11 @@
               "status": "blocked"
             }
           ],
-          "artifacts": []
+          "artifacts": [],
+          "detailCompleteness": {
+            "steps": "complete",
+            "artifacts": "complete"
+          }
         },
         {
           "id": "synthetic-run-held",
@@ -160,7 +184,11 @@
               "status": "held"
             }
           ],
-          "artifacts": []
+          "artifacts": [],
+          "detailCompleteness": {
+            "steps": "complete",
+            "artifacts": "complete"
+          }
         },
         {
           "id": "synthetic-run-stale",
@@ -176,7 +204,11 @@
               "status": "stale"
             }
           ],
-          "artifacts": []
+          "artifacts": [],
+          "detailCompleteness": {
+            "steps": "complete",
+            "artifacts": "complete"
+          }
         }
       ],
       "nextCursor": null,

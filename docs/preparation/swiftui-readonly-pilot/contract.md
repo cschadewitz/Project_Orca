@@ -60,12 +60,35 @@ not server-issued revisions and never authorization guards.
 
 | Payload | Required meaning |
 | --- | --- |
-| `runs` | Stable run ID, workflow ID, canonical status, bounded safe title, update time, per-run `observedSeq`, bounded steps and artifact references. Detail uses the same object. `items`, opaque `nextCursor` (null at end), `truncated`, `restartRequired`; no total unless independently supported. |
+| `runs` | Stable run ID, workflow ID, canonical status, bounded safe title, update time, per-run `observedSeq`, bounded steps and artifact references, and required `detailCompleteness` for each nested collection. Detail uses the same object. Outer `items`, opaque `nextCursor` (null at end), `truncated`, `restartRequired` describe the run page only; no total unless independently supported. |
 | `approvals` | Exact run/step/input ID and `durable`/`live` lifetime; observed `pending`/`answered`/`expired`, safe summary, owner availability (`available`/`unavailable`/`unknown`), evidence completeness and references. `requestId` here is a human-input ID, not a top-level Request. No option IDs, answer text or reusable live decision target is needed by a viewer. |
 | `artifact` | Run, step, artifact ID, content revision, media type, text or omission. `available` requires text; `redacted`, `missing`, `binary`, `tooLarge` prohibit text. `truncated` is explicit and cannot mean complete evidence. Missing/denied resource distinctions are returned only after authorization. |
 | `connection` | Local adapter fixture, never an authoritative server grant: canonical connection state, `fresh`/`stale`/`none`, last successful read time or null, sanitized reason. Repeated receipt of a connection event does not refresh a snapshot. |
 | `invalidation` | Collection, nullable run ID/seq, sanitized reason. Run `seq` means source event position, not projection revision or a global cursor. No content patch is trusted as complete evidence. |
 | `error` | Sanitized fixed code and retryable flag; no raw message, stack, path or server response. Context is nullable only when identity could not be verified; then discard prior protected content for denial/mismatch. |
+
+Every run requires `detailCompleteness: {steps, artifacts}`. Each value is
+`complete`, `truncated` or `omitted`, independent of the outer page's `truncated`:
+
+- `complete`: the array contains the entire authorized mobile projection for that
+  collection at this snapshot. An empty array means none in that scope; exactly
+  100 items can be complete only when the producer establishes completeness.
+- `truncated`: only part of that collection is supplied because of a row or byte
+  limit. Show the supplied rows and "Step list incomplete" or "Artifact list
+  incomplete", including when no rows fit. Never infer the number missing.
+- `omitted`: the collection was not projected; its array must be empty. Show
+  "Steps not included" or "Artifact references not included", never "No steps"
+  or "No artifacts". The field does not reveal whether inaccessible objects exist.
+
+The producer must set these fields from actual projection coverage, not array
+length. Completeness concerns authorized mobile-visible rows, not undisclosed
+private resources or the contents of a referenced artifact. Missing metadata is
+a malformed packet. Outer `truncated: false` can coexist with incomplete run
+detail; neither an outer cursor nor a successful refresh promises to retrieve
+omitted children. There is no nested pagination route in v1. Keep the notice
+visible in run detail and direct fuller inspection to the desktop. These fields
+correct the draft v1 contract before its implementation freeze; no deployed
+consumer or runtime schema is changed by this preparation.
 
 Titles/questions/artifacts use approved public sensitivity projections only.
 Unknown secrets cannot be proven absent merely by a scrubber: #472 must define

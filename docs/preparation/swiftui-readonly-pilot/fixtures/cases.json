@@ -497,5 +497,109 @@
     ],
     "decode": "accept",
     "expectation": "Version mismatch blocks fresh reads; no fallback to file mode."
+  },
+  {
+    "id": "nested-steps-truncated",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/steps",
+        "value": "truncated"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Outer page remains complete; steps are truncated. Show incomplete/not included notice with no invented total."
+  },
+  {
+    "id": "nested-steps-omitted",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/steps",
+        "value": "omitted"
+      },
+      {
+        "path": "/data/items/1/steps",
+        "value": []
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Outer page remains complete; steps are omitted. Show incomplete/not included notice with no invented total."
+  },
+  {
+    "id": "nested-steps-omitted-with-rows",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/steps",
+        "value": "omitted"
+      }
+    ],
+    "decode": "reject",
+    "expectation": "An omitted nested collection must be empty."
+  },
+  {
+    "id": "nested-artifacts-truncated",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/artifacts",
+        "value": "truncated"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Outer page remains complete; artifacts are truncated. Show incomplete/not included notice with no invented total."
+  },
+  {
+    "id": "nested-artifacts-omitted",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/artifacts",
+        "value": "omitted"
+      },
+      {
+        "path": "/data/items/1/artifacts",
+        "value": []
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Outer page remains complete; artifacts are omitted. Show incomplete/not included notice with no invented total."
+  },
+  {
+    "id": "nested-artifacts-omitted-with-rows",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/artifacts",
+        "value": "omitted"
+      }
+    ],
+    "decode": "reject",
+    "expectation": "An omitted nested collection must be empty."
+  },
+  {
+    "id": "missing-detail-completeness",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness",
+        "remove": true
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Completeness cannot be inferred from outer page metadata or row count."
+  },
+  {
+    "id": "missing-artifact-completeness",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/artifacts",
+        "remove": true
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Both nested collections require explicit completeness."
   }
 ]

@@ -155,6 +155,18 @@ def main():
         page = copy.deepcopy(packets["runs"])
         page["data"]["items"] = [dict(page["data"]["items"][0], id=f"synthetic-row-{i}") for i in range(size)]
         assert rejected(encoded(page)) == should_reject
+    # A complete outer page says nothing about each run's bounded child collections.
+    for field in ("steps", "artifacts"):
+        for size, should_reject in [(100, False), (101, True)]:
+            for completeness in ("complete", "truncated"):
+                page = copy.deepcopy(packets["runs"])
+                run = page["data"]["items"][1]
+                row = run[field][0]
+                identity = "stepRunId" if field == "steps" else "artifactId"
+                run[field] = [dict(row, **{identity: f"synthetic-child-{i}"}) for i in range(size)]
+                run["detailCompleteness"][field] = completeness
+                assert page["data"]["truncated"] is False
+                assert rejected(encoded(page)) == should_reject
     for count, should_reject in [(8192, False), (8193, True)]:
         artifact = copy.deepcopy(packets["artifact"])
         artifact["data"]["text"] = "é" * count

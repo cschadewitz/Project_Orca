@@ -294,10 +294,79 @@
             "$ref": "#/$defs/reference"
           },
           "maxItems": 100
+        },
+        "detailCompleteness": {
+          "type": "object",
+          "properties": {
+            "steps": {
+              "enum": ["complete", "truncated", "omitted"]
+            },
+            "artifacts": {
+              "enum": ["complete", "truncated", "omitted"]
+            }
+          },
+          "required": ["steps", "artifacts"],
+          "additionalProperties": true
         }
       },
-      "required": ["id", "workflowId", "title", "status", "updatedAt", "observedSeq", "steps", "artifacts"],
-      "additionalProperties": true
+      "required": [
+        "id",
+        "workflowId",
+        "title",
+        "status",
+        "updatedAt",
+        "observedSeq",
+        "steps",
+        "artifacts",
+        "detailCompleteness"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "detailCompleteness": {
+                "properties": {
+                  "steps": {
+                    "const": "omitted"
+                  }
+                },
+                "required": ["steps"]
+              }
+            },
+            "required": ["detailCompleteness"]
+          },
+          "then": {
+            "properties": {
+              "steps": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "detailCompleteness": {
+                "properties": {
+                  "artifacts": {
+                    "const": "omitted"
+                  }
+                },
+                "required": ["artifacts"]
+              }
+            },
+            "required": ["detailCompleteness"]
+          },
+          "then": {
+            "properties": {
+              "artifacts": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
     },
     "approval": {
       "type": "object",

@@ -29,6 +29,7 @@ timestamps include timezone. A client clock never changes authority or lease sta
 | Initial loading, no cache | Named loading state; do not say there are zero runs/asks. Preserve focus and allow Back. |
 | Successful empty page | “No pending decisions” or “No runs in this scope.” A denied read is never empty. Local filter with no matches offers Clear filter. |
 | Partial page | Show loaded count and truncation/next-page notice. Never call a partial attention list complete. |
+| Incomplete run detail | Inspect `detailCompleteness.steps` and `.artifacts` independently of outer paging. Mark truncated lists incomplete and omitted lists not included; an omitted empty list is not "No steps/artifacts". Keep the notice accessible and offer a desktop pointer, without missing totals or a promised nested Load more action. |
 | Read failed | Sanitized category and Retry; retain eligible prior snapshot with an absolute as-of label. Do not show raw server diagnostics. |
 | Missing capability | “This server does not provide [surface].” Other supported read screens work. No raw-RPC fallback. |
 | Denied / revoked | Remove protected content and cached pages, cancel in-flight reads. Explain access unavailable and desktop recovery; do not reveal whether an inaccessible resource exists. |

@@ -466,5 +466,39 @@
     "expected": [
       "Transport may still be live while data becomes stale. No periodic polling and no invented lease-stale status."
     ]
+  },
+  {
+    "id": "incomplete-nested-detail",
+    "steps": [
+      {
+        "event": "deliver",
+        "fixture": "nested-steps-truncated",
+        "ticket": "detail-1",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "nested-artifacts-truncated",
+        "ticket": "detail-2",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "nested-steps-omitted",
+        "ticket": "detail-3",
+        "generation": 1
+      },
+      {
+        "event": "deliver",
+        "fixture": "nested-artifacts-omitted",
+        "ticket": "detail-4",
+        "generation": 1
+      }
+    ],
+    "expected": [
+      "Outer truncated=false never suppresses each nested completeness notice.",
+      "Truncated shows available rows and an incomplete notice. Omitted shows not included, not an empty-success message.",
+      "No fabricated totals or nested pagination; use the desktop for fuller inspection."
+    ]
   }
 ]
