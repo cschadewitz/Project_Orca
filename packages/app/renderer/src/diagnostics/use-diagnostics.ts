@@ -119,6 +119,8 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   const runStatus = useCallback(
     async (action: () => Promise<DiagnosticsResult<DiagnosticsStatus>>, turningOff = false, enabling = false) => {
       const epoch = authority.current;
+      // Feedback belongs to the explicit action that produced it, not its successor.
+      setMessage(undefined);
       setBusy(true);
       try {
         const result = await action();
@@ -148,6 +150,7 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
   );
 
   const close = useCallback(() => {
+    setMessage(undefined);
     clear();
   }, [clear]);
 
@@ -167,6 +170,7 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     if (bridge === undefined || busy || handle.current !== undefined || disposalHandle.current !== undefined) return;
     const epoch = authority.current;
     preparing.current = true;
+    setMessage(undefined);
     setBusy(true);
     try {
       const result = await bridge.preparePreview(source);
@@ -193,6 +197,7 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
     const old = handle.current;
     if (bridge === undefined || old === undefined || busy) return;
     const epoch = authority.current;
+    setMessage(undefined);
     setDestination(undefined);
     setBusy(true);
     try {

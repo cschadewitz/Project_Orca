@@ -301,6 +301,39 @@ describe("exact preview and separate local Save", () => {
     expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
   });
 
+  it("does not carry a prior Save success into a new pending or unknown Save", async () => {
+    const f = fakeBridge(enabled);
+    await open(f);
+    fireEvent.click(screen.getByRole("button", { name: "Choose destination" }));
+    await screen.findByText("Destination: /local/report.json");
+    fireEvent.click(screen.getByRole("button", { name: "Save exact content" }));
+    await waitFor(() => expect(f.bridge.save).toHaveBeenCalledOnce());
+    const oldSuccess = "The exact reviewed content was saved locally. ORCA will not remove that exported file.";
+    await screen.findAllByText(oldSuccess);
+
+    vi.mocked(f.bridge.chooseDestination).mockResolvedValueOnce(
+      ok({ token: "fresh-token", displayPath: "/local/second-report.json" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose another destination" }));
+    await screen.findByText("Destination: /local/second-report.json");
+    const saved = deferred<DiagnosticsResult<DiagnosticsStatus>>();
+    vi.mocked(f.bridge.save).mockReturnValueOnce(saved.promise);
+    fireEvent.click(screen.getByRole("button", { name: "Save exact content" }));
+    act(() => {
+      const { lastSaveOutcome: _oldOutcome, ...rest } = f.state();
+      f.emit({ ...rest, code: "publication_pending" });
+    });
+    expect(screen.queryAllByText(oldSuccess)).toHaveLength(0);
+    act(() =>
+      f.emit({ ...f.state(), code: "unknown_blocked", lastSaveOutcome: "unknown", unknownOperation: "new-operation" }),
+    );
+    expect(screen.queryAllByText(oldSuccess)).toHaveLength(0);
+    expect(screen.getByText(/ORCA cannot claim that nothing was saved/)).toBeTruthy();
+    await act(async () => saved.resolve(ok(f.state())));
+    expect(f.bridge.save).toHaveBeenLastCalledWith(preview.handle, "fresh-token");
+    expect(screen.queryAllByText(oldSuccess)).toHaveLength(0);
+  });
+
   it("clears the view even when durable opt-out fails and says only off for this session", async () => {
     const f = fakeBridge(enabled);
     await open(f);
