@@ -140,6 +140,20 @@ it.each([
     "PLIST_VERSIONS_REQUIRED",
   ],
   [
+    "lone high surrogate in short plist version",
+    (x) => {
+      x.metadata.bundleShortVersion = "0.0.0\ud800";
+    },
+    "PLIST_VERSIONS_REQUIRED",
+  ],
+  [
+    "lone low surrogate in plist version",
+    (x) => {
+      x.metadata.bundleVersion = "0007.02\udc00";
+    },
+    "PLIST_VERSIONS_REQUIRED",
+  ],
+  [
     "missing build ID",
     (x) => {
       delete x.metadata.buildId;

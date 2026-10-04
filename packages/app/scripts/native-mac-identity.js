@@ -35,6 +35,7 @@ function text(value) {
   return (
     typeof value === "string" &&
     value.length > 0 &&
+    value.isWellFormed() &&
     value === value.trim() &&
     ![...value].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)
   );
