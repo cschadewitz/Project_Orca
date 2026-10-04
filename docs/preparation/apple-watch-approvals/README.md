@@ -54,7 +54,7 @@ a distributed release, actual-Cal acceptance or deployed homelab configuration.
 | [#151](https://github.com/cschadewitz/Project_Orca/issues/151), [#241](https://github.com/cschadewitz/Project_Orca/issues/241), [#294](https://github.com/cschadewitz/Project_Orca/issues/294) | Closed stream/reconnect/snapshot work; [event fold](../../../packages/daemon/src/notifications.ts), [subscriptions](../../../packages/daemon/src/subscriptions.ts), [live invalidations](../../../packages/daemon/src/live-input-notifications.ts). | Streams are wakeups, not a durable mobile delivery queue. Reconcile authorized pending state after missed events/restart; do not copy the snapshot-overwrites-newer-event bug. |
 | [#328](https://github.com/cschadewitz/Project_Orca/issues/328), [#318](https://github.com/cschadewitz/Project_Orca/issues/318) | #328 remains open; #318 is closed. Token authentication, operation/resource guards, credential lifecycle and target identity are integrated via [#371](https://github.com/cschadewitz/Project_Orca/pull/371)/[#397](https://github.com/cschadewitz/Project_Orca/pull/397). | Mobile enrollment, per-device revocation and a deliberately smaller HTTPS facade. No second principal model. |
 | [#237](https://github.com/cschadewitz/Project_Orca/issues/237), merged [#383](https://github.com/cschadewitz/Project_Orca/pull/383)/[#397](https://github.com/cschadewitz/Project_Orca/pull/397) | [Live input continuity](../../live-input-continuity.md) distinguishes durable gates from original-process ACP callbacks. | Do not reconstruct an expired callback from a push or turn it into a durable gate. Owner availability must be reread. |
-| [#327](https://github.com/cschadewitz/Project_Orca/issues/327), [#331](https://github.com/cschadewitz/Project_Orca/issues/331), [#356](https://github.com/cschadewitz/Project_Orca/issues/356), merged [#415](https://github.com/cschadewitz/Project_Orca/pull/415) | [Operator mutations](../../../packages/daemon/src/operator-mutations.ts) delegate to shared controls; [continuation schemas](../../../packages/protocol/src/continuation-admission.ts) carry CAS boundaries and durable retry receipts. | Mobile transport must preserve these envelopes. Answer-only/live calls do not already have the continuation service's retry receipt. Revision composition remains a phone/desktop concern. |
+| [#327](https://github.com/cschadewitz/Project_Orca/issues/327), [#331](https://github.com/cschadewitz/Project_Orca/issues/331), [#356](https://github.com/cschadewitz/Project_Orca/issues/356), merged [#415](https://github.com/cschadewitz/Project_Orca/pull/415) | [Operator mutations](../../../packages/daemon/src/operator-mutations.ts) delegate to shared controls; [continuation schemas](../../../packages/protocol/src/continuation-admission.ts) carry CAS boundaries and durable retry receipts. | Mobile transport must preserve these envelopes. Answer-only/live calls do not already have the continuation service's retry receipt. Revision composition remains desktop-only in the initial mobile scope. |
 | [#443](https://github.com/cschadewitz/Project_Orca/issues/443), open [#448](https://github.com/cschadewitz/Project_Orca/pull/448) | Known continuation settlement race remains open at inspection. | Fix and strict acceptance evidence are a hard gate for mobile answer-and-continue; neither alerts nor answer-only research needs that fix. |
 | [#338](https://github.com/cschadewitz/Project_Orca/issues/338), [#339](https://github.com/cschadewitz/Project_Orca/issues/339), [#399](https://github.com/cschadewitz/Project_Orca/issues/399) | Store/conformance, SQLite and retention follow-ons. Existing file locks and protected journals are usable foundations. | Define a contained delivery-outbox contract under these owners; no mandatory SQLite migration or new authoritative approval ledger. |
 | [#363](https://github.com/cschadewitz/Project_Orca/issues/363), [#340](https://github.com/cschadewitz/Project_Orca/issues/340), [#357](https://github.com/cschadewitz/Project_Orca/issues/357) | Sensitive projections, operations/history and broader recovery ownership. | Allowlisted mobile content, delivery health and receipt correlation; no duplicate general dashboard/recovery project. |
@@ -409,12 +409,16 @@ uncertain pauses and missing generations are unsupported. Do not fall back to
 legacy long-running `inputs.answer` with implicit resume, which is unsuitable for
 mobile background execution limits. #443 must be resolved and verified first.
 
-For answer-only/live there is no equivalent existing retry receipt. Initially
-send once, retain non-secret intent correlation and reconcile through authorized
+For answer-only/live there is no equivalent existing retry receipt. An explicitly
+scoped experimental stage may send once, retain non-secret intent correlation and reconcile through authorized
 exact answer evidence after a timeout; if evidence is incomplete, show **Outcome
-unknown — check on phone/desktop**, not success or an automatic resend. If a future
-mobile receipt is needed, attach its correlation atomically to the existing shared
-answer journal/fence; a gateway cache must not become a second acceptance ledger.
+unknown — check on phone/desktop**, not success or an automatic resend. This is
+not completed M4/M5 write-MVP acceptance and does not enable live phone approvals.
+Before releasing phone commands, shared M3/P3 work must provide durable command
+receipts and authorized non-mutating lookup by original client intent even when
+the first response loses the server receipt ID. Attach correlation atomically to
+the existing shared answer journal/fence; a gateway cache must not become a
+second acceptance ledger.
 Do not regenerate an idempotency key to bypass an ambiguous operation.
 
 On disconnect, keep a draft only. An offline tap cannot approve, and reconnect
@@ -465,11 +469,13 @@ are bounded local test reruns or a non-destructive gate with fully visible scope
 even these require review of what that workflow's next step can actually do.
 An apparently harmless gate before deployment is not low risk.
 
-Require phone-based fresh confirmation (and desktop if adequate evidence will not
-fit) for publication/merge/deployment, destructive filesystem or data changes,
-credentials/secrets, permissions or standing authorization, trigger enrollment,
-configuration/security/network changes, spending, large/unclear diffs, and
-revision requests requiring text/context. Low-risk rejection is not assumed:
+Escalation does not expand the receiving device's supported actions. Publication,
+merge, deployment, standing grants, enrollment/security/configuration changes,
+secret administration and revision composition remain owner/desktop operations
+in the initial mobile scope, as defined by the [iPhone companion draft #461](https://github.com/cschadewitz/Project_Orca/pull/461). The phone may show a safe desktop pointer, not authorize these operations.
+Only phone-supported actions, such as an allowlisted durable choice or explicit
+cancel, can escalate to fresh phone confirmation; insufficient evidence, spending,
+arbitrary destructive changes or large/unclear diffs require desktop review. Low-risk rejection is not assumed:
 escalate it too when rejection releases claims, discards work or routes elsewhere.
 Some actions remain outside the mobile API entirely. A biometric/device-unlock
 check supplements current server authorization; it never replaces it.
@@ -484,7 +490,7 @@ groups are `ship-group:mobile-alerts`, `ship-group:phone-approvals`, and later
 
 | Slice / phase | Outcome, scope and acceptance | Foundations; hard dependencies | Non-goals |
 | --- | --- | --- | --- |
-| M0 — device and route feasibility | Record exact paired hardware/OS, distribution choice and threat/identity decisions; test synthetic alert routing and private phone HTTPS access in a separately authorized experiment. Accept only a written capability matrix with failures retained. | No code blocker. Uses Apple evidence; hardware and later setup authorization required for actual tests. | Real approval, credentials/deployment in this research PR; broad platform support. |
+| M0 — device and route feasibility | Record exact paired hardware/OS, distribution choice and threat/identity decisions; test synthetic alert routing and private phone HTTPS access with iPhone/Watch Low Power Mode independently on/off in a separately authorized experiment. Accept only a written capability matrix with failures retained. | No code blocker. Uses Apple evidence; hardware and later setup authorization required for actual tests. | Real approval, credentials/deployment in this research PR; broad platform support. |
 | M1 — durable attention delivery | Daemon-owned reconciliation/outbox plus one Pushover adapter for generic alerts, or APNs if native is selected immediately. Prove duplicate/restart suppression, missing-stream convergence, expiry, bounded retries and redaction with fake provider. | Existing #151/#162 semantics, #338 storage seam. Contract alignment with #450; completing #450/#339 is not a blocker. | New event bus, workflow admission, action callbacks. |
 | M2 — mobile identity and restricted gateway | Enrollment/revocation and exact human mapping; bounded read-only inbox over chosen private route. Prove no cross-user/workspace access, no owner fallback and revocation on active sessions. | Integrated #328/#318; M0 identity/route decision. Coordinate #363 projections. | General daemon proxy, tunnel reuse, OAuth platform from scratch. |
 | M3 — shared exact-decision boundary | Validate answer-only presentation revision/immutability and current user/device authority under the shared fence; extend the legacy durable path where needed. Preserve exact answer and uncertain-result semantics. Expose supported durable decisions through gateway. Prove stale/concurrent/revocation/lost-response cases and protected actor audit. | M2, integrated #237/#327; coordinate narrowly scoped #328 contract work. | Alternate approval ledger, live permission enablement, standing grants. |
@@ -492,6 +498,16 @@ groups are `ship-group:mobile-alerts`, `ship-group:phone-approvals`, and later
 | M5 — explicit durable answer-and-continue | Preserve `{command,retry}`, expected boundary, status lookup and separate resume/completion states; prove single decision/execution and restart/lost-ack recovery. | M3/M4; existing #331/#356 services; **#443/#448 correction and strict acceptance**. | Child/live/unsupported continuation or automatic mutation retries. |
 | M6 — native Watch low-risk review | Enroll a distinct device, fetch/confirm an allowlisted decision via HTTPS, and show truthful receipt. Test accidental taps, stale screen, expiry and concurrent phone decision on physical Watch. | M0/M2/M3/M4; M5 only if Watch offers continuation. Exact live support, if later desired, is another bounded extension. | Consequential actions, “always”, universal callback support. |
 | M7 — independent connectivity and operations | If phone-off use is still needed, verify direct APNs/HTTPS and dedicated relay/private route, revocation, outbox health, upgrades and signing expiry; document the supported hardware matrix. | M6 and separate topology/security decision. Related #392 supervision, #340/#357 visibility/recovery. | Treating iPhone VPN as Watch VPN or promising offline approvals. |
+
+**One shared implementation with [companion #461](https://github.com/cschadewitz/Project_Orca/pull/461):**
+M2 maps to P1 enrollment/revocation and restricted projections; M3 maps to P3
+authority/revision fences and receipts; M4/M5 consume P2/P4 phone surfaces and
+commands. Native APNs delivery under M1 is N1, sharing the same daemon-authorized
+enrollment, token lifecycle and outbox, counted once. P5a gates a read-only pilot;
+P5b gates command release with physical-device/security/accessibility/signing/
+privacy/support evidence. M4/M5 send-once/unknown experiments cannot bypass P3
+receipt/recovery acceptance or claim the completed write MVP. Watch escalation
+never expands the phone action allowlist.
 
 Smallest rollout: M0/M1 for awareness; M2–M4 for phone decisions; M5 only after its
 existing blocker is resolved; M6/M7 only if use justifies maintenance. The
@@ -517,7 +533,7 @@ fixtures, required repository checks and physical Apple hardware evidence.
 
 | Area | Required cases and observable pass condition |
 | --- | --- |
-| Delivery/routing | Phone unlocked/locked/offline/off/distant; Watch locked/off-wrist/Focus; notification permission denied; apps backgrounded/terminated; GPS Wi-Fi and cellular where available. Record which device alerts and latency distribution/misses, not an SLA. No silent-push dependence. |
+| Delivery/routing | Phone unlocked/locked/offline/off/distant; Watch locked/off-wrist/Focus; iPhone/Watch Low Power Mode independently on/off, paired phone nearby/absent and Watch network-using app closed/opened; notification permission denied; apps backgrounded/terminated; GPS Wi-Fi and cellular where available. Record which device alerts and latency distribution/misses, not an SLA. No silent-push dependence. |
 | Queue recovery | Duplicate, delayed, out-of-order/lost pushes; provider 429/5xx/timeouts and invalid tokens; daemon/sender restart at every persist/send/checkpoint boundary; desktop closed and other-process writes. Every still-pending durable request is discoverable by authenticated reconciliation; capacity saturation is visible; no mutation follows delivery. |
 | Exact identity | Wrong workspace/boot/run/step/request/option; stale revision, replaced gate, changed pinned generation, replayed invocation, expired callback and unavailable owner. Zero effect; current authorized explanation without leaking another user's data. |
 | Races/durability | Phone versus Watch versus desktop approve/reject; revocation during submission; lease loss; crash after decision before response; continuation settlement race; truncated/corrupt/missing protected evidence. One winner, preserved original receipt and explicit conflict/unknown; no second execution or fabricated success. |
@@ -527,8 +543,13 @@ fixtures, required repository checks and physical Apple hardware evidence.
 | Status/audit | Provider acceptance, decision recorded, continuation accepted, execution resumed and terminal result are demonstrably distinct. Rationale stays protected; device/user/target/operation correlate across retries. Notification acknowledgement cannot alter workflow state. |
 | Independent Watch | If claimed, phone off plus real Watch Wi-Fi/cellular must pass direct notification, auth, HTTPS, revocation and uncertain-response tests on each supported model/OS. Simulator-only evidence is insufficient. |
 
+Apple documents that Watch Low Power Mode disables Wi-Fi/cellular data while the
+phone is absent until a network-using app opens. Retain delayed/missed alerts and
+foreground recovery observations; no delivery guarantee follows from this matrix.
+[Apple Watch away from iPhone](https://support.apple.com/en-us/108300).
+
 Record exact code head, app build/distribution channel, Watch/iPhone models and OS,
-network state, server build, test method and retained failures. Fault tests use
+power modes, battery condition, network state, server build, test method and retained failures. Fault tests use
 synthetic requests/providers before any live enrollment. A later supervised pilot
 may measure prompt-to-alert and tap-to-receipt latency with synthetic gates, but
 never reduce server freshness checks to make delivery appear reliable. Suppressed
