@@ -7,6 +7,15 @@ feature implementation, or authorization to broaden permissions. Research date:
 and remote `main` matched that SHA when research began. External documentation and
 GitHub state are a dated observation, not part of the immutable code baseline.
 
+**Source-status refresh, 4 October 2026:** the [roadmap](roadmap.md) now records
+closed #460 through merged #462, completed #471/#479 read-only mobile preparation,
+the selected SwiftUI/Apple-first direction and remaining #449/#453 acceptance.
+Open #486 is inactive bootstrap preparation, not enforcement or activation proof.
+The original code baseline and proposed architecture remain unchanged. Existing
+CI427 passed documentation classification with runtime jobs skipped; it supplies
+no runtime/device evidence. Independent architecture/security review of the final
+refreshed head remains a separate gate; this update claims no such clearance.
+
 ## Recommendation
 
 Add an **implicit policy check at supported execution boundaries**, selected by an

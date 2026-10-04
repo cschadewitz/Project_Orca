@@ -25,7 +25,7 @@ or created by this research.
 | [#410](https://github.com/cschadewitz/Project_Orca/issues/410)/[#458](https://github.com/cschadewitz/Project_Orca/pull/458), [#443](https://github.com/cschadewitz/Project_Orca/issues/443)/[#448](https://github.com/cschadewitz/Project_Orca/pull/448), [#444](https://github.com/cschadewitz/Project_Orca/issues/444)/[#447](https://github.com/cschadewitz/Project_Orca/pull/447) | Closed/merged and in this baseline: resume-authority wiring regression, completed continuation settlement, bounded direct-child startup cleanup | Preserve regression evidence; these are not outstanding blockers, and direct-child cleanup is not process-tree confinement |
 | [#449](https://github.com/cschadewitz/Project_Orca/issues/449) | Open enforced unattended profile/standing trigger authority proposal | Owns filesystem/network/credential/process enforcement and supervisor; review layer consumes that boundary rather than duplicating a sandbox project |
 | [#450](https://github.com/cschadewitz/Project_Orca/issues/450), [#451](https://github.com/cschadewitz/Project_Orca/issues/451), [#452](https://github.com/cschadewitz/Project_Orca/issues/452), [#453](https://github.com/cschadewitz/Project_Orca/issues/453), [#454](https://github.com/cschadewitz/Project_Orca/issues/454) | Open intake/source/router/workflow/acceptance proposals | Trigger text is untrusted input; standing enrollment grants bounded launch authority, not arbitrary per-tool approval |
-| [#460](https://github.com/cschadewitz/Project_Orca/issues/460), [#350](https://github.com/cschadewitz/Project_Orca/issues/350) | Open root-worktree foundation under #453 and conflict-safe GitHub planning outbox; [draft #462](https://github.com/cschadewitz/Project_Orca/pull/462) proposes the contained root-worktree implementation | Reuse isolated root-attempt workspaces and separately scoped publishing/effect contracts. #462 is not in this baseline or #449 confinement evidence; a Git worktree is not a sandbox |
+| [#460](https://github.com/cschadewitz/Project_Orca/issues/460), [#350](https://github.com/cschadewitz/Project_Orca/issues/350) | #460 is closed through merged [#462](https://github.com/cschadewitz/Project_Orca/pull/462), completing the contained local Linux root-worktree foundation under #453. #350 remains the separate conflict-safe GitHub planning outbox owner | Reuse the merged workspace foundation; #449/#453 enforcement, feedback binding and expected-head/durable-outbox publication acceptance remain open. #462 postdates this research baseline and is not #449 confinement evidence; a Git worktree is not a sandbox |
 | [Draft PR #459](https://github.com/cschadewitz/Project_Orca/pull/459), [draft PR #461](https://github.com/cschadewitz/Project_Orca/pull/461) | Open research-only Watch/mobile and focused iOS proposals | Share authoritative answer/presentation/receipt contracts through Watch M3 and iOS P3; live tool permissions remain read/alert-only initially |
 
 No existing generic semantic tool-review issue was found in this inventory. A new
@@ -59,16 +59,35 @@ The implicit checker can flag a suspicious triggered action, but cannot authenti
 a feedback author or widen the enrolled scope. A supervisor's ability to stop the
 runner must survive expiry of the dispatcher's RPC credential.
 
-At publication refresh, root-worktree [draft #462 at `9d5821004385b561d152d243313150c140e24372`](https://github.com/cschadewitz/Project_Orca/pull/462/commits/9d5821004385b561d152d243313150c140e24372)
-was open. It proposes opt-in local Linux isolation with retained provisioning evidence
-and refusal of ambiguous recovery rather than automatic reprovisioning. Treat its
-contract as pending review; it provides no credential/network/process sandbox promise.
+The original publication inspected #462 while it was a draft at
+`9d5821004385b561d152d243313150c140e24372`. **Status refresh, 4 October 2026:**
+[#462](https://github.com/cschadewitz/Project_Orca/pull/462) is merged as
+`49efcc7236ac127c952bb1f7a50fc6ef72f7df84`, from reviewed head
+`3aa3d2c26f2c7e3237c5f27e0243980cf109ce3c`, and #460 is closed. It supplies opt-in
+local Linux owned root-worktrees, trusted captured configuration, frozen base and
+fail-closed retained provisioning evidence. This accepted contained foundation
+does not approve this research architecture, certify a deployed host or satisfy
+the broader [#449](https://github.com/cschadewitz/Project_Orca/issues/449) and
+[#453](https://github.com/cschadewitz/Project_Orca/issues/453) acceptance gates.
+Filesystem/network/credential/process enforcement, feedback/workflow binding and
+race-safe expected-head publication with durable effect reconciliation remain open.
+
+Related [#486](https://github.com/cschadewitz/Project_Orca/pull/486) remains open:
+its offline dependency-bootstrap helper is inactive preparation, with no subprocess
+runner, ACP wiring, actual dependency installation or live activation. Locked
+dependency/executable closure, externally enforced offline/cache-miss behavior,
+crash/concurrency reconciliation, tool readiness and trusted-controller state
+isolation still need proof. Neither preparation nor marker files certify #453
+readiness or #449 enforcement.
 
 ## Mobile/Watch approval proposal
 
-Read [the draft at `f6dcddbc592247de495f71a7b139c617fab14c9e`](https://github.com/cschadewitz/Project_Orca/blob/f6dcddbc592247de495f71a7b139c617fab14c9e/docs/preparation/apple-watch-approvals/README.md).
-It recommends generic alerts plus authenticated iPhone review first, then a narrow
-allowlist of Watch-native decisions after hardware validation. Live tool callbacks
+Read [the refreshed Watch draft at `192df3e0079fdb05a87a0517072d66f0bd65fb7c`](https://github.com/cschadewitz/Project_Orca/blob/192df3e0079fdb05a87a0517072d66f0bd65fb7c/docs/preparation/apple-watch-approvals/README.md).
+The original research read `f6dcddbc592247de495f71a7b139c617fab14c9e`; subsequent
+alignment at `d3dd447033d0510c1bbe4f7907b875e5a69db972` retained shared phone scope,
+receipt acceptance and independent Low Power Mode coverage. The refreshed draft
+records the selected read-only pilot and preserves later phone-command and narrow
+Watch-native proposals subject to their acceptance gates. Live tool callbacks
 are alert-only initially. Notification delivery/read/dismissal is never consent;
 notification credentials cannot answer. Keep consequential actions, credentials,
 standing grants and complex context off a tiny approval surface regardless of a
@@ -83,14 +102,19 @@ gap through shared controls; do not fix it with a mobile-only or checker-only te
 See [answerOwned](../../../packages/engine/src/orchestrator.ts) and
 [operator mutations](../../../packages/daemon/src/operator-mutations.ts).
 
-The Watch draft's statement that #443/#448 is open is superseded by this research
-baseline. Its distinction between answer recorded, callback delivered, continuation
+The older Watch draft's open-#443/#448 wording is corrected in the linked refresh:
+#448 is merged and #443 closed; strict continuation/security regressions remain
+required for future mobile commands. Its distinction between answer recorded,
+callback delivered, continuation
 accepted and execution completed still applies. Live/answer-only retry cannot borrow
 the continuation receipt contract without implementing equivalent semantics.
 
-Publication refresh also found the focused iOS [draft #461 architecture at
-`6cfa52018f9e80fb55db5b2ad82000fab681f0e8`](https://github.com/cschadewitz/Project_Orca/blob/6cfa52018f9e80fb55db5b2ad82000fab681f0e8/docs/preparation/ios-companion/architecture.md)
-and its [P3 delivery slice](https://github.com/cschadewitz/Project_Orca/blob/6cfa52018f9e80fb55db5b2ad82000fab681f0e8/docs/preparation/ios-companion/delivery.md).
+The focused iOS [draft #461 architecture at
+`78a48bf1e19df533aff019525b325e872b7e1c26`](https://github.com/cschadewitz/Project_Orca/blob/78a48bf1e19df533aff019525b325e872b7e1c26/docs/preparation/ios-companion/architecture.md)
+and its [P3 delivery slice](https://github.com/cschadewitz/Project_Orca/blob/78a48bf1e19df533aff019525b325e872b7e1c26/docs/preparation/ios-companion/delivery.md)
+retain one shared command contract. The original inspection was at
+`6cfa52018f9e80fb55db5b2ad82000fab681f0e8`; prior clarifications at
+`aa0884b228dc8c44772e2d0ea8f8e1e5fa480281` remain preserved in this refresh.
 P3 proposes shared under-fence current-authority and presentation/effect-policy
 revision checks for answer-only and answer-and-continue, durable answer/cancel
 receipts, and non-mutating lookup by retained client identity when a lost first
@@ -98,6 +122,20 @@ response also loses the server receipt ID. Coordinate these contracts with Watch
 and exact tool-action evidence; do not create a third approval ledger. The iOS draft
 also leaves live tool approvals read/alert-only initially. Both mobile documents
 remain proposals, not implemented clients or new authority.
+
+The [owner selected SwiftUI/Apple first, Android later](https://github.com/cschadewitz/Project_Orca/pull/461#issuecomment-5976265449),
+with platform-neutral shared contracts and APNs for the Apple phase.
+[Milestone 24](https://github.com/cschadewitz/Project_Orca/milestone/24) tracks
+the read-only iPhone and mirrored Watch pilot. [#471](https://github.com/cschadewitz/Project_Orca/issues/471)
+is complete through merged [#479](https://github.com/cschadewitz/Project_Orca/pull/479):
+contracts, synthetic fixtures and a device plan are preparation only.
+[#472](https://github.com/cschadewitz/Project_Orca/issues/472),
+[#473](https://github.com/cschadewitz/Project_Orca/issues/473),
+[#475](https://github.com/cschadewitz/Project_Orca/issues/475) and
+[#477](https://github.com/cschadewitz/Project_Orca/issues/477) remain open.
+This does not implement phone commands, approve native Watch decisions or prove
+physical-device delivery, and it does not approve the tool-call architecture.
+Swift ownership, hardware, route, visibility and signing/APNs custody remain open.
 
 ## Phased implementation recommendation
 
@@ -116,7 +154,7 @@ packages and issue ownership; Cal should assign concrete implementation owners.
 Hard dependency graph: `S0 → S1 → production S2`; `S0 → S2 contract work`;
 `{S2, E} → S3`; `S2 → S4 contract work`, and `S3 → delegated S4 rollout`.
 This is acyclic. Runner work E and observation S1 can proceed in parallel after
-agreeing S0's boundary vocabulary; no new review work blocks existing #460. Shared
+agreeing S0's boundary vocabulary; this adds no gate to the completed #460 foundation. Shared
 mobile presentation work and capability catalog discussions are coordination, not
 blanket blockers. Broad #335–337 completion, SQLite #339, all trigger sources and a
 Watch client are not prerequisites for a fixed supported credential-free profile.
