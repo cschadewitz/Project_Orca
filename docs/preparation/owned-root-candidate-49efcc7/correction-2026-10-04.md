@@ -121,8 +121,42 @@ Git for Windows Bash at `C:/Program Files/Git/bin/bash.exe`):
   permission passed. This was not a runtime or smoke retry.
 - `git diff --check`: passed. Historical `.log` files, proposed YAML, smoke JSON and
   `validate-proposal.mjs` were checked unchanged against the inspected documentation head.
-- Markdown is excluded by the repository's `.prettierignore`. Prettier is absent from
-  this isolated checkout and the available cache, so no Prettier pass is claimed for
-  the new validator; formatting was reviewed against `.prettierrc.json` and whitespace
-  checked. No dependencies were installed. The compiled proposal validator and original
-  build/source/acceptance suites were not rerun for this documentation-only correction.
+- Markdown is excluded by the repository's `.prettierignore`. The initial correction
+  did not locate Prettier in the checkout or filename-based cache search and claimed
+  no formatter pass. The subsequent cache-index inspection and formatter result below
+  supersede that availability assessment. No dependencies were installed. The compiled
+  proposal validator and original build/source/acceptance suites were not rerun.
+
+## Formatter follow-up - 2026-10-04 UTC
+
+The lockfile pins Prettier **3.9.9** (the package manifest requests `^3.9.9`). A read-only
+copy of the selected computer's pnpm v11 SQLite cache index contained this exact version
+under the lockfile's integrity key. All 56 cached package files were checked against
+their recorded SHA-512 digests and sizes, then copied into a temporary task directory.
+The copied executable reported `3.9.9`. No download, package-manager install, changes to
+another checkout, or cache mutation was needed. Editor-bundled versions 3.6.2 and 2.8.8
+were also found, but were not used for validation.
+
+At correction head `5b877d41241517e33bd2ec013fb452052c1189dc`, these checks passed:
+
+```text
+node ../cached-prettier-3.9.9/bin/prettier.cjs --check docs/preparation/owned-root-candidate-49efcc7/validate-documentation.mjs
+node ../cached-prettier-3.9.9/bin/prettier.cjs --check 'docs/preparation/owned-root-candidate-49efcc7/*.{mjs,yaml,json,md}'
+```
+
+The first command checked the new validator in the isolated checkout. The second
+checked the packet in a temporary export produced by `git -c core.autocrlf=false archive`,
+including the repository's `.prettierrc.json` and `.prettierignore`. A direct packet
+check in the Windows checkout initially warned about CRLF in four unchanged files;
+comparison with formatter output confirmed line endings were the only difference.
+The export without line-ending conversion passed for both validators, both YAML
+proposals and the smoke JSON. Markdown remains excluded by repository policy. Original
+logs, launch inputs and proposal files were not rewritten. This is a focused packet
+formatting result, not a new whole-repository `pnpm run format:check` result.
+
+[CI #458](https://github.com/cschadewitz/Project_Orca/actions/runs/37188953622) succeeded
+for that correction head, but only change classification ran; the main check job was
+skipped for documentation-only changes. It supplied no formatter or runtime validation.
+The full-repository format pass recorded in the original preflight belongs to the
+historical preparation published at `796ddd0a8c48e2b002ae8ff1b13f5ee02ed41657` and must
+not be presented as a fresh check of the correction.
