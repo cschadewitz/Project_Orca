@@ -56,6 +56,7 @@ export class RecoveryController {
   private exportState: ExportState = {};
   private previousAvailable = false;
   private cleanupPending = false;
+  private ageUncertain = false;
   private code: DiagnosticResultCode = "off";
   private lastCheckpoint: BootReading | undefined;
   private busy = false;
@@ -121,8 +122,15 @@ export class RecoveryController {
         // No creation/key access on a clean default-off profile. Adapter cleanup is bounded.
         await this.cleanupOwned();
       } else if (this.productionEnabled) {
+        this.startTimer();
         const now = this.now();
+        if (!now) await this.maintainHistory(undefined);
         if (!now) throw new Error("age_uncertain");
+        // An unresolved export prevents new capture/promotion, not expiry of
+        // existing recovery history. Maintenance creates no history authority.
+        if (this.exportState.current) {
+          await this.maintainHistory(now);
+        }
         if (!this.exportState.current) {
           this.previousAvailable = await this.options.disk.open(now);
           if (epoch !== this.epoch || !this.setting.enabled) {
@@ -130,13 +138,14 @@ export class RecoveryController {
             return;
           }
           this.ring = this.newRing();
-          this.ring.start();
+          if (!this.ring.start()) throw new Error("age_uncertain");
+          this.ageUncertain = false;
           this.code = "ready";
           this.startTimer();
         }
       } else if (!this.exportState.current) this.code = "unavailable";
     } catch {
-      this.code = this.exportState.current ? "unknown_blocked" : "unavailable";
+      this.code = this.exportState.current ? "unknown_blocked" : this.ageUncertain ? "age_uncertain" : "unavailable";
       this.cleanupPending = true;
     } finally {
       this.busy = false;
@@ -217,6 +226,8 @@ export class RecoveryController {
         return;
       }
       const now = this.now();
+      this.startTimer();
+      if (!now) await this.maintainHistory(undefined);
       if (!now) throw new Error("age_uncertain");
       const openEpoch = this.epoch;
       this.previousAvailable = await this.options.disk.open(now);
@@ -226,6 +237,7 @@ export class RecoveryController {
       }
       this.ring = this.newRing();
       if (!this.ring.start()) throw new Error("age_uncertain");
+      this.ageUncertain = false;
       this.code = "ready";
       this.startTimer();
     });
@@ -252,7 +264,10 @@ export class RecoveryController {
     await this.mutate(async () => {
       const epoch = this.epoch;
       const anchor = this.now();
+      if (!anchor) await this.maintainHistory(undefined);
       if (!anchor) throw new Error("age_uncertain");
+      this.previousAvailable = await this.maintainHistory(anchor);
+      if (!this.authorized(epoch)) return;
       const snapshot = this.ring.snapshot();
       if (!snapshot) throw new Error("unavailable");
       this.reserve(3 * RECOVERY_LIMITS.exportBytes);
@@ -276,7 +291,12 @@ export class RecoveryController {
     const work = (async (): Promise<DiagnosticsResult<DiagnosticPreview>> => {
       try {
         const now = this.now();
-        if (!now) return failure("age_uncertain");
+        if (!now) {
+          await this.maintainHistory(undefined).catch(() => {
+            this.cleanupPending = true;
+          });
+          return failure("age_uncertain");
+        }
         let bytes: Buffer;
         let deadline = now.elapsedMs + RECOVERY_LIMITS.previewMs;
         if (source === "previous") {
@@ -410,6 +430,10 @@ export class RecoveryController {
     this.busy = this.liveExport = true;
     this.reserve(RECOVERY_LIMITS.exportBytes);
     const id = randomUUID();
+    // Outcomes belong to this operation alone. An earlier known result cannot
+    // turn a new admitted-but-unresolved publication into a completed operation.
+    this.lastSaveOutcome = undefined;
+    this.saveAdmittedBeforeRevocation = false;
     this.destination = undefined;
     const epoch = this.epoch;
     const work = (async (): Promise<DiagnosticsResult<DiagnosticsStatus>> => {
@@ -514,6 +538,7 @@ export class RecoveryController {
         if (epoch !== this.epoch || !this.setting.enabled) return;
         this.ring = this.newRing();
         if (!this.ring.start()) throw new Error("age_uncertain");
+        this.ageUncertain = false;
         this.startTimer();
       }
     });
@@ -539,9 +564,12 @@ export class RecoveryController {
         if (this.disableFailed) await this.persistDisabled();
         await this.cleanupOwned();
       } else {
+        const now = this.now();
+        if (!this.productionEnabled) throw new Error("unavailable");
+        this.previousAvailable = await this.maintainHistory(now);
         await this.options.disk.clearStage();
         this.cleanupPending = false;
-        this.code = "ready";
+        this.code = this.ring.enabled ? "ready" : "unavailable";
       }
     });
   }
@@ -628,7 +656,11 @@ export class RecoveryController {
         return success(this.status());
       } catch {
         this.cleanupPending = true;
-        this.code = this.exportState.current ? "unknown_blocked" : "cleanup_pending";
+        this.code = this.exportState.current
+          ? "unknown_blocked"
+          : this.ageUncertain
+            ? "age_uncertain"
+            : "cleanup_pending";
         return failure(this.code);
       } finally {
         this.busy = false;
@@ -719,8 +751,10 @@ export class RecoveryController {
         (this.reading && (next.bootId !== this.reading.bootId || next.elapsedMs < this.reading.elapsedMs))
       )
         return undefined;
-      this.reading = next;
-      return next;
+      // Native adapters may reuse a mutable reading object. Anchors and prior
+      // readings must keep their original scalar values across async work.
+      this.reading = { bootId: next.bootId, elapsedMs: next.elapsedMs };
+      return this.reading;
     } catch {
       return undefined;
     }
@@ -728,9 +762,32 @@ export class RecoveryController {
   private startTimer(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = setInterval(() => {
-      void this.checkpoint();
+      void this.tick();
     }, RECOVERY_LIMITS.checkpointMs);
     this.timer.unref?.();
+  }
+  private async tick(): Promise<void> {
+    // Expiry is independent of opening a preview or a pending cleanup/export.
+    // Keep one mutation in flight; a stalled adapter remains visible and fenced.
+    if (!this.setting.enabled || !this.productionEnabled || this.busy) return;
+    await this.mutate(async () => {
+      const epoch = this.epoch;
+      const now = this.now();
+      const previous = await this.maintainHistory(now);
+      if (epoch === this.epoch && this.setting.enabled) this.previousAvailable = previous;
+    });
+    await this.checkpoint();
+  }
+  private async maintainHistory(now: BootReading | undefined): Promise<boolean> {
+    if (!now) {
+      this.ageUncertain = true;
+      this.previousAvailable = false;
+      this.ring.stop();
+      this.revokePreviewAuthority();
+    }
+    const previous = await this.options.disk.maintain(now);
+    if (!now) throw new Error("age_uncertain");
+    return previous;
   }
   private reserve(bytes: number): void {
     if (this.payloadReservedBytes + bytes > RECOVERY_LIMITS.payloadBytes) throw new Error("capacity_limited");

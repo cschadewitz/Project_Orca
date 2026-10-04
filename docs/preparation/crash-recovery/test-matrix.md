@@ -157,8 +157,8 @@ The fixed-slot design and narrowed destination support are approved in decision 
 
 | Environment | Required pass | Current status |
 | --- | --- | --- |
-| Focused Vitest, `--maxWorkers=1` | C01–C15 and C17–C26 against final integrated head; exact SHA, command, counts and contract constants | Not run: implementation absent |
-| Paired execution workload | Serialized bytes, aggregate owned disk bytes, copy/queue peaks, heap/RSS, checkpoint latency, event-loop delay, omissions and actual retained coverage | Not run at approved 8,192 events; #455 is earlier synthetic Linux/tmpfs evidence |
+| Focused Vitest, `--maxWorkers=1` | C01–C15 and C17–C26 against final integrated head; exact SHA, command, counts and contract constants | Implemented Linux filesystem/controller/UI tests; exact commands and outcomes in [implementation handoff](implementation-handoff.md). Native acceptance remains separate. |
+| Paired execution workload | Serialized bytes, aggregate owned disk bytes, copy/queue peaks, heap/RSS, checkpoint latency, event-loop delay, omissions and actual retained coverage | Approved 8,192-event standalone disk/preview probe now executable; final numerical artifact in handoff. Paired execution and combined Electron memory gate remain not run; #455 is historical. |
 | Network observation | Instrument or externally observe built process across C16, including denied/cancel paths | Not run |
 | Packaged macOS | Signed identity, native Keychain behavior, owner-only file access, path/link safety, crash restart, actual checkpoint latency, accessibility and no network | Not run |
 | Packaged Windows | DPAPI/secure-storage behavior, DACL ownership, junction/reparse safety, publication/path behavior, crash restart, actual checkpoint latency, accessibility and no network | Not run |
@@ -166,7 +166,7 @@ The fixed-slot design and narrowed destination support are approved in decision 
 | Independent technical/privacy review | Coherent frozen contract, exact candidate SHA and producer inventory; verify all scope/retention/exposure deviations return to Casey and Cal | Required before activation; fresh independent final review remains separate |
 | Power loss | Native storage barriers and recovery if a stronger survival claim is ever proposed | No guarantee approved; not run |
 
-#438/#441/#455 remain separate ownership. This matrix imports no implementation
-and changes none of their acceptance status. Production activation stays off;
+#438/#441/#455 remain separate ownership. The lead adopted the pinned #441 ring/schema for this candidate;
+this changes none of the peers’ acceptance status. Production activation stays off;
 recorded product choices are not actual tester consent. #416 stays open through
 the fresh independent reviewer and native/physical acceptance pass.

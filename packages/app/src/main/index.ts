@@ -75,7 +75,12 @@ diagnostics.subscribe((status) => {
     if (!win.isDestroyed()) win.webContents.send("orca:diagnostics.changed", status);
 });
 const diagnosticWindowGenerations = new Map<number, number>();
-const diagnosticHandle = (method: string, schema: z.ZodType, run: (params: unknown) => unknown): void => {
+const diagnosticHandle = (
+  method: string,
+  schema: z.ZodType,
+  run: (params: unknown) => unknown,
+  disposalOnly = false,
+): void => {
   ipcMain.handle(`orca:diagnostics.${method}`, async (event, params: unknown, epoch: number): Promise<unknown> => {
     try {
       const win = BrowserWindow.fromWebContents(event.sender);
@@ -93,11 +98,15 @@ const diagnosticHandle = (method: string, schema: z.ZodType, run: (params: unkno
         !win ||
         win.isDestroyed() ||
         event.senderFrame !== event.sender.mainFrame ||
-        epoch !== workspace.connectionTarget.epoch
+        (!disposalOnly && epoch !== workspace.connectionTarget.epoch)
       )
         return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
       const parsed = schema.safeParse(params);
       if (!parsed.success) return { ok: false, code: "refused" } satisfies DiagnosticsResult<never>;
+      // Exact-handle disposal grants no capture, content, picker or Save authority.
+      // A workspace switch may revoke its old target epoch before DOM removal;
+      // acknowledge removal from this same verified document without initialization.
+      if (disposalOnly) return await run(parsed.data);
       await diagnostics.initialize();
       if (!currentSender() || epoch !== workspace.connectionTarget.epoch)
         return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
@@ -120,8 +129,11 @@ diagnosticHandle("setMinutes", z.object({ minutes: z.number().int().min(1).max(1
 diagnosticHandle("preparePreview", z.object({ source: z.enum(["current", "previous"]) }).strict(), (params) =>
   diagnostics.preparePreview((params as { source: "current" | "previous" }).source),
 );
-diagnosticHandle("closePreview", z.object({ handle: opaqueDiagnosticHandle }).strict(), (params) =>
-  diagnostics.closePreview((params as { handle: string }).handle),
+diagnosticHandle(
+  "closePreview",
+  z.object({ handle: opaqueDiagnosticHandle }).strict(),
+  (params) => diagnostics.closePreview((params as { handle: string }).handle),
+  true,
 );
 diagnosticHandle("chooseDestination", z.object({ handle: opaqueDiagnosticHandle }).strict(), (params) =>
   diagnostics.chooseDestination((params as { handle: string }).handle),

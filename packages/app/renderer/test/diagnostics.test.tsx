@@ -316,9 +316,13 @@ describe("exact preview and separate local Save", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Choose another destination" }));
     await screen.findByText("Destination: /local/second-report.json");
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Save exact content" }) as HTMLButtonElement).disabled).toBe(false),
+    );
     const saved = deferred<DiagnosticsResult<DiagnosticsStatus>>();
     vi.mocked(f.bridge.save).mockReturnValueOnce(saved.promise);
     fireEvent.click(screen.getByRole("button", { name: "Save exact content" }));
+    await waitFor(() => expect(f.bridge.save).toHaveBeenCalledTimes(2));
     act(() => {
       const { lastSaveOutcome: _oldOutcome, ...rest } = f.state();
       f.emit({ ...rest, code: "publication_pending" });

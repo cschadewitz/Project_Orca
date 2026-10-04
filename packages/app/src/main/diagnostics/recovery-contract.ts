@@ -31,6 +31,8 @@ export interface RecoveryDisk {
   writeSetting(setting: DiagnosticsSetting): Promise<void>;
   /** Verify control authority; promote eligible unclean current, retain previous on clean exit. */
   open(now: BootReading): Promise<boolean>;
+  /** Authenticate committed authority, expire prior history and remove only unreferenced artifacts. */
+  maintain(now: BootReading | undefined): Promise<boolean>;
   checkpoint(bytes: Buffer, anchor: BootReading, admit: () => boolean): Promise<void>;
   previous(now: BootReading): Promise<StoredCheckpoint | undefined>;
   discardPrevious(): Promise<void>;

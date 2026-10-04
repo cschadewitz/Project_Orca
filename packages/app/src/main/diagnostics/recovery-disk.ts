@@ -290,7 +290,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       if (!setting.enabled) this.active = false;
     });
   }
-  private reading(now: BootReading): boolean {
+  private reading(now: BootReading | undefined): boolean {
     if (
       !validReading(now) ||
       (this.lastReading && (now.bootId !== this.lastReading.bootId || now.elapsedMs < this.lastReading.elapsedMs))
@@ -299,7 +299,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     this.lastReading = { ...now };
     return true;
   }
-  private eligible(record: RecordHeader, now: BootReading): boolean {
+  private eligible(record: RecordHeader, now: BootReading | undefined): boolean {
     return (
       validReading(now) &&
       validReading(record.anchor) &&
@@ -473,6 +473,8 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       if (!admit()) throw new Error("off");
       this.revoked = false;
       this.closed = false;
+      this.session?.key.fill(0);
+      this.session = undefined;
       this.captureOpened = true;
       this.active = true;
       return this.manifest?.previous !== undefined;
@@ -492,7 +494,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   /** Bounded maintenance does not promote a current session, decrypt reports,
    * mutate export obligations, or create replacement authority over lost keys.
    */
-  maintain(now: BootReading): Promise<boolean> {
+  maintain(now: BootReading | undefined): Promise<boolean> {
     const epoch = this.maintenanceEpoch;
     const admit = () => !this.revoked && !this.closed && this.maintenanceEpoch === epoch;
     return this.serialized(async () => {

@@ -459,6 +459,60 @@ describe.runIf(linux)("real recovery lifecycle and bounded maximum workload", ()
       await fixture.controller.cleanExit();
     });
   });
+  it.each(["boot-change", "rollback"])(
+    "timer revokes stored roles and capture on uncertain clock: %s",
+    async (fault) => {
+      await withSyntheticProfile(async (profile) => {
+        await crashImplementationAt(profile, "checkpoint-committed");
+        const intervals = vi.spyOn(globalThis, "setInterval");
+        let fixture: Awaited<ReturnType<typeof implementationFixture>>;
+        let tick: (() => void) | undefined;
+        try {
+          fixture = await implementationFixture(profile, { reading: { bootId: "synthetic-boot", elapsedMs: 2000 } });
+          const scheduled = intervals.mock.calls.find((call) => call[1] === RECOVERY_LIMITS.checkpointMs);
+          if (scheduled && typeof scheduled[0] === "function") tick = scheduled[0];
+        } finally {
+          intervals.mockRestore();
+        }
+        if (!tick) throw new Error("Actual recovery timer was not installed");
+        fixture.controller.record("run", "run_failed");
+        await fixture.controller.checkpoint();
+        const preview = value(await fixture.controller.preparePreview("current"));
+        const wrapped = vi.spyOn(fixture.keys, "wrap");
+        const maintain = fixture.disk.maintain.bind(fixture.disk);
+        let finished = false;
+        const maintenance = vi.spyOn(fixture.disk, "maintain").mockImplementation(async (reading) => {
+          try {
+            return await maintain(reading);
+          } finally {
+            finished = true;
+          }
+        });
+        // The adapter deliberately reuses its object; mutation must not change
+        // the controller's previous reading or immutable snapshot anchors.
+        if (fault === "boot-change") fixture.clock.reading.bootId = "different-boot";
+        else fixture.clock.reading.elapsedMs = 1999;
+        tick();
+        await waitFor(() => finished && fixture.controller.status().code === "age_uncertain");
+        expect(maintenance).toHaveBeenCalledWith(undefined);
+        const evidence = await inspectPrivateRoot(fixture.root);
+        expect([...evidence.files.keys()].some((name) => /^slot-|^session-/.test(name))).toBe(false);
+        expect(fixture.controller.status().enabled).toBe(true);
+        expect((await fixture.disk.readSetting()).enabled).toBe(true);
+        expect(fixture.controller.record("run", "run_failed")).toBe(false);
+        expect((await fixture.controller.chooseDestination(preview.handle)).ok).toBe(false);
+        value(await fixture.controller.closePreview(preview.handle));
+        fixture.clock.reading = { bootId: "synthetic-boot", elapsedMs: 3000 };
+        value(await fixture.controller.retryCleanup());
+        expect(fixture.controller.status().code).toBe("unavailable");
+        expect(fixture.controller.record("run", "run_failed")).toBe(false);
+        expect(wrapped).not.toHaveBeenCalled();
+        maintenance.mockRestore();
+        wrapped.mockRestore();
+        await fixture.controller.cleanExit();
+      });
+    },
+  );
   it.each(["failure", "hang"])(
     "durable opt-out %s stays visible and repeated requests do not allocate new writers",
     async (fault) => {
