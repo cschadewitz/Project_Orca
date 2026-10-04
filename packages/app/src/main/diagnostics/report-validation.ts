@@ -49,6 +49,9 @@ export function validateDiagnosticReport(bytes: Buffer, freshIds = false): Buffe
       throw new Error("unavailable");
     last = e.offsetMs;
   }
+  const first = r.events[0];
+  const retainedWindowMs = first ? r.coverage.observedWindowMs - first.offsetMs : 0;
+  if (r.coverage.retainedWindowMs !== retainedWindowMs) throw new Error("unavailable");
   const rebuilt = diagnosticReport(
     r.reportId,
     r.sessionId,
