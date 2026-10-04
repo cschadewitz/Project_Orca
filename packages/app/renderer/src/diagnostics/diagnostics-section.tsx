@@ -20,6 +20,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
     (status.code === "ready" ||
       status.code === "capacity_limited" ||
       status.code === "saved" ||
+      status.code === "refused" ||
       status.code === "acknowledged_unknown");
   const unknown = status?.code === "unknown_blocked" || status?.code === "unknown_ready";
   const disabledReason = state.busy ? "A diagnostics action is pending." : "Local diagnostics are unavailable.";

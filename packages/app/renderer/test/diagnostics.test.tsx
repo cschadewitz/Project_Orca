@@ -338,6 +338,51 @@ describe("exact preview and separate local Save", () => {
     expect(screen.queryAllByText(oldSuccess)).toHaveLength(0);
   });
 
+  it.each(["close", "expiry"] as const)(
+    "allows a fresh explicit Save after known refusal and preview %s without changing consent",
+    async (dismissal) => {
+      const f = fakeBridge({ ...enabled, previous: true });
+      vi.mocked(f.bridge.preparePreview).mockImplementationOnce(async () => {
+        f.emit({ ...f.state(), activePreviewHandle: preview.handle });
+        return ok({ ...preview, expiresInMs: dismissal === "expiry" ? 1000 : preview.expiresInMs });
+      });
+      await open(f);
+      fireEvent.click(screen.getByRole("button", { name: "Choose destination" }));
+      await screen.findByText("Destination: /local/report.json");
+      vi.mocked(f.bridge.save).mockImplementationOnce(async () => {
+        f.emit({ ...f.state(), code: "refused", lastSaveOutcome: "refused", cleanupPending: false });
+        return ok(f.state());
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save exact content" }));
+      await waitFor(() => expect(f.bridge.save).toHaveBeenCalledOnce());
+      await screen.findAllByText("This diagnostics action was refused. Review the current status before trying again.");
+      if (dismissal === "close") fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+      await waitFor(
+        () => expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull(),
+        { timeout: 2000 },
+      );
+      await waitFor(() => expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle));
+      act(() => f.emit({ ...f.state(), code: "refused", cleanupPending: false }));
+      for (const name of ["Preview current diagnostics", "Preview previous session"])
+        await waitFor(() => expect(screen.getByRole("button", { name }).getAttribute("aria-disabled")).toBeNull());
+      expect(f.bridge.setEnabled).not.toHaveBeenCalled();
+      expect(f.bridge.preparePreview).toHaveBeenCalledOnce();
+      expect(f.bridge.chooseDestination).toHaveBeenCalledOnce();
+      expect(f.bridge.save).toHaveBeenCalledOnce();
+      fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
+      await screen.findByRole("region", { name: "Complete exact diagnostic report" });
+      expect(f.bridge.save).toHaveBeenCalledOnce();
+      fireEvent.click(screen.getByRole("button", { name: "Choose destination" }));
+      await screen.findByText("Destination: /local/report.json");
+      expect(f.bridge.save).toHaveBeenCalledOnce();
+      fireEvent.click(screen.getByRole("button", { name: "Save exact content" }));
+      await waitFor(() => expect(f.bridge.save).toHaveBeenCalledTimes(2));
+      expect(f.bridge.preparePreview).toHaveBeenCalledTimes(2);
+      expect(f.bridge.chooseDestination).toHaveBeenCalledTimes(2);
+      expect(f.bridge.setEnabled).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["transport", "stale_preview"] as const)(
     "disposes the view but does not claim Off when revocation is unconfirmed by %s",
     async (failure) => {
