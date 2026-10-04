@@ -2,6 +2,7 @@
 import { ESLint } from "eslint";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
 const eslint = new ESLint();
@@ -30,14 +31,27 @@ it("retains type-aware checks for TypeScript", async () => {
   expect(config.rules["@typescript-eslint/no-floating-promises"][0]).toBe(2);
   // CI's single-run parser reads the project's source files from disk. lintText with
   // replacement text for a real barrel instead checks that barrel's original AST.
-  // Use real, temporary files included by the unchanged repository TS project.
+  // Keep real files, but scope the test program to these two fixtures: recreating the
+  // whole repository program here is expensive under coverage and shared CI load.
+  // The fixture inherits production compiler options; only its root-file set differs.
   const directory = mkdtempSync(new URL("../../packages/core/test/eslint-config-", import.meta.url));
   const unhandled = join(directory, "unhandled.ts");
   const handled = join(directory, "handled.ts");
+  const project = join(directory, "tsconfig.json");
   try {
     writeFileSync(unhandled, "/** Unhandled asynchronous work. */\nPromise.resolve();\n");
     writeFileSync(handled, "/** Explicitly handled asynchronous work. */\nvoid Promise.resolve();\n");
-    const results = await eslint.lintFiles([unhandled, handled]);
+    writeFileSync(
+      project,
+      JSON.stringify({
+        extends: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+        include: ["unhandled.ts", "handled.ts"],
+      }),
+    );
+    // Load the actual production ESLint config and rules, overriding only the test's
+    // project path. The unmodified production project/rule assertions above still apply.
+    const fixtureESLint = new ESLint({ overrideConfig: { languageOptions: { parserOptions: { project } } } });
+    const results = await fixtureESLint.lintFiles([unhandled, handled]);
     const messagesFor = (path) => results.find((result) => result.filePath === path).messages;
     expect(messagesFor(unhandled).map((message) => message.ruleId)).toEqual([
       "@typescript-eslint/no-floating-promises",
