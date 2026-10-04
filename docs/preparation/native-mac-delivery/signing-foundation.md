@@ -117,20 +117,28 @@ not native behavior. Exact check outcomes and implementation SHA belong in the d
 
 ## Single-validator integration and remaining gates
 
-[#442](https://github.com/cschadewitz/Project_Orca/pull/442) was read at
-`604330c7d0857f303b107cd044cc81fba55ee051`, still open/draft and not integrated into
-verified main. No branch or validator files were imported; no competing manifest
-validator was built. Its exact-field identity shape is the producer's output seam.
-Its `validate_identity` still requires the historical `dev.orca.desktop` Mac ID;
-that conflicts with approved main. **Do not change this producer back to the old ID.**
-The #442 integration owner must reconcile that assertion and its fixture expectations
-with merged #456, preserving Windows identity separately, then exercise generated
-identity through the existing single fixture validator. Until reviewed integration on
-main or an explicitly agreed branch, that acceptance item is blocked, not passed.
+[#442](https://github.com/cschadewitz/Project_Orca/pull/442) was reverified at
+`0065ded06d175382612e3d1ffd38484c2c4f4b9b`, after its history-preserving merge of
+main `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`. It is still open/draft and not
+integrated into main. The historical Mac-ID mismatch found at its earlier
+`604330c7d0857f303b107cd044cc81fba55ee051` head is **resolved**: its validator now
+requires `com.schadewitz.orca`; its owner reports 37 passing fixture tests including
+self-consistent legacy-ID rejection. Those Python results were not independently rerun
+here. Windows separately retains `dev.orca.desktop`.
+
+No branch or validator files were imported; no competing manifest validator was built.
+The exact-field v1 identity remains the producer's output seam, including opaque plist
+strings. Consumer CLI is `--mode fixture --fixture-app PATH DELIVERY`; candidate mode
+rejects before I/O. Synthetic signing declarations remain shape-only: the producer's
+public expected Team ID in its separate local receipt is not an observed publisher or
+an addition to the sealed identity/manifest schema. After reviewed integration on main
+or an explicitly agreed branch, exercise generated identity through the existing single
+fixture validator. That end-to-end acceptance item is still blocked, not passed; the
+resolved legacy-ID mismatch is no longer its blocker.
 
 The next ordered work remains in #464/#385/#388 rather than duplicate issues:
 
-1. Integrate #442 and its approved bundle-ID correction; connect synthetic output to
+1. Complete reviewed integration of #442; connect synthetic output to
    its fixture builder and all existing negative cases. Keep candidate mode rejected.
 2. Resolve publisher/certificate authority, D4 supported macOS, D5 version mapping and
    D6 ownership; verify protection availability, trusted source/workflow controls,
