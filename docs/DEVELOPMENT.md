@@ -40,6 +40,13 @@ See [runtime integration](runtime-foundation-integration.md) for pinned feature 
 security/storage boundaries. Run the combined suite and App smoke on the exact integration
 head before treating the independent story slices as accepted.
 
+The CI check matrix runs the two `ORCA_RETRY_INTEGRATION=1` CLI/ACP cases explicitly on
+Node 22 and 24, with at most two Vitest workers and a three-minute step limit. It checks
+the test report so a skipped case fails the lane. The CLI case uses a local authenticated
+HTTP/WebSocket daemon and a synthetic workflow; the ACP case uses an in-process SDK client
+and file-backed claims. Neither needs a provider credential. These cases do not prove
+Electron keychain restart or the full cross-client key lifecycle in #331.
+
 ### Desktop workflow bundle probe
 
 After `pnpm run build` and `pnpm --filter @orca/app run build:daemon`, run

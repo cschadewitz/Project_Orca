@@ -112,6 +112,44 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      # These two opt-in cases are skipped by the ordinary suite. Run them against the
+      # merged runtime on both supported Nodes and reject a green result with skips.
+      - name: Retry admission acceptance (CLI and ACP)
+        timeout-minutes: 3
+        env:
+          ORCA_RETRY_INTEGRATION: "1"
+        run: |
+          pnpm exec vitest run \
+            packages/cli/test/admission-retry-wiring.test.ts \
+            packages/integrations/test/admission-retry-acp.test.ts \
+            --maxWorkers=2 \
+            --reporter=default --reporter=json \
+            --outputFile.json="$RUNNER_TEMP/retry-acceptance.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { join, relative } from 'node:path';
+
+          const report = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'retry-acceptance.json'), 'utf8'));
+          const expected = new Set([
+            'packages/cli/test/admission-retry-wiring.test.ts',
+            'packages/integrations/test/admission-retry-acp.test.ts',
+          ]);
+          const files = report.testResults ?? [];
+          const ran = new Set(files.map((file) => relative(process.cwd(), file.name)));
+          if (
+            report.success !== true ||
+            files.length !== expected.size ||
+            [...expected].some((file) => !ran.has(file)) ||
+            files.some((file) =>
+              !file.assertionResults?.length || file.assertionResults.some((test) => test.status !== 'passed')) ||
+            report.numTotalTests !== report.numPassedTests ||
+            report.numPassedTests < expected.size
+          ) {
+            throw new Error('Retry acceptance requires both named test files to run with every test passing');
+          }
+          console.log(`Retry acceptance: ${report.numPassedTests} tests passed in both named files; none skipped`);
+          NODE
+
       # Coverage is measured on one leg for the same reason, and because instrumenting
       # slows the suite down. Thresholds live in vitest.config.ts, so this fails here
       # exactly when it fails locally.
