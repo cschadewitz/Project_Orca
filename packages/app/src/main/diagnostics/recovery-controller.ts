@@ -639,6 +639,15 @@ export class RecoveryController {
     if (!this.setting.enabled && this.disableWrite) await this.disableWrite;
     if (!this.setting.enabled && this.disableFailed) throw new Error("cleanup_pending");
     await this.options.disk.cleanup();
+    // Startup may have failed before reading a durable export obligation. Safe
+    // cleanup preserves that record; an empty cache cannot prove it was resolved.
+    const persisted = await this.options.disk.readExportState();
+    if (persisted.current && persisted.current.id !== this.exportState.current?.id) {
+      this.lastSaveOutcome = undefined;
+      this.saveAdmittedBeforeRevocation = false;
+      this.saveOperation = undefined;
+    }
+    this.exportState = persisted;
     if (this.exportState.current) {
       await this.resolveOldStage();
       this.code =

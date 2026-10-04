@@ -134,6 +134,78 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
     });
   });
 
+  it.each(["retry-cleanup", "opt-in"] as const)(
+    "restart inspection failure cannot hide durable unresolved authority from %s",
+    async (attempt) => {
+      await withSyntheticProfile(async (profile) => {
+        const crashed = await crashImplementationAt(profile, "optout-unresolved");
+        expect(crashed.signal).toBe("SIGKILL");
+        const evidence = crashed.evidence;
+        if (!evidence?.unresolvedId) throw new Error("Actual crash omitted its durable unresolved authority");
+        const root = join(profile, "private");
+        const journal = join(root, "export.json");
+        const stage = join(root, "export-stage.tmp");
+        const priorExport = join(profile, "report.json");
+        const durableJournal = await readFile(journal);
+        expect((JSON.parse(durableJournal.toString("utf8")) as ExportState).current?.id).toBe(evidence.unresolvedId);
+        // Replace only the owned staging entry; the link's user-export target
+        // must survive both strict inspection and later external link removal.
+        await unlink(stage);
+        await symlink(priorExport, stage);
+        const keys = new SyntheticKeys();
+        keys.usable = false;
+        const fixture = await implementationFixture(profile, { keys });
+        expect(fixture.controller.status().enabled).toBe(false);
+        expect((await fixture.disk.readSetting()).enabled).toBe(false);
+        expect(fixture.controller.status().cleanupPending).toBe(true);
+        expect(fixture.controller.status().unknownOperation).toBeUndefined();
+        await expect(fixture.disk.readExportState()).rejects.toThrow();
+        expect(await readFile(journal)).toEqual(durableJournal);
+        expect(await readFile(priorExport)).toEqual(Buffer.from(evidence.publishedText));
+        await unlink(stage);
+
+        const result =
+          attempt === "retry-cleanup"
+            ? await fixture.controller.retryCleanup()
+            : await fixture.controller.setEnabled(true, 1);
+        expect(fixture.controller.status().unknownOperation).toBe(evidence.unresolvedId);
+        expect(fixture.controller.status().cleanupPending).toBe(true);
+        expect(fixture.controller.status().enabled).toBe(false);
+        expect((await fixture.disk.readSetting()).enabled).toBe(false);
+        if (attempt === "opt-in") expect(result.ok).toBe(false);
+        expect(await readFile(journal)).toEqual(durableJournal);
+        expect((await fixture.disk.readExportState()).current?.id).toBe(evidence.unresolvedId);
+        expect((await fixture.controller.preparePreview("current")).ok).toBe(false);
+        expect(fixture.controller.record("run", "run_failed")).toBe(false);
+        expect(fixture.native.publishCalls).toBe(0);
+        expect(fixture.picker.calls).toBe(0);
+        expect((await fixture.controller.setEnabled(true, 1)).ok).toBe(false);
+        expect((await fixture.disk.readExportState()).current?.id).toBe(evidence.unresolvedId);
+        expect(await readFile(priorExport)).toEqual(Buffer.from(evidence.publishedText));
+
+        // Proven old-writer cessation and owned-slot cleanup permit ACK alone;
+        // capture and a new picker still require a later explicit opt-in.
+        value(await fixture.controller.acknowledgeUnknown(evidence.unresolvedId));
+        expect((await fixture.disk.readExportState()).current).toBeUndefined();
+        expect(fixture.controller.status().enabled).toBe(false);
+        expect(fixture.picker.calls).toBe(0);
+        expect(fixture.native.publishCalls).toBe(0);
+        keys.usable = true;
+        value(await fixture.controller.setEnabled(true, 1));
+        expect(fixture.controller.record("run", "run_failed")).toBe(true);
+        const preview = value(await fixture.controller.preparePreview("current"));
+        fixture.picker.destination = join(profile, "fresh-after-ack.json");
+        value(await fixture.controller.chooseDestination(preview.handle));
+        expect(fixture.picker.calls).toBe(1);
+        expect(fixture.native.publishCalls).toBe(0);
+        expect(await readFile(priorExport)).toEqual(Buffer.from(evidence.publishedText));
+        await expect(access(fixture.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
+        value(await fixture.controller.closePreview(preview.handle));
+        await fixture.controller.cleanExit();
+      });
+    },
+  );
+
   it.each(["before-stage-identity", "before-stage-write"])(
     "crash %s requires recorded identity before cleanup can release staging",
     async (boundary) => {
