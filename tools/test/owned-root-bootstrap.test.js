@@ -3,9 +3,10 @@ import { spawnSync } from "node:child_process";
 import { expect, it } from "vitest";
 
 it("runs the bootstrap admission and inventory checks with explicit platform evidence", () => {
+  // Use default test-process isolation: --test-isolation is unavailable on Node 22.
   const result = spawnSync(
     process.execPath,
-    ["--test", "--test-isolation=none", "--test-reporter=tap", "tools/deploy/owned-root-bootstrap/prepare.test.mjs"],
+    ["--test", "--test-reporter=tap", "tools/deploy/owned-root-bootstrap/prepare.test.mjs"],
     { encoding: "utf8", timeout: 25000, maxBuffer: 1024 * 1024 },
   );
   expect(result.error).toBeUndefined();

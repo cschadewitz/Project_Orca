@@ -19,7 +19,7 @@ From the assigned execution directory with an installed Node >=22:
 ```sh
 node --check tools/deploy/owned-root-bootstrap/prepare.mjs
 node --check tools/deploy/owned-root-bootstrap/prepare.test.mjs
-node --test --test-isolation=none --test-reporter=tap tools/deploy/owned-root-bootstrap/prepare.test.mjs
+node --test --test-reporter=tap tools/deploy/owned-root-bootstrap/prepare.test.mjs
 ```
 
 Tests create `.synthetic-*` fixtures beneath the helper directory and remove only
