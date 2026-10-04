@@ -100,9 +100,6 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
   it("R03 preserves an accepted intent across concurrent same-key replays in separate daemons and rejects a changed payload", async (ctx) => {
     const first = await f.connect(transport);
     await f.requireProduction(ctx, first);
-    const secondDaemon = await f.boot();
-    const second = await f.connect(transport, f.token, secondDaemon.endpoint);
-    expect(second.target.instanceId).not.toBe(first.target.instanceId);
     const command = { ...(await f.guards(first)), vars: { intent: "same" } };
     const params = { target: first.target, command, retry: { idempotencyKey: "concurrent-intent" } };
     // Each daemon has its own active generation. Accept with the daemon that
@@ -110,6 +107,13 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
     // against the other daemon may correctly fail CONFIG_STALE.
     const original = accepted(await f.mutation(first, "operator.admitRun", params));
     expect(original.replayed).toBe(false);
+    // Establish the accepted intent before starting the competing daemon. Its
+    // startup recovery can hold the catalog mutex; socket readiness does not
+    // imply recovery quiescence. R03 races retained-key replays, not fresh admission
+    // against startup recovery, so keep that unrelated contention out of setup.
+    const secondDaemon = await f.boot();
+    const second = await f.connect(transport, f.token, secondDaemon.endpoint);
+    expect(second.target.instanceId).not.toBe(first.target.instanceId);
     await Promise.all(
       [first, second].map(async (peer) => {
         const response = await peer.client.callTool({

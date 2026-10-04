@@ -174,6 +174,7 @@ export function makeWorkspaceProvider(
         repo: isAbsolute(ws.repo) ? ws.repo : resolve(configDir, ws.repo),
         baseBranch: ws.baseBranch,
         branchPrefix: ws.branchPrefix,
+        ...(ws.isolateRoots !== undefined ? { isolateRoots: ws.isolateRoots } : {}),
         ...(ws.worktreeRoot
           ? { worktreeRoot: isAbsolute(ws.worktreeRoot) ? ws.worktreeRoot : resolve(configDir, ws.worktreeRoot) }
           : {}),
