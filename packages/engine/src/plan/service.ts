@@ -157,7 +157,7 @@ export class PlanService {
   private readonly extractors: SignalExtractor[];
   /** Tail of the mutation chain per plan; see `withPlan`. */
   private readonly locks = new Map<string, Promise<unknown>>();
-  /** Failed dependency passes must be retried even if the next intake changes nothing. */
+  /** Outstanding dependency passes must be retried even if the next intake changes nothing. */
   private readonly pendingReconciliations = new Set<string>();
 
   constructor(opts: PlanServiceOptions) {
@@ -1081,6 +1081,9 @@ export class PlanService {
       ...(opts.rationale ? { rationale: opts.rationale } : {}),
     };
     await this.stores.plan.decisions.put(decision);
+    // Persistence makes dependency work outstanding even if journalling fails before
+    // reconcile is entered. Only a successful pass clears this marker under the lock.
+    this.pendingReconciliations.add(planId);
     await this.journal({
       type: "decision.resolved",
       planId,

@@ -42,6 +42,59 @@ async function make() {
 }
 
 describe("artifact intake change detection (#105)", () => {
+  it("recovers request-only decision replay after the resolution journal append fails", async () => {
+    const { service, stores, ctx, reconcile, snapshot } = await make();
+    const decision = await service.upsertDecision(
+      ctx.planId,
+      { key: "store", title: "Store", options: [{ key: "a", name: "A" }], blocks: ["a"] },
+      human,
+    );
+    const matrix: Artifact = {
+      ...artifact({ key: "store", title: "Store", chosen: "a" }),
+      kind: "decision-matrix",
+    };
+    const run = { id: ctx.runId, requestId: "req_1" }; // No recordProduced recovery pass.
+    vi.spyOn(stores.plan.journal, "append").mockImplementationOnce(async (input) => {
+      expect(input.type).toBe("decision.resolved");
+      expect(await stores.plan.decisions.get(decision.id)).toMatchObject({ status: "decided", chosen: "a" });
+      throw new Error("transient journal failure");
+    });
+
+    expect(await service.onArtifactRecorded(run, matrix)).toEqual([
+      expect.stringMatching(/decision 'store'.*transient journal failure/),
+    ]);
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(await stores.plan.dependencies.list((d) => d.planId === ctx.planId)).toEqual([
+      expect.objectContaining({ status: "open" }),
+    ]);
+
+    expect(await service.onArtifactRecorded(run, matrix)).toEqual([]);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(await stores.plan.dependencies.list((d) => d.planId === ctx.planId)).toEqual([
+      expect.objectContaining({ status: "satisfied" }),
+    ]);
+    const journal = await service.journalOf(ctx.planId);
+    // Recovery repairs dependencies; it does not recreate the failed decision event.
+    expect(journal.filter((e) => e.type === "decision.resolved")).toHaveLength(0);
+    expect(journal.filter((e) => e.type === "dependency.resolved")).toHaveLength(1);
+    expect(journal.filter((e) => e.type === "signals.rejected")).toEqual([
+      expect.objectContaining({
+        payload: {
+          artifactId: matrix.id,
+          runId: run.id,
+          issues: [expect.stringMatching(/decision 'store'.*transient journal failure/)],
+        },
+      }),
+    ]);
+
+    reconcile.mockClear();
+    snapshot.mockClear();
+    expect(await service.onArtifactRecorded(run, matrix)).toEqual([]);
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(await service.journalOf(ctx.planId)).toEqual(journal);
+  });
+
   it.each([1, 2])("recovers request-only decision replay after %i failed reconciliation reads", async (failures) => {
     const { service, stores, ctx, reconcile, snapshot } = await make();
     const decision = await service.upsertDecision(
