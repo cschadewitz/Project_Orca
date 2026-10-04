@@ -1,6 +1,6 @@
 # Crash-recovery diagnostics: engineering contract RC1
 
-Frozen engineering proposal for [#469](https://github.com/cschadewitz/Project_Orca/issues/469),
+Engineering proposal, amended after export-cleanup review, for [#469](https://github.com/cschadewitz/Project_Orca/issues/469),
 4 October 2026. **Technical/privacy review is pending; this is not an implemented
 feature or permission to activate it.** This document is the single authority for
 this slice's engineering parameters; companion storage, UI and test notes explain
@@ -26,6 +26,12 @@ approved RC1, that technical/privacy review has occurred, or that a tester opted
 The user authorized conservative engineering selection within these choices. Any
 material retention, consent, collection, sharing or exposure change returns to
 **Casey and Cal**. Do not turn a proposed budget into an accepted measurement.
+
+The owner explicitly approved reboot-limited recovery in the 4 October 2026 task
+follow-up. That availability choice is settled; native clock verification is still
+required. The export-cleanup correction below is a **recommendation awaiting Casey
+and Cal review**, not approval to implement those paths. It supersedes RC1's
+key-dependent external cleanup locator as a proposal.
 
 ## Ownership, exact inputs and integration order
 
@@ -101,7 +107,7 @@ results. MiB means 1,048,576 bytes; KiB means 1,024 bytes.
 | Retained workspace | 4 MiB aggregate logical file bytes, including current, previous, staging, old files, wrapped keys, control records, cleanup remnants and reservations |
 | Record slot | At most 1 MiB report plus 16 KiB framing/authentication/key overhead; at most three ciphertext slots (previous, committed current, replacement staging) |
 | Control/key files | At most 64 KiB aggregate, including their replacement copies; at most 16 directory entries; reject unexpected entries without recursive scans |
-| Export staging | One additional plaintext temporary file, at most 1 MiB, only after explicit final Save; aggregate unsaved owned file ceiling 5 MiB |
+| Export staging | Proposed fixed private export slot: one plaintext temporary file, at most 1 MiB, only after explicit final Save; aggregate unsaved owned file ceiling 5 MiB |
 | Retained payload memory | At most 8 MiB explicitly reserved byte buffers across ingress, ring, serialization, seal/open, IPC and frozen preview; reserve before allocating; release only when underlying work settles |
 | Preview copies | One app-wide main frozen report and one renderer text view; no second parsed report tree, hidden preview cache or retained IPC history; old view must acknowledge disposal before replacement |
 | Measured memory gate | At most 32 MiB incremental diagnostics managed/external memory across main/worker/renderer versus paired idle baseline; sample transient peaks and report method/limitations separately from RSS |
@@ -272,27 +278,28 @@ memory snapshot, expiry derives from freeze time plus the five-minute preview TT
 for recovery it also cannot outlive the checkpoint's original deadline.
 
 Select destination, show its path and sharing warning, then require a separate Save.
-Only final Save permits one exclusive owner-only plaintext temporary file in the
-chosen destination directory. This is deliberately authorized export staging, never
-capture/checkpoint storage. The destination must be new in RC1; existing paths are
-refused and the user may choose another. No clobber fallback. Native atomic no-replace
-publication and parent/path checks are prerequisites; generic rename is insufficient
-where it overwrites existing files. Before creating the export temporary, durably journal one encrypted cleanup locator
-under the diagnostics control key: destination directory/temporary identity, operation
-ID and publication state, bounded to 8 KiB including at most 4,096 UTF-8 path bytes.
-Charge this to the control allowance. No path enters reports, generic logs or daemon
-traffic. Startup reconciles this one operation before any new Save. Cleanup validates
-the owned temporary identity; it must never delete the published user file. An
-unreadable locator/key or unsafe destination means cleanup pending and no new Save,
-not a scan of user directories. Opt-out deletes session keys promptly but retains
-only the cleanup control key/locator until external staging is removed; report that
-key cleanup remains pending. Delete the control wrapper last. Losing that key can
-leave an inaccessible-to-ORCA cleanup locator and a plaintext export temporary;
-explicitly test/disclose this limitation. It is a technical/privacy review blocker
-if the reviewed export-staging exposure is unacceptable.
+The [export-cleanup correction](export-cleanup-proposal.md) recommends one fixed,
+private app-owned staging slot, discoverable without a diagnostics key, in place
+of RC1's destination-adjacent plaintext temporary and encrypted external locator.
+Only final Save permits plaintext staging; capture/checkpoints remain encrypted.
+The proposed restriction is a verified same-filesystem native no-replace move to a
+new destination. Unsupported destinations are refused before plaintext creation;
+no copy/delete or destination-adjacent fallback. Native feasibility and owner review
+are prerequisites, not claims established by this documentation.
 
-Temporary plaintext exposure, external-sync risks
-and cleanup failures must be part of the technical/privacy wording review.
+Before plaintext, persist bounded key-independent operation intent and verified
+staging identity under private filesystem protection. Persist no destination path;
+cleanup never scans user directories or deletes published exports. The proposal
+specifies crash gaps, identity refusal, key deletion, resource accounting and
+unknown publication. Neither the session data keys nor the control-authentication
+key is retained merely for export cleanup. Failed wrapper deletion remains visible;
+key loss cannot itself prevent locating the fixed slot. Uncertain ownership or an
+unresolved native writer still prevents cleanup success and new Save admission.
+
+Temporary plaintext can survive failed cleanup or app exit until a safe retry;
+there is no forensic erasure guarantee. The same-filesystem destination restriction,
+residual plaintext exposure and unknown-publication handling require Casey and Cal's
+review before implementing export/cleanup/key-retention paths.
 
 Serialize final publication admission with all revocations. Immediately before native
 no-replace publication dispatch, recheck epoch, source/preview deadline, sender,
@@ -301,8 +308,9 @@ ordering**, not evidence of successful publication. Revocation ordered before di
 prevents it and cleans staging. Revocation ordered after dispatch cannot promise
 cancellation: mark publication pending until the native result is known; if it succeeds,
 report “Save was admitted before revocation and completed” and leave that user-owned file. If the syscall's outcome
-is uncertain, reconcile only the owned destination identity/digest; do not blindly retry
-or overwrite. A hung publication keeps its single slot/reservation until resolved.
+is uncertain, use only the live operation's verified destination identity/digest.
+After restart, the proposal retains no destination locator: report unknown, never
+infer success from a missing staging file, scan for the export, retry or overwrite. A hung publication keeps its single slot/reservation until resolved.
 Cleanup failure is separate from save failure. Never claim “nothing saved” on timeout.
 Repeated Save shares one operation result; no duplicate file or fresh collection.
 

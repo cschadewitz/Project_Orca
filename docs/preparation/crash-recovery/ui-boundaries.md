@@ -82,7 +82,9 @@ ellipsis. The summary derives from those same bytes: included categories, honest
 omissions, effective coverage and checkpoint tail loss. Later capture never updates it.
 
 Renderer reload, target change, cancel/back, expiry, source deletion or recovered-candidate replacement,
-key loss and opt-out revoke the handle and any pending destination/save authority in main.
+key loss and opt-out revoke the handle and destination/save authority not yet dispatched
+in main. Already-dispatched publication retains only its pending outcome, not authority
+for new work.
 Current capture can continue independently: its preview pins an immutable snapshot id,
 so routine CURRENT checkpoint refreshes neither revoke the preview nor change its bytes.
 Replacing a recovered candidate invalidates its preview and requires a fresh explicit
@@ -101,22 +103,21 @@ existing destination: `Choose a different filename` explains that limitation bef
 Capture/checkpoint files and their staging files remain encrypted. In accordance with
 [#470's clarification](https://github.com/cschadewitz/Project_Orca/pull/470#issuecomment-5976092045),
 only explicit final Save may create one operation-owned restricted-access plaintext
-temporary file for the exact reviewed bytes. It lives beside the selected destination,
-uses exclusive creation and the contract's native path/ownership checks, and is covered
-by the 1 MiB export-temporary allowance, separate from the 4 MiB retained-store ceiling,
-and operation deadlines. Cancellation or failure removes it when publication has not
-crossed the commit boundary; failed
-cleanup remains visible. The shared contract requires a bounded encrypted cleanup
-locator journal before external staging creation, reconciliation after crash before
-another Save, and control-key deletion only after cleanup. Key loss can leave a
-plaintext export temporary that ORCA cannot locate; that exposure remains explicitly
-subject to Casey and Cal’s technical/privacy review. This temporary file is not a plaintext persistence fallback.
+temporary file for the exact reviewed bytes. The proposed
+[export-cleanup correction](export-cleanup-proposal.md) places it in one fixed private
+app-owned slot, with key-independent ownership/identity checks and no durable destination
+path. Its 1 MiB allowance remains separate from the 4 MiB retained-store ceiling.
+Only verified same-filesystem native no-replace publication is supported; explain
+unsupported destinations before creating plaintext. Cleanup needs no retained diagnostics
+key. Failed cleanup can leave plaintext in the private slot and blocks new Save; unknown
+publication is reported separately. This proposal needs Casey and Cal review before
+implementation, including its destination restriction and residual plaintext exposure.
 
 ## Save, discard, opt-out and replacement races
 
 The lead-owned storage contract supplies the publication primitive and one ordering for
 revocation and publication. Main rechecks the consent, preview, source, destination and
-deadline immediately before committing publication. A check followed by an unrelated
+deadline immediately before native publication dispatch. A check followed by an unrelated
 asynchronous rename is insufficient: there must be no gap where revocation can be accepted
 and the stale write subsequently publish. Native publication dispatch is the point of no
 return, ordered with revocation: a later opt-out revokes future work but must not claim
@@ -131,7 +132,7 @@ filesystem work cannot block execution.
 | A recovered candidate is replaced after its preview was prepared | Invalidate that source generation's preview and destination token. Never substitute new bytes into the old handle. Routine CURRENT checkpoint refreshes leave a pinned current-session preview unchanged. |
 | Picker returns after cancel, target change or opt-out | Ignore its destination; no write and no restored authority. |
 
-Opt-out stops capture and advances authority before asynchronous cleanup. It deletes
+Opt-out stops capture and advances authority before asynchronous cleanup. It attempts deletion of
 ORCA-owned history, previews and diagnostics-only key material; it never deletes shared
 app material or user exports. Report durable opt-out success only after the disabled
 setting and revocation are persisted. A persistence failure instead says “Off for this
@@ -159,8 +160,8 @@ content. #386/#389 retain onboarding/support ownership.
 - Durability: “Checkpoints are attempted about every five seconds. A crash can lose more
   than five seconds when writes are delayed or fail. Recovery after power loss is not
   guaranteed. This version cannot recover history after an operating-system restart or
-  when its age cannot be verified.” This conservative reboot refusal needs the shared
-  technical/privacy review. Show latest completed checkpoint age or `unknown`, actual retained coverage
+  when its age cannot be verified.” Reboot-limited recovery is owner-approved;
+  native clock verification and the remaining technical/privacy review still apply. Show latest completed checkpoint age or `unknown`, actual retained coverage
   and missing-history reasons next to the preview.
 - Recovery: “Diagnostic history from a previous app session may be available. Preview it
   before deciding whether to save a local file.” Actions: `Preview` and `Discard`.
@@ -169,14 +170,25 @@ content. #386/#389 retain onboarding/support ownership.
   absolute display time is advisory; main uses the contract's authoritative deadline.
 - Save: “Save this exact content to the location shown? The file will be unencrypted.
   Other people or software with access to this location may read or sync it. ORCA will
-  not automatically delete files you save.”
-- Opt-out: “Turning this off stops collection and removes ORCA's retained diagnostic
-  history, unsaved previews and diagnostics key material. Files you already saved are
-  unchanged.”
+  not automatically delete files you save. Saving uses a temporary unencrypted file in
+  ORCA’s private folder. If cleanup fails, it can remain until cleanup succeeds.”
+  Before confirmation disclose: “This version can save only to supported locations on
+  the same filesystem as ORCA’s private staging folder.”
+- Opt-out: “Turning this off stops collection and cancels saves that have not started
+  publication. ORCA attempts to remove retained history, unsaved previews, temporary
+  export files and diagnostics keys. An earlier save may still complete. Saved files
+  remain yours. Cleanup failures will be shown; diagnostics keys are not kept merely
+  to find temporary files.”
+- Pending Save: “Diagnostics are off. An earlier save is still pending.” Late success:
+  “The save started before diagnostics were turned off and has now completed. ORCA
+  will not delete that file.” Unknown outcome: “ORCA cannot confirm whether the earlier
+  save completed. Another save is blocked while its outcome is unresolved.”
 - Expiry: “Expired history cannot be opened. ORCA removes expired files when it next runs;
   it cannot remove them while closed.”
 - Cleanup failure: “Diagnostics access is disabled. Some local diagnostic files could not
-  be removed. Cleanup is pending.” Do not claim secure erasure of storage, snapshots or
+  be removed. Cleanup is pending. An unencrypted export temporary may remain.” Show
+  this exception next to opt-out/Save status when applicable, and report key-wrapper
+  cleanup separately from file cleanup and unknown publication. Do not claim secure erasure of storage, snapshots or
   backups; do not surface a raw exception as the explanation.
 
 ## Interaction and acceptance sketch

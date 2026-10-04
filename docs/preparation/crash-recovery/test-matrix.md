@@ -59,14 +59,14 @@ contract is reviewed and implemented, with `--maxWorkers=1`.
 | C10 | Full disk, denied access, fsync/rename failure, failed unlink, hung encryption/I/O, lock contention; complete a timed-out operation late | Queue, operation and disk bounds hold; a timeout is not proof work stopped. One physical checkpoint write remains in flight until resolved/fenced; late completion cannot resurrect data or evade accounting. Failure affects diagnostics alone. |
 | C11 | Saturate event, complete-report byte and lookback bounds independently and simultaneously; stop checkpoint scheduling | At most 8,192 events and 1,048,576 canonical UTF-8 bytes including envelope, formatting and omission metadata. Oldest eligible events drop first. Compression does not evade the cap; buffer/validator/preview/export use the same report limit. Requested versus actual coverage, capacity omissions and unknown/uncheckpointed tail remain distinct. |
 | C12 | Freeze a canonical preview; mutate live observations, request another preview or reconnect/destroy its renderer | Exact display, byte count and authorized save derive from the same immutable bytes. Contract-defined single-preview ownership, expiry and invalidation hold; stale renderer callbacks do not recreate a preview. |
-| C13 | Cancel picker, back out, retry, double-click save; interleave expiry, replacement, opt-out, discard and delete with every save boundary | Lead-defined publication commit point determines the outcome. Revocation before commit prevents publication; a file already committed for the user remains user-owned. No recollection, duplicate operation or hidden publication; failed temp cleanup remains visible. |
+| C13 | Cancel picker, back out, retry, double-click save; interleave expiry, replacement, opt-out, discard and delete with every save boundary | Native dispatch orders publication. Earlier revocation prevents dispatch; later revocation leaves an honestly pending outcome that may succeed after opt-out. A successful user export remains user-owned. Timeout never implies cancellation; no cleanup success while late writes remain possible. No recollection, duplicate operation or hidden publication; failed temp cleanup remains visible. |
 | C14 | Pass objects, strings, paths, IDs, encoded/fragmented canaries, logger/RPC/audit/output objects to ingress | Reviewed closed producer mapping rejects content-bearing input without traversal/coercion. Actual checkpoint and export bytes contain no synthetic canary. Source inventory identifies every producer and verifies there is no diagnostic execution retry. |
 | C15 | Run paired execution work while every diagnostic operation fails or stalls | No execution lock, state change, retry, gate answer, credential access or wait on diagnostics; no unhandled diagnostic rejection. Measure execution latency and event-loop delay against the contract budget. |
 | C16 | Observe built-process network activity through capture, recovery, preview, save, cancel, delete and denied paths | No diagnostic upload or new endpoint. Local save requires explicit reviewed intent; remembered capture opt-in grants no sharing permission. |
 | C17 | Fill previous and current records, begin replacement, wrap keys, hold preview and local-export temp, then inject partial-write/cleanup failure | Aggregate disk accounting includes ciphertext, authenticated headers/tags, wrapped keys, manifests and all temporary/old generations. Reserve before write; rejection or failed cleanup cannot create unaccounted allowance. User-owned committed export is distinguished from pending operation-owned files. |
 | C18 | Maximum report/events with simultaneous ring, serialization, encryption, decryption, preview, IPC/renderer copies and local save | Account for all retained copies, bounded queue cardinality and operation overlap. Instrument allocation/high-water behavior and measure heap/RSS externally; the 1 MiB serialized limit is never presented as a RAM guarantee. No unlimited preview, promise or timer accumulation. |
 | C19 | Cross-app restart/reboot, clock uncertainty while picker is open, restore an old disk/key pair, failed delete followed by relaunch | Durable opt-out/revocation overrides stale checkpoint/manifest copies; coordinated whole-profile rollback is outside the threat model. Apply clock/replay limits honestly; document platform limitations instead of claiming forensic erasure or stronger same-user protection. |
-| C20 | Plaintext export staging, target replacement/link race, restricted-access failure, cancellation and crash before/after final publication | Capture/checkpoint files and their temps stay encrypted. Any plaintext temp is tied to explicitly reviewed export, restricted, bounded, separately accounted and journaled before creation for crash cleanup. Test lost cleanup key, cleanup locator bounds and new-Save refusal while unresolved. No overwrite/path substitution outside selected authority; cleanup failure does not claim success. |
+| C20 | Plaintext export staging, target replacement/link race, restricted-access failure, cancellation and crash before/after final publication | Capture/checkpoint files and their temps stay encrypted. Under the pending export-cleanup proposal, plaintext occupies one fixed private slot with durable intent and verified identity before plaintext write. Test cleanup with every diagnostics key lost/unavailable/deleted; no external locator or retained cleanup key. Test same-filesystem restriction, intent/identity/publication crash gaps, unsafe/moved paths, failed unlink and new-Save refusal while unresolved. No overwrite/path substitution outside selected authority; cleanup failure does not claim success. |
 
 ## Adversarial schedules and assertions
 
@@ -108,10 +108,12 @@ For C12/C13/C20, compare exact frozen bytes with the committed file, including
 ordering, whitespace, Unicode and omission fields. Parsed JSON equality misses
 byte drift. Use barriers before/after every asynchronous boundary and the final
 publication operation, testing both orderings against expiry, opt-out and deletion.
-Track private temp ownership separately from the publication commit point. A
-queued invalidation must not report completed revocation while a stale publish can
-still occur. A cancellation that loses to publication must report that publication
-honestly. Verify exported user files survive later opt-out/expiry and that an
+Track private temp ownership separately from native dispatch and physical completion.
+Logical revocation is immediate, but cleanup cannot be reported complete while a
+previously dispatched write can still appear. Barrier both sides of dispatch, then
+time out and complete late with success/failure/unknown; retain reservations and
+prevent another Save. A cancellation that loses to dispatch must report the eventual
+outcome honestly, without restoring revoked authority. Verify exported user files survive later opt-out/expiry and that an
 existing destination is never destroyed on a failed save.
 
 For C14, scan only disposable profiles with
@@ -119,6 +121,10 @@ For C14, scan only disposable profiles with
 complete inspection. Pair this with inspection of decoded canonical content,
 because absence of a plaintext canary in ciphertext is not content review. A clean
 source search supports but does not establish C16's network observation.
+
+For C20, apply every row of the pending [export-cleanup fault plan](export-cleanup-proposal.md#fault-and-native-evidence-plan).
+The fixed-slot design and narrowed destination support are proposals; these cases are
+not executable acceptance evidence or permission to implement before review.
 
 ## Evidence to collect separately
 
