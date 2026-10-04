@@ -10,10 +10,10 @@ it("runs the bootstrap admission and inventory checks with explicit platform evi
   );
   expect(result.error).toBeUndefined();
   expect(result.status, result.stdout + result.stderr).toBe(0);
-  expect(result.stdout).toMatch(/# tests 17\b/);
+  expect(result.stdout).toMatch(/# tests 27\b/);
   expect(result.stdout).toMatch(/# fail 0\b/);
   // Linux must run every admission assertion. Only the non-Linux rejection case skips.
   // Windows/macOS run portable inventory checks; skips are never Linux acceptance.
-  expect(result.stdout).toMatch(process.platform === "linux" ? /# pass 16\b/ : /# pass 5\b/);
-  expect(result.stdout).toMatch(process.platform === "linux" ? /# skipped 1\b/ : /# skipped 12\b/);
+  expect(result.stdout).toMatch(process.platform === "linux" ? /# pass 26\b/ : /# pass 14\b/);
+  expect(result.stdout).toMatch(process.platform === "linux" ? /# skipped 1\b/ : /# skipped 13\b/);
 });

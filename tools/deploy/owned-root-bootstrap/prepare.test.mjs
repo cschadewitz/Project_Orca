@@ -5,7 +5,15 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { POLICY, PreparationError, constructPlan, prepare, fingerprint, cacheFingerprint } from "./prepare.mjs";
+import {
+  POLICY,
+  PreparationError,
+  constructPlan,
+  prepare,
+  fingerprint,
+  cacheFingerprint,
+  preparedFingerprint,
+} from "./prepare.mjs";
 
 // All synthetic files live beneath the authorized source directory. No /tmp,
 // real Git subprocess, pnpm, ACP, host services, credentials, or network.
@@ -455,4 +463,64 @@ test("portable source and cache inventories reject shared regular files", async 
   await rejects(() => fingerprint(f.c.root), "SHARED_OR_SPECIAL_FILE");
   await fs.link(path.join(f.c.cache, "content"), path.join(f.area, "cache-alias"));
   await rejects(() => cacheFingerprint(f.c.cache), "SHARED_OR_SPECIAL_FILE");
+});
+
+// Directory junctions exercise the same realpath/lstat boundary on Windows without
+// changing Linux admission checks or fabricating UID/mode observations.
+const directoryLink = (target, link) => fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+async function excludedOutput(f, excluded, targetKind, hiddenKind) {
+  const metadata = path.join(f.c.root, excluded);
+  const hidden = path.join(metadata, "pkg");
+  await fs.mkdir(hidden, { recursive: true });
+  if (hiddenKind === "hardlink") await fs.link(path.join(f.c.cache, "content"), path.join(hidden, "shared"));
+  else await directoryLink(f.c.cache, path.join(hidden, "escape"));
+  await directoryLink(targetKind === "root" ? metadata : hidden, path.join(f.c.root, "node_modules/pkg"));
+}
+
+for (const excluded of [".git", ".orca"]) {
+  for (const targetKind of ["root", "descendant"]) {
+    for (const hiddenKind of ["hardlink", "symlink"]) {
+      test(`prepared audit rejects ${excluded} ${targetKind} hiding a ${hiddenKind}`, async (t) => {
+        const f = await fixture(t);
+        await fs.mkdir(path.join(f.c.root, "node_modules"));
+        await excludedOutput(f, excluded, targetKind, hiddenKind);
+        await rejects(() => preparedFingerprint(f.c.root), "OUTPUT_SYMLINK");
+      });
+    }
+  }
+}
+
+test("prepared audit preserves audited package links and similarly named directories", async (t) => {
+  const f = await fixture(t);
+  const modules = path.join(f.c.root, "node_modules");
+  await fs.mkdir(path.join(modules, ".pnpm/dep"), { recursive: true });
+  await fs.writeFile(path.join(modules, ".pnpm/dep/index.js"), "synthetic package bytes");
+  await directoryLink(path.join(modules, ".pnpm/dep"), path.join(modules, "dep"));
+  await directoryLink(path.join(f.c.root, "packages/a"), path.join(modules, "workspace"));
+  for (const name of [".git-other", ".orca-other"]) {
+    await fs.mkdir(path.join(f.c.root, name));
+    await fs.writeFile(path.join(f.c.root, name, "index.js"), "audited bytes");
+    await directoryLink(path.join(f.c.root, name), path.join(modules, name));
+  }
+  assert.match(await preparedFingerprint(f.c.root), /^[0-9a-f]{64}$/);
+});
+
+linuxTest("excluded dependency targets retain reservation without publishing prepared state", async (t) => {
+  for (const excluded of [".git", ".orca"]) {
+    const f = await fixture(t);
+    const plan = await f.plan();
+    await rejects(
+      () =>
+        prepare(plan, async (spec) => {
+          await success(spec);
+          await excludedOutput(f, excluded, "descendant", "hardlink");
+          return { exitCode: 0, cacheComplete: true };
+        }),
+      "OUTPUT_SYMLINK",
+    );
+    const slot = path.join(f.c.control, sha(f.c.root));
+    assert.equal(JSON.parse(await fs.readFile(path.join(slot, "state.json"))).status, "preparing");
+    await assert.rejects(fs.stat(path.join(slot, "prepared.json")), { code: "ENOENT" });
+    await rejects(() => prepare(plan, success), "ALREADY_RESERVED");
+  }
 });

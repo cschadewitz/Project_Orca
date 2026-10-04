@@ -26,9 +26,9 @@ Tests create `.synthetic-*` fixtures beneath the helper directory and remove onl
 their own fixtures afterward. They never invoke Git, pnpm, ACP, network services,
 or real credentials. Interrupted fixture state is asserted before cleanup.
 `tools/test/owned-root-bootstrap.test.js` runs these Node tests through the existing
-Vitest/CI lane. Linux must pass all 12 admission tests and four portable inventory
+Vitest/CI lane. Linux must pass all 13 admission tests and 13 portable inventory
 tests; only the unsupported-platform rejection test skips. Windows and macOS run
-five tests and explicitly skip the 12 Linux admission tests. A green result with
+14 tests and explicitly skip the 13 Linux admission tests. A green result with
 those skips is not Linux acceptance. These tests do not prove package-manager,
 build, app smoke, or live bootstrap readiness.
 
@@ -49,9 +49,12 @@ Supply these fields to `constructPlan(contract, controller)`:
 | `cache`, `cacheDigest` | Canonical prepopulated seed directory and reviewed full inventory digest; missing/empty/changed cache blocks. |
 | `control` | Canonical controller-private directory, mode 0700, owned by the controller UID; disjoint from root and cache. |
 
-`fingerprint(root)` and `cacheFingerprint(cache)` are read-only inventory helpers
+`fingerprint(root)`, `cacheFingerprint(cache)` and `preparedFingerprint(root)` are read-only inventory helpers
 for trusted review, **not approval functions**. Review and persist their digests
 before launch; never recompute expected hashes to accept an unexpected change.
+`preparedFingerprint` exposes the same final link/file audit used by `prepare`
+for synthetic fixtures without invoking admission or writing a prepared receipt.
+It checks no controller attestation or package-manager result and cannot grant readiness.
 The dependency input map uses sorted insertion order. Inventory hashes cover
 sorted arrays of relative paths, kinds, modes, and regular-file SHA-256 hashes.
 Source excludes `.git`, `.orca`, and only the enumerated package `node_modules`
@@ -116,7 +119,11 @@ rechecks source/input/tool/cache digests and independently audits all output
 files for hardlinks and symlinks escaping the assigned root. The local `.pnpm`
 directory and regular `.modules.yaml` must exist; their presence alone does not
 prove the dependency closure or tool readiness. Local pnpm symlinks
-within the root are permitted; package bytes may not be shared writable hardlinks.
+within audited portions of the root are permitted; targets resolving to `.git`,
+`.orca`, or any descendant of either omitted subtree are rejected. Those trees
+are not traversed, so their contents cannot establish dependency safety. Similarly
+named audited directories such as `.orca-other` are not excluded. Package bytes
+may not be shared writable hardlinks.
 Only then does it return a receipt and write `prepared.json` in controller state.
 There is no resume/readiness API trusting a workspace marker. A receipt describes
 the controller-observed inventory at completion; it is not indefinitely valid

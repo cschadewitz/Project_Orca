@@ -131,7 +131,18 @@ async function inventory(root, excluded = [], links = false) {
     const stat = await fs.lstat(file);
     const mode = stat.mode & 0o777;
     if (stat.isSymbolicLink()) {
-      check(links && inside(root, await fs.realpath(file)), "OUTPUT_SYMLINK");
+      check(links, "OUTPUT_SYMLINK");
+      const target = await fs.realpath(file);
+      // A target inside an omitted tree has not been audited. It could hide
+      // escaping links or shared files even though this first realpath is local.
+      check(
+        inside(root, target) &&
+          !excluded.some((name) => {
+            const omitted = path.join(root, name);
+            return target === omitted || inside(omitted, target);
+          }),
+        "OUTPUT_SYMLINK",
+      );
       entries.push([relative, "link", await fs.readlink(file)]);
     } else if (stat.isDirectory()) {
       entries.push([relative, "directory", mode]);
@@ -315,14 +326,20 @@ export async function prepare(plan, runner) {
     await canonical(path.join(modules, ".pnpm"));
     await canonical(path.join(modules, ".modules.yaml"), false);
     // Audit the entire root's links/hardlinks, including all dependency outputs.
-    const prepared = await inventory(c.root, [".git", ".orca"], true);
-    const receipt = Object.freeze({ status: "prepared", contract: digest(c), inventory: prepared.hash });
+    const inventoryHash = await preparedFingerprint(c.root);
+    const receipt = Object.freeze({ status: "prepared", contract: digest(c), inventory: inventoryHash });
     await fs.writeFile(path.join(slot, "prepared.json"), JSON.stringify(receipt), { flag: "wx", mode: 0o600 });
     return receipt;
   });
 }
 
 // For offline review/test fixture authors; does not approve, execute, or write.
+export async function preparedFingerprint(root) {
+  return bounded(async () => {
+    await canonical(root);
+    return (await inventory(root, [".git", ".orca"], true)).hash;
+  });
+}
 export async function fingerprint(root) {
   return bounded(async () => {
     await canonical(root);
