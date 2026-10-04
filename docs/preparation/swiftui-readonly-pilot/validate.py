@@ -2,6 +2,7 @@
 
 import copy
 import json
+import math
 from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -46,6 +47,10 @@ def bounds(value, depth=0):
     elif isinstance(value, list):
         for item in value:
             bounds(item, depth + 1)
+    elif isinstance(value, float) and not math.isfinite(value):
+        # parse_constant rejects NaN/Infinity tokens, but 1e400 parses as inf.
+        # Check unknown fields too, before compatible additions are discarded.
+        raise ValueError("nonfinite decoded JSON number")
 
 
 def decode(raw):
@@ -148,6 +153,23 @@ def main():
 
     # Adversarial transport and boundary probes, generated without giant fixture files.
     invalid = [b'{"kind":"runs","kind":"error"}', b'\xff', b'{"seq":NaN}']
+    # Raw JSON is intentional: json.dumps(inf) would only exercise parse_constant.
+    session_prefix = encoded(packets["session"])[:-1]
+    for literal in (b"1e400", b"-1e400", b"NaN", b"Infinity", b"-Infinity"):
+        for location in (literal, b'{"nested":[' + literal + b"]}"):
+            invalid.append(session_prefix + b',"futureField":' + location + b"}")
+    finite_extension = session_prefix + b',"futureField":{"nested":[1e300,-1.5,true]}}'
+    assert not rejected(finite_extension), "finite additive numeric fields remain compatible"
+    for path in (("schema", "minor"), ("data", "protocol", "minor")):
+        for value, should_reject in ((0, False), (9007199254740991, False),
+                                     (9007199254740992, True), (10**100, True),
+                                     (-1, True), (0.5, True), (True, True)):
+            session = copy.deepcopy(packets["session"])
+            target = session
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            assert rejected(encoded(session)) == should_reject, (path, value)
     missing = copy.deepcopy(packets["runs"])
     del missing["data"]["items"][0]["id"]
     invalid.append(encoded(missing))

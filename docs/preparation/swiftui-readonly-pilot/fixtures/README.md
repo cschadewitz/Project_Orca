@@ -26,7 +26,8 @@ with a write-looking unknown capability can never enable commands.
 
 The validator exercises schema examples and deterministic malformed/boundary probes
 (duplicate keys, invalid UTF-8, missing fields, deep/oversized bodies, UTF-8 text cap,
-page cap and portable sequence integers). It checks fixture references and canonical
+page/nested collection caps, explicit detail completeness, portable version/sequence
+integers and nonfinite exponent overflow even in unknown fields). It checks fixture references and canonical
 status vocabulary against the repository source. It does not implement a server,
 network client, cache, UI state machine or credential policy. Server mutation-denial
 and canary projection tests remain mandatory in #472; device evidence belongs to #477.

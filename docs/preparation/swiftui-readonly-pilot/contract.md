@@ -47,12 +47,18 @@ enable code paths. Session advertising write mode is rejected. No version check
 substitutes for server authorization. The schema is a consumer schema, allowing
 additive fields; the validator separately verifies canonical fixture allowlisting.
 
-Reject invalid UTF-8, duplicate JSON keys, nonfinite/fractional/out-of-range
-integers, oversized packets and excess depth before model construction. Maximum
+Reject invalid UTF-8, duplicate JSON keys, nonfinite numbers, fractional/out-of-range
+version or sequence integers, oversized packets and excess depth before model construction. Maximum
 depth is 16, decoded response/frame size 256 KiB, text UTF-8 bytes 16 KiB, ID length
 512 characters, summary 500 characters, page 100 rows; cap bytes before parsing
-and before decoding compressed content. Sequences are integers no larger than
-`9007199254740991` for cross-language safety. Timestamps inform presentation only.
+and before decoding compressed content. Schema and daemon protocol version components
+(`major` and `minor`) and sequences are nonnegative integers no larger than
+`9007199254740991` for cross-language safety; supported majors remain exactly 1
+and 2 respectively. Reject nonfinite decoded values throughout the packet, including
+unknown fields and nested arrays/objects, before discarding additive fields. This
+includes exponent overflow such as JSON `1e400`, not only non-JSON `NaN`/`Infinity`
+tokens. Finite fractional numbers in unknown fields remain compatible; integer
+constraints apply to the declared version/sequence fields. Timestamps inform presentation only.
 Client observation generations and request tickets are local test-harness metadata,
 not server-issued revisions and never authorization guards.
 

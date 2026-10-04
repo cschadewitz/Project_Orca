@@ -601,5 +601,77 @@
     ],
     "decode": "reject",
     "expectation": "Both nested collections require explicit completeness."
+  },
+  {
+    "id": "schema-minor-max",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/schema/minor",
+        "value": 9007199254740991
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "schema-minor-unsafe",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/schema/minor",
+        "value": 9007199254740992
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "schema-minor-huge",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/schema/minor",
+        "value": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "protocol-minor-max",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/protocol/minor",
+        "value": 9007199254740991
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "protocol-minor-unsafe",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/protocol/minor",
+        "value": 9007199254740992
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "protocol-minor-huge",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/protocol/minor",
+        "value": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
   }
 ]
