@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "kind": "fixture",
+  "identity": {
+    "schemaVersion": 1,
+    "releaseVersion": "0.0.0-fixture.1",
+    "bundleId": "com.schadewitz.orca",
+    "platform": "darwin",
+    "arch": "arm64",
+    "sourceCommit": "0123456789abcdef0123456789abcdef01234567",
+    "buildId": "gha:0:0:mac-arm64",
+    "builtAt": "2000-01-01T00:00:00Z",
+    "appVersion": "0.0.0-fixture.1",
+    "bundleShortVersion": "0.0.0",
+    "bundleVersion": "0007.02",
+    "daemon": {
+      "path": "daemon/orca-daemon.mjs",
+      "sha256": "1792c5d6fc2cb0cc3916bb08284ce5796cea6c94f2411ea2e759046fe566502c",
+      "version": "0.0.0-fixture.1"
+    },
+    "protocol": {
+      "major": 1,
+      "minor": 9
+    },
+    "storeEpoch": "synthetic-fixture-only",
+    "toolchain": {
+      "electron": "0.0.0",
+      "electronBuilder": "0.0.0",
+      "node": "0.0.0",
+      "pnpm": "0.0.0",
+      "xcode": "0.0.0",
+      "macos": "0.0.0"
+    }
+  },
+  "identitySha256": "b4392df84a3a6f269130b0855c3a3bce9e3b0a3189e92a6e36d2189a75e21304",
+  "artifacts": [
+    {
+      "format": "dmg",
+      "path": "ORCA-0.0.0-fixture.1-mac-arm64.dmg",
+      "sha256": "88e8c7fc1afc7666911b1b9ba21756b268dcee07f381ec18ae4807c1beb36b9b",
+      "bytes": 64
+    },
+    {
+      "format": "zip",
+      "path": "ORCA-0.0.0-fixture.1-mac-arm64.zip",
+      "sha256": "c785398ac4bc97742a0bdcdd52b717c72b79264900148bd13f925fe3a189cc7e",
+      "bytes": 64
+    }
+  ],
+  "minimumMacOS": "0.0",
+  "signing": {
+    "teamId": "SYNTHETIC-FIXTURE-TEAM",
+    "certificateSha256": "a985c56035155bfca95eea025ce83e15f8e3ba9694dc01c27e29c9db764ed326",
+    "authority": "SYNTHETIC FIXTURE ONLY",
+    "hardenedRuntime": true,
+    "verification": "passed",
+    "reportPath": "evidence/signing.txt"
+  },
+  "notarization": {
+    "app": {
+      "submissionId": "00000000-0000-0000-0000-000000000001",
+      "submittedSha256": "fff9337e3b0e8659516b95f14528039dfc2c4aa0f1258de6b9ecda18b278e76e",
+      "status": "Accepted",
+      "logPath": "evidence/notary-app.json"
+    },
+    "dmg": {
+      "submissionId": "00000000-0000-0000-0000-000000000002",
+      "submittedSha256": "8389ecb5a2bb5cf96fa3e5fda3ae06638c72dab7fc4822d6b5ad4d5c68d311c8",
+      "status": "Accepted",
+      "logPath": "evidence/notary-dmg.json"
+    }
+  },
+  "stapling": {
+    "appInDmg": {
+      "status": "passed",
+      "reportPath": "evidence/staple-app-in-dmg.txt"
+    },
+    "appInZip": {
+      "status": "passed",
+      "reportPath": "evidence/staple-app-in-zip.txt"
+    },
+    "dmg": {
+      "status": "passed",
+      "reportPath": "evidence/staple-dmg.txt"
+    }
+  },
+  "evidence": [
+    {
+      "path": "evidence/notary-app.json",
+      "sha256": "6ce04f3b52c9ccc8cf46296778c882ffddc9ff9e199b9f7cb1b24cf6572ff825",
+      "bytes": 259
+    },
+    {
+      "path": "evidence/notary-dmg.json",
+      "sha256": "8596070c522236f34ce3a92e9f4516e3ba7b4452fb172d3c079c69cd98a0cfb8",
+      "bytes": 259
+    },
+    {
+      "path": "evidence/signing.txt",
+      "sha256": "d5815b97fbdc182c7302f3b4167efd2386abeb8481a39517132b5832d0f93eee",
+      "bytes": 66
+    },
+    {
+      "path": "evidence/staple-app-in-dmg.txt",
+      "sha256": "d5815b97fbdc182c7302f3b4167efd2386abeb8481a39517132b5832d0f93eee",
+      "bytes": 66
+    },
+    {
+      "path": "evidence/staple-app-in-zip.txt",
+      "sha256": "d5815b97fbdc182c7302f3b4167efd2386abeb8481a39517132b5832d0f93eee",
+      "bytes": 66
+    },
+    {
+      "path": "evidence/staple-dmg.txt",
+      "sha256": "d5815b97fbdc182c7302f3b4167efd2386abeb8481a39517132b5832d0f93eee",
+      "bytes": 66
+    }
+  ]
+}
