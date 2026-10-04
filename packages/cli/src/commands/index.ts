@@ -20,7 +20,7 @@ import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { hostname, tmpdir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { openAcpSession, permissionPolicyPath } from "@orca/agents";
 import {
   AgentModel,
@@ -293,7 +293,7 @@ export const commands: Record<string, Command> = {
       const files = ctx.positionals;
       const workflows = files.length
         ? await loadWorkflows(
-            files.map((f) => join(ctx.cwd, f)),
+            files.map((f) => (isAbsolute(f) ? f : join(ctx.cwd, f))),
             configDir,
           )
         : await loadWorkflows(assets.workflows, configDir);

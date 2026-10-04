@@ -145,6 +145,39 @@ describe("orca validate", () => {
     expect(text).toMatch(/error .*nowhere/);
   });
 
+  it.each([
+    ["tiny.yaml", 0],
+    ["broken.yaml", 1],
+    ["[bt]*.yaml", 1],
+  ] as const)("reports the same diagnostics for absolute and relative %s", async (file, exitCode) => {
+    const relative = ctx(dir, [file]);
+    const absolute = ctx(dir, [join(dir, file)]);
+    expect(await commands.validate!.run(relative)).toBe(exitCode);
+    expect(relative.lines.length).toBeGreaterThan(0);
+    expect(await commands.validate!.run(absolute)).toBe(exitCode);
+    expect(absolute.lines).toEqual(relative.lines);
+    expect(absolute.errs).toEqual(relative.errs);
+  });
+
+  it("resolves explicit files and globs from cwd, and defaults from the config directory", async () => {
+    const configDir = join(dir, "config");
+    await mkdir(configDir);
+    await writeFile(join(configDir, "tiny.yaml"), BROKEN, "utf8");
+    const configPath = join(configDir, "orca.config.yaml");
+    await writeFile(configPath, "version: 1\nworkflows: [t*.yaml]\ntemplates: []\n", "utf8");
+
+    for (const file of ["tiny.yaml", "./tiny.yaml", "t*.yaml", join(dir, "tiny.yaml"), join(dir, "t*.yaml")]) {
+      const c = { ...ctx(dir, [file]), configPath };
+      expect(await commands.validate!.run(c)).toBe(0);
+      expect(c.lines).toEqual(["OK   tiny (3 nodes, 2 edges)"]);
+    }
+
+    const defaults = { ...ctx(dir, []), configPath };
+    expect(await commands.validate!.run(defaults)).toBe(1);
+    expect(defaults.lines.join("\n")).toMatch(/^FAIL broken/m);
+    expect(defaults.lines.join("\n")).toMatch(/error .*nowhere/);
+  });
+
   it("prints the Mermaid graph alongside with --mermaid", async () => {
     const c = ctx(dir, ["tiny.yaml"], { mermaid: true });
     expect(await commands.validate!.run(c)).toBe(0);
