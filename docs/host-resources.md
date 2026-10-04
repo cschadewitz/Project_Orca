@@ -38,6 +38,16 @@ not current permission, successful observation, or safe launch capacity.
 | Swap | Total/used occupancy is separate from interval page-in/page-out byte rates. Page size comes from kernel auxiliary-vector `AT_PAGESZ`, never an assumed 4 KiB. Occupancy without activity does not mean thrashing. |
 | Storage | Fixed store/workspace/temp roles selected by trusted bootstrap, with `statfs` total and caller-available bytes. No request supplies paths or mount selectors. Opaque `fs-1`…`fs-3` backing IDs are comparable only within a snapshot. Shared IDs are the same filesystem. tmpfs is `shared-memory`; its capacity overlaps RAM/swap, never additional independent disk capacity. Unknown filesystems remain unknown. Never sum headroom across roles. |
 
+Cgroup CPU and memory limits have independent outcomes after shared hierarchy
+discovery succeeds. Missing CPU quota/cpuset files cannot suppress readable memory
+headroom or its pressure warning, and missing memory files cannot suppress readable
+CPU limits. Missing non-root controller files report `unsupported-source`; denied
+files report `permission-denied`, never an inferred unlimited capacity. Discovery
+failures invalidate both limits. At the visible root only, absent quota or paired
+memory controls are allowed independently; inconsistent memory pairs remain
+unverified. Shared `cgroup-cpu-unsupported`, `cgroup-cpu-denied`,
+`cgroup-memory-unsupported` and `cgroup-memory-denied` fixtures cover these states.
+
 Linux proc/cgroup v2 are the initial sources. Unsupported operating systems,
 cgroup v1, unverified cgroup visibility, inaccessible sources, malformed counters,
 backwards counters, oversized reads and timeouts remain explicit. No shell

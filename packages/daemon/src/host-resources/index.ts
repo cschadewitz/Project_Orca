@@ -199,6 +199,10 @@ export class HostResourceCollector {
       source(() => this.sources.cgroup()),
       source(() => this.sources.pageSize()),
     ]);
+    const cgroupMetric = <T>(result: Result<T>): ResourceMetric<T> =>
+      result.ok
+        ? available(result.value, "linux-cgroup-v2", "estimate")
+        : unavailable("linux-cgroup-v2", result.reason);
     const diskResults = await Promise.all(
       STORAGE_ROLES.map((role) => {
         const path = this.paths[role];
@@ -301,13 +305,9 @@ export class HostResourceCollector {
         ? ["cpu", "memory", "swap", "swapActivity", "cpuLimit", "memoryLimit", "storage"]
         : ["storage"],
       cpu: cpuMetric,
-      cpuLimit: cgroup.ok
-        ? available(cgroup.value.cpu, "linux-cgroup-v2", "estimate")
-        : unavailable("linux-cgroup-v2", cgroup.reason),
+      cpuLimit: cgroupMetric(cgroup.ok ? cgroup.value.cpu : cgroup),
       memory: parseMemory(availableMemory),
-      memoryLimit: cgroup.ok
-        ? available(cgroup.value.memory, "linux-cgroup-v2", "estimate")
-        : unavailable("linux-cgroup-v2", cgroup.reason),
+      memoryLimit: cgroupMetric(cgroup.ok ? cgroup.value.memory : cgroup),
       swap: parseMemory(swapMemory),
       swapActivity: swapMetric,
       storage,

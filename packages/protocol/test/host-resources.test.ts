@@ -10,15 +10,22 @@ import {
 } from "../src/index.js";
 
 describe("shared host resource contract", () => {
-  it.each(["healthy", "pressure", "partial", "stale", "tmpfs"] as const)(
-    "validates deterministic %s fixture",
-    (kind) => {
-      const fixture = hostResourceFixture(kind);
-      expect(HostResourceSnapshotSchema.parse(fixture)).toEqual(fixture);
-      expect(JSON.stringify(fixture).length).toBeLessThan(32_768);
-      expect(hostResourceFixture(kind)).toEqual(fixture);
-    },
-  );
+  it.each([
+    "healthy",
+    "pressure",
+    "partial",
+    "stale",
+    "tmpfs",
+    "cgroup-cpu-unsupported",
+    "cgroup-cpu-denied",
+    "cgroup-memory-unsupported",
+    "cgroup-memory-denied",
+  ] as const)("validates deterministic %s fixture", (kind) => {
+    const fixture = hostResourceFixture(kind);
+    expect(HostResourceSnapshotSchema.parse(fixture)).toEqual(fixture);
+    expect(JSON.stringify(fixture).length).toBeLessThan(32_768);
+    expect(hostResourceFixture(kind)).toEqual(fixture);
+  });
   it.each(["active", "empty", "partial", "denied"] as const)("shares %s authorized summary fixture", (kind) => {
     expect(WorkstreamSummarySchema.safeParse(workstreamSummaryFixture(kind)).success).toBe(true);
     const snapshot = hostResourceFixture();
@@ -41,6 +48,33 @@ describe("shared host resource contract", () => {
     expect(hostResourceFixture("partial").capabilities).toEqual(healthy.capabilities);
     expect(hostResourceFixture("stale").warnings.map((w) => w.code)).toEqual(["stale-data"]);
     expect(resourceWarnings(healthy)).toEqual(healthy.warnings);
+  });
+  it.each(["unsupported", "denied"] as const)("shares independent cgroup %s states and warnings", (state) => {
+    const cpuMissing = hostResourceFixture(`cgroup-cpu-${state}`);
+    expect(cpuMissing.cpuLimit.status).toBe(state === "denied" ? "permission-denied" : "unsupported");
+    expect(cpuMissing.cpuLimit).not.toHaveProperty("value");
+    expect(cpuMissing.memoryLimit.status).toBe("available");
+    expect(cpuMissing.warnings).toEqual([
+      {
+        code: "memory-pressure",
+        metric: "memoryLimit",
+        policy: "advisory-v1",
+        basis: "headroom-ratio",
+        threshold: 0.1,
+      },
+      {
+        code: "partial-data",
+        metric: "snapshot",
+        policy: "advisory-v1",
+        basis: "missing-observation",
+        threshold: null,
+      },
+    ]);
+    const memoryMissing = hostResourceFixture(`cgroup-memory-${state}`);
+    expect(memoryMissing.memoryLimit.status).toBe(state === "denied" ? "permission-denied" : "unsupported");
+    expect(memoryMissing.memoryLimit).not.toHaveProperty("value");
+    expect(memoryMissing.cpuLimit.status).toBe("available");
+    expect(memoryMissing.warnings.map((w) => w.code)).toEqual(["partial-data"]);
   });
   it("allows MemAvailable below MemFree, both independently bounded by total", () => {
     const s = hostResourceFixture();

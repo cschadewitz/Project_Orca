@@ -21,7 +21,16 @@ const available = <T>(value: T, source: ResourceSource): ResourceMetric<T> => ({
         : "counter",
 });
 export function hostResourceFixture(
-  kind: "healthy" | "pressure" | "partial" | "stale" | "tmpfs" = "healthy",
+  kind:
+    | "healthy"
+    | "pressure"
+    | "partial"
+    | "stale"
+    | "tmpfs"
+    | "cgroup-cpu-unsupported"
+    | "cgroup-cpu-denied"
+    | "cgroup-memory-unsupported"
+    | "cgroup-memory-denied" = "healthy",
 ): HostResourceSnapshot {
   const s: HostResourceSnapshot = {
     version: 1,
@@ -90,6 +99,28 @@ export function hostResourceFixture(
     s.memoryLimit = { status: "permission-denied", source: "linux-cgroup-v2", reason: "permission-denied" };
     s.swapActivity = { status: "unavailable", source: "linux-proc-vmstat", reason: "timeout" };
   }
+  if (kind === "cgroup-cpu-unsupported" || kind === "cgroup-cpu-denied") {
+    s.cpuLimit = {
+      status: kind === "cgroup-cpu-denied" ? "permission-denied" : "unsupported",
+      source: "linux-cgroup-v2",
+      reason: kind === "cgroup-cpu-denied" ? "permission-denied" : "unsupported-source",
+    };
+    s.memoryLimit = available(
+      {
+        limitBytes: 4_000_000_000,
+        currentBytes: 3_800_000_000,
+        headroomBytes: 200_000_000,
+        scope: "visible-cgroup-hierarchy",
+      },
+      "linux-cgroup-v2",
+    );
+  }
+  if (kind === "cgroup-memory-unsupported" || kind === "cgroup-memory-denied")
+    s.memoryLimit = {
+      status: kind === "cgroup-memory-denied" ? "permission-denied" : "unsupported",
+      source: "linux-cgroup-v2",
+      reason: kind === "cgroup-memory-denied" ? "permission-denied" : "unsupported-source",
+    };
   if (kind === "stale") {
     s.ageMs = 20_000;
     for (const key of ["bootId", "cpu", "cpuLimit", "memory", "memoryLimit", "swap", "swapActivity"] as const) {

@@ -28,12 +28,18 @@ export async function benchmarkHostResources(iterations = 250) {
     cgroup: async () => {
       calls++;
       return {
-        cpu: { effectiveCores: 2, quotaCores: 2, cpusetCores: 4, scope: "visible-cgroup-hierarchy" },
+        cpu: {
+          ok: true,
+          value: { effectiveCores: 2, quotaCores: 2, cpusetCores: 4, scope: "visible-cgroup-hierarchy" },
+        },
         memory: {
-          limitBytes: 4_000_000_000,
-          currentBytes: 1_000_000_000,
-          headroomBytes: 3_000_000_000,
-          scope: "visible-cgroup-hierarchy",
+          ok: true,
+          value: {
+            limitBytes: 4_000_000_000,
+            currentBytes: 1_000_000_000,
+            headroomBytes: 3_000_000_000,
+            scope: "visible-cgroup-hierarchy",
+          },
         },
       };
     },

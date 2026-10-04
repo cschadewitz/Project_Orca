@@ -10,14 +10,20 @@ export interface StorageReading {
   device: string;
   backing: "disk" | "tmpfs" | "unknown";
 }
+type CgroupResult<T> = { ok: true; value: T } | { ok: false; reason: ResourceReason };
 export interface CgroupReading {
-  cpu: { effectiveCores: number; quotaCores: number | null; cpusetCores: number; scope: "visible-cgroup-hierarchy" };
-  memory: {
+  cpu: CgroupResult<{
+    effectiveCores: number;
+    quotaCores: number | null;
+    cpusetCores: number;
+    scope: "visible-cgroup-hierarchy";
+  }>;
+  memory: CgroupResult<{
     limitBytes: number | null;
     currentBytes: number;
     headroomBytes: number | null;
     scope: "visible-cgroup-hierarchy";
-  };
+  }>;
 }
 export interface HostResourceSources {
   platform: string;
@@ -78,50 +84,68 @@ export async function readCgroup(read: HostResourceSources["read"]): Promise<Cgr
   // A subtree mount hides ancestor restrictions. A namespace-root membership cannot
   // establish whether parents are hidden. Both remain explicitly unverified.
   if (fields[3] !== "/" || fields[4] !== "/sys/fs/cgroup") throw new SourceError("scope-unverified");
-  let quotaCores: number | null = null,
-    cpusetCores = Number.MAX_SAFE_INTEGER;
-  let limitBytes: number | null = null,
-    headroomBytes: number | null = null,
-    currentBytes = 0;
-  for (let depth = parts.length; depth >= 0; depth--) {
-    const root = `/sys/fs/cgroup${depth ? `/${parts.slice(0, depth).join("/")}` : ""}`;
-    // A namespace root can itself have controls; only the actual hierarchy root omits them.
-    cpusetCores = Math.min(cpusetCores, cpusetCount(await read(`${root}/cpuset.cpus.effective`)));
-    const optionalRoot = async (name: string): Promise<string | undefined> => {
-      try {
-        return await read(`${root}/${name}`);
-      } catch (error) {
-        if (depth === 0 && typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
-          return undefined;
-        throw error;
-      }
-    };
-    const cpuMax = await optionalRoot("cpu.max"),
-      memoryMaxText = await optionalRoot("memory.max"),
-      memoryCurrent = await optionalRoot("memory.current");
-    if (depth === 0 && cpuMax === undefined && memoryMaxText === undefined && memoryCurrent === undefined) continue;
-    if (cpuMax === undefined || memoryMaxText === undefined || memoryCurrent === undefined)
-      throw new SourceError("scope-unverified");
-    const q = quota(cpuMax);
-    if (q !== null) quotaCores = Math.min(quotaCores ?? q, q);
-    const memoryMax = memoryMaxText.trim();
-    const current = natural(memoryCurrent.trim());
-    if (depth === parts.length) currentBytes = current;
-    if (memoryMax !== "max") {
-      const limit = natural(memoryMax);
-      limitBytes = Math.min(limitBytes ?? limit, limit);
-      headroomBytes = Math.min(headroomBytes ?? limit, Math.max(0, limit - current));
+  const roots = Array.from({ length: parts.length + 1 }, (_, i) => {
+    const depth = parts.length - i;
+    return `/sys/fs/cgroup${depth ? `/${parts.slice(0, depth).join("/")}` : ""}`;
+  });
+  const missing = (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+  // Discovery above is shared and fail-closed. Controller failures below affect
+  // only their own metric; absent files never imply unlimited capacity.
+  const capture = async <T>(operation: () => Promise<T>): Promise<CgroupResult<T>> => {
+    try {
+      return { ok: true, value: await operation() };
+    } catch (error) {
+      return { ok: false, reason: missing(error) ? "unsupported-source" : failureReason(error) };
     }
-  }
-  return {
-    cpu: {
+  };
+  const optionalRoot = async (root: string, name: string): Promise<string | undefined> => {
+    try {
+      return await read(`${root}/${name}`);
+    } catch (error) {
+      // Namespace roots may expose controls. Only ENOENT permits their absence.
+      if (root === "/sys/fs/cgroup" && missing(error)) return undefined;
+      throw error;
+    }
+  };
+  const cpu = await capture(async () => {
+    let quotaCores: number | null = null,
+      cpusetCores = Number.MAX_SAFE_INTEGER;
+    for (const root of roots) {
+      cpusetCores = Math.min(cpusetCores, cpusetCount(await read(`${root}/cpuset.cpus.effective`)));
+      const cpuMax = await optionalRoot(root, "cpu.max");
+      if (cpuMax === undefined) continue;
+      const q = quota(cpuMax);
+      if (q !== null) quotaCores = Math.min(quotaCores ?? q, q);
+    }
+    return {
       effectiveCores: Math.min(cpusetCores, quotaCores ?? cpusetCores),
       quotaCores,
       cpusetCores,
-      scope: "visible-cgroup-hierarchy",
-    },
-    memory: { limitBytes, currentBytes, headroomBytes, scope: "visible-cgroup-hierarchy" },
-  };
+      scope: "visible-cgroup-hierarchy" as const,
+    };
+  });
+  const memory = await capture(async () => {
+    let limitBytes: number | null = null,
+      headroomBytes: number | null = null,
+      currentBytes = 0;
+    for (const root of roots) {
+      const memoryMaxText = await optionalRoot(root, "memory.max"),
+        memoryCurrent = await optionalRoot(root, "memory.current");
+      if (memoryMaxText === undefined && memoryCurrent === undefined) continue;
+      if (memoryMaxText === undefined || memoryCurrent === undefined) throw new SourceError("scope-unverified");
+      const memoryMax = memoryMaxText.trim();
+      const current = natural(memoryCurrent.trim());
+      if (root === roots[0]) currentBytes = current;
+      if (memoryMax !== "max") {
+        const limit = natural(memoryMax);
+        limitBytes = Math.min(limitBytes ?? limit, limit);
+        headroomBytes = Math.min(headroomBytes ?? limit, Math.max(0, limit - current));
+      }
+    }
+    return { limitBytes, currentBytes, headroomBytes, scope: "visible-cgroup-hierarchy" as const };
+  });
+  return { cpu, memory };
 }
 export function nodeHostResourceSources(
   options: { storagePaths?: readonly string[]; io?: NativeResourceIo } = {},

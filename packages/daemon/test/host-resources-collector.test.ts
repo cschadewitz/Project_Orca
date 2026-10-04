@@ -21,8 +21,11 @@ function harness() {
     read: vi.fn(async (path) => values[path]!),
     pageSize: vi.fn(async () => 4096),
     cgroup: vi.fn<HostResourceSources["cgroup"]>(async () => ({
-      cpu: { effectiveCores: 1, quotaCores: 1, cpusetCores: 4, scope: "visible-cgroup-hierarchy" },
-      memory: { limitBytes: 10000, currentBytes: 1000, headroomBytes: 9000, scope: "visible-cgroup-hierarchy" },
+      cpu: { ok: true, value: { effectiveCores: 1, quotaCores: 1, cpusetCores: 4, scope: "visible-cgroup-hierarchy" } },
+      memory: {
+        ok: true,
+        value: { limitBytes: 10000, currentBytes: 1000, headroomBytes: 9000, scope: "visible-cgroup-hierarchy" },
+      },
     })),
     storage: vi.fn<HostResourceSources["storage"]>(async (path) => ({
       totalBytes: 10000,
@@ -293,6 +296,111 @@ describe("bounded visible cgroup hierarchy", () => {
       "/sys/fs/cgroup/parent/leaf/memory.current": "1000",
     } satisfies Record<string, string>;
   }
+  const fixtureRead =
+    (values: Record<string, string>, failPath?: string, code = "EACCES") =>
+    async (path: string) => {
+      if (path === failPath) throw Object.assign(new Error("secret controller path"), { code });
+      if (values[path] === undefined) throw Object.assign(new Error("absent"), { code: "ENOENT" });
+      return values[path];
+    };
+  it.each([
+    ["cpu.max", "ENOENT"],
+    ["cpu.max", "EACCES"],
+    ["cpuset.cpus.effective", "ENOENT"],
+    ["cpuset.cpus.effective", "EACCES"],
+  ])("preserves memory pressure when %s is %s", async (file, code) => {
+    const values: Record<string, string> = files();
+    values["/sys/fs/cgroup/parent/leaf/memory.max"] = "10000";
+    const h = harness();
+    h.sources.cgroup = () => readCgroup(fixtureRead(values, `/sys/fs/cgroup/parent/${file}`, code));
+    const snapshot = await h.collector.snapshot();
+    expect(snapshot.cpuLimit).toEqual({
+      status: code === "ENOENT" ? "unsupported" : "permission-denied",
+      reason: code === "ENOENT" ? "unsupported-source" : "permission-denied",
+      source: "linux-cgroup-v2",
+    });
+    expect(snapshot.memoryLimit).toMatchObject({
+      status: "available",
+      value: { limitBytes: 10000, currentBytes: 1000, headroomBytes: 500 },
+    });
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "memory-pressure", metric: "memoryLimit" }),
+        expect.objectContaining({ code: "partial-data" }),
+      ]),
+    );
+    expect(HostResourceSnapshotSchema.safeParse(snapshot).success).toBe(true);
+    expect(JSON.stringify(snapshot)).not.toContain("secret");
+  });
+  it.each([
+    ["memory.max", "EACCES"],
+    ["memory.current", "EACCES"],
+    ["memory.max", "ENOENT"],
+    ["memory.current", "ENOENT"],
+  ])("preserves CPU limits when %s is %s", async (file, code) => {
+    const h = harness();
+    h.sources.cgroup = () => readCgroup(fixtureRead(files(), `/sys/fs/cgroup/parent/leaf/${file}`, code));
+    const snapshot = await h.collector.snapshot();
+    expect(snapshot.cpuLimit).toMatchObject({
+      status: "available",
+      value: { effectiveCores: 1.5, quotaCores: 1.5, cpusetCores: 2 },
+    });
+    expect(snapshot.memoryLimit).toEqual({
+      status: code === "ENOENT" ? "unsupported" : "permission-denied",
+      reason: code === "ENOENT" ? "unsupported-source" : "permission-denied",
+      source: "linux-cgroup-v2",
+    });
+    expect(snapshot.warnings).not.toContainEqual(expect.objectContaining({ code: "memory-pressure" }));
+    expect(HostResourceSnapshotSchema.safeParse(snapshot).success).toBe(true);
+  });
+  it("retains only the failed metric as stale while refreshing independent memory pressure", async () => {
+    const h = harness();
+    const values: Record<string, string> = files();
+    let failPath: string | undefined = undefined;
+    h.sources.cgroup = () => readCgroup(fixtureRead(values, failPath));
+    await h.collector.snapshot();
+    h.advance(5000);
+    failPath = "/sys/fs/cgroup/parent/leaf/cpu.max";
+    values["/sys/fs/cgroup/parent/memory.current"] = "9800";
+    const snapshot = await h.collector.snapshot();
+    expect(snapshot.cpuLimit).toMatchObject({ status: "stale", reason: "permission-denied", ageMs: 5000 });
+    expect(snapshot.memoryLimit).toMatchObject({ status: "available", ageMs: 0, value: { headroomBytes: 200 } });
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({ code: "memory-pressure", metric: "memoryLimit" }),
+    );
+  });
+  it.each(["/proc/self/cgroup", "/proc/self/mountinfo"])(
+    "fails both metrics closed when discovery %s is denied",
+    async (path) => {
+      const read = vi.fn(fixtureRead(files(), path));
+      const h = harness();
+      h.sources.cgroup = () => readCgroup(read);
+      const snapshot = await h.collector.snapshot();
+      for (const key of ["cpuLimit", "memoryLimit"] as const)
+        expect(snapshot[key]).toEqual({
+          status: "permission-denied",
+          reason: "permission-denied",
+          source: "linux-cgroup-v2",
+        });
+      expect(read.mock.calls.every(([file]) => file.startsWith("/proc/self/"))).toBe(true);
+    },
+  );
+  it("accepts independently absent root CPU controls without losing namespace-root memory limits", async () => {
+    const values: Record<string, string> = files();
+    values["/sys/fs/cgroup/memory.max"] = "10000";
+    values["/sys/fs/cgroup/memory.current"] = "9900";
+    const result = await readCgroup(fixtureRead(values));
+    expect(result.cpu).toMatchObject({ ok: true, value: { effectiveCores: 1.5 } });
+    expect(result.memory).toMatchObject({ ok: true, value: { headroomBytes: 100 } });
+  });
+  it("refuses incomplete root memory controls without suppressing readable CPU limits", async () => {
+    const values: Record<string, string> = files();
+    values["/sys/fs/cgroup/cpu.max"] = "50000 100000";
+    values["/sys/fs/cgroup/memory.max"] = "10000";
+    const result = await readCgroup(fixtureRead(values));
+    expect(result.cpu).toMatchObject({ ok: true, value: { effectiveCores: 0.5 } });
+    expect(result.memory).toEqual({ ok: false, reason: "scope-unverified" });
+  });
   it("uses ancestor quota and sibling consumption without treating the leaf as the machine", async () => {
     const values: Record<string, string> = files();
     const paths: string[] = [];
@@ -301,8 +409,11 @@ describe("bounded visible cgroup hierarchy", () => {
       if (values[path] === undefined) throw Object.assign(new Error("absent"), { code: "ENOENT" });
       return values[path];
     });
-    expect(result.cpu).toMatchObject({ effectiveCores: 1.5, quotaCores: 1.5, cpusetCores: 2 });
-    expect(result.memory).toMatchObject({ limitBytes: 8000, currentBytes: 1000, headroomBytes: 500 });
+    expect(result.cpu).toMatchObject({ ok: true, value: { effectiveCores: 1.5, quotaCores: 1.5, cpusetCores: 2 } });
+    expect(result.memory).toMatchObject({
+      ok: true,
+      value: { limitBytes: 8000, currentBytes: 1000, headroomBytes: 500 },
+    });
     expect(paths).toHaveLength(14);
   });
   it("includes limits exposed at a namespace root", async () => {
@@ -311,8 +422,8 @@ describe("bounded visible cgroup hierarchy", () => {
     values["/sys/fs/cgroup/memory.max"] = "10000";
     values["/sys/fs/cgroup/memory.current"] = "9900";
     const s = await readCgroup(async (path) => values[path]!);
-    expect(s.cpu.effectiveCores).toBe(0.5);
-    expect(s.memory.headroomBytes).toBe(100);
+    expect(s.cpu).toMatchObject({ ok: true, value: { effectiveCores: 0.5 } });
+    expect(s.memory).toMatchObject({ ok: true, value: { headroomBytes: 100 } });
   });
   it.each(["0::/", "0::/../secret", "0::/a/b/c/d/e/f/g/h/i", "2:memory:/parent/leaf"])(
     "fails closed on hidden, escaped, too-deep or v1 membership %s",
