@@ -24,7 +24,7 @@ const dispatch = (): ExportObservation => ({
   atomicNoReplace: true,
   currentAuthority: true,
 });
-const snapshot = (): ExportObservation => ({
+const snapshot = (): Extract<ExportObservation, { kind: "snapshot" }> => ({
   kind: "snapshot",
   currentRecords: 1,
   summaryRecords: 1,
@@ -40,6 +40,24 @@ const snapshot = (): ExportObservation => ({
 });
 const legal = (): ExportObservation[] => [ack(), release(), dispatch(), snapshot()];
 const check = (trace: ExportObservation[]) => assertExportObservations(trace, priorBytes, ["old-token"]);
+const optOut = (): Extract<ExportObservation, { kind: "opt-out" }> => ({
+  kind: "opt-out",
+  logicalRevoked: true,
+  durablyDisabled: true,
+});
+const removeSummary = (): Extract<ExportObservation, { kind: "summary-removal" }> => ({
+  kind: "summary-removal",
+  committed: true,
+  evidence: { ...safe },
+  unresolvedOperations: 0,
+});
+const cleared = (): Extract<ExportObservation, { kind: "snapshot" }> => ({
+  ...snapshot(),
+  kind: "snapshot",
+  currentRecords: 0,
+  summaryRecords: 0,
+  summary: null,
+});
 
 // These mutations verify the oracle, not a real export implementation.
 describe("export observation oracle (not runtime acceptance)", () => {
@@ -145,7 +163,7 @@ describe("export observation oracle (not runtime acceptance)", () => {
     },
   );
 
-  it("rejects changed prior export bytes, removed summary and extra private summary fields", () => {
+  it("rejects changed prior export bytes, unauthorized summary removal and extra private summary fields", () => {
     const changed = snapshot();
     if (changed.kind !== "snapshot") throw new Error("fixture");
     changed.priorExportBytes = Uint8Array.of(0);
@@ -156,6 +174,88 @@ describe("export observation oracle (not runtime acceptance)", () => {
     changed.summary = null;
     changed.summaryRecords = 0;
     expect(() => check([ack(), release(), changed])).toThrow("summary lost");
+  });
+
+  it("accepts proven opt-out cleanup before summary removal and retains that absence across restart", () => {
+    const off = [ack(), release(), optOut(), removeSummary(), cleared()];
+    expect(() => check([...off, { kind: "restart" }, cleared(), { kind: "restart" }, cleared()])).not.toThrow();
+    const resurrected = { ...snapshot(), kind: "snapshot" as const, currentRecords: 0 };
+    expect(() => check([...off, { kind: "restart" }, resurrected])).toThrow("removed summary recreated");
+    expect(() => check([...off, ack()])).toThrow("stale acknowledgement");
+    expect(() => check([...off, dispatch()])).toThrow("save after opt-out");
+  });
+
+  it("summary removal does not release an acknowledged operation's reservation", () => {
+    const held = cleared();
+    held.oldReservationHeld = true;
+    expect(() => check([ack(), optOut(), removeSummary(), held])).not.toThrow();
+    expect(() => check([ack(), optOut(), removeSummary(), cleared()])).toThrow("silently released");
+    expect(() => check([ack(), optOut(), removeSummary(), held, release(), cleared()])).not.toThrow();
+    expect(() => check([ack(), optOut(), removeSummary(), held, { kind: "restart" }, release()])).toThrow(
+      "restart safety",
+    );
+  });
+
+  it("retains the predecessor summary when its removal is not durably committed", () => {
+    const failed = removeSummary();
+    failed.committed = false;
+    const retained = { ...snapshot(), kind: "snapshot" as const, currentRecords: 0 };
+    expect(() => check([ack(), release(), optOut(), failed, { kind: "restart" }, retained])).not.toThrow();
+    expect(() => check([ack(), release(), optOut(), failed, cleared()])).toThrow("summary lost");
+  });
+
+  it("rejects removal without both logical revocation and durable opt-out", () => {
+    expect(() => check([ack(), release(), removeSummary()])).toThrow("durable opt-out");
+    const unconfirmed = optOut();
+    unconfirmed.logicalRevoked = false;
+    expect(() => check([ack(), release(), unconfirmed, removeSummary()])).toThrow("authority not revoked");
+    const notPersisted = optOut();
+    notPersisted.durablyDisabled = false;
+    expect(() => check([ack(), release(), notPersisted, removeSummary()])).toThrow("durable opt-out");
+    expect(() => check([ack(), release(), removeSummary(), optOut()])).toThrow("durable opt-out");
+  });
+
+  it.each(["writersStopped", "stagingIdentityVerified", "cleanupConfirmed"] as const)(
+    "rejects opt-out summary removal when %s proof is missing",
+    (field) => {
+      const unsafe = removeSummary();
+      unsafe.evidence[field] = false;
+      expect(() => check([ack(), release(), optOut(), unsafe])).toThrow();
+      const held = { ...snapshot(), kind: "snapshot" as const, currentRecords: 0 };
+      expect(() => check([ack(), release(), optOut(), held])).not.toThrow();
+    },
+  );
+
+  it("preserves a stopped and cleaned but unacknowledged current obligation during opt-out", () => {
+    const pending = removeSummary();
+    pending.unresolvedOperations = 1;
+    expect(() => check([...legal(), optOut(), pending])).toThrow("bypassed unresolved operation");
+    expect(() => check([...legal(), optOut(), snapshot()])).not.toThrow();
+    const recreatedCurrent = cleared();
+    recreatedCurrent.currentRecords = 1;
+    expect(() => check([ack(), release(), optOut(), removeSummary(), recreatedCurrent])).toThrow(
+      "unresolved operation after completed opt-out cleanup",
+    );
+  });
+
+  it("late callbacks cannot restore removed metadata or release a cleaned reservation", () => {
+    const callback: Extract<ExportObservation, { kind: "callback" }> = {
+      kind: "callback",
+      operationId: "old",
+      mutatedOperationId: null,
+      releasedOperationId: null,
+      summaryUnchanged: true,
+    };
+    const off = [ack(), release(), optOut(), removeSummary(), { kind: "restart" as const }];
+    expect(() => check([...off, callback, cleared()])).not.toThrow();
+    callback.summaryUnchanged = false;
+    expect(() => check([...off, callback])).toThrow("callback changed prior unknown summary");
+    callback.summaryUnchanged = true;
+    callback.mutatedOperationId = "old";
+    expect(() => check([...off, callback])).toThrow("callback changed completed opt-out cleanup");
+    callback.mutatedOperationId = null;
+    callback.releasedOperationId = "old";
+    expect(() => check([...off, callback])).toThrow("callback changed completed opt-out cleanup");
   });
 
   it.each([

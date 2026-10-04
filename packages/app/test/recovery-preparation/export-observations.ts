@@ -26,6 +26,14 @@ export type ExportObservation =
       automaticEffects: number;
     }
   | { kind: "release"; operationId: string; evidence: CleanupEvidence }
+  | { kind: "opt-out"; logicalRevoked: boolean; durablyDisabled: boolean }
+  | {
+      kind: "summary-removal";
+      committed: boolean;
+      evidence: CleanupEvidence;
+      /** Independently observed current obligations, not the coordinator's status. */
+      unresolvedOperations: number;
+    }
   | { kind: "restart" }
   | { kind: "revalidated"; fixedSlotSafeAndEmpty: boolean; noCurrentWriter: boolean }
   | {
@@ -90,6 +98,9 @@ export function assertExportObservations(
   const saveHandles = new Set<string>();
   let latestUnknown: string | null = null;
   let olderUnknowns = false;
+  let optedOut = false;
+  let durablyDisabled = false;
+  let summaryRemoved = false;
   for (const observation of observations) {
     switch (observation.kind) {
       case "acknowledgement":
@@ -99,11 +110,29 @@ export function assertExportObservations(
           if (!acknowledged.has(observation.operationId)) {
             olderUnknowns ||= latestUnknown !== null;
             latestUnknown = observation.operationId;
+            summaryRemoved = false;
           } else {
             requireObservation(latestUnknown === observation.operationId, "stale acknowledgement mutated history");
           }
           acknowledged.add(observation.operationId);
           revalidated.add(observation.operationId);
+        }
+        break;
+      case "opt-out":
+        requireObservation(observation.logicalRevoked, "opt-out authority not revoked");
+        optedOut = true;
+        durablyDisabled ||= observation.durablyDisabled;
+        break;
+      case "summary-removal":
+        bounded(observation.unresolvedOperations, 1, "invalid unresolved operation count");
+        if (observation.committed) {
+          requireObservation(optedOut && durablyDisabled, "summary removal before durable opt-out");
+          requireSafe(observation.evidence);
+          requireObservation(observation.unresolvedOperations === 0, "summary removal bypassed unresolved operation");
+          // Decision 9 removes retained metadata, never an export outcome, callback fence or reservation.
+          latestUnknown = null;
+          olderUnknowns = false;
+          summaryRemoved = true;
         }
         break;
       case "restart":
@@ -124,6 +153,7 @@ export function assertExportObservations(
         released.add(observation.operationId);
         break;
       case "dispatch":
+        requireObservation(!optedOut, "save after opt-out without fresh opt-in");
         requireObservation(acknowledged.has(observation.previousUnknown), "save before durable acknowledgement");
         requireObservation(revalidated.has(observation.previousUnknown), "restart safety not re-established");
         requireObservation(released.has(observation.previousUnknown), "old reservation still held");
@@ -146,6 +176,10 @@ export function assertExportObservations(
         break;
       case "callback":
         requireObservation(
+          !summaryRemoved || (observation.mutatedOperationId === null && observation.releasedOperationId === null),
+          "callback changed completed opt-out cleanup",
+        );
+        requireObservation(
           observation.mutatedOperationId === null || observation.mutatedOperationId === observation.operationId,
           "callback mutated newer operation",
         );
@@ -162,6 +196,10 @@ export function assertExportObservations(
         break;
       case "snapshot": {
         bounded(observation.currentRecords, 1, "too many current records");
+        requireObservation(
+          !summaryRemoved || observation.currentRecords === 0,
+          "unresolved operation after completed opt-out cleanup",
+        );
         bounded(observation.summaryRecords, 1, "too many summaries");
         bounded(observation.replacementCopies, 1, "too many replacement copies");
         bounded(observation.cleanupBytesIncludingCopies, 8192, "cleanup sub-budget exceeded");
@@ -182,6 +220,7 @@ export function assertExportObservations(
         );
         const summary = observation.summary;
         requireObservation(observation.summaryRecords === (summary === null ? 0 : 1), "summary accounting mismatch");
+        requireObservation(!summaryRemoved || summary === null, "removed summary recreated");
         requireObservation((latestUnknown === null) === (summary === null), "prior unknown summary lost");
         if (summary !== null) {
           requireObservation(
