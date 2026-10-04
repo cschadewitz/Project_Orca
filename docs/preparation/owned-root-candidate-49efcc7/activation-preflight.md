@@ -1,12 +1,18 @@
 # Read-only activation preflight — 2026-10-04 06:10 UTC
 
-This report is an inactive proposal for Cal's review. It was prepared on `agent-01` from runtime source `49efcc7236ac127c952bb1f7a50fc6ef72f7df84` and PR #480 handoff `cd179c7be21573b36b6bb435456435e29736f6af`. The candidate checkout is `/srv/dev/worktrees/Project_Orca-prepare-49efcc7-candidate-validation-81dde16f`. No backup, installation, live configuration write, daemon or tunnel restart, credential change, admission, reconciliation, or agent launch was performed. Commands below are **proposed only** and need one later, explicit approval after their guards are refreshed.
+**Historical preflight, superseded for operational use on 2026-10-04.** See the
+[dated correction and owner recovery](correction-2026-10-04.md) before interpreting or reusing this packet.
+The owner has activated the candidate and admitted new runs; the pre-admission restore path below is no longer applicable.
+This document preserves the original observations and proposal, with the individual digest and reusable guards corrected.
+No activation or recovery commands were executed by this documentation correction.
 
-## Preflight conclusions
+At 06:10 UTC, this report was an inactive proposal for Cal's review. It was prepared on `agent-01` from runtime source `49efcc7236ac127c952bb1f7a50fc6ef72f7df84` and PR #480 handoff `cd179c7be21573b36b6bb435456435e29736f6af`. The candidate checkout is `/srv/dev/worktrees/Project_Orca-prepare-49efcc7-candidate-validation-81dde16f`. No backup, installation, live configuration write, daemon or tunnel restart, credential change, admission, reconciliation, or agent launch was performed during that preflight. Commands below are a **historical proposal**, not a current activation or recovery procedure. Their paths, process IDs, hashes and pre-admission assumptions must not be replayed against the now-active runtime.
+
+## Original preflight conclusions (06:10 UTC; later read at 06:18 UTC)
 
 | Check | Result |
 | --- | --- |
-| Build identity | **PASS.** Candidate compiled manifest: 1,009 `packages/*/dist` files, SHA-256 `ffc4e42345db96f5103613ac3a82be16409770f9b6df1a14c755d1a00b6aaf5f`. Lockfile SHA-256 `0a840533d8974ad2397ad297dfeb7f60bf9ec088728e3fb6680e3d65b62be5a4`. Key compiled hashes: CLI `0978c7dd9f1a074827b69c2972d7824b0544f3c2db55fedcc040f7b5d3358bd1`, owned-root worktree `ef7861dfa9e894a04087fc78d1313b4054051c735d82b613e25cba338b2814a`, MCP transport `21634ac36203d939f27aea4ce0e51ab6d0c4007c5ea67544b1f027399aaa71c6`. No source code differs from 49efcc7 in the candidate's later documentation commits. |
+| Build identity | **PASS.** Candidate compiled manifest: 1,009 `packages/*/dist` files, SHA-256 `ffc4e42345db96f5103613ac3a82be16409770f9b6df1a14c755d1a00b6aaf5f`. Lockfile SHA-256 `0a840533d8974ad2397ad297dfeb7f60bf9ec088728e3fb6680e3d65b62be5a4`. Key compiled hashes (owned-root digest corrected from owner verification; see addendum): CLI `0978c7dd9f1a074827b69c2972d7824b0544f3c2db55fedcc040f7b5d3358bd1`, owned-root worktree `ef7861dfa9e894a04087fc78d1313b4054051c735d82b613e25cba338b9ee78a`, MCP transport `21634ac36203d939f27aea4ce0e51ab6d0c4007c5ea67544b1f027399aaa71c6`. No source code differs from 49efcc7 in the candidate's later documentation commits. |
 | Current runtime | **PASS, change required.** `/home/casey/.local/share/orca-runtime/3702da5b38dc449280c2837366615de741e9c45c` is the installed source tree (commit `3702da5b38dc449280c2837366615de741e9c45c`), with 1,001 compiled files and manifest SHA-256 `f4b7ddcd744c986e6bd6595001e6b90016ff3e06967f180240c7034797b34726`. The old and candidate CLI main, daemon methods, and all compiled MCP integration files inspected are byte-identical, but 39 common compiled files differ and the candidate adds owned-root support. |
 | Executables and launcher | **PASS with supervision condition.** Live daemon PID 1600541 was a foreground job in an SSH shell on pts/1, running Node `/home/casey/.local/share/mise/installs/node/24.21.0/bin/node` with old CLI, `--config /home/casey/.orca-codex-work/orca.yaml serve --host 127.0.0.1 --port 33871`. The agent executable `/home/casey/.local/share/orca-adapters/codex-acp-2.1.1/node_modules/.bin/codex-acp` exists and is executable. Its args array is empty; neither it nor the daemon/tunnel argv forces the old task checkout or branch. There is no ORCA service unit or pidfile. A human/activation runner must retain control of a persistent pts/1 shell for the new foreground daemon; `systemctl restart` is not a valid plan. |
 | Endpoint and tunnel | **CONDITIONAL.** The tunnel remains a separate foreground job on pts/2, with the same loopback endpoint `http://127.0.0.1:33871`. Its private `mcp-client.cjs` wrapper pins the old CLI path. Candidate CLI main and MCP transport hashes equal the current ones, so the proposal leaves the tunnel and wrapper untouched and retains the old runtime. Require an authenticated, read-only hello through this existing tunnel after restart. Tunnel standalone relaunch cannot be guaranteed from public argv alone because its inherited private credential context was deliberately not inspected. If the tunnel drops, stop the switch and recover its existing session/credential context under separate review. |
@@ -23,12 +29,29 @@ Both releases declare protocol 2.0 and store epoch `operator-journals-v4`. Equal
 
 Activation is **conditional** on (1) a fresh read showing no active/waiting work in the authorized scope and an owner-side check for any other principals, (2) owner control of the pts/1 foreground daemon and a plan to keep that session open, (3) the same scoped credential still valid at smoke time, (4) no concurrent Git writes to the task source during the backup, and (5) agreement to retain the old runtime because the unchanged tunnel wrapper references it. If any condition fails, do not run the switch commands.
 
-## Exact proposed commands — not executed
+## Historical proposed commands - not executed during preflight
 
-Run the shell phases as `casey` on `agent-01` only after Cal approves the complete sequence. Refresh the read API status and Git/config/hash guards immediately first. The process-match command is deliberately pinned to the observed PID; if it changed, it fails instead of terminating a different process. Do not use `/tmp` or a different checkout.
+The original proposal required running these phases as `casey` on `agent-01` after Cal approved the complete sequence. This is not a continuation script for the current state. Refresh the read API status and Git/config/hash guards immediately first. The process-match command is deliberately pinned to the observed PID; if it changed, it fails instead of terminating a different process. Do not use `/tmp` or a different checkout.
 
 ```bash
-set -euo pipefail
+# BEGIN reusable checksum guards
+set -Eeuo pipefail
+trap 'status=$?; printf "STOP: verification failed at line %s (status %s)\n" "$LINENO" "$status" >&2; exit "$status"' ERR
+
+# Call these helpers as standalone commands: if/!, &&/|| callers suppress errexit.
+digest_is() {
+  local expected="$1" actual="$2"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$actual" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$actual" = "$expected" ]]
+}
+hash_is() {
+  local expected="$1" path="$2" actual
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+  actual=$(sha256sum "$path" | cut -d' ' -f1)
+  digest_is "$expected" "$actual"
+}
+# END reusable checksum guards
 umask 077
 C=/srv/dev/worktrees/Project_Orca-prepare-49efcc7-candidate-validation-81dde16f
 P="$C/docs/preparation/owned-root-candidate-49efcc7"
@@ -40,14 +63,18 @@ B=/srv/dev/.orca-activation-49efcc7-pre-switch-01
 NODE=/home/casey/.local/share/mise/installs/node/24.21.0/bin/node
 test "$(git -C "$S" rev-parse HEAD)" = 8875f4585d7e5cd038ec974f5c6c270f8c5f01c3
 test -z "$(git -C "$S" status --porcelain=v1)"
-test "$(sha256sum "$C/pnpm-lock.yaml" | cut -d' ' -f1)" = 0a840533d8974ad2397ad297dfeb7f60bf9ec088728e3fb6680e3d65b62be5a4
-test "$(sha256sum "$H/orca.yaml" | cut -d' ' -f1)" = 130b0ab6874d7b1208aa5c76256a2ece125173aab226320018ba2493dd45991a
-test "$(sha256sum "$H/work.yaml" | cut -d' ' -f1)" = deabb7cfd89ce12385a587741df1d2fe057d997f1817902aa90094bf179d0823
-test "$(sha256sum "$P/orca-workspace.proposed.yaml" | cut -d' ' -f1)" = 6051a848e1e9643f2125f1a876b28128f23a84ac3f815cb030392b35b473fd63
-test "$(sha256sum "$P/work-v3.proposed.yaml" | cut -d' ' -f1)" = a00b63c8f09594431858eca3adb89efe46b6d9227ed841fbb01abf01555f4737
-test ! -e "$NEW" && test ! -L "$NEW"
-test ! -e "$B" && test ! -L "$B"
+hash_is 0a840533d8974ad2397ad297dfeb7f60bf9ec088728e3fb6680e3d65b62be5a4 "$C/pnpm-lock.yaml"
+hash_is 130b0ab6874d7b1208aa5c76256a2ece125173aab226320018ba2493dd45991a "$H/orca.yaml"
+hash_is deabb7cfd89ce12385a587741df1d2fe057d997f1817902aa90094bf179d0823 "$H/work.yaml"
+hash_is 6051a848e1e9643f2125f1a876b28128f23a84ac3f815cb030392b35b473fd63 "$P/orca-workspace.proposed.yaml"
+hash_is a00b63c8f09594431858eca3adb89efe46b6d9227ed841fbb01abf01555f4737 "$P/work-v3.proposed.yaml"
+test ! -e "$NEW"
+test ! -L "$NEW"
+test ! -e "$B"
+test ! -L "$B"
 ```
+
+All shell blocks below were sequential phases in the same Bash session, inheriting the corrected guards above. Do not run an extracted helper in a conditional, disable `errexit`, or execute a phase without the inherited `ERR` trap. The mechanical validator executes only synthetic checksum fixtures and parses the full blocks without running them.
 
 After the operator freezes new admissions and refreshes the scoped run list, stop only the exact observed foreground daemon. Keep the existing tunnel and pts/2 session running. This reads `/proc/<pid>/cmdline` but **never** process environments.
 
@@ -95,12 +122,13 @@ install -d -m 0700 "$NEW"
 tar -C "$C" --exclude='./.git' --exclude='./.agents' --exclude='./.codex' \
   --exclude='./.candidate-*' \
   --exclude='./docs/preparation/owned-root-candidate-49efcc7' -cpf - . | tar -C "$NEW" -xpf -
-test "$(sha256sum "$NEW/packages/cli/dist/main.js" | cut -d' ' -f1)" = 0978c7dd9f1a074827b69c2972d7824b0544f3c2db55fedcc040f7b5d3358bd1
-test "$(sha256sum "$NEW/packages/engine/dist/workspace/owned-root-worktree.js" | cut -d' ' -f1)" = ef7861dfa9e894a04087fc78d1313b4054051c735d82b613e25cba338b2814a
-test "$(cd "$NEW" && find packages -type f -path '*/dist/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" = ffc4e42345db96f5103613ac3a82be16409770f9b6df1a14c755d1a00b6aaf5f
+hash_is 0978c7dd9f1a074827b69c2972d7824b0544f3c2db55fedcc040f7b5d3358bd1 "$NEW/packages/cli/dist/main.js"
+hash_is ef7861dfa9e894a04087fc78d1313b4054051c735d82b613e25cba338b9ee78a "$NEW/packages/engine/dist/workspace/owned-root-worktree.js"
+compiled_manifest=$(cd "$NEW" && find packages -type f -path '*/dist/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+digest_is ffc4e42345db96f5103613ac3a82be16409770f9b6df1a14c755d1a00b6aaf5f "$compiled_manifest"
 ```
 
-Stage and atomically replace only `orca.yaml`'s workspace value and the v3 workflow file. The code checks the old bytes and the reviewed proposal bytes before writing. It emits no private configuration or credential values. The installed agent, role, permissions, hosts, workflow path setting, store setting, and tunnel wrapper remain untouched. If either replacement fails, keep the daemon down and use the pre-admission rollback path below.
+Stage and atomically replace only `orca.yaml`'s workspace value and the v3 workflow file. The code checks the old bytes and the reviewed proposal bytes before writing. It emits no private configuration or credential values. The installed agent, role, permissions, hosts, workflow path setting, store setting, and tunnel wrapper remain untouched. If either replacement fails, keep the daemon down and stop for reviewed recovery. The historical pre-admission path below does not apply after new admissions.
 
 ```bash
 python3 - <<'PY'
@@ -109,6 +137,7 @@ import hashlib, json, os, yaml
 home = Path('/home/casey/.orca-codex-work')
 proposal = Path('/srv/dev/worktrees/Project_Orca-prepare-49efcc7-candidate-validation-81dde16f/docs/preparation/owned-root-candidate-49efcc7')
 def checked(path, expected):
+    assert len(expected) == 64 and all(c in '0123456789abcdef' for c in expected), 'invalid SHA-256 pin'
     data = path.read_bytes()
     assert hashlib.sha256(data).hexdigest() == expected, f'changed input: {path.name}'
     return data
@@ -151,9 +180,11 @@ Before admitting any run, use the existing authorized tunnel read APIs to discov
 
 If read-only hello or any guard fails, do not admit a run.
 
-The **one** later smoke uses the `vars` from `first-smoke-inputs.json`, `workflowId: cal-codex-work`, `workflowVersion: "3"`, and stable idempotency key `cal-codex-work-owned-root-smoke-49efcc7-16e4019d-e620-41c4-99a3-9e1880cc73c7`. The exact authorized API sequence is `discover_orca({})`, `list_workflows({target: freshTarget, workflowId: "cal-codex-work", limit: 100})`, then `preflight_launch({purpose: "workflow", target: freshTarget, workflowId: "cal-codex-work", workflowVersion: "3", vars: firstSmoke.vars})`. Require `validation.ok`, v3, the revision above, and `expectedConfigGeneration` equal to the fresh catalog generation. Only then call `start_workflow({target: freshTarget, command: {workflowId: "cal-codex-work", workflowVersion: "3", vars: firstSmoke.vars, expectedWorkflowRevision: preflight.expectedWorkflowRevision, expectedConfigGeneration: preflight.expectedConfigGeneration}, retry: {idempotencyKey: "cal-codex-work-owned-root-smoke-49efcc7-16e4019d-e620-41c4-99a3-9e1880cc73c7"}})` **once**. The target and generation are intentionally bound at activation because they cannot be known before restart. If the response is uncertain, inspect the same admission/key before any retry; do not create a new key or launch a second run. Confirm its owned root, recorded branch, pinned HEAD, no source changes, and two required report artifacts. This task uses only Git/shell checks; fresh worktrees do not inherit `node_modules`, and installs are forbidden. No such preflight or admission has been made here.
+The **one** later smoke uses the `vars` from `first-smoke-inputs.json`, `workflowId: cal-codex-work`, `workflowVersion: "3"`, and stable idempotency key `cal-codex-work-owned-root-smoke-49efcc7-16e4019d-e620-41c4-99a3-9e1880cc73c7`. The exact authorized API sequence is `discover_orca({})`, `list_workflows({target: freshTarget, workflowId: "cal-codex-work", limit: 100})`, then `preflight_launch({purpose: "workflow", target: freshTarget, workflowId: "cal-codex-work", workflowVersion: "3", vars: firstSmoke.vars})`. Require `validation.ok`, v3, the revision above, and `expectedConfigGeneration` equal to the fresh catalog generation. Only then call `start_workflow({target: freshTarget, command: {workflowId: "cal-codex-work", workflowVersion: "3", vars: firstSmoke.vars, expectedWorkflowRevision: preflight.expectedWorkflowRevision, expectedConfigGeneration: preflight.expectedConfigGeneration}, retry: {idempotencyKey: "cal-codex-work-owned-root-smoke-49efcc7-16e4019d-e620-41c4-99a3-9e1880cc73c7"}})` **once**. The target and generation are intentionally bound at activation because they cannot be known before restart. If the response is uncertain, inspect the same admission/key before any retry; do not create a new key or launch a second run. Confirm its owned root, recorded branch, pinned HEAD, no source changes, and two required report artifacts. This task uses only Git/shell checks; fresh worktrees do not inherit `node_modules`, and installs are forbidden. No such preflight or admission was made during the original preflight; subsequent owner-operated admissions are recorded in the addendum. The original stable key is historical and must not be reused for another smoke.
 
-## Rollback boundary
+## Historical rollback boundary - pre-admission condition no longer holds
+
+New runs have been admitted. Neither binary-only downgrade nor pre-switch snapshot restoration is a verified rollback now; either can discard or strand post-switch work. Preserve the verified backup and old runtime, but use a separately reviewed reconciliation/recovery plan. The commands below record the original, unexercised pre-admission proposal only.
 
 Before **any new admission**, if candidate startup or read-only verification fails, keep the tunnel unchanged, stop the exact new daemon, preserve its failed state in a private same-filesystem quarantine, restore the entire pre-switch ORCA home from the verified archive while offline, verify the old config/workflow hashes and task Git inventory, and run the old foreground daemon command in pts/1. Retain the new runtime and quarantine for diagnosis. A pointer-only binary downgrade is not the rollback. The proposed old command is:
 
@@ -161,8 +192,8 @@ Before **any new admission**, if candidate startup or read-only verification fai
 test ! -e /home/casey/.orca-codex-work.failed-49efcc7-pre-admission-01
 mv /home/casey/.orca-codex-work /home/casey/.orca-codex-work.failed-49efcc7-pre-admission-01
 tar -C /home/casey -xpf /srv/dev/.orca-activation-49efcc7-pre-switch-01/pre-switch.tar .orca-codex-work
-test "$(sha256sum /home/casey/.orca-codex-work/orca.yaml | cut -d' ' -f1)" = 130b0ab6874d7b1208aa5c76256a2ece125173aab226320018ba2493dd45991a
-test "$(sha256sum /home/casey/.orca-codex-work/work.yaml | cut -d' ' -f1)" = deabb7cfd89ce12385a587741df1d2fe057d997f1817902aa90094bf179d0823
+hash_is 130b0ab6874d7b1208aa5c76256a2ece125173aab226320018ba2493dd45991a /home/casey/.orca-codex-work/orca.yaml
+hash_is deabb7cfd89ce12385a587741df1d2fe057d997f1817902aa90094bf179d0823 /home/casey/.orca-codex-work/work.yaml
 cmp /srv/dev/.orca-activation-49efcc7-pre-switch-01/worktrees-before.txt <(git -C /home/casey/.local/share/orca-worktrees/mac-beta-codex worktree list --porcelain)
 /home/casey/.local/share/mise/installs/node/24.21.0/bin/node \
   /home/casey/.local/share/orca-runtime/3702da5b38dc449280c2837366615de741e9c45c/packages/cli/dist/main.js \

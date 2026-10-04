@@ -1,5 +1,16 @@
 Project_Orca candidate validation — 2026-10-04 UTC
 
+CORRECTION / HISTORICAL SCOPE - 2026-10-04 UTC
+See correction-2026-10-04.md for the verified owner recovery and later smoke history.
+The owned-root Key outputs digest below is corrected from owner verification against
+the matching candidate and installed full manifests; it is not a rerun result.
+The original malformed value is retained explicitly in the addendum. Commands, test
+results and accompanying evidence logs below remain the original preparation record.
+Inactive/no-activation statements describe that preparation, not the current runtime.
+New admissions have since occurred: binary-only downgrade or pre-switch snapshot
+restoration is NOT a verified rollback and can discard work. Preserve the backup,
+old runtime and post-switch state; any recovery needs separate reconciliation review.
+
 Candidate and build identity
 Host: agent-01, Linux 6.12.107+deb13-cloud-amd64 x86_64 GNU/Linux
 Checkout: /srv/dev/worktrees/Project_Orca-prepare-49efcc7-candidate-validation-81dde16f
@@ -10,7 +21,7 @@ Root package version: 0.6.0
 Lockfile SHA-256: 0a840533d8974ad2397ad297dfeb7f60bf9ec088728e3fb6680e3d65b62be5a4
 Compiled dist identity: 1009 files under packages/*/dist; SHA-256 of sorted relative-path sha256sum manifest: ffc4e42345db96f5103613ac3a82be16409770f9b6df1a14c755d1a00b6aaf5f
 Manifest command: find packages -type f -path '*/dist/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum
-Key outputs: packages/cli/dist/main.js SHA-256 0978c7dd9f1a074827b69c2972d7824b0544f3c2db55fedcc040f7b5d3358bd1; packages/engine/dist/workspace/owned-root-worktree.js SHA-256 ef7861dfa9e894a04087fc78d1313b4054051c735d82b613e25cba338b2814a; packages/integrations/dist/mcp/transport.js SHA-256 21634ac36203d939f27aea4ce0e51ab6d0c4007c5ea67544b1f027399aaa71c6.
+Key outputs (owned-root digest corrected 2026-10-04; no rebuild): packages/cli/dist/main.js SHA-256 0978c7dd9f1a074827b69c2972d7824b0544f3c2db55fedcc040f7b5d3358bd1; packages/engine/dist/workspace/owned-root-worktree.js SHA-256 ef7861dfa9e894a04087fc78d1313b4054051c735d82b613e25cba338b9ee78a; packages/integrations/dist/mcp/transport.js SHA-256 21634ac36203d939f27aea4ce0e51ab6d0c4007c5ea67544b1f027399aaa71c6.
 Tool versions: mise 2026.9.7; Node v24.21.0; pnpm 12.4.2; TypeScript 7.0.2; Vitest 5.0.2; Git 2.47.3.
 
 Commands and results
