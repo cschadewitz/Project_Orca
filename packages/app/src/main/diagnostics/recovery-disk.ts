@@ -82,6 +82,10 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   private control: Buffer | undefined;
   private session: { key: Buffer; id: string; keyId: string } | undefined;
   private active = false;
+  private captureOpened = false;
+  private revoked = false;
+  private closed = false;
+  private maintenanceEpoch = 0;
   private lease = false;
   private lastReading: BootReading | undefined;
   private rootIdentity: StageIdentity | undefined;
@@ -272,7 +276,11 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   writeSetting(setting: DiagnosticsSetting): Promise<void> {
     // Revocation affects admission before waiting for any outstanding disk operation.
-    if (!setting.enabled) this.active = false;
+    if (!setting.enabled) {
+      this.active = false;
+      this.revoked = true;
+      this.maintenanceEpoch++;
+    }
     return this.serialized(async () => {
       if (setting.scopeVersion !== this.scope || typeof setting.enabled !== "boolean" || !validMinutes(setting.minutes))
         throw new Error("unavailable");
@@ -404,12 +412,15 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     }
   }
   open(now: BootReading): Promise<boolean> {
+    const epoch = this.maintenanceEpoch;
+    const admit = () => this.maintenanceEpoch === epoch;
     return this.serialized(async () => {
       await this.acquire();
       await this.inspect();
       if (!(await this.setting()).enabled || !(await this.options.keys.available()) || !this.reading(now))
         throw new Error("unavailable");
       if (!(await this.options.native.writersStopped(this.root))) throw new Error("unavailable");
+      if (!admit()) throw new Error("off");
       const bytes = await this.read("manifest.json");
       if (!bytes) {
         // Never regenerate authority over stray history/key files.
@@ -425,7 +436,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
             this.control,
           ),
         );
-        await this.commit({ version: 1, scopeVersion: this.scope, epoch, generation: 0 });
+        await this.commit({ version: 1, scopeVersion: this.scope, epoch, generation: 0 }, admit);
       } else {
         const { manifest, control } = await this.authenticatedManifest(bytes);
         this.control?.fill(0);
@@ -435,7 +446,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         await this.remove("manifest.json.tmp");
         if (manifest.current && manifest.previous) {
           const { previous: _previous, ...revoked } = manifest;
-          await this.commit(revoked);
+          await this.commit(revoked, admit);
           await this.cleanUnreferenced();
         }
         // A latest crashed current invalidates the older candidate even when the
@@ -447,15 +458,22 @@ export class NodeRecoveryDisk implements RecoveryDisk {
           : manifest.previous && this.eligible(manifest.previous, now)
             ? manifest.previous
             : undefined;
-        await this.commit({
-          version: 1,
-          scopeVersion: this.scope,
-          epoch: manifest.epoch,
-          generation: manifest.generation,
-          ...(previous ? { previous } : {}),
-        });
+        await this.commit(
+          {
+            version: 1,
+            scopeVersion: this.scope,
+            epoch: manifest.epoch,
+            generation: manifest.generation,
+            ...(previous ? { previous } : {}),
+          },
+          admit,
+        );
       }
       await this.cleanUnreferenced();
+      if (!admit()) throw new Error("off");
+      this.revoked = false;
+      this.closed = false;
+      this.captureOpened = true;
       this.active = true;
       return this.manifest?.previous !== undefined;
     });
@@ -475,20 +493,44 @@ export class NodeRecoveryDisk implements RecoveryDisk {
    * mutate export obligations, or create replacement authority over lost keys.
    */
   maintain(now: BootReading): Promise<boolean> {
+    const epoch = this.maintenanceEpoch;
+    const admit = () => !this.revoked && !this.closed && this.maintenanceEpoch === epoch;
     return this.serialized(async () => {
-      if (!this.active || !this.manifest || !this.control) throw new Error("unavailable");
+      if (!admit()) throw new Error("off");
+      try {
+        await lstat(this.root);
+      } catch (error) {
+        if (isCode(error, "ENOENT") && !this.manifest && !this.control) return false;
+        throw new Error("unavailable", { cause: error });
+      }
       await this.acquire();
       await this.inspect();
       if (!(await this.setting()).enabled) throw new Error("off");
       if (!(await this.options.native.writersStopped(this.root))) throw new Error("cleanup_pending");
       // A failed replacement may have committed. Re-read the authenticated disk
       // authority before choosing orphan files; cached roles cannot decide this.
-      const { manifest, control } = await this.authenticatedManifest();
-      if (manifest.epoch !== this.manifest.epoch || manifest.generation < this.manifest.generation) {
+      const bytes = await this.read("manifest.json");
+      if (!bytes) {
+        const names = await readdir(this.root);
+        if (
+          this.manifest ||
+          this.control ||
+          names.some((name) => /^(slot-|session-|control\.key|manifest\.)/.test(name))
+        )
+          throw new Error("unavailable");
+        if (!admit()) throw new Error("off");
+        return false;
+      }
+      const { manifest, control } = await this.authenticatedManifest(bytes);
+      if (this.manifest && (manifest.epoch !== this.manifest.epoch || manifest.generation < this.manifest.generation)) {
         control.fill(0);
         throw new Error("unavailable");
       }
-      this.control.fill(0);
+      if (!admit()) {
+        control.fill(0);
+        throw new Error("off");
+      }
+      this.control?.fill(0);
       this.control = control;
       this.manifest = manifest;
       const certain = this.reading(now);
@@ -504,7 +546,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         // Durable revocation precedes unlink. A failed unlink stays pending and
         // the next maintenance attempt retries only the now-unreferenced files.
         await this.remove("manifest.json.tmp");
-        await this.commit(revoked, () => this.active);
+        await this.commit(revoked, admit);
       }
       // Check referenced wrappers without opening report plaintext. Missing or
       // lost keys cannot yield a false successful cleanup or ready status.
@@ -520,7 +562,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
           key.fill(0);
           await this.verifyRecordEnvelope(record);
         }
-      if (!this.active) throw new Error("off");
+      if (!admit()) throw new Error("off");
       await this.cleanUnreferenced();
       await this.remove("control.key.tmp");
       if (!certain) throw new Error("age_uncertain");
@@ -629,8 +671,12 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   cleanExit(): Promise<void> {
     this.active = false;
+    this.closed = true;
+    this.maintenanceEpoch++;
     return this.serialized(async () => {
-      if (this.manifest && this.control) {
+      // A maintenance-only adapter did not own the crashed capture session.
+      // Closing it must not relabel that session as a clean current exit.
+      if (this.captureOpened && this.manifest && this.control) {
         const { current: _current, ...next } = this.manifest;
         await this.commit(next);
         await this.cleanUnreferenced();
@@ -640,6 +686,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       this.control?.fill(0);
       this.control = undefined;
       this.manifest = undefined;
+      this.captureOpened = false;
       if (this.lease) {
         await this.options.native.release(this.root);
         this.lease = false;
@@ -648,6 +695,8 @@ export class NodeRecoveryDisk implements RecoveryDisk {
   }
   cleanup(): Promise<void> {
     this.active = false;
+    this.revoked = true;
+    this.maintenanceEpoch++;
     return this.serialized(async () => {
       try {
         await lstat(this.root);
@@ -672,6 +721,7 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       this.control?.fill(0);
       this.control = undefined;
       this.manifest = undefined;
+      this.captureOpened = false;
       const state = await this.exportState();
       await this.clearStageInternal(state.current?.stage);
       if (!state.current && !(await this.setting()).enabled) await this.remove("export.json");

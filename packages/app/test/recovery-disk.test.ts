@@ -70,6 +70,13 @@ async function prior(f: Awaited<ReturnType<typeof fixture>>) {
   expect(await disk.open({ ...f.now, elapsedMs: f.now.elapsedMs + 5 })).toBe(true);
   return disk;
 }
+async function maintenanceOnly(f: Awaited<ReturnType<typeof fixture>>) {
+  await f.native.release(f.root);
+  active.splice(active.indexOf(f.disk), 1);
+  const disk = new NodeRecoveryDisk({ root: f.root, keys: f.keys, native: f.native });
+  active.push(disk);
+  return disk;
+}
 interface ManifestView {
   payload: { generation: number; current?: { slot: number; generation: number }; previous?: { slot: number } };
 }
@@ -78,6 +85,131 @@ async function manifest(root: string): Promise<ManifestView> {
 }
 
 describe.skipIf(process.platform === "win32")("authenticated recovery maintenance", () => {
+  it("expires crashed current on a new adapter without opening capture or promoting history", async () => {
+    const f = await fixture();
+    await f.disk.checkpoint(Buffer.from("crashed current\n"), f.now, () => true);
+    await f.disk.writeExportState({ current: { id: "old-export", phase: "intent" } });
+    const metadata = await readFile(join(f.root, "export.json"));
+    const disk = await maintenanceOnly(f);
+    expect(await disk.maintain({ ...f.now, elapsedMs: f.now.elapsedMs + RECOVERY_LIMITS.retentionMs })).toBe(false);
+    expect((await manifest(f.root)).payload.current).toBeUndefined();
+    expect((await manifest(f.root)).payload.previous).toBeUndefined();
+    expect((await readdir(f.root)).filter((name) => /^(slot-|session-)/.test(name))).toEqual([]);
+    expect(await readFile(join(f.root, "export.json"))).toEqual(metadata);
+    await expect(
+      disk.checkpoint(
+        Buffer.from("forbidden capture\n"),
+        { ...f.now, elapsedMs: f.now.elapsedMs + RECOVERY_LIMITS.retentionMs },
+        () => true,
+      ),
+    ).rejects.toThrow("off");
+  });
+  it("preserves eligible crashed current and its role when a maintenance-only adapter closes", async () => {
+    const f = await fixture();
+    await f.disk.checkpoint(Buffer.from("crashed current\n"), f.now, () => true);
+    const authority = await readFile(join(f.root, "manifest.json"));
+    const slot = (await manifest(f.root)).payload.current!.slot;
+    const ciphertext = await readFile(join(f.root, `slot-${slot}.bin`));
+    const disk = await maintenanceOnly(f);
+    expect(await disk.maintain({ ...f.now, elapsedMs: f.now.elapsedMs + 5 })).toBe(false);
+    await disk.cleanExit();
+    expect(await readFile(join(f.root, "manifest.json"))).toEqual(authority);
+    expect(await readFile(join(f.root, `slot-${slot}.bin`))).toEqual(ciphertext);
+    expect((await manifest(f.root)).payload.previous).toBeUndefined();
+    await expect(disk.maintain(f.now)).rejects.toThrow("off");
+  });
+  it("refuses lost protection on a new maintenance-only adapter without modifying history", async () => {
+    const f = await fixture();
+    await f.disk.checkpoint(Buffer.from("crashed current\n"), f.now, () => true);
+    const authority = await readFile(join(f.root, "manifest.json"));
+    const disk = await maintenanceOnly(f);
+    f.setAvailable(false);
+    await expect(disk.maintain({ ...f.now, elapsedMs: f.now.elapsedMs + RECOVERY_LIMITS.retentionMs })).rejects.toThrow(
+      "unavailable",
+    );
+    expect(await readFile(join(f.root, "manifest.json"))).toEqual(authority);
+    expect((await readdir(f.root)).filter((name) => name.endsWith(".bin"))).toHaveLength(1);
+    f.setAvailable(true);
+  });
+  it("resets a closed maintenance fence only after successful capture preflight", async () => {
+    const f = await fixture();
+    await f.disk.cleanExit();
+    await f.disk.writeSetting({ enabled: true, scopeVersion: 1, minutes: 5 });
+    await expect(f.disk.maintain(f.now)).rejects.toThrow("off");
+    f.setAvailable(false);
+    await expect(f.disk.open(f.now)).rejects.toThrow("unavailable");
+    await expect(f.disk.maintain(f.now)).rejects.toThrow("off");
+    f.setAvailable(true);
+    expect(await f.disk.open(f.now)).toBe(false);
+    expect(await f.disk.maintain(f.now)).toBe(false);
+  });
+  it.each([false, true])("does not allocate keys for empty history with export-only=%s", async (withExport) => {
+    const f = await fixture();
+    await f.disk.cleanup();
+    if (withExport) await f.disk.writeExportState({ current: { id: "export-only", phase: "unknown" } });
+    const disk = await maintenanceOnly(f);
+    f.setAvailable(false);
+    expect(await disk.maintain(f.now)).toBe(false);
+    expect((await readdir(f.root)).filter((name) => /^(slot-|session-|control\.key|manifest\.)/.test(name))).toEqual(
+      [],
+    );
+    if (withExport) expect((await disk.readExportState()).current?.id).toBe("export-only");
+    await expect(disk.checkpoint(Buffer.from("forbidden\n"), f.now, () => true)).rejects.toThrow("off");
+  });
+  it("refuses missing authority with stray history and missing previously cached authority", async () => {
+    const f = await fixture();
+    await f.disk.checkpoint(Buffer.from("crashed current\n"), f.now, () => true);
+    const authority = await readFile(join(f.root, "manifest.json"));
+    const disk = await maintenanceOnly(f);
+    await rm(join(f.root, "manifest.json"));
+    await expect(disk.maintain(f.now)).rejects.toThrow("unavailable");
+    await writeFile(join(f.root, "manifest.json"), authority, { mode: 0o600 });
+    expect(await disk.maintain(f.now)).toBe(false);
+    await rm(join(f.root, "manifest.json"));
+    await rm(join(f.root, "control.key"));
+    for (const name of await readdir(f.root)) if (/^(slot-|session-)/.test(name)) await rm(join(f.root, name));
+    await expect(disk.maintain(f.now)).rejects.toThrow("unavailable");
+  });
+  it.each(["disable", "cleanup", "close"] as const)("fences pending inactive maintenance before %s", async (action) => {
+    const f = await fixture();
+    await f.disk.checkpoint(Buffer.from("crashed current\n"), f.now, () => true);
+    const authority = await readFile(join(f.root, "manifest.json"));
+    const disk = await maintenanceOnly(f);
+    const original = f.native.write.bind(f.native);
+    let observe!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      observe = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.native.write = async (file, bytes) => {
+      await original(file, bytes);
+      if (bytes.toString().startsWith('{"payload":')) {
+        observe();
+        await released;
+      }
+    };
+    const pending = disk.maintain({ ...f.now, elapsedMs: f.now.elapsedMs + RECOVERY_LIMITS.retentionMs });
+    await started;
+    const revoked =
+      action === "disable"
+        ? disk.writeSetting({ enabled: false, scopeVersion: 1, minutes: 5 })
+        : action === "cleanup"
+          ? disk.cleanup()
+          : disk.cleanExit();
+    release();
+    await expect(pending).rejects.toThrow("off");
+    await revoked;
+    if (action === "cleanup")
+      expect((await readdir(f.root)).filter((name) => /^(slot-|session-|control\.key|manifest\.)/.test(name))).toEqual(
+        [],
+      );
+    else expect(await readFile(join(f.root, "manifest.json"))).toEqual(authority);
+    await expect(disk.maintain(f.now)).rejects.toThrow("off");
+    f.native.write = original;
+  });
   it("expires an unopened prior candidate while new checkpoints continue, without removing current", async () => {
     const f = await fixture();
     const disk = await prior(f);
