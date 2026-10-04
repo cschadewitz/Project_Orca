@@ -19,6 +19,8 @@ Related research was read at exact revisions:
 - [Watch proposal, draft PR 459](https://github.com/cschadewitz/Project_Orca/pull/459), head `f6dcddbc592247de495f71a7b139c617fab14c9e`, [design](https://github.com/cschadewitz/Project_Orca/blob/f6dcddbc592247de495f71a7b139c617fab14c9e/docs/preparation/apple-watch-approvals/README.md). Its inspected runtime baseline is `dc30b5f9e8afa75d62f5dd8e1e76723d2f8fae4e`.
 - [Triggered workflows](https://github.com/cschadewitz/Project_Orca/blob/85fa22fc90574d844675951141aa62f7d8511426/docs/preparation/triggered-workflows/architecture.md), proposal head `85fa22fc90574d844675951141aa62f7d8511426`. The [3 October owner decisions](https://github.com/cschadewitz/Project_Orca/issues/449#issuecomment-5974260915) and updated #449–#454 supersede its human-only/local-only opening: enrolled human and review-agent feedback, including shared identity, plus separately scoped publication of tested fixes to the existing PR branch. Exact source forms, cross-trigger serialization and publication contracts remain unresolved; main merge remains separate.
 
+The Watch research agent also reviewed this draft directly on 4 October and acknowledged compatible ownership/contracts. Its enrollment, cross-device attribution and read-only recovery clarifications are incorporated in [architecture](architecture.md). Its earlier open-#443 wording remains historical; the upstream fix is accounted for here without editing that author's proposal.
+
 ## Focused first release
 
 The MVP has four destinations: Attention, Runs, Start and Connection. Connection shows the current host, human principal, verified permissions, last successful refresh and access problems. A small initial catalog matters more than a complex navigation system.
