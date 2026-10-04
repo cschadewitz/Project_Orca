@@ -10,6 +10,7 @@ import { renderTemplate } from "../../../packages/core/dist/template/render.js";
 import { validateWorkflowInputs } from "../../../packages/core/dist/workflow/inputs.js";
 import { parseWorkflow } from "../../../packages/core/dist/workflow/load.js";
 import { validateWorkflow } from "../../../packages/core/dist/workflow/validate.js";
+import { workflowRevision } from "../../../packages/engine/dist/orchestrator.js";
 
 const requireFromCore = createRequire(new URL("../../../packages/core/package.json", import.meta.url));
 const { parse: parseYaml } = requireFromCore("yaml");
@@ -29,6 +30,7 @@ assert.deepEqual(graph.errors, []);
 assert.equal(graph.ok, true);
 assert.equal(workflow.id, "cal-codex-work");
 assert.equal(workflow.version, "3");
+assert.equal(workflowRevision(workflow), "sha256:1949ae4b2dd7ed5cc33368a9ab7bb71f1d968071c91bdd42abf12cea80d057e7");
 assert.deepEqual(workflow.inputSchema.fields.expectedHead.enum, [config.workspace.baseBranch]);
 assert.equal(workflow.nodes.work.type, "agent");
 const prompt = workflow.nodes.work.prompt;
@@ -40,6 +42,8 @@ assert.ok(!prompt.includes("operator-serialized task"));
 
 const smoke = JSON.parse(readFileSync(local("./first-smoke-inputs.json"), "utf8"));
 assert.equal(smoke.workflowId, workflow.id);
+assert.equal(smoke.workflowVersion, workflow.version);
+assert.match(smoke.retry.idempotencyKey, /^[a-z0-9-]{1,128}$/u);
 assert.equal(smoke.vars.expectedHead, config.workspace.baseBranch);
 const inputs = validateWorkflowInputs(workflow, smoke.vars);
 assert.deepEqual(inputs.validation.errors, []);

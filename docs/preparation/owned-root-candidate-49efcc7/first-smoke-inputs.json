@@ -1,5 +1,9 @@
 {
   "workflowId": "cal-codex-work",
+  "workflowVersion": "3",
+  "retry": {
+    "idempotencyKey": "cal-codex-work-owned-root-smoke-49efcc7-16e4019d-e620-41c4-99a3-9e1880cc73c7"
+  },
   "vars": {
     "task": "Read-only first owned-root smoke. Verify the assigned root's path, branch, pinned HEAD, and clean source state. Make no source edits and no source commit. Produce the two required ORCA report artifacts with status blocked if any precondition fails. Do not launch another agent.",
     "issue": "owned-root-first-smoke",
