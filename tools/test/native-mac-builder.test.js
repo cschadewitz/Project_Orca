@@ -14,6 +14,7 @@ const { getConfig, doMergeConfigs, validateConfiguration } = libRequire("./util/
 const { MacPackager } = libRequire("./macPackager.js");
 const { PlatformPackager } = libRequire("./platformPackager.js");
 const { MacTargetHelper } = libRequire("./mac/MacTargetHelper.js");
+const { resolveFunction } = libRequire("./util/resolve.js");
 const { Arch } = libRequire("builder-util");
 const config = load(readFileSync(new URL("../../packages/app/electron-builder.yml", import.meta.url), "utf8"));
 const logger = { isEnabled: false };
@@ -46,10 +47,17 @@ it("resolves the selected lock and validates inert hook/version/entitlement inte
   await expect(
     validateConfiguration({ ...effective, mac: { ...effective.mac, inventedSigningPolicy: true } }, logger),
   ).rejects.toThrow();
-  // The locked AJV validator coerces scalar values; schema acceptance is not execution proof.
-  const coerced = { ...effective, afterPack: 42 };
-  await expect(validateConfiguration(coerced, logger)).resolves.toBeUndefined();
-  expect(coerced.afterPack).toBe("42");
+  // AJV ignores the schema's unknown `typeof` keyword (strict:false). That anyOf
+  // branch accepts even numbers unchanged; schema acceptance is not hook proof.
+  const invalidHook = { ...effective, afterPack: 42 };
+  await expect(validateConfiguration(invalidHook, logger)).resolves.toBeUndefined();
+  expect(invalidHook.afterPack).toBe(42);
+  const hook = vi.fn(async (context) => context.arch);
+  const resolved = await resolveFunction("module", hook, "afterPack", process.cwd());
+  expect(await resolved({ arch: Arch.arm64 })).toBe(Arch.arm64);
+  await expect(resolveFunction("module", "../outside-workspace.cjs", "afterPack", process.cwd())).rejects.toThrow(
+    "outside the workspace root",
+  );
 });
 
 it("shows overlay arrays concatenate: an arm64 overlay alone does not remove x64 targets", () => {

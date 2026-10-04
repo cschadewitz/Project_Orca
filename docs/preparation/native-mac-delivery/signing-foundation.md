@@ -92,7 +92,7 @@ Paths below are within those exact installed packages, not assumptions from newe
 
 | Finding | Source and test evidence |
 | --- | --- |
-| Top-level `afterPack`/`afterSign`, Mac explicit entitlements/hardened runtime and opaque plist version fields validate; unknown options fail. AJV coerces numeric hook values to strings, so schema acceptance is not hook execution proof. | `app-builder-lib/scheme.json`, `out/util/config/config.js:getConfig/validateConfiguration`, `schemaValidator.js`; tests load the ordinary config with inert overrides and demonstrate coercion. |
+| Top-level `afterPack`/`afterSign`, Mac explicit entitlements/hardened runtime and opaque plist version fields validate; unknown options fail. The unregistered `typeof` keyword in an `anyOf` branch accepts even numeric hooks unchanged, so schema acceptance is not hook execution proof. | `app-builder-lib/scheme.json`, `out/util/config/config.js:getConfig/validateConfiguration`, `schemaValidator.js`; tests load the ordinary config with inert overrides and demonstrate this permissive hook branch. |
 | Overlay target and extra-resource arrays concatenate, retaining existing x64 targets and the daemon resource. Merely adding arm64 does not isolate a lane. | `builder-util-runtime/out/objects.js:assignKey`, builder `doMergeConfigs`; tested against actual ordinary config. |
 | `afterPack` is after extra-resource copies and before framework post-pack, sanity, fuse flipping and signing. | `out/platformPackager.js:doPack` source inspection. Actual native hook ordering is not run here. |
 | `afterSign` fires only when `signApp` returns true. A hook is not independent signature proof. | `out/platformPackager.js:doSignAfterPack`; both return paths exercised with mocked sign result. |
