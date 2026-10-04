@@ -1380,6 +1380,15 @@ export class Orchestrator {
 
   private async execute(rc: RunContext): Promise<RunState> {
     const runId = rc.id;
+    if (rc.workspace.rootProvisioning) {
+      const generation = this.contextGenerations.get(rc);
+      const provider =
+        generation && this.generationWorkspaceProvider
+          ? this.generationWorkspaceProvider(generation)
+          : this.workspaceProvider;
+      if (!provider.validate) throw unavailable();
+      await provider.validate(rc.workspace);
+    }
     // A run resumed after a crash may have left stale WorkItem documents behind; the log is the
     // truth, so recompute them before doing anything else (no-op for runs without work items).
     await rc.syncWorkItems();

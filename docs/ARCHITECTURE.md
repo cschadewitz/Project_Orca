@@ -440,6 +440,8 @@ Recorded as ADRs in `docs/adr/`:
   and, since #140, over the built‑in default rules, which are the last layer of the three
 
 Request admission and recovery are described in [Request submission](request-submission.md).
+Opt-in built-in root isolation and its retained-evidence recovery limits are described in
+[Owned root worktrees](root-worktree-isolation.md).
 The admission lifecycle is shared by daemon, configured ProgramService/CLI and ACP;
 `runs.start` remains an explicit workflow launch.
 
