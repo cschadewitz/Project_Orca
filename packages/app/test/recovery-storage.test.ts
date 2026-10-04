@@ -3,7 +3,21 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  truncate,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
@@ -171,6 +185,137 @@ describe.skipIf(!linux)("bounded Linux recovery disk", () => {
     expect((await readdir(f.root)).sort()).toEqual(["setting.json", "writer.lock"]);
     await f.disk.cleanExit();
   });
+  it.each(["symlink", "hardlink", "nonprivate"])(
+    "opt-out removes diagnostics keys and ciphertext independently of unsafe fixed staging %s",
+    async (fault) => {
+      const f = await fixture();
+      await enable(f);
+      await f.disk.checkpoint(Buffer.from("secret diagnostic report\n"), f.now, () => true);
+      await f.disk.writeExportState({ current: { id: "unresolved", phase: "intent" } });
+      const identity = await f.disk.stageExport("unresolved", Buffer.from("approved preview\n"));
+      const metadata = await readFile(join(f.root, "export.json"));
+      const target = join(f.parent, "user-file");
+      await writeFile(target, "unrelated user file", { mode: 0o600 });
+      const stage = join(f.root, "export-stage.tmp");
+      if (fault === "nonprivate") await chmod(stage, 0o644);
+      else {
+        await unlink(stage);
+        if (fault === "symlink") await symlink(target, stage);
+        else await link(target, stage);
+      }
+      const unsafe = await lstat(stage);
+      await expect(f.disk.cleanup()).rejects.toThrow("cleanup_pending");
+      expect((await readdir(f.root)).some((name) => name.startsWith("session-"))).toBe(true);
+      f.lose();
+      await f.disk.writeSetting({ enabled: false, scopeVersion: 1, minutes: 5 });
+      await expect(f.disk.cleanup()).rejects.toThrow("cleanup_pending");
+      expect((await readdir(f.root)).sort()).toEqual([
+        "export-stage.tmp",
+        "export.json",
+        "setting.json",
+        "writer.lock",
+      ]);
+      expect((await f.disk.readSetting()).enabled).toBe(false);
+      expect(await readFile(join(f.root, "export.json"))).toEqual(metadata);
+      expect(await readFile(target, "utf8")).toBe("unrelated user file");
+      const preserved = await lstat(stage);
+      expect([preserved.dev, preserved.ino, preserved.mode, preserved.nlink]).toEqual([
+        unsafe.dev,
+        unsafe.ino,
+        unsafe.mode,
+        unsafe.nlink,
+      ]);
+      await expect(f.disk.clearStage(identity)).rejects.toThrow("cleanup_pending");
+      await expect(f.disk.writeSetting({ enabled: true, scopeVersion: 1, minutes: 5 })).rejects.toThrow(
+        "cleanup_pending",
+      );
+      await expect(f.disk.writeExportState({})).rejects.toThrow("cleanup_pending");
+      await expect(f.disk.publishStage(identity, join(f.parent, "report.json"), () => true)).rejects.toThrow(
+        "cleanup_pending",
+      );
+      await expect(f.disk.checkpoint(Buffer.from("later report\n"), f.now, () => true)).rejects.toThrow("off");
+      expect(await readFile(join(f.root, "export.json"))).toEqual(metadata);
+      await f.disk.cleanExit();
+    },
+  );
+  it("never relaxes unsafe-stage inspection without proven writer cessation", async () => {
+    const f = await fixture();
+    await enable(f);
+    await f.disk.checkpoint(Buffer.from("secret diagnostic report\n"), f.now, () => true);
+    const target = join(f.parent, "user-file");
+    await writeFile(target, "unrelated user file", { mode: 0o600 });
+    await symlink(target, join(f.root, "export-stage.tmp"));
+    const before = (await readdir(f.root)).sort();
+    f.native.writersStopped = async () => false;
+    await expect(f.disk.writeSetting({ enabled: false, scopeVersion: 1, minutes: 5 })).rejects.toThrow(
+      "cleanup_pending",
+    );
+    await expect(f.disk.cleanup()).rejects.toThrow("cleanup_pending");
+    expect((await readdir(f.root)).sort()).toEqual(before);
+    expect((await f.disk.readSetting()).enabled).toBe(true);
+    expect(await readFile(target, "utf8")).toBe("unrelated user file");
+    // Only the fixture retires its own settled lease; this is no cleanup success.
+    await f.native.release(f.root);
+  });
+  it("requires a valid persisted off setting before preserving unsafe staging for cleanup", async () => {
+    const f = await fixture();
+    await enable(f);
+    await f.disk.checkpoint(Buffer.from("secret diagnostic report\n"), f.now, () => true);
+    await writeFile(join(f.root, "export-stage.tmp"), "residual", { mode: 0o644 });
+    await writeFile(join(f.root, "setting.json"), '{"enabled":false,"scopeVersion":1,"minutes":99}');
+    const before = (await readdir(f.root)).sort();
+    await expect(f.disk.cleanup()).rejects.toThrow("cleanup_pending");
+    expect((await readdir(f.root)).sort()).toEqual(before);
+    await f.native.release(f.root);
+  });
+  it.each(["oversize-stage", "unsafe-other-entry", "stage-directory", "entry-limit"])(
+    "unsafe-stage opt-out preserves strict %s validation and budgets",
+    async (fault) => {
+      const f = await fixture();
+      await enable(f);
+      await f.disk.checkpoint(Buffer.from("secret diagnostic report\n"), f.now, () => true);
+      await f.disk.writeSetting({ enabled: false, scopeVersion: 1, minutes: 5 });
+      const stage = join(f.root, "export-stage.tmp");
+      if (fault === "stage-directory") {
+        // A directory is not one of the narrow permitted file/link types.
+        await mkdir(stage, { mode: 0o700 });
+      } else {
+        await writeFile(stage, "residual", { mode: 0o644 });
+        if (fault === "oversize-stage") await truncate(stage, RECOVERY_LIMITS.exportBytes + 1);
+        if (fault === "unsafe-other-entry") {
+          const target = join(f.parent, "user-file");
+          await writeFile(target, "unrelated user file", { mode: 0o600 });
+          await symlink(target, join(f.root, "manifest.json.tmp"));
+        }
+        if (fault === "entry-limit") {
+          for (const name of [
+            "setting.json.tmp",
+            "manifest.json.tmp",
+            "control.key.tmp",
+            "export.json",
+            "export.json.tmp",
+            "slot-1.bin",
+            "session-1.key",
+            "slot-2.bin",
+            "session-2.key",
+            "unexpected",
+          ])
+            await writeFile(join(f.root, name), "", { mode: 0o600 });
+          expect(await readdir(f.root)).toHaveLength(RECOVERY_LIMITS.entries + 1);
+        }
+      }
+      const before = (await readdir(f.root)).sort();
+      await expect(f.disk.cleanup()).rejects.toThrow(
+        fault === "oversize-stage" || fault === "entry-limit" ? "capacity_limited" : "cleanup_pending",
+      );
+      expect((await readdir(f.root)).sort()).toEqual(before);
+      if (fault === "oversize-stage")
+        await expect(f.disk.writeSetting({ enabled: false, scopeVersion: 1, minutes: 5 })).rejects.toThrow(
+          "capacity_limited",
+        );
+      await f.native.release(f.root);
+    },
+  );
   it("commits stage identity before plaintext and natively preserves existing destination", async () => {
     const f = await fixture();
     await enable(f);

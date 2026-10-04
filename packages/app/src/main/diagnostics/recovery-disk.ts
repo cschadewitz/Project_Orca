@@ -126,7 +126,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       this.lease = true;
     }
   }
-  private async inspect(): Promise<{ retained: number; controls: number; export: number; entries: number }> {
+  private async inspect(
+    preserveUnsafeStage = false,
+  ): Promise<{ retained: number; controls: number; export: number; entries: number }> {
     await this.safeRoot();
     const names = await readdir(this.root);
     if (names.length > RECOVERY_LIMITS.entries) throw new Error("capacity_limited");
@@ -137,12 +139,18 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     for (const name of names) {
       if (!allowedNames.has(name)) throw new Error("cleanup_pending");
       const stat = await lstat(this.path(name));
+      // Explicit opt-out may preserve only this fixed unsafe file/link while
+      // deleting independently verified history. lstat never follows its target;
+      // all size/entry budgets still apply, and remove() remains fully strict.
+      const preservedStage =
+        preserveUnsafeStage && name === "export-stage.tmp" && (stat.isFile() || stat.isSymbolicLink());
       if (
-        !stat.isFile() ||
-        stat.isSymbolicLink() ||
-        stat.nlink !== 1 ||
-        (stat.uid !== process.getuid?.() && process.platform !== "win32") ||
-        (process.platform !== "win32" && (stat.mode & 0o077) !== 0)
+        !preservedStage &&
+        (!stat.isFile() ||
+          stat.isSymbolicLink() ||
+          stat.nlink !== 1 ||
+          (stat.uid !== process.getuid?.() && process.platform !== "win32") ||
+          (process.platform !== "win32" && (stat.mode & 0o077) !== 0))
       )
         throw new Error("cleanup_pending");
       if (!Number.isSafeInteger(stat.size) || stat.size < 0) throw new Error("capacity_limited");
@@ -169,8 +177,10 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       throw new Error("capacity_limited");
     return { retained, controls, export: exported, entries: names.length };
   }
-  private async reserve(bytes: number, control: boolean, name: string): Promise<void> {
-    const budget = await this.inspect();
+  private async reserve(bytes: number, control: boolean, name: string, preserveUnsafeStage = false): Promise<void> {
+    // Only bounded durable disable may allocate while an unsafe stage is held.
+    if (preserveUnsafeStage && name !== "setting.json.tmp") throw new Error("cleanup_pending");
+    const budget = await this.inspect(preserveUnsafeStage);
     if (
       budget.retained + bytes > RECOVERY_LIMITS.retainedBytes ||
       (control && budget.controls + bytes > RECOVERY_LIMITS.controlBytes) ||
@@ -217,8 +227,8 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       await file.close();
     }
   }
-  private async create(name: string, bytes: Buffer): Promise<void> {
-    await this.reserve(bytes.length, !name.endsWith(".bin"), name);
+  private async create(name: string, bytes: Buffer, preserveUnsafeStage = false): Promise<void> {
+    await this.reserve(bytes.length, !name.endsWith(".bin"), name, preserveUnsafeStage);
     const handle = await open(
       this.path(name),
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
@@ -230,9 +240,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       await handle.close();
     }
   }
-  private async atomic(name: string, bytes: Buffer): Promise<void> {
+  private async atomic(name: string, bytes: Buffer, preserveUnsafeStage = false): Promise<void> {
     if (bytes.length > CONTROL_LIMIT) throw new Error("capacity_limited");
-    await this.create(`${name}.tmp`, bytes);
+    await this.create(`${name}.tmp`, bytes, preserveUnsafeStage);
     await this.safeRoot();
     await this.options.native.replace(this.path(`${name}.tmp`), this.path(name));
   }
@@ -255,9 +265,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       throw new Error("cleanup_pending");
     await this.options.native.remove(this.path(name));
   }
-  private async setting(): Promise<DiagnosticsSetting> {
+  private async persistedSetting(): Promise<DiagnosticsSetting | undefined> {
     const bytes = await this.read("setting.json");
-    if (!bytes) return { ...DEFAULT_SETTING, scopeVersion: this.scope };
+    if (!bytes) return undefined;
     const value: unknown = JSON.parse(bytes.toString("utf8"));
     if (
       !isObject(value) ||
@@ -266,8 +276,11 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       value.scopeVersion !== this.scope ||
       !validMinutes(value.minutes)
     )
-      return { ...DEFAULT_SETTING, scopeVersion: this.scope };
+      return undefined;
     return { enabled: value.enabled, scopeVersion: this.scope, minutes: value.minutes };
+  }
+  private async setting(): Promise<DiagnosticsSetting> {
+    return (await this.persistedSetting()) ?? { ...DEFAULT_SETTING, scopeVersion: this.scope };
   }
   readSetting(): Promise<DiagnosticsSetting> {
     return this.serialized(async () => {
@@ -290,8 +303,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
       if (setting.scopeVersion !== this.scope || typeof setting.enabled !== "boolean" || !validMinutes(setting.minutes))
         throw new Error("unavailable");
       await this.acquire();
-      if (await this.options.native.writersStopped(this.root)) await this.remove("setting.json.tmp");
-      await this.atomic("setting.json", json(setting));
+      const stopped = await this.options.native.writersStopped(this.root);
+      if (stopped) await this.remove("setting.json.tmp");
+      await this.atomic("setting.json", json(setting), !setting.enabled && stopped);
       if (!setting.enabled) this.active = false;
     });
   }
@@ -712,8 +726,9 @@ export class NodeRecoveryDisk implements RecoveryDisk {
         throw error;
       }
       await this.acquire();
-      await this.inspect();
       if (!(await this.options.native.writersStopped(this.root))) throw new Error("cleanup_pending");
+      const disabled = (await this.persistedSetting())?.enabled === false;
+      await this.inspect(disabled);
       // Remove publication authority before any referenced ciphertext or wrapper.
       for (const name of [
         "manifest.json",
