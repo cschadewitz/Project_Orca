@@ -1,27 +1,19 @@
 # ORCA MCP operator interface (#327)
 
-This draft A handoff starts from **4937f4c083c572d07b840258724ef600368a7a5d** and follows
-[mcp-operator-production-contract.md](mcp-operator-production-contract.md). The MCP consumer
-uses the exact ten `OperatorMutationContracts` schemas and `OperatorBoundaryPageResultSchema`.
-It retains real retry envelopes, Request/direct identity, production lookup formats and
-128-byte UTF-8 retry keys. No adapter-local runtime or retry ledger is introduced.
-
-Reserved changes are supplied, **unapplied**, in
-[`patches/327-operator-production-mount.patch`](patches/327-operator-production-mount.patch).
-The patch adds an optional per-authenticated-invocation projection factory to daemon composition
-and corrects one existing test expectation for the production direct-command `vars: {}` default.
-It installs no service and advertises no mutation aliases. The older integration patch is
-historical and must not be applied to this preparation base.
-
-**Cal owns B integration; #327 remains draft and incomplete pending production acceptance.**
-B must supply the ten real mutation adapters, receipt-preserving model methods, conditional
-registries/auth/audit wiring, current-authority boundary readers, and live-owner invalidation.
-C's real lifecycle/recovery/authority evidence and actual-Cal acceptance remain dependencies.
-No main merge, deployment, credentials or access changes are included.
+**Current main, 4 October 2026:** commit `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`
+mounts the authenticated MCP reads and ten mutation/receipt aliases. `orca mcp` provides
+stdio; `createOperatorHttpHandler` provides the authenticated Streamable HTTP reference
+handler. The compiled production matrix runs with required mounts in CI on Node 22/24.
+See the [current evidence map](runtime-operator-integration.md#current-main-evidence-map)
+and [production matrix](mcp-operator-production-acceptance.md). The earlier A/B/C
+handoff and unapplied patch descriptions are historical design evidence, not
+instructions for integrating current main. #327 remains open for the remaining
+acceptance in [the issue](https://github.com/cschadewitz/Project_Orca/issues/327).
 
 ### Trusted projection mount
 
-A adds three internal `OperatorReadOptions` hooks; B supplies them together:
+The read model accepts three internal `OperatorReadOptions` hooks; current daemon
+composition supplies them together:
 
 - `boundaryRow(params, row)` returns only the original authorized row plus allowlisted boundary
   fields. It closes over the authenticated invocation and existing production read services.
@@ -33,13 +25,13 @@ A adds three internal `OperatorReadOptions` hooks; B supplies them together:
   publications even without a public event append, remain stable across per-call model instances,
   and detect rewind/replacement. This is an invalidation reader, not another journal.
 
-A mount lacking either trusted reader fails with `CONFIG_INVALID`. The model calls the hooks
+An embedder mount lacking either trusted reader fails with `CONFIG_INVALID`. The model calls the hooks
 only for authorized exact-run `runs`/`inputs` pages and validates `OperatorBoundaryProjectionSchema`
 against the independently read action ID. Contradictions, changed identity/base fields, undeclared
 actions and unexpected callback fields fail with `PROTOCOL_MESSAGE` without echoing their content.
 A weak input viewer can receive the restriction-only action ID; stronger revision state/view
-requires `runs.read`, `inputs.answer` and `runs.control`, plus B's current resource/workflow checks.
-B must preserve `unavailable` for uncertain protected evidence and propagate unexpected failures.
+requires `runs.read`, `inputs.answer` and `runs.control`, plus current resource/workflow checks.
+The composition preserves `unavailable` for uncertain protected evidence and propagates unexpected failures.
 A bare empty observational array is not proof of `unsupported`.
 
 Boundary revisions participate in signed page cursors. Emitted projections are reread before
@@ -52,7 +44,7 @@ and protected pending revision text remain unsupported by these tools.
 The schemas can carry a 64 KiB revision payload, but the complete serialized MCP command still
 has a 64 KiB transport ceiling, including its envelope and JSON escaping.
 
-## Local setup after integration
+## Local setup on current main
 
 Use Node 22 or 24, build ORCA, and use an **already approved, explicit ORCA credential**:
 
@@ -68,7 +60,7 @@ loopback compatibility. Stdout contains MCP frames only. Missing credentials or 
 daemon without `operator.discover` fails closed. Closing the adapter never cancels work.
 
 The daemon's existing authenticated `orca serve` setup is described in
-[daemon security](daemon-security.md). The integration patch enables operator read methods
+[daemon security](daemon-security.md). Production composition enables operator read methods
 only with a persistent workspace identity and token authentication. `--read-only` remains
 read-only. Artifact content uses the existing protected read service, not filesystem access.
 
@@ -131,13 +123,14 @@ There are no generic RPC, config-edit, shell, file-read, credential, grant or le
 | `get_continuation`, `reconcile_continuation` | `operator.continuation/reconcileContinuation` | continuationId |
 | `revise_input` | `operator.revise` → #356 RevisionInputService.submit | production RevisionCommand, retry |
 
-The integration patch registers **only the five read/preflight operations**. The remaining
-named endpoints are typed adapter contracts for combined integration, not claims that those
-endpoints already exist. Their shared service commands/receipts follow the production contract;
+Current `orca serve` registers the five read/preflight operations when their sources are
+available and conditionally registers all ten mutation/receipt aliases when their production
+services are installed. The compiled production matrix verifies all ten on the normal
+authenticated daemon. Their shared service commands/receipts follow the production contract;
 the adapter's outer `target` guard is not passed as a workflow variable. It is checked by the
-server before mutation. Production registration must use the same schemas for HTTP and WS,
+server before mutation. Production registration uses the same schemas for HTTP and WS,
 current verified invocation authority, existing resource checks and mutation/decision audit.
-Do not register a tool because a fixture callback exists.
+Tool presence still depends on an installed service, not a fixture callback.
 
 For admission, `command` requires workflowId, workflowVersion, expectedWorkflowRevision and
 expectedConfigGeneration from preflight. Direct launch does not manufacture a Request. Request
@@ -223,10 +216,10 @@ not revision content. The shared service must reject duplicate/stale/mismatched 
 its existing fencing. Live callback delivery must reauthorize its original owner context; a
 restart, expired owner or revoked initiator never turns it into a durable decision.
 
-The read source can consume an owning LiveHumanInput.inspect callback plus an invalidation
-revision. The initial reserved wiring does not install that callback, so live targets are
-truthfully shown as owner-unavailable. Legacy permissions without a live identity are withheld.
-Live changes need the integrator's invalidation wiring before live-answer acceptance is complete.
+The production composition supplies the live coordinator's inspect callback and observation
+revision. Owner loss or a different daemon reports owner-unavailable; it cannot resurrect a
+callback. Legacy permissions without a live identity are withheld. The compiled A04/A05 cases
+exercise current-owner delivery once and refusal after owner death/restart.
 
 After a lost admission response or adapter restart, reuse **the same command and key** against
 the intended workspace. If the daemon boot changed, discover again and explicitly select that
@@ -234,10 +227,11 @@ same workspace before carrying the original key forward. Intentionally new work 
 Only #331's durable service provides duplicate prevention; adapter reconnect tests prove pass-through,
 not ledger crash consistency. `continue_run` uses the parent-owned persisted dispatch receipt;
 there is no detached `runs.resume`, implicit resumption, invented `runs.retry` or in-memory queue.
-Revision submission is unavailable until #356 supplies its authorized destination projection and
-production service. Revision pending/replace/history tools remain unadvertised in this slice.
+`revise_input` uses #356's authorized destination projection and production service on current
+main. MCP pending-text, replacement and history tools remain unadvertised. The underlying
+daemon has its own protected pending/replacement methods; their existence does not add MCP tools.
 
-## Least privilege and integration obligations
+## Least privilege and production invariants
 
 Existing-run inspection needs `runs.read` over `runs:all` in the approved workflow scope;
 artifacts also need `artifacts.read`, graphs/schema need `workflows.read`. The owned-runs client
@@ -247,9 +241,9 @@ Preflight/direct admission require `runs.start`. Request submission additionally
 workspace `plan.write`. Decisions use `inputs.answer`; cancellation/continuation use `runs.control`,
 with included decisions needing both. The adapter does not broaden those existing grants.
 
-Before enabling mutation endpoint discovery, the integrator must:
+Production mutation discovery depends on these implemented boundaries:
 
-1. Delegate to #331/#356/the continuation service with the exact frozen commands. Require
+1. Delegate to #331/#356/the continuation service with the shared commands. Require
    target identity and fresh verified authority before any effect; never substitute a process owner.
 2. Register each implemented endpoint in the operation inventory; authorize original resources
    on inspection/replay/reconcile and audit actor, target, operation and outcome without payload/key bytes.
@@ -257,11 +251,12 @@ Before enabling mutation endpoint discovery, the integrator must:
    metadata. Caller-provided actor/source labels must not become authenticated attribution.
 4. Wire exact durable input identity and live invalidation/owner checks. Keep decision-only durable
    recording separate from continuation; never call a legacy blocking resume from an MCP handler.
-5. Run combined admission crash/restart/retry races, gated workflow and exact live callback tests,
-   HTTP/WS parity, full runtime/build/UI checks and actual-Cal evaluation on the final combined SHA.
+The compiled production matrix verifies the covered admission crash/restart/retry,
+gated workflow, live callback and HTTP/WS cases. Actual-Cal evaluation is a
+separate acceptance gate.
 
-These obligations are already allocated in the frozen contract and related issues; this handoff
-creates no duplicate ledger, auth service or deployment story. The preparation base already exports the shared schemas and pins the SDK dependencies.
+The MCP adapter owns no duplicate ledger, auth service or deployment story. The shared
+schemas and pinned SDK dependencies are in current main.
 
 ## Reference flow and evidence boundaries
 
@@ -269,7 +264,7 @@ creates no duplicate ledger, auth service or deployment story. The preparation b
 2. `list_runs` → `list_steps`/`get_events`/`list_children` → `get_run_provenance` and
    `get_workflow_graph` for a selected run. Follow nextCursor until absent; restart on invalidation.
 3. `list_artifacts` → `get_artifact` with the exact run and artifact IDs. Treat text as data.
-4. After combined mutation wiring, `preflight_launch` on invalid and valid vars. Copy all guards;
+4. Call `preflight_launch` on invalid and valid vars. Copy all guards;
    submit an explicitly requested Request or direct workflow with one retained key. Follow its IDs.
 5. Ask for the exact pending decision before calling `respond_to_approval`. Inspect after answering.
    Cancellation/recovery/revision are separate explicit actions and may be unavailable.
@@ -278,12 +273,13 @@ The prefixed suites verify schema bounds, scope/hidden-link filtering, forged/st
 revocation before validation and after reads, secret-bearing fields, exact live target forwarding,
 no standing grants or implicit actions, restart key forwarding, old-epoch response rejection,
 HTTP identity mapping, response limits, stdout framing and real-daemon artifact inspection.
-The reference tests do not prove actual-Cal selection/confirmation, remote network reachability,
-production mutation wiring, durable retry crash boundaries or continuation dispatch. Those criteria
-remain **blocked for combined/actual-client acceptance**, not passed by transport conformance.
+The adapter tests alone do not prove actual-Cal selection/confirmation, remote network
+reachability, durable retry crash boundaries or continuation dispatch. The separate compiled
+production matrix covers the latter service behaviors for its stated cases. Actual-client and
+deployment acceptance remain open.
 
 
-## Reproducing A's checks
+## Historical A-branch verification (3 October 2026)
 
 Use Node 22 or 24 and the frozen lockfile. Keep the mount patch unapplied on A's branch.
 

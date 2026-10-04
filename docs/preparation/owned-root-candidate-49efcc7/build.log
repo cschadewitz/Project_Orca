@@ -1,0 +1,25 @@
+$ tsc -b tsconfig.build.json && pnpm --filter @orca/app run build:renderer
+$ vite build
+vite v8.3.1 building client environment for production...
+transforming...
+✓ 326 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/renderer/index.html                                        1.17 kB │ gzip:   0.69 kB
+dist/renderer/assets/NotoSansMath-Regular-Bn-n9ysB.woff2        2.74 kB
+dist/renderer/assets/NotoSansSymbols2-Regular-CY2_Ztoe.woff2    4.36 kB
+dist/renderer/assets/IBMPlexMono-Regular-DmbzZOdR.woff2        18.47 kB
+dist/renderer/assets/IBMPlexMono-Medium-CgbkQ141.woff2         18.75 kB
+dist/renderer/assets/IBMPlexSans-Regular-w9MpDABI.woff2        19.57 kB
+dist/renderer/assets/IBMPlexSans-Medium-s_Nlh_jA.woff2         20.58 kB
+dist/renderer/assets/IBMPlexSans-SemiBold-DLJ4C6Jw.woff2       20.95 kB
+dist/renderer/assets/IBMPlexSans-Italic-CIgC_cyG.woff2         21.62 kB
+dist/renderer/assets/index-DYoxus-o.css                        71.12 kB │ gzip:  11.78 kB
+dist/renderer/assets/index-D1Lz3HRY.js                        662.11 kB │ gzip: 192.10 kB │ map: 3,569.09 kB
+
+[plugin builtin:vite-reporter]
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 845ms

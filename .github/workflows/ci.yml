@@ -31,8 +31,9 @@ jobs:
           # Three-dot diff below needs the merge base, so the full history.
           fetch-depth: 0
 
-      # Documentation is `docs/**` and any Markdown outside `templates/`. The prompt
-      # templates are Markdown too, but the engine loads them and the tests and the
+      # Documentation is `docs/**` except JavaScript, and Markdown outside `templates/`.
+      # Executable documentation validators need lint and tests just like other tooling.
+      # Prompt templates are Markdown too, but the engine loads them and the tests and the
       # `demo` smoke test read them, so they count as code. Anything else counts as code.
       # When the base commit is unknown (first push of a branch, or a force-push that
       # rewrote it away) the job errs on the side of running everything.
@@ -48,7 +49,7 @@ jobs:
             exit 0
           fi
           code_paths=$(git diff --name-only "$BASE...$HEAD" \
-            | awk '!/^docs\// && !(/\.md$/ && !/^templates\//)')
+            | awk '/^docs\/.*\.(js|mjs|cjs|jsx)$/ || (!/^docs\// && !(/\.md$/ && !/^templates\//))')
           if [ -n "$code_paths" ]; then
             echo "code changed:"; printf '  %s\n' $code_paths
             echo "code=true" >> "$GITHUB_OUTPUT"
@@ -64,6 +65,9 @@ jobs:
     runs-on: [self-hosted, linux, x64, homelab]
     strategy:
       fail-fast: false
+      # These self-hosted runners share resources. Do not overlap the two full suites:
+      # the demo launches 24 scripted ACP children and has a fixed 60s operation bound.
+      max-parallel: 1
       matrix:
         # 22 is the floor declared in package.json engines; 24 is what mise.toml pins.
         node: [22, 24]
@@ -78,6 +82,19 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
+
+      # Bound every Vitest invocation, not just retry acceptance. Preserve the default
+      # of one worker on small runners rather than increasing their concurrency to two.
+      - name: Bound test workers
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { availableParallelism } from 'node:os';
+
+          const workers = Math.min(2, Math.max(1, availableParallelism() - 1));
+          appendFileSync(process.env.GITHUB_ENV, `VITEST_MAX_WORKERS=${workers}\n`);
+          console.log(`Vitest worker limit: ${workers} (available parallelism: ${availableParallelism()})`);
+          NODE
 
       # CI typechecks and lints the Electron app but never launches it, so skip the
       # ~100 MB binary that electron's postinstall would otherwise fetch.
@@ -111,6 +128,44 @@ jobs:
       # Production MCP acceptance launches the emitted daemon and MCP entry points.
       - name: Build
         run: pnpm run build
+
+      # These two opt-in cases are skipped by the ordinary suite. Run them against the
+      # merged runtime on both supported Nodes and reject a green result with skips.
+      - name: Retry admission acceptance (CLI and ACP)
+        timeout-minutes: 3
+        env:
+          ORCA_RETRY_INTEGRATION: "1"
+        run: |
+          pnpm exec vitest run \
+            packages/cli/test/admission-retry-wiring.test.ts \
+            packages/integrations/test/admission-retry-acp.test.ts \
+            --maxWorkers="$VITEST_MAX_WORKERS" \
+            --reporter=default --reporter=json \
+            --outputFile.json="$RUNNER_TEMP/retry-acceptance.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { join, relative } from 'node:path';
+
+          const report = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'retry-acceptance.json'), 'utf8'));
+          const expected = new Set([
+            'packages/cli/test/admission-retry-wiring.test.ts',
+            'packages/integrations/test/admission-retry-acp.test.ts',
+          ]);
+          const files = report.testResults ?? [];
+          const ran = new Set(files.map((file) => relative(process.cwd(), file.name)));
+          if (
+            report.success !== true ||
+            files.length !== expected.size ||
+            [...expected].some((file) => !ran.has(file)) ||
+            files.some((file) =>
+              !file.assertionResults?.length || file.assertionResults.some((test) => test.status !== 'passed')) ||
+            report.numTotalTests !== report.numPassedTests ||
+            report.numPassedTests < expected.size
+          ) {
+            throw new Error('Retry acceptance requires both named test files to run with every test passing');
+          }
+          console.log(`Retry acceptance: ${report.numPassedTests} tests passed in both named files; none skipped`);
+          NODE
 
       # Coverage is measured on one leg for the same reason, and because instrumenting
       # slows the suite down. Thresholds live in vitest.config.ts, so this fails here

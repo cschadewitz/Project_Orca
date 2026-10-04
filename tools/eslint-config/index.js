@@ -99,8 +99,8 @@ export default tseslint.config(
     },
   },
   {
-    // This config and the local rules are plain JS, outside tsconfig.json's project.
-    files: ["**/*.js"],
+    // Plain JS tooling, including documentation validators, is outside the TS project.
+    files: ["**/*.{js,mjs,cjs}"],
     extends: [tseslint.configs.disableTypeChecked],
     languageOptions: { globals: globals.nodeBuiltin },
   },
@@ -112,6 +112,7 @@ export default tseslint.config(
       "packages/testing/src/**/*.ts",
       "examples/**/*.ts",
       "tools/**/*.js",
+      "docs/preparation/**/validate-*.mjs",
       "packages/design/build-tokens.js",
       "packages/app/scripts/**/*.js",
     ],

@@ -23,6 +23,8 @@ export interface ProvisionInput {
 export interface WorkspaceProvider {
   readonly name: string;
   provision(input: ProvisionInput): Promise<Workspace>;
+  /** Recheck owned registration before attaching execution; never repairs or cleans up. */
+  validate?(workspace: Workspace): Promise<void>;
   /** Optional cleanup hook (e.g. remove worktree) - never called automatically. */
   release?(workspace: Workspace): Promise<void>;
 }

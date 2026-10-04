@@ -2,6 +2,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { LocalHost } from "@orca/agents";
+import { GitWorktreeProvider } from "../src/workspace/git-worktree.js";
 import { OrcaError } from "@orca/core";
 import { FileExecutionStore } from "@orca/store";
 import { FileRetryClaimStore } from "../../store/src/admission-retry-store.js";
@@ -13,10 +17,28 @@ const dirs: string[] = [];
 afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
-async function fixture(failAt?: "inputs" | "created" | "ownership") {
+async function fixture(failAt?: "inputs" | "created" | "ownership" | "publication", isolated = false) {
   const f = submissionFixture();
   const dir = await mkdtemp(join(tmpdir(), "orca-direct-"));
   dirs.push(dir);
+  if (isolated) {
+    execFileSync("git", ["init", "-q", "-b", "main"], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    execFileSync(
+      "git",
+      ["-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "base"],
+      { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    f.orc.workspaceProvider = new GitWorktreeProvider({
+      host: new LocalHost({ id: "local", type: "local" }),
+      repo: dir,
+      worktreeRoot: join(dir, "trees"),
+      isolateRoots: true,
+    });
+  }
   const faults = {
     conflict: () => new OrcaError("RUN_STATE", "conflict"),
     limit: () => new OrcaError("RUN_STATE", "limit"),
@@ -24,6 +46,13 @@ async function fixture(failAt?: "inputs" | "created" | "ownership") {
   const store = new FileRetryClaimStore({ storeDir: dir, execution: new FileExecutionStore(dir), faults });
   const claims = new RegisteredRetryClaims(store, faults);
   let fail = true;
+  if (failAt === "publication") {
+    const append = f.stores.events.append.bind(f.stores.events);
+    vi.spyOn(f.stores.events, "append").mockImplementation(async (event) => {
+      if (event.type === "run.created") throw new Error("before publication");
+      return append(event);
+    });
+  }
   await f.ready();
   const baseLaunch = await f.generations.captureLaunch({ purpose: "workflow", workflowId: "program" });
   if (failAt === "inputs") {
@@ -73,7 +102,7 @@ async function fixture(failAt?: "inputs" | "created" | "ownership") {
       await authority.authorize({ workflowId: "program" });
     },
   };
-  return { ...f, claims, service, authority, start, capture, restore, scope };
+  return { ...f, dir, claims, service, authority, start, capture, restore, scope };
 }
 it("admits a direct run without fabricating a Request or driving execution; retries retain identity", async () => {
   const f = await fixture();
@@ -93,6 +122,49 @@ it("admits a direct run without fabricating a Request or driving execution; retr
   // Fresh validation and preparation each capture; accepted replay does neither.
   expect(f.capture).toHaveBeenCalledTimes(2);
   expect(f.start).toHaveBeenCalledTimes(1);
+});
+
+it("isolated duplicate admissions retain one workspace and never repeat execution after acknowledgement loss", async () => {
+  const f = await fixture(undefined, true);
+  const command = {
+    workflowId: "program",
+    vars: { repo: "/untrusted", workspace: "/untrusted", branchPrefix: "untrusted/" },
+  };
+  const first = await f.service.admitRun(command, { idempotencyKey: "owned-root" }, f.authority);
+  expect(first).toMatchObject({ state: "resolved", result: { state: "accepted" } });
+  const [runId] = await f.orc.listRuns();
+  const workspace = (await f.orc.getState(runId!)).run.workspace;
+  expect(workspace.cwd).toBe(join(f.dir, "trees", runId!));
+  expect(workspace.branch).toBe(`orca/roots/${runId}`);
+  const duplicate = await Promise.all(
+    [1, 2].map(() => f.service.admitRun(command, { idempotencyKey: "owned-root" }, f.authority)),
+  );
+  expect(duplicate).toEqual([
+    { ...first, replayed: true },
+    { ...first, replayed: true },
+  ]);
+  await f.orc.run(runId!);
+  await f.orc.run(runId!);
+  expect((await f.orc.events(runId!)).filter((event) => event.type === "run.started")).toHaveLength(1);
+  expect(f.start).toHaveBeenCalledTimes(1);
+  expect(await f.stores.requests.list()).toEqual([]);
+  expect(await f.stores.workItems.list()).toEqual([]);
+});
+
+it("keeps exact owned receipt and private-input guard after provisioning but before publication", async () => {
+  const f = await fixture("publication", true);
+  const first = await f.service.admitRun({ workflowId: "program" }, { idempotencyKey: "failed-root" }, f.authority);
+  if (first.state !== "resolved" || first.result.state !== "recoverable-failure") throw new Error("expected failure");
+  const runId = first.result.runId!;
+  const receiptPath = join(f.dir, ".git", "orca-root-workspaces", `${runId}.json`);
+  const receipt = await readFile(receiptPath, "utf8");
+  expect(JSON.parse(receipt)).toMatchObject({ runId, repo: f.dir, path: join(f.dir, "trees", runId) });
+  expect(await f.stores.execution.getInputs(runId)).toBeDefined();
+  const result = await f.service.withRetryAuthority(f.authority, () => f.claims.reconcile(first.operationId, f.scope));
+  expect(result).toMatchObject({ operationId: first.operationId, result: { state: "recoverable-failure", runId } });
+  expect(await readFile(receiptPath, "utf8")).toBe(receipt);
+  expect(f.start).toHaveBeenCalledTimes(1);
+  expect(await f.orc.listRuns()).toEqual([]);
 });
 it("reconciles original run after ownership interruption", async () => {
   const boundary = "ownership";

@@ -2,8 +2,8 @@
 
 The daemon's HTTP `/rpc` endpoint and WebSocket `/socket` endpoint authenticate every caller
 and authorize every operation, every resource and every pushed notification (#328). This page
-is the reference for operators deploying the daemon, for authors of clients that call it, and
-for the integration that wires it into `orca serve`. The code is in
+is the reference for operators deploying the daemon and authors of clients that call it.
+Current `orca serve` wires the policy. The code is in
 `packages/daemon/src/auth/`; each module's header explains its part.
 
 Three checks are kept separate, and every call passes all three:
@@ -96,11 +96,8 @@ A credential holds a list of these permissions:
 | `runs.read`          | Read runs, their events, open inputs and claims; run notifications.        |
 | `artifacts.read`     | Artifact references, metadata and bodies.                                  |
 | `workflows.read`     | Workflow definitions; `workflows.changed`.                                 |
-| `runs.start`         | Start runs; the reserved launch-input preflight.                           |
+| `runs.start`         | Start runs and use installed operator launch preflight.                    |
 | `runs.control`       | Resume and cancel runs.                                                    |
-| `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
-| `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
-| `inputs.revisionPending` | `runs.read` | exact run; payload also requires `inputs.answer` and `runs.control` | — |
 | `inputs.answer`      | Answer one open gate or permission ask, once.                              |
 | `permissions.grant`  | Answer a permission ask with `always`, which writes a standing rule.       |
 | `claims.release`     | Release a work-item claim.                                                 |
@@ -135,7 +132,7 @@ Presets are expanded into the record at issue time:
 | `viewer`   | `runs.read`, `artifacts.read`, `workflows.read`, `plan.read`, `agents.read`. | Unrestricted.            |
 | `client`   | `runs.read`, `artifacts.read`, `workflows.read`, `runs.start`, `runs.control`, `inputs.answer`. | `{ workflows: "*", runs: "owned" }`; narrow `workflows` at issue time. |
 
-The `client` preset fits an adapter or a bot, including a future MCP adapter (#327): it can
+The `client` preset fits an adapter or a bot, including the MCP adapter (#327): it can
 launch work, steer it and answer its gates, and it sees nothing else.
 
 Starting with `requestId` additionally requires `plan.read`; `workItemId` requires both
@@ -170,6 +167,9 @@ that the two match. A method that is missing from the table is refused with
 | `runs.list` | `runs.read` | filtered to visible runs; `total` and paging recomputed | — |
 | `runs.get` | `runs.read` | the run | — |
 | `runs.events` | `runs.read` | the run | — |
+| `inputs.revise` | `inputs.answer` | also requires `runs.control`; exact durable run, input and declared destination | decision |
+| `inputs.replaceRevision` | `inputs.answer` | also requires `runs.control`; exact undelivered destination/attempt and CAS | mutation |
+| `inputs.revisionPending` | `runs.read` | exact run; protected payload also requires `inputs.answer` and `runs.control` | — |
 | `inputs.list` | `runs.read` | filtered to visible runs; `waiting` recomputed | — |
 | `claims.list` | `runs.read` | filtered to claims held by visible runs | — |
 | `artifacts.list` | `artifacts.read` | filtered to visible runs; `total` recomputed | — |
@@ -425,58 +425,34 @@ actors are excluded. Admission/continuation lookup reads are not mutation-audite
 | Embedders calling `startDaemon`           | Pass `auth`. Use `{ mode: "loopback-unauthenticated" }` only to keep the old behavior on loopback. |
 | Custom method tables                      | Every method name must be in `OPERATIONS`. An un-inventoried method is `AUTH_FORBIDDEN`.     |
 
-## Integration status
+## Current integration and acceptance boundary
 
-This story's branch owns the auth modules, both transports and these tests. These pieces of
-shared wiring are reserved for the integration step
-(`docs/runtime-foundation-parallel-contract.md`), so on this branch `orca serve` refuses to
-start until they land:
+On main `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`, `orca serve`
+bootstraps token authentication, the CLI exposes `auth issue|list|rotate|revoke`,
+and the desktop daemon client supplies its credential. The legacy
+`--unauthenticated-loopback` mode is explicit and loopback-only. Authenticated
+operator methods are conditionally mounted with their production sources and
+audited through the same daemon boundary. The former #328 branch handoff and
+`patches/328-control-integration.patch` are historical; do not apply them to
+current main. The [current evidence map](runtime-operator-integration.md#current-main-evidence-map)
+links the implementation and executable checks.
 
-- `orca serve`: open the auth directory, await `bootstrapLocalOwner`, and pass
-  `auth: { mode: "token", credentials, ownership, resolver: orchestratorResolver(app.orchestrator), audit }`.
-  Add `--trusted-proxy` and `--allow-origin`, and an explicit `--unauthenticated-loopback`.
-  Update the banner, which currently says there is no authentication.
-- `orca auth issue|list|rotate|revoke` over `CredentialStore`.
-- Re-export `./auth/index.js` from the `@orca/daemon` barrel.
-- The CLI and the app client send the token, as described in the migration table.
-- `ControlModel.startRun` calls `Authorizer.attributeRun(runId, principal)` between
-  `orc.startRun` and `orc.run`, replacing attribution by `run.created` matching.
-- Record the answering principal on `human.answered`, so the run log also shows who
-  answered.
-- Protocol README: the auth error codes, close code 4401, and the bearer subprotocol.
+The CLI accepts named presets with workflow/run-scope options; it does not accept
+an arbitrary permission list on `auth issue`. A proposed finer read-only grant
+cannot be provisioned by inventing a CLI flag or borrowing the local owner token.
+The `client` preset defaults to owned runs and includes write grants. Inspecting
+pre-existing user-selected runs requires a reviewed `runs: all` envelope over the
+approved root workflows; that envelope includes other and future runs of those
+roots. `config.read` is workspace-wide and includes raw unredacted `config.get`;
+the MCP `get_configuration_status` tool uses an allowlisted projection and does
+not grant raw config access.
 
-### Review handoff: control integration
-
-[328-control-integration.patch](patches/328-control-integration.patch) is a separate,
-apply-ready patch for Cal, based on this branch after the four inline review fixes.
-It changes the reserved method/control files and the guard together, plus adds a
-regression suite. Apply with `git apply docs/patches/328-control-integration.patch`.
-It is intentionally not applied to this implementation branch.
-
-- The method passes a server-bound admission callback into `ControlModel.startRun`;
-  the control model reports the actual admitted id before execution. The patch removes
-  `startOwned` and all global event-matching attribution. A concurrent unrelated start
-  of the same workflow stays unowned.
-- Standing rules are prepared without writing, then persisted only after `orc.answer`
-  has accepted the decision under its lease, before resumption. Invalid options, stale
-  decisions and lease refusals leave the sidecar unchanged. These stores do not have
-  a shared transaction: if persistence fails after acceptance, the answer stays recorded
-  and this call does not resume. The operator must repair the sidecar and resume explicitly.
-
-Validation in an isolated copy: 55 tests passed across the new integration suite,
-`control-methods`, `security-http`, and `security-socket`; TypeScript checking passed.
-This does not verify client migration. CLI/app/update-supervisor token wiring and
-Electron smoke remain integration acceptance gates, and the branch must not merge alone.
-All new credential mutation call sites must now await the promise, including bootstrap.
-
-Compatibility-only edits already present in the first pass (the two changelog fragments,
-`packages/app/test/daemon-client.test.ts`, `packages/app/test/notifications.test.ts`, and
-`packages/daemon/test/maintenance.test.ts`) still need Cal's ownership reconciliation;
-the review fixes do not expand those edits.
-
-
-Request admission methods require both `runs.start` and workspace-scoped `plan.write`.
-`requests.submit` and `requests.reconcile` are audited mutations; `requests.admission`
-and `requests.admissions` expose only this principal's admissions in this workspace.
-They are registered only with the submission provider and durable token-mode ownership.
-See [Request submission](request-submission.md) for recovery and discovery.
+#328 remains open. Its existing HTTP/WebSocket credential, operation, resource,
+notification, gate and audit tests establish the implemented core. They do not
+establish the expanded workflow-editor draft ownership, secret-reference use,
+full #336 raw-config migration alignment, or a complete deployment and client
+migration proof. Current-main CI passed on Node 22/24 at
+[run 37163133592](https://github.com/cschadewitz/Project_Orca/actions/runs/37163133592);
+that does not prove an upgraded agent-01 runtime or actual-Cal behavior. Keep
+these remaining [#328 criteria](https://github.com/cschadewitz/Project_Orca/issues/328)
+open until their own evidence exists.

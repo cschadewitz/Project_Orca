@@ -6,6 +6,7 @@
 import { type AgentHost, shellQuote } from "@orca/agents";
 import { OrcaError, type Workspace } from "@orca/core";
 import { type ProvisionInput, WORK_ITEM_BRANCH_PREFIX, type WorkspaceProvider } from "./provider.js";
+import { OwnedRootWorktree } from "./owned-root-worktree.js";
 
 export interface GitWorktreeProviderOptions {
   host: AgentHost;
@@ -15,6 +16,7 @@ export interface GitWorktreeProviderOptions {
   worktreeRoot?: string;
   baseBranch?: string;
   branchPrefix?: string;
+  isolateRoots?: boolean;
 }
 
 export class GitWorktreeProvider implements WorkspaceProvider {
@@ -23,6 +25,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
 
   async provision(input: ProvisionInput): Promise<Workspace> {
     const host = this.o.host;
+    if (!input.workItem && !input.parent && this.o.isolateRoots) return new OwnedRootWorktree(this.o).provision(input);
     // Runs without a work item (e.g. the program run itself) work in the main checkout.
     if (!input.workItem)
       return input.parent ?? { hostId: host.id, cwd: this.o.repo, repo: this.o.repo, provider: this.name };
@@ -47,7 +50,16 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return { hostId: host.id, cwd: dir, repo: this.o.repo, branch, provider: this.name };
   }
 
+  async validate(ws: Workspace): Promise<void> {
+    if (ws.rootProvisioning) await new OwnedRootWorktree(this.o).validate(ws);
+  }
+
   async release(ws: Workspace): Promise<void> {
+    if (ws.rootProvisioning)
+      throw new OrcaError(
+        "RUN_STATE",
+        "Owned root worktrees require explicit reconciliation; automatic removal is refused",
+      );
     if (ws.provider !== this.name || !ws.repo) return;
     await this.o.host.exec(`git worktree remove --force ${shellQuote(ws.cwd)}`, { cwd: ws.repo });
   }

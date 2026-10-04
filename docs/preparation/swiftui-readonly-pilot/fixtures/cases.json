@@ -1,0 +1,677 @@
+[
+  {
+    "id": "empty-runs",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items",
+        "value": []
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Successful empty scope, not denied."
+  },
+  {
+    "id": "empty-approvals",
+    "base": "approvals",
+    "changes": [
+      {
+        "path": "/data/items",
+        "value": []
+      }
+    ],
+    "decode": "accept",
+    "expectation": "No pending decisions in authorized scope."
+  },
+  {
+    "id": "partial-page",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/nextCursor",
+        "value": "synthetic-page-2"
+      },
+      {
+        "path": "/data/truncated",
+        "value": true
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Loaded count only; page remains incomplete."
+  },
+  {
+    "id": "restart-page",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/restartRequired",
+        "value": true
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Discard page cursors and reread page one."
+  },
+  {
+    "id": "unknown-field",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/futureHint",
+        "value": "synthetic-ignored"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Decode additive field but never display, persist or log it."
+  },
+  {
+    "id": "new-minor",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/schema/minor",
+        "value": 1
+      },
+      {
+        "path": "/data/protocol/minor",
+        "value": 1
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Same major and required read capabilities remain compatible."
+  },
+  {
+    "id": "incompatible-schema",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/schema/major",
+        "value": 2
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Block incompatible reads."
+  },
+  {
+    "id": "incompatible-protocol",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/protocol/major",
+        "value": 3
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Version mismatch, no RPC fallback."
+  },
+  {
+    "id": "unknown-status",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/0/status",
+        "value": "future-status"
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Do not invent a ninth status."
+  },
+  {
+    "id": "fractional-seq",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/0/observedSeq",
+        "value": 1.5
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Exact portable integers required."
+  },
+  {
+    "id": "unsafe-seq",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/0/observedSeq",
+        "value": 9007199254740992
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Reject precision loss."
+  },
+  {
+    "id": "null-items",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items",
+        "value": null
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Null is not empty."
+  },
+  {
+    "id": "write-mode",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/mode",
+        "value": "read-write"
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Pilot does not become writable."
+  },
+  {
+    "id": "missing-capability",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/capabilities",
+        "value": ["runs.read"]
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Attention/artifacts unavailable; do not call unsupported methods."
+  },
+  {
+    "id": "write-looking-capability",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/capabilities",
+        "value": ["runs.read", "runs.control"]
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Unknown capability ignored; no write path can activate."
+  },
+  {
+    "id": "wrong-host",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/context/workspaceId",
+        "value": "33333333-3333-4333-8333-333333333333"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Structurally valid; session must reject before display."
+  },
+  {
+    "id": "wrong-principal",
+    "base": "approvals",
+    "changes": [
+      {
+        "path": "/context/principalId",
+        "value": "synthetic-human-b"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Structurally valid; isolate cache and block display."
+  },
+  {
+    "id": "wrong-enrollment",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/context/enrollmentId",
+        "value": "synthetic-phone-b"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Structurally valid; cannot reuse another device session."
+  },
+  {
+    "id": "new-boot",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/context/instanceId",
+        "value": "44444444-4444-4444-8444-444444444444"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Same workspace; rediscover and reset cursors/live asks."
+  },
+  {
+    "id": "new-policy",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/context/policyRevision",
+        "value": "synthetic-policy-2"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Purge old policy cache; refresh authorized scope."
+  },
+  {
+    "id": "gap",
+    "base": "changed",
+    "changes": [
+      {
+        "path": "/data/seq",
+        "value": 20
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Fresh run plus approval reads; no global cursor."
+  },
+  {
+    "id": "duplicate",
+    "base": "changed",
+    "changes": [
+      {
+        "path": "/data/seq",
+        "value": 11
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Covered by snapshot for this run; ignore duplicate hint."
+  },
+  {
+    "id": "other-run",
+    "base": "changed",
+    "changes": [
+      {
+        "path": "/data/runId",
+        "value": "synthetic-run-running"
+      },
+      {
+        "path": "/data/seq",
+        "value": 11
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Independent cursor; do not compare with waiting run."
+  },
+  {
+    "id": "newer-run",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/observedSeq",
+        "value": 20
+      },
+      {
+        "path": "/data/items/1/status",
+        "value": "succeeded"
+      },
+      {
+        "path": "/revision",
+        "value": "synthetic-revision-2"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "New snapshot wins over old ticket even if old response arrives last."
+  },
+  {
+    "id": "expired-live",
+    "base": "approvals",
+    "changes": [
+      {
+        "path": "/data/items/1/status",
+        "value": "expired"
+      },
+      {
+        "path": "/data/items/1/ownerAvailability",
+        "value": "unavailable"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "No pending/live claim from expired callback."
+  },
+  {
+    "id": "missing-evidence",
+    "base": "approvals",
+    "changes": [
+      {
+        "path": "/data/items/0/evidence",
+        "value": "missing"
+      },
+      {
+        "path": "/data/items/0/artifacts",
+        "value": []
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Explicit missing evidence, no assurance of safety."
+  },
+  {
+    "id": "truncated-evidence",
+    "base": "approvals",
+    "changes": [
+      {
+        "path": "/data/items/0/evidence",
+        "value": "truncated"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Partial context remains explicit."
+  },
+  {
+    "id": "artifact-redacted",
+    "base": "artifact",
+    "changes": [
+      {
+        "path": "/data/availability",
+        "value": "redacted"
+      },
+      {
+        "path": "/data/text",
+        "remove": true
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Omission is explicit; no text is supplied or rendered."
+  },
+  {
+    "id": "artifact-missing",
+    "base": "artifact",
+    "changes": [
+      {
+        "path": "/data/availability",
+        "value": "missing"
+      },
+      {
+        "path": "/data/text",
+        "remove": true
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Omission is explicit; no text is supplied or rendered."
+  },
+  {
+    "id": "artifact-binary",
+    "base": "artifact",
+    "changes": [
+      {
+        "path": "/data/availability",
+        "value": "binary"
+      },
+      {
+        "path": "/data/text",
+        "remove": true
+      },
+      {
+        "path": "/data/mediaType",
+        "value": "application/octet-stream"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Omission is explicit; no text is supplied or rendered."
+  },
+  {
+    "id": "artifact-tooLarge",
+    "base": "artifact",
+    "changes": [
+      {
+        "path": "/data/availability",
+        "value": "tooLarge"
+      },
+      {
+        "path": "/data/text",
+        "remove": true
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Omission is explicit; no text is supplied or rendered."
+  },
+  {
+    "id": "artifact-truncated",
+    "base": "artifact",
+    "changes": [
+      {
+        "path": "/data/truncated",
+        "value": true
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Display truncation; never imply complete evidence."
+  },
+  {
+    "id": "artifact-substitution",
+    "base": "artifact",
+    "changes": [
+      {
+        "path": "/data/runId",
+        "value": "synthetic-run-failed"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Reject requested run/artifact mismatch before render."
+  },
+  {
+    "id": "denied",
+    "base": "revoked",
+    "changes": [
+      {
+        "path": "/data/code",
+        "value": "DENIED"
+      },
+      {
+        "path": "/context",
+        "value": null
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Clear eligible content; do not reveal resource existence."
+  },
+  {
+    "id": "malformed-error",
+    "base": "unavailable",
+    "changes": [
+      {
+        "path": "/data/code",
+        "value": "MALFORMED"
+      },
+      {
+        "path": "/data/retryable",
+        "value": false
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Sanitized decoder failure, never raw payload."
+  },
+  {
+    "id": "no-cache",
+    "base": "offline-empty",
+    "changes": [],
+    "decode": "accept",
+    "expectation": "Offline with no saved data; never show an empty success."
+  },
+  {
+    "id": "mismatch-state",
+    "base": "offline-empty",
+    "changes": [
+      {
+        "path": "/data/state",
+        "value": "mismatch"
+      },
+      {
+        "path": "/data/reason",
+        "value": "protocol"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Version mismatch blocks fresh reads; no fallback to file mode."
+  },
+  {
+    "id": "nested-steps-truncated",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/steps",
+        "value": "truncated"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Outer page remains complete; steps are truncated. Show incomplete/not included notice with no invented total."
+  },
+  {
+    "id": "nested-steps-omitted",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/steps",
+        "value": "omitted"
+      },
+      {
+        "path": "/data/items/1/steps",
+        "value": []
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Outer page remains complete; steps are omitted. Show incomplete/not included notice with no invented total."
+  },
+  {
+    "id": "nested-steps-omitted-with-rows",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/steps",
+        "value": "omitted"
+      }
+    ],
+    "decode": "reject",
+    "expectation": "An omitted nested collection must be empty."
+  },
+  {
+    "id": "nested-artifacts-truncated",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/artifacts",
+        "value": "truncated"
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Outer page remains complete; artifacts are truncated. Show incomplete/not included notice with no invented total."
+  },
+  {
+    "id": "nested-artifacts-omitted",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/artifacts",
+        "value": "omitted"
+      },
+      {
+        "path": "/data/items/1/artifacts",
+        "value": []
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Outer page remains complete; artifacts are omitted. Show incomplete/not included notice with no invented total."
+  },
+  {
+    "id": "nested-artifacts-omitted-with-rows",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/artifacts",
+        "value": "omitted"
+      }
+    ],
+    "decode": "reject",
+    "expectation": "An omitted nested collection must be empty."
+  },
+  {
+    "id": "missing-detail-completeness",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness",
+        "remove": true
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Completeness cannot be inferred from outer page metadata or row count."
+  },
+  {
+    "id": "missing-artifact-completeness",
+    "base": "runs",
+    "changes": [
+      {
+        "path": "/data/items/1/detailCompleteness/artifacts",
+        "remove": true
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Both nested collections require explicit completeness."
+  },
+  {
+    "id": "schema-minor-max",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/schema/minor",
+        "value": 9007199254740991
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "schema-minor-unsafe",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/schema/minor",
+        "value": 9007199254740992
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "schema-minor-huge",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/schema/minor",
+        "value": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "protocol-minor-max",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/protocol/minor",
+        "value": 9007199254740991
+      }
+    ],
+    "decode": "accept",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "protocol-minor-unsafe",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/protocol/minor",
+        "value": 9007199254740992
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  },
+  {
+    "id": "protocol-minor-huge",
+    "base": "session",
+    "changes": [
+      {
+        "path": "/data/protocol/minor",
+        "value": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      }
+    ],
+    "decode": "reject",
+    "expectation": "Version minor is a nonnegative portable integer no larger than 9007199254740991."
+  }
+]
