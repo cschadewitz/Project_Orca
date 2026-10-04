@@ -1,0 +1,45 @@
+[
+  {
+    "name": "maintenance_discover",
+    "arguments": {},
+    "expectedSubset": {
+      "readiness": "contract_ready",
+      "productionSources": "unavailable",
+      "callerIdentity": { "kind": "local_stdio_unverified", "verifiedHuman": false },
+      "hostBootIdentity": { "status": "unavailable", "bootId": null, "reason": "not_configured" },
+      "cursors": false,
+      "mutations": false
+    }
+  },
+  {
+    "name": "get_host_health",
+    "arguments": { "host": "agent-01" },
+    "expectedSubset": {
+      "host": "agent-01",
+      "mount": "root",
+      "status": "unavailable",
+      "reason": "not_configured",
+      "observedAt": null
+    }
+  },
+  {
+    "name": "get_service_health",
+    "arguments": { "host": "agent-01", "service": "orca-daemon" },
+    "expectedSubset": {
+      "service": "orca-daemon",
+      "status": "not_supervised",
+      "reason": "not_configured",
+      "observedAt": null
+    }
+  },
+  {
+    "name": "get_service_logs",
+    "arguments": { "host": "agent-01", "service": "maintenance-tunnel", "category": "lifecycle", "limit": 20 },
+    "expectedSubset": {
+      "service": "maintenance-tunnel",
+      "status": "unavailable",
+      "reason": "not_configured",
+      "observedAt": null
+    }
+  }
+]
