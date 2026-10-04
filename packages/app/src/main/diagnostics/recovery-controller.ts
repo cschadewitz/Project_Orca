@@ -639,7 +639,8 @@ export class RecoveryController {
     await this.options.disk.cleanup();
     if (this.exportState.current) {
       await this.resolveOldStage();
-      this.code = "unknown_ready";
+      this.code =
+        this.lastSaveOutcome === "saved" || this.lastSaveOutcome === "refused" ? "cleanup_pending" : "unknown_ready";
       this.cleanupPending = true;
       return;
     }

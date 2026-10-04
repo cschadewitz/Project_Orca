@@ -269,6 +269,11 @@ describe.runIf(linux)("real export adapter conformance (Linux disposable filesys
       expect(fixture.controller.status().lastSaveOutcome).toBe("saved");
       expect(fixture.controller.status().cleanupPending).toBe(true);
       expect(fixture.controller.status().code).toBe("cleanup_pending");
+      if (fault === "failure") {
+        value(await fixture.controller.setEnabled(false, 1));
+        expect(fixture.controller.status().lastSaveOutcome).toBe("saved");
+        expect(fixture.controller.status().code).toBe("cleanup_pending");
+      }
       fixture.native.beforeReplace = undefined;
       if (fault === "hang") {
         expect((await fixture.controller.retryCleanup()).ok).toBe(false);
