@@ -11,6 +11,7 @@
 | [session-logs/](session-logs/) | read the raw event logs of selected real-agent sessions and runs, kept for reference |
 | [EXTENSIBILITY.md](EXTENSIBILITY.md) | add node types, transports, hosts, stores, human channels via plugins |
 | [ROADMAP.md](ROADMAP.md) | compare implemented capabilities with planned ship groups and dependencies |
+| [Tool-call safety research](research/tool-call-safety/README.md) | review the proposed implicit policy/approval layer, adapter limits, threat model and implementation options (research only) |
 | [UPDATING.md](UPDATING.md) | update the desktop app and daemon with admission and compatibility checks |
 | [Historical review](../Current_State/README.md) | read the preserved 2026-09-29 snapshot and its dated reconciliation |
 | [Protocol reference](../packages/protocol/README.md) | inspect the current wire contract and version history |
