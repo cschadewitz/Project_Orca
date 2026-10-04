@@ -47,6 +47,11 @@ HTTP/WebSocket daemon and a synthetic workflow; the ACP case uses an in-process 
 and file-backed claims. Neither needs a provider credential. These cases do not prove
 Electron keychain restart or the full cross-client key lifecycle in #331.
 
+The two Node CI jobs run sequentially on the shared self-hosted runners. Every Vitest
+step uses at most two workers (one where Node reports at most two available CPUs),
+including the full suite and coverage. This limits contention for subprocess-heavy
+tests such as the demo while retaining their existing assertions and 60-second bounds.
+
 ### Desktop workflow bundle probe
 
 After `pnpm run build` and `pnpm --filter @orca/app run build:daemon`, run
