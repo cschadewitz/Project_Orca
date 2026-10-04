@@ -1,3 +1,5 @@
+> Decision 9 (4 October 2026) and the current implementation instruction supersede any pending-owner-review wording below for fixed private plaintext staging, same-filesystem no-replace destinations, content-free key-independent metadata and visible residual plaintext cleanup failures. Acknowledged summaries are removed on opt-out after cleanup completes; unresolved obligations remain until safely resolved. Native/independent acceptance remains separate.
+
 # Crash-recovery diagnostics: synthetic and native test matrix
 
 This is the #469 acceptance plan under #416. The lead-owned
@@ -78,7 +80,7 @@ contract is reviewed and implemented, with `--maxWorkers=1`.
 | C17 | Fill previous and current records, begin replacement, wrap keys, hold preview and local-export temp, then inject partial-write/cleanup failure | Aggregate disk accounting includes ciphertext, authenticated headers/tags, wrapped keys, manifests and all temporary/old generations. Reserve before write; rejection or failed cleanup cannot create unaccounted allowance. User-owned committed export is distinguished from pending operation-owned files. |
 | C18 | Maximum report/events with simultaneous ring, serialization, encryption, decryption, preview, IPC/renderer copies and local save | Account for all retained copies, bounded queue cardinality and operation overlap. Instrument allocation/high-water behavior and measure heap/RSS externally; the 1 MiB serialized limit is never presented as a RAM guarantee. No unlimited preview, promise or timer accumulation. |
 | C19 | Cross-app restart/reboot, clock uncertainty while picker is open, restore an old disk/key pair, failed delete followed by relaunch | Durable opt-out/revocation overrides stale checkpoint/manifest copies; coordinated whole-profile rollback is outside the threat model. Apply clock/replay limits honestly; document platform limitations instead of claiming forensic erasure or stronger same-user protection. |
-| C20 | Plaintext export staging, target replacement/link race, restricted-access failure, cancellation and crash before/after final publication | Capture/checkpoint files and their temps stay encrypted. Under the pending export-cleanup proposal, plaintext occupies one fixed private slot with durable intent and verified identity before plaintext write. Test cleanup with every diagnostics key lost/unavailable/deleted; no external locator or retained cleanup key. Test same-filesystem restriction, intent/identity/publication crash gaps, unsafe/moved paths, failed unlink and new-Save refusal while unresolved. No overwrite/path substitution outside selected authority; cleanup failure does not claim success. |
+| C20 | Plaintext export staging, target replacement/link race, restricted-access failure, cancellation and crash before/after final publication | Capture/checkpoint files and their temps stay encrypted. Under the approved export-cleanup contract, plaintext occupies one fixed private slot with durable intent and verified identity before plaintext write. Test cleanup with every diagnostics key lost/unavailable/deleted; no external locator or retained cleanup key. Test same-filesystem restriction, intent/identity/publication crash gaps, unsafe/moved paths, failed unlink and new-Save refusal while unresolved. No overwrite/path substitution outside selected authority; cleanup failure does not claim success. |
 | C21 | Timeout/native call still pending; request acknowledgement repeatedly; then inject late success/failure and stale completion after a newer operation | Pending or uncertain old writer blocks acknowledgement and new Save, retaining reservations. A real late outcome before acknowledgement is reported honestly; old callbacks cannot mutate new state, release its reservation or change an acknowledged unknown. Test revocation both before and after dispatch. |
 | C22 | Writer cessation proven; staging unlink denied, identity substituted, root moved, cleanup record unsafe; repeat with all diagnostics keys lost | Acknowledgement cannot bypass cleanup/identity checks, and missing name alone is insufficient. No external scan/key retention; new Save remains blocked until verified owned staging is safely cleared. |
 | C23 | Kill before/after acknowledgement write, flush/replacement, reservation release and next intent; fail acknowledgement persistence | Recover valid predecessor or committed successor only, otherwise block. No implicit acknowledgement, auto-replay, double release or new write from restart. A committed acknowledgement records completed old checks; restart freshly verifies the fixed slot empty and no current/incomplete operation capable of writing, never bypassing unexpected state. |
@@ -148,9 +150,8 @@ complete inspection. Pair this with inspection of decoded canonical content,
 because absence of a plaintext canary in ciphertext is not content review. A clean
 source search supports but does not establish C16's network observation.
 
-For C20, apply every row of the pending [export-cleanup fault plan](export-cleanup-proposal.md#fault-and-native-evidence-plan).
-The fixed-slot design and narrowed destination support are proposals; these cases are
-not executable acceptance evidence or permission to implement before review.
+For C20, apply every row of the approved [export-cleanup fault plan](export-cleanup-proposal.md#fault-and-native-evidence-plan).
+The fixed-slot design and narrowed destination support are approved in decision 9. Plans below are not acceptance evidence; actual execution is recorded in the implementation handoff.
 
 ## Evidence to collect separately
 
@@ -162,7 +163,7 @@ not executable acceptance evidence or permission to implement before review.
 | Packaged macOS | Signed identity, native Keychain behavior, owner-only file access, path/link safety, crash restart, actual checkpoint latency, accessibility and no network | Not run |
 | Packaged Windows | DPAPI/secure-storage behavior, DACL ownership, junction/reparse safety, publication/path behavior, crash restart, actual checkpoint latency, accessibility and no network | Not run |
 | Physical Apple Silicon Mac | Exact model, OS and candidate SHA; startup-before-handshake, offline, disconnect, sleep/wake, restart and human review of consent/preview/support text | Not run; #390 acceptance owner |
-| Independent technical/privacy review | Coherent frozen contract, exact candidate SHA and producer inventory; verify all scope/retention/exposure deviations return to Casey and Cal | Required before corresponding implementation; fresh final review remains separate |
+| Independent technical/privacy review | Coherent frozen contract, exact candidate SHA and producer inventory; verify all scope/retention/exposure deviations return to Casey and Cal | Required before activation; fresh independent final review remains separate |
 | Power loss | Native storage barriers and recovery if a stronger survival claim is ever proposed | No guarantee approved; not run |
 
 #438/#441/#455 remain separate ownership. This matrix imports no implementation

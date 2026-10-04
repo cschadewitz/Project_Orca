@@ -1,3 +1,5 @@
+> Decision 9 (4 October 2026) and the current implementation instruction supersede any pending-owner-review wording below for fixed private plaintext staging, same-filesystem no-replace destinations, content-free key-independent metadata and visible residual plaintext cleanup failures. Acknowledged summaries are removed on opt-out after cleanup completes; unresolved obligations remain until safely resolved. Native/independent acceptance remains separate.
+
 # Crash-recovery storage research for #469
 
 Engineering research updated 4 October 2026 after the [consolidated decisions and engineering gates](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976190374). The lead-owned [integration contract](integration-contract.md) is the authoritative engineering specification; this note explains its storage constraints and evidence gaps, and creates no competing runtime interface. Product choices are now recorded: one previous opted-in session after a main/full-app crash, up to 24 hours of checkpoint retention, clean-exit removal of the current checkpoint, persistent explicit opt-in with default off, approximately five-second checkpoints with one write in flight, 1–15-minute lookback with a five-minute default, 1 MiB complete canonical report and 8,192 events, and separate OS-protected diagnostics keys. No power-loss guarantee or upload permission exists. These choices do not satisfy technical/privacy review, actual user consent or independent/native acceptance.
@@ -69,7 +71,7 @@ for checkpoint manifests, separate from session data keys. The proposed
 locator and its post-opt-out control-key retention. One fixed private staging slot
 can be located without either key; wrapper deletion failures are reported separately.
 A verified same-filesystem no-replace move is required; other destinations are refused.
-This is pending owner/technical review, not an implemented adapter. Dispatch orders
+Decision 9 approves the design; actual adapter guarantees remain subject to native acceptance. Dispatch orders
 non-cancellable publication against revocation; late completion never restores authority.
 Unknown outcomes and failed cleanup retain their reservations and block new Saves
 until the authoritative contract's safe acknowledgement transition applies.
@@ -79,5 +81,4 @@ staging cleanup; durable acknowledgement preserves the unknown result. The next 
 is separate, with current preview/consent, fresh operation and picker token, and a
 newly selected nonexistent filename. One latest unknown summary and an olderUnknowns
 boolean bound history inside the existing cleanup budget; no destination history,
-automatic retry or deletion of a possible earlier export. Summary retention and the
-remaining storage/privacy exceptions still require review.
+automatic retry or deletion of a possible earlier export. Acknowledged summaries are removed on opt-out after cleanup completes. Native technical/privacy acceptance remains required before activation.

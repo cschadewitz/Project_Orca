@@ -1,30 +1,30 @@
+> Decision 9 (4 October 2026) and the current implementation instruction supersede any pending-owner-review wording below for fixed private plaintext staging, same-filesystem no-replace destinations, content-free key-independent metadata and visible residual plaintext cleanup failures. Acknowledged summaries are removed on opt-out after cleanup completes; unresolved obligations remain until safely resolved. Native/independent acceptance remains separate.
+
 # Export-cleanup correction for #470: decision packet
 
 4 October 2026; responds to [review items 1 and 2](https://github.com/cschadewitz/Project_Orca/pull/470#issuecomment-5976309663)
-on `026e217e9efd32bb587bdc7c7ca5d97ab9007357`. **Proposal only; Casey and Cal's
-technical/privacy review remains required before these paths are implemented.**
+on `026e217e9efd32bb587bdc7c7ca5d97ab9007357`. **Decision 9 approves the bounded disabled implementation; independent technical/privacy review and native acceptance remain required before activation.**
 [Decision 7](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976357825)
 approves reboot-limited recovery; [decision 8](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976828540)
-approves bounded explicit Save again after an unknown result. Neither choice is
-reopened; the remaining storage/exposure mechanisms still need review.
-No runtime code, activation, peer implementation import or native acceptance is added.
+approves bounded explicit Save again after an unknown result. Neither choice is reopened; decision 9 approves the final storage/exposure mechanisms within their recorded bounds.
+The disabled implementation follows this accepted contract; native acceptance and production activation are separate.
 
 ## Smallest viable alternatives
 
 | Design | Benefit | Cost / decision |
 | --- | --- | --- |
 | RC1: destination-adjacent temp and encrypted locator | Can stage beside the selected destination | Needs retained control key after opt-out; key loss can strand plaintext. Reject as the recommended design. |
-| Fixed private app-owned slot, same-filesystem native no-replace move | Bounded discovery without a diagnostics key or private destination locator; preserves exact reviewed bytes | Restricts supported destinations; native atomicity/path/identity proof still required. **Recommend.** |
+| Fixed private app-owned slot, same-filesystem native no-replace move | Bounded discovery without a diagnostics key or private destination locator; preserves exact reviewed bytes | Restricts supported destinations; native atomicity/path/identity proof still required. **Accepted in decision 9.** |
 | Native unnamed/delete-on-close staging | May remove crash cleanup state where publication from the handle is supported | No established common Mac/Windows publishable-handle adapter; transferring ownership must not delete the user export on close. Defer pending separate proof. |
 | Direct final-file write or external unencrypted path journal | Avoids the old encrypted locator dependency | Direct write exposes partial user files; path journal retains private destination data. Neither meets this correction's constraints. |
 
-Recommendation: replace only export staging/discovery and correct ordering prose.
+Accepted design: replace only export staging/discovery and correct ordering prose.
 Keep encrypted capture, key separation, exact-content preview, explicit final Save,
 all existing budgets and the no-overwrite/no-user-export-deletion rules. Refuse an
 unsupported destination before plaintext creation. No cross-volume copy/delete,
 destination-adjacent fallback, delayed OS deletion, directory scan or permission repair.
 
-Native research supports investigation, not implementation approval: Apple's
+Native research guides the approved design; it does not establish adapter conformance: Apple's
 [XNU headers](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/stdio.h)
 expose `renameatx_np` and `RENAME_EXCL`; Microsoft's
 [FILE_RENAME_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info)
@@ -93,7 +93,7 @@ while ORCA is closed or cleanup fails; no physical/forensic erasure is promised.
 ## Approved acknowledgement replaces the indefinite block
 
 The [authoritative state-transition contract](integration-contract.md#acknowledge-unknown-outcome-and-save-again)
-implements decision 8 as preparation, not runtime code. Compared with `edb66b4`'s
+specifies decision 8 for the disabled runtime implementation. Compared with `edb66b4`'s
 indefinite block, acknowledgement can remove only the new-Save admission block; it
 never establishes the previous publication result.
 
@@ -108,8 +108,7 @@ One latest acknowledged-unknown summary plus a boolean for older unknowns replac
 unbounded per-operation history. It shares the cleanup envelope and existing byte/entry
 budget. No old destination paths or report data; the UI discloses that only the latest
 unknown has detail. The contract specifies durable replacement, acknowledgement failure,
-crash recovery, callback fencing and repeated-click idempotence. Proposed summary
-retention across restart/opt-out is still part of the metadata privacy review.
+crash recovery, callback fencing and repeated-click idempotence. Decision 9 permits bounded summary retention across restart and requires its removal on opt-out only after cleanup completes. Unresolved obligations must not be discarded.
 
 ## Bounds and observable ordering
 
@@ -155,11 +154,6 @@ OS/build/filesystem. The existing six helpers only test orchestration/fixture pl
 | Many successive unknown outcomes | One current record and one latest unknown summary with olderUnknowns boolean, no per-event ledger; all copies fit 8 KiB/64 KiB/16-entry bounds; disclose compacted history. |
 | Packaged Mac and Windows, another ordinary OS account | Restrictive rights before first byte, cross-account read/write denial, ancestry/identity and no-replace race tests; actual filesystem behavior, not Node mode bits or Linux mocks. |
 
-## Decision requested before implementation
+## Decision 9 and acceptance handoff
 
-Casey and Cal: review the fixed private slot, no cleanup-key retention, same-filesystem
-Save restriction, bounded unencrypted identity/acknowledgement records and their
-retention, and residual plaintext cleanup risk together. The bounded explicit
-Save-again direction is already approved; exact copy and native proof remain open. The dispatch consistency fix
-addresses contradictory prose; implementing the associated paths remains gated. Keep
-#416, technical/privacy review and fresh independent/native acceptance open.
+[Decision 9](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5977241702) approves the fixed private slot, no cleanup-key retention, same-filesystem Save restriction, bounded content-free key-independent identity/acknowledgement records and visible residual plaintext cleanup risk. Remove acknowledged summaries on opt-out after verified cleanup; preserve unresolved obligations until safely resolved. The current task authorizes the disabled implementation. Native copy, identity, clock, key/ACL, process and resource proof remains required for activation, along with a fresh independent reviewer. #416 remains open.

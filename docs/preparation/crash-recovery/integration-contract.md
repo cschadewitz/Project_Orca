@@ -1,8 +1,7 @@
 # Crash-recovery diagnostics: engineering contract RC1
 
-Engineering proposal, amended after export-cleanup review, for [#469](https://github.com/cschadewitz/Project_Orca/issues/469),
-4 October 2026. **Technical/privacy review is pending; this is not an implemented
-feature or permission to activate it.** This document is the single authority for
+Accepted disabled implementation contract, amended after export-cleanup review, for [#469](https://github.com/cschadewitz/Project_Orca/issues/469),
+4 October 2026. **Owner direction is recorded; implementation and independent/native evidence do not authorize production activation.** This document is the single authority for
 this slice's engineering parameters; companion storage, UI and test notes explain
 it. It supersedes this directory's policy-neutral seam. It does not silently revise
 or approve the older D1–D8 schema, one-shot flow or producer inventory.
@@ -29,12 +28,10 @@ material retention, consent, collection, sharing or exposure change returns to
 
 The owner explicitly approved reboot-limited recovery in
 [decision 7](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976357825). That availability choice is settled; native clock verification is still
-required. The export-cleanup correction below is a **recommendation awaiting Casey
-and Cal review**, not approval to implement those paths. It supersedes RC1's
-key-dependent external cleanup locator as a proposal.
+required. [Decision 9](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5977241702) approves the export-cleanup correction below and the disabled implementation. It supersedes RC1's key-dependent external cleanup locator. Native technical evidence remains required.
 [Decision 8](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976828540)
 approves the explicit bounded Save-again behavior below, replacing the indefinite
-unknown-outcome block. This does not approve the other storage/privacy exceptions.
+unknown-outcome block. Decision 9 settles the final bounded export design; material deviations still require owner review.
 
 ## Ownership, exact inputs and integration order
 
@@ -57,7 +54,7 @@ not measure 8,192 events. Before code integration, coordinate an exact accepted
 coverage semantics; import its work once. #455's harness must be repinned and rerun
 on that implementation. Do not silently adopt its old results or old 4,096 cap.
 
-Order: RC1 technical/privacy review → agreed disabled storage/lifecycle and schema
+Order: recorded owner decisions → agreed disabled storage/lifecycle and schema
 → synthetic integration → frozen integrated SHA → fresh independent review →
 packaged/native and physical acceptance. The last two are separate from this lead's
 work. #416 remains open; #386/#389 own onboarding/support and #390 physical acceptance.
@@ -110,7 +107,7 @@ results. MiB means 1,048,576 bytes; KiB means 1,024 bytes.
 | Retained workspace | 4 MiB aggregate logical file bytes, including current, previous, staging, old files, wrapped keys, control records, cleanup remnants and reservations |
 | Record slot | At most 1 MiB report plus 16 KiB framing/authentication/key overhead; at most three ciphertext slots (previous, committed current, replacement staging) |
 | Control/key files | At most 64 KiB aggregate, including their replacement copies; at most 16 directory entries; reject unexpected entries without recursive scans |
-| Export staging | Proposed fixed private export slot: one plaintext temporary file, at most 1 MiB, only after explicit final Save; aggregate unsaved owned file ceiling 5 MiB |
+| Export staging | Approved fixed private export slot: one plaintext temporary file, at most 1 MiB, only after explicit final Save; aggregate unsaved owned file ceiling 5 MiB |
 | Retained payload memory | At most 8 MiB explicitly reserved byte buffers across ingress, ring, serialization, seal/open, IPC and frozen preview; reserve before allocating; release only when underlying work settles |
 | Preview copies | One app-wide main frozen report and one renderer text view; no second parsed report tree, hidden preview cache or retained IPC history; old view must acknowledge disposal before replacement |
 | Measured memory gate | At most 32 MiB incremental diagnostics managed/external memory across main/worker/renderer versus paired idle baseline; sample transient peaks and report method/limitations separately from RSS |
@@ -267,8 +264,7 @@ Conceptual bridge methods: `status`, `setEnabled(choice, scopeVersion)`,
 `chooseDestination(handle)`, `save(handle, destinationToken)`,
 `discardPrevious`, `retryCleanup` and `acknowledgeUnknown(operationHandle)`. Main validates the current sender/window/target
 and epoch for each. Renderer never supplies report JSON, ciphertext, key, source path
-or arbitrary writable path; the native picker owns the destination token. These are
-reviewed seams to implement later, not new exported runtime APIs in this patch.
+or arbitrary writable path; the native picker owns the destination token. These are the implemented main-owned bridge seams; production capture remains gated off.
 
 The preview freezes one canonical buffer and its digest/length. The renderer displays
 that entire exact text, including omissions and final newline, with summary derived
@@ -281,18 +277,17 @@ memory snapshot, expiry derives from freeze time plus the five-minute preview TT
 for recovery it also cannot outlive the checkpoint's original deadline.
 
 Select destination, show its path and sharing warning, then require a separate Save.
-The [export-cleanup correction](export-cleanup-proposal.md) recommends one fixed,
+The approved [export-cleanup correction](export-cleanup-proposal.md) requires one fixed,
 private app-owned staging slot, discoverable without a diagnostics key, in place
 of RC1's destination-adjacent plaintext temporary and encrypted external locator.
 Only final Save permits plaintext staging; capture/checkpoints remain encrypted.
-The proposed restriction is a verified same-filesystem native no-replace move to a
+The approved restriction is a verified same-filesystem native no-replace move to a
 new destination. Unsupported destinations are refused before plaintext creation;
-no copy/delete or destination-adjacent fallback. Native feasibility and owner review
-are prerequisites, not claims established by this documentation.
+no copy/delete or destination-adjacent fallback. Native adapter guarantees must be established on the exact candidate; unsupported adapters fail closed.
 
 Before plaintext, persist bounded key-independent operation intent and verified
 staging identity under private filesystem protection. Persist no destination path;
-cleanup never scans user directories or deletes published exports. The proposal
+cleanup never scans user directories or deletes published exports. The accepted design
 specifies crash gaps, identity refusal, key deletion, resource accounting and
 unknown publication. Neither the session data keys nor the control-authentication
 key is retained merely for export cleanup. Failed wrapper deletion remains visible;
@@ -300,10 +295,7 @@ key loss cannot itself prevent locating the fixed slot. Uncertain ownership or a
 unresolved native writer still prevents cleanup success and new Save admission.
 
 Temporary plaintext can survive failed cleanup or app exit until a safe retry;
-there is no forensic erasure guarantee. The same-filesystem destination restriction,
-residual plaintext exposure and key-independent metadata still require Casey and Cal's
-review before implementing export/cleanup/key-retention paths. The bounded Save-again
-behavior is approved separately; exact copy and native proof remain review gates.
+there is no forensic erasure guarantee. Decision 9 approves the same-filesystem restriction, residual plaintext exposure and bounded key-independent metadata. Cleanup failures remain visible. Exact-copy verification and native proof remain acceptance gates.
 
 Serialize final publication admission with all revocations. Immediately before native
 no-replace publication dispatch, recheck epoch, source/preview deadline, sender,
@@ -345,7 +337,7 @@ blocks: the summary is not a bypass. Unknown or malformed identity/state, a move
 root, failed unlink or uncertain writer cessation fails closed.
 Absence is checked through verified native directory/identity state; it never establishes
 a Save outcome. Lost keys do not bypass any check and are not required for locating the
-proposed fixed slot. Opt-out, expiry and consent/preview revocation remain independent.
+approved fixed slot. Opt-out, expiry and consent/preview revocation remain independent.
 
 Before acknowledgement show: “The earlier export may already exist. ORCA cannot
 confirm its result and will not find, change or delete that file. After safe cleanup,
@@ -377,9 +369,7 @@ acknowledgement folds the older unknown into the boolean, never into success.
 UI says only the latest acknowledged unknown is detailed and older unknowns may
 exist; it must not imply a complete export history.
 
-Proposed metadata retention is one bounded summary across restarts and opt-out;
-it supplies no capture/save authority. Its persistence is part of the still-open
-key-independent metadata privacy review, not blanket approval from decision 8.
+Metadata may retain one bounded summary across restarts; it supplies no capture/save authority. On opt-out, remove acknowledged summaries only after owned cleanup completes. Preserve unresolved obligations until writers have ceased and cleanup is verified; never erase them to bypass the gate. Decision 9 supersedes the earlier proposed retention across opt-out.
 Never erase an unacknowledged current operation to make space. An acknowledgement
 commit replaces that current obligation with the summary atomically; the next
 intent retains the summary. No path retention is needed for duplicate protection.
@@ -416,7 +406,7 @@ Use closed diagnostics result codes such as `off`, `unavailable`, `age_uncertain
 `cleanup_pending`. Failures cannot throw into execution, hold execution locks, retry
 admission/resume or change durable run state. No free-form errors in UI or logs.
 
-Before dependent implementation, record technical/privacy review of RC1 as one unit:
+The accepted disabled implementation proceeds under decisions 1–9 and the current task instruction. Before activation, obtain independent technical/privacy review as one unit:
 clock adapter and conservative reboot refusal; total logical and measured resource
 limits; authenticated format/control-key lifecycle; publication/cleanup linearization;
 consent scope/version and exact UI/support copy; closed producer provenance. Any

@@ -1,0 +1,1 @@
+Add disabled, explicitly opted-in diagnostic recovery storage and exact-content preview/local-save controls, with bounded encrypted checkpoints, honest cleanup/unknown outcomes and separately authorized Save again. Production capture and native acceptance remain gated.

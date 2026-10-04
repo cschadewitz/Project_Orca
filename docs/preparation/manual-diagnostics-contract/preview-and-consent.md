@@ -26,25 +26,28 @@ ceiling. Preparing captures only current safe observations and subsequent safe e
 that scope; it does not retroactively retain history. A failure that occurred before
 consent may have a safe current outcome; without one, it stays unknown.
 
-Separate settings action: **Keep diagnostic metadata temporarily** (off by default).
+Separate settings action: **Local diagnostics** (off by default).
 
-> Keep a temporary diagnostic history?
+> Keep local diagnostic metadata?
 >
-> With this separate permission, ORCA will retain only the listed diagnostic metadata in
-> protected local storage, up to 2 MiB and 2,048 events, for up to 24 hours. It stops on
-> expiry, opt-out or app restart. It never sends this history. Exporting still requires a
-> separate preview and save action. Turning this off stops collection, invalidates open
-> previews and deletes ORCA's diagnostic history. Files you saved and copies you shared
-> remain under your or the recipient's control.
+> After your explicit opt-in, ORCA remembers this setting and keeps only closed, allowlisted
+> metadata for a configurable 1–15-minute lookback, default five minutes. The complete report
+> is bounded to 1 MiB and 8,192 events; omissions and coverage remain visible. One previous
+> main/full-app crash checkpoint may be recovered on the same boot for less than 24 hours
+> from its snapshot. A delayed or failed checkpoint may lose more than five seconds of tail.
+> ORCA does not upload this history. Preview and local Save require separate actions.
+> Turning off immediately stops capture and revokes unsaved authority, then attempts owned
+> cleanup. Failed setting writes/cleanup are visible; ORCA does not promise forensic erasure.
+> Published exports and recipient copies remain outside ORCA's deletion control.
 
-Buttons: **Keep off** (initial focus), **Allow temporary history**. Display remaining
-retention duration when measurable, never a fabricated clock. “2 MiB / 24 hours” are
-review proposals, not accepted policy. Manual export does not depend on upload consent;
-there is no upload consent or network sharing implementation in this stage.
+Buttons: **Keep off** (initial focus), **Enable local diagnostics**. Production capture remains
+unavailable until a separate review/native activation change. Policy approval is not actual
+user consent. For an explicit final Save, disclose the private plaintext staging slot, possible
+residual plaintext after cleanup failure and same-filesystem destination restriction.
 
-For rolling export, a separate action says **Preview current history** and explains that
-only the latest eligible safe events (at most 256) will be included. It freezes a snapshot;
-ongoing history does not mutate that preview. Turning history off invalidates the snapshot.
+**Preview current history** freezes the complete bounded canonical report. Recovery Preview
+is explicit and never resumes agents. Display the exact bytes, final newline, omissions and
+checkpoint-tail disclosure; new observations do not mutate a pinned preview.
 
 ## Ready preview wireframe
 
@@ -92,15 +95,15 @@ A selected fixture's exact bytes and digest are in [fixtures](fixtures/README.md
 | Off | Open preview or history disclosure | Disclosure only; no capture/disk/network |
 | Disclosure | Cancel / decline | Off; normal execution unaffected |
 | Disclosure | Allow once | One-shot preparing, one 2-second active preparation deadline within 60-second grant |
-| Disclosure | Allow temporary history | Rolling starts only after storage/key/ACL preflight succeeds; grant lasts at most 24 hours and never survives restart |
+| Disclosure | Allow temporary history | Rolling starts only after storage/key/ACL preflight succeeds; explicit unchanged-scope setting survives restart; current and one prior checkpoint remain independently bounded |
 | Rolling | Preview current history, explicit snapshot consent | Preparing a bounded immutable snapshot; rolling grant remains separate |
 | Preparing | Success | Validate and scan a single frozen byte buffer; ready preview, no file yet |
 | Preparing | Cancel / back / expired / throw / deadline | Invalidate snapshot and one-shot grant, no raw fallback. Rolling producer failure stops rolling and invokes protected cleanup |
 | Ready | Choose location / change destination | Same exact bytes, selected destination visible; invalid destination disables Save |
 | Ready | Save local file | Revalidate grant, buffer identity and destination; save exactly once with owner-only creation and atomic publication |
 | Ready | Back | Discard snapshot and one-shot grant, return to disclosure; rolling setting unaffected |
-| Ready | Cancel / preview expiry / opt-out / restart / uncertain clock | Discard bytes; no save. Opt-out/restart/expiry also stops and purges rolling storage |
-| Saving | Cancel / I/O failure / disk full | No successful final file; remove only operation-owned temporary file. Show cleanup-pending if necessary, never report success |
+| Ready | Cancel / preview expiry / opt-out / restart / uncertain clock | Discard bytes; no save. Opt-out stops and cleans owned history; restart retains valid same-scope opt-in and original-age recovery; expiry revokes only the expired source |
+| Saving | Cancel / I/O failure / disk full | Publication may be pending/unknown; never infer no file from a timeout. Remove only safely verified owned staging after writers cease. Show cleanup-pending if necessary, never report success |
 | Saving | Atomic publish wins cancellation race | Show that the file was saved; cancel cannot claim to undo an already committed file. No transmission occurred |
 | Saved | Close | Off for one-shot, rolling continues only under its existing grant; discard preview memory. No share action is triggered |
 | Failure | Retry | Return to appropriate disclosure for a new grant/snapshot; no automatic retry or unsafe-source fallback |

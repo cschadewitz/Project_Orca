@@ -19,6 +19,10 @@
  * server for hot reload (scripts/dev.js).
  */
 import { z } from "zod";
+import { RecoveryController } from "./diagnostics/recovery-controller.js";
+import { NodeRecoveryDisk } from "./diagnostics/recovery-disk.js";
+import { createProductionNativeAdapter, createSafeStorageKeyAdapter } from "./diagnostics/native-adapter.js";
+import type { DiagnosticsResult } from "../diagnostics-contract.js";
 import { AdmissionIntents, AdmissionIntentController } from "./admission-intents.js";
 import { RunsAdmitResultSchema } from "@orca/protocol";
 import { ConnectionTarget, connectionFailure, callInConnection } from "./connection-target.js";
@@ -47,6 +51,94 @@ const preferences = new PreferencesFile(join(app.getPath("userData"), "preferenc
 
 /** The dev server's URL when `scripts/dev.js` started one; undefined in a packaged app. */
 const rendererUrl = process.env.ORCA_RENDERER_URL;
+
+// Capture and native recovery remain unavailable until independent/native review.
+// This controller is separate from admission intents, daemon hello and execution keys.
+const diagnostics = new RecoveryController({
+  disk: new NodeRecoveryDisk({
+    root: join(app.getPath("userData"), "diagnostics"),
+    keys: createSafeStorageKeyAdapter(safeStorage),
+    native: createProductionNativeAdapter(),
+  }),
+  clock: { read: () => undefined },
+  chooseDestination: async () => {
+    const result = await dialog.showSaveDialog({
+      title: "Save diagnostic preview",
+      defaultPath: "orca-diagnostics.json",
+      filters: [{ name: "Diagnostic JSON", extensions: ["json"] }],
+    });
+    return result.canceled ? undefined : result.filePath;
+  },
+});
+diagnostics.subscribe((status) => {
+  for (const win of BrowserWindow.getAllWindows())
+    if (!win.isDestroyed()) win.webContents.send("orca:diagnostics.changed", status);
+});
+const diagnosticWindowGenerations = new Map<number, number>();
+const diagnosticHandle = (method: string, schema: z.ZodType, run: (params: unknown) => unknown): void => {
+  ipcMain.handle(`orca:diagnostics.${method}`, async (event, params: unknown, epoch: number): Promise<unknown> => {
+    try {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      const generation = diagnosticWindowGenerations.get(event.sender.id) ?? 0;
+      const frame = event.senderFrame;
+      const currentSender = () =>
+        win &&
+        !win.isDestroyed() &&
+        BrowserWindow.getAllWindows().length === 1 &&
+        event.senderFrame === event.sender.mainFrame &&
+        frame === event.sender.mainFrame &&
+        generation === (diagnosticWindowGenerations.get(event.sender.id) ?? 0);
+      if (!currentSender()) return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
+      if (
+        !win ||
+        win.isDestroyed() ||
+        event.senderFrame !== event.sender.mainFrame ||
+        epoch !== workspace.connectionTarget.epoch
+      )
+        return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
+      const parsed = schema.safeParse(params);
+      if (!parsed.success) return { ok: false, code: "refused" } satisfies DiagnosticsResult<never>;
+      await diagnostics.initialize();
+      if (!currentSender() || epoch !== workspace.connectionTarget.epoch)
+        return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
+      return await run(parsed.data);
+    } catch {
+      return { ok: false, code: "unavailable" } satisfies DiagnosticsResult<never>;
+    }
+  });
+};
+const noDiagnosticParams = z.undefined();
+const opaqueDiagnosticHandle = z.string().uuid();
+diagnosticHandle("status", noDiagnosticParams, () => ({ ok: true, value: diagnostics.status() }));
+diagnosticHandle("setEnabled", z.object({ enabled: z.boolean(), scopeVersion: z.literal(1) }).strict(), (params) => {
+  const choice = params as { enabled: boolean; scopeVersion: number };
+  return diagnostics.setEnabled(choice.enabled, choice.scopeVersion);
+});
+diagnosticHandle("setMinutes", z.object({ minutes: z.number().int().min(1).max(15) }).strict(), (params) =>
+  diagnostics.setMinutes((params as { minutes: number }).minutes),
+);
+diagnosticHandle("preparePreview", z.object({ source: z.enum(["current", "previous"]) }).strict(), (params) =>
+  diagnostics.preparePreview((params as { source: "current" | "previous" }).source),
+);
+diagnosticHandle("closePreview", z.object({ handle: opaqueDiagnosticHandle }).strict(), (params) =>
+  diagnostics.closePreview((params as { handle: string }).handle),
+);
+diagnosticHandle("chooseDestination", z.object({ handle: opaqueDiagnosticHandle }).strict(), (params) =>
+  diagnostics.chooseDestination((params as { handle: string }).handle),
+);
+diagnosticHandle(
+  "save",
+  z.object({ handle: opaqueDiagnosticHandle, destinationToken: opaqueDiagnosticHandle }).strict(),
+  (params) => {
+    const choice = params as { handle: string; destinationToken: string };
+    return diagnostics.save(choice.handle, choice.destinationToken);
+  },
+);
+diagnosticHandle("discardPrevious", noDiagnosticParams, () => diagnostics.discardPrevious());
+diagnosticHandle("retryCleanup", noDiagnosticParams, () => diagnostics.retryCleanup());
+diagnosticHandle("acknowledgeUnknown", z.object({ operationHandle: opaqueDiagnosticHandle }).strict(), (params) =>
+  diagnostics.acknowledgeUnknown((params as { operationHandle: string }).operationHandle),
+);
 
 /* ---------- one app, one window onto a store ---------- */
 
@@ -351,6 +443,7 @@ const workspace = new Workspace({
     // The first verified hello enriches the current epoch. It must not erase alerts
     // already supplied by that epoch's renderer while verification was in flight.
     if (target.epoch !== alertsEpoch) {
+      diagnostics.revokePreviewAuthority();
       alertsEpoch = target.epoch;
       alerts.update({ waiting: 0, items: [] });
     }
@@ -676,6 +769,21 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  const diagnosticsWindowId = win.webContents.id;
+  win.webContents.on("did-start-loading", () => {
+    diagnosticWindowGenerations.set(
+      diagnosticsWindowId,
+      (diagnosticWindowGenerations.get(diagnosticsWindowId) ?? 0) + 1,
+    );
+    diagnostics.revokePreviewAuthority();
+  });
+  win.webContents.on("did-navigate", () => diagnostics.rendererDisposed());
+  win.webContents.on("render-process-gone", () => diagnostics.rendererDisposed());
+  win.on("closed", () => {
+    diagnosticWindowGenerations.delete(diagnosticsWindowId);
+    diagnostics.revokePreviewAuthority();
+    diagnostics.rendererDisposed();
+  });
   win.once("ready-to-show", () => win.show());
   if (rendererUrl) {
     void win.loadURL(rendererUrl);
@@ -691,6 +799,7 @@ if (!primary) {
   app.quit();
 } else {
   void app.whenReady().then(() => {
+    void diagnostics.initialize();
     applyTheme(preferences.read().theme);
     /* Registering the scheme is what makes `orca://` reach this app at all. In development
        the executable is Electron itself and the app is an argument to it, which is what
@@ -764,5 +873,7 @@ app.on("will-quit", (event) => {
   quitting = true;
   event.preventDefault();
   const deadline = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_DEADLINE_MS).unref?.());
-  void Promise.race([workspace.close(), deadline]).finally(() => setImmediate(() => app.quit()));
+  void Promise.race([Promise.allSettled([workspace.close(), diagnostics.cleanExit()]), deadline]).finally(() =>
+    setImmediate(() => app.quit()),
+  );
 });

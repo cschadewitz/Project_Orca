@@ -187,13 +187,6 @@ describe("export observation oracle (not runtime acceptance)", () => {
   });
 });
 
-// Replace these TODOs only with an adapter driving real implementation boundaries.
-describe("real export adapter conformance (implementation absent)", () => {
-  it.todo("interruption before/after acknowledgement commit and during fresh intent replacement");
-  it.todo("live native timeout blocks acknowledgement; late success/failure stays honest after opt-out");
-  it.todo("confirmed writer cessation plus safe cleanup permits durable acknowledgement and separate fresh save");
-  it.todo("failed/unsafe cleanup, missing keys and malformed records cannot bypass the gate");
-  it.todo("repeated clicks and stale callbacks cannot duplicate dispatch, release or mutate newer work");
-  it.todo("fresh picker and atomic no-overwrite preserve existing and previously exported exact bytes");
-  it.todo("all record replacement copies stay within 8 KiB/16 entries and one saturating unknown summary");
-});
+// The seven implementation categories are exercised by recovery-integration.test.ts
+// using actual NodeRecoveryDisk, RecoveryController and Linux no-replace publication.
+// Model-only observation tests above remain separate from native acceptance.

@@ -366,7 +366,8 @@ export class NodeRecoveryDisk implements RecoveryDisk {
     return this.serialized(async () => {
       await this.acquire();
       await this.inspect();
-      if (!(await this.setting()).enabled || !(await this.options.keys.available()) || !this.reading(now)) return false;
+      if (!(await this.setting()).enabled || !(await this.options.keys.available()) || !this.reading(now))
+        throw new Error("unavailable");
       if (!(await this.options.native.writersStopped(this.root))) throw new Error("unavailable");
       const bytes = await this.read("manifest.json");
       if (!bytes) {

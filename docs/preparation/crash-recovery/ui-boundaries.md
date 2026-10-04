@@ -1,3 +1,5 @@
+> Decision 9 (4 October 2026) and the current implementation instruction supersede any pending-owner-review wording below for fixed private plaintext staging, same-filesystem no-replace destinations, content-free key-independent metadata and visible residual plaintext cleanup failures. Acknowledged summaries are removed on opt-out after cleanup completes; unresolved obligations remain until safely resolved. Native/independent acceptance remains separate.
+
 # Crash-recovery diagnostics: UI and bridge boundaries
 
 Preparation for [#469](https://github.com/cschadewitz/Project_Orca/issues/469), within
@@ -215,8 +217,7 @@ commit and revalidated cleanup/writer cessation. After restart never resume Save
 silently. A newer successful Save leaves the earlier acknowledged result unknown.
 Only the latest acknowledged unknown is detailed; if older outcomes are compacted,
 show “Other earlier exports may also exist; ORCA does not keep a complete export history.”
-The bounded summary survives restart/opt-out as proposed housekeeping metadata; that
-retention and exact copy remain for privacy review, not new consent or acceptance.
+The bounded summary survives restart as housekeeping metadata. Decision 9 requires removal on opt-out after cleanup completes; unresolved obligations remain until safely resolved. This grants no capture/save authority.
 
 ## Interaction and acceptance sketch
 
@@ -253,7 +254,7 @@ retention and exact copy remain for privacy review, not new consent or acceptanc
 This note incorporates recorded product decisions and proposes engineering detail for the
 single shared contract. It supplies no runtime implementation or technical/privacy sign-off.
 Review the clock and key adapters, resource measurements, producer provenance, copy and
-native publication/revocation behavior together before implementation. The independently
+native publication/revocation behavior together before activation. The independently
 reviewed implementation must stay default-off until actual user opt-in and retain the
 separate native acceptance/activation gate. No synthetic result substitutes for packaged
 Mac/Windows or physical-Mac acceptance, and #416 remains open.
