@@ -1,78 +1,139 @@
 # Crash-recovery diagnostics: synthetic and native test matrix
 
-This is test preparation for #469 under #416. It follows the lead-owned
-`integration-contract.md` seam: main owns the grant generation, storage receives an
-opaque bounded checkpoint, preview freezes canonical UTF-8 bytes, and diagnostic
-failures cannot affect execution. It sets no consent, retention, flush, key or size
-policy. Only a configurable five-minute lookback default is approved. The tests
-below become implementation acceptance tests after Casey and Cal record the pending
-decisions and the lead freezes the executable interface.
+This is the #469 acceptance plan under #416. The lead-owned
+`integration-contract.md` is the authoritative engineering contract; this matrix
+must not introduce a different clock, lifetime, resource or race policy.
+[Consolidated owner decisions 1–6](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976190374)
+approve a persistent explicit opt-in (off by default), a configurable 1–15 minute
+lookback with a five-minute default, one previous opted-in session after a
+main/full-app crash, up-to-24-hour retention, approximately five-second checkpoint
+cadence with one write in flight, a complete uncompressed canonical report of at
+most 1 MiB and at most 8,192 events, and an OS-protected diagnostics-only key.
+Technical/privacy review, actual user consent, independent review and native
+acceptance remain separate gates. A test plan passing review is not an implemented
+or activated feature.
 
-The helper code in `packages/app/test/recovery-preparation/` currently tests only
-its disposable child-process crash orchestration and synthetic byte fixtures. It
-does **not** exercise a diagnostics implementation or establish the observations
-in this matrix. Do not count these helper tests as recovery coverage.
+The helper code in `packages/app/test/recovery-preparation/` tests only disposable
+child-process crash orchestration and synthetic byte fixtures. It does **not**
+exercise a diagnostics implementation or establish any observation below. Do not
+count these six helper tests as recovery coverage. The product choices supersede
+the earlier per-session restart re-consent and proposed 4,096-event ceiling.
 
-## Automated contract cases to add after the interface is frozen
+## Frozen engineering parameters to verify
 
-Each case uses a fresh synthetic profile, a deterministic clock where possible,
-closed enum observations, and a fake diagnostics-only key provider. No actual
-prompt, log, credential, execution store or network endpoint is fixture input.
-The outcome is a safe state or bounded omission code, never raw exception text.
+These are the lead-selected contract parameters for technical/privacy review,
+not measured results or permission to activate. Keep this table synchronized with
+`integration-contract.md`; reopen any material retention/consent/exposure change
+with Casey and Cal.
 
-| ID | Trigger / injected fault | Required observation | Pending choice |
-| --- | --- | --- | --- |
-| C01 | Start without an explicit capture grant, then deliver safe observations | No ring entry, checkpoint, key or preview; ordinary execution continues | None |
-| C02 | Deny grant or fail the secure-storage preflight | No disk capture or plaintext fallback; UI gives a safe explanation | Consent and key availability policy |
-| C03 | Queue a checkpoint for grant generation A, opt out, then release the delayed encrypt/write | A cannot publish after invalidation; only diagnostics-owned artifacts are deleted; no later read restores A | Opt-out/delete commit semantics |
-| C04 | Repeat C03 across a new grant generation B | A cannot contaminate B; stale A preview/save handles fail; B remains independent | Grant/restart lifetime |
-| C05 | Expire a grant, move wall clock backward/forward, suspend and resume | Capture and recovery fail closed under uncertain age; expired files are removed according to the approved rule | Expiry and clock rule |
-| C06 | Kill main at each actual checkpoint boundary: before enqueue, during serialization, after sealing, during temporary write, before/after publication, and during cleanup | Restart reads at most a complete authenticated candidate; partial/old candidate behavior and tail loss match the recorded contract | Publication method, flush cadence, retained sessions |
-| C07 | Graceful exit and restart on the same disposable profile | Retained candidate, deletion and re-consent behavior match the recorded contract; capture never restarts itself | Normal-exit and restart policy |
-| C08 | Empty, truncated, bit-flipped, unknown-format, duplicate, oversized and noncanonical records | No content preview or crash; safe reject/omission state; bounded read/work and no raw bytes in UI or logs | Format and size limits |
-| C09 | Missing, unavailable, wrong or rotated diagnostics key | No plaintext recovery or execution-key fallback; safe state and approved deletion behavior | Key lifecycle |
-| C10 | Full disk, denied write, fsync/rename error, failed cleanup, slow encryption and lock contention | Diagnostics drops/omits within accepted resource bound; run control and durable execution state are unchanged | Resource/timeout policy |
-| C11 | Saturate count/byte/time caps independently; pause checkpoint scheduling | Report requested versus actual coverage, capacity omissions and the uncheckpointed tail separately; never claim complete five-minute history from configuration alone | Limits and truthful lost-tail wording |
-| C12 | Freeze one canonical UTF-8 preview, then mutate live observations | Display, byte count and local save come from that same immutable buffer; saved bytes match byte-for-byte | Preview expiry and save authority |
-| C13 | Cancel picker, back out, retry, double-click save, opt out during save, then race recovery/delete/save | No unwanted publication; stale handle rejected; each permitted save has one observable commit point | Save/opt-out race semantics |
-| C14 | Feed nested objects, arbitrary strings, paths, IDs, encoded/fragmented canaries, logger/RPC/audit/output objects to the safe ingress | Closed `(phase, code)` gate rejects content-bearing input without traversal/coercion; on-disk and exported bytes contain no synthetic canary | Producer allowlist and schema revision |
-| C15 | Execute a run while all diagnostic operations fail | No execution lock, state change, retry, gate answer, credential access or wait on diagnostics; no unhandled diagnostic rejection | Accepted latency/heap budget |
-| C16 | Observe process/network activity through capture, recovery, preview, save, cancel and delete | No diagnostic upload or new endpoint; export remains local and explicit | None |
+| Boundary | Test oracle |
+| --- | --- |
+| Retention clock | Same-boot, suspend-inclusive native elapsed clock plus private boot identity. Missing clock, boot change or rollback makes age uncertain and recovery is refused. Immutable checkpoint snapshot anchor expires after 24 hours; recovery/rewrap cannot renew it. |
+| Owned disk allowance | 4 MiB aggregate retained workspace, including all ciphertext, keys, control records, old generations and temporary files; at most one additional 1 MiB explicitly authorized export temp. Enforce both individually and combined. |
+| Preview | One preview, at most five minutes, clipped to source expiry; expiry invalidates save authority and releases owned copies. |
+| Memory | At most 8 MiB explicitly owned payload buffers across operations, plus a measured 32 MiB incremental heapUsed + external acceptance target across processes (arrayBuffers reported as a subset, not added twice; RSS/native costs separate). The latter is not a hard JavaScript heap guarantee. |
+| Work | Two-second preparation deadline, ten-second key/file operation deadline, no snapshot queue, no second operation while timed-out work remains alive. Deadline handling must not pretend to interrupt synchronous CPU work or uncancellable OS calls. |
+| Keys | Independent per-session diagnostics data key, OS-wrapped through the selected asynchronous safeStorage adapter; verify missing/rotated key behavior and native identity separately. |
+| Save authority | Serialized publication commit dispatch wins over later revocation. Earlier revocation prevents dispatch. Once dispatched, a pending publication cannot be reported as cancelled; report actual completion/failure and cleanup state. |
 
-For C06, `killAtBoundary` accepts only an IPC boundary name and kills a Node child
-whose profile is disposable. The integrated child must signal *after* reaching
-each real operation boundary; a synthetic marker file alone proves only that the
-harness can kill a process. The parent must compare a surviving checkpoint with
-the exact committed predecessor and record the latest event it could recover.
-A process kill is evidence about main-process crash behavior, not OS or power-loss
-durability. Delayed I/O and scheduler stalls mean a nominal flush interval by
-itself cannot establish a maximum lost tail.
+## Automated contract cases
 
-For C08, create malformed copies from a genuine valid encrypted record generated
-inside the test. `truncatedCopies` covers empty/short/mid/near-complete records;
-`flippedCopy` targets codec-selected authenticated header and ciphertext offsets.
-Unknown version, duplicate and noncanonical examples must be made with knowledge
-of the final format. Never treat a parser exception as a passing safe-state test.
+Each case requires a fresh synthetic profile, a deterministic wall/monotonic clock
+and suspend source where applicable, closed enum observations, and a fake
+independent key provider. No actual prompt, log, credential, execution store or
+network endpoint is fixture input. Outcomes use bounded safe states/omission codes,
+never raw exception text. Run the integrated cases only after the corresponding
+contract is reviewed and implemented, with `--maxWorkers=1`.
 
-For C12, compare the exact frozen byte array with the saved file, including
-ordering, whitespace, Unicode and omission fields. Parsing two JSON documents
-and comparing objects would miss byte drift. For C14, use
-`filesContainingSyntheticBytes` only on the disposable profile and fail the test
-if it cannot inspect every file within its explicit scan guard. A clean source
-search is supporting evidence, not proof that no network call happened.
+| ID | Trigger / injected fault | Required observation |
+| --- | --- | --- |
+| C01 | Fresh install, missing setting, first-start prompt dismissed, or explicit refusal; deliver otherwise valid observations | Setting stays off; no ring entry, checkpoint, diagnostics key or content preview; ordinary execution continues. No product decision, fixture startup or prompt display supplies consent. |
+| C02 | Remember explicit opt-in and restart; repeat with corrupt/unknown consent version and failed secure-storage/ownership preflight | Same-scope remembered opt-in permits capture after current preflight without routine restart re-consent. Missing or incompatible authority fails closed; no plaintext fallback. Material scope expansion requires a new owner decision and consent. |
+| C03 | Delay sealing/write/publication for generation A; opt out, then release each delayed operation | Authority revokes before cleanup; A cannot gain publication admission after revocation or restore logical authority; already-dispatched native work is reconciled under the contract ordering. Only diagnostics-owned artifacts/key material are removed. Cleanup failure remains visible and is not reported as successful deletion. |
+| C04 | Repeat C03, then opt in to generation B; replay old handles, renderer messages and callbacks | A cannot contaminate B or delete B's artifacts. Revoked preview/save handles remain invalid after opt-in. Persistent preference and transient generation identity are distinct. |
+| C05 | Test just before, at and after expiry; backward/forward clock jumps, nonfinite time, drift, suspend/resume, process restart and reboot | Age and uncertainty follow the lead's clock contract. Reopen, preview, rewrite and restart never refresh retention origin. Refused/expired content cannot become a preview or save; cleanup occurs when ORCA next runs, without promising deletion while closed. |
+| C06 | Kill main before enqueue, during serialization/sealing, temporary write, before/after publication and cleanup | Restart admits at most a complete authenticated candidate bound to its session/generation. Record actual recovered tail, not a five-second guarantee; no OS/power-loss claim. |
+| C07 | Clean exit; crash twice; start current capture while a previous candidate exists; kill during replacement | Clean exit removes the current checkpoint. One previous-session bound and lead-defined replacement ordering hold without extending the previous candidate's age. Removed/stale candidates cannot reappear; persisted opt-in remains subject to preflight. |
+| C08 | Empty, truncated, bit-flipped, unknown-format, duplicate, oversized, noncanonical and deeply nested records; forged session/generation/age headers | Bounded reads/allocation/validation precede content exposure; authenticated binding and schema checks reject invalid candidates with safe results. No parser exception, raw bytes or fallback content reaches UI/logs. |
+| C09 | Missing, locked, unavailable, wrong or rotated diagnostic key; crash between wrapped-key and checkpoint publication | Key lifecycle follows the shared contract, including incomplete-generation cleanup. No execution-key lookup, plaintext fallback, silent restoration of unreadable history or deletion of shared app/keychain material. |
+| C10 | Full disk, denied access, fsync/rename failure, failed unlink, hung encryption/I/O, lock contention; complete a timed-out operation late | Queue, operation and disk bounds hold; a timeout is not proof work stopped. One physical checkpoint write remains in flight until resolved/fenced; late completion cannot resurrect data or evade accounting. Failure affects diagnostics alone. |
+| C11 | Saturate event, complete-report byte and lookback bounds independently and simultaneously; stop checkpoint scheduling | At most 8,192 events and 1,048,576 canonical UTF-8 bytes including envelope, formatting and omission metadata. Oldest eligible events drop first. Compression does not evade the cap; buffer/validator/preview/export use the same report limit. Requested versus actual coverage, capacity omissions and unknown/uncheckpointed tail remain distinct. |
+| C12 | Freeze a canonical preview; mutate live observations, request another preview or reconnect/destroy its renderer | Exact display, byte count and authorized save derive from the same immutable bytes. Contract-defined single-preview ownership, expiry and invalidation hold; stale renderer callbacks do not recreate a preview. |
+| C13 | Cancel picker, back out, retry, double-click save; interleave expiry, replacement, opt-out, discard and delete with every save boundary | Lead-defined publication commit point determines the outcome. Revocation before commit prevents publication; a file already committed for the user remains user-owned. No recollection, duplicate operation or hidden publication; failed temp cleanup remains visible. |
+| C14 | Pass objects, strings, paths, IDs, encoded/fragmented canaries, logger/RPC/audit/output objects to ingress | Reviewed closed producer mapping rejects content-bearing input without traversal/coercion. Actual checkpoint and export bytes contain no synthetic canary. Source inventory identifies every producer and verifies there is no diagnostic execution retry. |
+| C15 | Run paired execution work while every diagnostic operation fails or stalls | No execution lock, state change, retry, gate answer, credential access or wait on diagnostics; no unhandled diagnostic rejection. Measure execution latency and event-loop delay against the contract budget. |
+| C16 | Observe built-process network activity through capture, recovery, preview, save, cancel, delete and denied paths | No diagnostic upload or new endpoint. Local save requires explicit reviewed intent; remembered capture opt-in grants no sharing permission. |
+| C17 | Fill previous and current records, begin replacement, wrap keys, hold preview and local-export temp, then inject partial-write/cleanup failure | Aggregate disk accounting includes ciphertext, authenticated headers/tags, wrapped keys, manifests and all temporary/old generations. Reserve before write; rejection or failed cleanup cannot create unaccounted allowance. User-owned committed export is distinguished from pending operation-owned files. |
+| C18 | Maximum report/events with simultaneous ring, serialization, encryption, decryption, preview, IPC/renderer copies and local save | Account for all retained copies, bounded queue cardinality and operation overlap. Instrument allocation/high-water behavior and measure heap/RSS externally; the 1 MiB serialized limit is never presented as a RAM guarantee. No unlimited preview, promise or timer accumulation. |
+| C19 | Cross-app restart/reboot, clock uncertainty while picker is open, restore an old disk/key pair, failed delete followed by relaunch | Durable opt-out/revocation overrides stale checkpoint/manifest copies; coordinated whole-profile rollback is outside the threat model. Apply clock/replay limits honestly; document platform limitations instead of claiming forensic erasure or stronger same-user protection. |
+| C20 | Plaintext export staging, target replacement/link race, restricted-access failure, cancellation and crash before/after final publication | Capture/checkpoint files and their temps stay encrypted. Any plaintext temp is tied to explicitly reviewed export, restricted, bounded, separately accounted and journaled before creation for crash cleanup. Test lost cleanup key, cleanup locator bounds and new-Save refusal while unresolved. No overwrite/path substitution outside selected authority; cleanup failure does not claim success. |
+
+## Adversarial schedules and assertions
+
+For C05, use independent control of wall time, elapsed time, suspend notification
+and boot identity. Verify lookback eviction separately from retained-candidate
+expiry. Advance time while secure storage, picker, decrypt and write are pending,
+then release each result; validity at operation start is insufficient. Test the
+contract's exact uncertainty checks and expiry boundary, including an old
+checkpoint whose latest successful publication greatly predates the crash.
+
+For C06/C07, `killAtBoundary` accepts only an IPC boundary name and kills a Node
+child whose profile is disposable. The integrated child must signal *after*
+reaching each real operation boundary; a synthetic marker file alone proves only
+that the harness can kill a process. Compare the surviving checkpoint with the
+exact committed predecessor and record the latest recoverable event. Kill between
+removing a superseded candidate and publishing its replacement, and between
+committing bytes and recording completion. Never silently substitute a rolled-back
+candidate to make recovery look successful. Process kill evidence does not prove
+OS/power-loss durability. A nominal five-second target cannot bound lost tail under
+scheduler or I/O delay.
+
+For C08, make malformed copies from a genuine valid encrypted record generated by
+the eventual implementation. `truncatedCopies` covers empty/short/mid/near-complete
+records; `flippedCopy` targets authenticated header and ciphertext offsets. Include
+validly authenticated but unsupported schemas and cross-session/generation swaps.
+Never treat a parser exception as a passing safe-state test.
+
+For C11/C17/C18, use limit-minus-one, exact-limit and limit-plus-one inputs, then
+combinations. Include omission counters increasing their encoded length, Unicode
+UTF-8 byte size, envelope overhead, encryption/tag overhead, preview replacement
+and failed cleanup retaining an old generation. Measure at the agreed 8,192-event
+ceiling: #455's earlier burst offered 5,250 events, retained 4,096, evicted 1,154 and
+covered 238.95 seconds; it supplies no measurement of these new limits. Use the
+lead contract's aggregate disk/memory/deadline values without inventing independent
+test defaults. Record both deterministic allocation bounds and empirical memory
+results; garbage collection timing cannot establish a hard whole-process ceiling.
+
+For C12/C13/C20, compare exact frozen bytes with the committed file, including
+ordering, whitespace, Unicode and omission fields. Parsed JSON equality misses
+byte drift. Use barriers before/after every asynchronous boundary and the final
+publication operation, testing both orderings against expiry, opt-out and deletion.
+Track private temp ownership separately from the publication commit point. A
+queued invalidation must not report completed revocation while a stale publish can
+still occur. A cancellation that loses to publication must report that publication
+honestly. Verify exported user files survive later opt-out/expiry and that an
+existing destination is never destroyed on a failed save.
+
+For C14, scan only disposable profiles with
+`filesContainingSyntheticBytes`; fail when its explicit scan guard prevents
+complete inspection. Pair this with inspection of decoded canonical content,
+because absence of a plaintext canary in ciphertext is not content review. A clean
+source search supports but does not establish C16's network observation.
 
 ## Evidence to collect separately
 
 | Environment | Required pass | Current status |
 | --- | --- | --- |
-| Focused Vitest, `--maxWorkers=1` | C01–C15 against the final integrated head; record exact SHA, command, case count and limits | Not run: implementation absent |
-| Paired execution workload | Peak serialized bytes, heap including preview copies, encryption and I/O latency, event-loop delay, omission counts and actual retained coverage | Not run; #455 measures an earlier synthetic volatile ring on Linux/tmpfs |
-| Network observation | Instrument or externally observe the built process across C16 actions, including denied/cancel paths | Not run |
-| Packaged macOS | Signed identity, native Keychain behavior, owner-only file access, path/link safety, process-crash restart, accessible preview/save and no network | Not run |
-| Packaged Windows | DPAPI/secure-storage behavior, DACL ownership, junction/reparse safety, path handling, process-crash restart, accessible preview/save and no network | Not run |
+| Focused Vitest, `--maxWorkers=1` | C01–C15 and C17–C20 against final integrated head; exact SHA, command, counts and contract constants | Not run: implementation absent |
+| Paired execution workload | Serialized bytes, aggregate owned disk bytes, copy/queue peaks, heap/RSS, checkpoint latency, event-loop delay, omissions and actual retained coverage | Not run at approved 8,192 events; #455 is earlier synthetic Linux/tmpfs evidence |
+| Network observation | Instrument or externally observe built process across C16, including denied/cancel paths | Not run |
+| Packaged macOS | Signed identity, native Keychain behavior, owner-only file access, path/link safety, crash restart, actual checkpoint latency, accessibility and no network | Not run |
+| Packaged Windows | DPAPI/secure-storage behavior, DACL ownership, junction/reparse safety, publication/path behavior, crash restart, actual checkpoint latency, accessibility and no network | Not run |
 | Physical Apple Silicon Mac | Exact model, OS and candidate SHA; startup-before-handshake, offline, disconnect, sleep/wake, restart and human review of consent/preview/support text | Not run; #390 acceptance owner |
-| Power loss | If any OS/power-loss survival claim is proposed, test actual native storage barriers and recovery after forced power loss | No claim approved; not run |
+| Independent technical/privacy review | Coherent frozen contract, exact candidate SHA and producer inventory; verify all scope/retention/exposure deviations return to Casey and Cal | Required before corresponding implementation; fresh final review remains separate |
+| Power loss | Native storage barriers and recovery if a stronger survival claim is ever proposed | No guarantee approved; not run |
 
-The old #416 D1–D8 proposals, #441 disabled volatile ring and #455 Linux benchmark
-remain separate ownership. This matrix neither imports their work nor changes
-their status. #416 stays open through the fresh reviewer and native acceptance pass.
+#438/#441/#455 remain separate ownership. This matrix imports no implementation
+and changes none of their acceptance status. Production activation stays off;
+recorded product choices are not actual tester consent. #416 stays open through
+the fresh independent reviewer and native/physical acceptance pass.
