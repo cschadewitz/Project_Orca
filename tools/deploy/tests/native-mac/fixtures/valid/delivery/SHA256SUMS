@@ -1,0 +1,9 @@
+88e8c7fc1afc7666911b1b9ba21756b268dcee07f381ec18ae4807c1beb36b9b  ORCA-0.0.0-fixture.1-mac-arm64.dmg
+c785398ac4bc97742a0bdcdd52b717c72b79264900148bd13f925fe3a189cc7e  ORCA-0.0.0-fixture.1-mac-arm64.zip
+6ce04f3b52c9ccc8cf46296778c882ffddc9ff9e199b9f7cb1b24cf6572ff825  evidence/notary-app.json
+8596070c522236f34ce3a92e9f4516e3ba7b4452fb172d3c079c69cd98a0cfb8  evidence/notary-dmg.json
+d5815b97fbdc182c7302f3b4167efd2386abeb8481a39517132b5832d0f93eee  evidence/signing.txt
+d5815b97fbdc182c7302f3b4167efd2386abeb8481a39517132b5832d0f93eee  evidence/staple-app-in-dmg.txt
+d5815b97fbdc182c7302f3b4167efd2386abeb8481a39517132b5832d0f93eee  evidence/staple-app-in-zip.txt
+d5815b97fbdc182c7302f3b4167efd2386abeb8481a39517132b5832d0f93eee  evidence/staple-dmg.txt
+0c67bf69bd3edbaee5d34ae1afd1928fb983ba89d9846534763308c293c43b34  native-mac-artifact.json
