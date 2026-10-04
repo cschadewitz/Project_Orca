@@ -16,7 +16,8 @@ The observations below were supplied by the owner on 2026-10-04, not re-observed
 | `HOME` / working directory | `/home/casey` / `/home/casey/.orca-codex-work` |
 | Configuration / workflow | `/home/casey/.orca-codex-work/orca.yaml` / `work.yaml` in that same directory; retain both unchanged |
 | Daemon | `/home/casey/.local/share/orca-runtime/49efcc7236ac127c952bb1f7a50fc6ef72f7df84/packages/cli/dist/main.js` |
-| Node | `/home/casey/.local/share/mise/installs/node/24.21.0/bin/node` |
+| Service-entry Node | `/home/casey/.local/share/mise/installs/node/24.21.0/bin/node` |
+| Launcher's internal Node alias | `/home/casey/.local/share/mise/installs/node/24/bin/node`; cutover must verify resolution and hash against the reviewed 24.21.0 binary |
 | Clean `PATH` | `/home/casey/.local/share/mise/installs/node/24.21.0/bin:/usr/bin:/bin` |
 | Private temp | `/srv/dev/orca-temp-cal`, `casey`, `0700`; explicit `TMPDIR` **after** `env -i` in both units |
 | Daemon listener | `127.0.0.1:33871`; explicit `--config /home/casey/.orca-codex-work/orca.yaml` before `serve` |
@@ -35,6 +36,10 @@ executing MCP `3702da5` against port 33871. It has **no fixed credential-ID or d
 boot pin** and does not itself establish fresh authenticated discovery before startup.
 The supplied hash includes the literal-dot character-class regex repair; do not restore
 an earlier launcher copy. No private launcher or credential contents are included here.
+The unchanged launcher internally execs Node through the `24/bin/node` alias above.
+The absolute 24.21.0 service-entry path does **not** pin every descendant: neither it
+nor the clean PATH overrides that internal absolute alias. Its resolution is an owner
+verification gate, not an additional enforcement mechanism in the unit or launcher.
 
 Required authority remains principal `cal-codex-work`, permissions exactly `runs.read`,
 `artifacts.read`, `workflows.read`, `runs.start`, `runs.control`, `inputs.answer`, workflow
@@ -105,6 +110,20 @@ These relationships follow [systemd 257 unit semantics](https://github.com/syste
    hashes, private ownership/modes and sufficient space on `/srv/dev` **and** `/tmp`.
    Verify the live launcher still execs the separate MCP pin and that its existing
    clean-child environment does not expose a control-plane key. Stop on drift.
+   Before cutover, use these **read-only** owner checks on Linux (not run by this PR):
+
+   ```sh
+   /usr/bin/readlink -e /home/casey/.local/share/mise/installs/node/24/bin/node
+   /usr/bin/readlink -e /home/casey/.local/share/mise/installs/node/24.21.0/bin/node
+   /usr/bin/sha256sum /home/casey/.local/share/mise/installs/node/24/bin/node /home/casey/.local/share/mise/installs/node/24.21.0/bin/node
+   ```
+
+   Require both canonical paths to identify the reviewed 24.21.0 binary and both
+   SHA-256 values to match its independently reviewed binary hash; equal version
+   strings or equal hashes without that reviewed reference are insufficient.
+   Missing paths, changed alias resolution or a hash mismatch block cutover. Do not
+   retarget the alias or edit the launcher to pass. Recheck after any mise/Node change
+   and before a later restart/rollback that could select a different descendant binary.
 
 2. **User manager and hardening acceptance.** As Casey, inspect `loginctl show-user
    casey -p Linger`, `systemctl --user is-system-running`, user unit/drop-in inventory,
