@@ -1,0 +1,66 @@
+{
+  "candidate": {
+    "commit": "1b8f196e4df22066efda3c0ed1331a64d9061c4d",
+    "tree": "4480c23ce8683f2d6c2df4bf4977a6bf2ad069eb",
+    "sourceReceipt": "https://github.com/cschadewitz/Project_Orca/issues/501#issuecomment-5988611112",
+    "note": "Local candidate object is not available through GitHub. Its selected files are grounded by the published assembly manifest/receipt and the frozen source blobs."
+  },
+  "runtime": "49efcc7236ac127c952bb1f7a50fc6ef72f7df84",
+  "workflow": {
+    "publication": "85326130190895bc3a0fbc087f6d511c29d029e8",
+    "revision": "sha256:1a977b93d1c8f6b1257f9d235d9183be090ffb460d55099d362eb89e4b9cfdde",
+    "fileSha256": "2fa3fbf178b92ef32f209d88c26ccb5ae8bc8a12d28f67298c72d05264daa9e2"
+  },
+  "firstScope": [
+    {
+      "path": "packages/daemon/src/operator-host-resources.ts",
+      "ref": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "blob": "e3c5c5c8eb2f4ae4c9ffa7130d9f1909b7040cd4",
+      "bytes": 11795
+    },
+    {
+      "path": "packages/daemon/test/operator-host-resources.test.ts",
+      "ref": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "blob": "6e72976c0e0433456c6e78f072964227ef78cccf",
+      "bytes": 19369
+    },
+    {
+      "path": "packages/integrations/test/mcp-host-resources.test.ts",
+      "ref": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "blob": "9c3a3699618f287c2b6c630d829814a9c9b54bdb",
+      "bytes": 13325
+    }
+  ],
+  "mainInheritedConfigRef": "57f527308f82ab566c146cd160fe6a7eda620fc2",
+  "configPaths": [
+    "package.json",
+    "tsconfig.json",
+    "tsconfig.base.json",
+    "tsconfig.build.json",
+    "vitest.config.ts",
+    "packages/app/renderer/tsconfig.json",
+    "packages/daemon/tsconfig.json",
+    "packages/integrations/tsconfig.json",
+    "packages/app/package.json"
+  ],
+  "checks": [
+    "packages/protocol/test/host-resources.test.ts",
+    "packages/protocol/test/protocol.test.ts",
+    "packages/daemon/test/operator-host-resources.test.ts",
+    "packages/daemon/test/operator-integration-discovery.test.ts",
+    "packages/integrations/test/mcp-host-resources.test.ts",
+    "packages/integrations/test/mcp-host-resource-responses.test.ts"
+  ],
+  "evidence": [
+    "https://github.com/cschadewitz/Project_Orca/pull/498#issuecomment-5986751003",
+    "https://github.com/cschadewitz/Project_Orca/issues/501#issuecomment-6002265303",
+    "https://github.com/cschadewitz/Project_Orca/issues/502#issuecomment-6002902073",
+    "https://github.com/cschadewitz/Project_Orca/issues/502#issuecomment-6003244349",
+    "https://github.com/cschadewitz/Project_Orca/blob/57f527308f82ab566c146cd160fe6a7eda620fc2/package.json",
+    "https://github.com/cschadewitz/Project_Orca/blob/57f527308f82ab566c146cd160fe6a7eda620fc2/tsconfig.build.json",
+    "https://github.com/cschadewitz/Project_Orca/blob/57f527308f82ab566c146cd160fe6a7eda620fc2/vitest.config.ts",
+    "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/protocol/src/host-resources.ts#L280-L362",
+    "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/test/host-resources-collector.test.ts#L106-L120"
+  ],
+  "verification": "Static source-bound draft only. Exact installed-runtime validation of these new vars and four local CLI binding checks are pending; previous v4 validation does not automatically validate new task inputs."
+}

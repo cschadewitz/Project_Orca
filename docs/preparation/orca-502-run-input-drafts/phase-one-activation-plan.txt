@@ -1,0 +1,16 @@
+DRAFT FOR SEPARATE EXPLICIT OWNER APPROVAL
+
+Proposed approval:
+Allow the existing owner agent to import pinned integration commit 1b8f196e4df22066efda3c0ed1331a64d9061c4d into one fresh non-force ref in the existing workspace repository, activate only the reviewed new base and v4 workflow, perform one controlled restart, and admit exactly one fence-fix run with the reviewed inputs. Stop at dependencyReady without answering it. Dependency copying and ready/agent execution are separate decisions.
+
+Execution after approval, not part of current handoff:
+- Confirm the read-only preflight passed. Check only activation-sensitive drift: live v3/revision, unused v4, runtime identity, source pins and current active/pending admissions or recoverable continuations. Reserve one preparation writer. Historical stale records are retained; zero attached agents alone does not establish quiescence. If recovery could start work, stop for explicit handling rather than restarting.
+- Verify an owner-controlled local bundle from the exact candidate. Import only a fresh non-force ref, preserving the existing provider repository's HEAD/index/worktree, common directory and other refs. Avoid FETCH_HEAD changes. Set baseBranch to the full candidate SHA, not the ref label.
+- Stop the daemon before publishing the paired base/workflow selection, preventing partial hot application. Preserve the existing home/store/identity, provider repo/root/isolation, principal/grants, sandbox/agent profile and all historical generations/workflow pins/roots. Use the unchanged installed 49ef runtime.
+- Restart once. Verify intended active version4/revision sha256:1a977b93d1c8f6b1257f9d235d9183be090ffb460d55099d362eb89e4b9cfdde, existing workspace/principal/scope and no unexpected work. Normal local-owner bootstrap-token rotation is expected; do not restore old authentication files.
+- Admit once with all exact first-task vars, workflowVersion4, expectedWorkflowRevision above and the actual active configuration-generation guard. Retain one idempotency key. An uncertain result requires inspecting/reconciling the same admission, never submitting a fresh intent.
+- Stop when the run is durably paused at dependencyReady and its original provisioning receipt matches the candidate, with no coding agent started. Keep root/branch/run identifiers and full evidence local. Leave the gate unanswered.
+- Next decision binds relocation/copy approval to this actual destination and receipt. Preserved pnpm metadata stays historical, package-manager execution remains excluded, and NODE_PATH must be unset for tools. Before ready, separately approved bounded destination tool/write-sandbox and loopback capability checks must establish the supported normal-sandbox behavior and any exact-command one-shot review prerequisite allowed by the unchanged v4. No persistent permissions or denial workarounds are authorized.
+
+Failure/rollback:
+Stop and retain all partial evidence. A configuration-selection rollback requires the same compatible runtime and quiescence; it must retain every new object, ref, generation, admission, root and receipt. Never restore an old store snapshot, delete evidence, reset branches, downgrade the binary or resume old work automatically.
