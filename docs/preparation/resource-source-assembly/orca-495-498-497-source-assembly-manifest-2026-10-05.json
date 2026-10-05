@@ -1,0 +1,1186 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "orca_source_only_assembly",
+  "filename": "orca-495-498-497-source-assembly-manifest-2026-10-05.json",
+  "repository": {
+    "full_name": "cschadewitz/Project_Orca",
+    "url": "https://github.com/cschadewitz/Project_Orca"
+  },
+  "prepared_at_utc": "2026-10-05T04:45:10Z",
+  "state": "PROPOSED_SOURCE_ONLY_NOT_EXECUTED",
+  "authority": {
+    "artifact_creation_only_in_this_session": true,
+    "target_assembly_authority": "Owner approved a fresh independent preparation checkout under /srv/dev/worktrees and a proposed pre-agent human readiness gate. Assembly is a separate owner-forwarded task; this artifact does not prove that any checkout was created or operation ran.",
+    "allowed_future_assembly_scope": "Only source assembly from the frozen inputs, local ancestry-preserving merge commits if existing hook/signing/filter policy permits them, source-only integrity checks, and a nonsecret readiness inventory/report.",
+    "forbid": [
+      "ORCA run admission or workflow launch",
+      "production or live telemetry activation",
+      "source fixes or semantic refactors",
+      "package installation or dependency bootstrap",
+      "builds, typechecks, linters or test execution",
+      "browser or Vite launch or browser installation",
+      "service or daemon changes or restarts",
+      "credentials, grants, authentication or persistent access changes",
+      "live configuration changes",
+      "pushes, PR updates, original branch updates or upstream writes",
+      "release, deployment, cleanup or deletion",
+      "disabling or bypassing hooks, signing or filters"
+    ],
+    "no_execution_inferred_from_manifest": true
+  },
+  "frozen_sources": [
+    {
+      "id": "main",
+      "branch_ref": "refs/heads/main",
+      "commit_sha": "57f527308f82ab566c146cd160fe6a7eda620fc2",
+      "tree_sha": "2f30b2c9b018c6114e960872378de53224c645bc",
+      "commit_url": "https://github.com/cschadewitz/Project_Orca/commit/57f527308f82ab566c146cd160fe6a7eda620fc2",
+      "remote_ref_verified_at_utc": "2026-10-05T04:45:10Z"
+    },
+    {
+      "id": "pr495",
+      "branch_ref": "refs/heads/kepler/490-daemon-host-resource-snapshot",
+      "commit_sha": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "tree_sha": "743ecc7179a639901ead106da742ca238f74e3ff",
+      "commit_url": "https://github.com/cschadewitz/Project_Orca/commit/504e2dce10e0fd75420512d4d4857282b94c9758",
+      "remote_ref_verified_at_utc": "2026-10-05T04:45:10Z"
+    },
+    {
+      "id": "pr498",
+      "branch_ref": "refs/heads/kepler/491-mcp-daemon-resource-reads",
+      "commit_sha": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "tree_sha": "0bb00035bc3d5c1b4c2be532069343facf66c677",
+      "commit_url": "https://github.com/cschadewitz/Project_Orca/commit/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "remote_ref_verified_at_utc": "2026-10-05T04:45:10Z"
+    },
+    {
+      "id": "pr497",
+      "branch_ref": "refs/heads/codex/492-resource-ui-fixtures",
+      "commit_sha": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "tree_sha": "2774f0ce6dbbdb188535bea1d5271a0d25edfebf",
+      "commit_url": "https://github.com/cschadewitz/Project_Orca/commit/5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "remote_ref_verified_at_utc": "2026-10-05T04:45:10Z"
+    }
+  ],
+  "ancestry": {
+    "main_pr495_merge_base": "e1db2049e4a9b4a26a9f66e16e6891f8caf131d6",
+    "main_pr498_merge_base": "a299db8bb9d7eb47c103090b9f62d7af3f3db29b",
+    "pr495_pr497_merge_base": "a94d78a5e7e8ebb8cd8274a71cbe0a4010058d93",
+    "pr495_commits": [
+      "363ecf640159f3b1d8b6ffc716908c91ca6324a3",
+      "5d1da56c8d56a2883d9f64d3a8fd6d37c2d95d14",
+      "a94d78a5e7e8ebb8cd8274a71cbe0a4010058d93",
+      "504e2dce10e0fd75420512d4d4857282b94c9758"
+    ],
+    "pr498_commits": [
+      "ef82756d47b3dce1f5f9743ac50e4f7c76c724c3",
+      "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58"
+    ],
+    "pr497_own_commits": [
+      "aee05e91e8d773055862e1935c13025791cc85ba",
+      "5f286d309f1ce2bd1816a20259a2102da02716a8"
+    ],
+    "pr497_own_slice_paths": [
+      "packages/app/renderer/src/preview/preview.tsx",
+      "packages/app/renderer/src/preview/resources.css",
+      "packages/app/renderer/src/preview/resources.tsx",
+      "packages/app/renderer/src/resources/resource-model.ts",
+      "packages/app/renderer/src/resources/resource-view.tsx",
+      "packages/app/renderer/src/resources/resources.css",
+      "packages/app/renderer/src/routes.tsx",
+      "packages/app/renderer/test/resource-model.test.ts",
+      "packages/app/renderer/test/resource-screenshots/cgroup-cpu-denied-dark.png",
+      "packages/app/renderer/test/resource-screenshots/denied-dark.png",
+      "packages/app/renderer/test/resource-screenshots/healthy-light.png",
+      "packages/app/renderer/test/resource-screenshots/partial-light.png",
+      "packages/app/renderer/test/resource-screenshots/pressure-dark.png",
+      "packages/app/renderer/test/resource-screenshots/stale-dark.png",
+      "packages/app/renderer/test/resource-screenshots/target-switch-dark.png",
+      "packages/app/renderer/test/resource-screenshots/tmpfs-light.png",
+      "packages/app/renderer/test/resource-view.test.tsx",
+      "packages/app/renderer/test/resources-browser.config.ts",
+      "packages/app/renderer/test/resources-browser.spec.ts"
+    ],
+    "preserve_original_ancestry": true,
+    "no_cherry_pick_rebase_squash_or_force_updates": true
+  },
+  "assembly": {
+    "target_parent": "/srv/dev/worktrees",
+    "checkout_name_must_be_fresh": true,
+    "independently_owned_git_directory_required": true,
+    "no_common_git_directory_sharing": true,
+    "no_hardlinks_or_object_alternates": true,
+    "object_transfer": "Prefer a verified low-memory copy of existing local Git objects into the new independent repository when possible. A local clone with no hardlinks can avoid repacking, but is only a candidate after source and configuration inspection. Do not use --shared, --reference, a linked worktree, an objects/info/alternates dependency or a hardlinked object store. Record the actual method and object/connectivity verification.",
+    "original_repository_read_only": true,
+    "original_checkout_reference": "/srv/dev/worktrees/Project_Orca-490-daemon-host-resource-snapshot-81dde16f",
+    "original_common_git_reference": "/srv/dev/repos/Project_Orca/.git",
+    "explicit_tool_path": "Discover and record the exact available Git/tool executable paths. If Node or pnpm version inventory is needed, resolve existing mise-managed binaries explicitly; do not assume shell PATH or install anything. Use process-scoped PATH only, with no shell profile or persistent configuration changes.",
+    "temporary_storage": "Use a new task-owned disk-backed temporary directory under /srv/dev, after verifying its backing and capacity. Set TMPDIR only for preparation processes. Do not use or change the nearly full tmpfs /tmp, and do not delete existing temporary data.",
+    "serialized_low_memory_work": true,
+    "inspect_configuration_before_checkout_or_commit": "Read existing Git hook, signing and filter configuration without exposing secrets. Do not disable or bypass them. If normal checkout or commit would execute a forbidden hook/filter/build, require unavailable signing/authentication, rewrite unrelated settings or exceed this source-only scope, stop and preserve the partial checkout.",
+    "remote_recheck": "Immediately before assembly, read all four named remote refs and verify exact equality with frozen_sources. Stop if any moves, cannot be verified, or an object/ancestor is missing. Do not silently re-pin.",
+    "merge_order": [
+      {
+        "step": 0,
+        "action": "Create the independent local preparation branch at exact main.",
+        "input_source_id": "main",
+        "input_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+      },
+      {
+        "step": 1,
+        "action": "Merge exact #495 into the preparation branch, preserving its ancestry.",
+        "input_source_id": "pr495",
+        "input_commit": "504e2dce10e0fd75420512d4d4857282b94c9758"
+      },
+      {
+        "step": 2,
+        "action": "Merge exact #498 into the result, preserving its ancestry. Resolve only the explicit manifest overlap choices; report every conflict.",
+        "input_source_id": "pr498",
+        "input_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58"
+      },
+      {
+        "step": 3,
+        "action": "Merge exact #497 into the result, preserving its ancestry. The existing a94 ancestor means only its two-commit renderer slice should contribute.",
+        "input_source_id": "pr497",
+        "input_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8"
+      }
+    ],
+    "final_union_path_count": 57,
+    "exact_blob_selection_count": 55,
+    "composite_count": 2,
+    "preserve_main_outside_union": true,
+    "expected_composite_recipes_are_not_an_authorization_for_other_conflicts": true,
+    "stop_conditions": [
+      "Any frozen remote ref moved or cannot be verified",
+      "Missing source object, unexpected ancestor relationship or source/blob mismatch",
+      "Any conflict outside the six declared overlaps",
+      "Any resolution that cannot produce an exact selected blob or exact composite recipe",
+      "Any unexpected changed path outside the 57-path union",
+      "Any original checkout/branch/configuration mutation would be needed",
+      "Any required hook, signing, filter or authentication behavior conflicts with source-only limits",
+      "Observed pressure or unavailable disk-backed temporary space prevents safe bounded source assembly",
+      "Any substantive access or security denial"
+    ],
+    "on_block": "Stop dependent work. Preserve the partial independent checkout, conflicts, files and logs. Do not delete/reset/clean it or disable hooks, signing or filters. Report the exact blocker, current state, completed steps and safe next decision.",
+    "artifact_location": "Keep this manifest and preparation reports outside the repository worktree so the final repository diff remains exactly the 57-source-path union."
+  },
+  "overlap_map": [
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "input_blobs": [
+        {
+          "source_id": "main",
+          "blob_sha": "4d506edd84abaa44e575849608302360ff65b247"
+        },
+        {
+          "source_id": "pr495",
+          "blob_sha": "7cb10285eb2ac819df39fa4a9921185640591579"
+        },
+        {
+          "source_id": "pr498",
+          "blob_sha": "ec6ae0f2259f2ede406ffe4659206374617790d1"
+        }
+      ],
+      "selection": "explicit_composite",
+      "reason": "Current main plus both exact resource paragraphs."
+    },
+    {
+      "path": "packages/daemon/src/index.ts",
+      "input_blobs": [
+        {
+          "source_id": "main",
+          "blob_sha": "8afa17d887b59531305e89bf199114fd19f90f01"
+        },
+        {
+          "source_id": "pr495",
+          "blob_sha": "1a3cadb92130a4abb36a0b98623562a647700fa5"
+        },
+        {
+          "source_id": "pr498",
+          "blob_sha": "fb32543e03899e6ab233ed15381c1841484ddc0e"
+        }
+      ],
+      "selection": "explicit_composite",
+      "reason": "Current main plus all three exact source exports."
+    },
+    {
+      "path": "packages/protocol/src/host-resource-fixtures.ts",
+      "input_blobs": [
+        {
+          "source_id": "main",
+          "blob_sha": null
+        },
+        {
+          "source_id": "pr495",
+          "blob_sha": "235a80d9817bed63b780477ac5c97f0f6026aac1"
+        },
+        {
+          "source_id": "pr498",
+          "blob_sha": "235a80d9817bed63b780477ac5c97f0f6026aac1"
+        }
+      ],
+      "selection": "235a80d9817bed63b780477ac5c97f0f6026aac1",
+      "reason": "Identical fixture blob in all three PR heads."
+    },
+    {
+      "path": "packages/protocol/src/host-resources.ts",
+      "input_blobs": [
+        {
+          "source_id": "main",
+          "blob_sha": null
+        },
+        {
+          "source_id": "pr495",
+          "blob_sha": "e7c2ea1aff2116eecd5d228ba05f2c56ac4825b9"
+        },
+        {
+          "source_id": "pr498",
+          "blob_sha": "7dfdd9ddb02ff2e8ae22b89b2d689feed9e6d452"
+        }
+      ],
+      "selection": "7dfdd9ddb02ff2e8ae22b89b2d689feed9e6d452",
+      "reason": "Use #498's shared provenance/composition helpers while retaining #495 schemas, warning policy and adjacent predicate behavior."
+    },
+    {
+      "path": "packages/protocol/src/index.ts",
+      "input_blobs": [
+        {
+          "source_id": "main",
+          "blob_sha": "6db9add90d42311fb60b8cca37f1888fd1a74f04"
+        },
+        {
+          "source_id": "pr495",
+          "blob_sha": "d63908c8510275d724f86b3e21d3ce01c090094d"
+        },
+        {
+          "source_id": "pr498",
+          "blob_sha": "5ab7cc54adec297703837e099142f5b5a67e68bb"
+        }
+      ],
+      "selection": "5ab7cc54adec297703837e099142f5b5a67e68bb",
+      "reason": "Use #498's barrel with each shared/operator export once."
+    },
+    {
+      "path": "packages/protocol/test/host-resources.test.ts",
+      "input_blobs": [
+        {
+          "source_id": "main",
+          "blob_sha": null
+        },
+        {
+          "source_id": "pr495",
+          "blob_sha": "7a02be06036e25ef4bfef43a956b7893c57be489"
+        },
+        {
+          "source_id": "pr498",
+          "blob_sha": "0b1c0e77fa939d8a12f1346b9202a1f92fc8b595"
+        }
+      ],
+      "selection": "0b1c0e77fa939d8a12f1346b9202a1f92fc8b595",
+      "reason": "Use #498's additive superset; every #495 test remains."
+    }
+  ],
+  "exact_blob_selections": [
+    {
+      "path": "changelog.d/490-host-resources.added.md",
+      "mode": "100644",
+      "blob_sha": "faf6e7dfeea85b7537c9386c9decf4b5d2c45d7b",
+      "size_bytes": 232,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/changelog.d/490-host-resources.added.md"
+    },
+    {
+      "path": "changelog.d/491-host-resource-access.added.md",
+      "mode": "100644",
+      "blob_sha": "1f00a124ac39483efe837a94ee6ebadcadf5817d",
+      "size_bytes": 318,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/changelog.d/491-host-resource-access.added.md"
+    },
+    {
+      "path": "docs/daemon-security.md",
+      "mode": "100644",
+      "blob_sha": "5a3979cd4b2c7e41323b1e50cf11b1e7bd907ab1",
+      "size_bytes": 32363,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/docs/daemon-security.md"
+    },
+    {
+      "path": "docs/host-resource-access-policy.md",
+      "mode": "100644",
+      "blob_sha": "73896c0691a07a8c96b8d7daa99b23f6475522fb",
+      "size_bytes": 7072,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/docs/host-resource-access-policy.md"
+    },
+    {
+      "path": "docs/host-resources.md",
+      "mode": "100644",
+      "blob_sha": "2ee5a273c0bfcd64e52a45cc578ca097fc5bfeb4",
+      "size_bytes": 13654,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/docs/host-resources.md"
+    },
+    {
+      "path": "docs/mcp-operator.md",
+      "mode": "100644",
+      "blob_sha": "de89d66d0b5388a45dee367a7f5902b406304183",
+      "size_bytes": 23195,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/docs/mcp-operator.md"
+    },
+    {
+      "path": "packages/app/renderer/src/preview/preview.tsx",
+      "mode": "100644",
+      "blob_sha": "53ba7d6c24fe2c0ab7e048a07751cd22db4c5e09",
+      "size_bytes": 10112,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/src/preview/preview.tsx"
+    },
+    {
+      "path": "packages/app/renderer/src/preview/resources.css",
+      "mode": "100644",
+      "blob_sha": "3366b61a00ec499159ac80b342f1e198343a8073",
+      "size_bytes": 842,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/src/preview/resources.css"
+    },
+    {
+      "path": "packages/app/renderer/src/preview/resources.tsx",
+      "mode": "100644",
+      "blob_sha": "cbbcfedb537cd9fbf0e2551d748353a6c8d3fc39",
+      "size_bytes": 6170,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/src/preview/resources.tsx"
+    },
+    {
+      "path": "packages/app/renderer/src/resources/resource-model.ts",
+      "mode": "100644",
+      "blob_sha": "5c6d747358ef550c7323688ad6721516943c3bd1",
+      "size_bytes": 10579,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/src/resources/resource-model.ts"
+    },
+    {
+      "path": "packages/app/renderer/src/resources/resource-view.tsx",
+      "mode": "100644",
+      "blob_sha": "5c2b1aee4c1b9190f6a192c492d8a771d15c0ca0",
+      "size_bytes": 15228,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/src/resources/resource-view.tsx"
+    },
+    {
+      "path": "packages/app/renderer/src/resources/resources.css",
+      "mode": "100644",
+      "blob_sha": "fe688fa3216d8b93f6d3e8bf8a5a0a7bce4c33b7",
+      "size_bytes": 1221,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/src/resources/resources.css"
+    },
+    {
+      "path": "packages/app/renderer/src/routes.tsx",
+      "mode": "100644",
+      "blob_sha": "89d26754b54b69b7b589254b3c2de8756e412b56",
+      "size_bytes": 2130,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/src/routes.tsx"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-model.test.ts",
+      "mode": "100644",
+      "blob_sha": "28dcb4739f9b1202d6e849d7a787dff3652d49b7",
+      "size_bytes": 9855,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-model.test.ts"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-screenshots/cgroup-cpu-denied-dark.png",
+      "mode": "100644",
+      "blob_sha": "556ad05cd8fe5c1907161f143214891e52345fbf",
+      "size_bytes": 178943,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-screenshots/cgroup-cpu-denied-dark.png"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-screenshots/denied-dark.png",
+      "mode": "100644",
+      "blob_sha": "216569b61e6c6e4f4257251d7db3e8aa8ca356bc",
+      "size_bytes": 43465,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-screenshots/denied-dark.png"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-screenshots/healthy-light.png",
+      "mode": "100644",
+      "blob_sha": "0e0aba349d00ad784d52bfa7815aef0d61186560",
+      "size_bytes": 166032,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-screenshots/healthy-light.png"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-screenshots/partial-light.png",
+      "mode": "100644",
+      "blob_sha": "96d828772862d17cd113652b070773db7dd8c0e1",
+      "size_bytes": 162154,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-screenshots/partial-light.png"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-screenshots/pressure-dark.png",
+      "mode": "100644",
+      "blob_sha": "109df7b84fb570671f09a7f20361c625143b1a67",
+      "size_bytes": 207197,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-screenshots/pressure-dark.png"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-screenshots/stale-dark.png",
+      "mode": "100644",
+      "blob_sha": "2570901a079d4472420c90769b92b5df4309c77e",
+      "size_bytes": 176594,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-screenshots/stale-dark.png"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-screenshots/target-switch-dark.png",
+      "mode": "100644",
+      "blob_sha": "7229747415cd0c77513d723897a7e889964bd0c1",
+      "size_bytes": 46784,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-screenshots/target-switch-dark.png"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-screenshots/tmpfs-light.png",
+      "mode": "100644",
+      "blob_sha": "acd1091c3e9b7da3e66618a2431b28f388d2ddff",
+      "size_bytes": 168967,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-screenshots/tmpfs-light.png"
+    },
+    {
+      "path": "packages/app/renderer/test/resource-view.test.tsx",
+      "mode": "100644",
+      "blob_sha": "84a8cb668ec34fe0c883443cf48860b3fb18d021",
+      "size_bytes": 14180,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resource-view.test.tsx"
+    },
+    {
+      "path": "packages/app/renderer/test/resources-browser.config.ts",
+      "mode": "100644",
+      "blob_sha": "c6b4230bb12fc37e9154fbcc6787a1824605dfb3",
+      "size_bytes": 704,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resources-browser.config.ts"
+    },
+    {
+      "path": "packages/app/renderer/test/resources-browser.spec.ts",
+      "mode": "100644",
+      "blob_sha": "185ce1b6f353ec9df3bde78dbb23ac2a1936a9d5",
+      "size_bytes": 6568,
+      "source_id": "pr497",
+      "source_commit": "5f286d309f1ce2bd1816a20259a2102da02716a8",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/5f286d309f1ce2bd1816a20259a2102da02716a8/packages/app/renderer/test/resources-browser.spec.ts"
+    },
+    {
+      "path": "packages/daemon/src/auth/operations.ts",
+      "mode": "100644",
+      "blob_sha": "a4dc7abb26c51b8973a6ab8193239f48c124c124",
+      "size_bytes": 10447,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/daemon/src/auth/operations.ts"
+    },
+    {
+      "path": "packages/daemon/src/auth/principal.ts",
+      "mode": "100644",
+      "blob_sha": "9c8caa299cbb769d4c7f1447ee5d5f32be339b59",
+      "size_bytes": 7694,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/daemon/src/auth/principal.ts"
+    },
+    {
+      "path": "packages/daemon/src/host-resources/benchmark.ts",
+      "mode": "100644",
+      "blob_sha": "8e4a4d17bc38b5cacd8af26b9b2642b0334e003c",
+      "size_bytes": 6058,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/src/host-resources/benchmark.ts"
+    },
+    {
+      "path": "packages/daemon/src/host-resources/index.ts",
+      "mode": "100644",
+      "blob_sha": "8c959dbe78d38aaaec99ad410555780daf1b10a0",
+      "size_bytes": 18414,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/src/host-resources/index.ts"
+    },
+    {
+      "path": "packages/daemon/src/host-resources/native-io-worker.ts",
+      "mode": "100644",
+      "blob_sha": "18748982f5ac1c42050083a929bff5fc6d63d05b",
+      "size_bytes": 3583,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/src/host-resources/native-io-worker.ts"
+    },
+    {
+      "path": "packages/daemon/src/host-resources/native-io.ts",
+      "mode": "100644",
+      "blob_sha": "63a92e2e7595a4e731a2aa88a46f201e83127022",
+      "size_bytes": 4431,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/src/host-resources/native-io.ts"
+    },
+    {
+      "path": "packages/daemon/src/host-resources/parsers.ts",
+      "mode": "100644",
+      "blob_sha": "af6289635f77c031c2baba9bf8ce96cca1a5bbb3",
+      "size_bytes": 3585,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/src/host-resources/parsers.ts"
+    },
+    {
+      "path": "packages/daemon/src/host-resources/sources.ts",
+      "mode": "100644",
+      "blob_sha": "ac16713f7c1752c7a6fe3eab91b976dd20a82c11",
+      "size_bytes": 7128,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/src/host-resources/sources.ts"
+    },
+    {
+      "path": "packages/daemon/src/host-workstreams.ts",
+      "mode": "100644",
+      "blob_sha": "23e1a8615c53abace016a488727ce6063ad500dd",
+      "size_bytes": 8583,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/src/host-workstreams.ts"
+    },
+    {
+      "path": "packages/daemon/src/methods.ts",
+      "mode": "100644",
+      "blob_sha": "ef74e67f84b1b159c42da8169d0e11f86d674530",
+      "size_bytes": 41468,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/daemon/src/methods.ts"
+    },
+    {
+      "path": "packages/daemon/src/operator-host-resources.ts",
+      "mode": "100644",
+      "blob_sha": "e3c5c5c8eb2f4ae4c9ffa7130d9f1909b7040cd4",
+      "size_bytes": 11795,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/daemon/src/operator-host-resources.ts"
+    },
+    {
+      "path": "packages/daemon/src/server.ts",
+      "mode": "100644",
+      "blob_sha": "117ba06cdcb5bd662f9aac35f5ee7c9213499b97",
+      "size_bytes": 41964,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/daemon/src/server.ts"
+    },
+    {
+      "path": "packages/daemon/src/socket.ts",
+      "mode": "100644",
+      "blob_sha": "3408ceeac4a93fd1ab9a077abd9b617782f65794",
+      "size_bytes": 12742,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/daemon/src/socket.ts"
+    },
+    {
+      "path": "packages/daemon/test/host-resources-collector.test.ts",
+      "mode": "100644",
+      "blob_sha": "55389f0be1512b22c387c8ca27f8116b636f1cc2",
+      "size_bytes": 20723,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/test/host-resources-collector.test.ts"
+    },
+    {
+      "path": "packages/daemon/test/host-resources-native.test.ts",
+      "mode": "100644",
+      "blob_sha": "55cede3be7f2d177232c36184de99e5662443eb3",
+      "size_bytes": 8773,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/test/host-resources-native.test.ts"
+    },
+    {
+      "path": "packages/daemon/test/host-workstreams.test.ts",
+      "mode": "100644",
+      "blob_sha": "163e1a14d5c431f912140a78d6e0f85e47dbf7dc",
+      "size_bytes": 11955,
+      "source_id": "pr495",
+      "source_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/504e2dce10e0fd75420512d4d4857282b94c9758/packages/daemon/test/host-workstreams.test.ts"
+    },
+    {
+      "path": "packages/daemon/test/operator-host-resources.test.ts",
+      "mode": "100644",
+      "blob_sha": "6e72976c0e0433456c6e78f072964227ef78cccf",
+      "size_bytes": 19369,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/daemon/test/operator-host-resources.test.ts"
+    },
+    {
+      "path": "packages/daemon/test/operator-integration-discovery.test.ts",
+      "mode": "100644",
+      "blob_sha": "892989232b1c52523be9db45f12b3601c4946416",
+      "size_bytes": 7487,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/daemon/test/operator-integration-discovery.test.ts"
+    },
+    {
+      "path": "packages/integrations/src/mcp/backend.ts",
+      "mode": "100644",
+      "blob_sha": "b24c4e4d646ecbe62d14f84e5d6a1f61a9e74d10",
+      "size_bytes": 5641,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/integrations/src/mcp/backend.ts"
+    },
+    {
+      "path": "packages/integrations/src/mcp/contracts.ts",
+      "mode": "100644",
+      "blob_sha": "66bc81b72902a53d215887cac5fa5c107da4ca61",
+      "size_bytes": 4174,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/integrations/src/mcp/contracts.ts"
+    },
+    {
+      "path": "packages/integrations/src/mcp/server.ts",
+      "mode": "100644",
+      "blob_sha": "c36cc5f8ddb6bcccc805654349e69e7568b03568",
+      "size_bytes": 11310,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/integrations/src/mcp/server.ts"
+    },
+    {
+      "path": "packages/integrations/test/mcp-host-resource-responses.test.ts",
+      "mode": "100644",
+      "blob_sha": "629031876a2e1e140a09953b13d73f5e3d5f3026",
+      "size_bytes": 4560,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/integrations/test/mcp-host-resource-responses.test.ts"
+    },
+    {
+      "path": "packages/integrations/test/mcp-host-resources.test.ts",
+      "mode": "100644",
+      "blob_sha": "9c3a3699618f287c2b6c630d829814a9c9b54bdb",
+      "size_bytes": 13325,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/integrations/test/mcp-host-resources.test.ts"
+    },
+    {
+      "path": "packages/protocol/src/host-resource-fixtures.ts",
+      "mode": "100644",
+      "blob_sha": "235a80d9817bed63b780477ac5c97f0f6026aac1",
+      "size_bytes": 5848,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/protocol/src/host-resource-fixtures.ts"
+    },
+    {
+      "path": "packages/protocol/src/host-resources.ts",
+      "mode": "100644",
+      "blob_sha": "7dfdd9ddb02ff2e8ae22b89b2d689feed9e6d452",
+      "size_bytes": 13704,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/protocol/src/host-resources.ts"
+    },
+    {
+      "path": "packages/protocol/src/index.ts",
+      "mode": "100644",
+      "blob_sha": "5ab7cc54adec297703837e099142f5b5a67e68bb",
+      "size_bytes": 1407,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/protocol/src/index.ts"
+    },
+    {
+      "path": "packages/protocol/src/operator-host-resources.ts",
+      "mode": "100644",
+      "blob_sha": "1e50e1e6022e87fbd62d6adf6dccad7c97d1a91c",
+      "size_bytes": 1115,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/protocol/src/operator-host-resources.ts"
+    },
+    {
+      "path": "packages/protocol/src/operator-reads.ts",
+      "mode": "100644",
+      "blob_sha": "631b1f374314cd33ef4d989b2a710ce71b06c7c8",
+      "size_bytes": 5943,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/protocol/src/operator-reads.ts"
+    },
+    {
+      "path": "packages/protocol/test/host-resources.test.ts",
+      "mode": "100644",
+      "blob_sha": "0b1c0e77fa939d8a12f1346b9202a1f92fc8b595",
+      "size_bytes": 12663,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/protocol/test/host-resources.test.ts"
+    },
+    {
+      "path": "packages/protocol/test/protocol.test.ts",
+      "mode": "100644",
+      "blob_sha": "6dbba4c10888f015db015606ec3e1e17c72110c7",
+      "size_bytes": 10015,
+      "source_id": "pr498",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "source_url": "https://github.com/cschadewitz/Project_Orca/blob/de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58/packages/protocol/test/protocol.test.ts"
+    }
+  ],
+  "composites": [
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "mode": "100644",
+      "base_source_id": "main",
+      "base_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2",
+      "base_blob_sha": "4d506edd84abaa44e575849608302360ff65b247",
+      "source_inputs": [
+        {
+          "source_id": "main",
+          "commit": "57f527308f82ab566c146cd160fe6a7eda620fc2",
+          "blob_sha": "4d506edd84abaa44e575849608302360ff65b247"
+        },
+        {
+          "source_id": "pr495",
+          "commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+          "blob_sha": "7cb10285eb2ac819df39fa4a9921185640591579"
+        },
+        {
+          "source_id": "pr498",
+          "commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+          "blob_sha": "ec6ae0f2259f2ede406ffe4659206374617790d1"
+        }
+      ],
+      "recipe": {
+        "type": "append_exact_segments_to_exact_main_blob",
+        "exact_append_text": "\nThe advisory daemon-machine resource contract and bounded collection/authorized-summary\nports are described in [Host resources](host-resources.md). They are not registered\nas transport methods and make no admission decisions; authenticated consumers are\nseparate work.\n\nThe injected host-resource MCP read is a bounded, separately authorized composition seam;\nits [access-policy proposal](host-resource-access-policy.md) requires review before production\nmounting or grants. The shared snapshot and fixtures are pinned to #495; the daemon/MCP slice\nconstructs no collector and supplies no runtime workstream index.\n",
+        "segment_provenance": [
+          {
+            "source_id": "pr495",
+            "start_line": 462,
+            "end_line": 465
+          },
+          {
+            "source_id": "pr498",
+            "start_line": 462,
+            "end_line": 465
+          }
+        ],
+        "preservation_note": "Preserve every byte of current main, including the continuation-lease paragraph at main lines 364-371. Append the exact #495 resource paragraph, then the exact #498 resource paragraph, separated by one blank line. Never replace this file with either PR's whole file."
+      },
+      "expected_composite_blob_sha": "2701e7248033c60da6946dcc7c5ae1a3185d1a45",
+      "expected_size_bytes": 33048,
+      "actual_prepared_blob_sha": null,
+      "resolution_status": "proposed_deterministic_recipe_not_executed"
+    },
+    {
+      "path": "packages/daemon/src/index.ts",
+      "mode": "100644",
+      "base_source_id": "main",
+      "base_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2",
+      "base_blob_sha": "8afa17d887b59531305e89bf199114fd19f90f01",
+      "source_inputs": [
+        {
+          "source_id": "main",
+          "commit": "57f527308f82ab566c146cd160fe6a7eda620fc2",
+          "blob_sha": "8afa17d887b59531305e89bf199114fd19f90f01"
+        },
+        {
+          "source_id": "pr495",
+          "commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+          "blob_sha": "1a3cadb92130a4abb36a0b98623562a647700fa5"
+        },
+        {
+          "source_id": "pr498",
+          "commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+          "blob_sha": "fb32543e03899e6ab233ed15381c1841484ddc0e"
+        }
+      ],
+      "recipe": {
+        "type": "append_exact_segments_to_exact_main_blob",
+        "exact_append_text": "\nexport * from \"./host-resources/index.js\";\nexport * from \"./host-workstreams.js\";\nexport * from \"./operator-host-resources.js\";\n",
+        "segment_provenance": [
+          {
+            "source_id": "pr495",
+            "start_line": 45,
+            "end_line": 46
+          },
+          {
+            "source_id": "pr498",
+            "start_line": 45,
+            "end_line": 45
+          }
+        ],
+        "preservation_note": "Preserve every byte of main and append each of the three source exports exactly once, in #495 then #498 order."
+      },
+      "expected_composite_blob_sha": "e128e5252da71bd324c0633123e4859f624481dd",
+      "expected_size_bytes": 1810,
+      "actual_prepared_blob_sha": null,
+      "resolution_status": "proposed_deterministic_recipe_not_executed"
+    }
+  ],
+  "main_configuration_pins": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "blob_sha": "16b63b14bf1dc68619acea07a2ed4be7e032247f",
+      "mode": "100644",
+      "size_bytes": 9074,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "AGENTS.md",
+      "blob_sha": "b175999ec336176ed8117d196e810b2b9126118a",
+      "mode": "100644",
+      "size_bytes": 19770,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "docs/DEVELOPMENT.md",
+      "blob_sha": "d3a9587fc114188cb693fe35a179d68336bed04a",
+      "mode": "100644",
+      "size_bytes": 53618,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "docs/design/RULES.md",
+      "blob_sha": "b4b374df61422911b8716706d61fe18deac6ad10",
+      "mode": "100644",
+      "size_bytes": 3133,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "mise.toml",
+      "blob_sha": "b279eacc337995bc58e48357394a232b1c573291",
+      "mode": "100644",
+      "size_bytes": 32,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "package.json",
+      "blob_sha": "9f82a667eb73df34a16bbdf6261f671bd8927917",
+      "mode": "100644",
+      "size_bytes": 2342,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "packages/app/package.json",
+      "blob_sha": "f972941efd61a8be3632088dbdacff24a15980c8",
+      "mode": "100644",
+      "size_bytes": 1065,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "packages/daemon/package.json",
+      "blob_sha": "5c078d2f7033c13b7e2461923557ff60a62caf51",
+      "mode": "100644",
+      "size_bytes": 604,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "packages/integrations/package.json",
+      "blob_sha": "0274b6bcc83ce6cbe3b844d2bff663fbc5a655db",
+      "mode": "100644",
+      "size_bytes": 806,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "packages/protocol/package.json",
+      "blob_sha": "30e83791189fa3abbb93d191b7d9a4c9b7e10c78",
+      "mode": "100644",
+      "size_bytes": 367,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "blob_sha": "bc1e0fa854fdb999ea672b0ba41657cece49719e",
+      "mode": "100644",
+      "size_bytes": 165237,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "pnpm-workspace.yaml",
+      "blob_sha": "67b962f8d6a62f402e293a2bfbadc88ac286fb1b",
+      "mode": "100644",
+      "size_bytes": 1168,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "tsconfig.build.json",
+      "blob_sha": "1902c5facf3584b5d83bcc1ddb2c4c8401c56ec3",
+      "mode": "100644",
+      "size_bytes": 523,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "tsconfig.json",
+      "blob_sha": "bf6b0c39b74882c7ad0a2dc455d6627fc5503d99",
+      "mode": "100644",
+      "size_bytes": 1368,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    },
+    {
+      "path": "vitest.config.ts",
+      "blob_sha": "d9500a9c2661c4114b7a52ce4c8f4420d44db142",
+      "mode": "100644",
+      "size_bytes": 5761,
+      "source_id": "main",
+      "source_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2"
+    }
+  ],
+  "preservation_invariants": [
+    "All 55 selected paths match their listed immutable Git blobs, sizes and modes.",
+    "Both composite paths match the exact main-plus-append recipe and record the actual new blob hash.",
+    "Every tracked path outside the 57-path union remains byte/mode-identical to pinned main, including package, lockfile, maintenance, continuation and other unrelated changes.",
+    "Keep the #495 collector, bounded native worker, independent cgroup outcomes, authorized-summary seam, fixtures and tests unchanged.",
+    "Keep #498 shared provenance/composition helpers, final authorization fence, HTTP/WS response-publication guards and both inventory assertion corrections unchanged.",
+    "Keep #497 renderer retained-boot/double-predicate behavior, fixtures, announcements, tests and screenshots unchanged. Do not convert it to the newer helper during preparation.",
+    "No default production mount, runtime workstream index, grants, polling, collection, live configuration or service activation is introduced.",
+    "The async publication-fence rejection-containment P2 remains an explicit unresolved blocker; do not silently fix it.",
+    "Preserve all three source histories through local merge parents; never rewrite their commits or update their original branches."
+  ],
+  "known_blockers": [
+    {
+      "id": "pr498-async-publication-rejection",
+      "status": "OPEN_P2_DO_NOT_FIX_DURING_ASSEMBLY",
+      "source_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "path": "packages/daemon/src/operator-host-resources.ts",
+      "lines": [
+        258,
+        267
+      ],
+      "source_blob_sha": "e3c5c5c8eb2f4ae4c9ffa7130d9f1909b7040cd4",
+      "url": "https://github.com/cschadewitz/Project_Orca/pull/498#issuecomment-5986751003",
+      "description": "An invalid asynchronous publishable() is refused by strict true comparison, but a rejecting Promise is not consumed. A later approved fix must preserve the synchronous fence and sanitized refusal, without awaiting or accepting eventual true, and add rejection-containment regression coverage."
+    },
+    {
+      "id": "current-resource-pressure",
+      "status": "RECHECK_BEFORE_ANY_READINESS_CLAIM",
+      "description": "Historical owner inventory reports low available memory, full swap and nearly full /tmp. It is not current run-readiness evidence."
+    },
+    {
+      "id": "combined-source-acceptance",
+      "status": "UNRUN",
+      "description": "No combined source tree, build, test, actual-agent, real-host, packaged UI or production activation has been executed or accepted."
+    }
+  ],
+  "owner_inventory": {
+    "provenance": "Owner-forwarded read-only inventory received 2026-10-05; observation timestamp not supplied. Treat as historical and recheck before relying on it.",
+    "host": "agent-01",
+    "existing_checkout": "/srv/dev/worktrees/Project_Orca-490-daemon-host-resource-snapshot-81dde16f",
+    "existing_common_git_directory": "/srv/dev/repos/Project_Orca/.git",
+    "available_node_versions": [
+      "22.23.2",
+      "24.21.0"
+    ],
+    "pnpm_version": "12.4.2",
+    "tool_provider": "mise",
+    "node_and_pnpm_on_current_shell_path": false,
+    "existing_dependencies": "Installed Linux x64 dependencies match the #490 checkout's committed lockfile only. This is not evidence of compatibility with the final main lockfile.",
+    "pnpm_store": "/srv/dev/.pnpm-store/v11",
+    "chromium": "Not found in standard locations; readiness unverified.",
+    "playwright": {
+      "version": "1.63.0",
+      "chromium_revision": "1243",
+      "readiness": "unverified"
+    },
+    "memory": {
+      "available_gib": 1.77,
+      "total_gib": 15.62
+    },
+    "swap": "full",
+    "temp": {
+      "path": "/tmp",
+      "used_percent": 95,
+      "available_mib": 465
+    },
+    "disk": {
+      "path": "/srv/dev",
+      "available_gib": 171.78
+    },
+    "test_or_launch_authority": false
+  },
+  "ci_provenance": [
+    {
+      "source_id": "main",
+      "run_id": 37259879484,
+      "head_commit": "57f527308f82ab566c146cd160fe6a7eda620fc2",
+      "url": "https://github.com/cschadewitz/Project_Orca/actions/runs/37259879484",
+      "verified_status": "completed_success",
+      "qualification": "Both supported Node jobs passed, including their applicable checks. This result belongs only to this main revision, not the proposed combined source."
+    },
+    {
+      "source_id": "pr498",
+      "run_id": 37251742353,
+      "head_commit": "de9fb1ad21fbd8ce9c142b72816f7fb42fb09d58",
+      "url": "https://github.com/cschadewitz/Project_Orca/actions/runs/37251742353",
+      "verified_status": "completed_failure",
+      "qualification": "Node 22 A11 stdio 30000ms timeout: 4247 passed, 1 failed, 3 skipped; Node 24 successful. Keep this CI failure separate from the async-fence P2; root cause unproven.",
+      "triage_url": "https://github.com/cschadewitz/Project_Orca/pull/498#issuecomment-5986875808"
+    },
+    {
+      "source_id": "pr495",
+      "head_commit": "504e2dce10e0fd75420512d4d4857282b94c9758",
+      "qualification": "Owner handoff reports Node 22 green; Node 24 demo timeout failure and failed beforeAll suite. Do not claim exact-head full CI green.",
+      "triage_url": "https://github.com/cschadewitz/Project_Orca/pull/495#issuecomment-5986876453"
+    }
+  ],
+  "source_only_checks": [
+    "Verify all frozen refs, full commit objects, recorded trees and merge bases before assembly.",
+    "Inventory original worktree/branch status before and after without modifying it.",
+    "Verify independent Git directory/object storage; no common-dir sharing, hardlinks, alternates or borrowed dependency/build directories.",
+    "Record original-source and final prepared blob hashes/modes; validate exactly 55 immutable selections plus two deterministic composites and exactly 57 changed paths versus pinned main.",
+    "Verify all preserved main configuration pins and byte/mode equality outside the allowlist.",
+    "Inspect unresolved-index entries, conflict markers, whitespace and merge-parent graph using source-only Git/file inspection, without running repository code.",
+    "Record normal hook/filter/signing behavior and any blockers rather than bypassing it.",
+    "Record final clean status, prepared commit/tree, ordered merge parent lists, conflict decisions and nonsecret provenance.",
+    "Do not interpret these integrity checks as build, test, security, human gate or ORCA run acceptance."
+  ],
+  "deferred_verification_plan": {
+    "execution_allowed": false,
+    "requires_new_human_readiness_gate": true,
+    "prerequisite_inventory": [
+      "Fresh host pressure and active-job/run state",
+      "Safe disk-backed temp and output locations",
+      "Explicit supported executable paths",
+      "Exact final lockfile/dependency/bootstrap plan",
+      "Native worker and compiled fixture build prerequisites",
+      "Installed browser readiness and port/output collision check"
+    ],
+    "later_static_checks": [
+      "Workspace and renderer typecheck",
+      "Design freshness",
+      "Formatting",
+      "ESLint and CSS lint",
+      "Build, including emitted worker/compiled transport prerequisites"
+    ],
+    "focused_test_paths": [
+      "packages/protocol/test/host-resources.test.ts",
+      "packages/protocol/test/protocol.test.ts",
+      "packages/daemon/test/host-resources-collector.test.ts",
+      "packages/daemon/test/host-resources-native.test.ts",
+      "packages/daemon/test/host-workstreams.test.ts",
+      "packages/daemon/test/operator-host-resources.test.ts",
+      "packages/daemon/test/operator-integration-discovery.test.ts",
+      "packages/integrations/test/mcp-host-resources.test.ts",
+      "packages/integrations/test/mcp-host-resource-responses.test.ts",
+      "packages/app/renderer/test/resource-model.test.ts",
+      "packages/app/renderer/test/resource-view.test.tsx",
+      "packages/app/renderer/test/preview.test.tsx",
+      "packages/app/renderer/test/a11y-sweep.test.tsx",
+      "packages/app/renderer/test/scroll-sweep.test.tsx"
+    ],
+    "browser_config": "packages/app/renderer/test/resources-browser.config.ts",
+    "browser_limits": {
+      "workers": 1,
+      "port": 5274,
+      "output_directory": "/tmp/orca-resource-browser-results",
+      "qualification": "Frozen source uses this output path. Do not launch or change it during source assembly; any later execution needs safe output/temp handling approved separately."
+    },
+    "worker_limit_proposal": "For later authorized focused verification, use one worker initially; do not overlap heavy suites. Wider Node 22/24 acceptance follows the repository's bounded sequential matrix and a fresh readiness decision.",
+    "broader_acceptance": "Later full supported-Node and production-transport verification is required after the separate P2 fix. Preserve coverage thresholds/timeouts and report failed, skipped and unrun stages honestly.",
+    "no_automatic_follow_on": true
+  },
+  "required_return_fields": [
+    "target_checkout_path",
+    "git_common_directory",
+    "object_transfer_method",
+    "object_independence_evidence",
+    "tool_paths",
+    "temporary_storage_backing",
+    "frozen_ref_recheck",
+    "prepared_commit_sha",
+    "prepared_tree_sha",
+    "ordered_merge_commits_and_parents",
+    "actual_blob_manifest",
+    "composite_blob_hashes",
+    "conflict_and_resolution_report",
+    "outside_union_main_equality",
+    "main_configuration_pin_checks",
+    "original_checkout_unchanged_evidence",
+    "source_only_checks",
+    "final_status_porcelain",
+    "blockers",
+    "deferred_not_run_stages"
+  ],
+  "completion_label": "SOURCE_ASSEMBLY_ONLY; HUMAN READINESS GATE AND ALL EXECUTION STILL PENDING",
+  "artifact_validation": {
+    "expected_exact_blob_entries": 55,
+    "expected_composites": 2,
+    "expected_union_paths": 57,
+    "sha1_format": "40 lowercase hexadecimal characters",
+    "source_tree_consistency": "Verified against untruncated GitHub trees for all four pins; original source content also retained for deterministic composite hash validation.",
+    "result": "PASS",
+    "validated_sha1_fields": 198,
+    "verified_counts": {
+      "exact_entries": 55,
+      "composites": 2,
+      "union_paths": 57
+    },
+    "source_consistency": "All 55 entries, sizes and modes match the exact frozen Git tree metadata. All six composite input texts independently hash to their recorded Git blobs. Composite append segments match their pinned source lines; computed output hashes are expected values, not executed preparation results.",
+    "validated_at_utc": "2026-10-05T04:50:53Z"
+  }
+}
