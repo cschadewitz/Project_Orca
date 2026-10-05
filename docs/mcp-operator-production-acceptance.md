@@ -378,3 +378,34 @@ checks, authority classification, unsafe-boundary rejection, journal verificatio
 single decision and single execution remain in force. The #443 PR records bounded
 Node 22/24 baseline samples and validation against its final commit; passing random
 samples alone are not evidence that a race is fixed.
+
+### Pre-lease continuation contention correction (#499)
+
+The accepted base is `f799be0700044320d53a0dd606e4397b07a25053`.
+Deterministic shared-runtime barriers hold the winner inside summary loading,
+after its local running slot is reserved and before durable execution lease
+acquisition. Both same-model and separate-model retained-key responses schedule
+reconciliation. On the unchanged runtime, each loses with `RUN_LEASED` but
+publishes a second `blocked` marker while the winner remains at the barrier.
+Both strict regression cases fail there; cleanup releases the winner and drains
+execution. This reproduces #499's mechanism, not the uncaptured extra Linux CI
+event's exact state or interleaving.
+
+Pre-attachment `RUN_LEASED` now refuses the competing attempt without publishing
+a receipt transition. The original accepted intent remains inspectable while
+the winner attaches; the public journal remains exactly
+`accepted / accepted / settled` with one correlated decision, one attachment,
+one execution and one completion. Fresh terminal intent is refused without a
+new event. This rule also covers an actual file-lease refusal whose incumbent
+releases before error handling: acquiring a publication fence afterward does
+not make that refusal a failure of the shared intent. Separate interpreter/store
+instances still refuse execution against a real active lease.
+
+The regressions use real file stores, registered retry claims, protected journals,
+generation restoration and the interpreter, with the existing injected scheduler
+and labelled authority-wrapper fixture. They release every barrier and drain both
+models during cleanup. Existing authority/revocation, exact-boundary, generation,
+journal verification, and #448 post-completion/publication-refusal tests remain
+in force. Production L03's strict checks and read-only observation are unchanged.
+The PR records the final SHA and Node 22/24 build/check/test results. These tests
+do not establish actual-Cal, deployed-host or Windows acceptance.
