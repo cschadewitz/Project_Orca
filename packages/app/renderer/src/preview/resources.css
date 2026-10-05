@@ -1,0 +1,39 @@
+/* A stack of review content: one bounded root scrolls, even in a short window. No nested scroller. */
+.resource-preview {
+  box-sizing: border-box;
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  background: var(--surface-base);
+  color: var(--ink-primary);
+}
+.resource-preview > * {
+  flex: none;
+}
+.resource-preview__heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.resource-preview__heading h1,
+.resource-preview__heading p {
+  margin: 0;
+}
+.resource-preview a {
+  color: var(--accent);
+}
+.resource-preview__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+.resource-preview__controls label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
