@@ -1,8 +1,39 @@
-# Operator integration checkpoint
+# Operator integration status and checkpoints
 
-This is the shared integration of the three parallel handoffs, not production
-acceptance of #331, #356 or #327. No main merge, release, deployment or actual Cal
-connection is included.
+## Current main evidence map
+
+As of 4 October 2026, main is `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`.
+The sections below preserve the dated integration checkpoints and their original
+limits. Their statements that MCP mutation aliases are unmounted, or that no main
+merge exists, describe earlier commits. They are not current deployment guidance.
+
+| Claim on current main | Source and executable evidence | Limit |
+| --- | --- | --- |
+| `orca serve` conditionally mounts the authenticated read/preflight sources and ten production mutation/receipt aliases; discovery reflects installed operations and current grants. | [`server.ts`](../packages/daemon/src/server.ts), [`methods.ts`](../packages/daemon/src/methods.ts), [`operator-mutations.ts`](../packages/daemon/src/operator-mutations.ts), [discovery tests](../packages/daemon/test/operator-integration-discovery.test.ts), production F01/L01/A11 | A method is advertised only when its service and authority are available; the inventory alone does not mount it. |
+| Stdio and Streamable HTTP MCP use the caller's credential and current daemon authority, with no adapter retry ledger. | [`server.ts`](../packages/integrations/src/mcp/server.ts), [`backend.ts`](../packages/integrations/src/mcp/backend.ts), [`transport.ts`](../packages/integrations/src/mcp/transport.ts), [adapter contract tests](../packages/integrations/test/mcp-operator-production-contract.test.ts), production A01–A09 | The HTTP handler needs a separately supplied TLS listener or approved bridge; tests use loopback. |
+| Request/direct admission, receipt recovery, durable/live decisions, root continuation, cancellation and revision execute through the compiled daemon. | [Lifecycle L01–L05](../packages/integrations/test/mcp-operator-production-lifecycle.test.ts), [recovery R01–R05](../packages/integrations/test/mcp-operator-production-recovery.test.ts), [authority A01–A12](../packages/integrations/test/mcp-operator-production-authority.test.ts). [CI 37163133592](https://github.com/cschadewitz/Project_Orca/actions/runs/37163133592) passed the required-mount matrix on Node 22/24. | See the [matrix coverage limits](mcp-operator-production-acceptance.md#executable-matrix); passing reference clients is not actual-Cal acceptance. |
+| Direct daemon HTTP/WS enforce credential, operation, resource, notification, gate and audit boundaries. | [`auth/operations.ts`](../packages/daemon/src/auth/operations.ts), [HTTP security tests](../packages/daemon/test/security-http.test.ts), [socket security tests](../packages/daemon/test/security-socket.test.ts), [deployment tests](../packages/daemon/test/security-deployment.test.ts) | Workflow-editor draft ownership, secret-reference integration and combined #336 raw-config migration are not established by this inventory. |
+| Actual Cal performed one authenticated `discover_orca` read through the connected tunnel, as recorded in [#327](https://github.com/cschadewitz/Project_Orca/issues/327). | Issue observation dated 2026-10-04 00:32:43 UTC; service principal `cal-codex-work`, owned runs for workflow `cal-codex-work`, six grants. | The observed agent-01 binary is older commit `3702da5b38dc449280c2837366615de741e9c45c`, ORCA 0.6.0/protocol 2.0. Its discovery does not prove that current main is deployed there, grant access to selected historical runs, or exercise write/confirmation paths. |
+
+The outstanding #327 acceptance is actual-Cal investigation, launch, recovery,
+gate-negative, denial and tool-intent behavior on an authorized deployment; [#393](https://github.com/cschadewitz/Project_Orca/issues/393)
+tracks that execution proof. MCP exposes no pending-revision text/replacement/history
+tool. Current preflight refuses a captured stored definition it cannot validate
+exactly, even if that stored version is otherwise launchable. Root continuation
+is bounded to supported durable boundaries; it is not a generic retry or resume.
+
+The outstanding #328 documentation and cross-feature security criteria remain
+open in [#328](https://github.com/cschadewitz/Project_Orca/issues/328).
+The current grant model covers existing methods, while workflow-editor draft
+read/edit/publish/ownership, secret-reference use and full #336 migration alignment
+are not proven by the present MCP and daemon security suites. No criterion is
+waived by documenting the shipped core.
+
+## Historical integration checkpoints
+
+The following text records the staged integration of the three parallel handoffs.
+At that checkpoint, it was not production acceptance of #331, #356 or #327, and
+no main merge, release, deployment or actual Cal connection was included.
 
 ## Current continuation composition
 

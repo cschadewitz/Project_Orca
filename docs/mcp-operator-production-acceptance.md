@@ -1,16 +1,20 @@
-# Production MCP acceptance — ownership C
+# Production MCP acceptance (#327)
 
-Base: `4937f4c083c572d07b840258724ef600368a7a5d`. Branch:
-`test/327-production-acceptance-c`. This branch changes only the four C-owned
-integration test files and this document. The frozen contract is
-[mcp-operator-production-contract.md](mcp-operator-production-contract.md).
-It does not install the production handlers or import A/B branches.
+**Current main, 4 October 2026:** `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`
+includes the production handlers and the 60-case compiled matrix below. Its
+[CI run](https://github.com/cschadewitz/Project_Orca/actions/runs/37163133592)
+passed on Node 22 and 24, with `ORCA_MCP_REQUIRE_PRODUCTION=1` in both jobs;
+missing aliases therefore fail rather than skip. This is reference-client and
+compiled-daemon evidence, not proof of the full actual-Cal or deployed-host
+acceptance. The first actual-Cal authenticated `discover_orca` observation recorded
+in [#327](https://github.com/cschadewitz/Project_Orca/issues/327) used older
+agent-01 runtime `3702da5b38dc449280c2837366615de741e9c45c`; it does not
+validate this current-main binary on that host.
 
-The C branch retains the frozen preparation runtime. Combined validation uses a
-separate worktree at #434 commit `951950dbf685bd3b9054a8399346eed15b403b4c`, with only
-C-owned tests overlaid and the runtime built there. The latest combined evidence
-is recorded below; preparation-only skips remain historical evidence, not alias
-acceptance. Actual-Cal connectivity remains separate #393 proof.
+The C-branch setup and #434 overlay described in the later historical sections
+are dated preparation evidence. They no longer describe the installation state of
+current main. The [evidence map](runtime-operator-integration.md#current-main-evidence-map)
+separates code, compiled tests and deployed observations.
 
 ## Execution
 
@@ -27,18 +31,15 @@ pnpm exec tsc --noEmit
 pnpm exec eslint packages/integrations/test/mcp-operator-production-*.ts
 pnpm exec prettier --check packages/integrations/test/mcp-operator-production-*.ts docs/mcp-operator-production-acceptance.md
 
-# Preparation report: discover the real deployment; mark missing mounts BLOCKED/skipped.
-pnpm exec vitest run packages/integrations/test/mcp-operator-production-{lifecycle,recovery,authority}.test.ts --maxWorkers=1
-
-# Release/integration acceptance: missing production mounts are failures, never skips.
+# Current-main acceptance: missing production mounts are failures, never skips.
 ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-{lifecycle,recovery,authority}.test.ts --maxWorkers=1
 
 # Machine-readable evidence, without adding generated reports to the branch.
-pnpm exec vitest run packages/integrations/test/mcp-operator-production-{lifecycle,recovery,authority}.test.ts --maxWorkers=1 --reporter=json --outputFile=/tmp/orca-mcp-production-results.json
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-{lifecycle,recovery,authority}.test.ts --maxWorkers=1 --reporter=json --outputFile=/tmp/orca-mcp-production-results.json
 
 # Select one row by its stable ID, e.g. response loss or exact live identity.
-pnpm exec vitest run packages/integrations/test/mcp-operator-production-recovery.test.ts -t R01 --maxWorkers=1
-pnpm exec vitest run packages/integrations/test/mcp-operator-production-authority.test.ts -t A04 --maxWorkers=1
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-recovery.test.ts -t R01 --maxWorkers=1
+ORCA_MCP_REQUIRE_PRODUCTION=1 pnpm exec vitest run packages/integrations/test/mcp-operator-production-authority.test.ts -t A04 --maxWorkers=1
 ```
 
 Loopback listeners and child processes must be permitted by the runner. A sandbox
@@ -154,6 +155,14 @@ a typed transient-unavailability classification. A07 checks the publication edge
 not every awaited daemon authorization boundary. These limits remain integration
 follow-up within #327; this matrix is not a claim of complete production acceptance.
 
+Current-main verification does not yet establish TLS termination or private-tunnel
+lifecycle on agent-01, the current binary's host activation, or Cal's tool selection
+and confirmation behavior. The observed Cal discovery on the older runtime proves
+one authenticated read for that principal and scope only. #327's remaining
+pre-existing-run, Request/direct-run, cancel/recovery, exact gate-negative,
+denial/truncation/secret-fixture and follow-up cases require actual-client evidence
+under [#393](https://github.com/cschadewitz/Project_Orca/issues/393).
+
 The ten aliases are exercised positively by A11 and these MCP cases:
 
 | RPC | MCP tool | Principal cases |
@@ -169,7 +178,7 @@ The ten aliases are exercised positively by A11 and these MCP cases:
 | `operator.reconcileContinuation` | `reconcile_continuation` | L02, R04 |
 | `operator.revise` | `revise_input` | L04, R05 |
 
-## Historical initial preparation evidence
+## Historical initial preparation evidence (C branch)
 
 Initial commit `9720e7d736bcacdd04ae3609c3ab175d91169290` was executed on 2026-10-03 with Node `24.21.0` and pnpm `12.4.2`, using a build made
 from the frozen base in this isolated checkout:

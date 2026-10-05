@@ -8,7 +8,7 @@
 import { ConfigurationGenerations, type GenerationMaterial } from "./configuration-generation.js";
 import { configuredGenerationSecrets, launchProvenance } from "./configuration-provenance.js";
 
-import { AgentRegistry, openAcpSession, type AgentSession, type OpenSessionOptions } from "@orca/agents";
+import { AgentRegistry, LocalHost, openAcpSession, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import { applyModel, currentModel, selectedModel } from "./session-model.js";
 import {
   describeError,
@@ -847,6 +847,7 @@ export class Orchestrator {
           throw new OrcaError("RUN_STATE", "continuation requires a sealed durable root decision boundary");
         // Execution authority is checked under the same fence as the attached marker.
         await this.liveInput?.prepareExecution?.(runId);
+        await this.validateOwnedWorkspace(context);
         await prepareAdmissionExecution(this.stores, context, this.admissionExecution, true);
         await beforeExecute(context);
       });
@@ -1309,6 +1310,7 @@ export class Orchestrator {
       const context = rc;
       await context.withOwnership(async () => {
         await this.liveInput?.prepareExecution?.(runId);
+        await this.validateOwnedWorkspace(context);
         await prepareAdmissionExecution(this.stores, context, this.admissionExecution, recovery);
       });
       return await this.execute(rc);
@@ -1376,6 +1378,19 @@ export class Orchestrator {
       },
       release: () => keeper.release(),
     };
+  }
+
+  /** Caller holds the execution lease's mutation fence, before consuming attachment evidence. */
+  private async validateOwnedWorkspace(rc: RunContext): Promise<void> {
+    if (rc.workspace.rootProvisioning) {
+      const generation = this.contextGenerations.get(rc);
+      const provider =
+        generation && this.generationWorkspaceProvider
+          ? this.generationWorkspaceProvider(generation)
+          : this.workspaceProvider;
+      if (!provider.validate) throw unavailable();
+      await provider.validate(rc.workspace);
+    }
   }
 
   private async execute(rc: RunContext): Promise<RunState> {
@@ -1810,6 +1825,11 @@ export class Orchestrator {
     const { agent, host } = (this.contextGenerations.get(rc)?.agents ?? this.agents)
       .withOverrides(rc.state.run.overrides)
       .resolve(selector);
+    if (
+      rc.workspace.rootProvisioning &&
+      (process.platform !== "linux" || !(host instanceof LocalHost) || host.id !== rc.workspace.hostId)
+    )
+      throw new OrcaError("RUN_STATE", "Owned root workspace requires its matching supported local execution host");
     const key = `${rc.id}:${agent.id}`;
     const model = selectedModel(rc.state.run.overrides, agent);
     const pooled = agent.sessionMode === "per-run" ? this.sessions.get(key) : undefined;

@@ -39,6 +39,8 @@ export const WorkspaceSchema = z.object({
   previousBranch: z.string().optional(),
   /** Provider that created it (git-worktree, kepler, t3code, ...). */
   provider: z.string().optional(),
+  /** Built-in owned root identity, inherited unchanged by children. */
+  rootProvisioning: z.object({ runId: z.string(), baseCommit: z.string() }).optional(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 

@@ -18,6 +18,9 @@ import {
 import { checkProfile, childEnvironment, launch } from "../deploy/private-mcp-service/launch-mcp.js";
 
 const dirs = [];
+// These acceptance fixtures require POSIX ownership/modes and /usr/bin/env.
+// Keep the real filesystem and process assertions enabled on Linux CI.
+const linuxIt = it.skipIf(process.platform !== "linux");
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -138,6 +141,8 @@ describe("reviewed credential policy", () => {
     ])
       expect(() => validateCredential(p, token, store({ ...record(p), ...patch }))).toThrow();
     expect(() => validateCredential(p, `orca1.${credentialId}.${"B".repeat(43)}`, store(record(p)))).toThrow();
+    // Literal separators must not regress to wildcard dots during launcher preparation.
+    expect(() => validateCredential(p, `orca1X${credentialId}X${secret}`, store(record(p)))).toThrow();
     expect(() => validateCredential(p, "owner-token", store(record(p)))).toThrow();
   });
   it("rejects a changed authenticated target or grant", () => {
@@ -152,7 +157,7 @@ describe("reviewed credential policy", () => {
       validateDiscovery(p, { ...discovery(p), scope: { ...scope, permissions: [...p.permissions, "plan.read"] } }),
     ).toThrow();
   });
-  it("checks regular files, private mode, owner and symlink safety without exposing contents", () => {
+  linuxIt("checks regular files, private mode, owner and symlink safety without exposing contents", () => {
     const paths = files();
     expect(readPrivateFile(paths.token)).toBe(`${token}\n`);
     chmodSync(paths.token, 0o644);
@@ -181,7 +186,7 @@ describe("reviewed credential policy", () => {
 });
 
 describe("guarded launcher", () => {
-  it("probes authenticated discovery before stdio and keeps control-plane secrets out of the child", async () => {
+  linuxIt("probes authenticated discovery before stdio and keeps control-plane secrets out of the child", async () => {
     const p = profile();
     const paths = files(p);
     const output = new PassThrough();
@@ -219,7 +224,7 @@ describe("guarded launcher", () => {
     expect(bytes).toBe('{"jsonrpc":"2.0"}\n');
     expect(spawnMock).toHaveBeenCalledOnce();
   });
-  it("refuses failed discovery before spawn and forwards termination to child", async () => {
+  linuxIt("refuses failed discovery before spawn and forwards termination to child", async () => {
     const p = profile();
     const paths = files(p);
     const spawnMock = vi.fn();
@@ -247,7 +252,7 @@ describe("guarded launcher", () => {
     expect(await running).toBe(143);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
-  it("requires a reviewed post-start pin for a second boot and preserves every authority check", async () => {
+  linuxIt("requires a reviewed post-start pin for a second boot and preserves every authority check", async () => {
     const first = profile();
     const second = profile();
     second.target.instanceId = "33333333-3333-4333-8333-333333333333";
@@ -282,7 +287,7 @@ describe("guarded launcher", () => {
       );
     }
   });
-  it("check-only CLI succeeds silently without spawning the configured MCP executable", () => {
+  linuxIt("check-only CLI succeeds silently without spawning the configured MCP executable", () => {
     const p = profile();
     const paths = files(p);
     const fixture = join(resolve(paths.profile, ".."), "discovery-fixture.mjs");
@@ -356,7 +361,7 @@ it("service templates pin one local daemon and one downstream tunnel with bounde
     expect(unit).toMatch(/TimeoutStopSec=30s/);
   }
   expect(daemon).toMatch(/serve --host 127\.0\.0\.1 --port 33871/);
-  expect(tunnel).toMatch(/Requires=orca-daemon\.service/);
+  expect(tunnel).toMatch(/Wants=orca-daemon\.service/);
   expect(daemon).not.toMatch(/PartOf=orca-tunnel|Requires=orca-tunnel/);
   expect(yaml).toMatch(/api_key: file:/);
   expect(yaml).toMatch(/listen_addr: 127\.0\.0\.1:/);
@@ -364,7 +369,7 @@ it("service templates pin one local daemon and one downstream tunnel with bounde
   expect(yaml).not.toMatch(/server_urls:|harpoon:/);
 });
 
-it("service entry clears ambient tunnel and Node overrides before starting either runtime", () => {
+linuxIt("service entry clears ambient tunnel and Node overrides before starting either runtime", () => {
   const dir = mkdtempSync(join(tmpdir(), "orca-entry-"));
   dirs.push(dir);
   const preload = join(dir, "preload.cjs");
@@ -385,11 +390,12 @@ it("service entry clears ambient tunnel and Node overrides before starting eithe
     const template = readFileSync(`tools/deploy/private-mcp-service/${name}.service.template`, "utf8");
     const entry = template.split("\n").find((line) => line.startsWith("ExecStart="));
     const prefix = entry.slice("ExecStart=".length).split(name === "orca-daemon" ? "@NODE@" : "@TUNNEL_CLIENT@")[0];
-    expect(prefix).toBe("/usr/bin/env -i HOME=@SERVICE_HOME@ PATH=@REVIEWED_PATH@ LANG=C ");
+    expect(prefix).toBe("/usr/bin/env -i HOME=@SERVICE_HOME@ PATH=@REVIEWED_PATH@ LANG=C TMPDIR=@TMPDIR@ ");
     const [binary, ...args] = prefix
       .trim()
       .replace("@SERVICE_HOME@", dir)
       .replace("@REVIEWED_PATH@", "/usr/bin:/bin")
+      .replace("@TMPDIR@", dir)
       .split(" ");
     // Exercise the actual template prefix with Node as a synthetic service executable.
     const result = spawnSync(
@@ -403,7 +409,7 @@ it("service entry clears ambient tunnel and Node overrides before starting eithe
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(JSON.parse(result.stdout)).toEqual({ HOME: dir, PATH: "/usr/bin:/bin", LANG: "C" });
+    expect(JSON.parse(result.stdout)).toEqual({ HOME: dir, PATH: "/usr/bin:/bin", LANG: "C", TMPDIR: dir });
     const reviewed = spawnSync(
       binary,
       [

@@ -44,6 +44,29 @@ const EnvelopeSchema = z.strictObject({
 const unreadable = () =>
   new OrcaError("RUN_STATE", "protected execution record or key is missing, invalid or unreadable");
 
+// Identity, not an error code/message or caller-supplied data, selects a fixed diagnostic.
+// Reconstruct at the boundary so even a mutated internal error cannot carry plaintext.
+const safeFailures = new WeakMap<object, "record" | "limit">();
+export function protectedRecordInvalid(): OrcaError {
+  const error = new OrcaError("RUN_STATE", "protected execution record is missing or invalid");
+  safeFailures.set(error, "record");
+  return error;
+}
+
+/** Internal single-record validator boundary; no arbitrary exceptions may escape replay. */
+export async function validatePrivateJson<T>(
+  read: () => Promise<unknown[]>,
+  validate: (records: unknown[]) => Promise<T>,
+): Promise<T> {
+  try {
+    const records = await read();
+    if (records.includes(undefined)) throw unreadable();
+    return await validate(records);
+  } catch (error) {
+    throw observationError(error);
+  }
+}
+
 interface FileObservation {
   dir: string;
   name: string;
@@ -72,10 +95,17 @@ const privateObservation = new AsyncLocalStorage<PrivateObservation>();
 class ObservationLimitError extends OrcaError {
   constructor() {
     super("RUN_STATE", "protected execution observation exceeds record limit");
+    safeFailures.set(this, "limit");
   }
 }
 function observationError(error: unknown): OrcaError {
-  const failure = error instanceof ObservationLimitError ? error : unreadable();
+  const diagnostic = safeFailures.get(error as object);
+  const failure =
+    diagnostic === "record"
+      ? protectedRecordInvalid()
+      : diagnostic === "limit"
+        ? new ObservationLimitError()
+        : unreadable();
   const scope = privateObservation.getStore();
   if (scope) scope.failure ??= failure;
   return failure;
@@ -222,7 +252,7 @@ export async function observePrivateReads<T>(
   let value: T;
   try {
     value = await privateObservation.run(scope, work);
-    if (scope.failure) throw scope.failure;
+    if (scope.failure) throw observationError(scope.failure);
   } finally {
     scope.active = false;
   }
@@ -478,7 +508,16 @@ export async function readPrivateJsonBatch<T>(
         return decodeRecord(dir, name, bytes, key);
       }),
     );
-    const result = await validate(records);
+    let result: T | undefined;
+    let failure: OrcaError | undefined;
+    try {
+      result = await validate(records);
+    } catch (error) {
+      // Delay poisoning until after terminal verification. A validator refusal does
+      // not excuse a changed key/identity, which must take precedence over diagnostics.
+      const diagnostic = safeFailures.get(error as object);
+      failure = diagnostic === "record" ? protectedRecordInvalid() : unreadable();
+    }
     terminal = await replayKey(dir);
     if (
       entry.directory !== terminal.directory ||
@@ -486,7 +525,8 @@ export async function readPrivateJsonBatch<T>(
       !timingSafeEqual(entry.bytes, terminal.bytes)
     )
       throw unreadable();
-    return result;
+    if (failure) throw failure;
+    return result as T;
   } catch (error) {
     throw observationError(error);
   } finally {

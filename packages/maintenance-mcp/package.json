@@ -1,0 +1,25 @@
+{
+  "name": "@orca/maintenance-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Inactive independent read-only maintenance contract; production observations unavailable",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit --composite false"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.2.0",
+    "zod": "4.6.5"
+  }
+}

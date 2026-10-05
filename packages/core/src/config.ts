@@ -19,6 +19,8 @@ export const WorkspaceProviderConfigSchema = z.discriminatedUnion("provider", [
     worktreeRoot: z.string().optional(),
     baseBranch: z.string().default("main"),
     branchPrefix: z.string().default("orca/"),
+    /** Opt-in owned direct/root worktrees on the built-in local Linux host. */
+    isolateRoots: z.boolean().optional(),
     hostId: z.string().default(LOCAL_HOST_ID),
   }),
   /** Inside a Kepler task: reuse the task's worktrees. */

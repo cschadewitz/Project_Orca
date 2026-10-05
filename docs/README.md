@@ -12,10 +12,13 @@
 | [EXTENSIBILITY.md](EXTENSIBILITY.md) | add node types, transports, hosts, stores, human channels via plugins |
 | [ROADMAP.md](ROADMAP.md) | compare implemented capabilities with planned ship groups and dependencies |
 | [Tool-call safety research](research/tool-call-safety/README.md) | review the proposed implicit policy/approval layer, adapter limits, threat model and implementation options (research only) |
+| [Apple Watch approvals research](preparation/apple-watch-approvals/README.md) | compare mobile alerts and remote approval options, security contracts, and proposed implementation phases |
 | [UPDATING.md](UPDATING.md) | update the desktop app and daemon with admission and compatibility checks |
 | [Historical review](../Current_State/README.md) | read the preserved 2026-09-29 snapshot and its dated reconciliation |
 | [Protocol reference](../packages/protocol/README.md) | inspect the current wire contract and version history |
 | [adr/](adr/) | the architectural decision records, including daemon boundaries and permission sidecars |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | build, test, and review the code base |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | plan issues, reuse existing work, group coherent outcomes and make dependencies explicit |
+| [SwiftUI read-only pilot preparation](preparation/swiftui-readonly-pilot/README.md) | review iPhone screens, portable synthetic contracts, device prerequisites and the milestone 24 spike handoff |
 | [RELEASING.md](RELEASING.md) | cut a release: the versioning policy, what counts as breaking, and the milestone‑driven flow |
+| [iOS companion research](preparation/ios-companion/README.md) | compare mobile frameworks and review the proposed phone scope, shared Watch contracts, security, costs and acceptance gates |

@@ -1,0 +1,32 @@
+Scope: all 14 workspace projects
+✓ Lockfile passes supply-chain policies (verified 1d ago)
+Lockfile is up to date, resolution step is skipped
+Downloading electron-winstaller@5.4.0: 0.00 B/9.14 MB
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: /srv/dev/worktrees/Project_Orca-prepare-49efcc7-candidate-validation-81dde16f/.candidate-store/v11
+  Virtual store is at:             node_modules/.pnpm
+Downloading @typescript/typescript-linux-x64@7.0.2: 0.00 B/9.66 MB
+Downloading @rolldown/binding-linux-x64-gnu@1.2.11: 0.00 B/7.94 MB
+Downloading @rolldown/binding-linux-x64-gnu@1.2.11: 4.21 MB/7.94 MB
+Packages: +461
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 461, reused 0, downloaded 461, added 461, done
+.../esbuild@0.28.2/node_modules/esbuild postinstall$ node install.js
+.../esbuild@0.28.2/node_modules/esbuild postinstall: Done
+
+devDependencies:
++ @axe-core/playwright 4.13.0
++ @modelcontextprotocol/client 2.2.0
++ @modelcontextprotocol/core 2.2.0
++ @orca/eslint-config link:tools/eslint-config
++ @playwright/test 1.63.0
++ @types/node 26.6.3
++ @vitest/coverage-v8 5.0.2
++ eslint 10.11.0
++ happy-dom 20.14.5
++ prettier 3.9.9
++ tsx 4.23.15
++ typescript 7.0.2
++ vitest 5.0.2
+
+Done in 2.8s using pnpm v12.4.2
