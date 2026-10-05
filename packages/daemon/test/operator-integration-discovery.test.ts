@@ -115,8 +115,9 @@ describe("operator runtime integration discovery", () => {
   it("advertises configured operator reads when no capability flags were supplied", async () => {
     const result = await discovery(context({ capabilities: [], operatorReads: operatorReads(OPERATOR_METHODS) }));
     for (const name of OPERATOR_METHODS) {
-      expect(result.capabilities).toContain(name);
-      expect(result.methods).toContain(name);
+      // Telemetry is mounted through its explicit source, not the general read inventory.
+      expect(result.capabilities.includes(name)).toBe(name !== "operator.hostResources");
+      expect(result.methods?.includes(name)).toBe(name !== "operator.hostResources");
     }
   });
 
