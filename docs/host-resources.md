@@ -163,6 +163,21 @@ trusted implementation seams, not transport input.
 
 ## Evidence and remaining acceptance
 
+[CI run 37237386507](https://github.com/cschadewitz/Project_Orca/actions/runs/37237386507)
+passed for PR head `a94d78a5e7e8ebb8cd8274a71cbe0a4010058d93` on
+2026-10-05. Both Node 22 and Node 24 jobs checked out the synthetic merge
+`785b4f54f1b18eeba8cf4d2f00d83e9829253a90` with base
+`a299db8bb9d7eb47c103090b9f62d7af3f3db29b`. Each full suite passed
+4,150 tests across 327 files, with three tests/files skipped. Both jobs also
+passed the two opt-in CLI/ACP retry acceptance tests without skips, the build
+and compiled CLI demo. The Node 24 job passed typecheck, design freshness,
+formatting, lint and coverage thresholds: statements 91.67%, branches 84.63%,
+functions 93.17% and lines 94.21%.
+
+These results cover the recorded source and merge above. Later documentation
+commits do not constitute new runtime validation, and CI does not establish
+agent-01 host observations or the connected-consumer acceptance below.
+
 Contract/fixture tests, source-adapter tests and measured synthetic overhead are
 recorded in the draft PR. They do not establish agent-01 production acceptance.
 Exact-source agent-01 Linux measurements, identity/boot verification, cgroup
