@@ -361,6 +361,14 @@ fence and legacy-writer refusals are documented in
 [ownership compatibility](v0.5.2-ownership-compatibility.md).
 
 Durable continuation attachment and receipt settlement are separate fenced writes.
+Before attachment, lease contention refuses the competing reconciliation with
+`RUN_LEASED` and preserves the shared receipt. This includes the interval after an
+interpreter reserves its local running slot but before it acquires the durable
+execution lease, and an incumbent releasing its lease before the refusal is handled.
+An accepted receipt records durable intent; it does not promise execution ownership.
+The winning continuation records attachment and settlement once, without a transient
+`blocked / leased` publication from the loser. Authority, generation and boundary
+failures still publish their existing fenced blocked states when safe to do so.
 Execution releases its lease before the final receipt write. A competing replay
 that previously read `dispatch: needed` must reread the verified journal and run
 history under the fence: a now-attached terminal run settles, while a nonterminal

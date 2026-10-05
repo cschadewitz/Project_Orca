@@ -632,15 +632,20 @@ export class ContinuationAdmissionModel {
         }
         const code =
           error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
+        // Local reservation precedes the durable execution lease. A losing attempt
+        // can therefore acquire the publication fence while the winner is still
+        // attaching. Lease contention refuses this attempt, not the shared intent:
+        // preserve its receipt even if the incumbent releases before we handle it.
+        if (code === "RUN_LEASED") {
+          refuse(error);
+          return;
+        }
         const reason: NonNullable<ContinuationReceipt["blockedReason"]> =
-          code === "RUN_LEASED"
-            ? "leased"
-            : code.startsWith("AUTH_") ||
-                (error instanceof OrcaError && error.details?.executionResumeRequired === true)
-              ? "authority-unavailable"
-              : code === "CONTINUATION_STALE"
-                ? "unsafe-boundary"
-                : "generation-unavailable";
+          code.startsWith("AUTH_") || (error instanceof OrcaError && error.details?.executionResumeRequired === true)
+            ? "authority-unavailable"
+            : code === "CONTINUATION_STALE"
+              ? "unsafe-boundary"
+              : "generation-unavailable";
         try {
           const blocked = await this.fenced(entry.receipt.runId, async () => {
             const fresh = await this.latest(entry.receipt.runId, entry.receipt.continuationId);
