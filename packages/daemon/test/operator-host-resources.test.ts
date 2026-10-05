@@ -1,6 +1,12 @@
 /** The proposed telemetry grant and caller-scoped summary boundary, using exact #495 fixtures. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hostResourceFixture, workstreamSummaryFixture, HOST_RESOURCE_LIMITS, PROTOCOL_VERSION } from "@orca/protocol";
+import {
+  hostResourceFixture,
+  workstreamSummaryFixture,
+  HOST_RESOURCE_LIMITS,
+  PROTOCOL_VERSION,
+  resourceWarnings,
+} from "@orca/protocol";
 import {
   HostResourceReadModel,
   methodsFor,
@@ -52,13 +58,19 @@ function setup(permissions: Permission[] = ["host.telemetry.read", "runs.read"])
     runIds: ["root", "child", "parked", "uncertain"],
     read: vi.fn(async () => JSON.stringify(workstreamSummaryFixture())),
     current: vi.fn(async () => true),
+    publishable: vi.fn(() => true),
   };
   const source: HostResourceReadSource = { snapshot, workstreams: vi.fn(async () => projection) };
   const access = {
     current: () => principal,
     allowsRun: vi.fn(async (_p: Principal, _id: string) => true),
   };
-  const model = new HostResourceReadModel(target, source, () => clock);
+  const model = new HostResourceReadModel(
+    target,
+    source,
+    () => clock,
+    () => Date.parse(hostResourceFixture().collectedAt) + clock,
+  );
   return {
     model,
     source,
@@ -72,6 +84,9 @@ function setup(permissions: Permission[] = ["host.telemetry.read", "runs.read"])
     principal: () => principal,
     advance: () => {
       clock += HOST_RESOURCE_LIMITS.refreshMs;
+    },
+    elapse: (ms: number) => {
+      clock += ms;
     },
   };
 }
@@ -237,6 +252,116 @@ describe("host telemetry policy (proposal)", () => {
     await expect(g.read()).rejects.toMatchObject({ code: "RUN_STATE" });
   });
 
+  it.each(["ownership", "visibility", "lineage", "coverage"])(
+    "fences %s changes during a later final check without changing the credential",
+    async (kind) => {
+      const f = setup();
+      const owned = new Set(f.projection.runIds);
+      let valid = true;
+      f.projection.current = vi.fn(async () => true);
+      f.projection.publishable = vi.fn(() => valid && f.projection.runIds.every((id) => owned.has(id)));
+      let calls = 0;
+      f.access.allowsRun.mockImplementation(async (_principal, id) => {
+        if (++calls === 8) {
+          if (kind === "ownership") owned.delete("root");
+          else valid = false;
+        }
+        return owned.has(id);
+      });
+      await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
+      expect(f.access.allowsRun).toHaveBeenCalledTimes(8);
+      expect(f.projection.current).toHaveBeenCalledTimes(1);
+      expect(f.projection.publishable).toHaveBeenCalledTimes(1);
+      expect(f.principal().permissions.has("runs.read")).toBe(true);
+    },
+  );
+
+  it("fails closed when a malformed fence returns a promise instead of synchronous authority", async () => {
+    const f = setup();
+    Object.assign(f.projection, { publishable: async () => true });
+    await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
+  });
+
+  it("checks the fence after the operation promise settles and sanitizes fence failures", async () => {
+    const f = setup();
+    f.projection.publishable = () => {
+      throw new Error("SECRET ownership index");
+    };
+    await expect(f.read()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: "Resource observation is unavailable; retry later",
+    });
+    const g = setup();
+    let valid = true;
+    let calls = 0;
+    g.access.allowsRun.mockImplementation(async () => {
+      if (++calls === 8)
+        queueMicrotask(() => {
+          valid = false;
+        });
+      return true;
+    });
+    g.projection.publishable = () => valid;
+    await expect(g.read()).rejects.toMatchObject({ code: "RUN_STATE" });
+  });
+
+  it("rejects a provider without a synchronous publication fence before summary collection", async () => {
+    const f = setup();
+    Reflect.deleteProperty(f.projection, "publishable");
+    await expect(f.read()).rejects.toMatchObject({ code: "PROTOCOL_MESSAGE" });
+    expect(f.projection.read).not.toHaveBeenCalled();
+  });
+
+  it("composes a genuinely later summary through the final checks without renewing observations", async () => {
+    const f = setup();
+    const summary = workstreamSummaryFixture();
+    if (!("value" in summary)) throw new Error();
+    summary.observedAt = "2026-10-04T12:00:00.001Z";
+    f.projection.read = async () => {
+      f.elapse(1);
+      return JSON.stringify(summary);
+    };
+    f.projection.current = async () => {
+      f.elapse(5);
+      return true;
+    };
+    const result = await f.read();
+    expect(result.collectedAt).toBe("2026-10-04T12:00:00.006Z");
+    expect(result.ageMs).toBe(6);
+    expect(result.cpu).toMatchObject({ observedAt: hostResourceFixture().collectedAt, ageMs: 6 });
+    expect(result.workstreams).toEqual({ ...summary, ageMs: 5 });
+  });
+
+  it("ages expiring host observations and warnings during summary composition", async () => {
+    const f = setup();
+    const host = hostResourceFixture("pressure");
+    if (!("value" in host.cpu)) throw new Error();
+    host.cpu = { ...host.cpu, ageMs: 14999 };
+    f.snapshot.mockResolvedValue(JSON.stringify(host));
+    f.projection.current = async () => {
+      f.elapse(2);
+      return true;
+    };
+    const result = await f.read();
+    expect(result.cpu).toMatchObject({
+      status: "stale",
+      reason: "expired",
+      ageMs: 15001,
+      observedAt: host.collectedAt,
+    });
+    expect(result.warnings.map((warning) => warning.code)).not.toContain("cpu-pressure");
+    expect(result.warnings.map((warning) => warning.code)).toContain("stale-data");
+  });
+
+  it("keeps future summary timestamps invalid rather than rewriting their observation time", async () => {
+    const f = setup();
+    const summary = workstreamSummaryFixture();
+    if (!("value" in summary)) throw new Error();
+    summary.observedAt = "2026-10-04T12:00:01.000Z";
+    f.projection.read = async () => JSON.stringify(summary);
+    await expect(f.read()).rejects.toMatchObject({ code: "PROTOCOL_MESSAGE" });
+  });
+
   it.each(
     [
       "not-json",
@@ -315,6 +440,35 @@ describe("host telemetry policy (proposal)", () => {
     f.snapshot.mockResolvedValue(JSON.stringify(snapshot));
     await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
   });
+
+  it.each(["available", "stale"] as const)(
+    "retains known boot provenance through an unavailable reading before a %s replacement",
+    async (status) => {
+      const f = setup(["host.telemetry.read"]);
+      await f.read();
+      f.advance();
+      const missing = hostResourceFixture();
+      missing.sequence = 2;
+      missing.bootId = { status: "unavailable", source: "linux-boot-id", reason: "source-failed" };
+      missing.warnings = resourceWarnings(missing);
+      f.snapshot.mockResolvedValue(JSON.stringify(missing));
+      expect((await f.read()).bootId).toEqual(missing.bootId);
+      f.advance();
+      const replacement = hostResourceFixture();
+      replacement.sequence = 3;
+      if (!("value" in replacement.bootId)) throw new Error();
+      replacement.bootId.value = crypto.randomUUID();
+      if (status === "stale") replacement.bootId = { ...replacement.bootId, status, reason: "source-failed" };
+      replacement.warnings = resourceWarnings(replacement);
+      f.snapshot.mockResolvedValue(JSON.stringify(replacement));
+      await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
+      f.advance();
+      const sameBoot = hostResourceFixture();
+      sameBoot.sequence = 3;
+      f.snapshot.mockResolvedValue(JSON.stringify(sameBoot));
+      await expect(f.read()).resolves.toEqual(sameBoot);
+    },
+  );
 
   it("bounds refresh and retains the occupied slot after a timeout with ignored cancellation", async () => {
     vi.useFakeTimers();

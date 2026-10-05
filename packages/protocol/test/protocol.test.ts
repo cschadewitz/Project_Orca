@@ -105,6 +105,7 @@ describe("hello", () => {
       "operator.config",
       "operator.preflight",
       "operator.artifact",
+      "operator.hostResources",
       "operator.submitRequest",
       "operator.admitRun",
       "operator.admission",

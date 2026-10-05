@@ -61,7 +61,11 @@ import { attachSocket } from "./socket.js";
 import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
 import { directAdmissionAuthority } from "./admission-retry.js";
 import { holds } from "./auth/principal.js";
-import { HostResourceReadModel, type HostResourceReadSource } from "./operator-host-resources.js";
+import {
+  HostResourceReadModel,
+  resourceResponseForPublication,
+  type HostResourceReadSource,
+} from "./operator-host-resources.js";
 import { authForbidden } from "./auth/errors.js";
 import { submissionAuthority } from "./request-submission.js";
 import { revisionAccess } from "./revision-input.js";
@@ -138,7 +142,7 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   res.writeHead(status, { "content-type": "application/json", ...headers });
-  res.end(JSON.stringify(body));
+  res.end(JSON.stringify(resourceResponseForPublication(body)));
 }
 
 /** The response to a refused admission: the same envelope a method failure has, with a status. */

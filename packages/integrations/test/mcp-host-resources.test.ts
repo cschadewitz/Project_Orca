@@ -21,6 +21,7 @@ const target = {
 const closers: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close();
+  vi.useRealTimers();
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -28,6 +29,25 @@ function deferred<T>() {
     resolve = r;
   });
   return { promise, resolve };
+}
+async function socketCall(url: string, token: string) {
+  const ws = new WebSocket(url, ["orca.v1", `orca.bearer.${token}`]);
+  await new Promise<void>((resolve, reject) => {
+    ws.onopen = () => resolve();
+    ws.onerror = () => reject(new Error("fixture socket failed"));
+  });
+  const response = new Promise<unknown>((resolve) => {
+    ws.onmessage = (e) => resolve(JSON.parse(String(e.data)) as unknown);
+  });
+  ws.send(
+    JSON.stringify({ kind: "request", id: "resource-test", method: "operator.hostResources", params: { target } }),
+  );
+  const body = await response;
+  ws.close();
+  await new Promise<void>((resolve) => {
+    ws.onclose = () => resolve();
+  });
+  return body;
 }
 async function fixture(mount = true, mode: "token" | "loopback-unauthenticated" = "token") {
   const credentials = new CredentialStore();
@@ -184,7 +204,7 @@ describe("injected daemon resource transport boundary", () => {
   it.each(["hidden", "missing"])("does not read a summary for %s work or leak its ID in errors", async (runId) => {
     const f = await fixture();
     const read = vi.fn(async () => JSON.stringify(workstreamSummaryFixture()));
-    f.source.workstreams = async () => ({ runIds: [runId], read, current: async () => true });
+    f.source.workstreams = async () => ({ runIds: [runId], read, current: async () => true, publishable: () => true });
     const response = await f.rpc(f.scoped.token, "operator.hostResources", { target });
     expect(response.body).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN", message: "not permitted" } });
     expect(read).not.toHaveBeenCalled();
@@ -208,32 +228,55 @@ describe("injected daemon resource transport boundary", () => {
 
   it("applies the same registered operation and authorization over WebSocket", async () => {
     const f = await fixture();
-    const call = async (token: string) => {
-      const ws = new WebSocket(f.daemon.socketUrl!, ["orca.v1", `orca.bearer.${token}`]);
-      await new Promise<void>((resolve, reject) => {
-        ws.onopen = () => resolve();
-        ws.onerror = () => reject(new Error("fixture socket failed"));
-      });
-      const response = new Promise<unknown>((resolve) => {
-        ws.onmessage = (e) => resolve(JSON.parse(String(e.data)) as unknown);
-      });
-      ws.send(
-        JSON.stringify({ kind: "request", id: "resource-test", method: "operator.hostResources", params: { target } }),
-      );
-      const body = await response;
-      ws.close();
-      await new Promise<void>((resolve) => {
-        ws.onclose = () => resolve();
-      });
-      return body;
-    };
-    expect(await call(f.viewer.token)).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });
+    expect(await socketCall(f.daemon.socketUrl!, f.viewer.token)).toMatchObject({
+      ok: false,
+      error: { code: "AUTH_FORBIDDEN" },
+    });
     expect(f.snapshot).not.toHaveBeenCalled();
-    expect(await call(f.host.token)).toMatchObject({ ok: true, result: hostResourceFixture() });
+    expect(await socketCall(f.daemon.socketUrl!, f.host.token)).toMatchObject({
+      ok: true,
+      result: hostResourceFixture(),
+    });
+  });
+
+  it.each([
+    ["http", "ownership"],
+    ["ws", "ownership"],
+    ["http", "credential"],
+    ["ws", "credential"],
+  ])("fences %s serialization when %s changes after the model returns", async (transport, kind) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(hostResourceFixture().collectedAt));
+    const f = await fixture();
+    const ids = ["root", "child", "parked", "uncertain"];
+    for (const id of ids) f.ownership.record(id, "test-caller");
+    const publishable = vi.fn(() => {
+      if (publishable.mock.calls.length === 1)
+        queueMicrotask(() => {
+          if (kind === "ownership") f.ownership.forget("root", "test-caller");
+          else void f.credentials.revoke(f.scoped.credential.id);
+        });
+      return ids.every((id) => f.ownership.owner(id) === "test-caller");
+    });
+    f.source.workstreams = async () => ({
+      runIds: ids,
+      read: async () => JSON.stringify(workstreamSummaryFixture()),
+      current: async () => true,
+      publishable,
+    });
+    const body =
+      transport === "http"
+        ? (await f.rpc(f.scoped.token, "operator.hostResources", { target })).body
+        : await socketCall(f.daemon.socketUrl!, f.scoped.token);
+    expect(body).toMatchObject({ ok: false, error: { code: kind === "ownership" ? "RUN_STATE" : "AUTH_INVALID" } });
+    expect(JSON.stringify(body)).not.toContain("activeRoots");
+    expect(publishable).toHaveBeenCalledTimes(kind === "ownership" ? 2 : 1);
   });
 });
 
 it("publishes a caller summary using real ownership/workflow checks without touching hidden work", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(hostResourceFixture().collectedAt));
   const f = await fixture();
   for (const id of ["root", "child", "parked", "uncertain"]) f.ownership.record(id, "test-caller");
   const read = vi.fn(async () => JSON.stringify(workstreamSummaryFixture("partial")));
@@ -241,11 +284,13 @@ it("publishes a caller summary using real ownership/workflow checks without touc
     runIds: ["root", "child", "parked", "uncertain"],
     read,
     current: async () => true,
+    publishable: () => true,
   });
   const { client } = await f.connect(f.scoped.token);
   const result = await client.callTool({ name: "get_daemon_resources", arguments: { target } });
   expect(result.isError).not.toBe(true);
-  expect(result.structuredContent).toMatchObject({ workstreams: workstreamSummaryFixture("partial") });
+  const summary = workstreamSummaryFixture("partial");
+  expect(result.structuredContent).toMatchObject({ workstreams: { ...summary, ageMs: expect.any(Number) } });
   expect(f.resolver.run).not.toHaveBeenCalledWith("hidden");
   expect(read).toHaveBeenCalledTimes(1);
 });

@@ -277,11 +277,22 @@ export function resourceWarnings(s: Omit<HostResourceSnapshot, "warnings">): Res
   return warnings;
 }
 
-/** The caller pins request generation to its current connection; late prior requests are rejected. */
+/** Ordering evidence, including the last known boot even while a later observation lacks it. */
+export type ResourceSnapshotProvenance = Pick<
+  HostResourceSnapshot,
+  "daemonInstanceId" | "hostId" | "bootId" | "sequence" | "ageMs"
+>;
+export interface ResourceSnapshotConnection {
+  expectedDaemonInstanceId: string;
+  requestGeneration: number;
+  currentGeneration: number;
+}
+
+/** Adjacent predicate; consumers use advanceResourceSnapshot to retain boot evidence across missing data. */
 export function acceptResourceSnapshot(
-  previous: HostResourceSnapshot | undefined,
+  previous: ResourceSnapshotProvenance | undefined,
   next: HostResourceSnapshot,
-  connection: { expectedDaemonInstanceId: string; requestGeneration: number; currentGeneration: number },
+  connection: ResourceSnapshotConnection,
 ): boolean {
   if (
     connection.requestGeneration !== connection.currentGeneration ||
@@ -292,4 +303,61 @@ export function acceptResourceSnapshot(
   if (previous.daemonInstanceId !== next.daemonInstanceId || previous.hostId !== next.hostId) return false;
   if ("value" in previous.bootId && "value" in next.bootId && previous.bootId.value !== next.bootId.value) return false;
   return next.sequence > previous.sequence || (next.sequence === previous.sequence && next.ageMs >= previous.ageMs);
+}
+
+/** Commit the returned cursor only on publication; reset only on an authoritative connection/target/boot transition. */
+export function advanceResourceSnapshot(
+  previous: ResourceSnapshotProvenance | undefined,
+  next: HostResourceSnapshot,
+  connection: ResourceSnapshotConnection,
+): ResourceSnapshotProvenance | undefined {
+  if (!acceptResourceSnapshot(previous, next, connection)) return undefined;
+  return {
+    daemonInstanceId: next.daemonInstanceId,
+    hostId: next.hostId,
+    bootId: { ...("value" in next.bootId ? next.bootId : (previous?.bootId ?? next.bootId)) },
+    sequence: next.sequence,
+    ageMs: next.ageMs,
+  };
+}
+
+/** Finish separately authorized composition without renewing any observation or inventing freshness. */
+export function composeResourceSnapshot(
+  host: HostResourceSnapshot,
+  workstreams: WorkstreamSummary,
+  completion: { collectedAt: string; hostElapsedMs: number; summaryElapsedMs: number },
+): HostResourceSnapshot {
+  const { collectedAt, hostElapsedMs, summaryElapsedMs } = completion;
+  if (
+    !timestamp.safeParse(collectedAt).success ||
+    Date.parse(collectedAt) < Date.parse(host.collectedAt) ||
+    !Number.isFinite(hostElapsedMs) ||
+    !Number.isFinite(summaryElapsedMs) ||
+    summaryElapsedMs < 0 ||
+    hostElapsedMs < summaryElapsedMs
+  )
+    throw new RangeError("Invalid resource composition clock");
+  const age = <T>(metric: ResourceMetric<T>, elapsedMs: number): ResourceMetric<T> => {
+    if (!("value" in metric)) return metric;
+    const ageMs = metric.ageMs + elapsedMs;
+    return metric.status === "available" && ageMs >= host.expiresAfterMs
+      ? { ...metric, ageMs, status: "stale", reason: "expired" }
+      : { ...metric, ageMs };
+  };
+  const result: HostResourceSnapshot = {
+    ...host,
+    collectedAt,
+    ageMs: host.ageMs + hostElapsedMs,
+    bootId: age(host.bootId, hostElapsedMs),
+    cpu: age(host.cpu, hostElapsedMs),
+    cpuLimit: age(host.cpuLimit, hostElapsedMs),
+    memory: age(host.memory, hostElapsedMs),
+    memoryLimit: age(host.memoryLimit, hostElapsedMs),
+    swap: age(host.swap, hostElapsedMs),
+    swapActivity: age(host.swapActivity, hostElapsedMs),
+    storage: host.storage.map((disk) => ({ ...disk, measurement: age(disk.measurement, hostElapsedMs) })),
+    workstreams: age(workstreams, summaryElapsedMs),
+  };
+  result.warnings = resourceWarnings(result);
+  return HostResourceSnapshotSchema.parse(result);
 }
