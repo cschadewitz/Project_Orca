@@ -7,6 +7,7 @@ import {
   type ResourceMetric,
   type ResourceReason,
   type ResourceWarning,
+  type WorkstreamSummary,
 } from "@orca/protocol";
 import type { ConnectionState } from "@orca/design";
 
@@ -22,6 +23,8 @@ export interface ResourceViewState {
   nowMs: number;
   receivedAtMs: number;
   snapshot: HostResourceSnapshot | undefined;
+  /** Keep the shared predicate's boot evidence across missing observations; never display this older snapshot. */
+  lastKnownBootSnapshot: HostResourceSnapshot | undefined;
   awaitingSnapshot: boolean;
   invalidResponse: boolean;
 }
@@ -40,6 +43,7 @@ export function resourceViewState(
     nowMs: 0,
     receivedAtMs: 0,
     snapshot: undefined,
+    lastKnownBootSnapshot: undefined,
     awaitingSnapshot: true,
     invalidResponse: false,
   };
@@ -69,6 +73,7 @@ export function resourceViewReducer(state: ResourceViewState, action: ResourceVi
         access: action.access,
         generation: state.generation + 1,
         snapshot: undefined,
+        lastKnownBootSnapshot: undefined,
         awaitingSnapshot: true,
         invalidResponse: false,
       };
@@ -84,17 +89,22 @@ export function resourceViewReducer(state: ResourceViewState, action: ResourceVi
       // Never render schema errors or source exceptions: they could include inaccessible data.
       if (!parsed.success) return { ...state, invalidResponse: true };
       const previous = displayedSnapshot(state);
+      const connection = {
+        expectedDaemonInstanceId: state.expectedDaemonInstanceId,
+        requestGeneration: action.requestGeneration,
+        currentGeneration: state.generation,
+      };
+      // The pinned helper compares adjacent snapshots. Retain a known boot for a second
+      // shared check so A → unavailable → B cannot silently reset provenance (#497/#498).
       if (
-        !acceptResourceSnapshot(previous, parsed.data, {
-          expectedDaemonInstanceId: state.expectedDaemonInstanceId,
-          requestGeneration: action.requestGeneration,
-          currentGeneration: state.generation,
-        })
+        !acceptResourceSnapshot(previous, parsed.data, connection) ||
+        !acceptResourceSnapshot(state.lastKnownBootSnapshot, parsed.data, connection)
       )
         return state;
       return {
         ...state,
         snapshot: parsed.data,
+        lastKnownBootSnapshot: "value" in parsed.data.bootId ? parsed.data : state.lastKnownBootSnapshot,
         receivedAtMs: state.nowMs,
         awaitingSnapshot: false,
         invalidResponse: false,
@@ -178,6 +188,19 @@ export const RESOURCE_REASONS: Record<ResourceReason, string> = {
   "not-authorized": "This caller is not authorized to see the summary.",
   "coverage-limit": "The authorized read reached its coverage limit.",
 };
+
+/** Announce access, freshness and coverage changes, never changing counts or observation ages. */
+export function workstreamAnnouncement(summary: WorkstreamSummary): string {
+  if (!("value" in summary)) {
+    const status = summary.status === "permission-denied" ? "permission denied" : summary.status;
+    return `Workstream summary ${status}; active work is unknown. ${RESOURCE_REASONS[summary.reason]}`;
+  }
+  const scope = summary.value.scope === "caller-visible" ? "caller-visible" : "authorized aggregate";
+  const coverage = summary.value.complete ? "complete coverage" : "partial coverage";
+  const freshness =
+    summary.status === "stale" ? `Workstream summary is stale. ${RESOURCE_REASONS[summary.reason]} ` : "";
+  return `${freshness}Workstream summary: ${scope}, ${coverage} of the authorized run set.`;
+}
 
 const metricNames: Record<ResourceWarning["metric"], string> = {
   cpu: "Whole-machine CPU",

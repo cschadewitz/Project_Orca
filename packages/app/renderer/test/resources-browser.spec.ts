@@ -4,22 +4,37 @@ import { AxeBuilder } from "@axe-core/playwright";
 import { test, expect, type Page } from "@playwright/test";
 import { DEFAULT_PREFERENCES } from "../../src/preferences/schema.js";
 
+const pageErrors = new WeakMap<Page, string[]>();
+
 test.beforeEach(async ({ page }) => {
+  const errors: string[] = [];
+  pageErrors.set(page, errors);
+  page.on("pageerror", (error) => errors.push(error.message));
   // Only the existing preload bootstrap consumed by main.tsx. Any RPC is a test failure.
   await page.addInitScript((preferences) => {
     Object.defineProperty(window, "orca", {
-      value: {
-        platform: "linux",
-        preferences: { read: () => preferences, write: () => Promise.resolve({ ok: true, result: preferences }) },
-        notifications: { subscribe: () => () => {} },
-        call: () => {
-          throw new Error("Resource fixture attempted an RPC");
+      value: new Proxy(
+        {
+          platform: "linux",
+          preferences: { read: () => preferences, write: () => Promise.resolve({ ok: true, result: preferences }) },
+          notifications: { subscribe: () => () => {} },
+          daemonConnection: undefined,
         },
-      },
+        {
+          get: (bridge, property) => {
+            if (Object.hasOwn(bridge, property)) return Reflect.get(bridge, property) as unknown;
+            throw new Error("Resource fixture accessed an unexpected bridge API");
+          },
+        },
+      ),
     });
   }, DEFAULT_PREFERENCES);
   await page.goto("/#resources");
   await expect(page.getByRole("heading", { name: "Daemon resources" })).toBeVisible();
+});
+
+test.afterEach(({ page }) => {
+  expect(pageErrors.get(page)).toEqual([]);
 });
 
 async function screenshot(page: Page, name: string) {
@@ -36,8 +51,6 @@ async function screenshot(page: Page, name: string) {
 
 for (const theme of ["light", "dark"] as const) {
   test(`${theme}: all shared fixtures and access states pass axe`, async ({ page }) => {
-    const errors: string[] = [];
-    page.on("pageerror", (error) => errors.push(error.message));
     await page.getByRole("combobox", { name: "Theme", exact: true }).selectOption(theme);
     for (const fixture of [
       "healthy",
@@ -64,11 +77,12 @@ for (const theme of ["light", "dark"] as const) {
       expect((await new AxeBuilder({ page }).analyze()).violations, `${theme}/${access}`).toEqual([]);
       if (access === "permission-denied" && theme === "dark") await screenshot(page, "denied-dark");
     }
-    expect(errors).toEqual([]);
   });
 }
 
 test("keyboard, reduced motion, short/narrow scrolling, target switching and reconnection", async ({ page }) => {
+  const announcer = page.locator("[data-orca-announcer]");
+  await expect(announcer).toContainText("Workstream summary permission denied");
   await page.getByRole("combobox", { name: "Shared fixture", exact: true }).focus();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("combobox", { name: "Shared fixture", exact: true })).toHaveValue("pressure");
@@ -80,6 +94,7 @@ test("keyboard, reduced motion, short/narrow scrolling, target switching and rec
       .evaluate((el) => getComputedStyle(el).outlineStyle),
   ).not.toBe("none");
   await page.getByRole("combobox", { name: "Workstream summary", exact: true }).selectOption("partial");
+  await expect(announcer).toContainText("partial coverage");
   await expect(page.getByRole("region", { name: "Active ORCA workstreams", exact: true })).toContainText(
     "partial coverage",
   );

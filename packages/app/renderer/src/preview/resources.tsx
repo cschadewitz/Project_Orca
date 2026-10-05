@@ -155,8 +155,8 @@ export default function ResourcesPreview(): JSX.Element {
           Replay selected fixture
         </Button>
       </div>
-      <ResourceView state={state} />
       <Announcer />
+      <ResourceView state={state} />
     </main>
   );
 }

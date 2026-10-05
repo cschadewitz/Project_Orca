@@ -5,6 +5,7 @@ import {
   HostResourceSnapshotSchema,
   resourceWarnings,
   workstreamSummaryFixture,
+  type HostResourceSnapshot,
 } from "@orca/protocol";
 import {
   ageResourceSnapshot,
@@ -90,6 +91,7 @@ describe("resource observations", () => {
       let state = receive(initial());
       state = resourceViewReducer(state, { type: "access", access });
       expect(state.snapshot).toBeUndefined();
+      expect(state.lastKnownBootSnapshot).toBeUndefined();
       expect(displayedSnapshot(receive(state))).toBeUndefined();
       const opened = resourceViewReducer(state, { type: "access", access: "fixture" });
       expect(receive(opened, fixture, 0).snapshot).toBeUndefined();
@@ -163,5 +165,40 @@ describe("resource observations", () => {
     expect(refused.invalidResponse).toBe(true);
     expect(refused.snapshot).toEqual(fixture);
     expect(JSON.stringify(refused)).not.toContain("sensitive");
+  });
+
+  describe.each(["healthy", "stale"] as const)("%s known boot provenance", (kind) => {
+    it.each([
+      { status: "unavailable", reason: "source-failed" },
+      { status: "permission-denied", reason: "permission-denied" },
+      { status: "unsupported", reason: "unsupported-source" },
+    ] as const)("survives repeated $status boot observations until an authoritative reset", ({ status, reason }) => {
+      let state = receive(initial(), hostResourceFixture(kind));
+      for (const sequence of [2, 3]) {
+        const gap: HostResourceSnapshot = {
+          ...hostResourceFixture(),
+          sequence,
+          bootId: { status, reason, source: "linux-boot-id" },
+        };
+        gap.warnings = resourceWarnings(gap);
+        state = receive(state, gap);
+        expect(displayedSnapshot(state)?.bootId).toEqual(gap.bootId);
+        expect(state.snapshot?.sequence).toBe(sequence);
+      }
+      const differentBoot = hostResourceFixture();
+      differentBoot.sequence = 4;
+      if ("value" in differentBoot.bootId) differentBoot.bootId.value = "30000000-0000-4000-8000-000000000001";
+      expect(receive(state, differentBoot)).toBe(state);
+      expect(receive(state, ageResourceSnapshot(differentBoot, 20_000))).toBe(state);
+      expect(receive(state, { ...hostResourceFixture(), sequence: 2 })).toBe(state);
+      expect(receive(state, { ...hostResourceFixture(), sequence: 4 }).snapshot?.sequence).toBe(4);
+      const reset = resourceViewReducer(state, {
+        type: "select",
+        targetLabel: "Restarted fixture daemon",
+        daemonInstanceId: fixture.daemonInstanceId,
+      });
+      expect(receive(reset, differentBoot, state.generation)).toBe(reset);
+      expect(receive(reset, differentBoot).snapshot).toEqual(differentBoot);
+    });
   });
 });

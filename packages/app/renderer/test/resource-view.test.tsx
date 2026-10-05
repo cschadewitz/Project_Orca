@@ -159,6 +159,84 @@ describe("resource cards", () => {
     });
   });
 
+  it("announces summary access, coverage and scope changes while count updates stay silent", () => {
+    const channel = createAnnouncements();
+    const say = vi.fn();
+    const off = channel.subscribe(say);
+    const present = (snapshot: HostResourceSnapshot) => (
+      <AnnouncementsProvider value={channel}>
+        <ResourceView state={stateFor(snapshot)} />
+      </AnnouncementsProvider>
+    );
+    const snapshot = { ...hostResourceFixture(), workstreams: workstreamSummaryFixture("active") };
+    const view = render(present(snapshot));
+    expect(say).toHaveBeenLastCalledWith(expect.stringContaining("caller-visible, complete coverage"));
+    view.rerender(present({ ...snapshot, workstreams: workstreamSummaryFixture("empty") }));
+    expect(say).toHaveBeenCalledTimes(1);
+    const partial = workstreamSummaryFixture("partial");
+    view.rerender(present({ ...snapshot, workstreams: partial }));
+    expect(say).toHaveBeenCalledTimes(2);
+    expect(say).toHaveBeenLastCalledWith(expect.stringContaining("caller-visible, partial coverage"));
+    if ("value" in partial) partial.value.scope = "authorized-aggregate";
+    view.rerender(present({ ...snapshot, workstreams: partial }));
+    expect(say).toHaveBeenLastCalledWith(expect.stringContaining("authorized aggregate, partial coverage"));
+    view.rerender(present({ ...snapshot, workstreams: workstreamSummaryFixture("denied") }));
+    expect(say).toHaveBeenLastCalledWith(expect.stringContaining("permission denied; active work is unknown"));
+    expect(metric("Active ORCA workstreams").queryByText(/active roots/)).toBeNull();
+    view.rerender(
+      present({ ...snapshot, workstreams: { status: "unavailable", source: "runtime-ownership", reason: "timeout" } }),
+    );
+    expect(say).toHaveBeenLastCalledWith(expect.stringContaining("unavailable; active work is unknown"));
+    off();
+  });
+
+  it("marks and announces an expired workstream summary even while host metrics remain current", () => {
+    const channel = createAnnouncements();
+    const say = vi.fn();
+    const off = channel.subscribe(say);
+    const summary = workstreamSummaryFixture("active");
+    if ("value" in summary) summary.ageMs = 14_000;
+    let state = stateFor({ ...hostResourceFixture(), workstreams: summary });
+    const present = () => (
+      <AnnouncementsProvider value={channel}>
+        <ResourceView state={state} />
+      </AnnouncementsProvider>
+    );
+    const view = render(present());
+    state = resourceViewReducer(state, { type: "time", nowMs: 1_000 });
+    view.rerender(present());
+    expect(screen.getByText("Stale observations")).toBeTruthy();
+    expect(metric("Whole-machine CPU").getByText("Observed")).toBeTruthy();
+    expect(metric("Active ORCA workstreams").getByText("Stale")).toBeTruthy();
+    expect(say).toHaveBeenLastCalledWith(expect.stringContaining("Workstream summary is stale"));
+    off();
+  });
+
+  it("announces malformed-response failure without reading schema errors or repeating it on age ticks", () => {
+    const channel = createAnnouncements();
+    const say = vi.fn();
+    const off = channel.subscribe(say);
+    let state = stateFor();
+    const present = () => (
+      <AnnouncementsProvider value={channel}>
+        <ResourceView state={state} />
+      </AnnouncementsProvider>
+    );
+    const view = render(present());
+    state = resourceViewReducer(state, {
+      type: "receive",
+      snapshot: { privatePath: "/private/credential" },
+      requestGeneration: 0,
+    });
+    view.rerender(present());
+    expect(say).toHaveBeenLastCalledWith(expect.stringContaining("The latest resource response was invalid"));
+    expect(say.mock.lastCall?.[0]).not.toContain("credential");
+    state = resourceViewReducer(state, { type: "time", nowMs: 1_000 });
+    view.rerender(present());
+    expect(say).toHaveBeenCalledTimes(2);
+    off();
+  });
+
   it("replays fixtures, revokes access, ages disconnects and clears a switched target without transport work", () => {
     stubMatchMedia(1280);
     const h = harness();
@@ -169,6 +247,9 @@ describe("resource cards", () => {
       </Providers>,
     );
     try {
+      expect(view.container.querySelector("[data-orca-announcer]")?.textContent).toContain(
+        "Workstream summary permission denied",
+      );
       fireEvent.change(screen.getByLabelText("Shared fixture"), { target: { value: "pressure" } });
       expect(metric("Whole-machine CPU").getByText("98% busy")).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Simulate disconnect" }));

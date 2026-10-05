@@ -12,6 +12,7 @@ import {
   seconds,
   supportedMetric,
   warningText,
+  workstreamAnnouncement,
   type ResourceViewState,
 } from "./resource-model.js";
 import "./resources.css";
@@ -28,7 +29,7 @@ export function ResourceView({ state }: { state: ResourceViewState }): JSX.Eleme
   const snapshot = displayedSnapshot(state);
   const retained = state.connection !== "live" || state.awaitingSnapshot || state.invalidResponse;
   const freshness = snapshot
-    ? snapshot.warnings.some((warning) => warning.code === "stale-data")
+    ? snapshot.workstreams.status === "stale" || snapshot.warnings.some((warning) => warning.code === "stale-data")
       ? "Stale observations"
       : retained
         ? "Last known observations"
@@ -36,7 +37,15 @@ export function ResourceView({ state }: { state: ResourceViewState }): JSX.Eleme
     : "No observations";
   const announce = useAnnounce();
   // Only categorical changes speak. Age and changing measurements never stream into the live region.
-  const announcement = `${state.targetLabel}. ${state.access === "fixture" ? `${state.connection}. ${freshness}. ${snapshot?.warnings.map(warningText).join(" ") ?? ""}` : ACCESS_MESSAGE[state.access]}`;
+  const observations = [
+    `${state.connection}. ${freshness}.`,
+    state.invalidResponse ? "The latest resource response was invalid." : "",
+    snapshot?.warnings.map(warningText).join(" ") ?? "",
+    snapshot ? workstreamAnnouncement(snapshot.workstreams) : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const announcement = `${state.targetLabel}. ${state.access === "fixture" ? observations : ACCESS_MESSAGE[state.access]}`;
   useEffect(() => announce(announcement), [announce, announcement]);
   const connection = CONNECTION_PRESENTATION[state.connection];
 
