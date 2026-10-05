@@ -466,3 +466,8 @@ The admission lifecycle is shared by daemon, configured ProgramService/CLI and A
 The inbound MCP operator adapter uses authenticated daemon projections and shared admission
 services; see [MCP operator handoff](mcp-operator.md) for the bounded read contract and
 production mutation/actual-client acceptance boundaries.
+
+The advisory daemon-machine resource contract and bounded collection/authorized-summary
+ports are described in [Host resources](host-resources.md). They are not registered
+as transport methods and make no admission decisions; authenticated consumers are
+separate work.
