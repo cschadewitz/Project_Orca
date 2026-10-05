@@ -1,0 +1,10 @@
+# INACTIVE REFERENCE FRAGMENT ONLY. Do not replace the whole live configuration.
+# The sole intended live-config change is workspace.baseBranch after all owner preconditions.
+workspace:
+  provider: git-worktree
+  repo: /home/casey/.local/share/orca-worktrees/mac-beta-codex
+  worktreeRoot: /home/casey/.local/share/orca-worktrees/cal-codex-roots
+  baseBranch: 1b8f196e4df22066efda3c0ed1331a64d9061c4d
+  branchPrefix: orca/
+  isolateRoots: true
+  hostId: local

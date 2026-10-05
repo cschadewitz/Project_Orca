@@ -1,0 +1,25 @@
+INACTIVE OWNER PREPARATION ASSIGNMENT — NO LIVE ACTIONS
+
+Use this packet to prepare an activation decision, not to activate it.
+
+1. Stage the exact published nonsecret packet in a NEW task-private directory on the existing disk-backed /srv/dev storage. Keep it outside the candidate checkout, live ORCA home, configured workflow globs and repository metadata. Verify every file against the published SHA256SUMS before use. Only task-private staging/evidence writes are allowed.
+
+2. Return the current cal-codex-work ID/version and authoritative parsed revision, plus confirmation that its parsed content matches the published #480 v3 baseline. If it differs, export only that nonsecret workflow file with its source hash for review. Confirm version 4 is unused, or report the actual next unused version. Do not modify historical workflow pins.
+
+3. Confirm the current nonsecret workspace block (provider, repo, worktreeRoot, baseBranch, branchPrefix, isolateRoots, hostId), H/store/workspace identity and existing principal/six-grant scope. Do not export full live configuration/environment, credentials, auth/key files or private state.
+
+4. If existing tool/dependency access permits, use the already verified installed runtime corresponding to source 49efcc7236ac127c952bb1f7a50fc6ef72f7df84 for an INACTIVE module-level validation only. Record the actual runtime path and prior compiled-identity evidence. Use its parser/schema and workflow graph/input/template helpers; do not start the daemon/CLI bootstrap, provision a workspace or access protected generations merely to validate files.
+   - Parse the exact v3 baseline and proposed v4 with the runtime workflow parser.
+   - Parse the proposed nonsecret workspace fragment with the runtime configuration schema. This is fragment validation, not a claim the full live configuration has been validated.
+   - Validate the graph and its codex-worker reference without launching any agent.
+   - Verify the matching expectedHead succeeds; the old/wrong SHA and unknown inputs are rejected.
+   - Render the human-gate question with a synthetic workspace cwd, recorded branch/base and expectedHead; verify all intended values appear and no workspace/input placeholders remain. Do not create a real or synthetic run or write a provisioning receipt.
+   - Confirm every path to the sole agent requires dependencyReady and only ready reaches it; stop terminates. Missing/invalid answers must not be treated as approval.
+   - Compute and report the exact parser-normalized baseline and proposed workflow revisions using that runtime's workflowRevision helper. Do not substitute a raw-file hash for the runtime revision.
+   - Keep NODE_DISABLE_COMPILE_CACHE=1 and the minimal private environment. Do not run project builds/tests, install packages or enable scripts to obtain a validator. If a required compiled module, dependency, identity proof or permission is unavailable, stop and report the exact blocker. No escalation or alternate execution route.
+
+5. Produce a read-only relocatability inventory of the existing candidate dependency-output trees. Focus on .bin shims, symlink destinations, external path references, inode independence and bounded copy size. This determines whether a later owner-only independent copy into a future root is viable; it does not authorize that copy or certify a new root.
+
+Return the task-private staged path, verified file hashes, source/graph assertions, actually executed inactive-validator commands/results and authoritative revisions, or exact blockers. Keep static source/schema evidence separate from runtime validation performed in this assignment. No live state is changed by this result.
+
+Do not import the candidate commit, copy dependencies into any run root, write active workflow/configuration, change permissions/grants, install, start/restart the daemon, admit/continue a run or answer a live gate. Preserve all candidate/history/root/evidence state. The next deliverable is a bounded activation/dependency-copy handoff for explicit owner review.

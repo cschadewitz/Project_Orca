@@ -1,0 +1,77 @@
+{
+  "status": "INACTIVE",
+  "validationLevel": "Source/schema review plus local proposal-only structural assertions",
+  "runtimeSchemaExecution": "NOT RUN",
+  "runtimeSource": "49efcc7236ac127c952bb1f7a50fc6ef72f7df84",
+  "baseline": {
+    "publicationCommit": "27dc5fdf82579f9b0e558077baead9ccfa38d251",
+    "gitBlob": "77ff0b3a6b462278ce688ba7c6094548cc1cd50e",
+    "liveMatch": "OWNER CONFIRMATION REQUIRED"
+  },
+  "version": {
+    "proposed": "4",
+    "unused": "NOT VERIFIED"
+  },
+  "authoritativeWorkflowRevision": "MUST BE COMPUTED BY EXACT RUNTIME PARSER BEFORE ACTIVATION; no launch payload supplied",
+  "assertions": {
+    "jsonSyntax": true,
+    "idUnchanged": true,
+    "onlyExpectedHeadInputChanged": true,
+    "agentNodeUnchanged": true,
+    "allExistingNonStartEdgesUnchanged": true,
+    "everyPathToAgentCrossesGate": true,
+    "allEdgeEndpointsExist": true,
+    "oneStart": true,
+    "oneAgent": true,
+    "gateHasNoAutoApproval": true,
+    "gateUsesOnlySchemaFields": true,
+    "questionUsesExistingWorkspaceTemplateFields": true,
+    "workspaceChangeOnlyBaseBranch": true,
+    "structuralDeltaReconstructsProposal": true
+  },
+  "schemaEvidence": [
+    {
+      "path": "packages/core/src/model/workflow.ts",
+      "gitBlob": "f4d6e2fd905721f04217ea173b49b305c0536697",
+      "lines": "44-49; 138-161; 265-269",
+      "claim": "end outcome failure, gate question/options, and conditional edges are supported"
+    },
+    {
+      "path": "packages/core/src/model/run.ts",
+      "gitBlob": "891aa09b29dddcdfd72f9d21abc05d1adf5b18da",
+      "lines": "193-218",
+      "claim": "gate options may use id and label"
+    },
+    {
+      "path": "packages/core/src/config.ts",
+      "gitBlob": "598420e26be350636c7a28068db74b47f7690581",
+      "lines": "12-31",
+      "claim": "reference workspace fields match built-in provider schema"
+    },
+    {
+      "path": "packages/engine/src/executors/basic.ts",
+      "gitBlob": "84246937c0c3715ab8dba3b533f0e5d2bf79ecfc",
+      "lines": "162-179",
+      "claim": "gate renders question and asks human when autoApproveWhen is absent"
+    },
+    {
+      "path": "packages/cli/src/commands/index.ts",
+      "gitBlob": "0ac16cda6c9a5d74e3c8ae757e0616c27090c331",
+      "lines": "754-760",
+      "claim": "writable daemon supplies PausingHumanInput"
+    },
+    {
+      "path": "packages/engine/src/orchestrator.ts",
+      "gitBlob": "8b8454215f206de9ab45f58df473706afda4b217",
+      "lines": "429-446",
+      "claim": "provider provisions workspace before run.created"
+    }
+  ],
+  "preconditions": [
+    "Live baseline equality and unused version",
+    "Exact-runtime parser/graph/input/render validation",
+    "Independent dependency-copy relocatability proof",
+    "Reviewed import and controlled restart",
+    "Separate admission/ready authorization"
+  ]
+}

@@ -1,0 +1,92 @@
+[
+  {
+    "op": "test",
+    "path": "/id",
+    "value": "cal-codex-work"
+  },
+  {
+    "op": "test",
+    "path": "/version",
+    "value": "3"
+  },
+  {
+    "op": "test",
+    "path": "/inputSchema/fields/expectedHead/enum",
+    "value": [
+      "8875f4585d7e5cd038ec974f5c6c270f8c5f01c3"
+    ]
+  },
+  {
+    "op": "test",
+    "path": "/edges/0",
+    "value": {
+      "from": "start",
+      "to": "work"
+    }
+  },
+  {
+    "op": "replace",
+    "path": "/version",
+    "value": "4"
+  },
+  {
+    "op": "replace",
+    "path": "/inputSchema/fields/expectedHead/enum",
+    "value": [
+      "1b8f196e4df22066efda3c0ed1331a64d9061c4d"
+    ]
+  },
+  {
+    "op": "add",
+    "path": "/nodes/dependencyReady",
+    "value": {
+      "type": "gate",
+      "question": "Owner preparation checkpoint before the coding agent starts.\nAssigned root: {{workspace.cwd}}\nRecorded branch: {{workspace.branch}}\nRecorded base: {{workspace.rootProvisioning.baseCommit}}\nExpected HEAD: {{vars.expectedHead}}\nLeave this run paused until the owner has verified this exact root, its original provisioning receipt, matching base/HEAD/branch, unchanged tracked source/index, and an independently copied, reviewed dependency tree with no links or executable shims reaching another checkout or controller/private state and no writable hardlinks shared with the source or other runs.\nConfirm the approved root-local tool checks, write-sandbox behavior and this task's capacity/scope are satisfied. The prepared source checkout's results alone do not satisfy this gate. Do not install, fetch, broaden permissions, change Git state or rely on a ready-marker file to make a mismatch pass.\nChoose ready only when the owner authorizes starting the task's agent now. Choose stop to end without starting the agent and retain this root for inspection.",
+      "options": [
+        {
+          "id": "stop",
+          "label": "Stop; retain this root"
+        },
+        {
+          "id": "ready",
+          "label": "Dependencies verified; start agent"
+        }
+      ]
+    }
+  },
+  {
+    "op": "add",
+    "path": "/nodes/preparationStopped",
+    "value": {
+      "type": "end",
+      "outcome": "failure",
+      "message": "Owner preparation was not approved. No coding agent was started; retain this root and its provisioning evidence."
+    }
+  },
+  {
+    "op": "replace",
+    "path": "/edges/0",
+    "value": {
+      "from": "start",
+      "to": "dependencyReady"
+    }
+  },
+  {
+    "op": "add",
+    "path": "/edges/1",
+    "value": {
+      "from": "dependencyReady",
+      "to": "work",
+      "when": "choice == 'ready'"
+    }
+  },
+  {
+    "op": "add",
+    "path": "/edges/2",
+    "value": {
+      "from": "dependencyReady",
+      "to": "preparationStopped",
+      "when": "choice == 'stop'"
+    }
+  }
+]

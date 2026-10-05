@@ -1,0 +1,48 @@
+INACTIVE OWNER-ONLY DEPENDENCY COPY HANDOFF
+
+Purpose
+Prepare one newly assigned ORCA root while its dependencyReady gate is paused. Reuse reviewed materialized dependencies from the exact #501 candidate; do not ask the coding agent to install, fetch, inspect another checkout or broaden its permissions. No root has been admitted or copied by this packet.
+
+Source
+/srv/dev/worktrees/Project_Orca-501-source-assembly-20261005-5c782ac5
+HEAD 1b8f196e4df22066efda3c0ed1331a64d9061c4d
+tree 4480c23ce8683f2d6c2df4bf4977a6bf2ad069eb
+lock blob bc1e0fa854fdb999ea672b0ba41657cece49719e
+
+Destination
+Must come from the later daemon-owned run record and its original ready receipt:
+- exact run ID, cwd, repo/common directory, branch and base commit;
+- cwd must be the configured owned-root child for that run;
+- branch must be its recorded orca/roots/<runId>;
+- HEAD, receipt base and expectedHead must all equal the integration commit.
+Never fabricate a destination/run ID, manually precreate a root, move a receipt, use another run's root or resume uncertain provisioning.
+
+Copy map required before copying
+Inventory only the existing dependency-output trees for the root and workspace importers in the pinned project lock. Allowed relative roots are node_modules and existing packages/<importer>/node_modules or tools/<importer>/node_modules. A package with no dependency directory contributes no source. Record an explicit source-relative -> destination-relative map; do not copy an entire checkout.
+
+For every selected directory, regular file and symlink, record relative path, kind and mode; file byte length/SHA-256; symlink raw target and normalized destination after relocation. Include native executables, .node files, virtual-store contents and executable .bin shims. Record the snapshot's total size/digest and keep its source stable during copying.
+
+Do not copy .git, .orca reports/store, project dist outputs, browser downloads, HOME/XDG caches/configuration, compile caches, auth/private files, unrelated data or another checkout's source. Dependency packages' own shipped dist/native files are normal dependency bytes, not project build outputs.
+
+Relocatability is an unresolved gate
+A successful installation in the source directory does not prove its tree can be moved.
+- Every dependency symlink must resolve within the destination's audited dependency trees or its intended tracked workspace-package tree.
+- Reject dangling/escaping links and links into .git, .orca or controller/private state.
+- Audit executable shims and loader/config metadata for absolute references to the source checkout, another worktree or external mutable package store. Do not rely on symlink inspection alone.
+- A benign recorded store path in metadata is not automatically a live execution link; classify it explicitly and ensure no planned command can use it. Unexplained external references block readiness.
+- Do not rewrite paths, regenerate shims, enable scripts, invoke a package manager or run a fallback installer under this copy authorization. Return an exact proposed correction for separate review if relocation is required.
+- Use independent file copies, never writable hardlinks to source/cache/other roots. Verify inode independence. Existing destination dependency output is a partial-state blocker, not permission to merge/overwrite/clean it.
+
+Later bounded owner operation, only after approval
+1. Confirm the run is parked at dependencyReady with no agent attached; reserve one owner preparation writer and current capacity. Keep all configured sandbox/grants unchanged.
+2. Verify the exact source and destination identities and approved copy-map digests. Copy only the enumerated dependency trees with exclusive destination creation, preserving permitted relative links/file modes. Preserve partial copies on failure.
+3. Compare destination inventory against the approved relocated map, resolve every link and executable shim, and prove no shared writable inodes or source/index/HEAD/branch changes.
+4. Recheck required tool entrypoints/native bindings from the DESTINATION context under the unchanged normal sandbox. Reuse the bounded version/load diagnostics; no project build/test/network/install is implied. NODE_DISABLE_COMPILE_CACHE=1 prevents the previously observed compile-cache side effect.
+5. Record nonsecret destination proof linked to run ID, exact base, copy-map digest, command results and any omissions. Ready marker files and a copied receipt alone are not proof.
+6. Only the explicit ready answer starts the agent. Until approved, leave the gate unanswered. If stopping, choose stop only when authorized; retain all source/root/receipt/partial-copy evidence.
+
+Current limits
+The installed candidate has passed six tool-readiness diagnostics. Project compilation/tests/browser readiness remain separate.
+The private metadata cache has 493 abbreviated and 13 full files, with combined coverage reported for 534 project entries; only 14 are covered by full metadata alone. Do not claim an independently usable offline reinstall seed or run another install as part of this plan.
+PR #486 is an inactive controller library without a trusted runner or ACP wiring; it is not invoked here.
+The owned-root mechanism is a recovery/collision safeguard, not a security boundary against another process with the same UID.
