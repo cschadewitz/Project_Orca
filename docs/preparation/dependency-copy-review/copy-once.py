@@ -120,12 +120,15 @@ def validate_gate(evidence, policy, nonce, issued_at):
                 for x in evidence['steps']['items']), 'work step appeared')
 
 
-def git(policy, path, *args):
+def git(policy, path, *args, empty_match_ok=False):
     result = subprocess.run([policy['git_executable'], '--no-optional-locks', '--no-pager',
         '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
         '-c', 'core.untrackedCache=false', '-C', path, *args],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        timeout=20, check=True)
+        timeout=20, check=False)
+    if result.returncode != 0:
+        require(empty_match_ok and result.returncode == 1 and not result.stdout
+                and not result.stderr, 'Git inspection failed')
     return result.stdout.decode('utf-8').rstrip('\n')
 
 
@@ -163,7 +166,9 @@ def join_run_gate(records, receipt=None):
 def git_safety(policy, path):
     # Config and index inspection do not run clean/process drivers. Reject even
     # currently inapplicable drivers: untracked attributes may change applicability.
-    config = git(policy, path, 'config', '--null', '--list')
+    # Request only driver keys, never raw unrelated configuration/auth values.
+    config = git(policy, path, 'config', '--null', '--get-regexp',
+                 r'^filter\..*\.(clean|process|smudge)$', empty_match_ok=True)
     require(not any(re.fullmatch(r'filter\..+\.(clean|process|smudge)',
                     record.split('\n', 1)[0].lower()) for record in config.split('\x00')),
             'configured clean/process/smudge filter is unsupported')
