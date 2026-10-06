@@ -11,9 +11,9 @@ an approved private writable fixture area:
     python3 -I -S -B -c "import sys,unittest; sys.path.insert(0,'.'); suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromName(x) for x in ['test_copier','test_wrapper','test_guards']); result=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(not result.wasSuccessful())"
 
 The 28 copier cases and 15 checkpoint cases are retained. Fixture contracts now
-supply explicit link policies and joined step identities. test_guards.py adds 28
-guards: 26 full-wrapper subprocess cases in new synthetic Git worktrees, plus two
-memory-profile/helper cases. All 71 pass. Fixtures, journals and failure evidence
+supply explicit link policies and joined step identities. test_guards.py adds 34
+guards: 32 full-wrapper subprocess cases in new synthetic Git worktrees, plus two
+memory-profile/helper cases. All 77 pass. Fixtures, journals and failure evidence
 are retained locally. No test reads real bindings or contacts ORCA. Generic result
 JSON does not include private paths or measurements. Fixtures require local Linux,
 Python and Git; synthetic copy successes do not establish real-root readiness.
@@ -27,11 +27,14 @@ Corrective invariants
    Approval stepRunId/nodeId must match one scheduled gate step whose final event
    is waiting. The join applies to the pinned baseline and each fresh checkpoint,
    independently of exact record equality.
-2. Before status, config/index inspection rejects every configured clean/process/
-   smudge driver, even currently inapplicable drivers: untracked attributes can
+2. Before status, query only matching clean/process/smudge driver key names and
+   reject any result, including empty-named drivers. Untracked attributes can
    change applicability. Gitlinks and any .gitmodules file refuse; status also
-   explicitly ignores submodules. Hooks/fsmonitor/untracked cache remain disabled.
-   Clean and process marker-command regressions prove the commands never execute.
+   explicitly ignores submodules. Reject assume-unchanged, skip-worktree and other
+   nonordinary index tags before status; never clear or modify flags. This applies
+   to both source and destination. Same-size flagged workspace edits refuse, while
+   clean workspace links pass. Hooks/fsmonitor/untracked cache remain disabled.
+   Named and empty-name clean/process marker commands never execute in regressions.
 3. Links may reach copied dependency outputs or explicitly pinned tracked workspace
    packages only. Package entries are derived from pinned Git HEAD, require a
    tracked package manifest, and must equal the supplied complete allowlist.

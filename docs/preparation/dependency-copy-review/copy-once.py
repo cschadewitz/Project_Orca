@@ -167,14 +167,20 @@ def git_safety(policy, path):
     # Config and index inspection do not run clean/process drivers. Reject even
     # currently inapplicable drivers: untracked attributes may change applicability.
     # Request only driver keys, never raw unrelated configuration/auth values.
-    config = git(policy, path, 'config', '--null', '--get-regexp',
+    config = git(policy, path, 'config', '--null', '--name-only', '--get-regexp',
                  r'^filter\..*\.(clean|process|smudge)$', empty_match_ok=True)
-    require(not any(re.fullmatch(r'filter\..+\.(clean|process|smudge)',
-                    record.split('\n', 1)[0].lower()) for record in config.split('\x00')),
+    # Any matching key refuses, including Git's valid empty driver name.
+    require(not config,
             'configured clean/process/smudge filter is unsupported')
     index = git(policy, path, 'ls-files', '--stage', '-z')
     require(not any(row.startswith('160000 ') for row in index.split('\x00'))
             and not os.path.lexists(Path(path) / '.gitmodules'), 'submodules are unsupported')
+    # -v lowercases tags for assume-unchanged; S/s denotes skip-worktree.
+    # Only ordinary cached entries (H) are supported. Never clear flags or trust
+    # status to prove bytes that the index explicitly suppresses checking.
+    flags = git(policy, path, 'ls-files', '-v', '-z')
+    require(all(row.startswith('H ') for row in flags.split('\x00') if row),
+            'index checking is suppressed or index state is unsupported')
 
 
 def workspace_inventory(policy):

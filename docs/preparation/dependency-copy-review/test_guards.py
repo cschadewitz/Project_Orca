@@ -174,10 +174,10 @@ class ExecutableGuards(unittest.TestCase):
         self.policy['baseline']['approvals']['items'][0]['stepRunId'] = 'different-synthetic-step'
         self.refused('approval/gate-step identity mismatch')
 
-    def filter_case(self, driver):
+    def filter_case(self, driver, name='fixture'):
         marker = self.area / 'filter-marker'
-        self.git('config', 'filter.fixture.' + driver, 'printf marker > ' + shlex.quote(str(marker)))
-        (self.source / '.gitattributes').write_text('pnpm-lock.yaml filter=fixture\n')
+        self.git('config', 'filter.' + name + '.' + driver, 'printf marker > ' + shlex.quote(str(marker)))
+        (self.source / '.gitattributes').write_text('pnpm-lock.yaml filter=' + name + '\n')
         lock = self.source / 'pnpm-lock.yaml'; s = lock.stat()
         os.utime(lock, ns=(s.st_atime_ns, s.st_mtime_ns + 1000000000))
         self.refused('configured clean/process/smudge filter')
@@ -185,6 +185,34 @@ class ExecutableGuards(unittest.TestCase):
 
     def test_clean_filter_never_executes(self): self.filter_case('clean')
     def test_process_filter_never_executes(self): self.filter_case('process')
+    def test_empty_named_clean_filter_never_executes(self): self.filter_case('clean', '')
+    def test_empty_named_process_filter_never_executes(self): self.filter_case('process', '')
+
+    def suppressed_workspace_case(self, root, flag):
+        relative = 'packages/widget/package.json'
+        manifest = root / relative
+        before = manifest.read_bytes()
+        self.git('update-index', flag, '--', relative, root=root)
+        changed = before.replace(b'fixture', b'changed')
+        self.assertNotEqual(changed, before); self.assertEqual(len(changed), len(before))
+        manifest.write_bytes(changed)
+        (self.source / 'node_modules/workspace').symlink_to('../packages/widget')
+        self.rebuild_contract()
+        self.refused('index checking is suppressed')
+        self.assertEqual(manifest.read_bytes(), changed, 'flagged fixture evidence changed')
+        self.assertFalse((self.stage / 'gate-request.json').exists())
+
+    def test_source_assume_unchanged_same_size_workspace_edit(self):
+        self.suppressed_workspace_case(self.source, '--assume-unchanged')
+
+    def test_destination_assume_unchanged_same_size_workspace_edit(self):
+        self.suppressed_workspace_case(self.dest, '--assume-unchanged')
+
+    def test_source_skip_worktree_same_size_workspace_edit(self):
+        self.suppressed_workspace_case(self.source, '--skip-worktree')
+
+    def test_destination_skip_worktree_same_size_workspace_edit(self):
+        self.suppressed_workspace_case(self.dest, '--skip-worktree')
 
     def test_submodule_index_refused(self):
         self.git('update-index', '--add', '--cacheinfo', '160000,' + self.head + ',fixture-submodule')
