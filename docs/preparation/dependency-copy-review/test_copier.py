@@ -63,6 +63,7 @@ class CopierFixtures(unittest.TestCase):
         self.contract = {'trees': self.trees, 'entries': list(self.entries.values()),
                          'shims': self.shims, 'shim_count': 192,
                          'prefix_count': 1340, 'metadata': self.metadata}
+        self.contract['link_policy'] = {'workspace_packages': [], 'workspace_entries': []}
 
     def plan(self):
         return copier.plan(str(self.source), str(self.dest), self.contract)
@@ -151,6 +152,10 @@ class CopierFixtures(unittest.TestCase):
         (self.source / 'workspace-target').mkdir()
         (self.source / 'workspace-target/file').write_bytes(b'tracked fixture source')
         (self.source / 'node_modules/workspace').symlink_to('../workspace-target')
+        self.contract['link_policy'] = {'workspace_packages': ['workspace-target'],
+            'workspace_entries': [{'path': 'workspace-target', 'kind': 'directory'},
+                {'path': 'workspace-target/file', 'kind': 'file',
+                 'bytes': len(b'tracked fixture source')}]}
         with copier.root(str(self.source)) as fd:
             self.contract['entries'] = list(copier.scan(fd, self.trees).values())
 
@@ -240,8 +245,8 @@ class CopierFixtures(unittest.TestCase):
     def test_exclusive_creation_race_retains_existing_bytes(self):
         original = copier.read_file
         first = self.source / 'node_modules/.bin/tool-0'
-        def race(fd, name):
-            data, st = original(fd, name)
+        def race(fd, name, maximum_bytes=None):
+            data, st = original(fd, name, maximum_bytes)
             target = self.dest / 'node_modules/.bin/tool-0'
             if name == first.name and target.parent.exists() and not target.exists():
                 target.write_bytes(b'concurrent fixture evidence')

@@ -1,86 +1,116 @@
-Exact executable wrapper and synthetic checkpoint review
+Exact executable wrapper and bounded corrective review
 
-copy-once.py is the complete executable wrapper used by the private owner invocation.
-There is no redacted/private variant. The published SHA256 must equal the local
-wrapper bytes before execution. test_wrapper.py contains the same fifteen checkpoint
-test cases with wholly synthetic in-memory deployment/run/gate values; it does not
-read any real binding, private evidence, contract, provisioning record or run state.
+copy-once.py and copier.py are the exact executable bytes pinned by the local owner
+packet. There is no redacted counterpart. Actual bindings, command packets, nonce
+evidence, resource snapshots and provisioning records remain local. The checkpoint
+collector and relocation byte-splicing helper are unchanged.
 
-Run the synthetic tests with the installed Python standard library:
+Run the synthetic standard-library suites from this directory, with TMPDIR set to
+an approved private writable fixture area:
 
-    python3 -I -S -B test_wrapper.py
+    python3 -I -S -B -c "import sys,unittest; sys.path.insert(0,'.'); suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromName(x) for x in ['test_copier','test_wrapper','test_guards']); result=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(not result.wasSuccessful())"
 
-The tests import the adjacent exact wrapper without invoking main(). They call only
-the pure validate_gate function and make no Git, copy, network or runtime operation.
-wrapper-results.json records their execution profile and result. The previously
-reviewed copier.py, relocation.py and their twenty-eight tests are unchanged.
+The 28 copier cases and 15 checkpoint cases are retained. Fixture contracts now
+supply explicit link policies and joined step identities. test_guards.py adds 28
+guards: 26 full-wrapper subprocess cases in new synthetic Git worktrees, plus two
+memory-profile/helper cases. All 71 pass. Fixtures, journals and failure evidence
+are retained locally. No test reads real bindings or contacts ORCA. Generic result
+JSON does not include private paths or measurements. Fixtures require local Linux,
+Python and Git; synthetic copy successes do not establish real-root readiness.
 
-Private binding interface
+Corrective invariants
 
-The wrapper CLI requires --binding-file and --binding-sha256. The binding must be an
-absolute no-symlink, single-link regular file, mode0600 and owned by the current uid.
-It is parsed only as JSON data after its bytes match the independently reviewed
-SHA256 argument. No binding contents or hash are embedded in published wrapper code.
-Stage/source/destination/control/helper paths, uid/inode identities, Git executable,
-branches/HEAD/lock, receipt/ready hashes and content, inventory/proposal/contract/
-helper hashes, counts, live baseline records and timing/headroom limits are local
-data. The actual command packet, binding, contract and nonce evidence stay local.
+1. Receipt strictly supports original v1 schema: version is integer 1;
+   runId/repo/commonDir/baseCommit/branch/path are nonempty strings; baseCommit is
+   40-64 lowercase hex characters. Unknown/missing fields refuse. Receipt runId
+   joins run.id/runId, approval.runId/id/requestId and every step.runId.
+   Approval stepRunId/nodeId must match one scheduled gate step whose final event
+   is waiting. The join applies to the pinned baseline and each fresh checkpoint,
+   independently of exact record equality.
+2. Before status, config/index inspection rejects every configured clean/process/
+   smudge driver, even currently inapplicable drivers: untracked attributes can
+   change applicability. Gitlinks and any .gitmodules file refuse; status also
+   explicitly ignores submodules. Hooks/fsmonitor/untracked cache remain disabled.
+   Clean and process marker-command regressions prove the commands never execute.
+3. Links may reach copied dependency outputs or explicitly pinned tracked workspace
+   packages only. Package entries are derived from pinned Git HEAD, require a
+   tracked package manifest, and must equal the supplied complete allowlist.
+   Caller-added private/untracked entries cannot grant access. Complete source and
+   virtual-destination chains reject absolute/escaping/cyclic paths, unknown
+   targets and Git/ORCA components. A linked workspace directory exposes children:
+   every actual child must be pinned tracked package data or an approved dependency
+   output. Kind/link-text/file-size drift and shared target files refuse.
+   .git/.orca entries are excluded from copied trees. Containment alone grants no
+   access. The unchanged original dependency contract establishes output trees.
+4. Before loading helper/manifest buffers or scanning payloads, Linux memory evidence
+   comes from the executing process: host MemAvailable (no swap), RSS/VmSize, finite
+   soft/hard RLIMIT_AS/RLIMIT_DATA and every visible cgroup-v2 ancestor's
+   memory.max/memory.high minus memory.current. Only the exact hierarchy root may
+   omit controller files; host headroom covers that root. Missing/ambiguous nonroot
+   measurements refuse. Smallest headroom must cover at least:
 
-Binding fields (data types shown; no operational values provided):
-- stage:string; owner_uid:int; git_executable:absolute string
-- source/destination:{path:string,dev:int,ino:int,uid:int}
-- source_branch/destination_branch/source_git_dir/destination_git_dir/common_dir:
-  strings; head/lock_blob:strings
-- receipt/ready:{path:string,sha256:string,mode:string,content:JSON object}
-- files:{absolute path:SHA256}; contract/copier/relocation/inventory/proposal:paths
-- counts:{trees:int,entries:int,shims:int,prefixes:int,file_bytes:int}
-- baseline:{discovery:object,runs:page,steps:page,approvals:page}, containing only
-  previously authenticated deployment identity and original assigned run/gate data
-- gate_max_age_seconds/checkpoint_timeout_seconds/minimum_free_bytes:positive numbers
+       4 * largest_file_bytes + 4 * retained_shim_bytes
+       + 8 * manifest_bytes + 192 MiB
 
-The command reviewed privately pins BOTH executable-wrapper SHA256 and binding SHA256.
-It runs in a clean environment with NODE_PATH absent, compile cache disabled, Python
-isolated/no-site/no-bytecode mode, disabled global/system Git config and a bounded
-timeout. Real arguments and tool/executable paths are in that local packet only.
-Data-only binding does not imply safe authorization of arbitrary helper code: owners
-must review its helper path/hash pins against the already approved immutable copier.
+   or pinned minimum_available_bytes, whichever is greater. This covers chunk joins,
+   retained payloads, relocated shim buffers, JSON/manifest/interpreter overhead
+   and reserve. Controls, original/workspace payloads and potential prefix growth
+   must fit independently reviewed pins. All real payload reads are capped at
+   recorded sizes, including growth during reading. The copy loop releases payload
+   and view references before the next file. Actual profile headroom is rechecked
+   before copying. A fresh check is a prerequisite, not a reservation or proof
+   about another process's resource profile.
 
-Mode and ownership requirements
+Private data-only interface
 
---validate-only rechecks current source/provisioning/Git/copy preconditions and a
-fresh owner-provided review snapshot; it never calls copy_exclusive or creates an
-execution attempt, nonce request, destination access probe or dependency outputs.
---execute-once additionally requires --owner-holds-roots-and-gate. The owner must
-actually hold exclusive control of both roots and other gate answers/continuations
-throughout execution. The flag is an acknowledgement, not a runtime lock.
+CLI requires --binding-file and --binding-sha256, and exactly one of --validate-only
+or --execute-once. Binding is absolute/no-symlink, regular, single-link, mode0600,
+owner uid and hash-pinned. Stage is mode0700/task-owned. Owners review both code
+and private data; no task values are embedded in executable code.
 
-Execution creates an exclusive attempt record; partial output is never resumed,
-deleted or replaced. Permission failure, drift, unsupported checkpoint or timeout
-stops and retains local journals/outputs. No sandbox/credential/config/service/run
-changes, package manager, installs, builds, project tests or agent start are present.
+Binding fields:
+- stage/owner_uid/git_executable; source/destination path/dev/ino/uid identities
+- source/destination branches/Git directories; common directory; HEAD/lock blob
+- receipt/ready path/hash/content; original inventory/proposal/contract path/hash
+- files map of independently pinned controls/helpers; copier/relocation paths
+- original counts; authenticated baseline discovery/run/steps/pending gate records
+- gate_max_age_seconds/checkpoint_timeout_seconds/minimum_free_bytes
+- link_policy:{workspace_packages:[relative directory],workspace_entries:[objects]}
+  Entries have path/kind; files have bytes; links have target; directories explicit.
+  Pinned Git tree supplies workspace authority. Private state may not be added.
+- memory:{largest_file_bytes,retained_shim_bytes,manifest_bytes,
+  minimum_available_bytes}: nonnegative integer byte counts, reviewed independently.
 
-Authenticated checkpoint protocol
+The original contract stays unchanged on disk. load_helpers verifies equality with
+original inventory/proposal, then adds the separately pinned link policy only to
+the in-memory contract. Command pins exact wrapper and binding hashes; binding
+pins exact helper bytes. Clean environment has NODE_PATH absent, compile caching
+disabled, isolated/no-site/no-bytecode Python, no global/system Git config and
+the existing timeout. Actual paths and argv stay local.
 
-After read-only preflight, execution writes one nonce request and waits within the
-binding's bounded checkpoint deadline. collectCheckpoint(bindingFile,bindingSha256,
-tools,report) in checkpoint-collector.js uses the existing supported authenticated
-MCP tools to discover identity and read that exact run, steps and pending inputs.
-The collector is generic complete executable code; it is not invoked automatically.
-It uses Python from the caller's reviewed clean PATH for private file handling.
-It atomically publishes a mode0600 response without replacing existing evidence.
-No token retrieval, raw protected-state access, alternate identity or bootstrap.
+Ownership, checkpoint and execution boundary
 
-The wrapper checks the matching nonce, post-request/fresh/grouped timestamps,
-complete pages, exact original identity/scope/run/step/pending gate records and
-waiting state. This is trusted local owner-supplied evidence from authenticated
-reads, not an independent shell authentication or cryptographic attestation. Missing
-or stale evidence refuses copying; recorded review evidence cannot answer a fresh
-random execution checkpoint. Owner hold remains a required concurrency precondition.
+Validate-only issues no execution nonce, destination probe or copy.
+Execute-once requires --owner-holds-roots-and-gate and actual exclusive owner control
+of both roots and gate answers/continuations throughout. The flag acknowledges
+ownership; it does not acquire a runtime lock or establish cryptographic attestation.
 
-After fresh evidence, the wrapper rechecks bindings, probes only the assigned root,
-rechecks freshness and calls the pinned copier once. Successful copying still leaves
-independent destination/source verification and destination-local readiness pending.
-Gate answering, coding-agent start, services and additional admissions are absent.
-Owner-session results do not establish future worker sandbox, loopback or capacity.
+Execution creates an exclusive attempt and private journal, then waits for a new
+nonce-bound checkpoint using unchanged collectCheckpoint(bindingFile,bindingSha256,
+tools,report). Its complete published code uses existing authenticated MCP discovery
+and exact run/step/pending-input read interfaces. No token/bootstrap reads or ORCA
+mutation. Trusted owner-supplied evidence must have exact original identities,
+scope/records, complete pages, fresh post-request/grouped timestamps and the joined
+receipt/run/gate-step. Old review evidence cannot satisfy a new execution nonce.
 
-Publication is preparation for independent code review, not permission to execute.
+After checkpoint, provisioning/Git/memory are rechecked, an exclusive assigned-root
+write probe is performed, freshness checked again and copier called once.
+Permission failure, missing measurement, drift or timeout stops and retains partial
+evidence. No retry, cleanup or rollback. Independent destination/source inventory
+and destination-local readiness remain pending even after successful copying.
+
+No gate answer, coding-agent start, package manager/install/network preparation,
+project build/test, browser/Electron, service action, sandbox change or admission.
+Owner-session checks do not establish future worker sandbox/loopback/capacity.
+Publication requires independent re-review of these exact bytes; it does not
+authorize executing the real packet.

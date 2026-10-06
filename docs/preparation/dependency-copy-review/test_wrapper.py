@@ -25,9 +25,12 @@ def synthetic_policy():
     runs = page([{'id': 'run-fixture', 'runId': 'run-fixture', 'kind': 'run',
         'status': 'waiting', 'workflowVersion': '4', 'workflowId': 'workflow-fixture',
         'workflowRevision': 'sha256:' + 'a' * 64, 'configGeneration': 'generation-fixture'}])
-    steps = page([{'id': 'start-fixture', 'nodeId': 'start', 'kind': 'step.completed'},
-        {'id': 'gate-fixture', 'nodeId': 'dependencyReady', 'kind': 'step.scheduled'},
-        {'id': 'waiting-fixture', 'stepRunId': 'step-fixture', 'kind': 'step.waiting'}])
+    steps = page([{'id': 'start-fixture', 'nodeId': 'start', 'kind': 'step.completed',
+                  'runId': 'run-fixture', 'stepRunId': 'start-step-fixture'},
+        {'id': 'gate-fixture', 'nodeId': 'dependencyReady', 'kind': 'step.scheduled',
+         'runId': 'run-fixture', 'stepRunId': 'step-fixture'},
+        {'id': 'waiting-fixture', 'runId': 'run-fixture',
+         'stepRunId': 'step-fixture', 'kind': 'step.waiting'}])
     approvals = page([{'id': 'request-fixture', 'requestId': 'request-fixture',
         'runId': 'run-fixture', 'stepRunId': 'step-fixture', 'kind': 'decision',
         'nodeId': 'dependencyReady', 'options': [{'id': 'stop'}, {'id': 'ready'}]}])

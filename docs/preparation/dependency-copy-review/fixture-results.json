@@ -45,7 +45,7 @@
     "test_wrong_recorded_spans",
     "test_wrong_relocation_count"
   ],
-  "command": "python3 -B test_copier.py",
-  "elapsed_seconds": 6.204,
-  "python_version": "3.13.5"
+  "command": "python3 -I -S -B with local synthetic unittest loader",
+  "python_version": "3.13.5",
+  "corrective_revision_rerun": true
 }

@@ -25,5 +25,7 @@
     "test_unknown_proof_field",
     "test_work_step_added",
     "test_wrong_nonce"
-  ]
+  ],
+  "corrective_revision_rerun": true,
+  "fixtures_include_run_step_identity_joins": true
 }

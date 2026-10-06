@@ -69,17 +69,23 @@ def stable(st):
             st.st_mtime_ns, st.st_ctime_ns, st.st_nlink)
 
 
-def read_file(parent_fd, name):
+def read_file(parent_fd, name, maximum_bytes=None):
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
     try:
         before = os.fstat(fd)
         require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1,
                 'special file or shared hardlink')
+        require(maximum_bytes is None or before.st_size <= maximum_bytes,
+                'file exceeds budgeted payload size')
         chunks = []
+        total = 0
         while True:
             chunk = os.read(fd, 1024 * 1024)
             if not chunk:
                 break
+            total += len(chunk)
+            require(total <= before.st_size and (maximum_bytes is None or total <= maximum_bytes),
+                    'file grew beyond budgeted size')
             chunks.append(chunk)
         require(stable(before) == stable(os.fstat(fd)), 'file changed during read')
         require(stable(before) == stable(os.stat(name, dir_fd=parent_fd,
@@ -89,7 +95,7 @@ def read_file(parent_fd, name):
         os.close(fd)
 
 
-def scan(root_fd, trees):
+def scan(root_fd, trees, maximum_bytes=None):
     """Complete no-follow inventory; rejects special files and shared hardlinks."""
     entries = {}
     seen = set()
@@ -107,7 +113,7 @@ def scan(root_fd, trees):
                     visit(fd, child, path + '/' + child)
                 require(stable(before) == stable(os.fstat(fd)), 'directory changed')
         elif stat.S_ISREG(before.st_mode):
-            data, st = read_file(parent_fd, name)
+            data, st = read_file(parent_fd, name, maximum_bytes)
             require(stable(before) == stable(st), 'file replaced before read')
             identity = (st.st_dev, st.st_ino)
             require(identity not in seen, 'repeated regular inode')
@@ -136,28 +142,50 @@ def scan(root_fd, trees):
     return entries
 
 
-def contained_links(path, entries):
-    """Resolve full relative-link chains; require every final target to exist in root.
-
-    Workspace source targets outside copied trees may be present in the assigned root.
-    Absolute source/destination roots and all their parents have already been checked.
-    """
-    for item in entries.values():
-        if item['kind'] == 'symlink':
-            resolved = os.path.realpath(path + '/' + item['path'], strict=True)
-            require(resolved.startswith(path + '/'), 'link resolves outside root')
-
-
-def virtual_links(fd, entries):
+def virtual_links(fd, entries, link_policy, trees):
     """Validate links against proposed outputs AND untouched workspace targets.
 
     Existing output trees must be absent. No following foreign directory links,
     even when a later link would lead back to this root.
     """
-    for item in entries.values():
-        if item['kind'] != 'symlink':
-            continue
-        todo = item['path'].split('/')
+    require(set(link_policy) == {'workspace_packages', 'workspace_entries'}, 'unknown link policy')
+    packages = [relative(p) for p in link_policy['workspace_packages']]
+    require(len(packages) == len(set(packages)), 'duplicate workspace package')
+    workspace = {}
+    def prohibited(p):
+        return any(c in ('.git', '.orca') for c in p.split('/'))
+    for item in link_policy['workspace_entries']:
+        p = relative(item['path'])
+        require(not prohibited(p) and p not in workspace and p not in entries
+                and any(p == t or p.startswith(t + '/') for t in packages),
+                'invalid workspace allowlist')
+        require(item['kind'] in ('directory', 'file', 'symlink'), 'unknown workspace kind')
+        workspace[p] = item
+    require(all(workspace.get(p, {}).get('kind') == 'directory' for p in packages),
+            'unbound workspace package')
+    allowed = {**workspace, **entries}
+    parents = {posixpath.dirname(p) for p in [*trees, *packages]}
+    for p in list(parents):
+        while p:
+            parents.add(p); p = posixpath.dirname(p)
+    def approved(p):
+        return not prohibited(p) and (p in workspace or
+            any(p == t or p.startswith(t + '/') for t in trees))
+    def physical(p):
+        with directory(fd, posixpath.dirname(p)) as parent:
+            st = os.stat(posixpath.basename(p), dir_fd=parent, follow_symlinks=False)
+            kind = ('symlink' if stat.S_ISLNK(st.st_mode) else 'directory'
+                    if stat.S_ISDIR(st.st_mode) else 'file' if stat.S_ISREG(st.st_mode) else 'special')
+            item = {'kind': kind}
+            if kind == 'symlink':
+                item['target'] = os.readlink(posixpath.basename(p), dir_fd=parent)
+            if kind == 'file':
+                require(st.st_nlink == 1, 'shared workspace target file')
+                item['bytes'] = st.st_size
+            return item
+    checked = set()
+    def resolve(path):
+        todo = path.split('/')
         parts = []
         links = 0
         while todo:
@@ -169,22 +197,42 @@ def virtual_links(fd, entries):
                 parts.pop()
                 continue
             p = '/'.join(parts + [part])
-            e = entries.get(p)
-            if e is None:
-                with directory(fd, '/'.join(parts)) as parent:
-                    st = os.stat(part, dir_fd=parent, follow_symlinks=False)
-                    if stat.S_ISLNK(st.st_mode):
-                        e = {'kind': 'symlink', 'target': os.readlink(part, dir_fd=parent)}
-                    else:
-                        e = {'kind': 'directory' if stat.S_ISDIR(st.st_mode) else 'file'}
+            require(not prohibited(p) and (approved(p) or p in parents), 'unapproved link chain path')
+            e = allowed.get(p)
+            require(e is not None or p in parents, 'unrecorded dependency/link target')
+            if p not in entries:
+                actual = physical(p)
+                require(actual['kind'] == (e['kind'] if e else 'directory'), 'workspace target kind drift')
+                if e and e['kind'] == 'symlink':
+                    require(actual['target'] == e['target'], 'workspace link drift')
+                if e and e['kind'] == 'file':
+                    require(actual['bytes'] == e['bytes'], 'workspace file size drift')
+                e = actual
             if e['kind'] == 'symlink':
                 links += 1
                 require(links <= 40 and not e['target'].startswith('/'),
                         'cyclic or absolute virtual link')
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(p), e['target']))
+                require(approved(target), 'unapproved dependency/workspace link target')
                 todo = e['target'].split('/') + todo
             else:
                 require(not todo or e['kind'] == 'directory', 'nondirectory link parent')
                 parts.append(part)
+        final = '/'.join(parts)
+        require(approved(final), 'unapproved final link target')
+        # Linking a workspace directory exposes its descendants too. Every actual
+        # child must be pinned tracked package data or an approved dependency tree.
+        if final in workspace and workspace[final]['kind'] == 'directory' and final not in checked:
+            checked.add(final)
+            with directory(fd, final) as parent:
+                names = os.listdir(parent)
+            for name in names:
+                child = final + '/' + name
+                require(child in allowed, 'unrecorded workspace/private-state child')
+                resolve(child)
+    for item in entries.values():
+        if item['kind'] == 'symlink':
+            resolve(item['path'])
 
 
 def contract_entries(contract):
@@ -196,6 +244,8 @@ def contract_entries(contract):
     entries = {}
     for e in contract['entries']:
         p = relative(e['path'])
+        require(not any(c in ('.git', '.orca') for c in p.split('/')),
+                'Git/ORCA state is excluded from dependency outputs')
         require(p not in entries and any(p == t or p.startswith(t + '/') for t in trees),
                 'duplicate or out-of-scope entry')
         item = {k: e[k] for k in ('path', 'mode', 'kind')}
@@ -232,12 +282,13 @@ def plan(source, destination, contract):
     require(not relocation.inside(source, destination)
             and not relocation.inside(destination, source), 'overlapping roots')
     trees, expected = contract_entries(contract)
+    maximum = max([e.get('bytes', 0) for e in expected.values()])
     with root(source) as sf, root(destination) as df:
-        actual = scan(sf, trees)
+        actual = scan(sf, trees, maximum)
         require(actual == expected, 'source inventory drift')
-        contained_links(source, actual)
+        virtual_links(sf, actual, contract['link_policy'], trees)
         absent_outputs(df, trees)
-        virtual_links(df, expected)
+        virtual_links(df, expected, contract['link_policy'], trees)
         shims = contract['shims']
         require(len(shims) == len({m['path'] for m in shims}), 'duplicate shims')
         require({m['path'] for m in shims} ==
@@ -250,7 +301,7 @@ def plan(source, destination, contract):
             require(expected[p]['sha256'] == mapping['before_sha256'], 'shim hash mismatch')
             parent, name = posixpath.split(p)
             with directory(sf, parent) as fd:
-                data, st = read_file(fd, name)
+                data, st = read_file(fd, name, expected[p]['bytes'])
             updated, evidence = relocation.propose(data, mapping['before_sha256'],
                 stat.S_IMODE(st.st_mode), source, destination, p)
             for key in ('spans', 'unchanged_bytes_sha256', 'relative_target', 'header_sha256'):
@@ -262,7 +313,7 @@ def plan(source, destination, contract):
         for p, hash_value in contract['metadata'].items():
             require(expected[p]['sha256'] == hash_value and p not in rewritten,
                     'historical metadata changed')
-        require(scan(sf, trees) == expected, 'source changed during planning')
+        require(scan(sf, trees, maximum) == expected, 'source changed during planning')
         return trees, expected, rewritten
 
 
@@ -275,8 +326,9 @@ def copy_exclusive(source, destination, contract):
     or claim daemon/worker locks. Any exception retains the destination evidence.
     """
     trees, expected, rewritten = plan(source, destination, contract)
+    maximum = max([e.get('bytes', 0) for e in expected.values()])
     with root(source) as sf, root(destination) as df:
-        require(scan(sf, trees) == expected, 'source changed before copying')
+        require(scan(sf, trees, maximum) == expected, 'source changed before copying')
         absent_outputs(df, trees)
         ordered = sorted(expected, key=lambda p: (p.count('/'), p))
         for p in ordered:
@@ -289,7 +341,7 @@ def copy_exclusive(source, destination, contract):
                     os.symlink(e['target'], name, dir_fd=dest_fd)
                 else:
                     with directory(sf, parent) as src_fd:
-                        data, _ = read_file(src_fd, name)
+                        data, _ = read_file(src_fd, name, e['bytes'])
                     require(digest(data) == e['sha256'] and len(data) == e['bytes'],
                             'source file changed during copying')
                     data = rewritten.get(p, data)
@@ -306,6 +358,7 @@ def copy_exclusive(source, destination, contract):
                         require(os.fstat(fd).st_nlink == 1, 'destination shared hardlink')
                     finally:
                         os.close(fd)
+                    del view, data
                 os.fsync(dest_fd)
         for p in reversed(ordered):
             if expected[p]['kind'] == 'directory':
@@ -315,9 +368,10 @@ def copy_exclusive(source, destination, contract):
         wanted = {p: dict(e) for p, e in expected.items()}
         for p, data in rewritten.items():
             wanted[p].update(bytes=len(data), sha256=digest(data))
-        require(scan(df, trees) == wanted, 'destination inventory mismatch')
-        contained_links(destination, wanted)
-        require(scan(sf, trees) == expected, 'source preservation check failed')
+        require(scan(df, trees, max([e.get('bytes', 0) for e in wanted.values()])) == wanted,
+                'destination inventory mismatch')
+        virtual_links(df, wanted, contract['link_policy'], trees)
+        require(scan(sf, trees, maximum) == expected, 'source preservation check failed')
         return {'trees': len(trees), 'shims': len(rewritten),
                 'prefixes': contract['prefix_count'], 'independent_files': True,
                 'source_preserved': True, 'metadata_preserved': True}
