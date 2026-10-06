@@ -1,0 +1,29 @@
+{
+  "kind": "wholly synthetic checkpoint tests",
+  "tests": 15,
+  "passed": 15,
+  "failed": 0,
+  "execution_profile": "owner-task local Python standard-library test process",
+  "python_version": "3.13.5",
+  "command": "python3 -I -S -B test_wrapper.py",
+  "private_bindings_read": false,
+  "copier_called": false,
+  "runtime_or_git_called": false,
+  "tests_executed": [
+    "test_extra_page",
+    "test_gate_gone",
+    "test_instance_changed",
+    "test_matching_fresh_pending_checkpoint",
+    "test_pre_checkpoint",
+    "test_principal_changed",
+    "test_request_changed",
+    "test_restart_required",
+    "test_run_not_waiting",
+    "test_scope_changed",
+    "test_stale",
+    "test_truncated",
+    "test_unknown_proof_field",
+    "test_work_step_added",
+    "test_wrong_nonce"
+  ]
+}
