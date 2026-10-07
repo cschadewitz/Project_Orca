@@ -75,6 +75,7 @@ const peerProgress = new WeakMap<Client, FixtureProgress>();
 
 export class ProductionFixture {
   readonly progress = new FixtureProgress();
+  private failurePublished = false;
   readonly cleanup: (() => Promise<unknown>)[] = [];
   readonly processes: { child: ChildProcessWithoutNullStreams; output: () => string }[] = [];
   readonly tokenSecrets: string[] = [];
@@ -84,7 +85,7 @@ export class ProductionFixture {
   token = "";
   daemon!: ChildProcessWithoutNullStreams;
 
-  static async create() {
+  static async create(onAcquired?: (fixture: ProductionFixture) => void) {
     for (const file of [
       cli,
       join(root, "packages/integrations/dist/mcp/transport.js"),
@@ -99,14 +100,27 @@ export class ProductionFixture {
     const f = new ProductionFixture();
     f.dir = await mkdtemp(join(tmpdir(), "orca-mcp-production-"));
     try {
+      onAcquired?.(f);
       await f.prepare();
       await f.boot();
       // Persistent non-bootstrap identity survives another daemon's bootstrap rotation.
       f.token = (await f.issue({ principal: "acceptance-owner", preset: "owner" })).token;
       return f;
     } catch (error) {
+      f.reportFailure();
       await f.close();
       throw error;
+    }
+  }
+
+  /** Setup and test hooks share one guarded, failure-only publication before cleanup. */
+  reportFailure(): void {
+    if (this.failurePublished) return;
+    this.failurePublished = true;
+    try {
+      console.error("Production fixture wait failure", JSON.stringify(this.progress.snapshot()));
+    } catch {
+      // Diagnostic publication cannot replace the original failure or skip cleanup.
     }
   }
 
