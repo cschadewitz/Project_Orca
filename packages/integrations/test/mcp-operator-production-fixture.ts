@@ -29,6 +29,7 @@ import {
 } from "@orca/protocol";
 import type { IssueOptions } from "../../daemon/src/auth/credentials.js";
 import { continuationDiagnostics } from "./continuation-diagnostics.js";
+import { transportObserverSource } from "./mcp-replay-diagnostics.js";
 
 export const aliases = {
   "operator.submitRequest": "submit_request",
@@ -339,19 +340,32 @@ export class ProductionFixture {
     };
   }
 
-  async connect(transport: Transport, token = this.token, endpoint = this.endpoint): Promise<Peer> {
+  async connect(
+    transport: Transport,
+    token = this.token,
+    endpoint = this.endpoint,
+    observeTransport?: (chunk: Buffer) => void,
+  ): Promise<Peer> {
     const client = new Client({ name: "orca-production-acceptance", version: "1" });
     this.cleanup.push(() => client.close());
     if (transport === "stdio") {
       const wire = new StdioClientTransport({
         command: process.execPath,
-        args: [cli, "mcp", "--endpoint", endpoint],
+        args: [
+          ...(observeTransport
+            ? ["--import", `data:text/javascript,${encodeURIComponent(transportObserverSource)}`]
+            : []),
+          cli,
+          "mcp",
+          "--endpoint",
+          endpoint,
+        ],
         cwd: this.dir,
         env: { ...environment(), ORCA_MCP_TOKEN: token },
         stderr: "pipe",
       });
       // Consume stderr, but never allow an SDK error to print a token.
-      wire.stderr?.on("data", () => undefined);
+      wire.stderr?.on("data", observeTransport ?? (() => undefined));
       await client.connect(wire);
     } else {
       // An isolated loopback private bridge supplies the fixed HTTPS origin; no TLS bypass,
