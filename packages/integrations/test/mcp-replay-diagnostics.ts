@@ -152,7 +152,7 @@ export class ReplayDiagnostics {
   }
 }
 
-/** Read at most two directory entries and 2 KiB of owner metadata; do not follow symlinks or inspect protected records. */
+/** Read at most two entries and 2 KiB plus an oversize sentinel; never follow symlinks or block on special owners. */
 export async function lockMetadata(path: string, previousPid?: number, currentPid?: number) {
   try {
     const info = await lstat(path);
@@ -171,7 +171,13 @@ export async function lockMetadata(path: string, previousPid?: number, currentPi
     }
     if (entries !== 1 || !/^owner\.\d+\.[a-f0-9-]+\.json$/.test(name ?? ""))
       return { state: "directory", entries, owner: "unavailable" };
-    const handle = await open(join(path, name!), constants.O_RDONLY | constants.O_NOFOLLOW);
+    // A FIFO can otherwise occupy a filesystem worker before fstat rejects it;
+    // the diagnostic deadline does not cancel that open or free workers for cleanup.
+    // Windows has no O_NONBLOCK flag or filesystem FIFOs; still validate the opened handle.
+    const handle = await open(
+      join(path, name!),
+      constants.O_RDONLY | constants.O_NOFOLLOW | (process.platform === "win32" ? 0 : constants.O_NONBLOCK),
+    );
     let raw: unknown;
     try {
       if (!(await handle.stat()).isFile()) return { state: "directory", entries, owner: "unavailable" };

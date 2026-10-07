@@ -212,3 +212,51 @@ it("fails closed for foreign, malformed, oversized, multiple and symlink owners"
   expect(await lockMetadata(lock)).toEqual({ state: "symlink" });
   expect(await lockMetadata(join(dir, "absent"))).toEqual({ state: "absent" });
 });
+
+it.skipIf(process.platform === "win32")("rejects four FIFO owners without starving subsequent cleanup", async () => {
+  const dir = await temporary();
+  const source = `
+    import assert from 'node:assert/strict';
+    import {execFileSync} from 'node:child_process';
+    import {access, mkdir, rm} from 'node:fs/promises';
+    import {join} from 'node:path';
+    import {ReplayDiagnostics} from ${JSON.stringify(new URL("./mcp-replay-diagnostics.ts", import.meta.url).href)};
+    const dir = ${JSON.stringify(dir)};
+    const operationId = 'retry_synthetic';
+    const runId = 'run_synthetic';
+    try {
+      const paths = [
+        join(dir, 'state/admission-retries/catalog.lock'),
+        join(dir, 'state/admission-retries', operationId + '.lock'),
+        join(dir, 'state/runs', runId + '.jsonl.lock'),
+        join(dir, 'state/leases', encodeURIComponent('run:' + runId) + '.json.mutation.lock'),
+      ];
+      for (const path of paths) {
+        await mkdir(path, {recursive: true});
+        execFileSync('mkfifo', [join(path, 'owner.123.aabb.json')], {stdio: 'pipe'});
+      }
+      const daemon = {exitCode: null, signalCode: null, pid: process.pid};
+      const evidence = await new ReplayDiagnostics().evidence({dir, daemon}, daemon, operationId, runId);
+      assert.ok(Array.isArray(evidence.locks));
+      assert.equal(evidence.locks.length, 4);
+      for (const lock of evidence.locks) assert.equal(lock.owner, 'unavailable');
+    } finally {
+      // Same asynchronous recursive removal used by ProductionFixture.close().
+      await rm(dir, {recursive: true, force: true});
+    }
+    await assert.rejects(access(dir), {code: 'ENOENT'});
+    process.stdout.write('cleanup-completed');
+  `;
+  // Four blocking opens exhaust this isolated child's pool. The external watchdog
+  // can stop a regression even when evidence's own deadline cannot cancel I/O.
+  const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", source], {
+    env: { PATH: process.env.PATH ?? "", UV_THREADPOOL_SIZE: "4" },
+    encoding: "utf8",
+    timeout: 3000,
+    killSignal: "SIGKILL",
+  });
+  expect(child.status).toBe(0);
+  expect(child.signal).toBeNull();
+  expect(child.stdout).toBe("cleanup-completed");
+  expect(child.stderr).toBe("");
+});
