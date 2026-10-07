@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "scope": "synthetic-preparation-packet",
+  "sourceBaseline": "794e64344e3d6edb64e80c5920f722ff381fa4a5",
+  "backendCommit": "b6f4345b0e8b60a75a8c8e8409a1851785e61383",
+  "publishedHead": "Recorded in the PR exact-head receipt; this file cannot name its own commit.",
+  "contractDigest": "280c63f2a77506a2ea915e89a55adf4d7add1c776430b88fed443dab4f340abe",
+  "resultDigest": "bdfd0bdd16ff1d92477ce213359a92afb7f2e3c304bede6c94ffe9c00c53d258",
+  "fixtureFileSha256": "dcab20231b6163e6a6ec7707d87f626d4b748e77e0ef3a5a1f1955b0349701a4",
+  "tools": [
+    {
+      "name": "node-22",
+      "sha256": "3517c2df0b2f8cd7f422b4b8450ef81c6889f08eb03e281d6de9079b15e6a327"
+    },
+    {
+      "name": "node-24",
+      "sha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c"
+    },
+    {
+      "name": "prettier-cli",
+      "sha256": "6e922134a3c76fd4de202959bb6aef50bde0c994148075003a15569b7197906e"
+    },
+    {
+      "name": "eslint-cli",
+      "sha256": "bb07a179294caee1175397035fef38347782cb8fbf00356ca8c6fd2c87a989fa"
+    },
+    {
+      "name": "vitest-cli",
+      "sha256": "39db22f579acf5639bbb17a261408debbde03f4692c0c439e77e7f13aeba74d6"
+    }
+  ],
+  "checks": [
+    {
+      "status": "passed",
+      "command": "$NODE22 --test-reporter=tap docs/preparation/trusted-prepared-roots/contract.test.mjs",
+      "passed": 309,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "status": "passed",
+      "command": "$NODE24 --test-reporter=tap docs/preparation/trusted-prepared-roots/contract.test.mjs",
+      "passed": 309,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "status": "passed",
+      "command": "$NODE24 $VITEST run --config $TEMP_TOOLING_CONFIG",
+      "passed": 309,
+      "failed": 0,
+      "skipped": 0,
+      "scope": "One exact bridge; installed Vitest 5.0.2, temporary alias and discovery config."
+    },
+    {
+      "status": "passed",
+      "command": "$NODE24 $PRETTIER --check .",
+      "scope": "Prettier 3.9.9, repository-wide formatter check."
+    },
+    {
+      "status": "passed",
+      "command": "$NODE24 $ESLINT --no-config-lookup --config $TEMP_BASELINE_CONFIG <three owned executable files>",
+      "scope": "ESLint 10.11.0, exact baseline rules with static dependency imports."
+    },
+    {
+      "status": "passed",
+      "command": "$NODE24 packages/design/build-tokens.js --check"
+    },
+    {
+      "status": "passed",
+      "command": "$NODE24 tools/eslint-config/bin/check-css-tokens.js packages/app/renderer packages/design/css/components.css"
+    },
+    {
+      "status": "passed",
+      "command": "$NODE24 --check <each owned executable file>; git diff --check; exact file scope and fixture pins"
+    },
+    {
+      "status": "blocked",
+      "command": "Full repository lint/typecheck/build/test/coverage/compiled demo",
+      "reason": "No checkout dependencies; installation and dependency copying excluded."
+    },
+    {
+      "status": "not-run",
+      "command": "Opt-in integration, Electron/browser smoke, real copier, runtime/ACP/controller/worker tests",
+      "reason": "Outside synthetic assignment."
+    },
+    {
+      "status": "failed",
+      "command": "Initial subprocess discovery bridge",
+      "reason": "Host refused nested spawn with EPERM; final in-process registration preserves all assertions and passes."
+    },
+    {
+      "status": "blocked",
+      "command": "Initial pnpm run design:check/lint:css/format:check/typecheck/lint and pnpm exec vitest",
+      "reason": "Unexpected automatic install attempt; registry access failed; all processes interrupted with exit 130. No checkout dependency tree created; tracked package/workspace/lock bytes unchanged."
+    }
+  ],
+  "review": {
+    "workingTree": "Two P2 findings fixed: workspace child link traversal and strict acquired ownership before begin. Seventeen regression cases added; independent re-review reported no remaining blockers.",
+    "publishedExactHead": "Required and recorded separately in PR."
+  },
+  "limits": [
+    "Fixture-only; no production runtime import, copy, install or launch.",
+    "Historical owner copy evidence is attributed separately, not rerun.",
+    "No worker sandbox, loopback, peak capacity or #449 enforcement certification."
+  ],
+  "pathValidationCorrection": {
+    "reviewedParent": "afee876435d7c76b5f09fe18f55880552797812d",
+    "findings": [
+      "https://github.com/cschadewitz/Project_Orca/pull/508#issuecomment-6030367155",
+      "https://github.com/cschadewitz/Project_Orca/pull/508#issuecomment-6030372419"
+    ],
+    "changes": "Semantic manifest/lock relative checks; ten aligned relative-path schema patterns; canonical absolute identity checks permit matching .git metadata identities while copy outputs still exclude Git/ORCA state.",
+    "addedCases": 90,
+    "totalCases": 309,
+    "fullValidatorCoverage": "Joined and separately repinned hypothetical policies pass through binding, snapshot and full-result validation; ordinary relative paths and .git metadata identity are positive fixtures.",
+    "schemaDistinction": "Malformed relative spellings reject in direct shape validation. Absolute identity strings require semantic canonical-path validation; schema acceptance alone is not trusted binding/readiness.",
+    "fixtureBytesAndDigests": "Unchanged from reviewed parent.",
+    "review": "Independent correction review and final published-head results are recorded in the PR; Cal re-review is separate.",
+    "repositoryChecks": "Direct installed tools reused; no pnpm commands, package installs or runtime wiring in this correction."
+  }
+}
