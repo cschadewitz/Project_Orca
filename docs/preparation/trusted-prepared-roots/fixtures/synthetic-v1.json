@@ -1,0 +1,535 @@
+{
+  "contract": {
+    "version": 1,
+    "kind": "trusted-prepared-root",
+    "inputs": {
+      "repository": "/synthetic/repository",
+      "baseCommit": "1111111111111111111111111111111111111111",
+      "source": {
+        "path": "/synthetic/source",
+        "device": 7,
+        "inode": 101,
+        "uid": 1000
+      },
+      "root": {
+        "path": "/synthetic/roots/run-alpha",
+        "device": 7,
+        "inode": 100,
+        "uid": 1000
+      },
+      "sourceBranch": "synthetic/source",
+      "branch": "synthetic/roots/run-alpha",
+      "commonDir": "/synthetic/repository/git-common",
+      "gitDir": "/synthetic/repository/git-common/worktrees/run-alpha",
+      "receipt": {
+        "version": 1,
+        "runId": "synthetic-run-alpha",
+        "repo": "/synthetic/repository",
+        "commonDir": "/synthetic/repository/git-common",
+        "baseCommit": "1111111111111111111111111111111111111111",
+        "branch": "synthetic/roots/run-alpha",
+        "path": "/synthetic/roots/run-alpha"
+      },
+      "receiptSha256": "fa6d01cd6d035238155c1d9dbbea336460e7db21df954cf73ce9a918c209db59",
+      "ready": {
+        "gitDir": "/synthetic/repository/git-common/worktrees/run-alpha"
+      },
+      "readySha256": "c6f9cf885cc2858cb9d0df224752cb35bf2872acccc3382cc6b9ab7a33992888",
+      "runId": "synthetic-run-alpha",
+      "stepRunId": "synthetic-step-alpha",
+      "nodeId": "synthetic-dependency-gate",
+      "inputId": "synthetic-input-alpha",
+      "generation": {
+        "id": "synthetic-generation-alpha",
+        "sha256": "32edbc0edc320bfe6d6084a133861c51d4206a0249a8a1b3b5bea7b4486dd27f"
+      },
+      "profile": {
+        "id": "synthetic-owner-linux",
+        "sha256": "5192be205a1687c44fce092914c7e08e2edd50b191648165b358f03380808713"
+      },
+      "manifests": [
+        {
+          "path": "package.json",
+          "sha256": "7f7c0982d8eb5d031c19b32148413806a6c8220c278f272c6c9932ee8586f005"
+        },
+        {
+          "path": "packages/widget/package.json",
+          "sha256": "2be9117e94ea4e7cdd516286b2217d0223d3ced6997d2f94dc80e2ebb18c548e"
+        }
+      ],
+      "lock": {
+        "path": "pnpm-lock.yaml",
+        "sha256": "35013341099ded1b42792d9d64d61380e321886cf98b8be405cc5512398a44e4",
+        "gitBlob": "2222222222222222222222222222222222222222"
+      },
+      "inventorySha256": "f1ef59cc3f9edb9f5d8ef20696fda8afc7233c0858b00c5254ad74ad9a122921",
+      "workspaceSha256": "6a1157348497944429e95a831027da5ed43cf080f5c1b98a4bc75415cfe80ca3",
+      "shimInventorySha256": "77fbd0080ce2795b453ed10d5efbed421ea5b9d431a6a736eefcd2035c642038",
+      "tools": [
+        {
+          "name": "synthetic-node",
+          "version": "24.0.0-fixture",
+          "sha256": "9b836ec646ae82f9594ff89be48e4867f33ca876edfbe07ca0925c8bc419833d"
+        },
+        {
+          "name": "synthetic-python",
+          "version": "3.0.0-fixture",
+          "sha256": "91e363b1eb862088e00e891d59b0fa920500261a6418292b74813788dd707ddc"
+        },
+        {
+          "name": "synthetic-git",
+          "version": "2.0.0-fixture",
+          "sha256": "dabb5ada4f583525833d720c0a74030281c87e26a0a99609217ff0022272dadf"
+        }
+      ]
+    },
+    "backend": {
+      "commit": "b6f4345b0e8b60a75a8c8e8409a1851785e61383",
+      "wrapperSha256": "952dc2652cfb1e6d7b41e5e0267f2c6a2b7c95e3cda4f0d1e6e3e76cb2491ea5",
+      "copierSha256": "97c291ac389e65bf4c5a9176fe5d3416683782e1b7bc36a8c5e53020874c3955",
+      "relocationSha256": "f634cb5be8e926a657e42dc42b0bb7c7042fed62b9e72d4a29e56c961286e5c1",
+      "collectorSha256": "a68b79c10f08ff48bb9435c4e2e453e58d875ac58ac09fd2bdfb9bdee15a93e6"
+    },
+    "outputs": ["node_modules"],
+    "requiredChecks": ["independent-inventory", "root-local-tool", "native-load"],
+    "capacity": {
+      "largestFileBytes": 64,
+      "retainedShimBytes": 64,
+      "manifestBytes": 1024,
+      "minimumAvailableBytes": 0,
+      "minimumFreeBytes": 4096
+    },
+    "validity": {
+      "notBefore": 1000,
+      "expiresAt": 10000,
+      "checkpointMaxAgeMs": 1000
+    }
+  },
+  "before": {
+    "inputs": {
+      "repository": "/synthetic/repository",
+      "baseCommit": "1111111111111111111111111111111111111111",
+      "source": {
+        "path": "/synthetic/source",
+        "device": 7,
+        "inode": 101,
+        "uid": 1000
+      },
+      "root": {
+        "path": "/synthetic/roots/run-alpha",
+        "device": 7,
+        "inode": 100,
+        "uid": 1000
+      },
+      "sourceBranch": "synthetic/source",
+      "branch": "synthetic/roots/run-alpha",
+      "commonDir": "/synthetic/repository/git-common",
+      "gitDir": "/synthetic/repository/git-common/worktrees/run-alpha",
+      "receipt": {
+        "version": 1,
+        "runId": "synthetic-run-alpha",
+        "repo": "/synthetic/repository",
+        "commonDir": "/synthetic/repository/git-common",
+        "baseCommit": "1111111111111111111111111111111111111111",
+        "branch": "synthetic/roots/run-alpha",
+        "path": "/synthetic/roots/run-alpha"
+      },
+      "receiptSha256": "fa6d01cd6d035238155c1d9dbbea336460e7db21df954cf73ce9a918c209db59",
+      "ready": {
+        "gitDir": "/synthetic/repository/git-common/worktrees/run-alpha"
+      },
+      "readySha256": "c6f9cf885cc2858cb9d0df224752cb35bf2872acccc3382cc6b9ab7a33992888",
+      "runId": "synthetic-run-alpha",
+      "stepRunId": "synthetic-step-alpha",
+      "nodeId": "synthetic-dependency-gate",
+      "inputId": "synthetic-input-alpha",
+      "generation": {
+        "id": "synthetic-generation-alpha",
+        "sha256": "32edbc0edc320bfe6d6084a133861c51d4206a0249a8a1b3b5bea7b4486dd27f"
+      },
+      "profile": {
+        "id": "synthetic-owner-linux",
+        "sha256": "5192be205a1687c44fce092914c7e08e2edd50b191648165b358f03380808713"
+      },
+      "manifests": [
+        {
+          "path": "package.json",
+          "sha256": "7f7c0982d8eb5d031c19b32148413806a6c8220c278f272c6c9932ee8586f005"
+        },
+        {
+          "path": "packages/widget/package.json",
+          "sha256": "2be9117e94ea4e7cdd516286b2217d0223d3ced6997d2f94dc80e2ebb18c548e"
+        }
+      ],
+      "lock": {
+        "path": "pnpm-lock.yaml",
+        "sha256": "35013341099ded1b42792d9d64d61380e321886cf98b8be405cc5512398a44e4",
+        "gitBlob": "2222222222222222222222222222222222222222"
+      },
+      "inventorySha256": "f1ef59cc3f9edb9f5d8ef20696fda8afc7233c0858b00c5254ad74ad9a122921",
+      "workspaceSha256": "6a1157348497944429e95a831027da5ed43cf080f5c1b98a4bc75415cfe80ca3",
+      "shimInventorySha256": "77fbd0080ce2795b453ed10d5efbed421ea5b9d431a6a736eefcd2035c642038",
+      "tools": [
+        {
+          "name": "synthetic-node",
+          "version": "24.0.0-fixture",
+          "sha256": "9b836ec646ae82f9594ff89be48e4867f33ca876edfbe07ca0925c8bc419833d"
+        },
+        {
+          "name": "synthetic-python",
+          "version": "3.0.0-fixture",
+          "sha256": "91e363b1eb862088e00e891d59b0fa920500261a6418292b74813788dd707ddc"
+        },
+        {
+          "name": "synthetic-git",
+          "version": "2.0.0-fixture",
+          "sha256": "dabb5ada4f583525833d720c0a74030281c87e26a0a99609217ff0022272dadf"
+        }
+      ]
+    },
+    "at": 2000,
+    "entries": [
+      {
+        "path": "node_modules",
+        "kind": "directory",
+        "mode": 493,
+        "bytes": 0,
+        "sha256": "b311899cf0ae4971480ba7c2b3f4843da99363b7f4c129d8654fdf52d79973e2",
+        "target": "",
+        "device": 7,
+        "inode": 1,
+        "nlink": 1
+      },
+      {
+        "path": "node_modules/payload",
+        "kind": "file",
+        "mode": 420,
+        "bytes": 16,
+        "sha256": "25a84e5fb48bf63a2a8eab3332cd58dd4f4346ff966409542c2b276c07fef1b0",
+        "target": "",
+        "device": 7,
+        "inode": 2,
+        "nlink": 1
+      },
+      {
+        "path": "node_modules/.modules.yaml",
+        "kind": "file",
+        "mode": 420,
+        "bytes": 16,
+        "sha256": "2f2c26909c1354b9d01d1603a086d747420493700aff26af708c276cb1b9aa80",
+        "target": "",
+        "device": 7,
+        "inode": 3,
+        "nlink": 1
+      },
+      {
+        "path": "node_modules/.pnpm-workspace-state-v1.json",
+        "kind": "file",
+        "mode": 420,
+        "bytes": 16,
+        "sha256": "6d3cd9b8e024763f165ba523d093de84675c751a6fd8d61f457cae7e7737b4f8",
+        "target": "",
+        "device": 7,
+        "inode": 4,
+        "nlink": 1
+      },
+      {
+        "path": "node_modules/.bin",
+        "kind": "directory",
+        "mode": 493,
+        "bytes": 0,
+        "sha256": "4b99ee503ea8138074576aabaccbcd43493459970671481e09fe65cd425ece8b",
+        "target": "",
+        "device": 7,
+        "inode": 5,
+        "nlink": 1
+      },
+      {
+        "path": "node_modules/.bin/synthetic-tool",
+        "kind": "file",
+        "mode": 493,
+        "bytes": 16,
+        "sha256": "e0e2bd8d30ff8e5e51cb44a07b61ad12b065fd87cf04ff72ade77ca8d558a4d7",
+        "target": "",
+        "device": 7,
+        "inode": 6,
+        "nlink": 1
+      },
+      {
+        "path": "node_modules/widget",
+        "kind": "symlink",
+        "mode": 420,
+        "bytes": 0,
+        "sha256": "4f806871922943b4af3053def498b0560325d39194df29b6631bb158bb75d25d",
+        "target": "../packages/widget",
+        "device": 7,
+        "inode": 7,
+        "nlink": 1
+      }
+    ],
+    "workspaceEntries": [
+      {
+        "path": "packages/widget",
+        "kind": "directory",
+        "mode": 493,
+        "bytes": 0,
+        "sha256": "7f168f245c2a41852c25785f85d6390f468b9ec915be5e88a56cf8037bfd498a",
+        "target": "",
+        "device": 7,
+        "inode": 8,
+        "nlink": 1
+      },
+      {
+        "path": "packages/widget/package.json",
+        "kind": "file",
+        "mode": 420,
+        "bytes": 16,
+        "sha256": "2be9117e94ea4e7cdd516286b2217d0223d3ced6997d2f94dc80e2ebb18c548e",
+        "target": "",
+        "device": 7,
+        "inode": 9,
+        "nlink": 1
+      }
+    ],
+    "shims": [
+      {
+        "path": "node_modules/.bin/synthetic-tool",
+        "template": "reviewed-pnpm-posix-v1",
+        "beforeSha256": "e0e2bd8d30ff8e5e51cb44a07b61ad12b065fd87cf04ff72ade77ca8d558a4d7",
+        "afterSha256": "e579f5427bdb344f7339552d7c4deb9526cc55d88bf1bb25d376b675bf4d9f4f",
+        "unchangedBytesSha256": "2a59eb173091548a4868dc89ce010c6181fbd317f9ce9f617d37157832e3adc5",
+        "prefixEdits": 3,
+        "afterBytes": 43
+      }
+    ],
+    "git": [
+      {
+        "role": "source",
+        "filterKeys": [],
+        "indexTags": ["H"],
+        "gitlinks": false,
+        "gitmodules": false,
+        "trackedClean": true,
+        "registrationValid": true,
+        "pathsNoSymlinks": true
+      },
+      {
+        "role": "root",
+        "filterKeys": [],
+        "indexTags": ["H"],
+        "gitlinks": false,
+        "gitmodules": false,
+        "trackedClean": true,
+        "registrationValid": true,
+        "pathsNoSymlinks": true
+      }
+    ],
+    "existingOutputs": [],
+    "capacity": {
+      "profileSha256": "5192be205a1687c44fce092914c7e08e2edd50b191648165b358f03380808713",
+      "at": 2000,
+      "hostAvailableBytes": 1073741824,
+      "rssBytes": 1024,
+      "virtualBytes": 2048,
+      "rlimitAsSoft": null,
+      "rlimitAsHard": null,
+      "rlimitDataSoft": null,
+      "rlimitDataHard": null,
+      "cgroupMembershipCount": 1,
+      "cgroupMountCount": 1,
+      "ancestorsComplete": true,
+      "cgroups": [
+        {
+          "path": "/synthetic/cgroup/owner",
+          "isHierarchyRoot": false,
+          "currentBytes": 4096,
+          "maxBytes": 1073741824,
+          "highBytes": 1073741824
+        },
+        {
+          "path": "/synthetic/cgroup",
+          "isHierarchyRoot": true,
+          "currentBytes": null,
+          "maxBytes": null,
+          "highBytes": null
+        }
+      ],
+      "diskFreeBytes": 8192
+    }
+  },
+  "result": {
+    "version": 1,
+    "kind": "prepared-root-result",
+    "contractDigest": "280c63f2a77506a2ea915e89a55adf4d7add1c776430b88fed443dab4f340abe",
+    "runId": "synthetic-run-alpha",
+    "root": {
+      "path": "/synthetic/roots/run-alpha",
+      "device": 7,
+      "inode": 100,
+      "uid": 1000
+    },
+    "branch": "synthetic/roots/run-alpha",
+    "baseCommit": "1111111111111111111111111111111111111111",
+    "generationSha256": "32edbc0edc320bfe6d6084a133861c51d4206a0249a8a1b3b5bea7b4486dd27f",
+    "profileSha256": "5192be205a1687c44fce092914c7e08e2edd50b191648165b358f03380808713",
+    "attemptId": "synthetic-attempt-alpha",
+    "fenceId": "synthetic-fence-alpha",
+    "nonce": "synthetic-nonce-alpha",
+    "startedAt": 2000,
+    "completedAt": 2100,
+    "expiresAt": 5000,
+    "beforeCheckpoint": {
+      "nonce": "synthetic-nonce-alpha",
+      "at": 2000,
+      "runId": "synthetic-run-alpha",
+      "stepRunId": "synthetic-step-alpha",
+      "nodeId": "synthetic-dependency-gate",
+      "inputId": "synthetic-input-alpha",
+      "runStatus": "waiting",
+      "gateStatus": "pending",
+      "gateScheduled": true,
+      "gateLastEvent": "step.waiting",
+      "authenticated": true,
+      "complete": true,
+      "generationSha256": "32edbc0edc320bfe6d6084a133861c51d4206a0249a8a1b3b5bea7b4486dd27f"
+    },
+    "afterCheckpoint": {
+      "nonce": "synthetic-nonce-alpha",
+      "at": 2100,
+      "runId": "synthetic-run-alpha",
+      "stepRunId": "synthetic-step-alpha",
+      "nodeId": "synthetic-dependency-gate",
+      "inputId": "synthetic-input-alpha",
+      "runStatus": "waiting",
+      "gateStatus": "pending",
+      "gateScheduled": true,
+      "gateLastEvent": "step.waiting",
+      "authenticated": true,
+      "complete": true,
+      "generationSha256": "32edbc0edc320bfe6d6084a133861c51d4206a0249a8a1b3b5bea7b4486dd27f"
+    },
+    "copy": {
+      "invocations": 1,
+      "exitCode": 0,
+      "journalSha256": "2cb5b04d356b17826ff44585a7762c04a7205dbe46a9fd8e581bc3be5fdc69be",
+      "outputInventorySha256": "174be7a2ef41c4d30058007c2a3c6a33982897a30c303044368073f6435209b5"
+    },
+    "verification": {
+      "independent": true,
+      "sourceBeforeSha256": "f1ef59cc3f9edb9f5d8ef20696fda8afc7233c0858b00c5254ad74ad9a122921",
+      "sourceAfterSha256": "f1ef59cc3f9edb9f5d8ef20696fda8afc7233c0858b00c5254ad74ad9a122921",
+      "workspaceSha256": "6a1157348497944429e95a831027da5ed43cf080f5c1b98a4bc75415cfe80ca3",
+      "metadataPreserved": true,
+      "entries": [
+        {
+          "path": "node_modules",
+          "kind": "directory",
+          "mode": 493,
+          "bytes": 0,
+          "sha256": "b311899cf0ae4971480ba7c2b3f4843da99363b7f4c129d8654fdf52d79973e2",
+          "target": "",
+          "device": 7,
+          "inode": 1001,
+          "nlink": 1
+        },
+        {
+          "path": "node_modules/payload",
+          "kind": "file",
+          "mode": 420,
+          "bytes": 16,
+          "sha256": "25a84e5fb48bf63a2a8eab3332cd58dd4f4346ff966409542c2b276c07fef1b0",
+          "target": "",
+          "device": 7,
+          "inode": 1002,
+          "nlink": 1
+        },
+        {
+          "path": "node_modules/.modules.yaml",
+          "kind": "file",
+          "mode": 420,
+          "bytes": 16,
+          "sha256": "2f2c26909c1354b9d01d1603a086d747420493700aff26af708c276cb1b9aa80",
+          "target": "",
+          "device": 7,
+          "inode": 1003,
+          "nlink": 1
+        },
+        {
+          "path": "node_modules/.pnpm-workspace-state-v1.json",
+          "kind": "file",
+          "mode": 420,
+          "bytes": 16,
+          "sha256": "6d3cd9b8e024763f165ba523d093de84675c751a6fd8d61f457cae7e7737b4f8",
+          "target": "",
+          "device": 7,
+          "inode": 1004,
+          "nlink": 1
+        },
+        {
+          "path": "node_modules/.bin",
+          "kind": "directory",
+          "mode": 493,
+          "bytes": 0,
+          "sha256": "4b99ee503ea8138074576aabaccbcd43493459970671481e09fe65cd425ece8b",
+          "target": "",
+          "device": 7,
+          "inode": 1005,
+          "nlink": 1
+        },
+        {
+          "path": "node_modules/.bin/synthetic-tool",
+          "kind": "file",
+          "mode": 493,
+          "bytes": 43,
+          "sha256": "e579f5427bdb344f7339552d7c4deb9526cc55d88bf1bb25d376b675bf4d9f4f",
+          "target": "",
+          "device": 7,
+          "inode": 1006,
+          "nlink": 1
+        },
+        {
+          "path": "node_modules/widget",
+          "kind": "symlink",
+          "mode": 420,
+          "bytes": 0,
+          "sha256": "4f806871922943b4af3053def498b0560325d39194df29b6631bb158bb75d25d",
+          "target": "../packages/widget",
+          "device": 7,
+          "inode": 1007,
+          "nlink": 1
+        }
+      ],
+      "checks": [
+        {
+          "name": "independent-inventory",
+          "status": "passed",
+          "profileSha256": "5192be205a1687c44fce092914c7e08e2edd50b191648165b358f03380808713",
+          "evidenceSha256": "5a5b1f6ad0c5686d8b064c15932912c594e7b9bd149478ba4cecf190b3a43996"
+        },
+        {
+          "name": "root-local-tool",
+          "status": "passed",
+          "profileSha256": "5192be205a1687c44fce092914c7e08e2edd50b191648165b358f03380808713",
+          "evidenceSha256": "701a8758dfcdbd868e9d58feffa7c0bd87ca6ff112fcdf69193d63e7d382a0f1"
+        },
+        {
+          "name": "native-load",
+          "status": "passed",
+          "profileSha256": "5192be205a1687c44fce092914c7e08e2edd50b191648165b358f03380808713",
+          "evidenceSha256": "18bfe2901fc3f10bb08fe5ce2a6731bcd5b0ac3e4875d46a1cb44cac0923baef"
+        }
+      ]
+    }
+  },
+  "trust": {
+    "contractDigest": "280c63f2a77506a2ea915e89a55adf4d7add1c776430b88fed443dab4f340abe",
+    "resultDigest": "bdfd0bdd16ff1d92477ce213359a92afb7f2e3c304bede6c94ffe9c00c53d258",
+    "attemptId": "synthetic-attempt-alpha",
+    "fenceId": "synthetic-fence-alpha",
+    "nonce": "synthetic-nonce-alpha",
+    "exclusive": true,
+    "leaseExpiresAt": 6000,
+    "otherRootFiles": []
+  },
+  "now": 2200
+}

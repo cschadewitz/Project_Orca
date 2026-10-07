@@ -1,0 +1,426 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/prepared-roots/result-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "kind",
+    "contractDigest",
+    "runId",
+    "root",
+    "branch",
+    "baseCommit",
+    "generationSha256",
+    "profileSha256",
+    "attemptId",
+    "fenceId",
+    "nonce",
+    "startedAt",
+    "completedAt",
+    "expiresAt",
+    "beforeCheckpoint",
+    "afterCheckpoint",
+    "copy",
+    "verification"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "prepared-root-result"
+    },
+    "contractDigest": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "device", "inode", "uid"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "device": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "inode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "baseCommit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "generationSha256": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "profileSha256": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "attemptId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "fenceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "startedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "completedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "expiresAt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "beforeCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonce",
+        "at",
+        "runId",
+        "stepRunId",
+        "nodeId",
+        "inputId",
+        "runStatus",
+        "gateStatus",
+        "gateScheduled",
+        "gateLastEvent",
+        "authenticated",
+        "complete",
+        "generationSha256"
+      ],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "stepRunId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "inputId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "runStatus": {
+          "const": "waiting"
+        },
+        "gateStatus": {
+          "const": "pending"
+        },
+        "gateScheduled": {
+          "const": true
+        },
+        "gateLastEvent": {
+          "const": "step.waiting"
+        },
+        "authenticated": {
+          "const": true
+        },
+        "complete": {
+          "const": true
+        },
+        "generationSha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "afterCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nonce",
+        "at",
+        "runId",
+        "stepRunId",
+        "nodeId",
+        "inputId",
+        "runStatus",
+        "gateStatus",
+        "gateScheduled",
+        "gateLastEvent",
+        "authenticated",
+        "complete",
+        "generationSha256"
+      ],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "stepRunId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "inputId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "runStatus": {
+          "const": "waiting"
+        },
+        "gateStatus": {
+          "const": "pending"
+        },
+        "gateScheduled": {
+          "const": true
+        },
+        "gateLastEvent": {
+          "const": "step.waiting"
+        },
+        "authenticated": {
+          "const": true
+        },
+        "complete": {
+          "const": true
+        },
+        "generationSha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "copy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invocations", "exitCode", "journalSha256", "outputInventorySha256"],
+      "properties": {
+        "invocations": {
+          "const": 1
+        },
+        "exitCode": {
+          "const": 0
+        },
+        "journalSha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "outputInventorySha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "independent",
+        "sourceBeforeSha256",
+        "sourceAfterSha256",
+        "workspaceSha256",
+        "metadataPreserved",
+        "entries",
+        "checks"
+      ],
+      "properties": {
+        "independent": {
+          "const": true
+        },
+        "sourceBeforeSha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sourceAfterSha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "workspaceSha256": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "metadataPreserved": {
+          "const": true
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "kind", "mode", "bytes", "sha256", "target", "device", "inode", "nlink"],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^(?!/)(?!.*(?:^|/)(?:\\.{1,2}|\\.git|\\.orca)(?:/|$))[^\\x00\\\\]+$"
+              },
+              "kind": {
+                "enum": ["directory", "file", "symlink"]
+              },
+              "mode": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sha256": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "target": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "device": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "inode": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "nlink": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          },
+          "maxItems": 256
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "status", "profileSha256", "evidenceSha256"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "status": {
+                "enum": ["passed", "failed", "blocked", "skipped", "not-run"]
+              },
+              "profileSha256": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "evidenceSha256": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          },
+          "maxItems": 256
+        }
+      }
+    }
+  }
+}
