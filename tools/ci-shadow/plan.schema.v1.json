@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orca:ci-shadow-plan:1",
+  "description": "Advisory only. Validate by trusted recomputation against current exact identities; shape alone grants no authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "artifact": {
+      "const": "orca-ci-shadow-plan"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "shadowOnly": {
+      "const": true
+    },
+    "authority": {
+      "const": "existing-full-checks"
+    },
+    "identities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "mergeBase": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "candidate": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        }
+      },
+      "required": ["base", "head", "mergeBase", "candidate"]
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.1.1"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "manifestVersion": {
+          "const": 1
+        },
+        "manifestHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": ["version", "hash", "manifestVersion", "manifestHash"]
+    },
+    "forceFull": {
+      "type": "boolean"
+    },
+    "graphs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "sha": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "tree": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "inventoryHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "scope": {
+            "const": "reviewed-islands-only"
+          },
+          "discoveredVitestFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "gaps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path", "reason"],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "specifier": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["sha", "tree", "hash", "inventoryHash", "complete", "scope", "discoveredVitestFiles", "gaps"]
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "origin": {
+            "enum": ["pr-head", "merge-candidate"]
+          },
+          "status": {
+            "type": "string",
+            "pattern": "^(?:[MADTU]|[RC](?:100|[1-9]?\\d))$"
+          },
+          "path": {
+            "type": "string"
+          },
+          "oldPath": {
+            "type": ["string", "null"]
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "tier": {
+                  "enum": ["docs", "targeted", "full"]
+                },
+                "reasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "required": ["path", "tier", "reasons"]
+            },
+            "minItems": 1
+          },
+          "consumers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": ["origin", "status", "path", "oldPath", "risks", "consumers"]
+      }
+    },
+    "wouldRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tier": {
+          "enum": ["docs", "targeted", "full"]
+        },
+        "reasonCodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "vitestFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "runners": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "config": {
+                "type": "string"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "project": {
+                "type": ["string", "null"]
+              },
+              "platforms": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "runtime": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "config", "files", "project", "platforms", "runtime"]
+          }
+        },
+        "expectedChecks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": ["tier", "reasonCodes", "vitestFiles", "runners", "expectedChecks"]
+    },
+    "observedResults": {
+      "type": "array",
+      "items": {},
+      "maxItems": 0
+    }
+  },
+  "required": [
+    "artifact",
+    "schemaVersion",
+    "shadowOnly",
+    "authority",
+    "identities",
+    "selector",
+    "forceFull",
+    "graphs",
+    "changes",
+    "wouldRun",
+    "observedResults"
+  ]
+}

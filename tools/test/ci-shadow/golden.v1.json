@@ -1,0 +1,142 @@
+[
+  {
+    "label": "renderer time wording",
+    "path": "packages/app/renderer/src/ui/format-time.ts",
+    "status": "M",
+    "tier": "targeted",
+    "reason": "reviewed_renderer_time_island"
+  },
+  {
+    "label": "existing renderer time test",
+    "path": "packages/app/renderer/test/format-time.test.tsx",
+    "status": "M",
+    "tier": "targeted",
+    "reason": "reviewed_renderer_time_island"
+  },
+  {
+    "label": "reviewed selector prose",
+    "path": "docs/ci-shadow-selection.md",
+    "status": "M",
+    "tier": "docs",
+    "reason": "reviewed_inert_prose"
+  },
+  {
+    "label": "unknown prose",
+    "path": "docs/unknown.md",
+    "status": "A",
+    "tier": "full",
+    "reason": "unknown_or_unreviewed_path"
+  },
+  {
+    "label": "filesystem JSON contract",
+    "path": "docs/preparation/trusted-prepared-roots/fixtures/synthetic-v1.json",
+    "status": "M",
+    "tier": "full",
+    "reason": "consumer_backed_or_sensitive_contract"
+  },
+  {
+    "label": "docs executable Python",
+    "path": "docs/helper.py",
+    "status": "A",
+    "tier": "full",
+    "reason": "unknown_or_unreviewed_path"
+  },
+  {
+    "label": "docs executable JavaScript",
+    "path": "docs/helper.mjs",
+    "status": "A",
+    "tier": "full",
+    "reason": "unknown_or_unreviewed_path"
+  },
+  {
+    "label": "protocol resource fixture",
+    "path": "packages/protocol/src/host-resource-fixtures.ts",
+    "status": "M",
+    "tier": "full",
+    "reason": "shared_or_sensitive_package"
+  },
+  {
+    "label": "renderer resource authority model",
+    "path": "packages/app/renderer/src/resources/resource-model.ts",
+    "status": "M",
+    "tier": "full",
+    "reason": "unknown_or_unreviewed_path"
+  },
+  {
+    "label": "store recovery",
+    "path": "packages/store/src/index.ts",
+    "status": "M",
+    "tier": "full",
+    "reason": "shared_or_sensitive_package"
+  },
+  {
+    "label": "daemon authority",
+    "path": "packages/daemon/src/index.ts",
+    "status": "M",
+    "tier": "full",
+    "reason": "shared_or_sensitive_package"
+  },
+  {
+    "label": "maintenance policy",
+    "path": "packages/maintenance-mcp/src/index.ts",
+    "status": "M",
+    "tier": "full",
+    "reason": "shared_or_sensitive_package"
+  },
+  {
+    "label": "root lockfile",
+    "path": "pnpm-lock.yaml",
+    "status": "M",
+    "tier": "full",
+    "reason": "build_discovery_or_workflow"
+  },
+  {
+    "label": "test configuration",
+    "path": "vitest.config.ts",
+    "status": "M",
+    "tier": "full",
+    "reason": "build_discovery_or_workflow"
+  },
+  {
+    "label": "workflow",
+    "path": ".github/workflows/ci.yml",
+    "status": "M",
+    "tier": "full",
+    "reason": "build_discovery_or_workflow"
+  },
+  {
+    "label": "runtime Markdown",
+    "path": "templates/program/assess-risks.md",
+    "status": "M",
+    "tier": "full",
+    "reason": "runtime_template"
+  },
+  {
+    "label": "new test",
+    "path": "packages/app/renderer/test/new.test.ts",
+    "status": "A",
+    "tier": "full",
+    "reason": "test_discovery_change"
+  },
+  {
+    "label": "deleted test",
+    "path": "packages/app/renderer/test/format-time.test.tsx",
+    "status": "D",
+    "tier": "full",
+    "reason": "test_discovery_change"
+  },
+  {
+    "label": "renamed test",
+    "path": "packages/app/renderer/test/format-time.test.tsx",
+    "status": "R",
+    "tier": "full",
+    "reason": "test_discovery_change"
+  },
+  {
+    "label": "shared tokens",
+    "path": "packages/design/tokens.json",
+    "status": "M",
+    "tier": "full",
+    "reason": "shared_design"
+  }
+]
