@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "graphVersion": 1,
-  "reviewedCommit": "5fb21d1aa67f5966a23e94296ff6aac3708db088",
-  "reviewedInventoryHash": "76f59e807ef67ed697e1faa4516d1acc937a593b7c4bb47838f0b90c873f26d2",
+  "reviewedCommit": "6a7316cba563e9c3f0c1cc1f6d7e0a5fb65e3c85",
+  "reviewedInventoryHash": "beddd0d10ef18d86585c8924a103dd930738c0a9b259a07b146536a795380b56",
   "coverage": "Frozen Git inventory and conservative app-domain consumers cover only the named renderer presentation island. Static import edges outside it are a lower bound, not whole-repository proof.",
   "prosePaths": ["docs/ci-shadow-selection.md"],
   "islands": [
@@ -129,7 +129,7 @@
       "from": "package:daemon",
       "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
       "kind": "compiled-subprocess",
-      "evidence": "ProductionFixture child imports packages/daemon/dist/index.js"
+      "evidence": "ProductionFixture starts emitted CLI serve; the compiled daemon runtime follows CLI workspace/TypeScript references, while credential administration uses the separate bootstrap edge."
     },
     {
       "from": "package:integrations",
@@ -214,6 +214,42 @@
       "to": "file:packages/integrations/test/mcp-operator-production-fixture.test.ts",
       "kind": "compiled-subprocess-identity-regression",
       "evidence": "Reviewed #512 regression directly execFile-imports emitted daemon/dist/index.js and daemon/dist/auth/bootstrap.js, then verifies distinct completed credential-admin processes and real revocation."
+    },
+    {
+      "from": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-stdio-diagnostic-preload",
+      "evidence": "Reviewed #519 optional fixture observer encodes transportObserverSource as a data URL --import in the emitted CLI MCP child; ordinary connections retain existing arguments."
+    },
+    {
+      "from": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.test.ts",
+      "kind": "subprocess-diagnostic-preload",
+      "evidence": "Reviewed #519 regression runs the same observer source through child --import, including actual socket/abort/503 requests."
+    },
+    {
+      "from": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.test.ts",
+      "kind": "subprocess-typescript-helper",
+      "evidence": "Reviewed #519 FIFO cleanup regression imports the helper source URL through an isolated Node --import tsx child; this dependency lives inside generated child code."
+    },
+    {
+      "from": "file:packages/store/src/admission-retry-store.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "kind": "filesystem-lock-evidence",
+      "evidence": "Reviewed #519 diagnostics read bounded owner metadata for the retry catalog and original operation lock roles produced by this store; no durable record or secret is emitted."
+    },
+    {
+      "from": "file:packages/store/src/jsonl-log.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "kind": "filesystem-lock-evidence",
+      "evidence": "Reviewed #519 diagnostics read bounded owner metadata for the original run event journal lock roles produced by this store; no durable record or secret is emitted."
+    },
+    {
+      "from": "file:packages/store/src/lease-store.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "kind": "filesystem-lock-evidence",
+      "evidence": "Reviewed #519 diagnostics read bounded owner metadata for the run lease mutation lock roles produced by this store; no durable record or secret is emitted."
     }
   ],
   "runners": [

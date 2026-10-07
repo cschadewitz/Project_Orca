@@ -14,10 +14,11 @@ and this document is the only selector documentation path.
 
 `ownership.v1.json` versions the exact initial island, full-risk rules, reviewed
 Git inventory, explicit consumer edges and runner/check inventory. Its reviewed
-source is main `5fb21d1aa67f5966a23e94296ff6aac3708db088`, including the
+source is main `6a7316cba563e9c3f0c1cc1f6d7e0a5fb65e3c85`, including the
 reviewed #512 credential-admin import and emitted-identity/process/revocation
-regression (tree `3f5fe631d146790c0ecc0b3ec1248cb4b8ea1900`). That baseline has 340 statically discovered Vitest files. Adding the
-selector test increases candidate discovery to 341; this implementation PR
+regression and #519's bounded failure-only restart diagnostics
+(tree `3209023fdfbee0f56e1c9b84914c254cb43172e4`). That baseline has 341 statically discovered Vitest files. Adding the
+selector test increases candidate discovery to 342; this implementation PR
 therefore takes full, as do all selector/manifest changes. The original `d3491cc`
 review had 339 files; it cannot stand in for this combined current-base inventory.
 
@@ -75,6 +76,12 @@ TypeScript references, conservative domain supersets and reviewed explicit edges
   imports both emitted daemon entrypoints, verifies identity/fresh processes and
   tests persisted revocation. Reverse runtime dependencies preserve authority,
   lifecycle and recovery consumers even if the candidate removes an import.
+- The reviewed restart diagnostic helper supplies the optional observer preload
+  to the compiled MCP child. Its regression launches both the observer preload
+  and a TypeScript helper import embedded inside generated child code. Explicit
+  filesystem edges retain the retry catalog/operation, run event and lease
+  mutation lock-metadata readers. The helper and diagnostic regression remain
+  shared/full-risk paths; their review does not expand targeted eligibility.
 - Shared resource fixtures, resource-model, preferences and Vite feed the standalone
   resources browser spec. Its `.spec.ts` is outside root Vitest discovery.
 - Linux Electron smoke, three-platform type proof and macOS/Windows native encrypted

@@ -53,6 +53,7 @@ beforeAll(() => {
     "packages/app/test/source-reader.test.ts",
     "packages/cli/test/admission-retry-wiring.test.ts",
     "packages/integrations/test/admission-retry-acp.test.ts",
+    "packages/integrations/test/mcp-root-worktree.test.ts",
     "docs/ci-shadow-selection.md",
   ]);
   for (const path of paths) write(path, /\.json$/.test(path) ? "{}\n" : "/** Synthetic graph node. */\n");
@@ -80,6 +81,12 @@ beforeAll(() => {
       `packages/integrations/test/mcp-operator-production-${name}.test.ts`,
       'import "./mcp-operator-production-fixture.js";\n',
     );
+  for (const path of [
+    "packages/integrations/test/mcp-operator-production-fixture.ts",
+    "packages/integrations/test/mcp-root-worktree.test.ts",
+    "packages/integrations/test/mcp-replay-diagnostics.test.ts",
+  ])
+    write(path, 'import "./mcp-replay-diagnostics.js";\n');
   write(
     "tools/test/trusted-prepared-roots.test.js",
     'import "../../docs/preparation/trusted-prepared-roots/contract.test.mjs";\n',
@@ -219,6 +226,56 @@ it("retains the reviewed credential-admin and direct emitted-identity regression
   expect(consumers([g], ["packages/daemon/src/auth/bootstrap.ts"])).toContain(`file:${regression}`);
   expect(g.tests).toContain(regression);
 });
+
+it("retains reviewed diagnostic preloads, generated helper imports and filesystem readers across a rename", () => {
+  reset();
+  const oldGraph = graph(snapshot(directory, base), manifest);
+  const helper = "packages/integrations/test/mcp-replay-diagnostics.ts";
+  const regression = "packages/integrations/test/mcp-replay-diagnostics.test.ts";
+  const rootReplay = "packages/integrations/test/mcp-root-worktree.test.ts";
+  for (const kind of ["subprocess-diagnostic-preload", "subprocess-typescript-helper"])
+    expect(oldGraph.edges).toContainEqual({ from: `file:${helper}`, to: `file:${regression}`, kind });
+  expect(oldGraph.edges).toContainEqual({
+    from: `file:${helper}`,
+    to: "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+    kind: "compiled-stdio-diagnostic-preload",
+  });
+  for (const path of [
+    "packages/store/src/admission-retry-store.ts",
+    "packages/store/src/jsonl-log.ts",
+    "packages/store/src/lease-store.ts",
+  ]) {
+    expect(oldGraph.edges).toContainEqual({
+      from: `file:${path}`,
+      to: `file:${helper}`,
+      kind: "filesystem-lock-evidence",
+    });
+    expect(consumers([oldGraph], [path])).toEqual(expect.arrayContaining([`file:${regression}`, `file:${rootReplay}`]));
+  }
+  expect(oldGraph.tests).toEqual(expect.arrayContaining([regression, rootReplay]));
+  command("mv", helper, helper + ".renamed");
+  write(rootReplay, "/** Candidate removed helper import. */\n");
+  const head = save();
+  const newGraph = graph(snapshot(directory, head), manifest);
+  expect(newGraph.complete).toBe(false);
+  expect(consumers([oldGraph, newGraph], [helper])).toContain(`file:${rootReplay}`);
+  const result = plan(head);
+  expect(result.wouldRun.tier).toBe("full");
+  expect(result.changes.find((entry) => entry.oldPath === helper)?.consumers).toContain(`file:${rootReplay}`);
+});
+
+it.each(["mcp-replay-diagnostics.ts", "mcp-replay-diagnostics.test.ts"])(
+  "keeps the reviewed diagnostic path full-risk: %s",
+  (name) => {
+    reset();
+    const path = `packages/integrations/test/${name}`;
+    write(path, readFileSync(join(directory, path), "utf8") + "\n/* Changed diagnostic input. */\n");
+    const result = plan(save());
+    expect(result.wouldRun.tier).toBe("full");
+    expect(result.wouldRun.reasonCodes).toContain("shared_or_sensitive_package");
+    expect(result.wouldRun.vitestFiles).toContain("packages/integrations/test/mcp-replay-diagnostics.test.ts");
+  },
+);
 
 it("maps shared resource fixtures and preferences to the standalone Playwright runner", () => {
   reset();
