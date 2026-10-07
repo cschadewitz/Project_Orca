@@ -6,7 +6,7 @@ adapter, and synthetic tests. **It is not deployable maintenance access.** Nothi
 starts, enables, connects to, or grants authority on agent-01. The issue remains open for
 production observation, activation and access acceptance.
 
-The package depends only on the repository's already selected MCP server SDK **2.2.0**
+The package depends only on the repository's already selected MCP server SDK **2.3.0**
 and Zod **4.6.5**, pinned exactly. It imports no ORCA daemon, store, engine, credentials,
 configuration or launcher. Its separate build is `pnpm --filter @orca/maintenance-mcp build`.
 There is deliberately no executable bin, start script, service unit, production config,
