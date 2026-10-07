@@ -305,8 +305,9 @@ describe("host telemetry policy (proposal)", () => {
           const principal = { id: "caller", kind: "credential", credentialId: "synthetic",
             permissions: new Set(["host.telemetry.read", "runs.read"]), scope: { runs: "owned" } };
           for (const serialization of [false, true]) {
-            for (const kind of ["false", "undefined", "non-boolean", "async-throw", "rejected", "eventual-true", "thenable", "then-getter", "constructor-getter", "catch-getter", "throw"]) {
+            for (const kind of ["false", "undefined", "non-boolean", "async-throw", "rejected", "eventual-true", "thenable", "then-getter", "constructor-getter", "catch-getter", "rejected-catch-getter", "throw"]) {
               let calls = 0;
+              let getterCalls = 0;
               let resolve;
               const projection = {
                 runIds: ["root", "child", "parked", "uncertain"],
@@ -321,10 +322,10 @@ describe("host telemetry policy (proposal)", () => {
                   if (kind === "eventual-true") return new Promise(r => { resolve = r; });
                   if (kind === "thenable") return { then: (_resolve, reject) => reject(new Error(marker)) };
                   if (kind === "then-getter") return { get then() { throw new Error(marker); } };
-                  if (kind === "constructor-getter" || kind === "catch-getter") {
-                    const promise = Promise.resolve(true);
+                  if (["constructor-getter", "catch-getter", "rejected-catch-getter"].includes(kind)) {
+                    const promise = kind === "rejected-catch-getter" ? Promise.reject(new Error(marker)) : Promise.resolve(true);
                     Object.defineProperty(promise, kind === "constructor-getter" ? "constructor" : "catch", {
-                      get() { throw new Error(marker); },
+                      get() { ++getterCalls; throw new Error(marker); },
                     });
                     return promise;
                   }
@@ -335,7 +336,7 @@ describe("host telemetry policy (proposal)", () => {
                 snapshot: async () => JSON.stringify(host), workstreams: async () => projection,
               }, () => 0, () => Date.parse(host.collectedAt));
               const read = () => model.read({ target }, { current: () => principal, allowsRun: async () => true });
-              const code = ["throw", "constructor-getter", "catch-getter"].includes(kind) ? "NOT_SUPPORTED" : "RUN_STATE";
+              const code = ["throw", "constructor-getter"].includes(kind) ? "NOT_SUPPORTED" : "RUN_STATE";
               if (serialization) {
                 const result = await read();
                 assert.equal(calls, 1);
@@ -348,6 +349,7 @@ describe("host telemetry policy (proposal)", () => {
                 await assert.rejects(read, error => error.code === code && !error.message.includes(marker));
               }
               assert.equal(calls, serialization ? 2 : 1);
+              if (kind === "catch-getter" || kind === "rejected-catch-getter") assert.equal(getterCalls, 0);
               resolve?.(true);
               await new Promise(r => setImmediate(r));
             }

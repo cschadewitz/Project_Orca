@@ -261,8 +261,9 @@ export class HostResourceReadModel {
           let publishable: unknown;
           try {
             publishable = projection.publishable();
-            // Refuse async authority; contain both rejection and synchronous assimilation faults.
-            if (publishable !== true) void Promise.resolve(publishable).catch(() => {});
+            // Never await async authority or consult a returned promise's instance catch.
+            if (publishable !== true)
+              void Promise.prototype.then.call(Promise.resolve(publishable), undefined, () => {});
           } catch {
             throw unavailable();
           }
