@@ -239,7 +239,11 @@ it.each([
 
 it("retains import-equals dependencies and rejects direct unreviewed ambient references", () => {
   const signature = imports('import cp = require("node:child_process"); cp.execSync("true");', "probe.ts");
-  expect(signature).toEqual({ dependencies: ["node:child_process"], unsafe: true });
+  expect(signature).toEqual({
+    dependencies: ["node:child_process"],
+    bindings: ["node:child_process::require::cp"],
+    unsafe: true,
+  });
   const allowed = ["Date", "Math", "undefined"];
   for (const text of [
     'navigator.sendBeacon("x", "x");',
@@ -262,6 +266,21 @@ it("retains import-equals dependencies and rejects direct unreviewed ambient ref
   );
   const g = graph(snapshot(directory, save()), manifest);
   expect(g.edges).toContainEqual({ from: `file:${helper}`, to: `file:${formatter}`, kind: "static-import-or-alias" });
+});
+
+it.each([
+  'import { vi } from "vitest"; const cp: any = await vi.importActual("node:child_process"); cp.execSync("true");',
+  'import * as expandedHelpers from "vitest";',
+  'import expandedHelpers from "vitest";',
+  'export { vi } from "vitest";',
+])("rejects new foreign bindings from an unchanged reviewed module: %s", (extra) => {
+  reset();
+  const path = manifest.islands[0].paths[1];
+  write(path, readFileSync(join(directory, path), "utf8") + "\n" + extra);
+  const result = plan(save());
+  expect(result.graphs.every((g) => g.complete)).toBe(true);
+  expect(result.wouldRun.tier).toBe("full");
+  expect(result.wouldRun.reasonCodes).toContain("unreviewed_execution_edge");
 });
 
 it("falls back for stale metadata, empty diffs, explicit override and mixed-risk changes", () => {

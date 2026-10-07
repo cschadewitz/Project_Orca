@@ -18,6 +18,17 @@
       "ambientReferences": {
         "packages/app/renderer/src/ui/format-time.ts": ["Date", "Math", "undefined"],
         "packages/app/renderer/test/format-time.test.tsx": ["Date", "undefined"]
+      },
+      "importBindings": {
+        "packages/app/renderer/src/ui/format-time.ts": [],
+        "packages/app/renderer/test/format-time.test.tsx": [
+          "../src/ui/format-time.js::value::named::formatAbsolute::formatAbsolute",
+          "../src/ui/format-time.js::value::named::formatDuration::formatDuration",
+          "../src/ui/format-time.js::value::named::formatRelative::formatRelative",
+          "vitest::value::named::describe::describe",
+          "vitest::value::named::expect::expect",
+          "vitest::value::named::it::it"
+        ]
       }
     }
   ],

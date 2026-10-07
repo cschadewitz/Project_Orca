@@ -65,13 +65,35 @@ export function imports(text, path, allowedAmbientReferences) {
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   if (source.parseDiagnostics.length) throw new Error("source_parse_error");
   const dependencies = [];
+  const bindings = [];
   let unsafe = false;
   const visit = (node) => {
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier)
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
       dependencies.push(node.moduleSpecifier.text);
+      const module = node.moduleSpecifier.text;
+      if (ts.isImportDeclaration(node)) {
+        const clause = node.importClause;
+        const type = clause?.isTypeOnly ? "type" : "value";
+        if (!clause) bindings.push(`${module}::side-effect`);
+        if (clause?.name) bindings.push(`${module}::${type}::default::${clause.name.text}`);
+        if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings))
+          bindings.push(`${module}::${type}::namespace::${clause.namedBindings.name.text}`);
+        if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings))
+          for (const binding of clause.namedBindings.elements)
+            bindings.push(
+              `${module}::${binding.isTypeOnly ? "type" : type}::named::${binding.propertyName?.text ?? binding.name.text}::${binding.name.text}`,
+            );
+      } else {
+        // A new foreign re-export also expands this island's public capability surface.
+        bindings.push(`${module}::re-export::${node.exportClause?.getText(source) ?? "*"}`);
+      }
+    }
     if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
       const expression = node.moduleReference.expression;
-      if (expression && ts.isStringLiteral(expression)) dependencies.push(expression.text);
+      if (expression && ts.isStringLiteral(expression)) {
+        dependencies.push(expression.text);
+        bindings.push(`${expression.text}::require::${node.name.text}`);
+      }
       unsafe = true;
     }
     if (
@@ -118,7 +140,7 @@ export function imports(text, path, allowedAmbientReferences) {
   };
   visit(source);
   if (allowedAmbientReferences && unreviewedAmbientReferences(source, allowedAmbientReferences).length) unsafe = true;
-  return { dependencies: sorted(dependencies), unsafe };
+  return { dependencies: sorted(dependencies), bindings: sorted(bindings), unsafe };
 }
 
 export function coveredInventory(files, manifest) {
@@ -169,6 +191,13 @@ export function validateManifest(manifest) {
       ) ||
       typeof island.dependencies !== "object" ||
       !island.dependencies ||
+      typeof island.importBindings !== "object" ||
+      !island.importBindings ||
+      island.paths.some(
+        (path) =>
+          !Array.isArray(island.importBindings[path]) ||
+          island.importBindings[path].some((binding) => typeof binding !== "string"),
+      ) ||
       typeof island.ambientReferences !== "object" ||
       !island.ambientReferences ||
       island.paths.some(
