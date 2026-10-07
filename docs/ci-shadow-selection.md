@@ -21,13 +21,18 @@ PR therefore takes full, as do all selector/manifest changes.
 
 The initial Tier 1 advisory island contains exactly the existing renderer
 `src/ui/format-time.ts` and `test/format-time.test.tsx`. Only modifications with
-unchanged reviewed module dependencies/imported bindings and no detected ambient/dynamic execution
+unchanged reviewed module dependencies, imported bindings, call targets and member-access
+shapes, with no detected ambient/dynamic execution
 boundary are eligible. The virtual TypeScript binder permits only the reviewed
 `Date`, `Math` and `undefined` ambient references; unresolved transport/persistence
 references, ambient declarations and external-module import-equals force full.
 New named/default/namespace imports, side-effect imports or foreign re-exports
 force full even from an already reviewed module; an added Vitest helper can import
-another module dynamically. Binding loads no candidate libraries or dependencies.
+another module dynamically. New member reads/calls also force full: existing
+`expect` can otherwise gain a filesystem snapshot matcher without a new import.
+Computed member access and tagged-template invocation force full. These are syntax
+bounds for the reviewed leaves, not proof of arbitrary semantics. Binding loads
+no candidate libraries or dependencies.
 Additions, deletions, copies,
 renames, modes, new test files and discovery changes take full. All renderer
 **and app-side** Vitest tests are
@@ -111,7 +116,7 @@ candidate; missing base-side consumers from candidate discovery force full.
 ## Artifact and consumer contract
 
 Artifact kind: `orca-ci-shadow-plan`; schema version **1**; selector version
-**1.0.2**; manifest/graph version **1**. Proposed artifact filename:
+**1.0.3**; manifest/graph version **1**. Proposed artifact filename:
 `ci-shadow-plan-v1-<candidate-sha>.json`. The shape is specified by
 `tools/ci-shadow/plan.schema.v1.json` (`urn:orca:ci-shadow-plan:1`). A matching
 filename or valid JSON Schema shape is insufficient for acceptance.

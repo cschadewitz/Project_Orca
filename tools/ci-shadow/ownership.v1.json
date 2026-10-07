@@ -29,6 +29,76 @@
           "vitest::value::named::expect::expect",
           "vitest::value::named::it::it"
         ]
+      },
+      "callTargets": {
+        "packages/app/renderer/src/ui/format-time.ts": [
+          "Math.abs",
+          "Math.floor",
+          "Math.max",
+          "Math.round",
+          "a.getDate",
+          "a.getFullYear",
+          "a.getMonth",
+          "at.getTime",
+          "at.toLocaleDateString",
+          "at.toLocaleTimeString",
+          "b.getDate",
+          "b.getFullYear",
+          "b.getMonth",
+          "formatDuration",
+          "new:Date",
+          "now.getTime",
+          "pair",
+          "sameDay",
+          "syntax:BinaryExpression.toFixed"
+        ],
+        "packages/app/renderer/test/format-time.test.tsx": [
+          "ago",
+          "describe",
+          "expect",
+          "expect().not.toBe",
+          "expect().toBe",
+          "expect().toContain",
+          "expect().toHaveLength",
+          "formatAbsolute",
+          "formatDuration",
+          "formatDuration().split",
+          "formatRelative",
+          "it",
+          "it.each",
+          "it.each()",
+          "new:Date",
+          "now.getTime"
+        ]
+      },
+      "memberReferences": {
+        "packages/app/renderer/src/ui/format-time.ts": [
+          "Math.abs",
+          "Math.floor",
+          "Math.max",
+          "Math.round",
+          "a.getDate",
+          "a.getFullYear",
+          "a.getMonth",
+          "at.getTime",
+          "at.toLocaleDateString",
+          "at.toLocaleTimeString",
+          "b.getDate",
+          "b.getFullYear",
+          "b.getMonth",
+          "now.getTime",
+          "syntax:BinaryExpression.toFixed"
+        ],
+        "packages/app/renderer/test/format-time.test.tsx": [
+          "expect().not",
+          "expect().not.toBe",
+          "expect().toBe",
+          "expect().toContain",
+          "expect().toHaveLength",
+          "formatDuration().split",
+          "it.each",
+          "now.getTime"
+        ]
       }
     }
   ],

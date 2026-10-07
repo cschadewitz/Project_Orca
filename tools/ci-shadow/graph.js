@@ -61,13 +61,29 @@ function unreviewedAmbientReferences(source, allowed) {
   return sorted(unknown);
 }
 
+function accessShape(node) {
+  if (ts.isIdentifier(node)) return node.text;
+  if (ts.isPropertyAccessExpression(node)) return `${accessShape(node.expression)}.${node.name.text}`;
+  if (ts.isCallExpression(node)) return `${accessShape(node.expression)}()`;
+  if (ts.isNewExpression(node)) return `new:${accessShape(node.expression)}()`;
+  if (ts.isParenthesizedExpression(node)) return accessShape(node.expression);
+  return `syntax:${ts.SyntaxKind[node.kind]}`;
+}
+
 export function imports(text, path, allowedAmbientReferences) {
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   if (source.parseDiagnostics.length) throw new Error("source_parse_error");
   const dependencies = [];
   const bindings = [];
+  const callTargets = [];
+  const memberReferences = [];
   let unsafe = false;
   const visit = (node) => {
+    // Arguments and wording may change, but new API capabilities need graph review.
+    if (ts.isCallExpression(node)) callTargets.push(accessShape(node.expression));
+    if (ts.isNewExpression(node)) callTargets.push(`new:${accessShape(node.expression)}`);
+    if (ts.isPropertyAccessExpression(node)) memberReferences.push(accessShape(node));
+    if (ts.isElementAccessExpression(node) || ts.isTaggedTemplateExpression(node)) unsafe = true;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
       dependencies.push(node.moduleSpecifier.text);
       const module = node.moduleSpecifier.text;
@@ -140,7 +156,13 @@ export function imports(text, path, allowedAmbientReferences) {
   };
   visit(source);
   if (allowedAmbientReferences && unreviewedAmbientReferences(source, allowedAmbientReferences).length) unsafe = true;
-  return { dependencies: sorted(dependencies), bindings: sorted(bindings), unsafe };
+  return {
+    dependencies: sorted(dependencies),
+    bindings: sorted(bindings),
+    callTargets: sorted(callTargets),
+    memberReferences: sorted(memberReferences),
+    unsafe,
+  };
 }
 
 export function coveredInventory(files, manifest) {
@@ -197,6 +219,15 @@ export function validateManifest(manifest) {
         (path) =>
           !Array.isArray(island.importBindings[path]) ||
           island.importBindings[path].some((binding) => typeof binding !== "string"),
+      ) ||
+      ["callTargets", "memberReferences"].some(
+        (field) =>
+          !island[field] ||
+          typeof island[field] !== "object" ||
+          island.paths.some(
+            (path) =>
+              !Array.isArray(island[field][path]) || island[field][path].some((value) => typeof value !== "string"),
+          ),
       ) ||
       typeof island.ambientReferences !== "object" ||
       !island.ambientReferences ||

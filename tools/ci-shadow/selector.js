@@ -6,7 +6,7 @@ import { consumers, graph, imports, MANIFEST_PATH, TOOL_PATHS, validateManifest 
 
 export const ARTIFACT = "orca-ci-shadow-plan";
 export const SCHEMA_VERSION = 1;
-export const SELECTOR_VERSION = "1.0.2";
+export const SELECTOR_VERSION = "1.0.3";
 export const loadManifest = () =>
   validateManifest(JSON.parse(readFileSync(new URL("./ownership.v1.json", import.meta.url), "utf8")));
 export const selectorIdentity = (manifest) => ({
@@ -43,7 +43,9 @@ function pathRisk(path, record, snapshots, manifest) {
         if (
           signature.unsafe ||
           !isDeepStrictEqual(signature.dependencies, island.dependencies[path]) ||
-          !isDeepStrictEqual(signature.bindings, island.importBindings[path])
+          !isDeepStrictEqual(signature.bindings, island.importBindings[path]) ||
+          !isDeepStrictEqual(signature.callTargets, island.callTargets[path]) ||
+          !isDeepStrictEqual(signature.memberReferences, island.memberReferences[path])
         )
           reasons.push("unreviewed_execution_edge");
       } catch {

@@ -242,6 +242,8 @@ it("retains import-equals dependencies and rejects direct unreviewed ambient ref
   expect(signature).toEqual({
     dependencies: ["node:child_process"],
     bindings: ["node:child_process::require::cp"],
+    callTargets: ["cp.execSync"],
+    memberReferences: ["cp.execSync"],
     unsafe: true,
   });
   const allowed = ["Date", "Math", "undefined"];
@@ -277,6 +279,27 @@ it.each([
   reset();
   const path = manifest.islands[0].paths[1];
   write(path, readFileSync(join(directory, path), "utf8") + "\n" + extra);
+  const result = plan(save());
+  expect(result.graphs.every((g) => g.complete)).toBe(true);
+  expect(result.wouldRun.tier).toBe("full");
+  expect(result.wouldRun.reasonCodes).toContain("unreviewed_execution_edge");
+});
+
+it.each([
+  'it("probe", async () => await expect("synthetic").toMatchFileSnapshot("synthetic.snap"));',
+  "const expanded = expect.getState;",
+  "const expanded = it.extend;",
+  'it["extend"]({});',
+  "it.each`synthetic`;",
+])("rejects new API capabilities without changing imports or bindings: %s", (extra) => {
+  reset();
+  const path = manifest.islands[0].paths[1];
+  const original = readFileSync(join(directory, path), "utf8");
+  const before = imports(original, path, manifest.islands[0].ambientReferences[path]);
+  const after = imports(original + "\n" + extra, path, manifest.islands[0].ambientReferences[path]);
+  expect(after.dependencies).toEqual(before.dependencies);
+  expect(after.bindings).toEqual(before.bindings);
+  write(path, original + "\n" + extra);
   const result = plan(save());
   expect(result.graphs.every((g) => g.complete)).toBe(true);
   expect(result.wouldRun.tier).toBe("full");
