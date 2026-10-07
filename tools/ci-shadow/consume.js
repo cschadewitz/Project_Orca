@@ -75,8 +75,36 @@ export async function resolveSource(run, event, apiRead, repo) {
     if (!SHA.test(base)) throw new Error("missing_push_parent");
     return { base, head: run.head_sha, candidate: run.head_sha };
   }
-  if (run.pull_requests?.length !== 1) throw new Error("missing_or_ambiguous_pull_request");
-  const number = run.pull_requests[0].number;
+  if (!Array.isArray(run.pull_requests) || run.pull_requests.length > 1)
+    throw new Error("missing_or_ambiguous_pull_request");
+  let association = run.pull_requests[0];
+  if (!association) {
+    // GitHub may omit PR associations on workflow runs (notably private repos).
+    // Resolve the immutable commit's server-side associations, never a branch name
+    // or artifact-provided PR number; require a complete, unique open matching head.
+    const matches = [];
+    let complete = false;
+    for (let page = 1; page <= 10; page++) {
+      const prs = await apiRead(`/commits/${run.head_sha}/pulls?per_page=100&page=${page}`);
+      if (!Array.isArray(prs) || prs.length > 100) throw new Error("invalid_pull_request_inventory");
+      matches.push(
+        ...prs.filter(
+          (pr) =>
+            pr.state === "open" &&
+            pr.head?.sha === run.head_sha &&
+            pr.base?.ref === "main" &&
+            pr.base?.repo?.full_name === REPO,
+        ),
+      );
+      if (prs.length < 100) {
+        complete = true;
+        break;
+      }
+    }
+    if (!complete || matches.length !== 1) throw new Error("missing_or_ambiguous_pull_request");
+    association = matches[0];
+  }
+  const number = association.number;
   if (!Number.isSafeInteger(number) || number < 1) throw new Error("invalid_pull_request_number");
   const pr = await apiRead(`/pulls/${number}`);
   // Moving or closed PRs cannot authenticate a superseded merge ref. Retain unknown.
@@ -87,8 +115,8 @@ export async function resolveSource(run, event, apiRead, repo) {
     pr.head?.sha !== run.head_sha ||
     !SHA.test(pr.base.sha) ||
     !SHA.test(pr.merge_commit_sha) ||
-    run.pull_requests[0].head?.sha !== pr.head.sha ||
-    run.pull_requests[0].base?.sha !== pr.base.sha
+    association.head?.sha !== pr.head.sha ||
+    association.base?.sha !== pr.base.sha
   )
     throw new Error("stale_pull_request_identities");
   return { base: pr.base.sha, head: pr.head.sha, candidate: pr.merge_commit_sha };
@@ -141,7 +169,33 @@ export async function consume({ repo, out, event, trusted, apiRead = api, artifa
     try {
       if (git(repo, ["cat-file", "-t", sha]).toString().trim() !== "commit") throw new Error("missing_commit");
     } catch {
-      git(repo, ["fetch", "--no-tags", "origin", sha]);
+      // Private repository read: reuse this job's ephemeral read-only token without
+      // persisting credentials or passing a secret through command arguments.
+      execFileSync(
+        "git",
+        [
+          "--no-replace-objects",
+          "-c",
+          "credential.helper=",
+          "fetch",
+          "--no-tags",
+          `https://github.com/${REPO}.git`,
+          sha,
+        ],
+        {
+          cwd: repo,
+          timeout: 30000,
+          maxBuffer: 1024 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            GIT_TERMINAL_PROMPT: "0",
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+            GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${process.env.GH_TOKEN}`).toString("base64")}`,
+          },
+        },
+      );
     }
   }
   if (run.event === "pull_request") {
@@ -181,7 +235,8 @@ export async function consume({ repo, out, event, trusted, apiRead = api, artifa
     let artifactState = "missing";
     if (named.length === 1) {
       try {
-        evidence = await artifactRead(named[0], { ...source, ...identities, node });
+        const identity = { ...source, ...identities, node };
+        evidence = validateEvidence(await artifactRead(named[0], identity), identity);
         artifactState = "validated";
       } catch {
         artifactState = "unknown_or_stale";

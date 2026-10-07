@@ -14,7 +14,8 @@ import {
   RETRY_FILES,
   validateEvidence,
 } from "../ci-shadow/evidence.js";
-import { resolveSource, summary } from "../ci-shadow/consume.js";
+import { consume, resolveSource, summary } from "../ci-shadow/consume.js";
+import { createPlan } from "../ci-shadow/selector.js";
 import { git, hash } from "../ci-shadow/git.js";
 
 const repo = resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -233,6 +234,26 @@ it("resolves independent exact PR identities from server metadata", async () => 
     candidate,
   });
 });
+it("resolves a unique immutable commit association when GitHub omits the run PR list", async () => {
+  const r = { ...run(), pull_requests: [] };
+  const apiRead = async (path) => (path.startsWith("/commits/") ? [{ ...pr(), number: 1 }] : pr());
+  expect(await resolveSource(r, { ...event(), workflow_run: r }, apiRead, repo)).toEqual({
+    base: candidate,
+    head: candidate,
+    candidate,
+  });
+});
+it.each([0, 2])("rejects %s matching commit PR associations instead of guessing", async (n) => {
+  const r = { ...run(), pull_requests: [] };
+  await expect(
+    resolveSource(
+      r,
+      { ...event(), workflow_run: r },
+      async () => Array.from({ length: n }, () => ({ ...pr(), number: 1 })),
+      repo,
+    ),
+  ).rejects.toThrow("missing_or_ambiguous_pull_request");
+});
 it.each(["closed", "moved_head", "moved_base", "missing_candidate"])("rejects stale PR %s", async (mode) => {
   const p = pr();
   if (mode === "closed") p.state = "closed";
@@ -263,6 +284,79 @@ it("resolves a main push to its exact first parent without guessing workflow_run
     candidate,
   });
 });
+
+it.each(["complete", "stale_after_read", "malformed_artifact"])(
+  "complete consumer pipeline preserves %s evidence",
+  async (mode) => {
+    const base = git(repo, ["rev-parse", `${candidate}^1`])
+      .toString()
+      .trim();
+    const tree = git(repo, ["rev-parse", `${candidate}^{tree}`])
+      .toString()
+      .trim();
+    const merge = git(repo, ["commit-tree", tree, "-p", base, "-p", candidate], "Synthetic advisory candidate\n")
+      .toString()
+      .trim();
+    const r = {
+      ...run(),
+      conclusion: "success",
+      pull_requests: [{ number: 1, base: { sha: base }, head: { sha: candidate } }],
+    };
+    const p = { ...pr(), base: { ...pr().base, sha: base }, merge_commit_sha: merge };
+    const full = createPlan({ repo, base, head: candidate, candidate: merge });
+    const output = temp();
+    let reads = 0;
+    const apiRead = async (path) => {
+      if (path === "/actions/runs/123") {
+        reads++;
+        return mode === "stale_after_read" && reads === 2 ? { ...r, run_attempt: 2 } : r;
+      }
+      if (path === "/pulls/1") return p;
+      if (path.endsWith("/jobs"))
+        return {
+          total_count: 2,
+          jobs: [22, 24].map((node) => ({ ...job(node), name: `check (node ${node})`, run_id: 123, run_attempt: 1 })),
+        };
+      if (path.endsWith("/artifacts"))
+        return {
+          total_count: 2,
+          artifacts: [22, 24].map((node) => ({ id: node, name: `ci-full-evidence-123-1-node-${node}` })),
+        };
+      throw new Error("unexpected_api_path");
+    };
+    const artifactRead = async (_artifact, identity) => {
+      const e = evidence(identity.node);
+      e.identity = identity;
+      e.suite.files = full.graphs[1].discoveredVitestFiles.map((path) => {
+        const skip = INTENTIONAL_SKIPS.find((policy) => policy.path === path);
+        return skip ? { ...file(path), passed: 0, skips: [hash(skip.name)] } : file(path);
+      });
+      if (mode === "malformed_artifact") e.identity = { ...identity, candidate: "0".repeat(40) };
+      return e;
+    };
+    const promise = consume({
+      repo,
+      out: output,
+      event: { ...event(), workflow_run: r },
+      trusted: candidate,
+      apiRead,
+      artifactRead,
+    });
+    if (mode === "stale_after_read") {
+      await expect(promise).rejects.toThrow("stale_or_invalid_source_run");
+      expect(() => readJSON(join(output, "plan.json"))).toThrow();
+      expect(() => readJSON(join(output, "comparison.json"))).toThrow();
+    } else {
+      const comparison = await promise;
+      expect(comparison.identities.candidate).toBe(merge);
+      expect(comparison.lanes.map((lane) => lane.status)).toEqual(
+        mode === "complete" ? ["compared", "compared"] : ["unknown", "unknown"],
+      );
+      expect(readJSON(join(output, "plan.json"))).toEqual(full);
+      expect(readJSON(join(output, "comparison.json"))).toEqual(comparison);
+    }
+  },
+);
 
 it("publishes complete JSON atomically and refuses symlink/oversized inputs", () => {
   const dir = temp();

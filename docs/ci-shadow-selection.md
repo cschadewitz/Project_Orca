@@ -207,7 +207,9 @@ read a bounded fixed member; no dependency/lockfile changes are needed.
 
 The consumer resolves source run, attempt and complete job/artifact inventories
 from GitHub's API. An open PR's live server base/head/candidate must match the
-source run association, with two exact candidate parents. Identities are rechecked
+source run association, with two exact candidate parents. When GitHub omits that
+association, complete server-side commit-to-PR lookup must yield exactly one open
+PR with the exact source head; no branch/artifact hint is used. Identities are rechecked
 after reads. A moved/closed PR, rerun, stale candidate or missing association is
 unknown. Main push head/candidate is the source run SHA; comparison base is its
 exact first parent. This is a first-parent comparison for multi-commit pushes too;
