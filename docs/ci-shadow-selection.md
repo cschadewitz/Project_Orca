@@ -14,10 +14,12 @@ and this document is the only selector documentation path.
 
 `ownership.v1.json` versions the exact initial island, full-risk rules, reviewed
 Git inventory, explicit consumer edges and runner/check inventory. Its reviewed
-source is main `d3491cc06b5abc1c5d82f2c685d6f628d9d4b04b`, tree
-`db6e22b47cafb1504ebdab1c3ef9cac0b06cad90`. That tree has 339 statically discovered Vitest files.
-Adding the selector test increases candidate discovery to 340; this implementation
-PR therefore takes full, as do all selector/manifest changes.
+source is main `5fb21d1aa67f5966a23e94296ff6aac3708db088`, including the
+reviewed #512 credential-admin import and emitted-identity/process/revocation
+regression (tree `3f5fe631d146790c0ecc0b3ec1248cb4b8ea1900`). That baseline has 340 statically discovered Vitest files. Adding the
+selector test increases candidate discovery to 341; this implementation PR
+therefore takes full, as do all selector/manifest changes. The original `d3491cc`
+review had 339 files; it cannot stand in for this combined current-base inventory.
 
 The initial Tier 1 advisory island contains exactly the existing renderer
 `src/ui/format-time.ts` and `test/format-time.test.tsx`. Eligibility requires a positive structural invariant: each base/candidate leaf
@@ -68,7 +70,10 @@ TypeScript references, conservative domain supersets and reviewed explicit edges
 - The prepared-root JSON fixture feeds its filesystem-reading contract and the
   Vitest wrapper. Security-contract changes are full.
 - The production MCP fixture consumes emitted CLI, daemon, MCP transport and
-  scripted-agent processes. Reverse runtime dependencies preserve authority,
+  scripted-agent processes. The credential-admin child maps emitted
+  `daemon/dist/auth/bootstrap.js` to its source; #512's regression independently
+  imports both emitted daemon entrypoints, verifies identity/fresh processes and
+  tests persisted revocation. Reverse runtime dependencies preserve authority,
   lifecycle and recovery consumers even if the candidate removes an import.
 - Shared resource fixtures, resource-model, preferences and Vite feed the standalone
   resources browser spec. Its `.spec.ts` is outside root Vitest discovery.
@@ -130,7 +135,7 @@ candidate; missing base-side consumers from candidate discovery force full.
 ## Artifact and consumer contract
 
 Artifact kind: `orca-ci-shadow-plan`; schema version **1**; selector version
-**1.1.0**; manifest/graph version **1**. Proposed artifact filename:
+**1.1.1**; manifest/graph version **1**. Proposed artifact filename:
 `ci-shadow-plan-v1-<candidate-sha>.json`. The shape is specified by
 `tools/ci-shadow/plan.schema.v1.json` (`urn:orca:ci-shadow-plan:1`). A matching
 filename or valid JSON Schema shape is insufficient for acceptance.

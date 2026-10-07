@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "graphVersion": 1,
-  "reviewedCommit": "d3491cc06b5abc1c5d82f2c685d6f628d9d4b04b",
-  "reviewedInventoryHash": "6237c15f4a479d3ce2c024a91441354d08db92568cc39734c9c882558025a1de",
+  "reviewedCommit": "5fb21d1aa67f5966a23e94296ff6aac3708db088",
+  "reviewedInventoryHash": "76f59e807ef67ed697e1faa4516d1acc937a593b7c4bb47838f0b90c873f26d2",
   "coverage": "Frozen Git inventory and conservative app-domain consumers cover only the named renderer presentation island. Static import edges outside it are a lower bound, not whole-repository proof.",
   "prosePaths": ["docs/ci-shadow-selection.md"],
   "islands": [
@@ -202,6 +202,18 @@
       "to": "runner:revision-workflow",
       "kind": "platform",
       "evidence": "macOS/Windows production revision UI/restart acceptance"
+    },
+    {
+      "from": "file:packages/daemon/src/auth/bootstrap.ts",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-credential-admin",
+      "evidence": "Reviewed #512 fixture admin subprocess imports emitted daemon/dist/auth/bootstrap.js; source mapping preserves openAuthDirectory issue/revoke dependency."
+    },
+    {
+      "from": "package:daemon",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.test.ts",
+      "kind": "compiled-subprocess-identity-regression",
+      "evidence": "Reviewed #512 regression directly execFile-imports emitted daemon/dist/index.js and daemon/dist/auth/bootstrap.js, then verifies distinct completed credential-admin processes and real revocation."
     }
   ],
   "runners": [

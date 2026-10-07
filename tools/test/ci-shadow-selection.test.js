@@ -201,6 +201,25 @@ it("retains filesystem and emitted-process consumers in the base/candidate union
   );
 });
 
+it("retains the reviewed credential-admin and direct emitted-identity regression edges", () => {
+  reset();
+  const g = graph(snapshot(directory, base), manifest);
+  const fixture = "packages/integrations/test/mcp-operator-production-fixture.ts";
+  const regression = "packages/integrations/test/mcp-operator-production-fixture.test.ts";
+  expect(g.edges).toContainEqual({
+    from: "file:packages/daemon/src/auth/bootstrap.ts",
+    to: `file:${fixture}`,
+    kind: "compiled-credential-admin",
+  });
+  expect(g.edges).toContainEqual({
+    from: "package:daemon",
+    to: `file:${regression}`,
+    kind: "compiled-subprocess-identity-regression",
+  });
+  expect(consumers([g], ["packages/daemon/src/auth/bootstrap.ts"])).toContain(`file:${regression}`);
+  expect(g.tests).toContain(regression);
+});
+
 it("maps shared resource fixtures and preferences to the standalone Playwright runner", () => {
   reset();
   const g = graph(snapshot(directory, base), manifest);

@@ -6,7 +6,7 @@ import { consumers, graph, imports, MANIFEST_PATH, TOOL_PATHS, validateManifest 
 
 export const ARTIFACT = "orca-ci-shadow-plan";
 export const SCHEMA_VERSION = 1;
-export const SELECTOR_VERSION = "1.1.0";
+export const SELECTOR_VERSION = "1.1.1";
 export const loadManifest = () =>
   validateManifest(JSON.parse(readFileSync(new URL("./ownership.v1.json", import.meta.url), "utf8")));
 export const selectorIdentity = (manifest) => ({
