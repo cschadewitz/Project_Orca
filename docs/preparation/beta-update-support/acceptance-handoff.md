@@ -5,6 +5,15 @@ backup/restore, tester contact, diagnostics collection or website publication ru
 Parent #387/#389 acceptance remains open. Re-read current source and freeze exact ownership
 before implementation; do not import active MCP peer branches or change shared files now.
 
+## Source refresh and evidence limits
+
+Reconciled against main `c1eba301702fef0466b2d3481c36d62331ee7d48` on 7 October: protocol 2.0/
+operator-journals-v4 and merged operator source; approved Mac bundle/Team identity,
+retained Windows identity and inactive Mac signing. The 3 October protocol 1.10/v3
+audit remains historical. This four-document refresh runs static owned-path/link/
+whitespace validation only; earlier docs CI/review stays attributed to `48c6723`.
+No updater engine, safe-idle, restore, signing/native or physical test is rerun/implied.
+
 ## Decisions and prerequisites
 
 | Decision | Owner / evidence required before implementation or enablement |
@@ -14,9 +23,10 @@ before implementation; do not import active MCP peer branches or change shared f
 | Approval lifetime/check cadence | Casey + UX/platform: approve session binding, expiry, relaunch behavior, defer/revocation boundary and update-check privacy/frequency. Safe proposal: no unapproved staging and no restored install permission after process restart. |
 | Updater engine | #387 platform owner: compare existing electron-updater MacUpdater with Electron native autoUpdater using locked versions. Prove staging/ordinary-quit/relaunch and cancellation semantics before selecting; no new dependency/framework is frozen here. |
 | Trust and distribution | #385 owner + security review: personal publisher enrollment, approved secure provisioning, signed/notarized/stapled artifacts, private delivery, feed metadata/freshness, revocation and restricted writer/read authority. All actual provisioning pending. |
+| Native identity upgrade | #387/#385/#388: old-to-new `com.schadewitz.orca`/Team identity, notifications/URL/OS permissions and existing `admission-intents.enc` Keychain access. Windows `dev.orca.desktop` remains unchanged. No journal deletion/keychain reset to bypass refusal. |
 | Data/rollback boundary | #387 + store/runtime owners: exact store inventory, protocol/epoch/write compatibility, reliable safe-idle boundary, complete backup/matching binary, isolated restore and retained-newer-work policy. No bare epoch-equality rollback rule. |
 | Recovery semantics | Runtime owner: typed known-failed versus unknown outcomes; safe recovery ownership and inability to reopen admission. Coordinate #394–396 without blocking early MCP proof. |
-| Diagnostics/support | #416 and #389 owners: validated manual preview/export, safe codes, named support route and informed consent. Reuse pending #416 budgets/privacy choices; do not decide them here. #417/#418 remain later. |
+| Diagnostics/support | #416 and #389 owners: validated manual preview/export, safe codes, named support route and informed consent. Reuse #469 decisions 1–9 for settled product bounds; #470 implementation, actual consent and technical/privacy/native acceptance remain separate. #417/#418 remain later. |
 | Test cohort/guide | #388/#390/#389: actual supported candidate/OS/chip matrix, separately consented physical session and Windows instructions/evidence. M3–M5 targets are not certification. Hub publication is separate and not authorized here. |
 
 ## Proposed code ownership, to freeze in implementation planning
@@ -61,7 +71,7 @@ participant records stay in the approved private record, not these documents.
 | U09 | New downloaded/quarantined signed, notarized, stapled arm64 app installs by DMG/Applications and in-app setup on actual target-like Mac; Gatekeeper/TCC intact, no contributor PATH/terminal workaround. | Physical modern M-series; #390 |
 | U10 | Approved/deferred/waiting/blocked/recovery UX understandable without coaching; keyboard, VoiceOver, focus and both themes work. Actual OS/chip recorded; unsupported/untested stay explicit. | Physical unassisted test; #389/#390 |
 | U11 | Startup-before-handshake and unknown admission/resume/protected state can use validated #416 preview/export/cancel, with no default capture/upload or raw fallback. | #416 privacy/producer tests and physical walkthrough; #390 consumes |
-| U12 | Upgrade/reinstall/uninstall retain declared user state and credentials; no unsupported deletion/key replacement. Windows behavior/instructions tested independently. | Disposable native accounts; #387, separate Windows evidence |
+| U12 | Upgrade/reinstall/uninstall retain declared user state and credentials; old-to-new Mac bundle/signing identity preserves verified intent-journal Keychain access, notifications/URL handling and OS permissions or blocks distribution for owner-reviewed recovery. No journal/key reset or unsupported deletion. Windows retained identity/behavior tested independently. | Disposable native accounts; #387, separate Windows evidence |
 
 No running system, real key, user store or paid provider is a fixture. Do not simulate
 acceptance by disabling authentication/security, relaxing signature checks, changing epoch
@@ -78,4 +88,5 @@ skipped Markdown format check as substantive validation. Record exact commands/r
 and the published commit in the draft PR. No executable change means runtime suite,
 typecheck/build/Electron smoke, signing, package update, restore and physical tests are
 **not run**, not implied successful. Publication verification must show only these four
-new files and exact parent baseline. Review outstanding questions before implementation.
+owned Markdown files against the prior head and unchanged original ancestry. Review outstanding
+questions before implementation.

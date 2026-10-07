@@ -4,6 +4,15 @@
 [#387's approved preference](https://github.com/cschadewitz/Project_Orca/issues/387).
 All interface names below are conceptual obligations, not new RPCs or shipped UI labels.
 
+## Current source binding
+
+Refresh baseline: main `c1eba301702fef0466b2d3481c36d62331ee7d48`; protocol 2.0/operator-journals-v4,
+Mac `com.schadewitz.orca` / approved Team `Q2FP9UY5T4`, Windows retained
+`dev.orca.desktop`. [README](README.md) separates historical protocol 1.10/v3
+from current source and the native identity/Keychain continuity gate. Mac updater
+selection/lifecycle is unimplemented, signing remains inactive. The specific-update
+approval experience is settled; the proposals below address its unresolved mechanics.
+
 ## Approval and phase boundaries
 
 Proposed safe default: approval binds one immutable candidate and authorizes download,
@@ -17,7 +26,7 @@ Checking policy/frequency is still a product decision; never treat checking as c
 | Available | Show verified current/target version, publisher/channel, concise release changes, restart need and compatibility/support eligibility. Unverified metadata is not an install offer. Offer approve or defer; no countdown/default acceptance. |
 | Approved | Bind approval to artifact digest, version, architecture, publisher, channel and compatibility identity; duplicate clicks create no second operation. Never silently substitute a newer candidate. |
 | Downloading | Bounded download to owned staging, truthful byte progress only; active work continues. Offline/authorization/full-disk errors are update failures, not run failures. Credentials/raw errors stay out of renderer and diagnostics. |
-| Verifying | Validate exact bytes and trusted publisher, expected artifact/build/app/daemon/protocol/store identity and support matrix. A checksum from the same untrusted feed alone is insufficient trust. Fail closed on mismatch. |
+| Verifying | Validate exact bytes and trusted publisher, expected artifact/build/app/daemon/protocol/store and OS signing/Keychain identity, plus support matrix. A checksum from the same untrusted feed alone is insufficient trust. Fail closed on mismatch. |
 | Waiting for safe activation | Preserve jobs/drafts; explain the blockers and let the person defer the update. No automatic cancel, answering inputs, provider replay, forced quit or timeout kill. Do not infer safe idle from a disconnected UI. |
 | Preparing | Revalidate candidate and approval, all window acknowledgements, current daemon ownership/identity and compatibility. Atomically close admission through the supported owner; prevent fresh work racing with shutdown. If any check is unknown/busy, release only guards whose ownership is proven and remain blocked. |
 | Installing/restarting | Only after a proven safe boundary and any required verified backup, stop the owned daemon and activate the exact candidate. Do not stop/install an external daemon. Persist minimal recovery identity without secrets and prevent competing activation. |
@@ -65,8 +74,10 @@ no automatic activation retry following an uncertain outcome.
   prevention of duplicate actions, owned-daemon-only stop and truthful recovery result.
 - Runtime maintenance owner: atomic admission fencing, activity classification, durable
   guard ownership and recovery outcome; use current APIs, do not duplicate journals.
-- Compatibility/backup owner: establish which writes can occur at startup; complete
-  consistent backup plus matching binary and isolated restore proof before a risky change.
+- Compatibility/backup owner: establish candidate protocol 2.0/operator-journals-v4
+  writes at startup, complete consistent backup plus matching binary and isolated restore.
+  Prove old-to-new Mac identity/Keychain intent-journal continuity before distribution;
+  app-name/path continuity alone is insufficient. No key reset/journal deletion fallback.
 - Delivery owner: restricted immutable feed publication, updater metadata and artifact
   integrity, signing/notary/staple evidence, publisher verification and revocation response.
   Provisioning/service choices require separate approval. No embedded repository token.

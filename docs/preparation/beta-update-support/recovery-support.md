@@ -6,6 +6,16 @@ the Hub from this preparation. No instruction here authorizes actual recovery or
 collection. Casey and the coordinator must supply the agreed private support route;
 no contact address, access grant or retention policy is invented.
 
+## Current recovery boundary
+
+Current source is main `c1eba301702fef0466b2d3481c36d62331ee7d48`, protocol 2.0/operator-journals-v4.
+Earlier protocol 1.10/config-generations-v3 references are historical audit evidence,
+not current downgrade compatibility. [README](README.md) records the approved Mac
+bundle/Team identity and Windows continuity exception. Native old-to-new Mac Keychain,
+OS-permission, notification and URL handling checks remain required before distribution;
+unchanged userData paths do not prove access to the existing encrypted intent journal.
+This runbook implements no migration/recovery and authorizes no key/journal reset.
+
 ## Plain-language tester guidance to validate
 
 1. If an update is offered, read which version it will install and that it needs a
@@ -65,7 +75,7 @@ cannot preserve them. Inventory external workspace/worktree data and external cr
 stores separately; do not claim the app-store backup protects external provider effects.
 
 This is an inventory obligation, not an assertion every item exists in the audited main.
-For operator-journals-v4 candidates the matching journals must be included. Establish
+Current-main candidates use operator-journals-v4, so their matching journals must be included. Establish
 actual roots through supported ownership/configuration, not guessed home-directory paths.
 Do not request/upload this inventory or its private values for diagnostics.
 
@@ -95,4 +105,6 @@ Never delete a recovery/admission journal or edit an epoch marker to force reope
 
 Uninstall/reinstall must explain that app binaries and user state are separate. Neither
 operation implies deletion of stores, credentials, backups or keys, nor repairs corruption.
+An identity change also cannot be assumed to retain OS-protected key access; validate
+the existing encrypted intent journal and Keychain continuity without resetting either.
 No automatic cleanup, reinitialization or replacement of protected keys is part of recovery.
