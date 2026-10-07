@@ -206,7 +206,9 @@ jobs:
       # exactly when it fails locally.
       - name: Test
         if: matrix.node != 24
-        run: pnpm test --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
+        # Explicit `run` forwards reporter flags to Vitest; pnpm's `test` shortcut
+        # otherwise interprets --reporter as a pnpm option before any script args.
+        run: pnpm run test --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 

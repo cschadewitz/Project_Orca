@@ -413,6 +413,34 @@ it("summary emits bounded trusted fields without artifact text or admission clai
   expect(summary({ status: "unknown", reason: "secret" })).not.toContain("secret");
 });
 
+it("forwards workflow reporter options through pinned pnpm's explicit run command", () => {
+  const dir = temp();
+  const output = join(dir, "arguments.json");
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({
+      name: "shadow-forwarding-test",
+      type: "module",
+      packageManager: "pnpm@12.4.2",
+      scripts: { test: "node capture.js", "test:coverage": "node capture.js --coverage" },
+    }),
+  );
+  writeFileSync(
+    join(dir, "capture.js"),
+    `import fs from 'node:fs'; fs.writeFileSync(process.env.SHADOW_ARGS,JSON.stringify(process.argv.slice(2)));`,
+  );
+  const args = ["--reporter=default", "--reporter=json", "--outputFile.json=/synthetic/report.json"];
+  for (const script of ["test", "test:coverage"]) {
+    execFileSync("pnpm", ["run", script, ...args], {
+      cwd: dir,
+      timeout: 30000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, SHADOW_ARGS: output },
+    });
+    expect(readJSON(output)).toEqual(script === "test" ? args : ["--coverage", ...args]);
+  }
+});
+
 it("keeps existing full checks and limits while isolating workflow_run from candidate execution", () => {
   const ci = readFileSync(join(repo, ".github/workflows/ci.yml"), "utf8");
   const consumer = readFileSync(join(repo, ".github/workflows/ci-shadow.yml"), "utf8");
@@ -429,6 +457,7 @@ it("keeps existing full checks and limits while isolating workflow_run from cand
   ])
     expect(ci).toContain(invariant);
   expect(ci.match(/--reporter=default --reporter=json/g)).toHaveLength(3);
+  expect(ci).toContain("run: pnpm run test --reporter=default --reporter=json");
   expect(ci).not.toContain("actions: write");
   expect(consumer).toContain("ref: ${{ github.sha }}");
   expect(consumer).toContain("persist-credentials: false");
