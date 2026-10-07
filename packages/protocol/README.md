@@ -5,9 +5,16 @@ both ends validate at the boundary and the TypeScript types fall out of them. It
 `@orca/core` for the domain types and on nothing else — a client that depends only on this
 package cannot reach the engine, the stores or the transports (ADR 0008).
 
-Everything below is exported from the package root. The current protocol is **1.9**
-([version source](src/version.ts)). Protocol 1.9 adds authenticated clients, typed-input
-preflight and pinned launch guards. Protocol 1.7 introduced the
+Everything below is exported from the package root. Current main uses **2.0**
+([version source](src/version.ts)), store epoch `operator-journals-v4`.
+Protocol 2.0 requires coordinated client/daemon upgrade: old closed capability/event
+schemas cannot safely ignore the operator/admission/revision additions. Methods remain
+conditional on installed providers, read-only mode and current caller authority.
+See [operator integration](../../docs/runtime-operator-integration.md) for the current
+composition and dated acceptance checkpoints. Root version 0.6.0 alone does not identify
+a deployed build. Protocol 1.9 added authenticated clients, typed-input
+preflight and pinned launch guards; 1.10 added Request admission, generations/apply,
+workspace/boot identity and live callback fields. Protocol 1.7 introduced the
 v0.5.0 config/workflow/plan methods; 1.8 adds maintenance admission and optional
 `hello.processId`. It also advertises the additive v0.6.0 fields initially landed
 under 1.7: decision `resultIsPreview`, `runs.get.workflowPinned`, step `model`,
@@ -98,7 +105,8 @@ fail with `PROTOCOL_MESSAGE` ("Update admission is closed; retry later"); `hello
 use `PROTOCOL_MESSAGE`. This counts in-flight method calls, not all persisted run states.
 
 This method does not install software or accept paths/commands. The token coordinates
-updaters; it is not the general API authentication planned in #328. The supervisor must
+updaters; general HTTP/WS authentication and `daemon.maintenance` authorization now
+apply separately ([security](../../docs/daemon-security.md)). The supervisor must
 also check run/update readiness and daemon ownership as described in [Updating](../../docs/UPDATING.md).
 See [schema](src/maintenance.ts) and [admission implementation](../daemon/src/maintenance.ts).
 
@@ -146,15 +154,16 @@ risk appetite, and belongs to the plan methods.
 
 ```ts
 params: { client: string; protocol: { major, minor } }
-result: { protocol, orcaVersion, storeDir?, processId?, capabilities: DaemonCapability[], methods?: string[] }
+result: { protocol, orcaVersion, storeDir?, processId?, identity?: { workspaceId; instanceId };
+          capabilities: DaemonCapability[]; methods?: string[] }
 ```
 
-`capabilities` is coarse (`runs.read`, `runs.subscribe`, `runs.control`, `plan.read`,
-`plan.write`); `methods` (protocol 1.1) is exactly what this daemon answers, so a newer
-client can light up one screen against an older daemon. A daemon serving no store answers
-`hello` and nothing else. `READ_METHODS` is the ten reads below — the seven run reads,
-`workflows.list` / `workflows.get` and `config.get` — `PLAN_READ_METHODS` the nine plan
-reads, `CONTROL_METHODS` the ten that write and `AGENT_METHODS` the two about agents.
+`capabilities` is coarse; `methods` is the installed method set available to this
+authenticated principal. Protocol 2.0 includes conditional operator/admission/revision
+families beyond the original read/control/plan/agent groups. A schema/export alone
+does not install a service. Consult [handshake schemas](src/handshake.ts) and current
+[operation authorization](../daemon/src/auth/operations.ts); resource scope is still
+checked on every call. Major versions must match before normal client operation.
 
 **`methods` is the check that matters, not `capabilities`.** `orca serve --read-only` leaves
 the control methods out of the dispatch table *and* out of `methods`, and drops
@@ -162,10 +171,11 @@ the control methods out of the dispatch table *and* out of `methods`, and drops
 a refusal. That is deliberate — a client should be able to hide a button rather than find out
 at the moment of pressing it that there is nothing behind it.
 
-> **The control port is not access control.** `orca serve` binds loopback and authenticates
-> nobody, so any local process can answer a gate, cancel a run or start one. The per-run
-> lease stops a *second writer*; it does not stop a caller. ADR 0008 records that as an
-> accepted cost.
+> **A lease and caller authority are separate.** Default `orca serve` authenticates
+> bearer credentials and enforces operation/resource authority. Explicit
+> loopback-unauthenticated compatibility is the older local-trust mode; it is not the
+> default. The per-run lease prevents competing execution writers and does not replace
+> authentication. ADR 0008's original no-auth context is historical.
 
 ### `runs.list` — the run list
 
@@ -242,10 +252,15 @@ node is expanded, and both name one thing.
 **`versions` combines registered, stored and run-referenced versions.** Since v0.6.0,
 `workflows.get({ id, version })` can serve a stored definition; `pinned` is true when a registered definition exists
 and has a different version. A recorded version need not still be available: a missing requested version
-returns `WORKFLOW_VERSION_NOT_FOUND`. Resume uses the live definition if its version
-matches, otherwise the stored definition; legacy runs without `workflowStored` may fall
-back to current. Editing a file without changing its version can still change resumed
-behavior. Version labels do not establish byte-immutable execution recipes.
+returns `WORKFLOW_VERSION_NOT_FOUND`. Runs with `workflowStored` prefer the recorded
+definition; legacy runs without it retain their current-definition fallback. New launches
+reject changed content at an already recorded version, and generation restoration
+verifies the exact digest. Bump the workflow version before admitting changed content.
+The low-level lookup and protected-generation restoration have distinct missing-data
+guards; see [configuration generations](../../docs/configuration-generations.md).
+
+Version labels alone do not establish reproducible external executables, plugin
+closures or provider environment; the generation contract states those limits.
 
 `WORKFLOW_NOT_FOUND` for an unknown id, and for a `parent::node` whose node has no nested
 graph.
@@ -377,13 +392,12 @@ moved written permission grants out of the YAML: `config` is `orca.config.yaml` 
 (`""` when the file is not there), `text` the bytes verbatim, and `parsed` the document as
 YAML/JSON read it, *before* schema defaults, which is what a form binds to.
 
-**Nothing is redacted.** `text` is the file, host entries and command lines included. A form
+**Editor bytes are unredacted and require `config.read`.** `text` is the file, host entries and command lines included. A form
 that edits a file has to show the file, and a redacted text written back would destroy what
-it hid. Loopback is the default bind address, not a caller identity or a filesystem
-permission check. The bind address is configurable, and general HTTP/WebSocket caller
-authentication is not implemented ([#328](https://github.com/cschadewitz/Project_Orca/issues/328)).
-Treat all reachable callers as trusted to read these bytes, including environment values.
-Read-only mode and the maintenance admission token do not provide general authorization.
+it hid. Loopback is the default bind address, not a caller identity. Default token mode
+authenticates and authorizes HTTP/WS before projection. Grant raw config reads only to
+callers trusted with these bytes, including environment values. The MCP operator's
+redacted effective-config projection is a separate contract, not editable raw text.
 
 `schema` describes `OrcaConfigSchema`, walked at runtime rather than written out by hand:
 `{ path, type, enum?, required, default?, help? }` per field, with an array's element type
@@ -406,8 +420,8 @@ params: { document; expectedRevision; text? | patch?: { path; value? }[]; valida
 result: { document: ConfigDocumentView; written; validation?: { errors: { path; message }[] }; asOf }
 ```
 
-A write, so it is in `CONTROL_METHODS` and absent from a `--read-only` daemon; it reuses
-`runs.control` and mints no capability of its own. Exactly one of `text` and `patch` — they
+A write, so it is in `CONTROL_METHODS` and absent from a `--read-only` daemon;
+current operation authority requires `config.write`. Exactly one of `text` and `patch` — they
 are different promises. `text` replaces the bytes; `patch` edits the parsed YAML *document*
 in place, so every comment and every piece of formatting survives. The daemon never
 re-serialises the parsed config, which would materialise every schema default into the file
@@ -426,13 +440,15 @@ therefore *canonicalised* rather than stored verbatim — the one place `text` d
 trip byte for byte. A `permissions` document carrying a `default` is refused: answering one
 prompt must not change the answer to every other one (ADR 0009).
 
-**Activation depends on the document.** Main configuration is captured at bootstrap and
-changes take effect on the next `orca serve`. Permission sidecars are loaded by
-`openAcpSession` on every permission ask (#271), including an already-open session.
-This reread does not apply general configuration or preserve callbacks across a parked
-run/restart: those are [#332](https://github.com/cschadewitz/Project_Orca/issues/332) and
-[#237](https://github.com/cschadewitz/Project_Orca/issues/237). `config.set` takes no run lease
-and appends no run event. App appearance preferences have their own app-owned lifetime.
+**Saving and activation are separate.** `config.set` saves; guarded `config.apply`
+validates/activates supported settings and assets for new admissions. Bootstrap settings
+require restart; existing work restores captured generation material. Permission sidecars
+are loaded on every permission ask, independently of apply. See
+[generations](../../docs/configuration-generations.md) for result states, mandatory
+revision/generation guards and restoration limits. Live permission continuity has its
+separate owner/session/turn/lease lifetime ([live input](../../docs/live-input-continuity.md)).
+`config.set` takes no run lease and appends no run event. App appearance preferences
+have their own app-owned lifetime.
 
 ## The plan methods
 
@@ -633,28 +649,26 @@ on a handshake succeeding or failing — never on `lastSeenAt` moving, which hap
 batch of agent output and would be exactly the firehose the `agent.update` coalescing exists
 to prevent.
 
-### `workflows.changed` — declared, and not yet sent
+### `workflows.changed` — activated asset invalidation
 
 ```ts
-params: { subscriptionId; id; version; at }
+params: { subscriptionId; id; version; removed?; at }
 ```
 
 The second push that is not about a run, added in **1.7** (#174). Like `agent.changed` it has
 no `runId` and no cursor: a client re-reads `workflows.get`.
 
-**Nothing emits it today, and that is the honest state rather than an omission.** ORCA loads
-workflows once, at bootstrap, from the glob in `orca.config.yaml`; there is no file watcher
-and no reload path, so the daemon has no moment at which it could truthfully say a workflow
-changed, and inventing one would be a runtime feature smuggled in behind a notification. It
-is on the wire now so the viewer (#177) can subscribe from the version it ships in, and so
-the editor (#181) — where publishing a draft *is* a write the daemon performs — has a frame
-to send rather than a protocol bump mid-feature. A client that subscribes today never hears
-one, which is what a workflow nobody edited looks like.
+Successful configuration activation emits this invalidation for added/changed and
+removed workflow IDs (`removed: true` for removal), filtered by current workflow
+authority. Re-read the affected snapshot. No notification is emitted for failed apply
+or validate-only. There is no filesystem watcher; explicit `config.apply` is the asset
+refresh boundary, including template-only changes. A workflow editor is still separate work.
 
 ### `config.changed` — the third push that is not about a run
 
 ```ts
-params: { subscriptionId; document; revision; path; at }
+params: { subscriptionId; document; revision; path; kind?: "saved" | "activated";
+          generation?; at }
 ```
 
 New in **1.7** (#174, #266), and it follows `agent.changed` in every respect: store-wide
@@ -666,6 +680,9 @@ sidecar itself when an `inputs.answer` with `always` appends a standing grant, b
 configuration screen that only heard about its own writes would show a policy that stopped
 being true the moment a run answered a prompt (ADR 0009: the sidecar is meant to be read).
 An `always` that added nothing — the rule was already recorded — sends nothing.
+Successful `config.apply` also announces activation with the generation; a client
+must compare that state even if the saved revision is unchanged. Validation and
+failed apply do not publish activation.
 
 It carries no `text`: a document can be large and the frame goes to every store-wide
 subscriber. `revision` is enough to know that what is held is stale, and a client that finds

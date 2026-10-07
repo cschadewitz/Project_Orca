@@ -1,5 +1,11 @@
 # Request submission and recovery (#329)
 
+**Current reading, 7 October 2026:** the combined runtime is protocol **2.0**,
+store epoch **`operator-journals-v4`**. Later [MCP composition](mcp-operator.md)
+uses this shared service; “no MCP transport here” and protocol 1.10 below refer
+to this feature's original scope/checkpoint. See [retry receipts](admission-retry.md)
+and the [capability ledger](ROADMAP.md) for current composition and residual acceptance.
+
 This feature slice implements the frozen [parallel contract](runtime-next-parallel-contract.md).
 The combined runtime wires daemon methods and CLI/ACP entry points to the real
 configuration-generation provider, historical `RestoreLaunch`, persistent workspace

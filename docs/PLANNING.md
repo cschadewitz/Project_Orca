@@ -398,8 +398,10 @@ See the [capability ledger](ROADMAP.md) for source owners and the current issue 
 
 ## Known limitations
 
-The scheduler still rereads the whole plan on each wake; history scale remains unmeasured.
-Artifact intake reconciles unchanged signals (#105), and critical-path treatment of later
+The scheduler still rereads the whole plan on each wake. The
+[bounded persistence baseline](performance/persistence-baseline/README.md) measures
+its documented synthetic workloads; it does not certify arbitrary history scale.
+Artifact intake skips reconciliation for unchanged signals (#105/#487), and critical-path treatment of later
 phases/in-progress work remains #108. Automatic matrix intake preserves decided choices
 (#104); an explicit human decision may replace one. Artifact-index locking (#102), fenced
 run writes (#197) and released-item repair (#123) are implemented. These mechanisms do not

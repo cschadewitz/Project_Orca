@@ -1,13 +1,20 @@
 # Architecture
 
+Reconciled against main `dcccd2bb849ae26c7fe0fb202431f11a6ab909c1` on
+7 October 2026. This describes source behavior. See the
+[capability ledger](ROADMAP.md) and [evidence map](reviews/2026-10-07-living-docs.md)
+for deployment, actual-client and native acceptance limits.
+
 ## Goals
 
 1. **Sit above the agents.** Accept a large request, decompose it, and drive each
    piece through the AI‑native SDLC loop. Humans concentrate on gates, not on
    typing the next prompt.
 2. **Artifacts, not transcripts, cross step boundaries.** Every step ends with a
-   durable artifact (a markdown file with YAML front matter, committed in the
-   workspace). The next step's instructions are `template ⊕ artifacts`.
+   durable artifact (normally Markdown with YAML front matter, collected into the
+   content-addressed store). Workflows/agents may commit workspace files; ORCA does
+   not automatically commit every artifact. The next step's instructions are
+   `template ⊕ artifacts`.
 3. **Watch and hand off.** The orchestrator observes each agent session, detects
    completion, validates the promised artifacts, and routes to the next node.
 4. **User‑defined workflows** with decision steps, loops, parallelism,
@@ -53,17 +60,16 @@ and protected execution records are separate from public event projections. See
 [runtime integration](runtime-foundation-integration.md) for the combined admission,
 ownership, client and resume boundaries.
 
-Since v0.4.0 that daemon is a **writer**, not a reader: it drives runs under a single‑writer
-lease of its own (`orca-serve@<host>:<pid>`), advertises the `runs.control` capability, and
-answers `inputs.answer`, `runs.resume`, `runs.cancel` and `runs.start`. At protocol 1.7 the
-read half is ten methods — `runs.list`, `runs.get`, `runs.events`, `inputs.list`,
-`claims.list`, `artifacts.list`, `artifacts.get`, `workflows.list`, `workflows.get` and
-`config.get` — beside the agent methods (`agents.list`, `agents.ping`), the nine plan reads
-under `plan.read`, and ten writes in all. `orca serve --read-only` opts back out of every one
-of those writes, and then they are *absent* from `hello.methods` rather than present and
-refusing, which is what makes "can this client write" a question about the handshake rather
-than about a failed call. The lease is the guard against a second writer; it is not access
-control, and any local process can reach the control methods on the loopback port (ADR 0008).
+The daemon drives runs under a single-writer lease (`orca-serve@<host>:<pid>`).
+Its current contract is protocol **2.0**, with store epoch `operator-journals-v4`.
+`hello.methods` reflects installed providers, read-only mode and the caller's current
+grants. Each call still checks operation and resource authority; handshake discovery
+does not authorize an arbitrary run. `orca serve --read-only` omits run/config/plan
+mutation methods. Supervisor maintenance admission is separate and remains available
+when authorized. The lease prevents competing execution writers; bearer authentication
+and resource authorization control access. Loopback binding alone establishes neither.
+See [daemon security](daemon-security.md) and the [protocol reference](../packages/protocol/README.md)
+instead of treating an old method count as a current inventory.
 
 Three things v0.5.0 added to that inventory are worth reading together. The **workflow
 files** come over as a display graph (#174): nodes with the per‑type fields the viewer shows,
@@ -72,20 +78,22 @@ under the `parent::node` ids the engine addresses them by, plus a `traversal` on
 the nodes a run took in order with their attempts and the edges between them — so the viewer
 (#177) can overlay a run on its graph. Both are reads, so `--read-only` answers them. As of
 v0.6.0 they can also serve an *old* version (#179): `startRun` keeps the definition a run
-starts on in the store's **workflow‑version store** (`workflows/<id>@v<version>.json`, one
-immutable file per version, written once), and marks the run `workflowStored` in
+starts on in the store's **workflow-version store** (protected persisted definitions),
+and marks the run `workflowStored` in
 `run.created`. A resumed run is loaded through `Orchestrator.definitionFor(id, version)` —
-the file on disk when it is still at that version, otherwise the stored copy — so publishing
-a new version affects runs started afterwards and a run under way finishes on the version it
-began with. A run that predates versioning carries no `workflowStored` and resumes on
-whatever file is current, as before; a run that does carry it but whose version is neither
+the stored copy first, with a matching-version loaded definition as the low-level fallback.
+Generation-backed restoration additionally verifies protected material and the recorded
+digest and fails closed when missing or corrupt. New unversioned launches reject changed
+content at an already stored `(id, version)`; bump the version. A legacy run without
+`workflowStored` retains its historical current-definition fallback; a run whose version is neither
 stored nor on disk refuses to resume with `WORKFLOW_VERSION_NOT_FOUND`, naming what exists.
 `workflows.get({ id, version })` answers from the store for a non‑current version,
 `WorkflowView.pinned` says the answer is not the version on disk, and `runs.get` carries
 `workflowPinned` for the same reason (the `◷ pinned` chip in
-`docs/design/70-workflow-editing.md`). A file edited *without* bumping `version` still wins
-over the stored copy. `workflows.changed` is on the wire with nothing emitting it — there is
-no workflow reload path yet — so a client may subscribe before the editor (#181) can send one.
+`docs/design/70-workflow-editing.md`). `config.apply` reloads and validates assets and emits
+`workflows.changed` for activated changes/removals. There is no filesystem watcher or
+workflow editor. [Configuration generations](configuration-generations.md) documents
+the exact activation and historical restoration rules.
 
 The **configuration** is two documents (#174, #266). `config.get` returns `orca.config.yaml`
 and the ADR 0009 permission sidecar `orca.permissions.json`, each with its own path, raw text
@@ -95,9 +103,12 @@ to. `config.set` writes exactly one of them: it refuses a stale revision with `C
 decided *under* the write lock rather than before it; it edits the YAML through the
 comment-preserving `yaml` `Document` rather than re-serialising it, so no schema default is
 materialised into the file; and it routes a sidecar write through `@orca/agents`' `link()`
-lock so an operator's edit and a run answering "always" both land. Writing the config reloads
-nothing: the orchestrator goes on serving the configuration it booted with until the next
-`orca serve`, and a `config.set` while a run is in flight takes no lease and appends no event.
+lock so an operator's edit and a run answering "always" both land. Editor bytes require
+`config.read` and are unredacted; config writes require `config.write`. Saving does not
+activate the main config. A separately guarded `config.apply` activates reloadable roles,
+program defaults and workflow/template assets for new admissions; agent, host, workspace
+and other bootstrap settings require restart. Existing admitted work retains captured
+generation material. Permission sidecars remain live and independent of apply.
 
 The **plan** is served over `PlanService` (#169): `plans.list`, `plan.get`, `items.list`,
 `schedule.get`, `schedule.explain`, `dependencies.list`, `risks.list`, `decisions.list` and
@@ -109,7 +120,10 @@ state of every dependency all come from at once — and `schedule.explain` retur
 `explainWorkItem` lines verbatim, the same ones `orca plan explain` prints, so the popover and
 the terminal cannot drift. A plan write is not a run write: it takes no lease, drives no
 interpreter, and journals through `PlanService`'s per‑plan lock with
-`PlanOrigin { kind: "human", actor: "daemon" }`.
+`PlanOrigin { kind: "human", actor }`, with the model's configured actor defaulting
+to `"daemon"`; transport authorization/audit is separate from that journal origin.
+Instance-local serialization and per-file locks do not make plan documents and their
+journal one atomic transaction.
 
 The daemon has **two transports on one port**. `socket.ts` upgrades `/socket` in `ws`'s
 `noServer` mode, so `/health` and `/rpc` still reach the HTTP handler untouched; a connection
@@ -463,9 +477,23 @@ Opt-in built-in root isolation and its retained-evidence recovery limits are des
 The admission lifecycle is shared by daemon, configured ProgramService/CLI and ACP;
 `runs.start` remains an explicit workflow launch.
 
-The inbound MCP operator adapter uses authenticated daemon projections and shared admission
-services; see [MCP operator handoff](mcp-operator.md) for the bounded read contract and
-production mutation/actual-client acceptance boundaries.
+The inbound MCP operator adapter uses authenticated daemon projections and the same
+admission, retry, continuation and revision services. Stdio and Streamable HTTP are
+implemented; remote HTTP still needs a trusted TLS listener/approved bridge. Production
+mutation aliases are conditionally mounted by writable token-mode `serve`; no adapter
+ledger or automatic mutation retry is added. See [MCP operator](mcp-operator.md) for the
+bounded read contract and actual-client acceptance. Downstream `agents[].mcpServers`
+are a different direction. Generic scoped MCP/skill/secret delivery and verification
+remain separate work (#335–#337).
+
+The desktop main process owns authentication, connection identity/epochs, protected
+retry intents and bundled-daemon lifecycle. Renderer/preload use the protocol bridge;
+credentials and protected text are not ordinary renderer preferences. Native `safeStorage`
+restart/UI tests are separate from source and Linux reference tests. Windows NSIS has
+an update driver; main's driver returns unavailable for macOS. Managed Debian daemon
+updates are a supervisor operation, not an RPC installation method. [Updating](UPDATING.md)
+and [Releasing](RELEASING.md) describe mechanisms; signed Apple Silicon delivery and
+native upgrade/privacy/physical acceptance remain separate gates.
 
 The advisory daemon-machine resource contract and bounded collection/authorized-summary
 ports are described in [Host resources](host-resources.md). They are not registered

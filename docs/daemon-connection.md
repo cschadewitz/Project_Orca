@@ -1,5 +1,11 @@
 # Authenticated daemon connections (#318)
 
+**Current reading, 7 October 2026:** target/draft isolation is implemented on main,
+whose combined protocol is **2.0**, store epoch **`operator-journals-v4`**.
+The 1.10 and feature integration checks below identify their original checkpoint.
+See [Development](DEVELOPMENT.md) for current source setup and the
+[capability ledger](ROADMAP.md) for guided-launch and native release gaps.
+
 The combined runtime includes the connection UI, authenticated target switching and
 persistent workspace identity. [318-daemon-connection-integration.patch](patches/318-daemon-connection-integration.patch)
 is a historical handoff against preparation baseline

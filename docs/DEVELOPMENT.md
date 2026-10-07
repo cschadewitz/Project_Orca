@@ -1,8 +1,21 @@
 # Development
 
+For a read-only orientation, use the [documentation index](README.md),
+[architecture](ARCHITECTURE.md) and [current capability ledger](ROADMAP.md).
+No local setup or provider credentials are needed to review the source/evidence map.
+The commands below are contributor recipes, not native beta installation instructions.
+
+## Toolchain and command effects
+
+`package.json` supports Node >=22 and pins pnpm 12.4.2; `mise.toml` selects Node 24
+and pnpm 12. The 7 October cloud reconciliation used Node 24.21.0/pnpm 12.4.2.
+Use a frozen install for ordinary setup; do not regenerate the lockfile to make a
+documentation check pass. `pnpm install` runs the existing dependency policy/build
+hooks and may download Electron, so it is a dependency/setup action, not a prose check.
+
 ```bash
-mise install                 # Node 24 + pnpm 12 (any Node >= 22 works)
-pnpm install
+mise install                 # Node 24 + pnpm 12; installs tools
+pnpm install --frozen-lockfile
 pnpm run typecheck           # tsc --noEmit over every package + tests, then again over the
                               # renderer (packages/app/renderer/tsconfig.json) with JSX/DOM lib
                               # a plain Node package never needs
@@ -47,10 +60,45 @@ HTTP/WebSocket daemon and a synthetic workflow; the ACP case uses an in-process 
 and file-backed claims. Neither needs a provider credential. These cases do not prove
 Electron keychain restart or the full cross-client key lifecycle in #331.
 
-The two Node CI jobs run sequentially on the shared self-hosted runners. Every Vitest
+Current `ci.yml` routes its jobs to standard `ubuntu-24.04` hosted runners (#525).
+The two Node jobs still run sequentially. Every Vitest
 step uses at most two workers (one where Node reports at most two available CPUs),
 including the full suite and coverage. This limits contention for subprocess-heavy
 tests such as the demo while retaining their existing assertions and 60-second bounds.
+
+PRs and main pushes start CI; its classifier skips runtime jobs for prose-only
+changes. JavaScript validators under `docs/` and prompt templates count as code.
+The shadow selector is advisory and cannot replace the full checks; #520's reporting
+consumer remains a separate unmerged slice. Desktop packaging, App smoke/type proof
+and native UI projects are manual/reusable workflows, not automatic PR proof. Their
+Linux jobs still include homelab routing; inspect the actual workflow before dispatch.
+The owner requires a fresh CPU/RAM/load check before any new homelab job. This
+documentation audit dispatches none. [Releasing](RELEASING.md) and
+[shadow selection](ci-shadow-selection.md) record release/parity/activation limits.
+
+## Documentation-only review
+
+For a prose-only change, inspect the final path diff, use `git diff --check`, and
+validate relative files/fragments, command names/flags and source claims in the
+changed documents. `.prettierignore` excludes Markdown and frozen `Current_State/`;
+a Prettier success does not validate prose. Check UTF-8, LF, final newline,
+trailing whitespace and balanced fences separately. Keep dated recipes and their
+source pins distinct from current instructions. The
+[7 October audit](reviews/2026-10-07-living-docs.md) records the broader inventory
+and checks used for the current reconciliation.
+
+Run runtime checks when executable docs, templates or behavior change, or when a
+specific unresolved concern requires them. A prose correction does not require
+duplicating a broad suite or dispatching platform workflows. Report checks actually
+run and jobs skipped; the PR template's general checklist is not proof of execution.
+
+`format` and `lint:fix` write files; `design:build`/`design:fonts` generate assets.
+`demo`, `serve`, app start/dev/smoke, agent ping and real-agent run/submit launch
+processes and can write workspace/store data. `answer`, resume/cancel, claims release,
+leases break, config apply and credential commands mutate operator state. Release,
+service, feed and signing recipes affect external installations. Review their exact
+target and authorization before using them; check command syntax without executing
+live/provider/host steps for a documentation review.
 
 ### Desktop workflow bundle probe
 
