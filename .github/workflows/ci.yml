@@ -73,6 +73,9 @@ jobs:
         node: [22, 24]
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Advisory push identity uses HEAD's first parent; no extra code is executed.
+          fetch-depth: 2
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
@@ -82,6 +85,37 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
+
+      # Capture identities before candidate test code runs. Reports remain untrusted data
+      # for the read-only default-branch workflow_run consumer, never admission outputs.
+      - name: Initialize advisory evidence
+        continue-on-error: true
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SHADOW_NODE: ${{ matrix.node }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-shadow-evidence"
+          rm -f "$RUNNER_TEMP/full-suite.json" "$RUNNER_TEMP/retry-acceptance.json" \
+            "$RUNNER_TEMP/ci-shadow-identity.json" "$RUNNER_TEMP/ci-shadow-evidence/evidence.json" \
+            "$RUNNER_TEMP/ci-shadow-evidence/evidence.json.tmp"
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const env = process.env;
+          const candidate = execFileSync('git', ['--no-replace-objects', 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          // Push comparison uses the immutable first parent, not an unauthenticated
+          // workflow_run "before" field. All existing push checks still run as before.
+          const base = env.GITHUB_EVENT_NAME === 'push'
+            ? execFileSync('git', ['--no-replace-objects', 'rev-parse', 'HEAD^1'], { encoding: 'utf8' }).trim()
+            : env.SHADOW_BASE;
+          writeFileSync(join(env.RUNNER_TEMP, 'ci-shadow-identity.json'), JSON.stringify({
+            repository: env.GITHUB_REPOSITORY, runId: Number(env.GITHUB_RUN_ID),
+            attempt: Number(env.GITHUB_RUN_ATTEMPT), event: env.GITHUB_EVENT_NAME,
+            base, head: env.SHADOW_HEAD, candidate, node: Number(env.SHADOW_NODE),
+          }));
+          NODE
 
       # Bound every Vitest invocation, not just retry acceptance. Preserve the default
       # of one worker on small runners rather than increasing their concurrency to two.
@@ -172,13 +206,13 @@ jobs:
       # exactly when it fails locally.
       - name: Test
         if: matrix.node != 24
-        run: pnpm test
+        run: pnpm test --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       - name: Test with coverage
         if: matrix.node == 24
-        run: pnpm run test:coverage
+        run: pnpm run test:coverage --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
@@ -208,3 +242,20 @@ jobs:
       # emitted dist graph. This catches broken exports maps and missing project references.
       - name: Smoke test the compiled build
         run: node packages/cli/dist/main.js demo
+
+      # Always retain sanitized failure/missing-result evidence. Failure here cannot
+      # mask or override any existing step, job, coverage or required-check outcome.
+      - name: Record advisory full-suite evidence
+        if: always()
+        continue-on-error: true
+        run: node tools/ci-shadow/record.js
+
+      - name: Upload advisory full-suite evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-full-evidence-${{ github.run_id }}-${{ github.run_attempt }}-node-${{ matrix.node }}
+          path: ${{ runner.temp }}/ci-shadow-evidence/evidence.json
+          if-no-files-found: warn
+          retention-days: 7

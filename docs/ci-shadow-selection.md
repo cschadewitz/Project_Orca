@@ -2,8 +2,9 @@
 
 This is an independent advisory implementation of [#509](https://github.com/cschadewitz/Project_Orca/issues/509).
 It computes **would-run** plans; the existing full CI checks remain authoritative.
-No workflow, required check, test timeout, worker limit, production fixture, runtime,
-release or deployment behavior changes. The separate [#510](https://github.com/cschadewitz/Project_Orca/issues/510)
+CI now records existing full execution and a separate advisory workflow compares it.
+Required checks, test timeouts, worker limits, production fixtures, runtime,
+release and deployment behavior remain unchanged. The separate [#510](https://github.com/cschadewitz/Project_Orca/issues/510)
 fixture optimization owns its production fixture changes.
 
 ## Owned implementation and limits
@@ -160,14 +161,14 @@ Each deterministic plan carries:
 - `shadowOnly: true`, `authority: "existing-full-checks"` and an empty
   `observedResults` array. A proposal records no fabricated execution verdict.
 
-The later consumer must independently resolve the **current** event identities,
+The consumer independently resolves the **current** event identities,
 run trusted `validatePlan`/the CLI validator with those identities, and reject on
 any mismatch. Validation recomputes the complete proposal: schema/version, SHA,
 selector/manifest/graph hashes, discovery, diff, reasons, selected files and checks.
 It rejects unknown fields, edited selections, stale code/metadata and mutated
 observations. Base/head/candidate movement invalidates prior plans. A push/merge
 queue consumer needs its own correctly resolved candidate, not head-only reuse.
-This version implements no event adapter and grants no merge/release authority.
+The event adapter below grants no merge/release authority.
 
 Observed execution belongs in a separately versioned evidence sidecar linked to
 the same candidate and plan digest. The exported `validateExecution` checks a strict
@@ -175,14 +176,88 @@ normalized file report: `{candidate,node,lane,success,files}` with lane `suite` 
 `retry`, Node 22/24 and each file `{path,status,passed,failed,skipped}`. It rejects
 missing/extra/duplicate files, zero assertions, failure/cancellation, skips and stale
 identity. The retry lane requires both named CLI/ACP files to pass with no skips.
-The later report adapter must derive counts/statuses from actual runner results;
+The report adapter derives counts/statuses from actual runner results;
 passing claimed counts to this helper is not proof that a process ran. Ordinary
 full-suite intentional opt-in skips need an explicit reviewed evidence model; this
 strict helper cannot accept them as passed and does not replace current CI's
-existing separate acceptance step. There is no raw Vitest/Playwright adapter or
-aggregate gate in this slice. Compile/demo, coverage, browser and native verdicts
-must be separately recorded against the same SHA; Vitest results cannot stand in
+existing separate acceptance step. This slice adds a Vitest JSON adapter; no
+Playwright adapter or aggregate gate is introduced. Compile/demo, coverage,
+browser and native verdicts are separately recorded against the same SHA; Vitest results cannot stand in
 for those lanes or platform coverage.
+
+## Advisory CI reporting and same-candidate comparison
+
+`ci.yml` retains its original full matrix and adds Vitest JSON alongside the
+default reporter. It captures checkout identity before tests and publishes one
+`orca-ci-full-evidence` v1 sidecar per run/attempt/Node, using `record.js`. It never
+launches another suite. Capture, normalization and upload are advisory; existing
+failures remain blocking. Partial/malformed/missing reports remain null. Artifacts
+contain paths, statuses, counts and skipped-name SHA-256 hashes, with no assertion
+text, messages, console output, absolute paths or credentials.
+
+`ci-shadow.yml` receives `workflow_run: CI/completed`. It checks out only the
+immutable default-branch `github.sha`, with persisted credentials disabled, and
+installs that trusted tree's frozen dependencies under existing supply-chain
+policy. It reuses existing action versions, pinned Node 24.21.0 and pnpm 12.4.2.
+Only this consumer adds `actions: read` beside `contents: read`; existing CI
+permissions remain unchanged. Candidate files/configuration/dependencies are never
+checked out, installed or executed. No `pull_request_target`, write token, comment,
+dispatch or check-result write is used. Python 3's standard ZIP/JSON libraries
+read a bounded fixed member; no dependency/lockfile changes are needed.
+
+The consumer resolves source run, attempt and complete job/artifact inventories
+from GitHub's API. An open PR's live server base/head/candidate must match the
+source run association, with two exact candidate parents. Identities are rechecked
+after reads. A moved/closed PR, rerun, stale candidate or missing association is
+unknown. Main push head/candidate is the source run SHA; comparison base is its
+exact first parent. This is a first-parent comparison for multi-commit pushes too;
+it does not reconstruct an unauthenticated `workflow_run` push `before` range.
+Existing full push classification/execution remains unchanged.
+
+Candidate CI workflow, Vitest config and producer/adapter must equal trusted source.
+Changes to reporting/execution need a reviewed default-branch baseline. Artifacts
+are selected by exact run/attempt/Node. Missing, duplicate, expired or stale data
+is unknown. Metadata, compressed-byte SHA-256, archive size, exactly one regular
+`evidence.json` member, JSON size, strict fields, identity and duplicates are checked.
+ZIP members are never extracted to controlled paths. Artifact text is never
+executed or interpolated into shell, logs, Markdown, environment or outputs.
+
+Normalized reports are untrusted runner data. Independently read GitHub step
+outcomes must prove build, mandatory no-skip retry acceptance, full suite/coverage,
+compiled smoke and Node 24 statics. This is provenance from existing full CI, not
+cryptographic attestation against malicious tests forging their own reporter.
+Reported full file inventory must exactly equal candidate discovery. Complete
+trusted plan recomputation precedes publication. The comparison links a canonical
+plan digest and retains failed omitted files, per Node. Missing/failed/skipped/
+cancelled steps cannot yield `compared`; original failures remain in original
+checks. `compared` is available evidence, not rollout/admission approval or savings.
+
+Three existing Linux opt-in skips have an explicit bounded policy:
+
+- CLI `admission-retry-wiring.test.ts` and ACP `admission-retry-acp.test.ts`: one
+  exact skipped assertion each in the suite; both must independently pass every
+  assertion without skips in the mandatory retry lane.
+- `jev-eval.live.test.ts`: its exact credential-dependent live-provider assertion
+  stays skipped. No credential or live-provider acceptance is introduced.
+
+Each also requires the candidate test blob to equal trusted policy source. Skips
+remain `skipped`, never passed. Different names/counts, changed source, empty/todo
+files or other skips make evidence unknown. Strict `validateExecution` is unchanged;
+this full-suite sidecar does not relax targeted/retry validation. A bounded seeded
+omitted-failure regression checks incident reporting, not live targeted execution.
+
+Browser/native runners remain `unknown/outside_CI_workflow`. Coverage and compiled
+verdicts are the actual same-run step outcomes; numbers stay in existing coverage
+reports. Legacy docs-only matrix skips give missing-full-suite evidence. Required
+check names, classification, serial matrix, concurrency, coverage ratchets and
+acceptance limits are intact. No aggregate or protection migration is introduced.
+
+The new `workflow_run` consumer runs only after its workflow/tools reach the
+default branch. Pre-merge CI can validate producer reports for a bounded read-only
+local replay; it cannot prove the new default-branch workflow executed. Live
+consumer validation is a post-merge follow-up; merge is unauthorized in this slice.
+Setup/timeout failure remains a failed advisory job, not accepted evidence.
+Nightly, release parity, freshness, platform adapters and pilot are later #509 work.
 
 ## Existing authority and remaining integration gates
 
@@ -197,8 +272,8 @@ are unverified. No migration is implied.
 
 Later owned workflow work must:
 
-1. Emit shadow plans alongside same-candidate existing full results, without a
-   second concurrent full workload; add trusted exact-file discovery/result adapters.
+1. Validate the default-branch advisory consumer on real full CI runs; add separate
+   browser/native result adapters before claiming those runners have evidence.
 2. Review required-check settings before any stable `CI required` aggregate migration;
    implement `always()`/`needs` failure/cancellation/missing/skip checks and merge-group
    candidate handling without weakening existing required names.

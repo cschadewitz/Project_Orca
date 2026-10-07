@@ -1,0 +1,54 @@
+# Consume existing full CI evidence; never execute PR code or grant a gate verdict.
+name: CI shadow comparison
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compare:
+    name: advisory same-candidate comparison
+    runs-on: [self-hosted, linux, x64, homelab]
+    timeout-minutes: 10
+    steps:
+      # workflow_run github.sha is the default-branch commit, NOT the PR candidate.
+      # Candidate objects are fetched and parsed only by trusted tools below.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
+          cache: pnpm
+
+      - name: Install trusted frozen dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Recompute proposal and compare existing full evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHADOW_OUTPUT: ${{ runner.temp }}/ci-shadow-comparison
+        run: |
+          mkdir -p "$SHADOW_OUTPUT"
+          rm -f "$SHADOW_OUTPUT/plan.json" "$SHADOW_OUTPUT/plan.json.tmp" \
+            "$SHADOW_OUTPUT/comparison.json" "$SHADOW_OUTPUT/comparison.json.tmp"
+          node tools/ci-shadow/consume.js
+
+      - name: Upload advisory comparison
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-shadow-comparison-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: ${{ runner.temp }}/ci-shadow-comparison/*.json
+          if-no-files-found: error
+          retention-days: 7
