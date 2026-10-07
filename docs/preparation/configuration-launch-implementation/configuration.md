@@ -4,6 +4,15 @@ This is a proposed implementation behavior contract for #333. Source baseline an
 status terminology are in [README](README.md); exact proposed shapes are in
 [interfaces](interfaces.md).
 
+## Current metadata/edit boundary
+
+Source refresh is main `c1eba301702fef0466b2d3481c36d62331ee7d48`. Existing revision/save/apply and
+target isolation
+are merged foundations. [Interfaces](interfaces.md) now proposes common authoritative
+absence/null/default metadata for every node and names the existing YAML patch boundary
+versus node-preserving collection lowering that still requires proof. Neither extension
+is frozen or exported here; #435/#333/integrator own contract approval and implementation.
+
 ## Form scope and truthful defaults
 
 - Start with existing `ConfigField`, `config-form`, `config-model`, `use-config`,
@@ -12,7 +21,9 @@ status terminology are in [README](README.md); exact proposed shapes are in
 - Field labels, enums, types and defaults come from authoritative metadata. An
   absent key remains absent; show a default as provenance/placeholder, never
   materialize all defaults when adding a row. `false`, `0`, empty string, null
-  and absent are distinct. Required fields need explicit valid values.
+  and absent are distinct. Requiredness, nullability and default presence come from independent authoritative
+  metadata; a nullable required key still cannot be deleted. Never infer them from the
+  current walker's flattened `required` flag.
 - Host/agent/role IDs and references are chosen from authorized existing data,
   with daemon-side validation. Deleting an in-use host/agent reports precise
   authorized references and refuses invalid save. Do not rewrite consumers.
@@ -23,7 +34,9 @@ status terminology are in [README](README.md); exact proposed shapes are in
 - Preserve extension fields and comments through form edits and raw transitions.
   Never replace the whole parsed document by JSON serialization. In particular,
   existing parent-array patching is not proof that comments within moved/deleted
-  elements survive. The integrator must prove the lowering strategy first.
+  elements survive. The integrator must prove scalar/removal patch addressing and node-preserving
+  collection text/AST lowering against the exact document/revision first, including
+  comments attached to moved elements, unsafe record keys and raw/form transitions.
 - `plugins` remains a list of existing module specifiers; no manifest registry,
   plugin execution, credential-editor UI or guessed provider keys are added.
   Models come from configured/discovered supported choices; configured declaration

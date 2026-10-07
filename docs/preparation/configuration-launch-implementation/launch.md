@@ -1,7 +1,19 @@
 # Guided launch and first-run consumer
 
 Proposed #334 behavior, built on the [#424 experience specification](../cal-first-job-experience/interaction-spec.md).
-This is not evidence of a completed UI or a working Cal connection.
+#424's specification is accepted/closed. This is not evidence of a completed guided
+app UI; actual Cal has separate historical discovery/worker evidence in #393/#496.
+
+## Reuse accepted foundations before residual choices
+
+The [current inventory](README.md) pins main `c1eba301702fef0466b2d3481c36d62331ee7d48` and accepted #415/#434
+operator/retry composition, #318/#332, #460/#462 root isolation, #505 copier fixtures,
+completed #420 offline asset and #496's historical configured-worker result. These
+replace blanket pending-integration/disconnected claims. Root isolation is local Linux
+and prepared-root fixtures are not an active controller; neither certifies a native
+Mac checkout projection. #486 stays optional/inactive, outside the launch prerequisites.
+Existing OS-encrypted palette intents are a restart foundation, not arbitrary task/input
+draft persistence. #331 retains the residual full cross-client retry acceptance matrix.
 
 ## Smallest first-beta path
 
@@ -22,9 +34,11 @@ The recommended first useful job is one fixed, reviewed `start → agent → end
 workflow with a declared task input, configured supported agent/model/instructions
 and verified disposable checkout. It is Request-free: no decomposition, Request
 or work-item record is invented just to run one agent. A workflow is still
-required; this is not a persistent chat session. #420 owns the actual harmless
-sample and result evidence. The preset identity is unresolved D2, not a fabricated
-workflow named in this packet.
+required; this is not a persistent chat session. Closed #420 already supplies the harmless offline
+sample/result evidence.
+Reuse it and the historically tested configured workflow before proposing any residual
+app-specific D2 identity/input/result binding. No general native preset is certified
+merely by that worker smoke or by this design recommendation.
 
 Broader Request mode is a separate explicit choice. Do not make fleet, Docker,
 canvas, persistent chat or a new template editor prerequisites for one local job.
@@ -40,16 +54,19 @@ publication. Existing loaded instructions can be used without #355 completion.
    declarations, preserving absence and declared defaults. Unknown declarations
    are unsupported with explanation unless the accepted validator defines their
    handling. Do not infer provider keys or coerce numbers/booleans by truthiness.
-3. Expose only selectors accepted by that entry point. At pinned main direct
-   `RunsStartParams` has no `overrides`; fixed effective agent/model/template
+3. Expose only selectors accepted by that entry point. At refreshed main direct
+   `RunsStartParams`/`RunsAdmitParams` has no `overrides`; fixed effective agent/model/template
    choices may be shown, but do not claim a writable override. Request override
    UI must map to actual `SubmissionCommand.overrides` and authorized selection
    data. Never disguise an unsupported selector inside arbitrary `vars`.
 4. Preflight is side-effect-free. Bind workflow ID/version/content revision,
    active generation, input draft and target into one review. A sequential
    `config.get` plus typed validation is not proof of a coherent snapshot: the
-   integrator must supply the accepted coherent projection or guarded assembly
-   and prove stale refusal. Do not use raw config as an operator projection.
+   integrator should consume the existing `operator.preflight` projection where
+   available/authorized, or prove an app-specific guarded assembly against the same
+   current generation/workflow contract. Its target/version/revision/generation result
+   does not supply checkout proof, effective input echo or permission to mutate. Do not use raw
+   config as an operator projection.
 5. Show exact target, effective selections/provenance, input names and permitted
    local values, withheld sensitive values and capability limitations. Show the
    configured checkout only after D1 evidence exists. A URL, workspace ID or
@@ -77,20 +94,22 @@ publication. Existing loaded instructions can be used without #355 completion.
   Closing after sending is not cancellation of an admitted run. Show recovery of
   the pending intent; any run cancellation is a separate explicit supported action.
 - Do not serialize launch inputs/task text in ordinary preferences or a URL to
-  survive restart. Integrator must agree a protected intent/reference design and
-  prove cross-restart recovery. Until then, restart acceptance is blocked.
+  survive restart. Reuse main's existing OS-encrypted palette intent/reference design for its supported
+  target/principal/workflow/key scope. The integrator must review any guided-input/Request
+  extension and prove its cross-restart matrix; do not reimplement the ledger or claim
+  arbitrary guided-draft restart acceptance from palette tests.
 - Startup continuation guarantees come from the accepted runtime, not a UI timer.
   No lease stealing, unconditional resume, automatic retry of external effects,
   invented `runs.retry` or resurrection of dead live callbacks.
 
-## Unresolved D1–D3 and owner decisions
+## Residual D1–D3 bindings after accepted evidence inventory
 
 | Decision | Smallest recommendation | Owner / evidence needed |
 | --- | --- | --- |
-| D1 exact checkout | An explicitly prepared disposable checkout fixed by target config; no per-launch arbitrary path/worktree picker | #334 with #327 projection owner/integrator: authorized observation of intended repo/cwd/branch/base, exact freshness binding and stale refusal. New projection fields/schema require coordinated approval. Until then verified-checkout launch is blocked. |
-| D2 workflow asset | One reviewed fixed direct workflow, typed task input, diff/check/risk result contract | #334/#420: real registered ID, version/digest, agent/instruction mapping and provenance/omission rules. Synthetic transcript is not execution evidence. |
+| D1 exact checkout | An explicitly prepared disposable checkout fixed by target config; no per-launch arbitrary path/worktree picker | #334/#327/integrator: first map #460/#462 frozen-base/ownership receipts and #505 fixtures to the selected supported target. Residual app/platform pre-admission repo/cwd/branch/base freshness projection needs review; unsupported launch stays blocked. No new provisioner or arbitrary picker. |
+| D2 workflow asset | One reviewed fixed direct workflow, typed task input, diff/check/risk result contract | #334/#386: reuse closed #420 offline fixture and #496 historical worker evidence; name only the remaining selected app asset ID/version/digest, task/instruction/result bindings. No reopened #420 fixture or native acceptance inferred. |
 | D3 publication | Return result with publication unavailable | #334/#327 and #350 if later selected: separately authorized publisher and verified outcome, never a new arbitrary shell MCP tool. |
-| Protected restart recovery | Persist only necessary intent correlation via an approved protected boundary | #334/#331 integrator: exact retention, current-principal binding, refusal on absent/corrupt state and cross-restart tests; no renderer secret cache. |
+| Protected restart recovery | Reuse OS-encrypted main palette intent correlation | #334/#331 integrator: map existing target/principal/workflow/key semantics, then review only guided-draft/Request extensions and residual cross-restart tests; no renderer secret cache or duplicate ledger. |
 
 #386 consumes a launcher blocked/unavailable reason and links to the existing
 configuration/connection surface. Diagnostics #416 integrates through its own

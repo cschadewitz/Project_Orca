@@ -4,6 +4,19 @@ This is a future implementation map. **Do not launch implementation agents from
 publication alone.** Parent review must accept the contract commit and exact
 runtime baseline, resolve required shared interfaces and allocate the integrator.
 
+## Reconciled source and contract checkpoint
+
+Main inspected on 7 October is `c1eba301702fef0466b2d3481c36d62331ee7d48`. #415/#434 operator/retry
+composition,
+#318/#332 target/config, protected palette intents and #460/#462 isolation are merged;
+#424 and #420 specification/offline preparation are closed, as is #505 through #508.
+See [accepted evidence inventory](README.md). #486 is optional inactive installer
+tooling, not a #505/launch prerequisite. Reuse these contracts before residual decisions.
+The published packet SHA and independently accepted runtime SHA still require an
+owner-recorded freeze. This reconciliation does not choose unresolved product contracts,
+launch agents, or close #435/#333/#334/#386/#331. Existing review/CI at `27a5d0f`
+remains historical; new-head review belongs to the parent after publication.
+
 ## Owned paths
 
 Preparation owns only the five Markdown files in this directory. Future feature
@@ -25,12 +38,13 @@ remain with their current owners; this packet does not allocate them anew.
 
 ## Freeze and integration order
 
-1. Re-read exact main, active retry integration and source contracts. Record a
+1. Re-read exact main, merged retry/operator composition and source contracts. Record a
    freeze comment naming the accepted full commit of this five-document packet
    and accepted runtime SHA. An actual published SHA belongs in that comment/PR,
    not a fabricated self-reference inside an uncommitted document.
 2. I approves app-local shapes, metadata/edit lowering, D1/D2 dependencies and
-   protected restart intent boundary. Product decisions remain with the parent/
+   existing protected intent scope and any guided-draft extension. Inventory accepted
+   D1/D2 assets first; product decisions remain with the parent/
    existing owners. Schema/API activation requires separate reviewed code.
 3. Launch A and B independently with injected fixtures and one identical contract
    SHA. C can prepare first-run UI/error fixtures without claiming native setup
@@ -82,10 +96,11 @@ diff, tests and gaps; no MCP edits, credentials, installs, deployment or main me
 ### Integrator: join configuration and launch
 
 Use RUNTIME_SHA and CONTRACT_SHA plus independently reviewed A/B heads. Re-audit
-active #331/MCP composition and retain their ownership. Consolidate types and
+merged #331/MCP composition and the residual retry matrix and retain their ownership. Consolidate types and
 approved schema/edit lowering; wire main/preload/IPC and renderer boot/navigation
-once. Resolve D1/D2 and restart-intent semantics with their owners before enabling
-production launch. Run exact combined checks below. Keep unsupported capabilities
+once. Map accepted D1/D2/intent foundations and resolve only residual app/platform
+bindings with their owners before enabling production launch. Run exact combined checks below. Keep
+unsupported capabilities
 unavailable; never use a legacy detached RPC to imply retry-safe admission. Report
 the assembled ancestry, actual enabled methods, failures and separately unrun
 packaged/physical/actual-Cal checks. No main merge/release/deployment.
