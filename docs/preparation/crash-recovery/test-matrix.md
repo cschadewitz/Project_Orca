@@ -153,6 +153,17 @@ source search supports but does not establish C16's network observation.
 For C20, apply every row of the approved [export-cleanup fault plan](export-cleanup-proposal.md#fault-and-native-evidence-plan).
 The fixed-slot design and narrowed destination support are approved in decision 9. Plans below are not acceptance evidence; actual execution is recorded in the implementation handoff.
 
+## Additional deterministic authority regressions (7 October)
+
+`packages/app/test/recovery-authority.test.ts` covers Enable paused before cleanup
+or initialization versus newer durable Off; renderer disposal during a genuine
+previous-session read with charges retained until settlement; status/preview-only
+rollback, missing/throwing clock and boot changes followed by plausible readings;
+and busy-slot/failed-maintenance retry without restoring old history. The main
+IPC suite adds consent revocation and renderer loss during initialization waits.
+See the [handoff](implementation-handoff.md#7-october-authority-corrections) for
+exact revision, red/green evidence, commands and the unchanged native limits.
+
 ## Evidence to collect separately
 
 | Environment | Required pass | Current status |

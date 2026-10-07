@@ -7,6 +7,86 @@ native adapter deliberately refuses all filesystem authority and no production
 clock or diagnostic producer is connected. This is an implementation candidate
 for review, not a working Mac/Windows recovery release or an activation request.
 
+## 7 October authority corrections
+
+The [full-head review](https://github.com/cschadewitz/Project_Orca/pull/470#issuecomment-5984828613)
+of `4b7ff36345593bf314e8108e78d2b7215b69c123` identified three additional
+blocking schedules. Runtime/test correction commit
+`edbc852d0c0f1443fb5822e13acf2d80ce543fc6` addresses them without changing
+product decisions, preparation deadlines or the disabled production boundary:
+
+- Enable captures authority before initialization or cleanup. Main IPC also
+  fences an Enable waiting for initialization when a newer verified Off arrives.
+  Barrier tests complete durable Off while the older Enable still waits in
+  pre-enable cleanup, and separately pause controller initialization. Both require
+  durable/in-memory Off and no enabling write, ring restart, history open or key
+  wrapping after the stale request resumes.
+- Trusted renderer disposal advances preview authority before releasing existing
+  references. Pending decrypt/preparation remains charged and busy until real
+  settlement, then refuses its late valid payload. Main advances document
+  generation on `render-process-gone`, covering requests waiting for initialization
+  without relying on a reload. Consent and continued capture remain distinct from
+  disposal. Tests cover the actual main handler and a paused genuine prior-session
+  read following the Linux crash fixture.
+- Every observed invalid clock sample latches uncertainty immediately, clears the
+  ring and preview authority, and schedules one owned-history maintenance attempt
+  through the existing mutation slot. No recursive status emission occurs. A
+  plausible later sample cannot restore old history, including after a cleanup
+  failure. Status and preview checks cover rollback, missing readings, changed
+  boot identity and a throwing clock; another barrier holds the mutation slot and
+  verifies serialized maintenance, failure visibility and explicit safe retry.
+
+These are 14 new deterministic tests: 12 controller/Linux-filesystem tests in
+`recovery-authority.test.ts` and two main IPC tests. The first 12 added regressions
+were run against the unchanged reviewed source: all 12 failed at the expected
+consent, late-preview or forgotten-clock assertions; the ten existing main tests
+passed. The later busy-slot and renderer-initialization regressions also pass on
+the correction. Synthetic keys/clocks and Linux fixture syscalls are not packaged
+Mac/Windows, clock, ACL, OS-protection or physical-device acceptance.
+
+Validation used Node **24.21.0**, pnpm **12.4.2**, the frozen lockfile and unchanged
+supply-chain policies (534 entries verified). Every invocation selected the task
+runtime with:
+
+```sh
+export PATH=/workspace/.orca-tools/node_modules/.bin:/opt/codex/cua_node/bin:$PATH
+```
+
+The final focused aggregate passed **203/203 across 11 files**, one worker,
+34.56 seconds. Exact focused command (the umask affects this test process only):
+
+```sh
+umask 022
+pnpm exec vitest run packages/app/test/recovery-authority.test.ts packages/app/test/recovery-integration.test.ts packages/app/test/recovery-storage.test.ts packages/app/test/recovery-disk.test.ts packages/app/test/report-validation.test.ts packages/app/test/pretrigger-buffer.test.ts packages/app/test/daemon-connection-integration.test.ts packages/app/renderer/test/diagnostics.test.tsx packages/app/test/recovery-preparation --maxWorkers=1
+```
+
+Workspace/renderer typechecks, targeted ESLint for all four changed code/test
+files, build, full Prettier, CSS-token and generated-design checks and all 12 Python
+contract fixtures pass. Vite retains the existing >500 kB warning (331 modules,
+675.70 kB JS). Initial typechecking caught a new test's possibly undefined clock
+reading; the test's discriminated branches were corrected before the passing run.
+
+The first broader aggregate under the shell's **0077** umask passed 202 and failed
+one unchanged storage test, `requires a valid persisted off setting before
+preserving unsafe staging for cleanup`. The test requests an unsafe 0644 stage;
+0077 instead creates a private 0600 file. It failed identically in isolation and
+passed **21/21** with test-process umask 0022, followed by the passing full focused
+aggregate above. No fixture, assertion, timeout, host umask or workflow changed.
+Historical failure/performance evidence below remains intact.
+
+Current main `d7546ce6bcaf51f194aade26de2cd9a432cd7073` has no competing changes
+in these diagnostics source/test paths; `git merge-tree --write-tree` found a clean
+integration. This correction stays on the existing PR branch without an unrelated
+main merge. The remote head was checked before work and must be checked again
+immediately before the normal fast-forward update; no competing work is overwritten.
+PR metadata records the final documentation head and its exact-head CI separately.
+
+The nonblocking preparation response deadline follow-up was deliberately deferred.
+Native adapters, packaged-device/network/paired-load observations, combined 32 MiB
+memory and the missed 4 ms work target remain open, as do #416/#469. No production
+capture, producers, uploads, deployment, merge or acceptance claim is enabled here.
+#509/#510 implementation and #511 CI monitoring remain separate and untouched.
+
 ## Decisions and ownership
 
 Decisions [1–6](https://github.com/cschadewitz/Project_Orca/issues/469#issuecomment-5976190374),
