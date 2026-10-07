@@ -940,6 +940,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     ...(detachSocket ? { socketUrl: socketUrlFor(url) } : {}),
     close: () => {
       closing ??= Promise.resolve().then(async () => {
+        // Automatic admission attachment verifies durable receipts outside the
+        // RPC handler. Fence it now and retain its reads through settlement.
+        const admissionsStopped = opts.admissionRetries?.close();
         // Stop accepting HTTP immediately; upgraded connections need separate closure.
         const stopped = new Promise<void>((resolve, reject) => {
           server.close((e) => (e ? reject(e) : resolve()));
@@ -948,6 +951,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         await Promise.all([stopped, detachSocket?.()]);
         // Handler rejection still settles its work. Dispatch retains the original error.
         await Promise.allSettled(pending);
+        await admissionsStopped;
       });
       return closing;
     },
