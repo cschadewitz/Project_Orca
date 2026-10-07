@@ -312,6 +312,11 @@ it.each([
   'it("probe", () => { let now: any; ({ "getState": now } = expect); });',
   'it("probe", () => { const [now] = [expect]; });',
   'it("probe", () => { let now: any; [now] = [expect]; });',
+  'it("probe", async () => { const now: any = expect("synthetic"); for ({ "toMatchFileSnapshot": now.getTime } of [now]) { await now.getTime("synthetic.snap"); } });',
+  'it("probe", async () => { const now: any = expect("synthetic"); for await ({ "toMatchFileSnapshot": now.getTime } of [now]) { await now.getTime("synthetic.snap"); } });',
+  'it("probe", () => { const now: any = expect("synthetic"); for ({ "getState": now.getTime } in [now]) {} });',
+  'it("probe", () => { const now: any = expect("synthetic"); for ([now.getTime] of [[now]]) {} });',
+  'it("probe", () => { const now: any = expect("synthetic"); for ({ ["toMatchFileSnapshot"]: now.getTime } of [now]) {} });',
 ])("rejects destructuring boundaries hidden behind reviewed names: %s", (extra) => {
   reset();
   const path = manifest.islands[0].paths[1];

@@ -70,6 +70,11 @@ function accessShape(node) {
   return `syntax:${ts.SyntaxKind[node.kind]}`;
 }
 
+function assignmentPattern(node) {
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  return ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node);
+}
+
 export function imports(text, path, allowedAmbientReferences) {
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   if (source.parseDiagnostics.length) throw new Error("source_parse_error");
@@ -90,7 +95,8 @@ export function imports(text, path, allowedAmbientReferences) {
       ts.isArrayBindingPattern(node) ||
       (ts.isBinaryExpression(node) &&
         node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        (ts.isObjectLiteralExpression(node.left) || ts.isArrayLiteralExpression(node.left)))
+        assignmentPattern(node.left)) ||
+      ((ts.isForOfStatement(node) || ts.isForInStatement(node)) && assignmentPattern(node.initializer))
     )
       unsafe = true;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {

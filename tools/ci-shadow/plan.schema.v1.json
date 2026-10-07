@@ -45,7 +45,7 @@
       "additionalProperties": false,
       "properties": {
         "version": {
-          "const": "1.0.4"
+          "const": "1.0.5"
         },
         "hash": {
           "type": "string",
