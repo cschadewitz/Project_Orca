@@ -1,0 +1,227 @@
+{
+  "schemaVersion": 1,
+  "graphVersion": 1,
+  "reviewedCommit": "d3491cc06b5abc1c5d82f2c685d6f628d9d4b04b",
+  "reviewedInventoryHash": "6237c15f4a479d3ce2c024a91441354d08db92568cc39734c9c882558025a1de",
+  "coverage": "Frozen Git inventory and conservative app-domain consumers cover only the named renderer presentation island. Static import edges outside it are a lower bound, not whole-repository proof.",
+  "prosePaths": ["docs/ci-shadow-selection.md"],
+  "islands": [
+    {
+      "id": "renderer-time-presentation",
+      "owner": "app renderer presentation",
+      "risk": "pure time wording only; authority, transport, persistence and discovery are excluded",
+      "paths": ["packages/app/renderer/src/ui/format-time.ts", "packages/app/renderer/test/format-time.test.tsx"],
+      "dependencies": {
+        "packages/app/renderer/src/ui/format-time.ts": [],
+        "packages/app/renderer/test/format-time.test.tsx": ["../src/ui/format-time.js", "vitest"]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "file:docs/preparation/trusted-prepared-roots/fixtures/synthetic-v1.json",
+      "to": "file:docs/preparation/trusted-prepared-roots/contract.test.mjs",
+      "kind": "filesystem-fixture",
+      "evidence": "contract.test.mjs readFileSync(new URL('./fixtures/synthetic-v1.json', import.meta.url))"
+    },
+    {
+      "from": "file:docs/preparation/trusted-prepared-roots/contract.test.mjs",
+      "to": "file:tools/test/trusted-prepared-roots.test.js",
+      "kind": "standalone-contract-import",
+      "evidence": "Vitest wrapper imports defineContractTests"
+    },
+    {
+      "from": "package:cli",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-subprocess",
+      "evidence": "ProductionFixture spawns packages/cli/dist/main.js; emitted daemon/store/runtime dependencies follow workspace and TS references"
+    },
+    {
+      "from": "package:daemon",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-subprocess",
+      "evidence": "ProductionFixture child imports packages/daemon/dist/index.js"
+    },
+    {
+      "from": "package:integrations",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-subprocess",
+      "evidence": "ProductionFixture HTTP child imports packages/integrations/dist/mcp/transport.js and stdio starts the emitted CLI mcp entrypoint"
+    },
+    {
+      "from": "package:testing",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-subprocess",
+      "evidence": "ProductionFixture config uses packages/testing/dist/scripted-agent/main.js"
+    },
+    {
+      "from": "file:templates/program/assess-risks.md",
+      "to": "package:cli",
+      "kind": "runtime-template",
+      "evidence": "Compiled CLI demo exercises program workflow templates; all templates force full"
+    },
+    {
+      "from": "file:packages/app/renderer/src/resources/resource-model.ts",
+      "to": "runner:resources-browser",
+      "kind": "playwright-vite-route",
+      "evidence": "resources-browser.spec.ts navigates dev-only #resources route through preview/resources.tsx"
+    },
+    {
+      "from": "file:packages/protocol/src/host-resource-fixtures.ts",
+      "to": "runner:resources-browser",
+      "kind": "shared-protocol-browser-fixture",
+      "evidence": "resource-model and preview consume shared protocol fixtures"
+    },
+    {
+      "from": "file:packages/app/src/preferences/schema.ts",
+      "to": "runner:resources-browser",
+      "kind": "playwright-preferences",
+      "evidence": "resources-browser.spec.ts imports DEFAULT_PREFERENCES"
+    },
+    {
+      "from": "file:packages/app/vite.config.ts",
+      "to": "runner:resources-browser",
+      "kind": "playwright-vite-config",
+      "evidence": "resources-browser.config.ts webServer invokes app Vite"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:resources-browser",
+      "kind": "browser-domain-superset",
+      "evidence": "All renderer changes conservatively affect the standalone browser runner"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:app-smoke",
+      "kind": "platform",
+      "evidence": "Linux built Electron smoke consumes renderer, bridge, authenticated demo daemon"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:type-proof",
+      "kind": "platform",
+      "evidence": "Linux/macOS/Windows dev renderer font proof"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:admission-intents",
+      "kind": "platform",
+      "evidence": "macOS/Windows native encrypted intent restart acceptance"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:revision-workflow",
+      "kind": "platform",
+      "evidence": "macOS/Windows production revision UI/restart acceptance"
+    }
+  ],
+  "runners": [
+    {
+      "id": "resources-browser",
+      "config": "packages/app/renderer/test/resources-browser.config.ts",
+      "files": ["packages/app/renderer/test/resources-browser.spec.ts"],
+      "project": null,
+      "platforms": ["linux"],
+      "runtime": "Chromium + Vite"
+    },
+    {
+      "id": "app-smoke",
+      "config": "packages/app/test/smoke/playwright.config.ts",
+      "files": ["packages/app/test/smoke/app-shell.spec.ts"],
+      "project": "smoke",
+      "platforms": ["linux"],
+      "runtime": "built Electron + daemon"
+    },
+    {
+      "id": "type-proof",
+      "config": "packages/app/test/smoke/playwright.config.ts",
+      "files": ["packages/app/test/smoke/type-proof.spec.ts"],
+      "project": "type-proof",
+      "platforms": ["linux", "macos", "windows"],
+      "runtime": "Electron + Vite + fonts"
+    },
+    {
+      "id": "admission-intents",
+      "config": "packages/app/test/smoke/playwright.config.ts",
+      "files": ["packages/app/test/smoke/admission-intents.spec.ts"],
+      "project": "admission-intents",
+      "platforms": ["macos", "windows"],
+      "runtime": "built Electron + daemon + native encryption"
+    },
+    {
+      "id": "revision-workflow",
+      "config": "packages/app/test/smoke/playwright.config.ts",
+      "files": ["packages/app/test/smoke/revision-workflow.spec.ts"],
+      "project": "revision-workflow",
+      "platforms": ["macos", "windows"],
+      "runtime": "built Electron + daemon + protected persistence"
+    }
+  ],
+  "fullChecks": [
+    "node22:build-before-tests",
+    "node22:retry-cli-acp-no-skips",
+    "node22:full-suite-production-required",
+    "node22:compiled-cli-demo",
+    "node24:typecheck",
+    "node24:lint",
+    "node24:format",
+    "node24:design-current",
+    "node24:build-before-tests",
+    "node24:retry-cli-acp-no-skips",
+    "node24:full-coverage-production-required-unchanged-ratchets",
+    "node24:compiled-cli-demo"
+  ],
+  "targetedChecks": [
+    "node22:build-before-tests",
+    "node22:retry-cli-acp-no-skips",
+    "node22:selected-exact-files",
+    "node22:compiled-cli-demo",
+    "node24:typecheck",
+    "node24:lint",
+    "node24:format",
+    "node24:design-current",
+    "node24:build-before-tests",
+    "node24:retry-cli-acp-no-skips",
+    "node24:selected-exact-files",
+    "node24:compiled-cli-demo",
+    "same-candidate:authoritative-full-shadow-baseline"
+  ],
+  "fullRiskRules": [
+    {
+      "id": "shared-runtime",
+      "pattern": "^packages/(core|store|agents|engine|daemon|integrations|cli|protocol|testing|maintenance-mcp)/",
+      "owner": "runtime, protocol and authority",
+      "reason": "shared_or_sensitive_package"
+    },
+    {
+      "id": "app-authority",
+      "pattern": "^packages/app/(src|scripts)/",
+      "owner": "app main/preload, authority and build",
+      "reason": "app_authority_or_build"
+    },
+    {
+      "id": "shared-design",
+      "pattern": "^packages/design/",
+      "owner": "design tokens and shared semantics",
+      "reason": "shared_design"
+    },
+    {
+      "id": "contracts",
+      "pattern": "^docs/preparation/",
+      "owner": "contract schemas, executable validators and filesystem fixtures",
+      "reason": "consumer_backed_or_sensitive_contract"
+    },
+    {
+      "id": "templates",
+      "pattern": "^templates/",
+      "owner": "runtime workflow and prompt consumers",
+      "reason": "runtime_template"
+    },
+    {
+      "id": "configuration",
+      "pattern": "^\\.github/|(?:^|/)(?:package\\.json|pnpm-lock\\.yaml|pnpm-workspace\\.yaml|mise\\.toml)|(?:tsconfig|vite|vitest|playwright).*\\.(?:json|ts|js)$",
+      "owner": "CI, toolchain, build and test discovery",
+      "reason": "build_discovery_or_workflow"
+    }
+  ]
+}
