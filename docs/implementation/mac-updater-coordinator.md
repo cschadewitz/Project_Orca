@@ -21,7 +21,12 @@ Approved requirements come from #387/#437 and reviewed PR #439 at
 [acceptance handoff](https://github.com/cschadewitz/Project_Orca/blob/39d4cf75b9e46dd267ccf0ae044f29f220fe667d/docs/preparation/beta-update-support/acceptance-handoff.md),
 [update contract](https://github.com/cschadewitz/Project_Orca/blob/39d4cf75b9e46dd267ccf0ae044f29f220fe667d/docs/preparation/beta-update-support/update-contract.md),
 and [recovery contract](https://github.com/cschadewitz/Project_Orca/blob/39d4cf75b9e46dd267ccf0ae044f29f220fe667d/docs/preparation/beta-update-support/recovery-support.md).
-Those documents remain on their own unmerged source branch.
+At the initial audit those documents were still unmerged. During publication, main
+advanced to `75bf00cc63ee5d47df823837252a8bfb26d3d5cd` with #438 and #439 merged.
+The four updater contract files match reviewed `39d4cf75` byte-for-byte; no contract
+or implementation change is introduced by this source-status read-back. A local
+`git merge-tree --write-tree` against that main succeeds without conflict. No main
+merge is performed on this implementation branch.
 
 ## Implemented behavior
 
