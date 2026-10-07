@@ -167,9 +167,12 @@ checked on every call. Major versions must match before normal client operation.
 
 **`methods` is the check that matters, not `capabilities`.** `orca serve --read-only` leaves
 the control methods out of the dispatch table *and* out of `methods`, and drops
-`runs.control` from `capabilities`: a control call against it answers `PROTOCOL_METHOD`, not
-a refusal. That is deliberate — a client should be able to hide a button rather than find out
-at the moment of pressing it that there is nothing behind it.
+`runs.control` from `capabilities`. For a caller holding the relevant operation grant,
+an omitted control method answers `PROTOCOL_METHOD`. A caller lacking the known
+operation's grant can receive `AUTH_FORBIDDEN` first: the
+[operation guard](../daemon/src/auth/guard.ts#L176-L187) runs before
+[method lookup](../daemon/src/server.ts#L187-L195). Discovery lets a client hide an
+unavailable action; it does not bypass authorization.
 
 > **A lease and caller authority are separate.** Default `orca serve` authenticates
 > bearer credentials and enforces operation/resource authority. Explicit
@@ -755,9 +758,11 @@ returns once it is parked again or finished, so `run` is a settled status rather
 a snapshot mid-flight. `resume: false` records the durable answer without resuming,
 as with `orca answer --no-resume`.
 
-For a live permission callback, copy `live` exactly from `inputs.list`: its `instanceId`,
-`sessionId`, `turnId`, `invocationId`, `runId`, `stepRunId` and `requestId` identify the
-original callback. The [schema](src/control.ts) permits omission for durable gates;
+For a live permission callback, copy the selected input's `input.live.target` into
+the answer's `live` field. The [read wrapper](src/live-input.ts#L15-L18) is `{ target, state }`;
+the answer takes the nested target alone. Its `instanceId`, `sessionId`, `turnId`,
+`invocationId`, `runId`, `stepRunId` and `requestId` identify the original callback.
+The [answer schema](src/control.ts#L46-L48) permits omission for durable gates;
 the [live-answer handler](../daemon/src/control.ts) requires it for a live reply,
 rechecks current server-bound authority and callback/lease availability, and refuses
 `resume: false` with `NOT_SUPPORTED`. Delivery goes to the original valid turn.
