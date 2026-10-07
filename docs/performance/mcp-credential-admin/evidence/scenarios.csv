@@ -1,0 +1,61 @@
+name,pair1-before,pair1-after,pair2-before,pair2-after,pair3-before,pair3-after
+compiled production authority via http A01 rechecks revocation before dispatch for all ten tool names on an already connected client,passed,passed,passed,passed,passed,passed
+compiled production authority via http A02 enforces current grant combinations and workflow/owner scope without disclosing strong boundaries,passed,passed,passed,passed,passed,passed
+"compiled production authority via http A03 rejects changed deployment, exact durable input, caller authority injection and cross-run artifacts",passed,passed,passed,passed,passed,passed
+"compiled production authority via http A04 requires every live identity field, rejects another owner, and delivers exactly once to the original callback",passed,passed,passed,passed,passed,passed
+compiled production authority via http A05 owner death expires the live callback and cannot be approved after restart,passed,passed,passed,passed,passed,passed
+"compiled production authority via http A06 bounds reads, invalidates cursors on boundary changes, and never enriches an unscoped page",passed,passed,passed,passed,passed,passed
+compiled production authority via http A07 withholds a late protected projection when the credential is revoked during transport publication,passed,passed,passed,passed,passed,passed
+"compiled production authority via http A08 audits authenticated identity and receipt correlations while excluding payloads, keys, rationale and credentials",passed,passed,passed,passed,passed,passed
+compiled production authority via http A09 enforces identical strict mutation schemas and current identity over backing HTTP and WS,passed,passed,passed,passed,passed,passed
+compiled production authority via http A10 propagates missing protected evidence as a whole-read failure and restores authorized revision reads,passed,passed,passed,passed,passed,passed
+compiled production authority via http A11 executes all ten aliases successfully through both backing transports using real receipts and effects,passed,passed,passed,passed,passed,passed
+"compiled production authority via http A12 keeps cold-read uncertainty safe without waiting, retrying or turning store failures into empty success",passed,passed,passed,passed,passed,passed
+compiled production authority via stdio A01 rechecks revocation before dispatch for all ten tool names on an already connected client,passed,passed,passed,passed,passed,passed
+compiled production authority via stdio A02 enforces current grant combinations and workflow/owner scope without disclosing strong boundaries,passed,passed,passed,passed,passed,passed
+"compiled production authority via stdio A03 rejects changed deployment, exact durable input, caller authority injection and cross-run artifacts",passed,passed,passed,passed,passed,passed
+"compiled production authority via stdio A04 requires every live identity field, rejects another owner, and delivers exactly once to the original callback",passed,passed,passed,passed,passed,passed
+compiled production authority via stdio A05 owner death expires the live callback and cannot be approved after restart,passed,passed,passed,passed,passed,passed
+"compiled production authority via stdio A06 bounds reads, invalidates cursors on boundary changes, and never enriches an unscoped page",passed,passed,passed,passed,passed,passed
+compiled production authority via stdio A07 withholds a late protected projection when the credential is revoked during transport publication,passed,passed,passed,passed,passed,passed
+"compiled production authority via stdio A08 audits authenticated identity and receipt correlations while excluding payloads, keys, rationale and credentials",passed,passed,passed,passed,passed,passed
+compiled production authority via stdio A09 enforces identical strict mutation schemas and current identity over backing HTTP and WS,passed,passed,passed,passed,passed,passed
+compiled production authority via stdio A10 propagates missing protected evidence as a whole-read failure and restores authorized revision reads,passed,passed,passed,passed,passed,passed
+compiled production authority via stdio A11 executes all ten aliases successfully through both backing transports using real receipts and effects,passed,passed,passed,passed,passed,passed
+"compiled production authority via stdio A12 keeps cold-read uncertainty safe without waiting, retrying or turning store failures into empty success",passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http F01 authenticates actual discovery and backing HTTP/WS parity without inventing capabilities,passed,passed,passed,passed,passed,passed
+"compiled production lifecycle via http F02 executes real preflight, legacy admission and bounded reads on isolated disk state",passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http F03 seeds a real live workload through shared production services,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http F03 seeds a real parent workload through shared production services,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http F03 seeds a real revision workload through shared production services,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http F04 proves gate continuation and scripted execution using existing production RPCs,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http F04 proves revision continuation and scripted execution using existing production RPCs,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http L01 mounts all ten real aliases and keeps Request and direct run identities distinct,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http L02 records an exact durable answer without resuming; rationale never becomes agent input,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http L03 admits answer plus root continuation once and refuses terminal or mismatched-child continuation,passed,passed,passed,passed,passed,passed
+"compiled production lifecycle via http L04 submits a pinned revision, replays its receipt, validates destination and delivers protected text once",passed,passed,passed,passed,passed,passed
+compiled production lifecycle via http L05 cancels the exact run and descendants with a real receipt and no second answer,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio F01 authenticates actual discovery and backing HTTP/WS parity without inventing capabilities,passed,passed,passed,passed,passed,passed
+"compiled production lifecycle via stdio F02 executes real preflight, legacy admission and bounded reads on isolated disk state",passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio F03 seeds a real live workload through shared production services,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio F03 seeds a real parent workload through shared production services,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio F03 seeds a real revision workload through shared production services,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio F04 proves gate continuation and scripted execution using existing production RPCs,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio F04 proves revision continuation and scripted execution using existing production RPCs,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio L01 mounts all ten real aliases and keeps Request and direct run identities distinct,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio L02 records an exact durable answer without resuming; rationale never becomes agent input,passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio L03 admits answer plus root continuation once and refuses terminal or mismatched-child continuation,passed,passed,passed,passed,passed,passed
+"compiled production lifecycle via stdio L04 submits a pinned revision, replays its receipt, validates destination and delivers protected text once",passed,passed,passed,passed,passed,passed
+compiled production lifecycle via stdio L05 cancels the exact run and descendants with a real receipt and no second answer,passed,passed,passed,passed,passed,passed
+"compiled production recovery via http R01 loses a committed operator.admitRun acknowledgement, replays and correlates the actual receipt",passed,passed,passed,passed,passed,passed
+"compiled production recovery via http R01 loses a committed operator.submitRequest acknowledgement, replays and correlates the actual receipt",passed,passed,passed,passed,passed,passed
+compiled production recovery via http R02 keeps one intent across daemon death and rejects the old instance target,passed,passed,passed,passed,passed,passed
+compiled production recovery via http R03 preserves an accepted intent across concurrent same-key replays in separate daemons and rejects a changed payload,passed,passed,passed,passed,passed,passed
+compiled production recovery via http R04 loses a combined answer/continuation acknowledgement and recovers its durable correlation after restart,passed,passed,passed,passed,passed,passed
+compiled production recovery via http R05 loses a revision acknowledgement and replays protected state across restart without re-delivery,passed,passed,passed,passed,passed,passed
+"compiled production recovery via stdio R01 loses a committed operator.admitRun acknowledgement, replays and correlates the actual receipt",passed,passed,passed,passed,passed,passed
+"compiled production recovery via stdio R01 loses a committed operator.submitRequest acknowledgement, replays and correlates the actual receipt",passed,passed,passed,passed,passed,passed
+compiled production recovery via stdio R02 keeps one intent across daemon death and rejects the old instance target,passed,passed,passed,passed,passed,passed
+compiled production recovery via stdio R03 preserves an accepted intent across concurrent same-key replays in separate daemons and rejects a changed payload,passed,passed,passed,passed,passed,passed
+compiled production recovery via stdio R04 loses a combined answer/continuation acknowledgement and recovers its durable correlation after restart,passed,passed,passed,passed,passed,passed
+compiled production recovery via stdio R05 loses a revision acknowledgement and replays protected state across restart without re-delivery,passed,passed,passed,passed,passed,passed
