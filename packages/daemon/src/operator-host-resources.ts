@@ -258,9 +258,11 @@ export class HostResourceReadModel {
       const fence = () => {
         check();
         if (projection) {
-          let publishable: boolean;
+          let publishable: unknown;
           try {
             publishable = projection.publishable();
+            // Refuse async authority; contain both rejection and synchronous assimilation faults.
+            if (publishable !== true) void Promise.resolve(publishable).catch(() => {});
           } catch {
             throw unavailable();
           }

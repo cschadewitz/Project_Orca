@@ -1,4 +1,6 @@
 /** The proposed telemetry grant and caller-scoped summary boundary, using exact #495 fixtures. */
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hostResourceFixture,
@@ -280,6 +282,94 @@ describe("host telemetry policy (proposal)", () => {
     const f = setup();
     Object.assign(f.projection, { publishable: async () => true });
     await expect(f.read()).rejects.toMatchObject({ code: "RUN_STATE" });
+  });
+
+  it("contains invalid fence rejections at read and serialization without a rejection handler", async () => {
+    const execution = promisify(execFile)(
+      process.execPath,
+      [
+        "--unhandled-rejections=strict",
+        "--input-type=module",
+        "-e",
+        `
+          import assert from "node:assert/strict";
+          import { HostResourceReadModel, resourceResponseForPublication } from ${JSON.stringify(
+            new URL("../dist/operator-host-resources.js", import.meta.url).href,
+          )};
+          import { hostResourceFixture, workstreamSummaryFixture } from ${JSON.stringify(
+            new URL("../../protocol/dist/index.js", import.meta.url).href,
+          )};
+          const marker = "SYNTHETIC_FENCE_PROVIDER_FAILURE";
+          const host = hostResourceFixture();
+          const target = { workspaceId: "20000000-0000-4000-8000-000000000001", instanceId: host.daemonInstanceId };
+          const principal = { id: "caller", kind: "credential", credentialId: "synthetic",
+            permissions: new Set(["host.telemetry.read", "runs.read"]), scope: { runs: "owned" } };
+          for (const serialization of [false, true]) {
+            for (const kind of ["false", "undefined", "non-boolean", "async-throw", "rejected", "eventual-true", "thenable", "then-getter", "constructor-getter", "catch-getter", "throw"]) {
+              let calls = 0;
+              let resolve;
+              const projection = {
+                runIds: ["root", "child", "parked", "uncertain"],
+                read: async () => JSON.stringify(workstreamSummaryFixture()), current: async () => true,
+                publishable: () => {
+                  if (++calls === 1 && serialization) return true;
+                  if (kind === "false") return false;
+                  if (kind === "undefined") return undefined;
+                  if (kind === "non-boolean") return "true";
+                  if (kind === "async-throw") return (async () => { throw new Error(marker); })();
+                  if (kind === "rejected") return Promise.reject(new Error(marker));
+                  if (kind === "eventual-true") return new Promise(r => { resolve = r; });
+                  if (kind === "thenable") return { then: (_resolve, reject) => reject(new Error(marker)) };
+                  if (kind === "then-getter") return { get then() { throw new Error(marker); } };
+                  if (kind === "constructor-getter" || kind === "catch-getter") {
+                    const promise = Promise.resolve(true);
+                    Object.defineProperty(promise, kind === "constructor-getter" ? "constructor" : "catch", {
+                      get() { throw new Error(marker); },
+                    });
+                    return promise;
+                  }
+                  throw new Error(marker);
+                },
+              };
+              const model = new HostResourceReadModel(target, {
+                snapshot: async () => JSON.stringify(host), workstreams: async () => projection,
+              }, () => 0, () => Date.parse(host.collectedAt));
+              const read = () => model.read({ target }, { current: () => principal, allowsRun: async () => true });
+              const code = ["throw", "constructor-getter", "catch-getter"].includes(kind) ? "NOT_SUPPORTED" : "RUN_STATE";
+              if (serialization) {
+                const result = await read();
+                assert.equal(calls, 1);
+                const response = resourceResponseForPublication({ kind: "response", id: 1, ok: true, result });
+                assert.equal(response.ok, false);
+                assert.equal(response.error.code, code);
+                assert.ok(!JSON.stringify(response).includes(marker));
+                assert.ok(!JSON.stringify(response).includes("activeRoots"));
+              } else {
+                await assert.rejects(read, error => error.code === code && !error.message.includes(marker));
+              }
+              assert.equal(calls, serialization ? 2 : 1);
+              resolve?.(true);
+              await new Promise(r => setImmediate(r));
+            }
+          }
+          console.log("contained");
+        `,
+      ],
+      { timeout: 10_000, maxBuffer: 16_384 },
+    );
+    const { stdout, stderr } = await execution;
+    const evidence = JSON.stringify({
+      executable: process.execPath,
+      argv: execution.child.spawnargs,
+      status: execution.child.exitCode,
+      signal: execution.child.signalCode,
+      stdout,
+      stderr,
+    });
+    expect(execution.child.exitCode, evidence).toBe(0);
+    expect(execution.child.signalCode, evidence).toBeNull();
+    expect(stdout, evidence).toBe("contained\n");
+    expect(stderr, evidence).toBe("");
   });
 
   it("checks the fence after the operation promise settles and sanitizes fence failures", async () => {

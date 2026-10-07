@@ -239,6 +239,66 @@ describe("injected daemon resource transport boundary", () => {
     });
   });
 
+  it.each(
+    (["http", "ws", "mcp"] as const).flatMap((transport) =>
+      [false, true].flatMap((serialization) =>
+        ["async-throw", "rejected", "eventual-true"].map((kind) => [transport, serialization, kind] as const),
+      ),
+    ),
+  )(
+    "refuses %s invalid fence (serialization=%s, %s) without provider diagnostics",
+    async (transport, serialization, kind) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(hostResourceFixture().collectedAt));
+      const f = await fixture();
+      const ids = ["root", "child", "parked", "uncertain"];
+      for (const id of ids) f.ownership.record(id, "test-caller");
+      const marker = "SYNTHETIC_FENCE_PROVIDER_FAILURE";
+      const eventual = deferred<boolean>();
+      const publishable = vi.fn(() => {
+        if (serialization && publishable.mock.calls.length === 1) return true;
+        if (kind === "async-throw")
+          return (async () => {
+            throw new Error(marker);
+          })();
+        if (kind === "rejected") return Promise.reject(new Error(marker));
+        return eventual.promise;
+      });
+      f.source.workstreams = async () => {
+        const projection = {
+          runIds: ids,
+          read: async () => JSON.stringify(workstreamSummaryFixture()),
+          current: async () => true,
+          publishable: () => true,
+        };
+        Object.assign(projection, { publishable });
+        return projection;
+      };
+      let body: unknown;
+      try {
+        if (transport === "mcp") {
+          const { client } = await f.connect(f.scoped.token);
+          body = await client.callTool({ name: "get_daemon_resources", arguments: { target } });
+          expect(body).toMatchObject({ isError: true });
+          expect(JSON.stringify(body)).toContain("RUN_STATE");
+        } else {
+          body =
+            transport === "http"
+              ? (await f.rpc(f.scoped.token, "operator.hostResources", { target })).body
+              : await socketCall(f.daemon.socketUrl!, f.scoped.token);
+          expect(body).toMatchObject({ ok: false, error: { code: "RUN_STATE" } });
+        }
+        expect(publishable).toHaveBeenCalledTimes(serialization ? 2 : 1);
+        expect(JSON.stringify(body)).not.toContain(marker);
+        expect(JSON.stringify(body)).not.toContain("activeRoots");
+      } finally {
+        eventual.resolve(true);
+        // Give rejection delivery a turn; Vitest also fails on any unhandled rejection.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    },
+  );
+
   it.each([
     ["http", "ownership"],
     ["ws", "ownership"],
