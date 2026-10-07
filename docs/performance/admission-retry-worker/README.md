@@ -16,7 +16,9 @@ the original pnpm realpaths and Node export conditions. The helper resolves esbu
 through the existing declared tsx tool. No manifest/dependency/config change.
 
 Before every fork, hash source/config/lock/compiler/package inputs and every emitted
-module/generated manifest; verify package links. Stale/missing artifacts fail closed
+module/generated manifest; verify package links and the complete expected artifact
+tree without following symlinks. Reject added entries and file/directory symlink
+replacements, including nearer alias-shadowing packages. Stale/missing artifacts fail closed
 without fallback/rebuild. The supervisor owns a unique ignored `.orca` directory
 and removes it after all workers close. Each supervisor builds afresh; no sensitive
 or mutable state is shared. Compiler target follows the verified invoking Node. Baseline tsx can use its own
@@ -73,13 +75,14 @@ python3 docs/performance/admission-retry-worker/measure.py \
   --output /workspace/scratch/issue510-retry/paired
 ```
 
-## Results
+## Pre-review results (retained)
 
-The primary ESM-observer cohort measured local source snapshot
+The pre-review ESM-observer cohort measured local source snapshot
 `8104e795d0909a8c331a90c53819e36c3f2dea1f` against the verified main base.
-The helper/harness implementation has been unchanged since `cf4ba6f`; later
-changes before/after these runs affect the measurement tooling and evidence only.
-Publication preserves those exact measured source and emitted hashes.
+Those measurements and the validation below describe published head
+`adddcf679306057eb6aa929a5a28d58f71be3438`. The review fix changes per-fork
+verification, so they are historical evidence rather than a current-head speedup
+or source-hash claim. The original raw packets are preserved unchanged.
 
 | Three samples per side | Baseline median (range) | Candidate median (range) |
 | --- | ---: | ---: |
@@ -114,7 +117,7 @@ first tsx sample (884.435 ms) is retained. It lacks the final provenance checks 
 is feasibility evidence only, not pooled with the whole-file experiment. Baseline
 tsx may read its own transform cache, so repeated transpilation is not established.
 
-## Validation and limits
+## Pre-review validation and limits
 
 - Node **24.21.0** and checksum-verified official Node **22.23.3**: all **33 focused
   cases** passed on each, zero skips/failures (25 original + eight added regressions).
@@ -148,3 +151,61 @@ physical-media, power-loss, private-phase attribution or host change was perform
 Rollback is the original harness fork of worker.ts with the tsx loader; remove the
 helper/regression/evidence as a reviewed fixture rollback. No runtime or workflow
 migration is involved. #510 and #408 remain open, and #509's owned paths are untouched.
+
+
+## Review fix: bind the complete emitted execution tree
+
+[Independent review 5445592522](https://github.com/cschadewitz/Project_Orca/pull/522#pullrequestreview-5445592522)
+reproduced an added `packages/engine/src/node_modules/@orca/core` package executing
+a marker-writing module while the recorded file/link verifier passed. The original
+pre-fork hash proof did not bind the complete resolution-affecting tree.
+
+The revised verifier derives the complete allowed entries from emitted outputs,
+declared package links and their parent directories; it never registers entries
+from the existing filesystem. Before each fork it walks this expected tree with
+`lstat`/`readdir` without following symlinks. Added files/directories, nested package
+manifests/node_modules, and symlink replacements of files or ancestors are rejected.
+Recorded content hashes, link targets and source/input checks remain mandatory.
+The emitted root is canonicalized once, so ordinary permitted package symlinks
+retain their original identities while emitted regular-file realpaths are bound.
+
+Seven added cases cover added manifests/package entries, identical bytes through
+file/directory symlinks and the exact closer-package reproduction. The latter
+first proves Node resolution changes, then invokes the real `Worker` constructor:
+it must refuse before creating a child, and the added module's marker must remain
+absent. The old-verifier negative control instead reaches real IPC ready and fails
+the refusal assertion; that report (one expected failure, 14 intentionally filtered
+cases) is retained. Owned children/markers/state are cleaned on both paths.
+
+Original 25-case assertions, worker/fixture sources, source resolution, all fresh
+processes, IPC/SIGKILL/retry and deadlines remain unchanged.
+
+The revised source snapshot is local commit
+`de9ad86b6ebbd346b60d6a69170ada3497e34dc0`, measured from a clean worktree against
+the same verified main. Its 120 input hashes match the final publication sources;
+the local commit identity is provenance, not a remote checkout ref. New raw packets
+are kept separately under `evidence/review-fix/`; no old sample is pooled or replaced.
+
+| Revised verifier, three samples per side | Baseline median (range) | Candidate median (range) |
+| --- | ---: | ---: |
+| Supervisor elapsed, seconds | 50.262 (49.777–50.345) | 41.723 (41.677–41.929) |
+| Vitest file duration, seconds | 48.680 (48.373–48.906) | 40.329 (40.229–40.530) |
+| Median of within-run fork-to-ready medians, ms | 432.405 (431.733–438.221) | 306.808 (306.413–310.336) |
+
+Supervisor median is **17.0% lower locally**, including compilation, full tree/input/
+artifact/link verification and cleanup. Paired savings are **7.848 / 8.584 / 8.622
+seconds**. Every run passed the same 25 names with zero failures/skips/todo and
+observed 75 distinct fresh worker PIDs, 21 SIGKILL exits and 54 normal exits:
+**150 passed executions and 450 launches** across the six runs. These intervals
+retain the scheduling/observer/cache limitations above and do not establish
+whole-CI speedup or isolated process/compilation time.
+
+Current validation passed **40/40 focused cases on Node 24.21.0 and 22.23.3**,
+zero failures/skips (25 original + 15 regressions). Whole typecheck, lint, formatting
+and design freshness passed serially on Node 24. The separate regression-only run
+passed 15/15. New Node 22/24 closure checks retain **120 matching input hashes** and
+**109 identical artifact hashes**; emitted bytes also match the pre-review artifacts.
+The helper input/content keys changed as expected. Builds and CLI/ACP opt-ins above
+were run before this review fix and are not claimed as current reruns. Full local
+ordinary/coverage suites remain unrun; normal current-head PR CI and independent
+re-review remain acceptance gates. The draft is not merged.

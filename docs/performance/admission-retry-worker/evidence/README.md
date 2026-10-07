@@ -6,14 +6,33 @@ in each paired provenance report. All runtime/manifests/lock/config files have
 identical control hashes between base and candidate. Only the harness and new
 compiler/regression differ in the owned code scope.
 
-## Primary versus historical packets
+## Current review-fix versus historical packets
 
-- `paired-esm/`: primary three alternating-order pairs using the published ESM
+- `review-fix/paired/`, `review-fix/samples.csv`, `review-fix/summary.json`: current
+  revised-verifier three-pair cohort, clean local source snapshot
+  `de9ad86b6ebbd346b60d6a69170ada3497e34dc0`. Six unchanged 25-case runs, 75 distinct
+  fresh PIDs each, 21 SIGKILL and 54 normal exits each. Raw packets are compressed
+  unchanged. Timings include complete tree verification on every fork.
+- `review-fix/validation/`: current 40/40 focused Node 24/22, 15/15 regression-only,
+  whole typecheck/lint/format/design and command outcomes; new closure/input hashes.
+  `red.json.gz`/`red.log.gz` retain the old-verifier negative control: the exact
+  closer-package reproduction reached real IPC ready, then failed the refusal
+  assertion (one expected failure, 14 cases intentionally filtered). The helper
+  was temporarily restored from pre-review local commit `1847e08`; fixed sources
+  were restored before green validation. Red/green runs used the same bounded,
+  single-worker/no-file-parallelism Vitest invocation; red selected
+  `--testNamePattern='rejects a closer shadow'`, green ran the regression file.
+  The red result is intentionally retained and excluded from performance samples.
+
+The packets below describe pre-review published head
+`adddcf679306057eb6aa929a5a28d58f71be3438`, not current-head validation/performance.
+
+- `paired-esm/`: pre-review primary three alternating-order pairs using the published ESM
   observer and supervisor. Raw test JSON/logs, process records, timings and
   provenance are gzip-compressed without changes. The local observations record
   fork-to-IPC-ready and fork-to-close intervals, not child CPU time. They include
   process creation, imports, store initialization and parent event scheduling.
-- `samples.csv`: primary supervisor/file durations, counts and within-run median,
+- `samples.csv`: pre-review primary supervisor/file durations, counts and within-run median,
   minimum and maximum fork-to-ready observations. Do not sum process intervals:
   race workers overlap, and close intervals include deliberate barriers/contention.
 - `paired/` and `samples-observer-cjs.csv`: earlier successful three-pair cohort

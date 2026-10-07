@@ -1,6 +1,16 @@
 /** Emit the retry fixture's source modules once; verify immutable inputs/output before every fresh fork. */
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,7 +124,7 @@ export function compileRetryWorker(root = retrySourceRoot) {
   mkdirSync(parent, { recursive: true });
   // No cross-run disk reuse: a missing/tampered artifact is an error, never a rebuild
   // or a fallback to saved dist. Each supervisor owns and removes its own directory.
-  const directory = mkdtempSync(join(parent, `retry-worker-${candidateHash}-`));
+  const directory = realpathSync(mkdtempSync(join(parent, `retry-worker-${candidateHash}-`)));
   const links = new Map<string, string>();
   const outputs = new Map<string, string>();
   const write = (path: string, value: unknown) => {
@@ -167,8 +177,38 @@ export function compileRetryWorker(root = retrySourceRoot) {
       );
     // Reject changes during compilation, including restored equal-size/equal-mtime edits.
     verifyInputs();
+    // Derive the complete allowed tree from the emitted files and declared links,
+    // never from a snapshot that could register an unexpected shadow package.
+    const entries = new Map<string, "file" | "link" | "directory">([[directory, "directory"]]);
+    for (const [paths, kind] of [
+      [outputs, "file"],
+      [links, "link"],
+    ] as const) {
+      for (const path of paths.keys()) {
+        entries.set(path, kind);
+        for (let parent = dirname(path); parent !== directory; parent = dirname(parent))
+          entries.set(parent, "directory");
+      }
+    }
+    const verifyTree = (path = directory) => {
+      const expected = entries.get(path);
+      const stat = lstatSync(path);
+      // No-follow checks on every ancestor and file also bind emitted realpaths:
+      // identical bytes through a replaced symlink must not change module identity.
+      if (
+        !expected ||
+        (expected === "directory" && !stat.isDirectory()) ||
+        (expected === "file" && !stat.isFile()) ||
+        (expected === "link" && !stat.isSymbolicLink())
+      )
+        throw new Error(`Stale retry worker tree: ${relative(directory, path)}`);
+      if (expected === "directory") {
+        for (const name of readdirSync(path)) verifyTree(join(path, name));
+      }
+    };
     const verify = () => {
       verifyInputs();
+      verifyTree();
       for (const [path, expected] of outputs) {
         if (digest(path) !== expected) throw new Error(`Stale retry worker artifact: ${relative(directory, path)}`);
       }
