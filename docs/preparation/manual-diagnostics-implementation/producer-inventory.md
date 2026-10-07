@@ -3,7 +3,17 @@
 All main links below are pinned to `e8678ebaa06f4deb883143df288275300f762b3e`.
 Read-only source inspection is not a privacy certification or runtime test.
 
-## Main inventory
+## Current coordination (7 October)
+
+Main is `c1eba301702fef0466b2d3481c36d62331ee7d48`. #434 and #415 are merged; the integrated
+[operator read model](https://github.com/cschadewitz/Project_Orca/blob/c1eba301702fef0466b2d3481c36d62331ee7d48/packages/daemon/src/operator-read-model.ts) is now
+main source, not pending integration. This does not make its DTOs diagnostic producers.
+#470 at `a174e33c307ef9348412eaad69bc0df9399ad684` owns the disabled 8,192/encrypted recovery contract and still
+has unconnected production producers/boot clock and a refusing native adapter. Reuse
+that owner; no competing producer/wiring work is allocated by this preparation.
+The source exclusions below remain required regardless of policy approval.
+
+## Historical main inventory (3 October)
 
 | Proposed fields / facts | Existing source and gap | Future owner / boundary |
 | --- | --- | --- |
@@ -40,9 +50,10 @@ Read-only source inspection is not a privacy certification or runtime test.
 ## Consistent observation and current authority
 
 For the approved configurable five-minute default direction, producers emit only after
-explicit tester rolling consent. This is ongoing safe-fact collection, never retroactive
-log reading. Volatile retention and final budgets still require review; export intent
-cannot authorize earlier or new background collection.
+the persistent explicit default-off opt-in for the approved scope. This is ongoing
+safe-fact collection, never retroactive log reading. #469 settles retention/report/event
+product bounds; actual producer/privacy/resource/native evidence remains required.
+Export intent cannot authorize earlier or new background collection.
 
 A future producer returns only the closed safe schema after checking the same private
 authority and resource scope that authorized the underlying observation. Authentication
@@ -63,18 +74,21 @@ accepted. A handshake is necessary for these facts but never sufficient to estab
 Current safe outcomes must also have their corresponding presence evidence. Unknown extra
 fields are rejected, not stripped from a received candidate.
 
-## Integration difference, not a new dependency
+## Historical integration comparison, not a new dependency
 
-At inspection, open [#434](https://github.com/cschadewitz/Project_Orca/pull/434) head was
+At the original 3 October inspection, open [#434](https://github.com/cschadewitz/Project_Orca/pull/434) head was
 `951950dbf685bd3b9054a8399346eed15b403b4c`, diverged from this main baseline.
 Its [operator read model](https://github.com/cschadewitz/Project_Orca/blob/951950dbf685bd3b9054a8399346eed15b403b4c/packages/daemon/src/operator-read-model.ts)
 adds per-invocation current principal checks, exact-run projections and publication revisions;
 its [production contract](https://github.com/cschadewitz/Project_Orca/blob/951950dbf685bd3b9054a8399346eed15b403b4c/docs/mcp-operator-production-contract.md)
-reserves identity-bound mutations and boundary evidence. These are active, moving MCP work,
-not a stable diagnostic API. Workspace/instance/principal/credential IDs, retry keys,
+reserves identity-bound mutations and boundary evidence. That was an active MCP checkpoint, now
+superseded by merged main. Neither the
+historical nor current operator surface is a diagnostic API. Workspace/instance/principal/credential
+IDs, retry keys,
 operation/continuation receipts, revision/config guards, live-owner identity and cursor
 material stay private. Never serialize an operator row then delete fields.
 
 Reinventory the final integrated baseline before assigning runtime files. Do not edit,
 import or “fix” A/B/C/MCP files here. A later diagnostics producer can reuse verified
-authority principles without depending on an unmerged API or claiming MCP acceptance.
+authority principles from the exact integrated main without serializing its private DTOs or claiming
+diagnostic or complete actual-Cal acceptance.
