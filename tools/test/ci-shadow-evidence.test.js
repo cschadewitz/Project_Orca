@@ -1,8 +1,8 @@
 /** Exercise genuine-report normalization, SHA binding, skip policy and safe artifact intake. */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -285,25 +285,48 @@ it("resolves a main push to its exact first parent without guessing workflow_run
   });
 });
 
+function pipelineHistory() {
+  // A small data-only history exercises the full adapter and recomputation path.
+  // It neither copies the production inventory nor executes any candidate code.
+  const dir = temp();
+  git(dir, ["init", "--initial-branch=main"]);
+  for (const path of [
+    ".github/workflows/ci.yml",
+    "vitest.config.ts",
+    "tools/ci-shadow/record.js",
+    "tools/ci-shadow/evidence.js",
+    ordinary,
+    ...INTENTIONAL_SKIPS.map((skip) => skip.path),
+  ]) {
+    const target = join(dir, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(join(repo, path)));
+  }
+  const config = ["-c", "user.name=Shadow test", "-c", "user.email=shadow@example.invalid"];
+  git(dir, ["add", "."]);
+  git(dir, [...config, "commit", "-m", "Synthetic base"]);
+  const base = git(dir, ["rev-parse", "HEAD"]).toString().trim();
+  git(dir, [...config, "commit", "--allow-empty", "-m", "Synthetic head"]);
+  const trusted = git(dir, ["rev-parse", "HEAD"]).toString().trim();
+  const tree = git(dir, ["rev-parse", "HEAD^{tree}"]).toString().trim();
+  const merge = git(dir, [...config, "commit-tree", tree, "-p", base, "-p", trusted], "Synthetic advisory candidate\n")
+    .toString()
+    .trim();
+  return { dir, base, trusted, merge };
+}
+
 it.each(["complete", "stale_after_read", "malformed_artifact"])(
   "complete consumer pipeline preserves %s evidence",
   async (mode) => {
-    const base = git(repo, ["rev-parse", `${candidate}^1`])
-      .toString()
-      .trim();
-    const tree = git(repo, ["rev-parse", `${candidate}^{tree}`])
-      .toString()
-      .trim();
-    const merge = git(repo, ["commit-tree", tree, "-p", base, "-p", candidate], "Synthetic advisory candidate\n")
-      .toString()
-      .trim();
+    const { dir, base, trusted, merge } = pipelineHistory();
     const r = {
       ...run(),
+      head_sha: trusted,
       conclusion: "success",
-      pull_requests: [{ number: 1, base: { sha: base }, head: { sha: candidate } }],
+      pull_requests: [{ number: 1, base: { sha: base }, head: { sha: trusted } }],
     };
-    const p = { ...pr(), base: { ...pr().base, sha: base }, merge_commit_sha: merge };
-    const full = createPlan({ repo, base, head: candidate, candidate: merge });
+    const p = { ...pr(), head: { sha: trusted }, base: { ...pr().base, sha: base }, merge_commit_sha: merge };
+    const full = createPlan({ repo: dir, base, head: trusted, candidate: merge });
     const output = temp();
     let reads = 0;
     const apiRead = async (path) => {
@@ -335,10 +358,10 @@ it.each(["complete", "stale_after_read", "malformed_artifact"])(
       return e;
     };
     const promise = consume({
-      repo,
+      repo: dir,
       out: output,
       event: { ...event(), workflow_run: r },
-      trusted: candidate,
+      trusted,
       apiRead,
       artifactRead,
     });
