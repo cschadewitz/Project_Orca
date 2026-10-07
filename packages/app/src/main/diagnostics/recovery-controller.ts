@@ -478,8 +478,9 @@ export class RecoveryController {
           // Status observes the clock and listeners may revoke. Admission is
           // decided only after that emission and the final preview/clock check;
           // nothing that can revoke runs between this decision and native dispatch.
-          dispatched = candidate && this.currentPreview(preview.handle) !== undefined && this.authorized(epoch);
-          return dispatched;
+          const admitted = candidate && this.currentPreview(preview.handle) !== undefined && this.authorized(epoch);
+          if (admitted) dispatched = true;
+          return admitted;
         });
         this.lastSaveOutcome = result;
         this.saveAdmittedBeforeRevocation = dispatched && !this.authorized(epoch);
