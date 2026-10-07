@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
-import { PROTOCOL_VERSION } from "@orca/protocol";
+import { PROTOCOL_VERSION, ResponseMessageSchema } from "@orca/protocol";
 import { ProductionFixture, root } from "./mcp-operator-production-fixture.js";
 
 it("uses the identical emitted auth implementation in distinct completed credential-admin processes", async () => {
@@ -29,7 +29,19 @@ it("uses the identical emitted auth implementation in distinct completed credent
     const hello = { client: "fixture-regression", protocol: PROTOCOL_VERSION };
     expect(await f.rpc("hello", hello, issued.token)).toMatchObject({ ok: true });
     await f.revoke(issued.credential.id);
-    expect(await f.rpc("hello", hello, issued.token)).toMatchObject({ ok: false, error: { code: "AUTH_INVALID" } });
+    // Authentication refusal precedes request decoding, so its response ID is zero.
+    const refusal = await fetch(`${f.endpoint}/rpc`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${issued.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ kind: "request", id: "revoked", method: "hello", params: hello }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    expect(refusal.status).toBe(401);
+    expect(ResponseMessageSchema.parse(await refusal.json())).toMatchObject({
+      id: 0,
+      ok: false,
+      error: { code: "AUTH_INVALID" },
+    });
 
     // Initial owner issue, the separate issue above, and revoke each completed in a fresh process.
     const admins = f.processes.filter(({ child }) => child.spawnargs.includes("--input-type=module"));
