@@ -1,4 +1,44 @@
-# Owner staging packet — no installation or live acceptance
+# Owner staging packet and historical service-cutover evidence
+
+## Reconciled status — 7 October 2026
+
+This packet retains the original 4 October staging/probe recipes and exact artifact
+hashes for audit. **Those recipes are historical, not current operating instructions
+or a request to repeat transfer, installation, cutover, key entry or lingering.**
+No live host/credential/configuration read or action is performed by this reconciliation.
+Main inspected is `c1eba301702fef0466b2d3481c36d62331ee7d48`; the historical service runtime has its
+separate pins below.
+
+The [5 October owner service-cutover acceptance](https://github.com/cschadewitz/Project_Orca/pull/496#issuecomment-5986160454)
+supersedes the earlier not-installed/not-enabled/`Linger=no` status for that recorded
+target and scope. #392/#393 already append this evidence, preserving their other gates.
+
+| Evidence class | Recorded result and limit |
+| --- | --- |
+| Owner terminal | Fresh all-principal scan covered 24 runs, no unsettled continuations; one historical stale run explicitly preserved. Installed unit/profile hashes and effective `UMask=0077`, `PrivateTmp=yes`, `NoNewPrivileges=yes`, bounded restart/cgroup shutdown matched reviewed #484 rendering `1199f7e4705d904f3f5dfda32a2644d0b8346e01`. Daemon stayed `49efcc7236ac127c952bb1f7a50fc6ef72f7df84`, MCP stayed `3702da5b38dc449280c2837366615de741e9c45c`. |
+| Owner service state, 5 October 00:35:58 UTC | Both units active/running, `NRestarts=0`, enabled, `Linger=yes`, loopback-only listeners 33871/33872. This is historical post-cutover state, not current health or reboot acceptance. |
+| Connector-verified configured-worker smoke, 00:08:12 UTC | One result with identifier suffix `49fa1cf2-052c-411c-9cee-ec6f4d3cdc38` completed the five prescribed shell/Git checks with initial/final verification, unchanged HEAD `8875f4585d7e5cd038ec974f5c6c270f8c5f01c3`, no source commit, clean source and complete empty source-review index. Retrieved patch was exactly `No source changes.` It does not prove every worker/runtime/operator scenario. |
+| Connector-verified post-SSH read | Owner closed setup SSH windows at 00:36:42; authenticated discovery/run read succeeded at 00:36:52 with the same service instance and unchanged scoped authority. This is observed post-cutover access, not full interruption/reconnect/recovery acceptance. |
+| Tunnel doctor | Configuration/key-reference resolution, executable readability and brief health-bind success only; doctor does not authenticate runtime-key grants or run the MCP child. Separate discovery/worker evidence carries those distinct observations. |
+| Backup/install prerequisites | Owner confirmed current-backup scope/capacity and success at 00:02:12, before installation. The first backup guard stopped before archive creation; the reviewed V2 narrow 0775 exceptions changed no permissions. Existing state/roots/backups and dependency symlinks remained retained. See the linked acceptance for helper digests and eight synthetic backup fixtures; those helpers are not added to this packet. |
+
+The recorded scoped credential expired **5 October at 18:16:53 UTC**. Neither renewal,
+present credential validity nor present live health is inferred. Before future authorized
+mutations, recheck authenticated target/service identity and scope, preserving original
+retry/receipt identity and retained work. This is a future operating constraint, not an
+instruction to obtain access or run discovery now.
+
+Keep #392/#393 open for real reboot/restart/network interruption, expiry/rotation/
+revocation/audience boundaries, rollback/removal, full automatic recovery and the
+complete actual-Cal operator/approval matrix. Service enablement/Linger/one worker
+smoke/post-SSH read cannot clear those gates. No reinstall or credential/access change
+is proposed; no host test, mutation, merge or closure is authorized here.
+
+## Historical staging preparation (4 October)
+
+The following original commands/effects remain reproducible audit records only.
+Current operation must follow a separately reviewed action-time runbook and fresh
+authorization; do not execute these preserved recipes against the historical paths.
 
 Follow-up: the owner reports staging/syntax success and independent official Node
 verification. See [the separate disposable hardening probe](hardening-probe.md) for
@@ -7,11 +47,14 @@ below; the original staging script and rendered files remain unchanged.
 
 The three sibling unit/profile files are exact LF output of `render-agent01.js`
 at merged source **`1199f7e4705d904f3f5dfda32a2644d0b8346e01`** (PR484).
-They retain that proposal unchanged, including the separate daemon/MCP pins, current
-launcher, clean environment, hardening and missing persistent runtime-key reference.
+They retain the original staging proposal unchanged, including separate daemon/MCP
+pins, then-current launcher, clean environment, hardening and the then-missing
+persistent runtime-key reference. Later cutover evidence above supersedes that missing-
+reference status for the historical installed setup; the staged artifact is unchanged.
 No credential, profile secret or host state was read to prepare this packet.
 All cutover limits in [the runbook](../agent01-supervision.md) still apply.
-The existing foreground daemon and tunnel must remain running throughout this stage.
+The original stage required the foreground daemon/tunnel to remain running.
+That pre-cutover instruction does not describe the later installed service state.
 
 | File | SHA-256 of downloadable LF bytes |
 | --- | --- |
@@ -20,7 +63,7 @@ The existing foreground daemon and tunnel must remain running throughout this st
 | `tunnel-profile.yaml` | `d9deb85cae77c9da4dbb796daae62a22613ee18182489fb5518d2b7bd3529d38` |
 | `stage-agent01.py` | `c9af7b86f414cdab80545afa05598760c763faa7065edd70d85ab166904f494e` |
 
-## Supplied prerequisite evidence, not acceptance
+## Historical supplied prerequisite evidence, not acceptance
 
 Owner metadata reported at **21:23 UTC, 2026-10-04**, without this task accessing agent-01:
 
@@ -32,16 +75,19 @@ Owner metadata reported at **21:23 UTC, 2026-10-04**, without this task accessin
   The issued `cal-codex-work.json` is a regular Casey-owned 0600 file; contents unread.
 
 These are prerequisite observations at that time, not systemd/sandbox acceptance.
-The independent Node distribution-reference check remains **unverified**: the permitted
+At the initial preparation checkpoint the independent Node distribution-reference
+check was **unverified**: the permitted
 web tool could not access `https://nodejs.org/dist/v24.21.0/SHASUMS256.txt`.
 No permission expansion, alternate download bypass, archive download, execution or
 installation followed. The owner-reported digest is the installed **binary** digest,
-not an archive checksum. Closing the gap requires an independently sourced official
+not an archive checksum. The later owner-reported verification in [hardening probe](hardening-probe.md) closes
+that historical gap by owner evidence, not this task's host observation. The original
+required method was an independently sourced official
 Linux x64 archive, verifying its archive digest against the official SHASUMS, then
 extracting `bin/node` without execution and comparing that separate binary digest.
 Do not relabel the supplied equality as independent provenance or use it to clear cutover.
 
-## Transfer and stage one small script
+## Historical transfer/staging recipe — do not repeat as current instructions
 
 `stage-agent01.py` is self-contained (about 6.5 KB), embedding the exact three non-secret
 files and their hashes. Download its **raw bytes from the immutable preparation commit
@@ -85,9 +131,11 @@ filesystem writes are that new review directory and its four named files. Cleanu
 optional owner removal of those four reviewed files and the empty review directory;
 never recursively delete an existing/unverified path or touch the live ORCA home.
 
-## Owner-only syntax check, after successful staging
+## Historical owner-only syntax check, after successful staging
 
-This **future recipe has not been run on Linux**. As Casey, in the existing user session:
+At initial publication the preparation agent had not run this on Linux. Later owner
+syntax success is recorded above and in the probe packet. Preserve this recipe for
+audit; it is not a current instruction to rerun it or operate the service manager:
 
 ```sh
 if /usr/bin/env -i HOME=/home/casey PATH=/usr/bin:/bin LANG=C XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus /usr/bin/systemd-analyze --user --man=no --recursive-errors=yes verify /home/casey/orca-service-review-1199f7e/orca-daemon.service /home/casey/orca-service-review-1199f7e/orca-tunnel.service >/dev/null 2>&1
@@ -109,11 +157,12 @@ reference, invoke the launcher, or contact the live daemon. See the
 A successful syntax check is still **not** PrivateTmp/NoNewPrivileges/user-namespace,
 worker-sandbox or reboot acceptance. In particular the executable immediately named by
 ExecStart is `/usr/bin/env`; syntax verification does not independently validate every
-descendant executable. No transient fixture is included or authorized for execution by
-this packet. A later fixture proposal must first state its exact process/unit names,
-filesystem/network effects and cleanup, and preserve the two running foreground jobs.
-Do not run tunnel doctor (the persistent key is absent), key entry, daemon-reload,
-systemctl start/stop/restart/enable, loginctl enable-linger, or any ORCA mutation here.
+descendant executable. The original stager included no transient fixture; the subsequent separate probe
+is preserved in its own historical packet, without renewed execution authority.
+The original stage barred tunnel doctor because its staged persistent key reference
+was then absent, and barred key entry, daemon-reload, service start/stop/restart/enable,
+enable-linger and ORCA mutation. Later owner cutover/doctor evidence supersedes those
+historical setup-status claims; this reconciliation still authorizes no such action.
 
 ## Local validation
 
@@ -127,4 +176,5 @@ Windows results: all three focused Vitest files passed (14 tests passed, 6 Linux
 PR446 skips). The separately run Python suite passed 2 tests and explicitly skipped
 4 Linux filesystem tests. Python AST syntax, changed JavaScript lint, JSON/YAML/JS
 formatting and diff whitespace checks passed. Markdown remains manually wrapped per
-repository policy. No Linux script, systemd verification or compatibility fixture ran.
+repository policy. No Linux script, systemd verification or compatibility fixture ran by that
+preparation agent. Later owner/connector evidence is separately recorded above.

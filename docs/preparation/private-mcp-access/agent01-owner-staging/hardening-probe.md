@@ -1,10 +1,21 @@
-# One disposable user-manager hardening probe
+# Historical disposable user-manager hardening probe
 
-This is a **new, separate owner-run artifact**, `probe-hardening.py`. The successful
-`stage-agent01.py` remains byte-for-byte unchanged. This task has not run the probe,
-contacted agent-01, or changed any service. Existing daemon/tunnel foreground jobs
-must remain running. No service installation, lingering, credentials or ORCA mutation
-is part of this check.
+This preserves the separate 4 October owner-run artifact `probe-hardening.py` and
+its proposed effects/checked recipe. All script/unit/profile bytes remain unchanged.
+The 7 October reconciliation performs no probe, host contact, service or access change.
+The commands below are historical audit material, not a new request to run/transfer them.
+
+The [current packet status](README.md) records the later
+[5 October owner service-cutover acceptance](https://github.com/cschadewitz/Project_Orca/pull/496#issuecomment-5986160454):
+installed/enabled units, `Linger=yes`, effective hardening, one configured-worker smoke
+and post-SSH authenticated read. The original foreground-only/no-install status is
+superseded for that historical scope. No separate transient-probe success is inferred
+merely from service/worker success. Credential expiry and reboot/network/revocation/
+rollback/full operator acceptance remain explicit; no repeat setup or access change.
+
+The original probe itself included no persistent installation, lingering, credentials
+or ORCA mutation. Its original prerequisite kept foreground jobs running before cutover;
+it is not an instruction to recreate foreground jobs after the recorded service cutover.
 
 ## Evidence received since the staging packet
 
@@ -18,7 +29,7 @@ installed Node paths. This supersedes the earlier independent-reference gap by
 The archive digest is a different value and was not supplied here; do not substitute
 the binary digest for it. Neither syntax nor Node provenance establishes runtime hardening.
 
-## Exact effects and cleanup — review before running
+## Historical exact effects and cleanup
 
 The parent script first checks Linux/agent-01/UID 1000 and its fixed private source
 path. It makes read-only `systemctl --user show` calls for the exact probe name and
@@ -77,7 +88,7 @@ considering another attempt; never stop another service or disable hardening.
 The downloaded script itself remains for review. See
 [systemd 257 transient-service semantics](https://github.com/systemd/systemd/blob/v257/man/systemd-run.xml).
 
-## Checked transfer and single owner invocation
+## Historical checked transfer and single owner invocation — audit only
 
 Download raw `probe-hardening.py` from the immutable preparation commit linked in
 the handoff, using existing private repository access. Transfer it as a **new** regular
@@ -104,7 +115,7 @@ This establishes only the observed **basic user-manager hardening** if it passes
 It does not establish actual Codex sandbox/adapter operation, writable-temp behavior,
 reboot startup, restart recovery, credentials, or ORCA deployment acceptance.
 
-## Preparation validation
+## Historical preparation validation
 
 Pure/mocked tests verify the exact transient invocation, rejection of each missing
 hardening observation, unit/drop-in refusal and manager-path scanning. They never run
@@ -113,3 +124,12 @@ synthetic tests passed on Windows. No Linux or live probe was run by this prepar
 The three focused repository test files also passed (15 tests, 6 explicit Linux-only
 PR446 skips; the unchanged stager's nested suite retains its 4 POSIX skips). Changed
 JavaScript lint/format and diff whitespace checks passed.
+
+## Documentation reconciliation validation
+
+Only README and this Markdown record change. Validate owned-path/UTF-8/LF/fences,
+relative documentation targets and whitespace; compare every sibling script, unit,
+profile and test blob to the preceding head. The passing preparation checks above
+are reused as historical source evidence, not rerun or relabeled as current host proof.
+No systemd, tunnel doctor, worker smoke or broad runtime suite is needed for this prose.
+The parent owns exact-head review/CI and outstanding #392/#393 acceptance.
