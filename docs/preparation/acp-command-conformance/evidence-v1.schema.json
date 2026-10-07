@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACP command conformance safe case evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "caseId",
+    "evidenceClass",
+    "orcaHead",
+    "providerRelease",
+    "adapterRelease",
+    "action",
+    "observations",
+    "result",
+    "reason"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "caseId": { "type": "string", "pattern": "^(S(0[1-9]|1[0-8])|G0[1-6])$" },
+    "evidenceClass": { "enum": ["source", "synthetic", "installed-provider", "actual-cal"] },
+    "orcaHead": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "providerRelease": { "const": "0.159.1" },
+    "adapterRelease": { "const": "2.1.1" },
+    "action": {
+      "enum": ["fixture-print-marker", "fixture-workspace-read", "fixture-permission-profile", "unexecuted"]
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run", "step", "request", "instance", "session", "turn", "invocation"],
+      "properties": {
+        "run": { "type": "string", "pattern": "^synthetic-run-[1-9][0-9]{0,2}$" },
+        "step": { "type": "string", "pattern": "^synthetic-step-[1-9][0-9]{0,2}$" },
+        "request": { "type": "string", "pattern": "^synthetic-request-[1-9][0-9]{0,2}$" },
+        "instance": { "type": "string", "pattern": "^synthetic-instance-[1-9][0-9]{0,2}$" },
+        "session": { "type": "string", "pattern": "^synthetic-session-[1-9][0-9]{0,2}$" },
+        "turn": { "type": "string", "pattern": "^synthetic-turn-[1-9][0-9]{0,2}$" },
+        "invocation": { "type": "string", "pattern": "^synthetic-invocation-[1-9][0-9]{0,2}$" }
+      }
+    },
+    "observations": {
+      "type": "array",
+      "maxItems": 9,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "requested",
+          "surfaced",
+          "allowed",
+          "rejected",
+          "delivered",
+          "executed",
+          "expired",
+          "blocked",
+          "unsupported"
+        ]
+      }
+    },
+    "result": { "enum": ["pass", "fail", "blocked", "unsupported", "unknown", "not-run"] },
+    "reason": {
+      "enum": [
+        "assertions-passed",
+        "assertion-failed",
+        "operator-context-omitted",
+        "command-binding-incomplete",
+        "native-routing-unknown",
+        "native-source-unavailable",
+        "installed-artifact-unverified",
+        "managed-sandbox-denied",
+        "scope-not-one-command",
+        "remembered-only",
+        "expired",
+        "authority-refused",
+        "delivery-unknown",
+        "separate-authorization-required"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "observations": { "contains": { "const": "executed" } } } },
+      "then": {
+        "properties": {
+          "observations": {
+            "allOf": [
+              { "contains": { "const": "allowed" } },
+              { "contains": { "const": "delivered" } },
+              { "not": { "contains": { "const": "rejected" } } }
+            ]
+          },
+          "evidenceClass": { "enum": ["synthetic", "installed-provider", "actual-cal"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "result": { "const": "not-run" } } },
+      "then": { "properties": { "observations": { "maxItems": 0 } } }
+    }
+  ]
+}
