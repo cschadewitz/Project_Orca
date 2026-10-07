@@ -1,9 +1,10 @@
 /** CLI revision parser and real authenticated HTTP composition; fake wire servers test transport failures only. */
 import { randomUUID } from "node:crypto";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile as writeFixtureFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrcaError, parseOrcaConfig, silentLogger } from "@orca/core";
 import { createRevisionInputServices, createRevisionRuntime, PausingHumanInput } from "@orca/engine";
@@ -17,18 +18,25 @@ import {
 } from "@orca/protocol";
 import { bootstrap } from "../src/bootstrap.js";
 import type { CommandContext } from "../src/commands/index.js";
-import { revisionsCommand } from "../src/commands/revisions.js";
-import { main } from "../src/main.js";
+import { revisionsCommand as executeRevisionsCommand } from "../src/commands/revisions.js";
+import { main as executeMain } from "../src/main.js";
 import { FixtureLifetime } from "./fixture-lifetime.js";
 
 let lifetime: FixtureLifetime;
+// Keep every fixture entry point owned, including parser calls and direct writes
+// outside production().invoke(). The real implementations and arguments are unchanged.
+const revisionsCommand = (...args: Parameters<typeof executeRevisionsCommand>) =>
+  lifetime.run(() => executeRevisionsCommand(...args));
+const main = (...args: Parameters<typeof executeMain>) => lifetime.run(() => executeMain(...args));
+const writeFile = (...args: Parameters<typeof writeFixtureFile>) => lifetime.run(() => writeFixtureFile(...args));
 beforeEach(() => {
   lifetime = new FixtureLifetime();
   vi.stubEnv("ORCA_DAEMON_URL", undefined);
   vi.stubEnv("ORCA_DAEMON_TOKEN", undefined);
   vi.stubEnv("ORCA_DAEMON_TOKEN_FILE", undefined);
 });
-afterEach(async () => {
+afterEach(closeFixture);
+async function closeFixture() {
   try {
     await lifetime.close();
   } finally {
@@ -36,7 +44,7 @@ afterEach(async () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   }
-});
+}
 async function temp() {
   return lifetime.run(async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-revision-cli-"));
@@ -284,6 +292,93 @@ describe("interrupted production fixture setup", () => {
     }
   });
 });
+
+describe("interrupted direct revision calls", () => {
+  it.each(["direct", "parser"] as const)(
+    "keeps roots and globals until a %s call consumes its real response",
+    async (entry) => {
+      const server = await wire((request, response) =>
+        reply(
+          response,
+          request,
+          request.method === "hello"
+            ? hello
+            : {
+                inputs: [],
+                waiting: 0,
+                pendingRevisions: { items: [], incomplete: false },
+                asOf: "now",
+              },
+        ),
+      );
+      const dir = await temp();
+      vi.stubEnv("ORCA_DAEMON_TOKEN", "explicit-test-credential");
+      const entered = deferred<void>();
+      const resume = deferred<void>();
+      const originalFetch = globalThis.fetch;
+      const observedFetch: typeof fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const body = args[1]?.body;
+        if (typeof body === "string" && (JSON.parse(body) as WireRequest).method === "inputs.list") {
+          const stream = response.body!;
+          const reader = stream.getReader();
+          const originalRead = reader.read.bind(reader);
+          let held = false;
+          vi.spyOn(reader, "read").mockImplementation(async () => {
+            const result = await originalRead();
+            if (!held) {
+              held = true;
+              entered.resolve(undefined);
+              await resume.promise;
+            }
+            return result;
+          });
+          vi.spyOn(stream, "getReader").mockReturnValue(reader);
+        }
+        return response;
+      };
+      vi.stubGlobal("fetch", observedFetch);
+      const ctx = context(dir, ["discover", "owned"], { endpoint: server.endpoint });
+      const out = vi.spyOn(ctx, "out");
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const command =
+        entry === "direct"
+          ? revisionsCommand(ctx)
+          : main(["revisions", "discover", "owned", "--cwd", dir, "--endpoint", server.endpoint]);
+      const resourceClosed = vi.fn(async () => {});
+      lifetime.own(resourceClosed);
+      let closing: Promise<void> | undefined;
+      try {
+        await entered.promise;
+        closing = closeFixture();
+        await nextTurn();
+        expect(resourceClosed).not.toHaveBeenCalled();
+        await access(dir);
+        expect(globalThis.fetch).toBe(observedFetch);
+        expect(out).not.toHaveBeenCalled();
+        expect(stdout).not.toHaveBeenCalled();
+        resume.resolve(undefined);
+        expect(await command).toBe(0);
+        await closing;
+        expect(entry === "direct" ? out.mock.calls : stdout.mock.calls).toHaveLength(1);
+        expect(globalThis.fetch).toBe(originalFetch);
+        await expect(access(dir)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        resume.resolve(undefined);
+        await command;
+        await closing;
+      }
+    },
+  );
+});
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 describe("real authenticated revision command composition", () => {
   it("discovers, submits, replays, inspects and replaces through protected production services without resuming", async () => {
