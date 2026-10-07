@@ -161,15 +161,22 @@ const command = { workflowId: pre.workflowId, workflowVersion: pre.workflowVersi
   expectedWorkflowRevision: pre.expectedWorkflowRevision,
   expectedConfigGeneration: pre.expectedConfigGeneration, vars: approvedVars };
 // Retain key and command before sending. No requestId/workItemId for Request-free proof.
-await tools.mcp__codex_apps__orca_tunnel_test_start_workflow({
+const admissionCall = await tools.mcp__codex_apps__orca_tunnel_test_start_workflow({
   target, command, retry: {idempotencyKey: key}
 });
+if (admissionCall.isError || !admissionCall.structuredContent)
+  throw new Error("Admission outcome unknown; preserve the original intent and stop this case");
+const receipt = admissionCall.structuredContent; // this invocation's exact receipt
+if (!["in-progress", "resolved"].includes(receipt.state) || typeof receipt.operationId !== "string")
+  throw new Error("Invalid admission receipt; stop this case");
+// Both outer states carry operationId; a resolved inner result is not completion.
 await tools.mcp__codex_apps__orca_tunnel_test_get_admission({
   target, operationId: receipt.operationId
 });
 ```
 
-Use a single non-secret <=200-character key chosen for the approved intent. Inspect
+Use a single non-secret key of **1–128 UTF-8 bytes**, matching `RetryKeySchema`;
+a short ASCII UUID-style key is suitable. Retain it unchanged across retries. Inspect
 outer `state`, then inner `result.state`: resolved/prepared and recoverable-failure are
 not accepted, accepted is not completed. Observe the returned runId until terminal and
 retrieve its authorized result/artifact. A failed coding run remains failed even if an
@@ -194,9 +201,16 @@ await tools.mcp__codex_apps__orca_tunnel_test_respond_to_approval({target, decis
   requestId: input.requestId, optionId, resume: false
 }});
 // After authorized exact-run read exposes continuationState:available / expectedBoundary.
-await tools.mcp__codex_apps__orca_tunnel_test_continue_run({target, command: {
+const continuationCall = await tools.mcp__codex_apps__orca_tunnel_test_continue_run({target, command: {
   runId, expectedBoundary: boundaryRow.expectedBoundary
 }, retry: {idempotencyKey: continuationKey}});
+if (continuationCall.isError || !continuationCall.structuredContent)
+  throw new Error("Continuation outcome unknown; preserve the original intent and stop this case");
+const continuationReceipt = continuationCall.structuredContent; // this invocation only
+if (continuationReceipt.state === "in-progress")
+  throw new Error("Continuation in progress; retain operationId and key, and stop this case");
+if (continuationReceipt.state !== "resolved" || typeof continuationReceipt.result?.continuationId !== "string")
+  throw new Error("Invalid continuation receipt; stop this case");
 await tools.mcp__codex_apps__orca_tunnel_test_get_continuation({
   target, continuationId: continuationReceipt.result.continuationId
 });
