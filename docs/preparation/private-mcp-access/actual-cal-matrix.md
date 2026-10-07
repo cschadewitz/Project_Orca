@@ -1,6 +1,8 @@
 # Bounded actual-Cal operator acceptance (#327 / #393)
 
 Prepared on 7 October 2026 from main `c1eba301702fef0466b2d3481c36d62331ee7d48`.
+Rebased without conflicts onto current main `fff65ed1ff59e06b012369ec6e2ca3c8f07426fc`
+after the dependency owner's #514 ACP SDK merge; manifests/lockfile are untouched here.
 This is an executable operator handoff, not authorization to run its mutation examples.
 The parent Cal conversation owns live execution after precise intent and capacity checks.
 The saved-cloud preparer performs only source work, disposable synthetic tests and bounded
@@ -323,6 +325,19 @@ Initial failure reports are `/tmp/orca-actual-cal-preflight.json` and
 fixes or retries of unchanged failing cases. The branch/PR supplies the tested commit SHA.
 Independent review/CI must be recorded separately; no full-suite/native/host acceptance
 is implied.
+
+On that updated base, code commit `ac8a3bd180d435a2d29d359edfeca5849fb2626b`
+passed frozen install (534 supply-chain entries), fresh compiled TypeScript build,
+root typecheck including tests, scoped ESLint/Prettier and whitespace checks. At
+23:03:55 UTC the final four-suite command above plus read-model, fresh-admission and
+mutation-schema suites passed **48 tests, 0 failures, 0 skips**, 20.92 seconds.
+Report: `/tmp/orca-actual-cal-current-main.json`. The earlier same four-suite check
+on the original base also passed 48 tests in 22.29 seconds; report
+`/tmp/orca-actual-cal-focused.json`. Local document links resolve. Runtime, manifests,
+lockfile, shared fixture, existing lifecycle/authority tests and timeout settings
+remain byte-identical to the updated base. Later commits in this handoff only add
+documentation/evidence. Full repository/native coverage, CI, independent review,
+deployment/capacity and remaining actual-Cal cases are unrun by this preparer.
 
 ## Evidence receipt and handoff completion
 
