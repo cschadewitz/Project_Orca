@@ -8,6 +8,8 @@ The review accounts for **all 13 workspace package manifests** (11 product/suppo
 
 ## Start here
 
+Follow-up findings: [Workflow execution and scheduling](addenda/workflow-execution-and-scheduling.md) covers node and edge types, deterministic evaluation, execution without an agent, and task ordering.
+
 | Purpose | Document |
 | --- | --- |
 | Understand the whole system | [System specification](architecture/system.md) · [System SVG](diagrams/svg/system.svg) · [Editable source](diagrams/source/system.json) |
