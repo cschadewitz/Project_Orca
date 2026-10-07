@@ -1,0 +1,6 @@
+{
+  "initialCheck": {
+    "command": "node node_modules/prettier/bin/prettier.cjs --check docs/performance/admission-retry-worker/README.md docs/performance/admission-retry-worker/evidence/README.md docs/performance/admission-retry-worker/evidence/review-fix/summary.json",
+    "result": "Prettier warned that newly generated summary.json required formatting; scoped --write and repeat check follow. This is a reconstructed command/outcome record, not a raw log."
+  }
+}
