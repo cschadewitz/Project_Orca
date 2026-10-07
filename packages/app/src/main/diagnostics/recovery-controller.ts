@@ -372,9 +372,16 @@ export class RecoveryController {
         this.emit();
       }
     })();
-    return this.bound(work, "unavailable", () => {
+    const result = await this.bound(work, "unavailable", () => {
       this.revokePreviewAuthority();
     });
+    // The final emission (and any listener) can revoke while evaluating status.
+    // Reject revoked plaintext and release its untransferred renderer reservation.
+    if (result.ok && !this.currentPreview(result.value.handle)) {
+      if (this.retiredPreview === result.value.handle) this.releaseRetiredPreview();
+      return failure("stale_preview");
+    }
+    return result;
   }
   async closePreview(handle: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {
     if (this.preview?.handle === handle) this.dropPreview();
@@ -409,10 +416,13 @@ export class RecoveryController {
         this.emit();
       }
     })();
-    return this.bound(work, "refused", () => {
+    const result = await this.bound(work, "refused", () => {
       this.destination = undefined;
       this.revokePreviewAuthority();
     });
+    if (result.ok && (!this.currentPreview(handle) || this.currentDestinationToken(handle) !== result.value.token))
+      return failure("stale_preview");
+    return result;
   }
   save(handle: string, destinationToken: string): Promise<DiagnosticsResult<DiagnosticsStatus>> {
     if (this.saveOperation?.handle === handle && this.saveOperation.token === destinationToken)
@@ -457,16 +467,19 @@ export class RecoveryController {
         await this.options.disk.writeExportState({ ...this.exportState, current: { id, stage, phase: "dispatched" } });
         this.exportState.current.phase = "dispatched";
         const result = await this.options.disk.publishStage(stage, path, () => {
-          const admitted =
+          const candidate =
             this.authorized(epoch) &&
             this.currentPreview(preview.handle) !== undefined &&
             digest(preview.bytes) === preview.digest;
-          if (admitted) {
-            dispatched = true;
+          if (candidate) {
             this.code = "publication_pending";
             this.emit();
           }
-          return admitted;
+          // Status observes the clock and listeners may revoke. Admission is
+          // decided only after that emission and the final preview/clock check;
+          // nothing that can revoke runs between this decision and native dispatch.
+          dispatched = candidate && this.currentPreview(preview.handle) !== undefined && this.authorized(epoch);
+          return dispatched;
         });
         this.lastSaveOutcome = result;
         this.saveAdmittedBeforeRevocation = dispatched && !this.authorized(epoch);
@@ -541,15 +554,23 @@ export class RecoveryController {
       this.saveOperation = undefined;
       this.code = "acknowledged_unknown";
       if (!this.setting.enabled) await this.cleanupOwned();
-      else if (this.productionEnabled && !this.ring.enabled) {
+      else if (this.ageUncertain) {
+        // Settling an export obligation grants no new history authority. A
+        // failed uncertainty cleanup must stay visible until explicit retry.
+        this.previousAvailable = false;
+        this.cleanupPending = true;
+        this.code = "age_uncertain";
+      } else if (this.productionEnabled && !this.ring.enabled) {
         const epoch = this.epoch;
         const now = this.now();
         if (!now) throw new Error("age_uncertain");
         this.previousAvailable = await this.options.disk.open(now);
-        if (epoch !== this.epoch || !this.setting.enabled) return;
+        if (epoch !== this.epoch || !this.setting.enabled) {
+          this.previousAvailable = false;
+          return;
+        }
         this.ring = this.newRing();
         if (!this.ring.start()) throw new Error("age_uncertain");
-        this.ageUncertain = false;
         this.startTimer();
       }
     });
@@ -682,21 +703,25 @@ export class RecoveryController {
     if (this.busy || this.disableWrite) return failure(this.liveExport ? "publication_pending" : "cleanup_pending");
     this.busy = true;
     const work = (async (): Promise<DiagnosticsResult<DiagnosticsStatus>> => {
+      let failed = false;
       try {
         await run();
-        return success(this.status());
       } catch {
+        failed = true;
         this.cleanupPending = true;
         this.code = this.exportState.current
           ? "unknown_blocked"
           : this.ageUncertain
             ? "age_uncertain"
             : "cleanup_pending";
-        return failure(this.code);
       } finally {
         this.busy = false;
         this.emit();
       }
+      // Return the state after the final status emission, which may itself
+      // observe uncertainty and revoke a previously successful mutation.
+      const status = this.status();
+      return failed ? failure(status.code) : success(status);
     })();
     return this.bound(work, "cleanup_pending", () => {
       this.cleanupPending = true;
@@ -731,6 +756,11 @@ export class RecoveryController {
   private currentPreview(handle: string): Preview | undefined {
     this.checkPreview(this.now());
     return this.preview?.handle === handle && this.authorized(this.preview.epoch) ? this.preview : undefined;
+  }
+  private currentDestinationToken(handle: string): string | undefined {
+    return this.destination?.handle === handle && this.destination.epoch === this.epoch
+      ? this.destination.token
+      : undefined;
   }
   private checkPreview(now: BootReading | undefined): void {
     if (

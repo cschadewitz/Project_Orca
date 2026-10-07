@@ -66,7 +66,8 @@ export function useDiagnostics(bridge: DiagnosticsBridge | undefined) {
       }
       if (
         (handle.current !== undefined && (!next.enabled || next.activePreviewHandle !== handle.current)) ||
-        (preparing.current && (!next.enabled || next.code === "stale_preview" || next.code === "expired"))
+        (preparing.current &&
+          (!next.enabled || next.code === "stale_preview" || next.code === "expired" || next.code === "age_uncertain"))
       )
         clear();
     },

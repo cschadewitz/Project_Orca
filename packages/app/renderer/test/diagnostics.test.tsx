@@ -205,6 +205,22 @@ async function open(f: ReturnType<typeof fakeBridge>) {
 const enabled = { enabled: true, productionEnabled: true, code: "ready" as const };
 
 describe("exact preview and separate local Save", () => {
+  it("rejects late plaintext when age uncertainty arrives during pending preparation", async () => {
+    const f = fakeBridge(enabled);
+    const prepared = deferred<DiagnosticsResult<DiagnosticPreview>>();
+    vi.mocked(f.bridge.preparePreview).mockReturnValueOnce(prepared.promise);
+    mount(f.bridge);
+    await screen.findByText("Local diagnostics: On");
+    fireEvent.click(screen.getByRole("button", { name: "Preview current diagnostics" }));
+    act(() => f.emit({ ...f.state(), code: "age_uncertain", cleanupPending: true }));
+    await act(async () => prepared.resolve(ok(preview)));
+    expect(screen.queryByRole("region", { name: "Complete exact diagnostic report" })).toBeNull();
+    expect(document.body.textContent).not.toContain(exact);
+    expect(f.bridge.closePreview).toHaveBeenCalledWith(preview.handle);
+    expect(f.bridge.chooseDestination).not.toHaveBeenCalled();
+    expect(f.bridge.save).not.toHaveBeenCalled();
+  });
+
   it("renders every exact byte including omissions and newline, then requires picker and separate Save", async () => {
     const f = fakeBridge(enabled);
     const report = await open(f);

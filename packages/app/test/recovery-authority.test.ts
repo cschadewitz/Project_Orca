@@ -1,16 +1,178 @@
 /** Deterministic controller fences on disposable Linux storage; no native acceptance claim. */
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { RecoveryController } from "../src/main/diagnostics/recovery-controller.js";
 import { RECOVERY_LIMITS, type BootReading } from "../src/main/diagnostics/recovery-contract.js";
 import { withSyntheticProfile } from "./recovery-preparation/crash-harness.js";
 import { barrier, inspectPrivateRoot } from "./recovery-preparation/filesystem-evidence.js";
-import { cleanupFixtureHelper, implementationFixture, value } from "./recovery-preparation/implementation-fixture.js";
+import {
+  cleanupFixtureHelper,
+  implementationFixture,
+  enableAndPreview,
+  moveNoReplace,
+  value,
+} from "./recovery-preparation/implementation-fixture.js";
 import { crashImplementationAt } from "./recovery-preparation/process-fixture.js";
 
 afterAll(cleanupFixtureHelper);
 afterEach(() => vi.restoreAllMocks());
 
+/** Wait for the controller's final emission, not only the underlying disk await. */
+function maintenanceSettled(f: Awaited<ReturnType<typeof implementationFixture>>): Promise<void> {
+  const done = barrier();
+  let settled = false;
+  const maintain = f.disk.maintain.bind(f.disk);
+  vi.spyOn(f.disk, "maintain").mockImplementationOnce(async (now) => {
+    try {
+      return await maintain(now);
+    } finally {
+      settled = true;
+    }
+  });
+  const unsubscribe = f.controller.subscribe(() => {
+    if (settled) {
+      unsubscribe();
+      done.release();
+    }
+  });
+  return done.wait();
+}
+
 describe.runIf(process.platform === "linux")("diagnostics request authority", () => {
+  it("acknowledgement cannot reopen uncertain history after real maintenance fails before manifest revocation", async () => {
+    await withSyntheticProfile(async (profile) => {
+      const f = await implementationFixture(profile);
+      const preview = await enableAndPreview(f);
+      await f.controller.checkpoint();
+      const manifest = await readFile(join(f.root, "manifest.json"));
+      const selected = value(await f.controller.chooseDestination(preview.handle));
+      f.native.publication = () => Promise.resolve("unknown");
+      const unknown = value(await f.controller.save(preview.handle, selected.token)).unknownOperation!;
+      const settled = maintenanceSettled(f);
+      const maintenance = vi.spyOn(f.disk, "maintain");
+      vi.spyOn(f.native, "writersStopped").mockResolvedValueOnce(false);
+      f.clock.reading.elapsedMs -= 1;
+      f.controller.status();
+      f.clock.reading.elapsedMs += 2;
+      await settled;
+      expect(maintenance).toHaveBeenCalledExactlyOnceWith(undefined);
+      expect(await readFile(join(f.root, "manifest.json"))).toEqual(manifest);
+      expect(f.controller.record("run", "run_failed")).toBe(false);
+      const opened = vi.spyOn(f.disk, "open");
+      const wrapped = vi.spyOn(f.keys, "wrap");
+      value(await f.controller.acknowledgeUnknown(unknown));
+      expect(f.controller.status()).toMatchObject({
+        enabled: true,
+        previous: false,
+        cleanupPending: true,
+        code: "age_uncertain",
+      });
+      expect(opened).not.toHaveBeenCalled();
+      expect(wrapped).not.toHaveBeenCalled();
+      expect((await f.disk.readExportState()).current).toBeUndefined();
+      expect((await f.disk.readExportState()).summary?.id).toBe(unknown);
+      value(await f.controller.closePreview(preview.handle));
+      value(await f.controller.acknowledgeUnknown(unknown));
+      expect((await f.controller.preparePreview("previous")).ok).toBe(false);
+      expect(f.controller.record("run", "run_failed")).toBe(false);
+      value(await f.controller.retryCleanup());
+      value(await f.controller.acknowledgeUnknown(unknown));
+      expect((await f.controller.preparePreview("previous")).ok).toBe(false);
+      expect(f.controller.record("run", "run_failed")).toBe(false);
+      expect(opened).not.toHaveBeenCalled();
+      expect(wrapped).not.toHaveBeenCalled();
+      expect([...(await inspectPrivateRoot(f.root)).files.keys()].some((name) => /^(slot-|session-)/.test(name))).toBe(
+        false,
+      );
+      await f.controller.cleanExit();
+    });
+  });
+
+  it.each(["emission", "after-emission"] as const)(
+    "a missing clock at publication %s refuses the real move before dispatch",
+    async (boundary) => {
+      await withSyntheticProfile(async (profile) => {
+        const f = await implementationFixture(profile);
+        const preview = await enableAndPreview(f);
+        const selected = value(await f.controller.chooseDestination(preview.handle));
+        const settled = maintenanceSettled(f);
+        const move = vi.fn(moveNoReplace);
+        f.native.publication = move;
+        f.native.beforePublish = () => {
+          const status = f.controller.status.bind(f.controller);
+          vi.spyOn(f.controller, "status").mockImplementationOnce(() => {
+            const observed = boundary === "after-emission" ? status() : undefined;
+            vi.spyOn(f.clock, "read").mockReturnValueOnce(undefined!);
+            return observed ?? status();
+          });
+          return Promise.resolve();
+        };
+        await f.controller.save(preview.handle, selected.token);
+        expect(move).not.toHaveBeenCalled();
+        await expect(access(f.picker.destination)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(f.controller.status()).toMatchObject({
+          lastSaveOutcome: "refused",
+          saveAdmittedBeforeRevocation: false,
+        });
+        expect(f.controller.status().activePreviewHandle).toBeUndefined();
+        value(await f.controller.closePreview(preview.handle));
+        await settled;
+        await f.controller.cleanExit();
+      });
+    },
+  );
+
+  it("a mutation reply reflects uncertainty in its last status observation", async () => {
+    await withSyntheticProfile(async (profile) => {
+      const f = await implementationFixture(profile);
+      value(await f.controller.setEnabled(true, 1));
+      const settled = maintenanceSettled(f);
+      const status = f.controller.status.bind(f.controller);
+      vi.spyOn(f.controller, "status")
+        .mockImplementationOnce(status)
+        .mockImplementationOnce(() => {
+          vi.spyOn(f.clock, "read").mockReturnValueOnce(undefined!);
+          return status();
+        });
+      expect(value(await f.controller.setMinutes(10))).toMatchObject({ code: "age_uncertain", cleanupPending: true });
+      expect(f.controller.record("run", "run_failed")).toBe(false);
+      await settled;
+      await f.controller.cleanExit();
+    });
+  });
+
+  it.each(["preview", "destination"] as const)(
+    "a missing clock at final %s emission cannot return stale success",
+    async (action) => {
+      await withSyntheticProfile(async (profile) => {
+        const f = await implementationFixture(profile);
+        const old = action === "destination" ? await enableAndPreview(f) : undefined;
+        if (!old) {
+          value(await f.controller.setEnabled(true, 1));
+          f.controller.record("connection", "connection_lost");
+        }
+        const settled = maintenanceSettled(f);
+        const status = f.controller.status.bind(f.controller);
+        const observed = vi.spyOn(f.controller, "status").mockImplementationOnce(() => {
+          vi.spyOn(f.clock, "read").mockReturnValueOnce(undefined!);
+          return status();
+        });
+        const result = old
+          ? await f.controller.chooseDestination(old.handle)
+          : await f.controller.preparePreview("current");
+        expect(observed).toHaveBeenCalled();
+        expect(result).toEqual({ ok: false, code: "stale_preview" });
+        expect(f.controller.status().activePreviewHandle).toBeUndefined();
+        if (old) value(await f.controller.closePreview(old.handle));
+        // Failed preparation never transferred a renderer reference requiring acknowledgement.
+        expect(f.controller.status().payloadReservedBytes).toBe(0);
+        await settled;
+        await f.controller.cleanExit();
+      });
+    },
+  );
+
   it("a newer durable Off wins while older Enable is in pre-enable cleanup", async () => {
     await withSyntheticProfile(async (profile) => {
       const f = await implementationFixture(profile);
