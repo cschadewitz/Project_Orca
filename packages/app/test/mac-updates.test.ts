@@ -204,6 +204,52 @@ describe("Mac candidate approval coordinator (synthetic; no native adapter)", ()
       expect(r.drafts.release).toHaveBeenCalledOnce();
     },
   );
+  it.each(
+    (["approve", "reconsider"] as const).flatMap((entry) =>
+      Array.from({ length: 13 }, (_, turns) => ({ entry, turns })),
+    ),
+  )("retains the idle notification at $entry ownership handoff after $turns microtasks", async ({ entry, turns }) => {
+    const r = rig();
+    if (entry === "reconsider") {
+      vi.mocked(r.ports.prepareDrafts).mockResolvedValueOnce({ outcome: "blocked", blocker: "drafts" });
+      await r.updates.approve(r.id);
+    }
+    let active = true;
+    const admission = r.ports.prepareAdmission;
+    r.ports.prepareAdmission = vi.fn((expected, token) =>
+      active
+        ? Promise.resolve({ outcome: "blocked" as const, blocker: "activity" as const })
+        : admission(expected, token),
+    );
+    const releasing = pending<void>();
+    const release = pending<void>();
+    r.drafts.release = vi.fn(async () => {
+      releasing.resolve();
+      await release.promise;
+      return "released" as const;
+    });
+    const operation = entry === "approve" ? r.updates.approve(r.id) : r.updates.reconsider();
+    await releasing.promise;
+    active = false;
+    release.resolve();
+    // The review's five-callback chain lands between the old drain returning and its
+    // caller clearing busy. Neighboring offsets also cover notifications after handoff.
+    const notified = new Promise<void>((resolve, reject) => {
+      const deliver = (remaining: number) => {
+        if (remaining === 0) void r.updates.reconsider().then(() => resolve(), reject);
+        else queueMicrotask(() => deliver(remaining - 1));
+      };
+      deliver(turns);
+    });
+    await operation;
+    await notified;
+    expect(r.updates.state.phase).toBe("awaiting-restart");
+    expect(r.ports.prepareAdmission).toHaveBeenCalledTimes(2);
+    expect(r.ports.download).toHaveBeenCalledOnce();
+    expect(r.ports.activate).toHaveBeenCalledOnce();
+    expect(r.admission.release).not.toHaveBeenCalled();
+    expect(r.drafts.release).toHaveBeenCalledOnce();
+  });
   it.each(["defer", "unknown-release"] as const)(
     "does not drain an idle notification after %s invalidates readiness",
     async (end) => {

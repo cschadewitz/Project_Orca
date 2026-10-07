@@ -199,8 +199,22 @@ export class MacUpdates {
   }
   async approve(id: string): Promise<MacUpdateSnapshot> {
     if (!this.offer || this.offer.id !== id || this.busy || this.sealed || this.approved) return this.state;
-    const offer = this.offer;
     this.approved = true;
+    return this.run(this.offer);
+  }
+  async reconsider(): Promise<MacUpdateSnapshot> {
+    if (!this.offer || !this.approved || !this.verified || this.sealed) return this.state;
+    if (this.busy) {
+      this.reconsiderPending = true;
+      return this.state;
+    }
+    return this.run(this.offer);
+  }
+  /** One operation owns busy from download through guard cleanup and notification drain.
+   * The final pending check and busy release share one synchronous continuation: a later
+   * notification starts a new owner, with no older caller left to clear that owner's busy.
+   */
+  private async run(offer: Offer): Promise<MacUpdateSnapshot> {
     this.busy = true;
     try {
       if (!this.verified) {
@@ -217,26 +231,14 @@ export class MacUpdates {
         }
         this.verified = true;
       }
-      await this.prepareNotified(offer);
+      do {
+        this.reconsiderPending = false;
+        await this.prepare(offer);
+      } while (this.reconsiderPending && this.approved && !this.sealed && this.state.phase === "waiting");
     } catch {
       this.unknown();
     } finally {
-      this.busy = false;
-    }
-    return this.state;
-  }
-  async reconsider(): Promise<MacUpdateSnapshot> {
-    if (!this.offer || !this.approved || !this.verified || this.sealed) return this.state;
-    if (this.busy) {
-      this.reconsiderPending = true;
-      return this.state;
-    }
-    this.busy = true;
-    try {
-      await this.prepareNotified(this.offer);
-    } catch {
-      this.unknown();
-    } finally {
+      this.reconsiderPending = false;
       this.busy = false;
     }
     return this.state;
@@ -260,16 +262,6 @@ export class MacUpdates {
       return false;
     }
     return true;
-  }
-  /** Drain coalesced activity changes only after the current lease preparation/release
-   * settles. No timer/retry: each follow-up requires a notification and retained consent.
-   */
-  private async prepareNotified(offer: Offer): Promise<void> {
-    do {
-      this.reconsiderPending = false;
-      await this.prepare(offer);
-    } while (this.reconsiderPending && this.approved && !this.sealed && this.state.phase === "waiting");
-    this.reconsiderPending = false;
   }
   private async prepare(offer: Offer): Promise<void> {
     this.set("preparing");
