@@ -48,6 +48,7 @@ import {
 import { WebSocketServer, type WebSocket } from "ws";
 import type { MethodContext, MethodTable } from "./methods.js";
 import { dispatch, refusalOf } from "./server.js";
+import { resourceResponseForPublication } from "./operator-host-resources.js";
 import { Subscription, type SubscriptionSource } from "./subscriptions.js";
 import { bindPrincipal, type Authorizer } from "./auth/guard.js";
 import type { Principal } from "./auth/principal.js";
@@ -113,7 +114,7 @@ export function attachSocket(server: Server, opts: SocketOptions): () => Promise
     let principal: Principal | undefined = admission.principal;
     const subscriptions = new Map<string, Subscription>();
     const send = (message: ResponseMessage | NotificationMessage): void => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(resourceResponseForPublication(message)));
     };
     const fail = (id: RequestId, code: "PROTOCOL_MESSAGE" | "PROTOCOL_METHOD", message: string): void =>
       send({ kind: "response", id, ok: false, error: protocolError(code, message) });
