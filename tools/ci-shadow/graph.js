@@ -75,6 +75,74 @@ function assignmentPattern(node) {
   return ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node);
 }
 
+function reviewedStructure(source) {
+  const literalKinds = [
+    "StringLiteral",
+    "NumericLiteral",
+    "NoSubstitutionTemplateLiteral",
+    "TemplateHead",
+    "TemplateMiddle",
+    "TemplateTail",
+  ];
+  const normalized = new Set(literalKinds.map((kind) => ts.SyntaxKind[kind]));
+  const wordingAlphabet = /^[A-Za-z0-9 ,.'?!:;%()+-]*$/;
+  const reviewedLiteral = (node) =>
+    normalized.has(node.kind) && (ts.isNumericLiteral(node) || wordingAlphabet.test(node.text));
+  const trivia = new Set([
+    "pos",
+    "end",
+    "id",
+    "text",
+    "rawText",
+    "escapedText",
+    "jsDoc",
+    "modifierFlagsCache",
+    "transformFlags",
+    "nodeCount",
+    "identifierCount",
+    "symbolCount",
+  ]);
+  const spans = [];
+  const encode = (node) => {
+    if (reviewedLiteral(node)) spans.push({ start: node.getStart(source), end: node.end, kind: node.kind });
+    const children = [];
+    ts.forEachChild(node, (child) => {
+      children.push(encode(child));
+    });
+    const metadata = {};
+    for (const [key, value] of Object.entries(node)) {
+      if (trivia.has(key)) continue;
+      if (["boolean", "number", "string"].includes(typeof value)) metadata[key] = value;
+      if (Array.isArray(value) && "pos" in value) metadata[`${key}.hasTrailingComma`] = Boolean(value.hasTrailingComma);
+    }
+    const text =
+      ts.isSourceFile(node) || reviewedLiteral(node)
+        ? undefined
+        : (node.text ?? node.escapedText ?? (children.length ? undefined : node.getText(source)));
+    const directives = ts.isSourceFile(node)
+      ? {
+          references: node.referencedFiles,
+          types: node.typeReferenceDirectives,
+          libraries: node.libReferenceDirectives,
+          amd: node.amdDependencies,
+          pragmas: [...node.pragmas.entries()],
+        }
+      : undefined;
+    return { metadata, text, directives, children };
+  };
+  const structure = encode(source);
+  let end = 0;
+  let frame = "";
+  for (const span of spans.sort((a, b) => a.start - b.start)) {
+    if (span.start < end) throw new Error("overlapping_literal_spans");
+    frame += source.text.slice(end, span.start) + `<reviewed-literal:${span.kind}>`;
+    end = span.end;
+  }
+  frame += source.text.slice(end);
+  // Everything outside explicitly reviewed literal tokens, including comments, stays exact.
+  return digest({ normalizationVersion: 1, literalKinds, wordingAlphabet: wordingAlphabet.source, structure, frame });
+}
+
 export function imports(text, path, allowedAmbientReferences) {
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   if (source.parseDiagnostics.length) throw new Error("source_parse_error");
@@ -84,7 +152,7 @@ export function imports(text, path, allowedAmbientReferences) {
   const memberReferences = [];
   let unsafe = false;
   const visit = (node) => {
-    // Arguments and wording may change, but new API capabilities need graph review.
+    // Additional capability checks accompany the positive reviewed structure/frame invariant.
     if (ts.isCallExpression(node)) callTargets.push(accessShape(node.expression));
     if (ts.isNewExpression(node)) callTargets.push(`new:${accessShape(node.expression)}`);
     if (ts.isPropertyAccessExpression(node)) memberReferences.push(accessShape(node));
@@ -176,6 +244,7 @@ export function imports(text, path, allowedAmbientReferences) {
     bindings: sorted(bindings),
     callTargets: sorted(callTargets),
     memberReferences: sorted(memberReferences),
+    ...(allowedAmbientReferences ? { structureHash: reviewedStructure(source) } : {}),
     unsafe,
   };
 }
@@ -235,6 +304,9 @@ export function validateManifest(manifest) {
           !Array.isArray(island.importBindings[path]) ||
           island.importBindings[path].some((binding) => typeof binding !== "string"),
       ) ||
+      !island.structureHashes ||
+      typeof island.structureHashes !== "object" ||
+      island.paths.some((path) => !/^[a-f0-9]{64}$/.test(island.structureHashes[path] ?? "")) ||
       ["callTargets", "memberReferences"].some(
         (field) =>
           !island[field] ||

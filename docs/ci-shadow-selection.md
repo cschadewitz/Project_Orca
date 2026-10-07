@@ -20,10 +20,21 @@ Adding the selector test increases candidate discovery to 340; this implementati
 PR therefore takes full, as do all selector/manifest changes.
 
 The initial Tier 1 advisory island contains exactly the existing renderer
-`src/ui/format-time.ts` and `test/format-time.test.tsx`. Only modifications with
-unchanged reviewed module dependencies, imported bindings, call targets and member-access
-shapes, with no detected ambient/dynamic execution
-boundary are eligible. The virtual TypeScript binder permits only the reviewed
+`src/ui/format-time.ts` and `test/format-time.test.tsx`. Eligibility requires a positive structural invariant: each base/candidate leaf
+must match its reviewed normalized AST fingerprint. Only string, numeric and
+(non-tagged) template text literal values are normalized, and text must remain
+within the reviewed one-line ASCII wording alphabet (letters, digits, spaces and
+` ,.'?!:;%()+-`). Changes outside those allowed literal values take full. An exact source frame
+also freezes every byte outside those approved literal spans, including comments,
+formatting, compiler directives and test-runner pragmas.
+Node kinds, semantic flags/scalars, identifiers, child order and trailing-comma
+structure remain fixed. New statements, declarations, calls, member reads,
+control flow or binding/assignment forms take full, even when earlier capability
+signatures happen to match. This is a literal/wording pilot, not general code-change
+eligibility. Dependencies, imported bindings, call targets and member-access
+signatures must also remain reviewed.
+
+The virtual TypeScript binder permits only the reviewed
 `Date`, `Math` and `undefined` ambient references; unresolved transport/persistence
 references, ambient declarations and external-module import-equals force full.
 New named/default/namespace imports, side-effect imports or foreign re-exports
@@ -33,8 +44,8 @@ another module dynamically. New member reads/calls also force full: existing
 Computed member access, tagged-template invocation, object/array binding patterns
 and destructuring assignments (including `for-of`, `for await` and `for-in`
 assignment initializers) force full. Quoted destructuring keys can otherwise
-hide a filesystem API behind already reviewed method names. These are syntax
-bounds for the reviewed leaves, not proof of arbitrary semantics. Binding loads
+hide a filesystem API behind already reviewed method names. The primary AST invariant rejects all unreviewed structure; the capability guards
+are additional conservative checks. This does not prove arbitrary semantics. Binding loads
 no candidate libraries or dependencies.
 Additions, deletions, copies,
 renames, modes, new test files and discovery changes take full. All renderer
@@ -119,7 +130,7 @@ candidate; missing base-side consumers from candidate discovery force full.
 ## Artifact and consumer contract
 
 Artifact kind: `orca-ci-shadow-plan`; schema version **1**; selector version
-**1.0.5**; manifest/graph version **1**. Proposed artifact filename:
+**1.1.0**; manifest/graph version **1**. Proposed artifact filename:
 `ci-shadow-plan-v1-<candidate-sha>.json`. The shape is specified by
 `tools/ci-shadow/plan.schema.v1.json` (`urn:orca:ci-shadow-plan:1`). A matching
 filename or valid JSON Schema shape is insufficient for acceptance.

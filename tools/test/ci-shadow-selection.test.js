@@ -25,6 +25,11 @@ const save = () => {
   command("commit", "-qm", "synthetic selector scenario");
   return command("rev-parse", "HEAD");
 };
+const wording = (path, text) =>
+  path.endsWith("/src/ui/format-time.ts")
+    ? text.replace('return "just now";', 'return "a moment ago";')
+    : text.replace('"never renders three units"', '"uses two units"');
+
 const reset = () => {
   command("checkout", "-q", "--detach", base);
   command("clean", "-fdq");
@@ -97,7 +102,9 @@ it.each(goldens)("golden: $label", ({ path, status, tier, reason }) => {
       path,
       status === "A"
         ? "/** New unreviewed node. */\n"
-        : readFileSync(join(directory, path), "utf8") + "\n/* Golden wording change. */\n",
+        : ownedManifest.islands.some((island) => island.paths.includes(path))
+          ? wording(path, readFileSync(join(directory, path), "utf8"))
+          : readFileSync(join(directory, path), "utf8") + "\n/* Golden wording change. */\n",
     );
   const result = plan(save());
   expect(result.wouldRun.tier).toBe(tier);
@@ -116,7 +123,7 @@ it.each(goldens)("golden: $label", ({ path, status, tier, reason }) => {
 it("pins all identities, emits deterministic plans, and recomputes their entire contents", () => {
   reset();
   const path = manifest.islands[0].paths[0];
-  write(path, readFileSync(join(directory, path), "utf8") + "\n// word change\n");
+  write(path, wording(path, readFileSync(join(directory, path), "utf8")));
   const head = save();
   const input = { repo: directory, base, head, candidate: head };
   const result = createPlan(input, manifest);
@@ -337,12 +344,94 @@ it.each([
   expect(validatePlan(result, { repo: directory, base, head, candidate: head }, manifest)).toEqual(result);
 });
 
+it.each([
+  [0, (text) => text.replace('return "just now";', 'return "a moment ago";')],
+  [0, (text) => text.replace("const SECOND = 1000;", "const SECOND = 999;")],
+  [0, (text) => text.replace("`${magnitude} ago`", "`${magnitude} earlier`")],
+  [1, (text) => text.replace('"never renders three units"', '"uses two units"')],
+])("permits only reviewed literal/wording edits: %s", (index, edit) => {
+  reset();
+  const path = manifest.islands[0].paths[index];
+  const original = readFileSync(join(directory, path), "utf8");
+  const candidate = edit(original);
+  expect(candidate).not.toBe(original);
+  write(path, candidate);
+  const result = plan(save());
+  expect(result.wouldRun.tier).toBe("targeted");
+  expect(result.wouldRun.reasonCodes).not.toContain("unreviewed_structure");
+});
+
+it.each([
+  "const additionalBinding = 1;",
+  'it("probe", () => { for (const ms of [0]) expect(formatDuration(ms)).toBe("0ms"); });',
+  'it("probe", () => { const now: any = expect("synthetic"); now.getTime = now.getTime; });',
+])("forces full for unreviewed structure even with identical capability signatures: %s", (extra) => {
+  reset();
+  const path = manifest.islands[0].paths[1];
+  const original = readFileSync(join(directory, path), "utf8");
+  const allowed = manifest.islands[0].ambientReferences[path];
+  const before = imports(original, path, allowed);
+  const after = imports(original + "\n" + extra, path, allowed);
+  expect(after.dependencies).toEqual(before.dependencies);
+  expect(after.bindings).toEqual(before.bindings);
+  expect(after.callTargets).toEqual(before.callTargets);
+  expect(after.memberReferences).toEqual(before.memberReferences);
+  expect(after.unsafe).toBe(false);
+  expect(after.structureHash).not.toBe(before.structureHash);
+  write(path, original + "\n" + extra);
+  const result = plan(save());
+  expect(result.wouldRun.tier).toBe("full");
+  expect(result.wouldRun.reasonCodes).toContain("unreviewed_structure");
+});
+
+it.each([
+  (text) => text.replace("const SECOND = 1000;", "let SECOND = 1000;"),
+  (text) => text.replace("delta > 0", "delta >= 0"),
+  (text) => "// @ts-nocheck\n" + text,
+  (text) => '/// <reference path="./unreviewed.d.ts" />\n' + text,
+])("retains semantic flags/operators and compiler directives in the structural invariant", (edit) => {
+  reset();
+  const path = manifest.islands[0].paths[0];
+  const original = readFileSync(join(directory, path), "utf8");
+  const candidate = edit(original);
+  expect(candidate).not.toBe(original);
+  write(path, candidate);
+  const result = plan(save());
+  expect(result.wouldRun.tier).toBe("full");
+  expect(result.wouldRun.reasonCodes).toContain("unreviewed_structure");
+});
+
+it.each(["// @vitest-environment node\n", "// Inert comments are conservatively frozen too.\n", "\n"])(
+  "forces full for all changes outside approved literal spans",
+  (prefix) => {
+    reset();
+    const path = manifest.islands[0].paths[1];
+    write(path, prefix + readFileSync(join(directory, path), "utf8"));
+    const result = plan(save());
+    expect(result.wouldRun.tier).toBe("full");
+    expect(result.wouldRun.reasonCodes).toContain("unreviewed_structure");
+  },
+);
+
+it.each(['"@vitest-environment node"', '"wording\\nwith another line"'])(
+  "forces full for literal values outside the reviewed one-line wording alphabet",
+  (literal) => {
+    reset();
+    const path = manifest.islands[0].paths[1];
+    const original = readFileSync(join(directory, path), "utf8");
+    write(path, original.replace('"never renders three units"', literal));
+    const result = plan(save());
+    expect(result.wouldRun.tier).toBe("full");
+    expect(result.wouldRun.reasonCodes).toContain("unreviewed_structure");
+  },
+);
+
 it("falls back for stale metadata, empty diffs, explicit override and mixed-risk changes", () => {
   reset();
   expect(plan(base).wouldRun.reasonCodes).toContain("empty_change_set");
   write(
     manifest.islands[0].paths[0],
-    readFileSync(join(directory, manifest.islands[0].paths[0]), "utf8") + "\n// words\n",
+    wording(manifest.islands[0].paths[0], readFileSync(join(directory, manifest.islands[0].paths[0]), "utf8")),
   );
   const head = save();
   expect(plan(head, { forceFull: true }).wouldRun.reasonCodes).toContain("force_full");
@@ -357,7 +446,7 @@ it("rejects unavailable/abbreviated bases and unrelated candidates without a gre
   for (const invalid of ["HEAD", "d3491cc", "f".repeat(40), "--help"])
     expect(() => plan(base, { base: invalid })).toThrow();
   const file = manifest.islands[0].paths[0];
-  write(file, readFileSync(join(directory, file), "utf8") + "\n// candidate change\n");
+  write(file, wording(file, readFileSync(join(directory, file), "utf8")));
   const head = save();
   expect(() => plan(head, { candidate: base })).toThrow();
   let failure;
@@ -388,7 +477,7 @@ it("rejects unavailable/abbreviated bases and unrelated candidates without a gre
 it("includes base-only merge-candidate changes and rejects reuse on a moved base", () => {
   reset();
   const file = manifest.islands[0].paths[0];
-  write(file, readFileSync(join(directory, file), "utf8") + "\n// PR wording\n");
+  write(file, wording(file, readFileSync(join(directory, file), "utf8")));
   const head = save();
   const old = plan(head);
   reset();
@@ -452,7 +541,7 @@ it("treats mode changes and stale selector sources as full", () => {
 it("keeps a seeded failing app-side consumer in the selection and refuses its success claim", () => {
   reset();
   const file = manifest.islands[0].paths[0];
-  write(file, readFileSync(join(directory, file), "utf8") + "\n// wording\n");
+  write(file, wording(file, readFileSync(join(directory, file), "utf8")));
   const result = plan(save());
   const seededPath = "packages/app/test/source-reader.test.ts";
   expect(result.wouldRun.vitestFiles).toContain(seededPath);

@@ -99,6 +99,10 @@
           "it.each",
           "now.getTime"
         ]
+      },
+      "structureHashes": {
+        "packages/app/renderer/src/ui/format-time.ts": "55b11abf8cd71d26deafed5bba9af5b333494e5e25f1594e7bb1732b41cb5b2a",
+        "packages/app/renderer/test/format-time.test.tsx": "a43811efd54086500092848570ae01dc051fb1d5b5df1956b8e4e40d45e5145e"
       }
     }
   ],

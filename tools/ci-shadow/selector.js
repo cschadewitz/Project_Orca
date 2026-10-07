@@ -6,7 +6,7 @@ import { consumers, graph, imports, MANIFEST_PATH, TOOL_PATHS, validateManifest 
 
 export const ARTIFACT = "orca-ci-shadow-plan";
 export const SCHEMA_VERSION = 1;
-export const SELECTOR_VERSION = "1.0.5";
+export const SELECTOR_VERSION = "1.1.0";
 export const loadManifest = () =>
   validateManifest(JSON.parse(readFileSync(new URL("./ownership.v1.json", import.meta.url), "utf8")));
 export const selectorIdentity = (manifest) => ({
@@ -40,6 +40,7 @@ function pathRisk(path, record, snapshots, manifest) {
       try {
         if (!entry?.text || !["100644", "100755"].includes(entry.mode)) throw new Error("missing_island");
         const signature = imports(entry.text, path, island.ambientReferences[path]);
+        if (signature.structureHash !== island.structureHashes[path]) reasons.push("unreviewed_structure");
         if (
           signature.unsafe ||
           !isDeepStrictEqual(signature.dependencies, island.dependencies[path]) ||
