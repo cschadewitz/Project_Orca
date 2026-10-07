@@ -8,6 +8,7 @@ import {
   canonical,
   decodeCanonical,
   digest,
+  validateShape,
   validateBinding,
   validateSnapshot,
   validateResult,
@@ -37,6 +38,27 @@ export function defineContractTests(test) {
   function pinResult(f) {
     f.trust.resultDigest = digest(f.result);
   }
+  function pinPolicyAndResult(f) {
+    pinContract(f);
+    pinResult(f);
+  }
+  function identityPath(f, field, value) {
+    const i = f.contract.inputs;
+    if (field === "commonDir") {
+      i.commonDir = i.receipt.commonDir = value;
+    } else if (field === "gitDir") {
+      i.gitDir = i.ready.gitDir = value;
+    } else if (field === "repository") {
+      i.repository = i.receipt.repo = value;
+    } else if (field === "root") {
+      i.root.path = i.receipt.path = value;
+      f.result.root.path = value;
+    } else {
+      i.source.path = value;
+    }
+    i.receiptSha256 = digest(i.receipt);
+    i.readySha256 = digest(i.ready);
+  }
   function negative(name, mutate, validate = result, code, approve) {
     test(name, () => {
       const f = fixture();
@@ -52,6 +74,157 @@ export function defineContractTests(test) {
     assert.equal(result(f), "bdfd0bdd16ff1d92477ce213359a92afb7f2e3c304bede6c94ffe9c00c53d258");
     assert.equal(digest({ z: 1, a: [false, null, "fixture"] }), digest({ a: [false, null, "fixture"], z: 1 }));
   });
+  const invalidRelativePaths = [
+    "fixture\n/../../private",
+    "fixture\r/../../private",
+    "fixture\t/../../private",
+    "fixture\u0001/../../private",
+    "fixture\u007f/../../private",
+    "fixture\u0085/../../private",
+    "fixture\u2028/../../private",
+    "fixture\u2029/../../private",
+    "packages//widget/package.json",
+    "/packages/widget/package.json",
+    "packages/widget/",
+    "packages/./widget/package.json",
+    "packages/../private",
+    "packages/.git/config",
+    "packages/.orca/private",
+    "packages\\widget\\package.json",
+    "package.json\n",
+    "",
+  ];
+  for (const field of ["manifest", "lock"]) {
+    for (const value of invalidRelativePaths) {
+      test(`${field} path ${JSON.stringify(value)} refuses through schema and all full validators`, () => {
+        const f = fixture();
+        const file = field === "manifest" ? f.contract.inputs.manifests[0] : f.contract.inputs.lock;
+        file.path = value;
+        // Join and repin the hypothetical approved fixture so neither digest
+        // mismatch nor stale snapshot inputs can conceal path false acceptance.
+        pinPolicyAndResult(f);
+        for (const [data, schema] of [
+          [f.contract, "contract"],
+          [f.before, "snapshot"],
+        ])
+          assert.throws(
+            () => validateShape(data, schema),
+            (error) => error.message === "SCHEMA",
+          );
+        for (const validate of [binding, snapshot, result])
+          assert.throws(
+            () => validate(f),
+            (error) => error.message === "SCHEMA",
+          );
+      });
+    }
+    for (const value of [
+      "package.json",
+      "packages/fixture/package.json",
+      "packages/my widget/package.json",
+      "locks/pnpm-lock.yaml",
+    ]) {
+      test(`${field} ordinary relative path ${JSON.stringify(value)} passes the complete oracle`, () => {
+        const f = fixture();
+        (field === "manifest" ? f.contract.inputs.manifests[0] : f.contract.inputs.lock).path = value;
+        pinPolicyAndResult(f);
+        validateShape(f.contract, "contract");
+        validateShape(f.before, "snapshot");
+        for (const validate of [binding, snapshot, result]) assert.doesNotThrow(() => validate(f));
+      });
+    }
+  }
+  test("ordinary .git common/worktree identity paths pass binding, snapshot and full result", () => {
+    const f = fixture();
+    identityPath(f, "commonDir", "/synthetic/repository/.git");
+    identityPath(f, "gitDir", "/synthetic/repository/.git/worktrees/run-alpha");
+    pinPolicyAndResult(f);
+    for (const validate of [binding, snapshot, result]) assert.doesNotThrow(() => validate(f));
+  });
+  for (const field of ["repository", "commonDir", "gitDir", "root", "source"]) {
+    for (const value of [
+      "/synthetic/../repository",
+      "/synthetic//repository",
+      "/synthetic/repository/",
+      "/synthetic/\nrepository",
+      "/synthetic/\trepository",
+      "/synthetic/repository\\alias",
+      "synthetic/repository",
+      "/synthetic/./repository",
+    ]) {
+      test(`${field} identity alias ${JSON.stringify(value)} refuses through full validators`, () => {
+        const f = fixture();
+        identityPath(f, field, value);
+        pinPolicyAndResult(f);
+        // Shape alone accepts identity strings. Canonical absolute-path checks
+        // belong to full semantic validation, separate from output exclusions.
+        validateShape(f.contract, "contract");
+        validateShape(f.before, "snapshot");
+        for (const validate of [binding, snapshot, result])
+          assert.throws(
+            () => validate(f),
+            (error) => error.message === "UNSAFE_ROOT",
+          );
+      });
+    }
+  }
+  for (const [name, mutate, data, schema] of [
+    [
+      "output",
+      (f) => {
+        f.contract.outputs[0] = "node_modules/.git";
+      },
+      (f) => f.contract,
+      "contract",
+    ],
+    [
+      "dependency",
+      (f) => {
+        f.before.entries[1].path = "node_modules/.git/config";
+      },
+      (f) => f.before,
+      "snapshot",
+    ],
+    [
+      "workspace",
+      (f) => {
+        f.before.workspaceEntries[1].path = "packages/widget/.orca/private";
+      },
+      (f) => f.before,
+      "snapshot",
+    ],
+    [
+      "shim",
+      (f) => {
+        f.before.shims[0].path = "node_modules//.bin/tool";
+      },
+      (f) => f.before,
+      "snapshot",
+    ],
+    [
+      "result",
+      (f) => {
+        f.result.verification.entries[1].path = "node_modules/.git/config";
+      },
+      (f) => f.result,
+      "result",
+    ],
+  ]) {
+    test(`${name} schema and full result retain private/output path exclusions`, () => {
+      const f = fixture();
+      mutate(f);
+      pinInventories(f);
+      pinResult(f);
+      assert.throws(
+        () => validateShape(data(f), schema),
+        (error) => error.message === "SCHEMA",
+      );
+      assert.throws(
+        () => result(f),
+        (error) => error.message === "SCHEMA",
+      );
+    });
+  }
   for (const value of [NaN, Infinity, -0, 0.5, undefined, new Date(0)]) {
     test(`canonical JSON refuses ${String(value)}`, () => assert.throws(() => canonical(value)));
   }

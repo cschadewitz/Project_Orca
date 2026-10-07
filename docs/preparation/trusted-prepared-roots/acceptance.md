@@ -6,8 +6,8 @@ its own commit. An amended head requires rechecking and re-reviewing that head.
 
 | Evidence class | Status and scope | What it establishes |
 | --- | --- | --- |
-| v1 synthetic contract/state suite | Passed locally on Node 22.23.2 and 24.21.0; 219 cases, zero failures/skips | Deterministic pins, strict objects/identity joins, drift, guard refusals, result/profile binding and retained synthetic uncertainty |
-| Vitest bridge | Passed locally: same 219 cases through Vitest 5.0.2 with a temporary tooling-only config | Normal discovery registration; no production runtime tests |
+| v1 synthetic contract/state suite | 309 cases after Cal's path-validation correction; exact-head Node 22/24 results in the PR | Deterministic pins, strict objects/identity joins, drift, guard refusals, result/profile binding and retained synthetic uncertainty |
+| Vitest bridge | Same 309 cases through Vitest 5.0.2 with a temporary tooling-only config; exact-head result in the PR | Normal discovery registration; no production runtime tests |
 | Historical owner-profile copy | Passed as reported in #502's linked exact b6f4345 receipt; not rerun here | That one approved owner invocation and independent destination checks |
 | Historical independent copier tests | 63/77 passed in the linked cloud review; 13 failures and one error at existing ambiguous/missing cgroup mount refusal | Reviewed guard semantics; unsupported cloud profile remains refused; not a local 77-pass claim |
 | Real controller ownership/effect/receipt integration | Not run; future controller work | No current evidence of acquired full ownership, atomic attempt persistence, real copy supervision or recovery |
@@ -50,11 +50,11 @@ assertions in process, which passed. Copier guards were unchanged.
 | `node packages/design/build-tokens.js --check` and `node tools/eslint-config/bin/check-css-tokens.js packages/app/renderer packages/design/css/components.css` | Passed, direct dependency-free equivalents of repository scripts |
 | Direct installed Prettier `--check .` | Passed repository format check |
 | Direct installed ESLint, baseline config, three owned executable files | Passed scoped lint |
-| Direct installed Vitest, temporary tooling-only config | Passed final 219-case discovery bridge |
+| Direct installed Vitest, temporary tooling-only config | 309-case discovery bridge; exact-head result in the PR |
 | Full repository lint, typecheck, build, tests/coverage and compiled demo | Blocked by absent checkout dependencies; no install/copy permitted |
 | Opt-in retry integration, Electron/browser smoke | Not run; broader integration/live subprocess work outside this synthetic packet |
 | Copier/wrapper suites and any real copier | Not run; guard behavior modeled from frozen code, historical results attributed separately |
-| Independent review | Two P2 findings fixed with regressions; working-tree re-review clear; published exact-head review and disposition in PR |
+| Independent review | Initial two P2 findings fixed; Cal later reported manifest/lock false acceptance and Git metadata identity false refusal, both corrected with full-validator regressions; review and exact-head disposition in the PR |
 
 Passed, failed, blocked, skipped and not-run are separate categories. No skipped
 case counts as a pass. No unsupported-host capacity refusal becomes a successful
@@ -79,3 +79,21 @@ The synthetic tests evaluate descriptors, not the real copier or an installed
 worker. Protected backend raw evidence and independently enforced controller
 ownership are prerequisites for later real results. Neither a hash nor a passed
 boolean creates authority. This packet does not complete #453 or #449.
+
+## Cal's path-validation correction
+
+The correction adds 90 cases, preserving the 219 initial cases and frozen fixture
+bytes/digests. It reproduces newline/control traversal, empty components and the
+ordinary `.git` identity incompatibility from Cal's two PR findings. Every
+manifest/lock case uses joined, separately repinned hypothetical synthetic input
+and result evidence, then invokes binding, snapshot and full-result validation;
+a digest mismatch cannot hide path acceptance. Ordinary relative paths and a
+provider-shaped `.git` common/worktree binding pass the complete oracle.
+
+Direct schema checks now refuse malformed relative paths in both contract and
+snapshot envelopes. Absolute identity strings remain shape-valid, so the full
+semantic validator independently refuses traversal, empty-component, separator
+and control-character aliases. Git/ORCA dependency-output exclusions remain
+unchanged. No production/controller/ACP wiring, live copying or package install
+is part of this correction. Cal's further review remains separate from local
+preparation check results.

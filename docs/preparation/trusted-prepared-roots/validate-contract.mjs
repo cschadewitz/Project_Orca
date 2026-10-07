@@ -95,19 +95,19 @@ export const validateShape = (value, name) => {
   shape(value, schemas[name]);
 };
 const unique = (values, code) => refuse(new Set(values).size === values.length, code);
+const canonicalComponents = (value) =>
+  typeof value === "string" &&
+  !/[\p{Cc}\u2028\u2029\\]/u.test(value) &&
+  value.split("/").every((component) => component && component !== "." && component !== "..");
 const relative = (value) => {
   refuse(
-    value &&
-      !value.startsWith("/") &&
-      !value.includes("\\") &&
-      !value.includes("\0") &&
-      value.split("/").every((x) => x && ![".", "..", ".git", ".orca"].includes(x)),
+    canonicalComponents(value) && value.split("/").every((component) => component !== ".git" && component !== ".orca"),
     "UNSAFE_PATH",
   );
 };
 const absolute = (value) => {
-  refuse(value.startsWith("/") && value !== "/", "UNSAFE_ROOT");
-  relative(value.slice(1));
+  // Git metadata is a legitimate identity location, never an allowed copy output.
+  refuse(typeof value === "string" && value.startsWith("/") && canonicalComponents(value.slice(1)), "UNSAFE_ROOT");
 };
 const within = (value, root) => value === root || value.startsWith(`${root}/`);
 
@@ -143,6 +143,8 @@ export function validateBinding(contract, trustedDigest, now) {
   );
   unique(contract.outputs, "DUPLICATE_OUTPUT");
   contract.outputs.forEach(relative);
+  i.manifests.forEach((manifest) => relative(manifest.path));
+  relative(i.lock.path);
   for (const a of contract.outputs)
     for (const b of contract.outputs) refuse(a === b || !within(a, b), "OUTPUT_OVERLAP");
   unique(contract.requiredChecks, "DUPLICATE_CHECK");

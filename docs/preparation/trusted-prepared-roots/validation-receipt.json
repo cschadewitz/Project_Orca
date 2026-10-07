@@ -33,21 +33,21 @@
     {
       "status": "passed",
       "command": "$NODE22 --test-reporter=tap docs/preparation/trusted-prepared-roots/contract.test.mjs",
-      "passed": 219,
+      "passed": 309,
       "failed": 0,
       "skipped": 0
     },
     {
       "status": "passed",
       "command": "$NODE24 --test-reporter=tap docs/preparation/trusted-prepared-roots/contract.test.mjs",
-      "passed": 219,
+      "passed": 309,
       "failed": 0,
       "skipped": 0
     },
     {
       "status": "passed",
       "command": "$NODE24 $VITEST run --config $TEMP_TOOLING_CONFIG",
-      "passed": 219,
+      "passed": 309,
       "failed": 0,
       "skipped": 0,
       "scope": "One exact bridge; installed Vitest 5.0.2, temporary alias and discovery config."
@@ -103,5 +103,20 @@
     "Fixture-only; no production runtime import, copy, install or launch.",
     "Historical owner copy evidence is attributed separately, not rerun.",
     "No worker sandbox, loopback, peak capacity or #449 enforcement certification."
-  ]
+  ],
+  "pathValidationCorrection": {
+    "reviewedParent": "afee876435d7c76b5f09fe18f55880552797812d",
+    "findings": [
+      "https://github.com/cschadewitz/Project_Orca/pull/508#issuecomment-6030367155",
+      "https://github.com/cschadewitz/Project_Orca/pull/508#issuecomment-6030372419"
+    ],
+    "changes": "Semantic manifest/lock relative checks; ten aligned relative-path schema patterns; canonical absolute identity checks permit matching .git metadata identities while copy outputs still exclude Git/ORCA state.",
+    "addedCases": 90,
+    "totalCases": 309,
+    "fullValidatorCoverage": "Joined and separately repinned hypothetical policies pass through binding, snapshot and full-result validation; ordinary relative paths and .git metadata identity are positive fixtures.",
+    "schemaDistinction": "Malformed relative spellings reject in direct shape validation. Absolute identity strings require semantic canonical-path validation; schema acceptance alone is not trusted binding/readiness.",
+    "fixtureBytesAndDigests": "Unchanged from reviewed parent.",
+    "review": "Independent correction review and final published-head results are recorded in the PR; Cal re-review is separate.",
+    "repositoryChecks": "Direct installed tools reused; no pnpm commands, package installs or runtime wiring in this correction."
+  }
 }

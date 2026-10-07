@@ -14,6 +14,21 @@ only the vocabulary those files use: type, const, enum, anyOf, required, propert
 additionalProperties, items, maxItems, string bounds/patterns and integer bounds.
 No executable hooks, subprocess arguments, environment or source overrides exist.
 
+Relative manifest, lock, inventory, shim and output paths must have nonempty
+components, with no dot/parent aliases, backslashes, control characters or line
+separators. Git/ORCA components remain excluded. All ten relative-path patterns
+in the three schemas enforce the same spelling rules; `validateBinding` also
+applies the semantic relative guard to every manifest and the lock path.
+
+Absolute identity paths use a separate canonical spelling check. A common Git
+directory such as `/synthetic/repository/.git` and its registered worktree
+administration directory are valid identities when receipt/ready joins and pins
+match. This does not admit Git metadata as dependency output. Direct schema
+validation checks envelope structure and relative-path spelling; identity strings
+still require full semantic validation for canonical absolute spelling, joined
+identities, trusted pins and current evidence. Schema acceptance alone is not a
+valid binding, snapshot or preparation result.
+
 Canonical JSON v1 encodes sorted ASCII object keys, ordered arrays, JSON strings,
 booleans, null and safe integers, with no whitespace. UTF-8 SHA256 yields the
 unprefixed 64-character lowercase digest. Fractions, nonfinite numbers, negative
