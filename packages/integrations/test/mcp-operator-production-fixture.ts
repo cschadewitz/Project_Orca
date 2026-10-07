@@ -29,6 +29,7 @@ import {
 } from "@orca/protocol";
 import type { IssueOptions } from "../../daemon/src/auth/credentials.js";
 import { continuationDiagnostics } from "./continuation-diagnostics.js";
+import { transportObserverSource } from "./mcp-replay-diagnostics.js";
 
 export const aliases = {
   "operator.submitRequest": "submit_request",
@@ -246,7 +247,7 @@ export class ProductionFixture {
 
   /** Admin operations affect only this fixture's synthetic auth directory, in another compiled process. */
   private async admin(action: "issue" | "revoke", value: unknown): Promise<unknown> {
-    const code = `import { openAuthDirectory } from ${JSON.stringify(moduleUrl("packages/daemon/dist/index.js"))};
+    const code = `import { openAuthDirectory } from ${JSON.stringify(moduleUrl("packages/daemon/dist/auth/bootstrap.js"))};
       let text = ''; for await (const chunk of process.stdin) text += chunk;
       const {action, value, dir} = JSON.parse(text); const auth = openAuthDirectory(dir);
       const result = action === 'issue' ? await auth.credentials.issue(value) : await auth.credentials.revoke(value);
@@ -339,19 +340,32 @@ export class ProductionFixture {
     };
   }
 
-  async connect(transport: Transport, token = this.token, endpoint = this.endpoint): Promise<Peer> {
+  async connect(
+    transport: Transport,
+    token = this.token,
+    endpoint = this.endpoint,
+    observeTransport?: (chunk: Buffer) => void,
+  ): Promise<Peer> {
     const client = new Client({ name: "orca-production-acceptance", version: "1" });
     this.cleanup.push(() => client.close());
     if (transport === "stdio") {
       const wire = new StdioClientTransport({
         command: process.execPath,
-        args: [cli, "mcp", "--endpoint", endpoint],
+        args: [
+          ...(observeTransport
+            ? ["--import", `data:text/javascript,${encodeURIComponent(transportObserverSource)}`]
+            : []),
+          cli,
+          "mcp",
+          "--endpoint",
+          endpoint,
+        ],
         cwd: this.dir,
         env: { ...environment(), ORCA_MCP_TOKEN: token },
         stderr: "pipe",
       });
       // Consume stderr, but never allow an SDK error to print a token.
-      wire.stderr?.on("data", () => undefined);
+      wire.stderr?.on("data", observeTransport ?? (() => undefined));
       await client.connect(wire);
     } else {
       // An isolated loopback private bridge supplies the fixed HTTPS origin; no TLS bypass,

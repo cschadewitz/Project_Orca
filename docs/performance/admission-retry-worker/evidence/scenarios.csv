@@ -1,0 +1,26 @@
+id,full_name,expected_launches
+R01,"real request admission across processes races fresh callers with contender accepted, converging on the same identifiers",3
+R02,"real request admission across processes races fresh callers with contender in-progress, converging on the same identifiers",3
+R03,"real request admission across processes after SIGKILL at claimed, a new process returns in-progress without replacement",3
+R04,"real request admission across processes after SIGKILL at bound, a new process returns recoverable-failure without replacement",3
+R05,"real request admission across processes after SIGKILL at material, a new process returns accepted without replacement",3
+R06,"real request admission across processes after SIGKILL at inputs, a new process returns recoverable-failure without replacement",3
+R07,"real request admission across processes after SIGKILL at created, a new process returns recoverable-failure without replacement",3
+R08,"real request admission across processes after SIGKILL at policy, a new process returns accepted without replacement",3
+R09,"real request admission across processes after SIGKILL at owner, a new process returns accepted without replacement",3
+R10,"real request admission across processes after SIGKILL at receipt, a new process returns accepted without replacement",3
+R11,"real request admission across processes after SIGKILL at response, a new process returns accepted without replacement",3
+R12,"real request admission across processes after SIGKILL at request-document, a new process returns accepted without replacement",3
+R13,"real request admission across processes after SIGKILL at linked, a new process returns accepted without replacement",3
+R14,"real request admission across processes after SIGKILL at admission-accepted, a new process returns accepted without replacement",3
+R15,"real direct admission across processes races fresh callers with contender accepted, converging on the same identifiers",3
+R16,"real direct admission across processes races fresh callers with contender in-progress, converging on the same identifiers",3
+R17,"real direct admission across processes after SIGKILL at claimed, a new process returns in-progress without replacement",3
+R18,"real direct admission across processes after SIGKILL at bound, a new process returns recoverable-failure without replacement",3
+R19,"real direct admission across processes after SIGKILL at material, a new process returns accepted without replacement",3
+R20,"real direct admission across processes after SIGKILL at inputs, a new process returns recoverable-failure without replacement",3
+R21,"real direct admission across processes after SIGKILL at created, a new process returns recoverable-failure without replacement",3
+R22,"real direct admission across processes after SIGKILL at policy, a new process returns accepted without replacement",3
+R23,"real direct admission across processes after SIGKILL at owner, a new process returns accepted without replacement",3
+R24,"real direct admission across processes after SIGKILL at receipt, a new process returns accepted without replacement",3
+R25,"real direct admission across processes after SIGKILL at response, a new process returns accepted without replacement",3
