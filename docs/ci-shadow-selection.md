@@ -30,7 +30,9 @@ New named/default/namespace imports, side-effect imports or foreign re-exports
 force full even from an already reviewed module; an added Vitest helper can import
 another module dynamically. New member reads/calls also force full: existing
 `expect` can otherwise gain a filesystem snapshot matcher without a new import.
-Computed member access and tagged-template invocation force full. These are syntax
+Computed member access, tagged-template invocation, object/array binding patterns
+and destructuring assignments force full. Quoted destructuring keys can otherwise
+hide a filesystem API behind already reviewed method names. These are syntax
 bounds for the reviewed leaves, not proof of arbitrary semantics. Binding loads
 no candidate libraries or dependencies.
 Additions, deletions, copies,
@@ -116,7 +118,7 @@ candidate; missing base-side consumers from candidate discovery force full.
 ## Artifact and consumer contract
 
 Artifact kind: `orca-ci-shadow-plan`; schema version **1**; selector version
-**1.0.3**; manifest/graph version **1**. Proposed artifact filename:
+**1.0.4**; manifest/graph version **1**. Proposed artifact filename:
 `ci-shadow-plan-v1-<candidate-sha>.json`. The shape is specified by
 `tools/ci-shadow/plan.schema.v1.json` (`urn:orca:ci-shadow-plan:1`). A matching
 filename or valid JSON Schema shape is insufficient for acceptance.

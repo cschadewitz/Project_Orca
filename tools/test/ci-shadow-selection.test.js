@@ -306,6 +306,32 @@ it.each([
   expect(result.wouldRun.reasonCodes).toContain("unreviewed_execution_edge");
 });
 
+it.each([
+  'it("probe", async () => { const now: any = expect("synthetic"); const { "toMatchFileSnapshot": getTime } = now; now.getTime = getTime; await now.getTime("synthetic.snap"); });',
+  'const { "getState": now } = expect;',
+  'it("probe", () => { let now: any; ({ "getState": now } = expect); });',
+  'it("probe", () => { const [now] = [expect]; });',
+  'it("probe", () => { let now: any; [now] = [expect]; });',
+])("rejects destructuring boundaries hidden behind reviewed names: %s", (extra) => {
+  reset();
+  const path = manifest.islands[0].paths[1];
+  const original = readFileSync(join(directory, path), "utf8");
+  const before = imports(original, path, manifest.islands[0].ambientReferences[path]);
+  const after = imports(original + "\n" + extra, path, manifest.islands[0].ambientReferences[path]);
+  expect(after.dependencies).toEqual(before.dependencies);
+  expect(after.bindings).toEqual(before.bindings);
+  expect(after.callTargets).toEqual(before.callTargets);
+  expect(after.memberReferences).toEqual(before.memberReferences);
+  expect(after.unsafe).toBe(true);
+  write(path, original + "\n" + extra);
+  const head = save();
+  const result = plan(head);
+  expect(result.graphs.every((g) => g.complete)).toBe(true);
+  expect(result.wouldRun.tier).toBe("full");
+  expect(result.wouldRun.reasonCodes).toContain("unreviewed_execution_edge");
+  expect(validatePlan(result, { repo: directory, base, head, candidate: head }, manifest)).toEqual(result);
+});
+
 it("falls back for stale metadata, empty diffs, explicit override and mixed-risk changes", () => {
   reset();
   expect(plan(base).wouldRun.reasonCodes).toContain("empty_change_set");

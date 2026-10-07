@@ -83,7 +83,16 @@ export function imports(text, path, allowedAmbientReferences) {
     if (ts.isCallExpression(node)) callTargets.push(accessShape(node.expression));
     if (ts.isNewExpression(node)) callTargets.push(`new:${accessShape(node.expression)}`);
     if (ts.isPropertyAccessExpression(node)) memberReferences.push(accessShape(node));
-    if (ts.isElementAccessExpression(node) || ts.isTaggedTemplateExpression(node)) unsafe = true;
+    if (
+      ts.isElementAccessExpression(node) ||
+      ts.isTaggedTemplateExpression(node) ||
+      ts.isObjectBindingPattern(node) ||
+      ts.isArrayBindingPattern(node) ||
+      (ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        (ts.isObjectLiteralExpression(node.left) || ts.isArrayLiteralExpression(node.left)))
+    )
+      unsafe = true;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
       dependencies.push(node.moduleSpecifier.text);
       const module = node.moduleSpecifier.text;
