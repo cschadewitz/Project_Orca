@@ -113,7 +113,10 @@ generation material. Permission sidecars remain live and independent of apply.
 The **plan** is served over `PlanService` (#169): `plans.list`, `plan.get`, `items.list`,
 `schedule.get`, `schedule.explain`, `dependencies.list`, `risks.list`, `decisions.list` and
 `journal.list` under `plan.read`, and `dependencies.waive`, `decisions.decide`,
-`decisions.reopen`, `risks.update` and `claims.release` under `plan.write`. The reads are one
+`decisions.reopen` and `risks.update` under `plan.write`. `claims.release` requires its
+own `claims.release` permission and claim resource authority. These are operation
+permissions, distinct from coarse discovery capabilities; the
+[operation matrix](../packages/daemon/src/auth/operations.ts) is authoritative. The reads are one
 projection (`daemon/src/plan-model.ts`): one snapshot and one `computeSchedule` per call,
 which is where an item's classification, its priority reasons, its risk exposure and the live
 state of every dependency all come from at once — and `schedule.explain` returns `core`'s own
@@ -131,7 +134,11 @@ carries the ordinary method table plus `subscribe` / `unsubscribe`, whose state 
 connection's. `subscriptions.ts` owns one client's stream — replay, fan-out and agent
 batching — over a narrow `SubscriptionSource` seam (`subscribe(listener, filter)` +
 `events(runId)`) that `Orchestrator` satisfies structurally, and `notifications.ts` is the
-pure event→notification fold. Four of the ten notifications carry no `runId`:
+pure event→notification fold. The [notification contract](../packages/protocol/src/subscriptions.ts)
+has eleven methods: six log-derived run notifications, ephemeral `input.invalidated`
+and four store-wide notifications. `input.invalidated` identifies an owner-local
+callback and carries `runId` but no `seq`; it is not replayed and never advances a
+run cursor. Four of the eleven notifications carry no `runId`:
 `agent.changed`, `workflows.changed`, `config.changed` — pushed by *both* config writers, so
 a screen watching the policy sees a grant a run just recorded — and `plan.changed`, folded
 from the plan journal's own listener seam, saying only which *kinds* of thing moved and never

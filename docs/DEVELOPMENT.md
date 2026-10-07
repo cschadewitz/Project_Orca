@@ -67,7 +67,8 @@ including the full suite and coverage. This limits contention for subprocess-hea
 tests such as the demo while retaining their existing assertions and 60-second bounds.
 
 PRs and main pushes start CI; its classifier skips runtime jobs for prose-only
-changes. JavaScript validators under `docs/` and prompt templates count as code.
+changes. Files ending in `.js`, `.mjs`, `.cjs` or `.jsx` under `docs/` and prompt
+templates count as code; see the [classifier](../.github/workflows/ci.yml).
 The shadow selector is advisory and cannot replace the full checks; #520's reporting
 consumer remains a separate unmerged slice. Desktop packaging, App smoke/type proof
 and native UI projects are manual/reusable workflows, not automatic PR proof. Their
@@ -402,8 +403,9 @@ job summary, and uploads `coverage/` as an artifact — including when the thres
 fail, which is when the numbers are worth reading.
 
 CI skips the whole typecheck/lint/test/build matrix when a push or PR changes only
-documentation: `docs/**` and any Markdown outside `templates/` (the prompt templates are
-Markdown but the engine loads them, so they count as code). A small `changes` job diffs
+documentation: `docs/**` except files ending in `.js`, `.mjs`, `.cjs` or `.jsx`, and
+any Markdown outside `templates/` (the prompt templates are Markdown but the engine
+loads them, so they count as code). A small `changes` job diffs
 against the merge base and gates the matrix with a job-level `if`, so a docs-only PR still
 shows a green check rather than none — see the comments in `.github/workflows/ci.yml`.
 
@@ -533,11 +535,13 @@ replaced the app's placeholder surface glyphs with designed ones, changing `#typ
 Windows proof passes at the v0.5.2 implementation checkout; Linux and macOS still require
 their own runner verdicts. See "Screenshot baselines" below for the review procedure.
 
-Run it with `pnpm run build && pnpm run app:smoke`; on a headless box,
-`xvfb-run -a pnpm run app:smoke`, and in a container without unprivileged user namespaces
-also set `ORCA_SMOKE_NO_SANDBOX=1`. That is the *OS* sandbox and is unrelated to
-`webPreferences.sandbox: true`, which stays on everywhere and is one of the things the test
-checks.
+Run it with `pnpm run build && pnpm run app:smoke`; on a headless Linux box,
+use `xvfb-run -a pnpm run app:smoke`. Linux needs `xvfb-run` and unprivileged user
+namespaces for Chromium's OS sandbox, as checked by the
+[App smoke workflow](../.github/workflows/app-smoke.yml). If that prerequisite is
+unavailable, report the blocker or use a suitable sandbox-preserving environment.
+Keep the OS sandbox enabled. The separate `webPreferences.sandbox: true` renderer
+setting also stays enabled and is checked by the test.
 
 The audit needs a workspace `orca demo` does not leave behind — it runs the program to
 completion, so there is no gate waiting, no failed run and one host, and three of the

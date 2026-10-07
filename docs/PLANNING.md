@@ -353,9 +353,13 @@ Every subcommand except `list` accepts the plan key positionally or as `--plan <
 
 `orca serve` projects the same plan for the desktop app (#169, protocol 1.7): `plans.list`,
 `plan.get`, `items.list`, `schedule.get`, `schedule.explain`, `dependencies.list`,
-`risks.list`, `decisions.list` and `journal.list` under the `plan.read` capability, and
-`dependencies.waive`, `decisions.decide`, `decisions.reopen`, `risks.update` and
-`claims.release` under `plan.write`. `orca serve --read-only` omits all five writes, from the
+`risks.list`, `decisions.list` and `journal.list` under the `plan.read` permission, and
+`dependencies.waive`, `decisions.decide`, `decisions.reopen` and `risks.update`
+under `plan.write`. `claims.release` requires the separate `claims.release` permission
+and claim resource authority. These operation permissions
+are distinct from coarse discovery capabilities; see the
+[operation matrix](../packages/daemon/src/auth/operations.ts).
+`orca serve --read-only` omits all five writes, from the
 dispatch table *and* from `hello.methods`, so a client hides an action instead of pressing one
 that would fail. `packages/protocol/README.md` has the shapes.
 

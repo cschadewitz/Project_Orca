@@ -314,10 +314,11 @@ approve something the app could not show them, so those travel with the card.
 destructive? }`, the model's own shape (`@orca/core/schemas`). It used to be `string[]`
 holding the ids, which let a client answer a gate it could not render: no label, no
 consequence clause, and no `destructive` flag, which is a safety property and not a
-decoration. `id` is still the whole of the answer — `inputs.answer` takes an option id, a
+decoration. `id` is still the selected answer — `inputs.answer` takes an option id, a
 label may be reworded between the ask and the answer, and a log written before #220 reads
 each bare string as an option that is its own id and label. `input.opened` carries the same
-shape, so a card drawn from the push frame alone is complete.
+shape. A live permission reply additionally requires the exact current target from
+`inputs.list`; a push frame alone does not establish callback availability or identity.
 
 **`agent` says whose turn is being held, as of protocol 1.6** — `{ id, hostId, hostType? }`,
 three fields of `AgentView` and not a fourth, because the rest of an agent's state is what
@@ -552,21 +553,24 @@ params: { subscriptionId }
 result: { stopped }
 ```
 
-`runId` absent means every run in the store. `methods` absent or empty means all ten.
+`runId` absent means every authorized run in the store. `methods` absent or empty
+means all eleven notification methods, subject to current per-notification authority.
 `since` is a resume cursor and **requires `runId`** — see below. `stopped: false` means the
 id was not live; unsubscribing twice is not an error, and closing the socket ends every
 subscription on it.
 
-Over `/rpc` these answer `NOT_SUPPORTED` — there is nowhere to push to. They are listed in
-`hello.methods` regardless, so a client can tell "this daemon can stream" from "this daemon
-is old". The capability is `runs.subscribe`.
+Over `/rpc` these answer `NOT_SUPPORTED` — there is nowhere to push to. When the
+subscription source is installed, they join the method table; authenticated discovery
+and each call still apply current authority. The coarse capability is `runs.subscribe`.
 
-### The ten notifications
+### The eleven notifications
 
-Six are about a run. Each carries `subscriptionId` (one connection may hold several),
+Six are derived from a run log. Each carries `subscriptionId` (one connection may hold several),
 `runId`, `seq` — the sequence number, within that run, of the event behind it, and therefore
 **the cursor** — and `at`, the event's own timestamp rather than the moment the frame was
-sent. The other four are not about a run and carry no `runId`: `agent.changed`,
+sent. The seventh run-scoped method, `input.invalidated`, is ephemeral: it carries
+`runId` but no `seq`, is never replayed and never advances a run cursor. The other
+four are not about a run and carry no `runId`: `agent.changed`,
 `workflows.changed` and `config.changed` are about the process and about the workspace's
 files and have no cursor at all, and `plan.changed` is about a plan and carries the *plan
 journal's* sequence number, which is not something `subscribe({ since })` takes. Each has its
@@ -582,6 +586,9 @@ own section below.
   out of a read, which is what keeps this fold a pure function of one event; `hostType` is
   therefore only on `inputs.list`, where the registry can be asked.
 - **`input.answered`** — `stepRunId`, `requestId`, `answer`.
+- **`input.invalidated`** — `subscriptionId`, `runId`, exact live `target` and `at`;
+  owner-local live callback invalidation. Re-read `inputs.list`
+  for current availability. Losing the callback/lease does not fabricate a run event.
 - **`event.appended`** — the raw `OrcaEvent`, for a timeline that renders events rather than
   state. **Excludes `agent.update` events**, which arrive coalesced instead, so agent output
   is never shipped twice.
@@ -600,12 +607,16 @@ not know — a newer daemon's — because dropping it is the compatible thing to
 
 ### Resuming
 
-Sequence numbers are per-run and gap-free, which is what makes the cursor work. Keep the
-highest `seq` seen; on reconnect send `subscribe({ runId, since: seq })`; the daemon replays
+Sequence numbers for log-derived run notifications are per-run and gap-free, which
+is what makes the cursor work. Keep the highest `seq` for that run; on reconnect send
+`subscribe({ runId, since: seq })`; the daemon replays
 `since + 1` onwards and then the live stream takes over, with `replayed` saying how many
 frames the replay sent. There is no gap and no duplicate: the daemon attaches its listener
 **before** reading the log, buffers what arrives during the read, and drops anything at or
-below the last replayed sequence number. **A blip costs latency and never data.**
+below the last replayed sequence number. The persisted run log supplies replay;
+ephemeral `input.invalidated` has no replay cursor. Re-read `inputs.list` after reconnect
+to obtain current callback identity/availability. See the
+[subscription contract](src/subscriptions.ts).
 
 `since` requires `runId` because a store-wide subscription interleaves numbers from
 unrelated logs and has no single cursor; it reconnects fresh and the screens behind it
@@ -633,8 +644,9 @@ params: { subscriptionId; at; agent: AgentView }
 In the union since **1.5**, and the first with neither `runId` nor `seq`. Agent health
 lives in the daemon's memory and not in any log: there is no run it belongs to, no sequence
 number to resume from, and nothing for a reconnect to replay, because the current answer is
-one `agents.list` away. A client that folds the cursor therefore tests for a `seq`
-(`typeof params.seq === "number"`) rather than assuming one.
+one `agents.list` away. A client that folds a run cursor checks both the matching
+`runId` and numeric `seq` on log-derived notifications. Neither `input.invalidated`
+nor the plan journal's `plan.changed` sequence advances that cursor.
 
 **1.4 kept it out of the union and 1.5 puts it in (#241).** The exclusion was meant to keep
 every cursor fold simple, and it did the opposite: a fold that compared `runId`s was already
@@ -685,8 +697,12 @@ must compare that state even if the saved revision is unchanged. Validation and
 failed apply do not publish activation.
 
 It carries no `text`: a document can be large and the frame goes to every store-wide
-subscriber. `revision` is enough to know that what is held is stale, and a client that finds
-it equal to the revision it already has — its own write, echoed back — re-reads nothing.
+subscriber. An equal revision can suppress a duplicate document read for a `kind: "saved"`
+echo already reflected in the client's state. It cannot suppress activation handling:
+compare the authoritative generation/status, and refresh the held configuration state
+when it changes even if the document hash is equal. See the
+[activation event](../daemon/src/config-model.ts) and
+[generation contract](../../docs/configuration-generations.md).
 
 ### `plan.changed` — a push about the plan, not about a run
 
@@ -708,22 +724,45 @@ is one `schedule.get` away.
 
 ## The control methods
 
-Behind the `runs.control` capability, and absent entirely from a `--read-only` daemon. Ten
-of them: the four that drive runs, `config.set` (documented above, with the read it pairs
-with), the four that write to the plan, and `claims.release`.
+These mutation methods are omitted by a `--read-only` daemon. Coarse discovery
+capabilities describe method families; they do not grant every operation in a family.
+The [operation matrix](../daemon/src/auth/operations.ts) checks current permissions
+and resource scope for each call:
+
+| Operation | Required operation permission |
+| --- | --- |
+| `runs.start` | `runs.start`, scoped to the workflow |
+| `runs.resume`, `runs.cancel` | `runs.control`, scoped to the run |
+| `inputs.answer` | `inputs.answer`, scoped to the input; `always` additionally requires `permissions.grant` |
+| `claims.release` | `claims.release`, scoped to the claim |
+| `config.set`, `config.apply` | `config.write` |
+| `dependencies.waive`, `decisions.decide`, `decisions.reopen`, `risks.update` | `plan.write` |
+
+Conditionally installed admission/continuation services add their own methods and
+guards; this section is not a fixed inventory of everything `hello.methods` may expose.
 
 ### `inputs.answer` — settle an open gate or permission ask
 
 ```ts
 params: { requestId; runId?; optionId; note?; always?: { decision: "allow" | "deny" };
-          resume = true }
+          live?: LiveDecisionTarget; resume = true }
 result: { requestId; runId; answer; permission?; run?; asOf }
 ```
 
-`optionId` is an option's **`id`** (the free text, for a question that offers none). `resume`
-re-drives the run under this daemon's lease and returns once it is parked again or finished,
-so `run` is a settled status rather than a snapshot mid-flight; `resume: false` is
-`orca answer --no-resume`.
+`optionId` is an option's **`id`** (the free text, for a question that offers none).
+For a durable workflow gate, `resume` re-drives the run under this daemon's lease and
+returns once it is parked again or finished, so `run` is a settled status rather than
+a snapshot mid-flight. `resume: false` records the durable answer without resuming,
+as with `orca answer --no-resume`.
+
+For a live permission callback, copy `live` exactly from `inputs.list`: its `instanceId`,
+`sessionId`, `turnId`, `invocationId`, `runId`, `stepRunId` and `requestId` identify the
+original callback. The [schema](src/control.ts) permits omission for durable gates;
+the [live-answer handler](../daemon/src/control.ts) requires it for a live reply,
+rechecks current server-bound authority and callback/lease availability, and refuses
+`resume: false` with `NOT_SUPPORTED`. Delivery goes to the original valid turn.
+An expired or unavailable owner cannot be recovered by reusing the identity. See
+[live input continuity](../../docs/live-input-continuity.md) for these lifetime rules.
 
 Answering a *permission* ask allow-once / allow-always / deny is: the allow option's id;
 the allow option's id plus `always: { decision: "allow" }`; the reject option's id. The
@@ -760,28 +799,43 @@ open HTTP call cannot tell waiting from hanging. A *lapsed* lease is not a refus
 holder stopped heartbeating, so the next interpreter takes it over, which is what the ttl is
 for.
 
-### `runs.start` — a workflow and its vars, and nothing else
+### `runs.start` — direct workflow launch with optional existing associations
 
 ```ts
 params: { workflowId; vars = {}; requestId?; workItemId? }
 result: { runId; run: RunSummaryView; asOf }
 ```
 
-**No request document and no work-item document are written or read.** The constraint that
-originally forced that is gone — `JsonFileDocumentStore` re-reads a collection under a lock
-before every write (#196), so the store is multi-process safe and a daemon writing documents
-beside a CLI no longer clobbers it.
+Direct launch creates a run for the selected workflow; it does not implicitly create a
+Request or decompose it into work items. Optional `requestId` and `workItemId` associate
+existing documents. The [orchestrator](../engine/src/orchestrator.ts) reads and validates
+them before creating the run: a supplied Request must exist, a supplied work item and
+its Request must exist, and supplying both requires matching associations. Missing or
+mismatched documents fail with `RUN_STATE`. Provisioning also reads these associations;
+the launch is not document-read-free. Valid associations are recorded on `run.created`
+and exposed on `run.changed`.
 
-The narrow method is kept by decision. Submitting a *request* and decomposing it into work
-items is `orca submit`'s job — a workflow, an agent and an artifact, not a record insert —
-and growing this method into it would settle that design inside the schema of a method whose
-job is "run this workflow". A `requests.submit` method goes beside this one when it is
-designed.
+The [resource guard](../daemon/src/auth/guard.ts) additionally requires `plan.read`
+when `requestId` is supplied, and both `plan.read` and `plan.write` for `workItemId`.
+Workflow launch authority alone does not make those workspace documents accessible.
 
-`requestId` and `workItemId` are still accepted: they are recorded on `run.created` and
-travel out on `run.changed`, so a client that already knows a work item can start a run
-against it and find the run again. A run named after a work item this daemon has not got
-falls back to the workflow id, which is the fallback chain `name` has always had.
+### Request admission — conditionally installed shared service
+
+`requests.submit`, `requests.reconcile`, `requests.admission` and `requests.admissions`
+are implemented. The [method table](../daemon/src/methods.ts) installs them only when
+control, the Request submission model and its authority provider are present;
+[production serve wiring](../cli/src/commands/index.ts) supplies those dependencies.
+Inspect the caller's current `hello.methods` rather than assuming every daemon exposes them.
+
+The [Request protocol schema](src/request-submission.ts) defines submission commands
+with optional `idempotencyKey`, reconciliation/inspection by `admissionId`, and listing.
+The [operation guard](../daemon/src/auth/guard.ts) requires both `runs.start` and
+`plan.write` for these methods; the shared service additionally enforces workspace,
+workflow scope and current admission authority. The receipt records
+durable acceptance, separately from execution attachment or completion. See
+[Request submission](../../docs/request-submission.md) for typed launch guards, result
+states and the CLI/daemon retry boundary, and
+[admission retry](../../docs/admission-retry.md) for exact retained envelopes.
 
 ### The plan writes — `dependencies.waive`, `decisions.decide`, `decisions.reopen`, `risks.update`
 
@@ -835,8 +889,11 @@ same sentence `orca claims release` prints.
 
 ## The agent methods
 
-Under `runs.read`, and answered by a `--read-only` daemon too: neither touches a run, a lease
-or a log.
+`agents.list` requires `agents.read`; `agents.ping` requires `agents.ping`, as defined
+by the [operation matrix](../daemon/src/auth/operations.ts). A `--read-only` daemon
+can expose both, subject to current caller authority. Listing reads in-process health;
+ping spawns an agent to perform a handshake and updates that health. Neither drives
+a workflow run or acquires its lease; discovery is not permission to spawn an agent.
 
 ### `agents.list`
 
@@ -879,7 +936,10 @@ result and not an error envelope: "down, and here is why" is what the caller ask
 otherwise falls back to an in-process handshake — saying, in those words, that it recorded
 nothing (#225).
 
-## What is not here yet
+## Remaining capability and acceptance work
 
-`requests.submit`: submitting a request and decomposing it is a workflow, and the method that
-starts one is still to be designed (see `runs.start` above). See `docs/ROADMAP.md`, item 1.
+Request admission and direct launch are implemented with the boundaries above.
+Structured configuration/launch authoring, actual-client acceptance and native beta
+delivery retain their distinct gaps and owners in the
+[capability ledger](../../docs/ROADMAP.md). Protocol implementation alone does not
+establish deployed or native acceptance.

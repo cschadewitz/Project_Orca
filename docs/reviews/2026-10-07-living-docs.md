@@ -30,6 +30,31 @@ preparation evidence, not an equivalent broad living-repository pass or runtime 
 main's documentation history revealed no newer equivalent broad owner/deliverable.
 That finding is bounded by the inspected inventory, not a claim about private work.
 
+## Independent review corrections — 7 October 2026
+
+The [independent review of the original draft](https://github.com/cschadewitz/Project_Orca/pull/532#issuecomment-6048925223)
+requested six bounded corrections at `1645174c2d9f26f0ab47ff90ae9ba17ec77a2127`.
+The source citations below pin that reviewed head; their files are byte-identical
+on fetched main `6abcdbaa72f26972adfc1ce6f9ef03e0232b47a9`. Main's intervening
+daemon close-settlement change does not change these contracts. This addendum
+does not replace the original `dcccd2b` audit/census or certify newer runtime evidence.
+
+| Finding | Corrected current reference | Exact implementation evidence at reviewed head |
+| --- | --- | --- |
+| Sandbox prerequisite | Development now requires a sandbox-preserving Linux environment or a reported prerequisite blocker. | [App smoke prerequisite check, lines 105–115](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/.github/workflows/app-smoke.yml#L105-L115) |
+| Granular authorization | Protocol control/agent sections, Architecture and Planning distinguish discovery from operation grants; claim release has its own permission. | [Operation matrix, lines 114–150](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/daemon/src/auth/operations.ts#L114-L150); [linked-document guard, lines 389–401](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/daemon/src/auth/guard.ts#L389-L401) |
+| Request admission and association reads | Protocol documents the implemented conditional service separately from direct launch and validates existing associations. | [Conditional registration, lines 871–899](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/daemon/src/methods.ts#L871-L899); [serve model, lines 839–850](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/cli/src/commands/index.ts#L839-L850); [serve context, lines 933–936](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/cli/src/commands/index.ts#L933-L936); [association validation, lines 361–367](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/engine/src/orchestrator.ts#L361-L367); [provisioning reads, lines 427–428](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/engine/src/orchestrator.ts#L427-L428); [Request operation guard, lines 164–168](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/daemon/src/auth/guard.ts#L164-L168) |
+| Live answers and cursor exception | Protocol requires the exact live target, rejects live no-resume, and joins Architecture in documenting eleven notifications. Cursor/replay guidance excludes ephemeral invalidation and plan sequence numbers. | [Answer schema, lines 46–48](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/protocol/src/control.ts#L46-L48); [live delivery guard, lines 358–375](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/daemon/src/control.ts#L358-L375); [notification inventory, lines 66–78](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/protocol/src/subscriptions.ts#L66-L78); [ephemeral target, lines 209–222](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/protocol/src/subscriptions.ts#L209-L222) |
+| Config activation echo | Protocol limits duplicate saved-document suppression and requires authoritative generation/status comparison for activation even at equal hashes. | [Activation event, lines 138–146](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/packages/daemon/src/config-model.ts#L138-L146) |
+| CI classification | Both Development explanations classify `.js/.mjs/.cjs/.jsx` files under docs and prompt templates as code. | [Classifier, lines 34–52](https://github.com/cschadewitz/Project_Orca/blob/1645174c2d9f26f0ab47ff90ae9ba17ec77a2127/.github/workflows/ci.yml#L34-L52) |
+
+A consistency sweep covered the 18 owned pages for these current-reference claims,
+including adjacent input-card, discovery and cursor explanations. Roadmap wording
+for #355 now preserves its existing scope and recorded dependencies without imposing
+new milestone sequencing. The cleared audit/deployment/native boundaries and owner
+proposals below are retained. This correction changes six already-owned Markdown
+pages; no runtime, manifests, workflows, frozen baseline or separately owned path changes.
+
 ## Coverage and reading method
 
 The [complete Markdown census](2026-10-07-doc-inventory.md) lists tracked main files,
@@ -141,7 +166,7 @@ now contained in main, with their original historical source/evidence boundaries
 
 ## Validation record
 
-Final scoped checks passed on **211 Markdown files** (209 baseline plus two review
+Original draft scoped checks passed on **211 Markdown files** (209 baseline plus two review
 pages): **983 relative targets / 27 Markdown fragments**, zero unresolved targets.
 All 18 changed/new pages passed UTF-8/LF/final newline/whitespace/fence checks.
 The 19 documented script definitions and 10 CLI command/flag handlers were inspected
@@ -152,6 +177,16 @@ source/protocol/epoch consistency, changed-path scope and all **186** frozen
 `Current_State/BASELINE-MANIFEST.sha256` entries. Markdown is deliberately excluded
 by `.prettierignore`; scoped Prettier alone is not prose validation. Git whitespace
 and scope checks accompany the independent text/link checks.
+
+After the independent-review corrections, the same corpus passes **1,005 relative
+targets / 27 Markdown fragments**, with zero unresolved targets or text-format
+errors on all 18 changed pages. All **15 immutable source ranges in 11 files** above
+resolve within their pinned blobs, and those source files match fetched main byte
+for byte. All **186/186** frozen hashes and historical real-agent fenced blocks still
+match. The correction delta is six Markdown pages within the original 18 owned paths;
+whitespace and scoped Prettier checks pass (Markdown remains ignored by Prettier).
+The owned-page consistency sweep finds none of the six reviewed stale reference
+claims. These are documentation/source checks, not runtime tests or new CI evidence.
 
 External PR/issue facts above were read through the authorized connector; repository
 paths and immutable preparation heads were checked against local Git objects.

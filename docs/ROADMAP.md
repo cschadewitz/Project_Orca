@@ -80,7 +80,8 @@ issues without recreating shipped features or changing milestones implicitly.
 | `ship-group:ado-planning`, `ship-group:jira-planning`, `ship-group:linear-planning`, `ship-group:beads-planning` | Adapter outcomes [#351](https://github.com/cschadewitz/Project_Orca/issues/351), [#352](https://github.com/cschadewitz/Project_Orca/issues/352), [#353](https://github.com/cschadewitz/Project_Orca/issues/353), [#354](https://github.com/cschadewitz/Project_Orca/issues/354) respectively | Each depends on [#350](https://github.com/cschadewitz/Project_Orca/issues/350); adapters can proceed in parallel after the shared contract. |
 
 Structured configuration and guided launch share `ship-group:configuration-studio`;
-#355 template authoring is later work. `ship-group:runtime-foundation` now includes
+#355 template authoring retains its existing scope and recorded dependencies.
+`ship-group:runtime-foundation` now includes
 implemented mechanisms with residual acceptance; the old blanket “#329–#357 are
 all planned” statement is superseded. SQLite, usage budgets, tracker outboxes,
 managed fleet and visual authoring remain their distinct owners.
