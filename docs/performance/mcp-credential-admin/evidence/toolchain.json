@@ -1,0 +1,18 @@
+{
+  "24.21.0": {
+    "binarySha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c",
+    "archiveSha256": "fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6",
+    "officialArchive": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.xz",
+    "officialManifest": "https://nodejs.org/dist/v24.21.0/SHASUMS256.txt"
+  },
+  "22.23.3": {
+    "binarySha256": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+    "archiveSha256": "df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de",
+    "officialArchive": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz",
+    "officialManifest": "https://nodejs.org/dist/v22.23.3/SHASUMS256.txt"
+  },
+  "pnpm": {
+    "version": "12.4.2",
+    "entrySha256": "df602b81c2e2f75c72904664cf2ee2ce50e1394bef1cb2a153ed4c08d99bc6e4"
+  }
+}
