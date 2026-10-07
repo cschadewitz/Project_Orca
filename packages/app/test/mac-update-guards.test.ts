@@ -94,6 +94,54 @@ describe("nonce draft leases", () => {
     expect(w.frozen()).toBe(true);
     if (second.outcome === "ready") await second.lease.release();
   });
+  it.each(["synchronous", "delayed-before-continuation"] as const)(
+    "owns release through cleanup with %s acknowledgements",
+    async (timing) => {
+      const w = windows();
+      const guard = new NonceDraftGuard(w.boundary);
+      const prepared = await guard.prepare();
+      if (prepared.outcome !== "ready") throw new Error("Expected ready");
+      if (timing !== "synchronous") w.auto(false);
+      const first = prepared.lease.release();
+      if (timing !== "synchronous") {
+        const message = w.sent.at(-1)!;
+        w.ack(1, { ...message, generation: 3, ready: true });
+        w.ack(2, { ...message, generation: 7, ready: true });
+      }
+      // ACK already cleared waiting, but the first release continuation has not run.
+      const duplicate = prepared.lease.release();
+      expect(await duplicate).toBe("unknown");
+      expect(await first).toBe("released");
+      expect(w.sent.filter((message) => message.phase === "release")).toHaveLength(1);
+      expect(w.release).toHaveBeenCalledOnce();
+    },
+  );
+  it.each(["confirmed", "throws"] as const)("handles throwing snapshot extraction with %s cleanup", async (cleanup) => {
+    const release = vi.fn(() => {
+      if (cleanup === "throws") throw new Error("release unknown");
+    });
+    const acquire = vi.fn(() => ({
+      get windows(): readonly { id: number; generation: number }[] {
+        throw new Error("snapshot unavailable");
+      },
+      release,
+      check: () => true,
+      listen: () => () => {},
+      send: () => {},
+    }));
+    const guard = new NonceDraftGuard({ acquire });
+    expect(await guard.prepare()).toEqual({ outcome: "unknown" });
+    if (cleanup === "throws") {
+      expect(await guard.prepare()).toMatchObject({ outcome: "blocked" });
+      expect(acquire).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+    } else {
+      expect(await guard.prepare()).toEqual({ outcome: "unknown" });
+      expect(acquire).toHaveBeenCalledTimes(2);
+      expect(release).toHaveBeenCalledTimes(2);
+    }
+  });
+
   it("ignores foreign, wrong nonce, wrong phase and reloaded-document acknowledgements", async () => {
     vi.useFakeTimers();
     const w = windows();

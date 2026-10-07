@@ -56,6 +56,7 @@ interface HeldDrafts {
   nonce: string;
   intact: boolean;
   ready: boolean;
+  releasing: boolean;
   unlisten: () => void;
   waiting?: { phase: "prepare" | "release"; pending: Set<number>; finish: (ready: boolean) => void };
 }
@@ -75,14 +76,32 @@ export class NonceDraftGuard {
   async prepare(): Promise<import("./mac-updates.js").MacPreparation<import("./mac-updates.js").MacDraftLease>> {
     if (this.held || this.uncertain) return { outcome: "blocked", blocker: "window-unavailable" };
     let boundary: ReturnType<DraftWindowBoundary["acquire"]>;
+    // Reserve before any adapter call or snapshot accessor can reenter preparation.
+    this.uncertain = true;
     try {
       boundary = this.windows.acquire();
     } catch {
       this.uncertain = true;
       return { outcome: "unknown" };
     }
-    if (!boundary) return { outcome: "blocked", blocker: "window-unavailable" };
-    const captured = boundary.windows.map((window) => ({ ...window }));
+    if (!boundary) {
+      this.uncertain = false;
+      return { outcome: "blocked", blocker: "window-unavailable" };
+    }
+    let captured: { id: number; generation: number }[];
+    try {
+      captured = boundary.windows.map((window) => ({ ...window }));
+    } catch {
+      // No prepare message was sent. Only positively completed local cleanup
+      // permits another acquisition after uncertain snapshot extraction.
+      try {
+        boundary.release();
+        this.uncertain = false;
+      } catch {
+        /* Retain the acquisition uncertainty. */
+      }
+      return { outcome: "unknown" };
+    }
     if (
       !captured.length ||
       new Set(captured.map((window) => window.id)).size !== captured.length ||
@@ -97,14 +116,23 @@ export class NonceDraftGuard {
       // No messages were sent, so no renderer freeze can have been acquired.
       try {
         boundary.release();
+        this.uncertain = false;
       } catch {
         this.uncertain = true;
         return { outcome: "unknown" };
       }
       return { outcome: "blocked", blocker: "window-unavailable" };
     }
-    const held: HeldDrafts = { boundary, nonce: randomUUID(), intact: true, ready: false, unlisten: () => {} };
+    const held: HeldDrafts = {
+      boundary,
+      nonce: randomUUID(),
+      intact: true,
+      ready: false,
+      releasing: false,
+      unlisten: () => {},
+    };
     this.held = held;
+    this.uncertain = false;
     try {
       held.unlisten = boundary.listen((event) => {
         if (event.kind === "changed") {
@@ -154,14 +182,22 @@ export class NonceDraftGuard {
         });
       const release = async (): Promise<"released" | "unknown"> => {
         // A stale or concurrent release cannot unlock a different owner.
-        if (this.held !== held || held.waiting) return "unknown";
+        if (this.held !== held || held.waiting || held.releasing) return "unknown";
+        // The ACK waiter may disappear synchronously. Ownership lasts through
+        // boundary release and listener cleanup, including reentrant adapter calls.
+        held.releasing = true;
         held.ready = false;
-        if (!(await acknowledge("release"))) return "unknown";
-        if (!held.intact || !boundary.check()) return "unknown";
-        boundary.release();
-        held.unlisten();
-        this.held = undefined;
-        return "released";
+        try {
+          if (!(await acknowledge("release"))) return "unknown";
+          if (this.held !== held || !held.intact || !boundary.check()) return "unknown";
+          boundary.release();
+          held.unlisten();
+          if (this.held !== held) return "unknown";
+          this.held = undefined;
+          return "released";
+        } catch {
+          return "unknown";
+        }
       };
       if (!(await acknowledge("prepare"))) {
         if ((await release()) === "unknown") return { outcome: "unknown" };
