@@ -1,0 +1,30 @@
+[
+  {
+    "phase": "candidate offline frozen install",
+    "outcome": "failed before installation",
+    "error": "ERR_PNPM_META_FETCH_FAIL / ERR_PNPM_NO_OFFLINE_META: @babel/runtime registry metadata absent",
+    "recovery": "Normal online frozen install passed with all supply-chain policies enabled. No override.",
+    "evidence": "Shell transcript excerpt reconstructed in this record; baseline successful install log retained."
+  },
+  {
+    "phase": "initial feasibility script startup",
+    "outcome": "failed before worker launch",
+    "error": "ERR_PACKAGE_PATH_NOT_EXPORTED: tsx/dist/loader.mjs",
+    "recovery": "Resolved tsx/package.json, then joined dist/loader.mjs as the existing harness does. All six pairs subsequently completed.",
+    "evidence": "Error reconstructed from shell transcript; corrected script and all executed micro rows retained."
+  },
+  {
+    "phase": "first paired attempt",
+    "outcome": "observer failed after baseline passed 25/25",
+    "error": "Missing pair1-before-processes.jsonl; process exit handler did not persist observations from Vitest workers",
+    "recovery": "Observe each child close event instead; first report retained and excluded from paired summary. New output directory used.",
+    "evidence": "observer-failure/"
+  },
+  {
+    "phase": "first whole-repository lint",
+    "outcome": "failed: 122 errors",
+    "error": "114 errors in retained temporary probe output and eight CommonJS observer import/global errors",
+    "recovery": "Removed only task-owned .orca/probe output and converted observer to ESM, then whole lint passed. Runtime/harness and lint policies unchanged.",
+    "evidence": "validation/lint-first.log.gz; final lint.log.gz and commands.json.gz"
+  }
+]

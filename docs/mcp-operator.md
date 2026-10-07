@@ -94,8 +94,11 @@ are created per HTTP request so MCP session identifiers cannot retain another ca
 identity. Remote HTTP errors do not include credential or backend diagnostic text.
 
 The reference client uses `StreamableHTTPClientTransport` from
-`@modelcontextprotocol/client` 2.2.0 with `requestInit.headers.Authorization`. SDK 2.2.0 is
-pinned; this follows the [official SDK serving API](https://ts.sdk.modelcontextprotocol.io/v2/).
+`@modelcontextprotocol/client` 2.2.0 with `requestInit.headers.Authorization`. The server SDK
+is pinned to 2.3.0; this follows the [official SDK serving API](https://ts.sdk.modelcontextprotocol.io/v2/).
+The server and HTTP handler are constructed afresh for each request, as required by 2.3.0's
+refusal of reconnecting an active server or reusing a stateless transport. Repeated requests
+and concurrent clients retain their own bearer-bound backend; no shared session holds authority.
 The tests exercise the SDK's real Fetch handler, reference HTTP client, stdio framing, and
 a real token-authenticated loopback daemon. They do **not** demonstrate TLS termination,
 Tailscale reachability, OAuth compatibility, a private tunnel or actual-Cal tool availability.
