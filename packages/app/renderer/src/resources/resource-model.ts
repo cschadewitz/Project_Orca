@@ -1,11 +1,12 @@
 /** Presentation and fixture lifecycle over #495's shared contract. No transport or warning policy lives here. */
 import {
-  acceptResourceSnapshot,
+  advanceResourceSnapshot,
   HostResourceSnapshotSchema,
   resourceWarnings,
   type HostResourceSnapshot,
   type ResourceMetric,
   type ResourceReason,
+  type ResourceSnapshotProvenance,
   type ResourceWarning,
   type WorkstreamSummary,
 } from "@orca/protocol";
@@ -23,8 +24,8 @@ export interface ResourceViewState {
   nowMs: number;
   receivedAtMs: number;
   snapshot: HostResourceSnapshot | undefined;
-  /** Keep the shared predicate's boot evidence across missing observations; never display this older snapshot. */
-  lastKnownBootSnapshot: HostResourceSnapshot | undefined;
+  /** Ordering evidence only: retain the known boot across missing observations, never an old summary. */
+  provenance: ResourceSnapshotProvenance | undefined;
   awaitingSnapshot: boolean;
   invalidResponse: boolean;
 }
@@ -43,7 +44,7 @@ export function resourceViewState(
     nowMs: 0,
     receivedAtMs: 0,
     snapshot: undefined,
-    lastKnownBootSnapshot: undefined,
+    provenance: undefined,
     awaitingSnapshot: true,
     invalidResponse: false,
   };
@@ -73,7 +74,7 @@ export function resourceViewReducer(state: ResourceViewState, action: ResourceVi
         access: action.access,
         generation: state.generation + 1,
         snapshot: undefined,
-        lastKnownBootSnapshot: undefined,
+        provenance: undefined,
         awaitingSnapshot: true,
         invalidResponse: false,
       };
@@ -94,17 +95,18 @@ export function resourceViewReducer(state: ResourceViewState, action: ResourceVi
         requestGeneration: action.requestGeneration,
         currentGeneration: state.generation,
       };
-      // The pinned helper compares adjacent snapshots. Retain a known boot for a second
-      // shared check so A → unavailable → B cannot silently reset provenance (#497/#498).
-      if (
-        !acceptResourceSnapshot(previous, parsed.data, connection) ||
-        !acceptResourceSnapshot(state.lastKnownBootSnapshot, parsed.data, connection)
-      )
-        return state;
+      // Compare against elapsed cache age, not arrival age: repeated delivery cannot
+      // renew an old observation. The shared cursor preserves boot evidence through gaps.
+      const provenance = advanceResourceSnapshot(
+        state.provenance && { ...state.provenance, ageMs: previous?.ageMs ?? state.provenance.ageMs },
+        parsed.data,
+        connection,
+      );
+      if (!provenance) return state;
       return {
         ...state,
         snapshot: parsed.data,
-        lastKnownBootSnapshot: "value" in parsed.data.bootId ? parsed.data : state.lastKnownBootSnapshot,
+        provenance,
         receivedAtMs: state.nowMs,
         awaitingSnapshot: false,
         invalidResponse: false,

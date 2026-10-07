@@ -68,16 +68,28 @@ of that composition too. Metric ages and cache expiration use monotonic elapsed
 time. Wall-clock discontinuities invalidate observations; no negative age is
 rendered as fresh. Boot changes invalidate interval baselines and retained data.
 
-`acceptResourceSnapshot` checks the request's captured connection generation
-against the current generation and expected daemon identity before ordering by
-sequence. A retained observation of a different boot (including stale boot data)
-is rejected. The consumer clears its previous snapshot only after an authoritative
-connection/target/boot transition, then submits responses with the new generation.
-A delayed old request cannot reset identity. Within one sequence, cache age may
-advance but cannot move backwards. Wall time alone never establishes ordering.
-Consumers must keep aging retained values while disconnected; transport arrival
-does not renew an observation. Schema validation rejects a metric labeled
-available at or beyond expiry, even if the snapshot is otherwise valid.
+`advanceResourceSnapshot` uses `acceptResourceSnapshot` to check the request's
+captured connection generation against the current generation and expected daemon
+identity before ordering by sequence. Consumers commit its returned
+`ResourceSnapshotProvenance` only with an accepted snapshot. The cursor contains
+daemon/collector identity, boot evidence, sequence and cache age; it retains no
+workstream summary. Known boot evidence survives unavailable, denied or unsupported
+boot observations, so a later different boot (including stale boot data) is
+rejected. An initially unknown boot may become known without a reset.
+
+The fixture renderer's follow-on to the integration foundation at
+`3be35c895abd7daa48bd39bf117d5fdc7b83ca5f` replaces retained older snapshots with
+this shared cursor. It clears the snapshot and cursor on authoritative target
+selection or an access change. Disconnect/reconnect advances
+the request generation while retaining and aging the existing observation and boot
+evidence; reconnect alone cannot authorize a new boot or collector. A delayed old
+request cannot reset identity. Within one sequence, cache age may advance but
+cannot move backwards, including elapsed local time since the last accepted
+delivery. Repeated responses therefore cannot renew an old observation or postpone
+expiry. Wall time alone never establishes ordering. Schema validation rejects a
+metric labeled available at or beyond expiry, even if the snapshot is otherwise
+valid. This remains fixture-only consumer validation, without live telemetry,
+transport mounting or grants.
 
 ## Shared warnings
 
