@@ -20,8 +20,8 @@ Git inventory, explicit consumer edges and runner/check inventory. The merged
 its selector test brought discovery from 341 to 342 files. This reporting slice
 starts at verified main `d7546ce6bcaf51f194aade26de2cd9a432cd7073`
 (tree `9cc9f5fcf2f202dddeb8403ba2425e9d1abbf132`) and refreshes the frozen inventory
-to implementation `f1aa1649fce35de6c0eea540584dfcb7c78f07c8`, hash
-`6378f2a8ceea89d59860bf66a27cf950f702c43993d01687611671b9f1325b80`.
+to implementation `820db15eaebfb5a3aee22107b0e7baf4dc771281`, hash
+`56bdea6aee6ade13f38bfd64cb47b2b731f9654c9f3942da278aad20f3898c82`.
 The new report-adapter regression brings discovery to 343. Eligibility, selector
 algorithm/version, existing edges and test semantics are unchanged. This PR
 necessarily takes full; its older base inventory is incomplete for the refreshed
