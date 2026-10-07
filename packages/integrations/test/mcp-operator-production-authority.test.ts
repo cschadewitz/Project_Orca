@@ -25,10 +25,20 @@ import {
 } from "./mcp-operator-production-fixture.js";
 
 let f: ProductionFixture;
+let fixtureReady = false;
 beforeEach(async () => {
+  fixtureReady = false;
   f = await ProductionFixture.create();
+  fixtureReady = true;
 });
-afterEach(async () => {
+afterEach(async (ctx) => {
+  if (fixtureReady && ctx.task.result?.state === "fail") {
+    try {
+      console.error("Production fixture wait failure", JSON.stringify(f.progress.snapshot()));
+    } catch {
+      // Diagnostic publication cannot replace the original failure or skip cleanup.
+    }
+  }
   await f?.close();
 });
 

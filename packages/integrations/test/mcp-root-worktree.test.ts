@@ -86,6 +86,7 @@ it("a six-grant owned-only MCP client admits isolated direct roots without plan 
       JSON.stringify(
         await diagnostics
           .evidence(f, previousDaemon, first.receipt.operationId, first.runId)
+          .then((evidence) => ({ ...evidence, fixtureWaits: f.progress.snapshot() }))
           .catch(() => ({ unavailable: true })),
       ),
     );

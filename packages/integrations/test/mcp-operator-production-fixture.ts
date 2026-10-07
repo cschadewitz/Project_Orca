@@ -28,6 +28,7 @@ import {
   type ResponseMessage,
 } from "@orca/protocol";
 import type { IssueOptions } from "../../daemon/src/auth/credentials.js";
+import { FixtureProgress, rpcStage, toolStage } from "./fixture-progress.js";
 import { continuationDiagnostics } from "./continuation-diagnostics.js";
 import { transportObserverSource } from "./mcp-replay-diagnostics.js";
 
@@ -70,7 +71,10 @@ export interface Peer {
   endpoint: string;
 }
 
+const peerProgress = new WeakMap<Client, FixtureProgress>();
+
 export class ProductionFixture {
+  readonly progress = new FixtureProgress();
   readonly cleanup: (() => Promise<unknown>)[] = [];
   readonly processes: { child: ChildProcessWithoutNullStreams; output: () => string }[] = [];
   readonly tokenSecrets: string[] = [];
@@ -214,7 +218,10 @@ export class ProductionFixture {
     return { child, output: () => output };
   }
 
-  async stop(child = this.daemon, signal: NodeJS.Signals = "SIGTERM") {
+  stop(child = this.daemon, signal: NodeJS.Signals = "SIGTERM") {
+    return this.progress.measure("daemon.stop", () => this.stopProcess(child, signal));
+  }
+  private async stopProcess(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals) {
     if (child.exitCode !== null || child.signalCode !== null) return;
     const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
     child.kill(signal);
@@ -226,7 +233,10 @@ export class ProductionFixture {
     }
   }
 
-  async boot() {
+  boot() {
+    return this.progress.measure("daemon.boot", () => this.bootDaemon());
+  }
+  private async bootDaemon() {
     const proc = this.process([cli, "serve", "--config", join(this.dir, "orca.config.yaml"), "--port", "0"]);
     await until(
       async () => {
@@ -246,7 +256,12 @@ export class ProductionFixture {
   }
 
   /** Admin operations affect only this fixture's synthetic auth directory, in another compiled process. */
-  private async admin(action: "issue" | "revoke", value: unknown): Promise<unknown> {
+  private admin(action: "issue" | "revoke", value: unknown): Promise<unknown> {
+    return this.progress.measure(action === "issue" ? "credential.issue" : "credential.revoke", () =>
+      this.administer(action, value),
+    );
+  }
+  private async administer(action: "issue" | "revoke", value: unknown): Promise<unknown> {
     const code = `import { openAuthDirectory } from ${JSON.stringify(moduleUrl("packages/daemon/dist/auth/bootstrap.js"))};
       let text = ''; for await (const chunk of process.stdin) text += chunk;
       const {action, value, dir} = JSON.parse(text); const auth = openAuthDirectory(dir);
@@ -273,6 +288,9 @@ export class ProductionFixture {
   }
 
   async rpc(method: string, params: unknown, token = this.token, endpoint = this.endpoint): Promise<ResponseMessage> {
+    return this.progress.measure(rpcStage(method), () => this.sendRpc(method, params, token, endpoint));
+  }
+  private async sendRpc(method: string, params: unknown, token: string, endpoint: string): Promise<ResponseMessage> {
     const id = randomUUID();
     const response = await fetch(`${endpoint}/rpc`, {
       method: "POST",
@@ -312,31 +330,35 @@ export class ProductionFixture {
     return async (method: string, params: unknown): Promise<ResponseMessage> => {
       if (ws.readyState !== WebSocket.OPEN) throw new Error("Socket closed");
       const id = randomUUID();
-      return new Promise((resolve, reject) => {
-        const finish = () => {
-          clearTimeout(timer);
-          ws.removeEventListener("message", listener);
-          ws.removeEventListener("close", closed);
-        };
-        const closed = () => {
-          finish();
-          reject(new Error("Socket closed"));
-        };
-        const listener = (event: MessageEvent) => {
-          const parsed = ResponseMessageSchema.safeParse(JSON.parse(String(event.data)));
-          if (parsed.success && parsed.data.id === id) {
-            finish();
-            resolve(parsed.data);
-          }
-        };
-        const timer = setTimeout(() => {
-          finish();
-          reject(new Error(`Socket request timed out: ${method}`));
-        }, 5000);
-        ws.addEventListener("message", listener);
-        ws.addEventListener("close", closed);
-        ws.send(JSON.stringify({ kind: "request", id, method, params }));
-      });
+      return this.progress.measure(
+        rpcStage(method),
+        () =>
+          new Promise<ResponseMessage>((resolve, reject) => {
+            const finish = () => {
+              clearTimeout(timer);
+              ws.removeEventListener("message", listener);
+              ws.removeEventListener("close", closed);
+            };
+            const closed = () => {
+              finish();
+              reject(new Error("Socket closed"));
+            };
+            const listener = (event: MessageEvent) => {
+              const parsed = ResponseMessageSchema.safeParse(JSON.parse(String(event.data)));
+              if (parsed.success && parsed.data.id === id) {
+                finish();
+                resolve(parsed.data);
+              }
+            };
+            const timer = setTimeout(() => {
+              finish();
+              reject(new Error(`Socket request timed out: ${method}`));
+            }, 5000);
+            ws.addEventListener("message", listener);
+            ws.addEventListener("close", closed);
+            ws.send(JSON.stringify({ kind: "request", id, method, params }));
+          }),
+      );
     };
   }
 
@@ -346,7 +368,16 @@ export class ProductionFixture {
     endpoint = this.endpoint,
     observeTransport?: (chunk: Buffer) => void,
   ): Promise<Peer> {
+    return this.progress.measure("mcp.connect", () => this.openPeer(transport, token, endpoint, observeTransport));
+  }
+  private async openPeer(
+    transport: Transport,
+    token: string,
+    endpoint: string,
+    observeTransport?: (chunk: Buffer) => void,
+  ): Promise<Peer> {
     const client = new Client({ name: "orca-production-acceptance", version: "1" });
+    peerProgress.set(client, this.progress);
     this.cleanup.push(() => client.close());
     if (transport === "stdio") {
       const wire = new StdioClientTransport({
@@ -559,7 +590,10 @@ export class ProductionFixture {
     return requested;
   }
 
-  async readyStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+  readyStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+    return this.progress.measure(`wait.${status}`, () => this.observeStatus(peer, runId, status));
+  }
+  private async observeStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
     const type = { waiting: "run.paused", succeeded: "run.completed", cancelled: "run.cancelled" }[status];
     const events = await until(
       () => this.observedEvents(peer, runId),
@@ -762,7 +796,13 @@ export class ProductionFixture {
   }
 }
 
-export async function tool(client: Client, name: string, args: object): Promise<unknown> {
+export function tool(client: Client, name: string, args: object): Promise<unknown> {
+  const progress = peerProgress.get(client);
+  return progress
+    ? progress.measure(toolStage(name), () => callTool(client, name, args))
+    : callTool(client, name, args);
+}
+async function callTool(client: Client, name: string, args: object): Promise<unknown> {
   const result = await client.callTool({ name, arguments: { ...args } });
   expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(OPERATOR_MAX_RESULT_BYTES);
   if (result.isError) throw new Error(`MCP refused ${name}: ${JSON.stringify(result.content)}`);
