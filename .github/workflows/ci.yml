@@ -22,7 +22,7 @@ concurrency:
 jobs:
   changes:
     name: classify changes
-    runs-on: [self-hosted, linux, x64, homelab]
+    runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.classify.outputs.code }}
     steps:
@@ -62,7 +62,7 @@ jobs:
     name: check (node ${{ matrix.node }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: [self-hosted, linux, x64, homelab]
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       # These self-hosted runners share resources. Do not overlap the two full suites:

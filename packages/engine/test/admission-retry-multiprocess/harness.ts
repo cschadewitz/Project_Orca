@@ -1,5 +1,6 @@
 import { fork, type ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { afterAll } from "vitest";
+import { compileRetryWorker } from "./compiled-worker.js";
 import type { RetryResult, DirectAdmissionResult } from "../../../core/src/model/admission-retry.js";
 import type { SubmissionResult } from "@orca/core";
 import type { AdmissionKind, Boundary } from "./fixture.js";
@@ -20,6 +21,9 @@ interface Message {
   data: unknown;
 }
 
+let compiled: ReturnType<typeof compileRetryWorker> | undefined;
+afterAll(() => compiled?.dispose());
+
 export class Worker {
   readonly child: ChildProcess;
   readonly closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
@@ -30,8 +34,10 @@ export class Worker {
   private stderr = "";
 
   constructor(dir: string, kind: AdmissionKind, stopAt: Boundary | "none" = "none", mode = "normal") {
-    this.child = fork(fileURLToPath(new URL("./worker.ts", import.meta.url)), [dir, kind, stopAt, mode], {
-      execArgv: ["--import", fileURLToPath(new URL("../../../../node_modules/tsx/dist/loader.mjs", import.meta.url))],
+    compiled ??= compileRetryWorker();
+    compiled.verify();
+    this.child = fork(compiled.entry, [dir, kind, stopAt, mode], {
+      execArgv: [],
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     this.child.stderr!.on("data", (data: Buffer) => {

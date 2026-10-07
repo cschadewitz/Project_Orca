@@ -28,6 +28,14 @@ necessarily takes full; its older base inventory is incomplete for the refreshed
 audit. Subsequent same-baseline candidates can use the existing literal-only rules.
 The original `d3491cc` review had 339 files and cannot replace this source inventory.
 
+The reporting branch now integrates main
+`c1eba301702fef0466b2d3481c36d62331ee7d48`, including the reviewed test compiler,
+accepted-retry contention fix and standard `ubuntu-24.04` CI routing. The shadow
+consumer uses that same runner route. The frozen inventory above is retained;
+new integrated files conservatively force full selection until a separate audit.
+This integration neither changes selector eligibility nor reuses prior evidence.
+CI 538's Node 22 failure remains historical; its actual holder/cause is unproven.
+
 The initial Tier 1 advisory island contains exactly the existing renderer
 `src/ui/format-time.ts` and `test/format-time.test.tsx`. Eligibility requires a positive structural invariant: each base/candidate leaf
 must match its reviewed normalized AST fingerprint. Only string, numeric and
@@ -223,7 +231,12 @@ Existing full push classification/execution remains unchanged.
 
 Candidate CI workflow, Vitest config and producer/adapter must equal trusted source.
 Changes to reporting/execution need a reviewed default-branch baseline. Artifacts
-are selected by exact run/attempt/Node. Missing, duplicate, expired or stale data
+from the prior runner route remain unknown when their workflow blob differs;
+runner labels are never normalized or accepted by compatibility inference. Before
+this reporting workflow reaches the trusted default branch, producer evidence
+cannot establish a live consumer verdict.
+
+Artifacts are selected by exact run/attempt/Node. Missing, duplicate, expired or stale data
 is unknown. Metadata, compressed-byte SHA-256, archive size, exactly one regular
 `evidence.json` member, JSON size, strict fields, identity and duplicates are checked.
 ZIP members are never extracted to controlled paths. Artifact text is never

@@ -315,6 +315,60 @@ function pipelineHistory() {
   return { dir, base, trusted, merge };
 }
 
+it("rejects prior runner workflow bytes even with exact source identities", async () => {
+  const { dir, base, trusted } = pipelineHistory();
+  const path = join(dir, ".github/workflows/ci.yml");
+  const workflow = readFileSync(path, "utf8");
+  expect(workflow).toContain("runs-on: ubuntu-24.04");
+  writeFileSync(path, workflow.replaceAll("runs-on: ubuntu-24.04", "runs-on: [self-hosted, linux, x64, homelab]"));
+  git(dir, ["add", ".github/workflows/ci.yml"]);
+  const tree = git(dir, ["write-tree"]).toString().trim();
+  const merge = git(
+    dir,
+    [
+      "-c",
+      "user.name=Shadow test",
+      "-c",
+      "user.email=shadow@example.invalid",
+      "commit-tree",
+      tree,
+      "-p",
+      base,
+      "-p",
+      trusted,
+    ],
+    "Synthetic prior runner candidate\n",
+  )
+    .toString()
+    .trim();
+  git(dir, ["reset", "--hard", trusted]);
+  const r = {
+    ...run(),
+    head_sha: trusted,
+    pull_requests: [{ number: 1, base: { sha: base }, head: { sha: trusted } }],
+  };
+  const p = { ...pr(), head: { sha: trusted }, base: { ...pr().base, sha: base }, merge_commit_sha: merge };
+  const output = temp();
+  await expect(
+    consume({
+      repo: dir,
+      out: output,
+      event: { ...event(), workflow_run: r },
+      trusted,
+      apiRead: async (path) => {
+        if (path === "/actions/runs/123") return r;
+        if (path === "/pulls/1") return p;
+        throw new Error("Evidence must not be read for a mismatched runner baseline");
+      },
+      artifactRead: async () => {
+        throw new Error("Artifact must not be read for a mismatched runner baseline");
+      },
+    }),
+  ).rejects.toThrow("unreviewed_evidence_producer_or_runner");
+  expect(() => readJSON(join(output, "plan.json"))).toThrow();
+  expect(() => readJSON(join(output, "comparison.json"))).toThrow();
+});
+
 it.each(["complete", "stale_after_read", "malformed_artifact"])(
   "complete consumer pipeline preserves %s evidence",
   async (mode) => {

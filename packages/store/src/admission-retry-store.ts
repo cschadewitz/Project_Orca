@@ -4,7 +4,7 @@ import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { OrcaError } from "@orca/core";
+import { OrcaError, isOrcaError } from "@orca/core";
 import type {
   JsonValue,
   RetryClaimStore,
@@ -136,53 +136,81 @@ export class FileRetryClaimStore implements RetryClaimStore {
     canonical: string,
     validateFresh?: () => Promise<void>,
   ): Promise<{ record: RetryRecord; fresh: boolean }> {
-    return this.mutex("catalog", async () => {
-      const catalog = await this.catalog();
-      const salt = await this.salt(catalog.total === 0);
-      const digest = (value: unknown) => createHmac("sha256", salt).update(JSON.stringify(value)).digest("hex");
-      const lookup = key === undefined ? undefined : digest([scope.workspaceId, scope.principalId, scope.kind, key]);
-      if (lookup) {
-        const pointer = await this.options.execution.getGeneration(`admission-retry-key-${lookup}`);
-        if (pointer !== undefined) {
-          const { operationId } = Pointer.pick({ operationId: true }).parse(pointer);
-          const record = await this.read(operationId);
-          if (
-            !record ||
-            record.workspaceId !== scope.workspaceId ||
-            record.principalId !== scope.principalId ||
-            record.kind !== scope.kind
-          )
-            throw unavailable();
-          return { record, fresh: false };
+    let entered = false;
+    try {
+      return await this.mutex("catalog", async () => {
+        entered = true;
+        const catalog = await this.catalog();
+        const salt = await this.salt(catalog.total === 0);
+        const digest = (value: unknown) => createHmac("sha256", salt).update(JSON.stringify(value)).digest("hex");
+        const lookup = key === undefined ? undefined : digest([scope.workspaceId, scope.principalId, scope.kind, key]);
+        const existing = lookup ? await this.lookup(scope, lookup) : undefined;
+        if (existing) return { record: existing, fresh: false };
+        const workspace = digest([scope.workspaceId]),
+          principal = digest([scope.workspaceId, scope.principalId]);
+        if (
+          (catalog.workspaces[workspace] ?? 0) >= this.limits.maxClaimsPerWorkspace ||
+          (catalog.principals[principal] ?? 0) >= this.limits.maxClaimsPerPrincipal
+        )
+          throw this.options.faults.limit();
+        // Existing records returned above never revalidate moving state. A fresh
+        // refusal leaves no sealed claim, lookup entry, quota charge or publication.
+        // The trusted validator must not acquire a fence or mutate this journal.
+        if (validateFresh) await validateFresh();
+        const record: RetryRecord = {
+          ...scope,
+          operationId: `retry_${randomUUID()}`,
+          command,
+          canonical,
+          phase: "claimed",
+        };
+        const ref = await this.seal(record);
+        catalog.total++;
+        catalog.workspaces[workspace] = (catalog.workspaces[workspace] ?? 0) + 1;
+        catalog.principals[principal] = (catalog.principals[principal] ?? 0) + 1;
+        catalog.pending = {
+          operationId: record.operationId,
+          ref,
+          ordinal: catalog.total,
+          ...(lookup ? { lookup } : {}),
+        };
+        await this.publish("catalog.json", catalog);
+        await this.catalog();
+        return { record, fresh: true };
+      });
+    } catch (error) {
+      if (!entered && key !== undefined && isOrcaError(error, "STORE_LOCK_TIMEOUT")) {
+        // Only immutable, already-published lookup material is safe without the catalog
+        // mutex. Never recover pending catalog work or create a salt/key/claim here.
+        // The engine still reauthorizes, compares intent, and reloads under the original
+        // operation mutex before validating an accepted receipt or returning it.
+        try {
+          const salt = await this.salt(false);
+          const lookup = createHmac("sha256", salt)
+            .update(JSON.stringify([scope.workspaceId, scope.principalId, scope.kind, key]))
+            .digest("hex");
+          const record = await this.lookup(scope, lookup);
+          if (record?.phase === "accepted") return { record, fresh: false };
+        } catch {
+          // A missing, corrupt or mismatched lookup must retain the original refusal.
         }
       }
-      const workspace = digest([scope.workspaceId]),
-        principal = digest([scope.workspaceId, scope.principalId]);
-      if (
-        (catalog.workspaces[workspace] ?? 0) >= this.limits.maxClaimsPerWorkspace ||
-        (catalog.principals[principal] ?? 0) >= this.limits.maxClaimsPerPrincipal
-      )
-        throw this.options.faults.limit();
-      // Existing records returned above never revalidate moving state. A fresh
-      // refusal leaves no sealed claim, lookup entry, quota charge or publication.
-      // The trusted validator must not acquire a fence or mutate this journal.
-      if (validateFresh) await validateFresh();
-      const record: RetryRecord = {
-        ...scope,
-        operationId: `retry_${randomUUID()}`,
-        command,
-        canonical,
-        phase: "claimed",
-      };
-      const ref = await this.seal(record);
-      catalog.total++;
-      catalog.workspaces[workspace] = (catalog.workspaces[workspace] ?? 0) + 1;
-      catalog.principals[principal] = (catalog.principals[principal] ?? 0) + 1;
-      catalog.pending = { operationId: record.operationId, ref, ordinal: catalog.total, ...(lookup ? { lookup } : {}) };
-      await this.publish("catalog.json", catalog);
-      await this.catalog();
-      return { record, fresh: true };
-    });
+      throw error;
+    }
+  }
+  private async lookup(scope: RetryScope, lookup: string): Promise<RetryRecord | undefined> {
+    const pointer = await this.options.execution.getGeneration(`admission-retry-key-${lookup}`);
+    if (pointer === undefined) return undefined;
+    const { operationId } = Pointer.pick({ operationId: true }).parse(pointer);
+    const record = await this.read(operationId);
+    if (
+      !record ||
+      record.workspaceId !== scope.workspaceId ||
+      record.principalId !== scope.principalId ||
+      record.kind !== scope.kind
+    )
+      throw unavailable();
+    return record;
   }
   private async seal(record: RetryRecord): Promise<string> {
     const ref = randomUUID();

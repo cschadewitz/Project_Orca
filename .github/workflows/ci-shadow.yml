@@ -13,7 +13,7 @@ permissions:
 jobs:
   compare:
     name: advisory same-candidate comparison
-    runs-on: [self-hosted, linux, x64, homelab]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       # workflow_run github.sha is the default-branch commit, NOT the PR candidate.
