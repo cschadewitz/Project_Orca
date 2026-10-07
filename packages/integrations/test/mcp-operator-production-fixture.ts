@@ -547,7 +547,10 @@ export class ProductionFixture {
   }
 
   /** Wait for publication milestones before asserting a settled MCP projection. Errors propagate. */
-  async readyInput(peer: Peer, runId: string) {
+  readyInput(peer: Peer, runId: string) {
+    return this.progress.measure("wait.input", () => this.observeInput(peer, runId));
+  }
+  private async observeInput(peer: Peer, runId: string) {
     const requested = await until(
       async () => {
         const events = await this.observedEvents(peer, runId);
@@ -663,7 +666,10 @@ export class ProductionFixture {
     }
   }
 
-  async boundary(peer: Peer, runId: string) {
+  boundary(peer: Peer, runId: string) {
+    return this.progress.measure("wait.boundary", () => this.observeBoundary(peer, runId));
+  }
+  private async observeBoundary(peer: Peer, runId: string) {
     await this.readyStatus(peer, runId, "waiting");
     const page = await until(
       () => this.page(peer, "runs", { runId }),
@@ -673,7 +679,10 @@ export class ProductionFixture {
     return page.items[0]!.expectedBoundary!;
   }
 
-  async status(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+  status(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
+    return this.progress.measure(`wait.${status}`, () => this.observeProjectionStatus(peer, runId, status));
+  }
+  private async observeProjectionStatus(peer: Peer, runId: string, status: "waiting" | "succeeded" | "cancelled") {
     await this.readyStatus(peer, runId, status);
     return until(
       () => this.page(peer, "runs", { runId }),
