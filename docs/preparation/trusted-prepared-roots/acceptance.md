@@ -23,7 +23,9 @@ this task. See the [copy receipt](https://github.com/cschadewitz/Project_Orca/is
 ## Local and repository checks
 
 The environment has installed Node 22.23.2, Node 24.21.0 and pnpm 12.4.2, outside
-the default PATH. The task checkout has **no node_modules**. The issue prohibits
+the default PATH. The task checkout initially had **no node_modules** and still
+has no installed dependency packages. The direct Vitest runner creates only its
+ignored `node_modules/.vite/vitest` results cache. The issue prohibits
 installing packages and live source/dependency copying. Accordingly, dependent
 checks requiring checkout dependencies stay blocked. Existing static Prettier
 3.9.9, ESLint 10.11.0 and Vitest 5.0.2 entries were subsequently found in a prior
