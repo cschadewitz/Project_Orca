@@ -57,6 +57,7 @@ export class RecoveryController {
   private previousAvailable = false;
   private cleanupPending = false;
   private ageUncertain = false;
+  private uncertaintyMaintenancePending = false;
   private code: DiagnosticResultCode = "off";
   private lastCheckpoint: BootReading | undefined;
   private busy = false;
@@ -180,6 +181,9 @@ export class RecoveryController {
   }
   async setEnabled(enabled: boolean, scopeVersion: number): Promise<DiagnosticsResult<DiagnosticsStatus>> {
     if (typeof enabled !== "boolean" || scopeVersion !== DIAGNOSTICS_SCOPE) return failure("refused");
+    // Admission precedes initialization and pre-enable cleanup: neither await
+    // may let an older Enable adopt authority revoked by a newer Off.
+    const epoch = this.epoch;
     // Immediate logical revocation precedes ALL awaits, including an outstanding native call.
     if (!enabled) {
       this.setting = { ...this.setting, enabled: false };
@@ -208,11 +212,12 @@ export class RecoveryController {
       });
     }
     await this.initialize();
+    if (epoch !== this.epoch) return failure("off");
     if (this.setting.enabled) return success(this.status());
     return this.mutate(async () => {
       await this.cleanupOwned();
+      if (epoch !== this.epoch) return;
       if (this.exportState.current || this.cleanupPending) throw new Error("cleanup_pending");
-      const epoch = this.epoch;
       const next = { ...this.setting, enabled: true, scopeVersion: DIAGNOSTICS_SCOPE };
       await this.options.disk.writeSetting(next);
       if (epoch !== this.epoch) {
@@ -281,13 +286,14 @@ export class RecoveryController {
     });
   }
   async preparePreview(source: "current" | "previous"): Promise<DiagnosticsResult<DiagnosticPreview>> {
+    const epoch = this.epoch;
     await this.initialize();
+    if (epoch !== this.epoch) return failure("stale_preview");
     if (source !== "current" && source !== "previous") return failure("refused");
     if (!this.authorized()) return failure(this.setting.enabled ? "unavailable" : "off");
     if (this.busy || this.preview || this.retiredPreview) return failure("publication_pending");
     this.reserve(4 * RECOVERY_LIMITS.exportBytes);
     this.busy = true;
-    const epoch = this.epoch;
     const work = (async (): Promise<DiagnosticsResult<DiagnosticPreview>> => {
       try {
         const now = this.now();
@@ -639,6 +645,7 @@ export class RecoveryController {
     if (!this.setting.enabled && this.disableWrite) await this.disableWrite;
     if (!this.setting.enabled && this.disableFailed) throw new Error("cleanup_pending");
     await this.options.disk.cleanup();
+    this.uncertaintyMaintenancePending = false;
     // Startup may have failed before reading a durable export obligation. Safe
     // cleanup preserves that record; an empty cache cannot prove it was resolved.
     const persisted = await this.options.disk.readExportState();
@@ -717,7 +724,9 @@ export class RecoveryController {
     }
   }
   private authorized(epoch = this.epoch): boolean {
-    return this.setting.enabled && this.productionEnabled && epoch === this.epoch && this.ring.enabled;
+    return (
+      this.setting.enabled && this.productionEnabled && !this.ageUncertain && epoch === this.epoch && this.ring.enabled
+    );
   }
   private currentPreview(handle: string): Preview | undefined {
     this.checkPreview(this.now());
@@ -749,6 +758,9 @@ export class RecoveryController {
   }
   /** Called only by main after verified old document/process disposal, never renderer IPC. */
   rendererDisposed(): void {
+    // Pending preparation/pickers have no preview to drop yet. Fence them too,
+    // without revoking consent or releasing their still-live payload charge.
+    this.epoch++;
     this.dropPreview();
     this.releaseRetiredPreview();
     this.emit();
@@ -773,15 +785,47 @@ export class RecoveryController {
       if (
         !validReading(next) ||
         (this.reading && (next.bootId !== this.reading.bootId || next.elapsedMs < this.reading.elapsedMs))
-      )
+      ) {
+        if (this.setting.enabled && this.productionEnabled) this.observeClockUncertainty();
         return undefined;
+      }
       // Native adapters may reuse a mutable reading object. Anchors and prior
       // readings must keep their original scalar values across async work.
       this.reading = { bootId: next.bootId, elapsedMs: next.elapsedMs };
       return this.reading;
     } catch {
+      if (this.setting.enabled && this.productionEnabled) this.observeClockUncertainty();
       return undefined;
     }
+  }
+  private observeClockUncertainty(): void {
+    if (this.ageUncertain) return;
+    this.ageUncertain = true;
+    this.previousAvailable = false;
+    this.ring.stop();
+    this.epoch++;
+    this.dropPreview();
+    this.cleanupPending = true;
+    if (!this.exportState.current) this.code = "age_uncertain";
+    this.uncertaintyMaintenancePending = true;
+    // now() is also called by status()/emit(). Never emit recursively here.
+    this.scheduleUncertainMaintenance();
+  }
+  private scheduleUncertainMaintenance(): void {
+    if (!this.uncertaintyMaintenancePending) return;
+    queueMicrotask(() => {
+      if (
+        !this.uncertaintyMaintenancePending ||
+        this.busy ||
+        this.disableWrite ||
+        !this.initialized ||
+        !this.setting.enabled
+      )
+        return;
+      void this.mutate(async () => {
+        await this.maintainHistory(undefined);
+      });
+    });
   }
   private startTimer(): void {
     if (this.timer) clearInterval(this.timer);
@@ -803,15 +847,21 @@ export class RecoveryController {
     await this.checkpoint();
   }
   private async maintainHistory(now: BootReading | undefined): Promise<boolean> {
-    if (!now) {
-      this.ageUncertain = true;
-      this.previousAvailable = false;
-      this.ring.stop();
-      this.revokePreviewAuthority();
+    if (!now) this.observeClockUncertainty();
+    if (this.ageUncertain) this.uncertaintyMaintenancePending = false;
+    let previous: boolean;
+    try {
+      // A plausible later sample cannot restore the pre-discontinuity history.
+      // Retrying cleanup must still remove it if the first attempt failed.
+      previous = await this.options.disk.maintain(this.ageUncertain ? undefined : now);
+    } catch (error) {
+      // The disk reports age_uncertain only after revocation and owned cleanup.
+      // A retry with a valid clock can finish cleanup, but never restart capture.
+      if (now && this.ageUncertain && error instanceof Error && error.message === "age_uncertain") return false;
+      throw error;
     }
-    const previous = await this.options.disk.maintain(now);
     if (!now) throw new Error("age_uncertain");
-    return previous;
+    return this.ageUncertain ? false : previous;
   }
   private reserve(bytes: number): void {
     if (this.payloadReservedBytes + bytes > RECOVERY_LIMITS.payloadBytes) throw new Error("capacity_limited");
@@ -829,6 +879,8 @@ export class RecoveryController {
         /* UI failure has no execution effect. */
       }
     }
+    // A busy operation keeps its slot until settlement; retry admission then.
+    this.scheduleUncertainMaintenance();
   }
 }
 const digest = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");

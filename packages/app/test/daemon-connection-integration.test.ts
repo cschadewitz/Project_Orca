@@ -15,6 +15,7 @@ const shell = vi.hoisted(() => ({
   userData: "",
   workspace: undefined as Workspace | undefined,
   handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
+  rendererEvents: new Map<string, () => void>(),
   events: undefined as EventEmitter | undefined,
   webContents: undefined as { id: number; mainFrame: object } | undefined,
   ready: true,
@@ -36,7 +37,7 @@ vi.mock("electron", async () => {
   const webContents = {
     id: 1,
     mainFrame: {},
-    on: vi.fn(),
+    on: (event: string, listener: () => void) => shell.rendererEvents.set(event, listener),
     send: (channel: string, value: unknown) => {
       shell.sent(channel, value);
       if (channel === "orca:update.prepare" && typeof value === "string")
@@ -124,6 +125,7 @@ beforeEach(() => {
   vi.resetModules();
   shell.events?.removeAllListeners();
   shell.handlers.clear();
+  shell.rendererEvents.clear();
   shell.workspace = undefined;
   shell.ready = true;
   shell.hasWindow = true;
@@ -167,6 +169,65 @@ it("dispatches verified opt-out before diagnostics initialization while opt-in w
   await on;
   expect(choices).toHaveBeenCalledTimes(2);
   expect(await readdir(directory)).toEqual([]);
+});
+
+it("a verified newer Off fences an older Enable waiting at the main initialization boundary", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-diagnostics-consent-ipc-"));
+  shell.userData = directory;
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.spyOn(RecoveryController.prototype, "initialize").mockReturnValue(waiting);
+  const choices = vi.spyOn(RecoveryController.prototype, "setEnabled");
+  await import("../src/main/index.js");
+  const sender = shell.webContents!;
+  const event = { sender, senderFrame: sender.mainFrame };
+  const epoch = shell.workspace!.connectionTarget.epoch;
+  const invoke = (enabled: boolean) =>
+    shell.handlers.get("orca:diagnostics.setEnabled")!(event, { enabled, scopeVersion: 1 }, epoch);
+  const enabling = invoke(true);
+  expect(choices).not.toHaveBeenCalled();
+  await invoke(false);
+  release();
+  expect(await enabling).toEqual({ ok: false, code: "stale_preview" });
+  expect(choices).toHaveBeenCalledTimes(1);
+  expect(choices).toHaveBeenCalledWith(false, 1);
+  expect(await readdir(directory)).toEqual([]);
+});
+
+it("renderer-process-gone fences a preview waiting at main initialization without a reload", async () => {
+  const { DaemonClient } = await import("../src/client/daemon-client.js");
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  directory = await mkdtemp(join(tmpdir(), "orca-renderer-loss-ipc-"));
+  shell.userData = directory;
+  vi.stubEnv("ORCA_DAEMON_URL", "http://localhost:9999");
+  vi.spyOn(DaemonClient.prototype, "subscribe").mockReturnValue({ close: vi.fn() } as unknown as DaemonSubscription);
+  await import("../src/main/index.js");
+  const workspace = shell.workspace!;
+  await workspace.connect();
+  shell.hasWindow = false;
+  await shell.handlers.get("orca:workspace.open")!({}, {}, workspace.connectionTarget.epoch);
+  expect(shell.createWindow).toHaveBeenCalledOnce();
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.spyOn(RecoveryController.prototype, "initialize").mockReturnValue(waiting);
+  const prepare = vi.spyOn(RecoveryController.prototype, "preparePreview");
+  const disposed = vi.spyOn(RecoveryController.prototype, "rendererDisposed");
+  const sender = shell.webContents!;
+  const preparing = shell.handlers.get("orca:diagnostics.preparePreview")!(
+    { sender, senderFrame: sender.mainFrame },
+    { source: "previous" },
+    workspace.connectionTarget.epoch,
+  );
+  shell.rendererEvents.get("render-process-gone")!();
+  expect(disposed).toHaveBeenCalledOnce();
+  release();
+  expect(await preparing).toEqual({ ok: false, code: "stale_preview" });
+  expect(prepare).not.toHaveBeenCalled();
 });
 
 it("permits old-target preview disposal only from the current window document without initializing diagnostics", async () => {

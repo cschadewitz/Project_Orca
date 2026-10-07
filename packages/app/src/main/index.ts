@@ -75,6 +75,7 @@ diagnostics.subscribe((status) => {
     if (!win.isDestroyed()) win.webContents.send("orca:diagnostics.changed", status);
 });
 const diagnosticWindowGenerations = new Map<number, number>();
+let diagnosticConsentGeneration = 0;
 const diagnosticHandle = (
   method: string,
   schema: z.ZodType,
@@ -85,6 +86,7 @@ const diagnosticHandle = (
     try {
       const win = BrowserWindow.fromWebContents(event.sender);
       const generation = diagnosticWindowGenerations.get(event.sender.id) ?? 0;
+      const consentGeneration = diagnosticConsentGeneration;
       const frame = event.senderFrame;
       const currentSender = () =>
         win &&
@@ -109,10 +111,16 @@ const diagnosticHandle = (
       if (disposalOnly) return await run(parsed.data);
       // Opt-out revokes in the controller before any initialization wait. Its
       // current sender, target and strict consent parameters were verified above.
-      if (method === "setEnabled" && (parsed.data as { enabled: boolean }).enabled === false)
+      if (method === "setEnabled" && (parsed.data as { enabled: boolean }).enabled === false) {
+        diagnosticConsentGeneration++;
         return await run(parsed.data);
+      }
       await diagnostics.initialize();
-      if (!currentSender() || epoch !== workspace.connectionTarget.epoch)
+      if (
+        !currentSender() ||
+        epoch !== workspace.connectionTarget.epoch ||
+        (method === "setEnabled" && consentGeneration !== diagnosticConsentGeneration)
+      )
         return { ok: false, code: "stale_preview" } satisfies DiagnosticsResult<never>;
       return await run(parsed.data);
     } catch {
@@ -786,15 +794,21 @@ function createWindow(): void {
     },
   });
   const diagnosticsWindowId = win.webContents.id;
-  win.webContents.on("did-start-loading", () => {
+  const advanceDiagnosticDocument = () => {
     diagnosticWindowGenerations.set(
       diagnosticsWindowId,
       (diagnosticWindowGenerations.get(diagnosticsWindowId) ?? 0) + 1,
     );
+  };
+  win.webContents.on("did-start-loading", () => {
+    advanceDiagnosticDocument();
     diagnostics.revokePreviewAuthority();
   });
   win.webContents.on("did-navigate", () => diagnostics.rendererDisposed());
-  win.webContents.on("render-process-gone", () => diagnostics.rendererDisposed());
+  win.webContents.on("render-process-gone", () => {
+    advanceDiagnosticDocument();
+    diagnostics.rendererDisposed();
+  });
   win.on("closed", () => {
     diagnosticWindowGenerations.delete(diagnosticsWindowId);
     diagnostics.revokePreviewAuthority();
