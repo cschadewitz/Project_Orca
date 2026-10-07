@@ -28,13 +28,24 @@ necessarily takes full; its older base inventory is incomplete for the refreshed
 audit. Subsequent same-baseline candidates can use the existing literal-only rules.
 The original `d3491cc` review had 339 files and cannot replace this source inventory.
 
-The reporting branch now integrates main
+The historical CI 553 reporting integration included main
 `c1eba301702fef0466b2d3481c36d62331ee7d48`, including the reviewed test compiler,
 accepted-retry contention fix and standard `ubuntu-24.04` CI routing. The shadow
 consumer uses that same runner route. The frozen inventory above is retained;
 new integrated files conservatively force full selection until a separate audit.
 This integration neither changes selector eligibility nor reuses prior evidence.
 CI 538's Node 22 failure remains historical; its actual holder/cause is unproven.
+
+The final ready-baseline refresh integrates main
+`6abcdbaa72f26972adfc1ce6f9ef03e0232b47a9`, including the reviewed ACP SDK 1.7.0
+update, preparation documentation/staging tests and daemon shutdown settlement.
+Reporting source, strict trusted workflow/producer parity, intentional-skip policy
+and frozen inventory are retained. New discovery remains full until separately
+audited; this refresh does not expand selector eligibility. The parent-verified
+CI 553 comparison selected full/all 345 on its original `c1eba301` base,
+`6db566c` head and `1901becc` candidate, with both lanes compared and three skips
+retained per lane. That historical evidence cannot authorize this newer tuple.
+Fresh full CI and a later live default-branch consumer remain separate gates.
 
 The initial Tier 1 advisory island contains exactly the existing renderer
 `src/ui/format-time.ts` and `test/format-time.test.tsx`. Eligibility requires a positive structural invariant: each base/candidate leaf
