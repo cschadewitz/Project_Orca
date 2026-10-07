@@ -246,7 +246,7 @@ export class ProductionFixture {
 
   /** Admin operations affect only this fixture's synthetic auth directory, in another compiled process. */
   private async admin(action: "issue" | "revoke", value: unknown): Promise<unknown> {
-    const code = `import { openAuthDirectory } from ${JSON.stringify(moduleUrl("packages/daemon/dist/index.js"))};
+    const code = `import { openAuthDirectory } from ${JSON.stringify(moduleUrl("packages/daemon/dist/auth/bootstrap.js"))};
       let text = ''; for await (const chunk of process.stdin) text += chunk;
       const {action, value, dir} = JSON.parse(text); const auth = openAuthDirectory(dir);
       const result = action === 'issue' ? await auth.credentials.issue(value) : await auth.credentials.revoke(value);
