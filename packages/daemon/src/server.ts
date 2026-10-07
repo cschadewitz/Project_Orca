@@ -121,6 +121,7 @@ export interface DaemonHandle {
   url: string;
   /** The WebSocket URL, when this daemon was given an engine feed to subscribe to. */
   socketUrl?: string | undefined;
+  /** Stop transports and await dispatched method handlers, including disconnected callers. */
   close: () => Promise<void>;
   /** Bounded startup sweep; resolves only the original sealed credential, never a process owner. */
   recoverContinuations?: (() => Promise<void>) | undefined;
@@ -829,7 +830,29 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const gate = new TransportGate(auth, host, authorizer);
   // The guard is outermost: a caller is authorized before maintenance admission is consulted,
   // so an unauthorized caller cannot even learn that an update is in progress.
-  const methods = authorizer.guard(opts.methods ? ctx.maintenance!.wrap(opts.methods) : methodsFor(ctx));
+  const guarded = authorizer.guard(opts.methods ? ctx.maintenance!.wrap(opts.methods) : methodsFor(ctx));
+  const pending = new Set<Promise<unknown>>();
+  let closing: Promise<void> | undefined;
+  const methods: MethodTable = Object.fromEntries(
+    Object.entries(guarded).map(([name, method]) => [
+      name,
+      {
+        params: method.params,
+        handle: (params: unknown, invocation: MethodContext) => {
+          if (closing) throw new OrcaError("RUN_STATE", "The daemon is closing");
+          // Register before entering any asynchronous authority or application work.
+          // A caller disconnect does not cancel an admitted durable operation.
+          const operation = Promise.resolve().then(() => method.handle(params, invocation));
+          pending.add(operation);
+          void operation.then(
+            () => pending.delete(operation),
+            () => pending.delete(operation),
+          );
+          return operation;
+        },
+      },
+    ]),
+  );
   const server: Server = createServer((req, res) => {
     void (async () => {
       const path = (req.url ?? "").split("?")[0];
@@ -915,14 +938,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     url,
     ...(recoverContinuations ? { recoverContinuations } : {}),
     ...(detachSocket ? { socketUrl: socketUrlFor(url) } : {}),
-    close: async () => {
-      // Sockets first: an open upgraded connection is not an HTTP connection, so
-      // `closeAllConnections` does not reach it and `server.close` would wait on it forever.
-      await detachSocket?.();
-      await new Promise<void>((resolve, reject) => {
-        server.close((e) => (e ? reject(e) : resolve()));
-        server.closeAllConnections();
+    close: () => {
+      closing ??= Promise.resolve().then(async () => {
+        // Stop accepting HTTP immediately; upgraded connections need separate closure.
+        const stopped = new Promise<void>((resolve, reject) => {
+          server.close((e) => (e ? reject(e) : resolve()));
+          server.closeAllConnections();
+        });
+        await Promise.all([stopped, detachSocket?.()]);
+        // Handler rejection still settles its work. Dispatch retains the original error.
+        await Promise.allSettled(pending);
       });
+      return closing;
     },
   };
 }
