@@ -73,6 +73,13 @@ correspondence in protected evidence; public aliases are not authority. Cap the
 later run at the human-approved budget; stop on unexpected files, network requests,
 scope, credential prompts, provider retries, unsupported routing or evidence loss.
 
+Set the case's `expectedEffect` before the observation. Record `approvalPath`
+separately: native authorization with no ACP ask has no `requested`, `surfaced`
+or `delivered` facts. If an effect is independently observed after reject/cancel
+or expiry, preserve `executed` and report `fail` / `unexpected-execution`.
+Otherwise, if callback delivery remains unknown, preserve the observed effect with
+`unknown` / `delivery-unknown`; never infer approval or delivery from it.
+
 Only publish sanitized result metadata after review. Link findings to #393's
 existing matrix and owning #327/#237/bridge seam. Cleanup may remove only the
 explicitly authorized disposable fixture state; never reset historical inputs,

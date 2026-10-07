@@ -9,18 +9,36 @@ installed/deployed proof. Baseline ORCA is
 | Component | Evidence | Status |
 | --- | --- | --- |
 | Installed profile labels | [#502 owner observation](https://github.com/cschadewitz/Project_Orca/issues/502#issuecomment-6022267371), refreshed [here](https://github.com/cschadewitz/Project_Orca/issues/502#issuecomment-6028681755): Codex CLI 0.159.1, adapter 2.1.1 | Recorded labels; no installed binary/hash/config inspection in #506 |
-| Codex 0.159.1 release | [`rust-v0.159.1`](https://github.com/openai/codex/releases/tag/rust-v0.159.1) resolves to [`8e68a98ef03cdde76d2e6800791ebdf1b3b95b24`](https://github.com/openai/codex/commit/8e68a98ef03cdde76d2e6800791ebdf1b3b95b24) | Release provenance resolved; native approval implementation unavailable in this retrieval |
+| Codex 0.159.1 release | [`rust-v0.159.1`](https://github.com/openai/codex/releases/tag/rust-v0.159.1) resolves to [`8e68a98ef03cdde76d2e6800791ebdf1b3b95b24`](https://github.com/openai/codex/commit/8e68a98ef03cdde76d2e6800791ebdf1b3b95b24) | Release provenance and the native parameter/emission/response sources below retrieved at this SHA; installed-artifact correspondence unverified |
 | ACP adapter 2.1.1 release | [`v2.1.1`](https://github.com/agentclientprotocol/codex-acp/commit/68d7d2d5ddfc0ed5746f9f6130892dda685e65dd), SHA `68d7d2d5ddfc0ed5746f9f6130892dda685e65dd`; pinned [package](https://github.com/agentclientprotocol/codex-acp/blob/68d7d2d5ddfc0ed5746f9f6130892dda685e65dd/package.json) | Exact release source retrieved. Package depends on `@openai/codex: ^0.159.1`; range alone does not pin the launched CLI |
 | Executable selection | Pinned [launcher](https://github.com/agentclientprotocol/codex-acp/blob/68d7d2d5ddfc0ed5746f9f6130892dda685e65dd/src/CodexJsonRpcConnection.ts) and [entry point](https://github.com/agentclientprotocol/codex-acp/blob/68d7d2d5ddfc0ed5746f9f6130892dda685e65dd/src/index.ts) | Explicit Codex path or dependency launcher starts `app-server`; installed selection remains unknown |
 
 The archived `zed-industries/codex-acp` repository did not resolve `v2.1.1`
 or `2.1.1` (422); its release URL returned 404. Search located the newer
 `agentclientprotocol/codex-acp` repository. No upstream-main behavior is used
-as a substitute. Native `codex-rs/app-server-protocol/src/protocol/v2.rs` at
-the exact CLI SHA returned 404 through GitHub and raw retrieval; native
-`core/src/config/permissions.rs` retrieval was unavailable. Generated bridge
-types establish what this bridge expects, not what every installed native
-execution path emits. **Native emission coverage is unknown.**
+as a substitute. The initial native `protocol/v2.rs` lookup was the wrong path:
+`v2` is a directory at the pinned CLI SHA. Cal's review identified the exact
+files below; these were retrieved and reviewed at that SHA. This corrects the
+initial retrieval gap. Native source describes these code paths, not every
+installed execution path; **installed emission and managed routing remain
+unverified**. Generated bridge types still establish only the bridge's contract.
+
+## Pinned native approval source
+
+Every native link below uses `8e68a98ef03cdde76d2e6800791ebdf1b3b95b24`.
+This is a source review; no native binary, model or app-server was launched.
+
+| Boundary | Source observation | Available / lost evidence |
+| --- | --- | --- |
+| Native command parameters | [CommandExecutionRequestApprovalParams](https://github.com/openai/codex/blob/8e68a98ef03cdde76d2e6800791ebdf1b3b95b24/codex-rs/app-server-protocol/src/protocol/v2/item.rs#L1549-L1630) | Thread/turn/item/start time, action kind, environment and optional distinct callback approval ID. Regular shell/unified-exec approval ID is null; subcommand/stdin callbacks can have distinct IDs under one item. Optional command string, cwd, reason, parsed actions, network context, additional permissions, amendments and available decisions. No structured argv/environment or effect proof. Additional permissions/available decisions are marked experimental; the stripping helper clears additional permissions |
+| Native permission-profile scope | [Permission params and response](https://github.com/openai/codex/blob/8e68a98ef03cdde76d2e6800791ebdf1b3b95b24/codex-rs/app-server-protocol/src/protocol/v2/permissions.rs#L773-L806) | Request includes thread/turn/item/environment/start time/cwd/reason/profile. Response carries granted profile plus scope `Turn` (default) or `Session`; optional `strictAutoReview` requests review of every subsequent command in the turn. This is broader than one command |
+| Native command approval emission | [ExecApprovalRequest event handling](https://github.com/openai/codex/blob/8e68a98ef03cdde76d2e6800791ebdf1b3b95b24/codex-rs/app-server/src/bespoke_event_handling.rs#L667-L815) | Converts effective decisions and native event identity to `CommandExecutionRequestApproval`, then sends a pending server request. Invalid cwd is denied. The command branch emits `shlex_join` of the original command vector, cwd and best-effort parsed actions; its comment distinguishes exact approval command from redacted history. The managed-network branch instead emits network context with command/cwd/actions absent. These branches do not prove all native actions request approval or identify which branch Cal's installed policy uses |
+| Native command response → core callback | [Response mapping and submission](https://github.com/openai/codex/blob/8e68a98ef03cdde76d2e6800791ebdf1b3b95b24/codex-rs/app-server/src/bespoke_event_handling.rs#L1965-L2090) | `Accept` → `Approved`; session/execpolicy/network amendments retain broader semantics. `Decline` → denied; `Cancel` → abort. Parse, client and channel errors deny; turn-transition errors return without resubmission. Submits `Op::ExecApproval` with the distinct approval ID or item ID and event turn ID. Submission may fail; response mapping is not effect proof |
+
+The reviewed native command branch preserves a shell-quoted representation of
+the input vector in its approval string. The later bridge shell-prefix transform
+can still remove that context. Source availability therefore does not resolve
+the command fidelity or operator-projection stop gate.
 
 ## Native request to ACP
 
@@ -64,7 +82,7 @@ preparation head over that baseline.
   transformed command string lacks lossless shell/argv binding; native invocation
   and scope/effect provenance are incomplete. Never approve from “Run command”,
   task text, update events or a matching tool-call ID alone.
-- **Unknown:** installed bridge artifact-to-release match, actual native emission,
+- **Unknown:** installed CLI/bridge artifact-to-release match, installed native emission,
   managed/automatic reviewer routing and actual Cal tool selection. Release tags
   and source compatibility do not establish these.
 - **Unsupported:** turn/session permission-profile grants in a one-command test,

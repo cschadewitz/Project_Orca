@@ -17,6 +17,8 @@ are new files in this directory. Production and existing test files are reserved
   support limits.
 - [Test matrix](test-matrix.md): assertions, seams and unproved boundaries.
 - [Evidence contract](evidence-format.md): versioned, bounded, safe reporting.
+- [Evidence regression samples](evidence-v1.samples.json): unexpected effects,
+  unknown delivery, native execution without an ACP ask, and invalid pass claims.
 - [Later test handoff](live-test-handoff.md): disabled and unexecuted; requires
   separate authorization under [#393](https://github.com/cschadewitz/Project_Orca/issues/393).
 - [Validation](validation.md): exact commands, results and blocked checks.

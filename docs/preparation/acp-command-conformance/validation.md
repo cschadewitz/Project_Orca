@@ -18,7 +18,7 @@ evidence format, not a runtime protocol schema.
 | Repository Prettier check | Passed; final fixture/schema formatting also checked |
 | Design generated-file check | Passed |
 | TypeScript project-reference build and Vite renderer build | Passed. Existing renderer large-chunk advisory remains |
-| Evidence v1 schema/example/negative samples | Draft 2020-12 schema valid; example accepted; raw environment, private/incomplete identity, unsupported execution claim and contradictory not-run rejected |
+| Evidence v1 schema/example/regression samples | Draft 2020-12 schema valid; example accepted; 9 valid and 15 invalid samples behave as expected, including unexpected effects, native execution without ACP, unknown callback delivery, false passes and raw-data restrictions |
 | Scope, diff whitespace and relative documentation links | Checked; owned files only |
 
 ## Exact check commands
@@ -72,8 +72,10 @@ jsonschema.Draft202012Validator.check_schema(schema)
 example = json.loads(re.search(r"```json\n(.*?)\n```", (root / "evidence-format.md").read_text(), re.S).group(1))
 validator = jsonschema.Draft202012Validator(schema)
 validator.validate(example)
-for patch in [dict(environment={"TOKEN": "synthetic-secret"}), dict(observations=["executed"]), dict(identity={"run": "private-host"}), dict(result="not-run")]:
-    assert not validator.is_valid({**example, **patch})
+samples = json.loads((root / "evidence-v1.samples.json").read_text())
+for sample in samples["samples"]:
+    record = {**samples["base"], **sample["patch"]}
+    assert validator.is_valid(record) == sample["valid"], sample["name"]
 ```
 
 ## Blocked / not run
@@ -89,8 +91,9 @@ for patch in [dict(environment={"TOKEN": "synthetic-secret"}), dict(observations
   Electron smoke were **not run**: they include subprocess/listener requirements
   unavailable in the current sandbox. No claim of full CI or installed acceptance.
   Published CI results must be evaluated separately on the exact PR head.
-- Native provider source retrieval gaps and installed-artifact correspondence
-  are reported in [source-map](source-map.md). Installed provider/model, live
+- Pinned native parameter/emission/response sources were retrieved during review
+  follow-up; installed-artifact correspondence and managed routing remain
+  unverified in [source-map](source-map.md). Installed provider/model, live
   daemon/tunnel decisions and actual Cal acceptance were **not run**.
 - Early `pnpm exec` attempted automatic dependency synchronization and hit a
   read-only shim write; it was stopped, with no completed install. Direct tool
@@ -109,3 +112,20 @@ separation of synthetic/source evidence from deployed/actual-Cal proof.
 This is not an independent security review. The preparation PR remains a draft,
 with `release:none` / `no-changelog` appropriate to test/documentation-only work.
 No production fixes, release, merge or deployment are included.
+
+## Cal review follow-up
+
+[Cal's review](https://github.com/cschadewitz/Project_Orca/pull/507#issuecomment-6030356050)
+of `3d0920551429ed8f682003570b2c3231fd57748e` identified an evidence-format
+blocker: observed execution wrongly required approval and callback delivery even
+for failures. The updated contract separates approval path and expected effect
+from observations. Unexpected execution remains reportable without fabricated
+authorization/delivery; contradictory pass claims are rejected. The committed
+sample manifest adds 24 illustrative regression records, not execution receipts.
+The source map now reviews the four pinned native sources identified by Cal,
+including the callback submission tail. Installed correspondence, actual managed
+routing and actual-Cal acceptance remain unverified and unexecuted.
+
+Follow-up changes stay in this preparation directory; production, configuration
+and the synthetic callback fixture are unchanged. The check table above records
+the rerun on the follow-up tree. Full-suite/live-lane limits above still apply.

@@ -12,6 +12,8 @@
     "adapterRelease",
     "action",
     "observations",
+    "approvalPath",
+    "expectedEffect",
     "result",
     "reason"
   ],
@@ -41,7 +43,7 @@
     },
     "observations": {
       "type": "array",
-      "maxItems": 9,
+      "maxItems": 10,
       "uniqueItems": true,
       "items": {
         "enum": [
@@ -49,6 +51,7 @@
           "surfaced",
           "allowed",
           "rejected",
+          "cancelled",
           "delivered",
           "executed",
           "expired",
@@ -65,7 +68,6 @@
         "operator-context-omitted",
         "command-binding-incomplete",
         "native-routing-unknown",
-        "native-source-unavailable",
         "installed-artifact-unverified",
         "managed-sandbox-denied",
         "scope-not-one-command",
@@ -73,29 +75,111 @@
         "expired",
         "authority-refused",
         "delivery-unknown",
-        "separate-authorization-required"
+        "separate-authorization-required",
+        "unexpected-execution"
       ]
-    }
+    },
+    "approvalPath": { "enum": ["acp-callback", "native-no-acp-ask", "unknown"] },
+    "expectedEffect": { "enum": ["required", "forbidden", "unspecified"] }
   },
   "allOf": [
     {
       "if": { "properties": { "observations": { "contains": { "const": "executed" } } } },
       "then": {
         "properties": {
+          "evidenceClass": { "enum": ["synthetic", "installed-provider", "actual-cal"] },
+          "action": { "not": { "const": "unexecuted" } }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          { "properties": { "observations": { "contains": { "const": "executed" } } } },
+          {
+            "anyOf": [
+              { "properties": { "observations": { "contains": { "const": "rejected" } } } },
+              { "properties": { "observations": { "contains": { "const": "cancelled" } } } },
+              { "properties": { "expectedEffect": { "const": "forbidden" } } }
+            ]
+          }
+        ]
+      },
+      "then": { "properties": { "result": { "const": "fail" }, "reason": { "const": "unexpected-execution" } } }
+    },
+    {
+      "if": { "properties": { "result": { "const": "pass" } } },
+      "then": { "properties": { "reason": { "const": "assertions-passed" } } }
+    },
+    {
+      "if": {
+        "allOf": [
+          { "properties": { "result": { "const": "pass" } } },
+          { "properties": { "expectedEffect": { "const": "required" } } }
+        ]
+      },
+      "then": { "properties": { "observations": { "contains": { "const": "executed" } } } }
+    },
+    {
+      "if": {
+        "allOf": [
+          { "properties": { "result": { "const": "pass" } } },
+          { "properties": { "observations": { "contains": { "const": "executed" } } } }
+        ]
+      },
+      "then": {
+        "properties": {
+          "expectedEffect": { "const": "required" },
+          "approvalPath": { "enum": ["acp-callback", "native-no-acp-ask"] },
+          "observations": { "contains": { "const": "allowed" } }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          { "properties": { "result": { "const": "pass" } } },
+          { "properties": { "observations": { "contains": { "const": "executed" } } } },
+          { "properties": { "approvalPath": { "const": "acp-callback" } } }
+        ]
+      },
+      "then": {
+        "properties": {
           "observations": {
             "allOf": [
-              { "contains": { "const": "allowed" } },
-              { "contains": { "const": "delivered" } },
-              { "not": { "contains": { "const": "rejected" } } }
+              { "contains": { "const": "requested" } },
+              { "contains": { "const": "surfaced" } },
+              { "contains": { "const": "delivered" } }
             ]
-          },
-          "evidenceClass": { "enum": ["synthetic", "installed-provider", "actual-cal"] }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "approvalPath": { "const": "native-no-acp-ask" } } },
+      "then": {
+        "properties": { "observations": { "not": { "contains": { "enum": ["requested", "surfaced", "delivered"] } } } }
+      }
+    },
+    {
+      "if": { "properties": { "observations": { "contains": { "const": "delivered" } } } },
+      "then": {
+        "properties": {
+          "approvalPath": { "const": "acp-callback" },
+          "observations": { "contains": { "const": "requested" } }
         }
       }
     },
     {
       "if": { "properties": { "result": { "const": "not-run" } } },
-      "then": { "properties": { "observations": { "maxItems": 0 } } }
+      "then": {
+        "properties": {
+          "observations": { "maxItems": 0 },
+          "action": { "const": "unexecuted" },
+          "expectedEffect": { "const": "unspecified" },
+          "approvalPath": { "const": "unknown" }
+        }
+      }
     }
   ]
 }
