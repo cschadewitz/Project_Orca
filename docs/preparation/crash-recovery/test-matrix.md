@@ -164,6 +164,14 @@ IPC suite adds consent revocation and renderer loss during initialization waits.
 See the [handoff](implementation-handoff.md#7-october-authority-corrections) for
 exact revision, red/green evidence, commands and the unchanged native limits.
 
+The [final clock-boundary follow-up](implementation-handoff.md#7-october-final-clock-boundary-follow-up)
+adds real failed-maintenance → acknowledgement → retry coverage without history
+promotion, invalid-clock observations at status emission and final native admission,
+no plaintext/destination success after final revocation, truthful mutation status,
+and a renderer uncertainty push during pending preparation. These seven tests
+address the additional `fc49bcc` review findings; the original clock cases alone
+did not prove these schedules.
+
 ## Evidence to collect separately
 
 | Environment | Required pass | Current status |

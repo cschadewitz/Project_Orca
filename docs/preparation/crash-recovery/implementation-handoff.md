@@ -7,6 +7,71 @@ native adapter deliberately refuses all filesystem authority and no production
 clock or diagnostic producer is connected. This is an implementation candidate
 for review, not a working Mac/Windows recovery release or an activation request.
 
+## 7 October final clock-boundary follow-up
+
+The [independent correction review](https://github.com/cschadewitz/Project_Orca/pull/470#issuecomment-6042743105)
+of `fc49bcc607cf0a4f7675c3ad76f8c4722707659d` cleared the Enable/Off and renderer-loss
+schedules, but reproduced two remaining clock-authority blockers. This supersedes
+the earlier claim below that the first clock correction closed the finding.
+Runtime/test freeze `69c08ee4ee32e3d21deb364469b9ec1a9c5b2d8c` addresses these
+specific gaps for the same review; it is not a new broad source-audit claim.
+
+1. Unknown-Save acknowledgement now settles only the export obligation when
+   history age is uncertain. It neither opens/promotes history nor clears the
+   uncertainty latch; pending history cleanup remains visible. Repeated
+   acknowledgement and explicit cleanup retry cannot restore old capture or
+   previous-session eligibility. The real Linux-disk regression refuses native
+   writer-cessation proof once, verifies the manifest is unchanged after failed
+   `maintain(undefined)`, then acknowledges/repeats/retries with the clock and
+   native seam recovered. It requires no `open`, wrapping or old-content preview.
+2. Native admission is decided after status emission and a final preview/clock
+   check. A valid earlier check cannot survive an invalid emission or final clock
+   observation. Two regressions retain the real Linux no-replace helper behind an
+   independent spy and require zero move invocations and no destination file.
+   Genuine already-admitted late saved/refused outcomes keep their existing rules;
+   a later refused admission check cannot erase a recorded earlier admission.
+3. Preview and destination responses are fenced after their bounded work and final
+   emission settle. A revoked plaintext reply is refused and its untransferred
+   renderer reservation released. Mutation replies also read status after the
+   final emission. The renderer advances its pending-preparation authority on an
+   `age_uncertain` push, rejecting and disposing any late successful reply.
+
+Seven new deterministic tests cover the three reviewer probes, stale destination
+success, the final admission observation, mutation status and the renderer push.
+The first five failed against unchanged `fc49bcc` (34 existing tests passed).
+The corrected controller/UI delta passes **41/41**, including the final lint-only
+spy adjustment. The 11-file aggregate passed **210/210**, one worker, 40.11 s before
+that assertion-spy adjustment and 35.55 s after it. The final admission-history
+adjustment preserves the existing monotonic dispatch fact; its exact frozen
+aggregate passed **210/210 in 11 files**, one worker, **35.54 s** at the
+`69c08ee4ee32e3d21deb364469b9ec1a9c5b2d8c` freeze. Existing consent, renderer-disposal, pre-admission timeout, genuine
+late-outcome, unknown-acknowledgement and real Linux filesystem tests are included.
+The unrelated full workspace suite was not rerun for this follow-up; the earlier
+4,216/3-skipped local result remains evidence for the earlier runtime only.
+
+Node 24.21.0 / pnpm 12.4.2, per-invocation PATH and test-process umask 0022 remain as
+below. Frozen installation verified all 534 unchanged supply-chain entries.
+Workspace/renderer typechecks, targeted main/test and renderer/test ESLint, build,
+full format, CSS/generated-design and 12 Python contract tests pass. The build's
+existing >500 kB warning remains (331 modules, 675.73 kB JS).
+
+Intermediate failures are retained: TypeScript rejected reading the destination
+property narrowed across an async closure; the final accessor checks handle,
+epoch and token. ESLint rejected an unbound method reference in the new test,
+replaced with an equivalent spy. One aggregate returned 209 passes and a new test's
+`ENOTEMPTY` teardown failure: scheduled uncertainty maintenance was still settling
+when the disposable profile was removed. The test now awaits the controller's
+settlement emission; no production timeout, assertion or cleanup behavior was
+relaxed. Prior umask, timing and performance evidence below remains historical.
+
+The existing branch is updated normally only after verifying the remote still
+matches `fc49bcc607cf0a4f7675c3ad76f8c4722707659d`. PR metadata records the final
+documentation head and applicable exact-head CI separately. Production capture,
+clock/producers and the refusing native adapter remain unchanged. The optional
+preparation deadline, native/platform/physical/network/paired-load acceptance,
+combined 32 MiB memory and missed 4 ms target remain open. No merge, activation,
+deployment or closure of #416/#469; #509/#510/#511 remain untouched.
+
 ## 7 October authority corrections
 
 The [full-head review](https://github.com/cschadewitz/Project_Orca/pull/470#issuecomment-5984828613)
