@@ -14,14 +14,19 @@ The implementation lives in `tools/ci-shadow/`, its tests in
 and this document is the only selector documentation path.
 
 `ownership.v1.json` versions the exact initial island, full-risk rules, reviewed
-Git inventory, explicit consumer edges and runner/check inventory. Its reviewed
-source is main `6a7316cba563e9c3f0c1cc1f6d7e0a5fb65e3c85`, including the
-reviewed #512 credential-admin import and emitted-identity/process/revocation
-regression and #519's bounded failure-only restart diagnostics
-(tree `3209023fdfbee0f56e1c9b84914c254cb43172e4`). That baseline has 341 statically discovered Vitest files. Adding the
-selector test increases candidate discovery to 342; this implementation PR
-therefore takes full, as do all selector/manifest changes. The original `d3491cc`
-review had 339 files; it cannot stand in for this combined current-base inventory.
+Git inventory, explicit consumer edges and runner/check inventory. The merged
+#511 foundation audited main `6a7316cba563e9c3f0c1cc1f6d7e0a5fb65e3c85`, including
+#512's credential-admin regression and #519's bounded failure-only diagnostics;
+its selector test brought discovery from 341 to 342 files. This reporting slice
+starts at verified main `d7546ce6bcaf51f194aade26de2cd9a432cd7073`
+(tree `9cc9f5fcf2f202dddeb8403ba2425e9d1abbf132`) and refreshes the frozen inventory
+to implementation `f1aa1649fce35de6c0eea540584dfcb7c78f07c8`, hash
+`6378f2a8ceea89d59860bf66a27cf950f702c43993d01687611671b9f1325b80`.
+The new report-adapter regression brings discovery to 343. Eligibility, selector
+algorithm/version, existing edges and test semantics are unchanged. This PR
+necessarily takes full; its older base inventory is incomplete for the refreshed
+audit. Subsequent same-baseline candidates can use the existing literal-only rules.
+The original `d3491cc` review had 339 files and cannot replace this source inventory.
 
 The initial Tier 1 advisory island contains exactly the existing renderer
 `src/ui/format-time.ts` and `test/format-time.test.tsx`. Eligibility requires a positive structural invariant: each base/candidate leaf
