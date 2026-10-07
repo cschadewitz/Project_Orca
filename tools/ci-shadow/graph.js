@@ -25,7 +25,43 @@ export function discover(files) {
   );
 }
 
-export function imports(text, path) {
+function unreviewedAmbientReferences(source, allowed) {
+  // Bind only this virtual module. No libraries, dependency resolution or candidate I/O.
+  const name = "/shadow-candidate.ts";
+  const virtualSource = ts.createSourceFile(name, source.text, ts.ScriptTarget.Latest, true, source.scriptKind);
+  const host = {
+    getSourceFile: (path) => (path === name ? virtualSource : undefined),
+    getDefaultLibFileName: () => "unused.d.ts",
+    writeFile: () => {},
+    getCurrentDirectory: () => "/",
+    getDirectories: () => [],
+    fileExists: (path) => path === name,
+    readFile: (path) => (path === name ? virtualSource.text : undefined),
+    getCanonicalFileName: (path) => path,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => "\n",
+  };
+  const program = ts.createProgram(
+    [name],
+    { noLib: true, noResolve: true, types: [], target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext },
+    host,
+  );
+  const checker = program.getTypeChecker();
+  const unknown = new Set();
+  const visit = (node) => {
+    if (ts.isIdentifier(node) && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)) {
+      const symbol = ts.isShorthandPropertyAssignment(node.parent)
+        ? checker.getShorthandAssignmentValueSymbol(node.parent)
+        : checker.getSymbolAtLocation(node);
+      if (!symbol && !allowed.includes(node.text)) unknown.add(node.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(virtualSource);
+  return sorted(unknown);
+}
+
+export function imports(text, path, allowedAmbientReferences) {
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   if (source.parseDiagnostics.length) throw new Error("source_parse_error");
   const dependencies = [];
@@ -33,6 +69,17 @@ export function imports(text, path) {
   const visit = (node) => {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier)
       dependencies.push(node.moduleSpecifier.text);
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      const expression = node.moduleReference.expression;
+      if (expression && ts.isStringLiteral(expression)) dependencies.push(expression.text);
+      unsafe = true;
+    }
+    if (
+      node.kind === ts.SyntaxKind.ThisKeyword ||
+      (ts.canHaveModifiers(node) &&
+        ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword))
+    )
+      unsafe = true;
     if (
       ts.isCallExpression(node) &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
@@ -47,6 +94,12 @@ export function imports(text, path) {
         "globalThis",
         "window",
         "document",
+        "navigator",
+        "EventSource",
+        "localStorage",
+        "sessionStorage",
+        "indexedDB",
+        "caches",
         "fetch",
         "XMLHttpRequest",
         "WebSocket",
@@ -64,6 +117,7 @@ export function imports(text, path) {
     ts.forEachChild(node, visit);
   };
   visit(source);
+  if (allowedAmbientReferences && unreviewedAmbientReferences(source, allowedAmbientReferences).length) unsafe = true;
   return { dependencies: sorted(dependencies), unsafe };
 }
 
@@ -114,7 +168,14 @@ export function validateManifest(manifest) {
         ),
       ) ||
       typeof island.dependencies !== "object" ||
-      !island.dependencies
+      !island.dependencies ||
+      typeof island.ambientReferences !== "object" ||
+      !island.ambientReferences ||
+      island.paths.some(
+        (path) =>
+          !Array.isArray(island.ambientReferences[path]) ||
+          island.ambientReferences[path].some((reference) => !["Date", "Math", "undefined"].includes(reference)),
+      )
     )
       throw new Error("invalid_island");
   }

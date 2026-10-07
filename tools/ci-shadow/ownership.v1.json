@@ -14,6 +14,10 @@
       "dependencies": {
         "packages/app/renderer/src/ui/format-time.ts": [],
         "packages/app/renderer/test/format-time.test.tsx": ["../src/ui/format-time.js", "vitest"]
+      },
+      "ambientReferences": {
+        "packages/app/renderer/src/ui/format-time.ts": ["Date", "Math", "undefined"],
+        "packages/app/renderer/test/format-time.test.tsx": ["Date", "undefined"]
       }
     }
   ],

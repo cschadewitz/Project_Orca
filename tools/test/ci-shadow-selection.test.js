@@ -213,6 +213,20 @@ it.each([
   ['import("./" + name);', "unreviewed_execution_edge"],
   ['import fs from "node:fs";', "unreviewed_execution_edge"],
   ['globalThis.fetch("https://example.invalid");', "unreviewed_execution_edge"],
+  ['navigator.sendBeacon("https://example.invalid/probe", "synthetic");', "unreviewed_execution_edge"],
+  ['new EventSource("https://example.invalid/probe");', "unreviewed_execution_edge"],
+  ['localStorage.setItem("synthetic-review-probe", "1");', "unreviewed_execution_edge"],
+  ['sessionStorage.setItem("synthetic-review-probe", "1");', "unreviewed_execution_edge"],
+  ['indexedDB.open("synthetic-review-probe");', "unreviewed_execution_edge"],
+  ['caches.open("synthetic-review-probe");', "unreviewed_execution_edge"],
+  ['new BroadcastChannel("synthetic-review-probe");', "unreviewed_execution_edge"],
+  ["const ambient = { unreviewedTransport };", "unreviewed_execution_edge"],
+  ['unreviewedTransport.send("synthetic-review-probe");', "unreviewed_execution_edge"],
+  [
+    'declare const unreviewedTransport: { send(value: string): void }; unreviewedTransport.send("synthetic");',
+    "unreviewed_execution_edge",
+  ],
+  ['import cp = require("node:child_process"); cp.execSync("true");', "unreviewed_execution_edge"],
   ["const x = ;", "island_graph_incomplete"],
 ])("falls back for new dependency/ambient/dynamic boundaries: %s", (extra, reason) => {
   reset();
@@ -221,6 +235,33 @@ it.each([
   const result = plan(save());
   expect(result.wouldRun.tier).toBe("full");
   expect(result.wouldRun.reasonCodes).toContain(reason);
+});
+
+it("retains import-equals dependencies and rejects direct unreviewed ambient references", () => {
+  const signature = imports('import cp = require("node:child_process"); cp.execSync("true");', "probe.ts");
+  expect(signature).toEqual({ dependencies: ["node:child_process"], unsafe: true });
+  const allowed = ["Date", "Math", "undefined"];
+  for (const text of [
+    'navigator.sendBeacon("x", "x");',
+    'new EventSource("x");',
+    'localStorage.setItem("x", "x");',
+    'new BroadcastChannel("x");',
+    "const ambient = { unreviewedTransport };",
+  ])
+    expect(imports(text, "probe.ts", allowed).unsafe).toBe(true);
+  expect(
+    imports("const local = { send: (value: string) => value }; local.send('synthetic');", "probe.ts", allowed).unsafe,
+  ).toBe(false);
+  reset();
+  const formatter = manifest.islands[0].paths[0];
+  const helper = "packages/app/renderer/src/require-helper.ts";
+  write(helper, "export const value = 1;\n");
+  write(
+    formatter,
+    readFileSync(join(directory, formatter), "utf8") + '\nimport helper = require("../require-helper.js");\n',
+  );
+  const g = graph(snapshot(directory, save()), manifest);
+  expect(g.edges).toContainEqual({ from: `file:${helper}`, to: `file:${formatter}`, kind: "static-import-or-alias" });
 });
 
 it("falls back for stale metadata, empty diffs, explicit override and mixed-risk changes", () => {
