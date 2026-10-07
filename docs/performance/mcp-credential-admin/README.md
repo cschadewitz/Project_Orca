@@ -71,13 +71,13 @@ daemon's HTTP 401 / `AUTH_INVALID` refusal after revocation.
 
 | Measurement | Before median (range), seconds | After median (range), seconds | Samples per side |
 | --- | --- | --- | --- |
-| Fresh issue + revoke subprocesses | 0.832 (0.780–0.837) | 0.504 (0.479–0.579) | 6 |
+| Supervisor elapsed for fresh issue + revoke children | 0.832 (0.780–0.837) | 0.504 (0.479–0.579) | 6 |
 | Combined production consumers, supervisor wall | 239.484 (237.261–244.200) | 229.571 (215.573–239.558) | 3 |
 | Authority file, within the combined run | 106.290 (103.396–116.765) | 96.922 (91.953–98.165) | 3 |
 | Lifecycle file, within the combined run | 80.595 (79.805–84.511) | 80.173 (74.399–83.148) | 3 |
 | Recovery file, within the combined run | 49.025 (44.729–49.620) | 47.517 (47.171–59.039) | 3 |
 
-The credential-operation median is **39.4% lower**. The combined-suite median is
+The micro supervisor-elapsed median is **39.4% lower**. The combined-suite median is
 **4.1% lower locally**, with paired savings of **9.912, 4.642 and 21.688 seconds**.
 All six suite invocations passed the identical 60 named scenarios: **360 passed,
 zero failed/skipped/todo**. The six final micro pairs each completed two fresh
@@ -130,6 +130,16 @@ no file parallelism, original test/hook timeouts and normal durability remained.
 The supervisor's micro timings include spawn, import, stdin protocol, credential
 I/O and exit; they do not isolate pure import time. Tokens and credential records
 were discarded, and synthetic auth directories were cleaned after each sample.
+
+The micro supervisor calls Python `Popen.communicate(timeout=...)` with regular
+file outputs. Its exit polling sleeps grow to roughly 50 ms, so each child's exit
+observation can lag by about a poll interval plus scheduling delay. The issue/revoke
+pair sums two such observed intervals. Thus **39.4% is a reduction in recorded
+supervisor elapsed, not pure credential-operation or child-process latency**;
+variant-dependent polling quantization can affect that percentage. The raw values
+remain unchanged. This caveat was identified by the
+[independent review](https://github.com/cschadewitz/Project_Orca/pull/512#pullrequestreview-5440095899).
+The three-pair suite result remains descriptive and subject to the variance above.
 
 The initial login PATH still exposed Node 24.19.0 / pnpm 11.19.0. Official Node
 24.21.0 and 22.23.3 archives were checked against official SHA-256 manifests before
