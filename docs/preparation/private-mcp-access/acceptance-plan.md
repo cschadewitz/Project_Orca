@@ -1,9 +1,12 @@
 # Private MCP acceptance and evidence plan
 
 This plan separates reference-client conformance, actual-Cal feasibility and full ORCA
-operator acceptance. **All runtime cases below are NOT RUN** as of 2026-10-02. Only the
-documentation/source observations in [decision.md](decision.md) have been made. Follow
-the [operator checklist](operator-checklist.md) before any setup.
+operator acceptance. The scenarios below retain the **2026-10-02 planning baseline**;
+their original NOT RUN status is not a present connection diagnosis. Actual Cal discovery,
+historical worker/cutover evidence and the remaining exact-call/authority/capacity gates are
+reconciled in the [7 October bounded actual-Cal matrix](actual-cal-matrix.md). Use that
+handoff for present execution and record partial evidence separately from completed criteria.
+Follow the [operator checklist](operator-checklist.md) before any setup.
 
 ## Evidence record
 
