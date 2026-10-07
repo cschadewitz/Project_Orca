@@ -85,6 +85,35 @@ export interface MacUpdatePorts {
     lease: MacAdmissionLease,
   ): Promise<"committed" | "refused" | "unknown">;
 }
+/** Ports may be implemented in JS/native code: ready must carry usable guard handles. */
+function isDraftLease(value: unknown): value is MacDraftLease {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "release" in value &&
+    typeof value.release === "function"
+  );
+}
+function isAdmissionLease(value: unknown): value is MacAdmissionLease {
+  if (!isDraftLease(value) || !("target" in value)) return false;
+  const target = value.target;
+  return (
+    typeof target === "object" &&
+    target !== null &&
+    !Array.isArray(target) &&
+    "workspaceId" in target &&
+    typeof target.workspaceId === "string" &&
+    target.workspaceId.length > 0 &&
+    "instanceId" in target &&
+    typeof target.instanceId === "string" &&
+    target.instanceId.length > 0 &&
+    "epoch" in target &&
+    typeof target.epoch === "number" &&
+    Number.isSafeInteger(target.epoch) &&
+    target.epoch >= 0
+  );
+}
 /** Normalize synchronous adapter exceptions as well as rejected promises. */
 async function settled<T>(operation: () => Promise<T>, fallback: T): Promise<T> {
   try {
@@ -107,6 +136,7 @@ export class MacUpdates {
   private offer: Offer | undefined;
   private approved = false;
   private busy = false;
+  private reconsiderPending = false;
   private sealed = false;
   private download: AbortController | undefined;
   private verified = false;
@@ -152,6 +182,7 @@ export class MacUpdates {
     });
     this.approved = false;
     this.verified = false;
+    this.reconsiderPending = false;
     this.set("available");
     return this.offer.id;
   }
@@ -161,6 +192,7 @@ export class MacUpdates {
   defer(id: string): boolean {
     if (!this.offer || this.offer.id !== id || this.sealed) return false;
     this.approved = false;
+    this.reconsiderPending = false;
     this.download?.abort();
     this.set("deferred");
     return true;
@@ -185,7 +217,7 @@ export class MacUpdates {
         }
         this.verified = true;
       }
-      await this.prepare(offer);
+      await this.prepareNotified(offer);
     } catch {
       this.unknown();
     } finally {
@@ -194,10 +226,14 @@ export class MacUpdates {
     return this.state;
   }
   async reconsider(): Promise<MacUpdateSnapshot> {
-    if (!this.offer || !this.approved || !this.verified || this.busy || this.sealed) return this.state;
+    if (!this.offer || !this.approved || !this.verified || this.sealed) return this.state;
+    if (this.busy) {
+      this.reconsiderPending = true;
+      return this.state;
+    }
     this.busy = true;
     try {
-      await this.prepare(this.offer);
+      await this.prepareNotified(this.offer);
     } catch {
       this.unknown();
     } finally {
@@ -206,6 +242,7 @@ export class MacUpdates {
     return this.state;
   }
   private unknown(): void {
+    this.reconsiderPending = false;
     this.approved = false;
     this.sealed = true;
     this.set("recovery-required");
@@ -224,6 +261,16 @@ export class MacUpdates {
     }
     return true;
   }
+  /** Drain coalesced activity changes only after the current lease preparation/release
+   * settles. No timer/retry: each follow-up requires a notification and retained consent.
+   */
+  private async prepareNotified(offer: Offer): Promise<void> {
+    do {
+      this.reconsiderPending = false;
+      await this.prepare(offer);
+    } while (this.reconsiderPending && this.approved && !this.sealed && this.state.phase === "waiting");
+    this.reconsiderPending = false;
+  }
   private async prepare(offer: Offer): Promise<void> {
     this.set("preparing");
     const drafts = await settled(() => this.ports.prepareDrafts(), { outcome: "unknown" });
@@ -232,6 +279,7 @@ export class MacUpdates {
       if (this.approved) this.set("waiting", drafts.blocker);
       return;
     }
+    if (!isDraftLease(drafts.lease)) return this.unknown();
     if (!this.approved) {
       await this.release(drafts.lease);
       return;
@@ -244,6 +292,7 @@ export class MacUpdates {
       if ((await this.release(drafts.lease)) && this.approved) this.set("waiting", admission.blocker);
       return;
     }
+    if (!isAdmissionLease(admission.lease)) return this.unknown();
     const actual = admission.lease.target;
     if (
       actual.workspaceId !== offer.target.workspaceId ||
@@ -259,6 +308,14 @@ export class MacUpdates {
     }
     const validation = await settled(() => this.ports.revalidate(offer.candidate, offer.target), "unknown");
     if (validation !== "valid" && validation !== "refused") return this.unknown();
+    if (
+      !isDraftLease(drafts.lease) ||
+      !isAdmissionLease(admission.lease) ||
+      admission.lease.target.workspaceId !== offer.target.workspaceId ||
+      admission.lease.target.instanceId !== offer.target.instanceId ||
+      admission.lease.target.epoch !== offer.target.epoch
+    )
+      return this.unknown();
     if (validation === "refused") {
       this.approved = false;
       this.verified = false;
@@ -269,12 +326,6 @@ export class MacUpdates {
       await this.release(drafts.lease, admission.lease);
       return;
     }
-    if (
-      admission.lease.target.workspaceId !== offer.target.workspaceId ||
-      admission.lease.target.instanceId !== offer.target.instanceId ||
-      admission.lease.target.epoch !== offer.target.epoch
-    )
-      return this.unknown();
     // No await between final approval check and commitment. Defer cannot race this edge.
     this.sealed = true;
     this.approved = false;

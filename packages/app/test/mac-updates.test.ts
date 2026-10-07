@@ -172,6 +172,108 @@ describe("Mac candidate approval coordinator (synthetic; no native adapter)", ()
       expect(r.ports.prepareAdmission).toHaveBeenCalledTimes(1);
     },
   );
+  it.each(["approve", "reconsider"] as const)(
+    "coalesces idle notifications received while %s is releasing a busy guard",
+    async (entry) => {
+      const r = rig();
+      if (entry === "reconsider") {
+        vi.mocked(r.ports.prepareDrafts).mockResolvedValueOnce({ outcome: "blocked", blocker: "drafts" });
+        await r.updates.approve(r.id);
+      }
+      vi.mocked(r.ports.prepareAdmission).mockResolvedValueOnce({ outcome: "blocked", blocker: "activity" });
+      const releasing = pending<void>();
+      const release = pending<"released">();
+      r.drafts.release = vi.fn(() => {
+        releasing.resolve();
+        return release.promise;
+      });
+      const operation = entry === "approve" ? r.updates.approve(r.id) : r.updates.reconsider();
+      await releasing.promise;
+      // The only idle transition occurs before release settles. Duplicate notifications
+      // must coalesce rather than compete for leases or require a later manual action.
+      await r.updates.reconsider();
+      await r.updates.reconsider();
+      expect(r.ports.prepareAdmission).toHaveBeenCalledOnce();
+      expect(r.ports.activate).not.toHaveBeenCalled();
+      release.resolve("released");
+      expect((await operation).phase).toBe("awaiting-restart");
+      expect(r.ports.prepareAdmission).toHaveBeenCalledTimes(2);
+      expect(r.ports.download).toHaveBeenCalledOnce();
+      expect(r.ports.activate).toHaveBeenCalledOnce();
+      expect(r.admission.release).not.toHaveBeenCalled();
+      expect(r.drafts.release).toHaveBeenCalledOnce();
+    },
+  );
+  it.each(["defer", "unknown-release"] as const)(
+    "does not drain an idle notification after %s invalidates readiness",
+    async (end) => {
+      const r = rig();
+      vi.mocked(r.ports.prepareAdmission).mockResolvedValueOnce({ outcome: "blocked", blocker: "activity" });
+      const releasing = pending<void>();
+      const release = pending<"released" | "unknown">();
+      r.drafts.release = vi.fn(() => {
+        releasing.resolve();
+        return release.promise;
+      });
+      const operation = r.updates.approve(r.id);
+      await releasing.promise;
+      await r.updates.reconsider();
+      if (end === "defer") r.updates.defer(r.id);
+      release.resolve(end === "defer" ? "released" : "unknown");
+      expect((await operation).phase).toBe(end === "defer" ? "deferred" : "recovery-required");
+      expect(r.ports.prepareAdmission).toHaveBeenCalledOnce();
+      expect(r.ports.activate).not.toHaveBeenCalled();
+      expect(r.admission.release).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    { name: "missing draft lease", port: "prepareDrafts", lease: undefined },
+    { name: "null draft lease", port: "prepareDrafts", lease: null },
+    { name: "draft lease without release", port: "prepareDrafts", lease: {} },
+    { name: "draft lease with noncallable release", port: "prepareDrafts", lease: { release: true } },
+    { name: "missing admission release", port: "prepareAdmission", lease: { target } },
+    { name: "noncallable admission release", port: "prepareAdmission", lease: { target, release: "release" } },
+    { name: "missing admission target", port: "prepareAdmission", lease: { release: vi.fn() } },
+    { name: "null admission target", port: "prepareAdmission", lease: { target: null, release: vi.fn() } },
+    {
+      name: "invalid admission epoch",
+      port: "prepareAdmission",
+      lease: { target: { ...target, epoch: "1" }, release: vi.fn() },
+    },
+  ])("seals malformed ready result: $name", async ({ port, lease }) => {
+    const r = rig();
+    Object.assign(r.ports, { [port]: () => Promise.resolve({ outcome: "ready", lease }) });
+    expect((await r.updates.approve(r.id)).phase).toBe("recovery-required");
+    expect(r.ports.revalidate).not.toHaveBeenCalled();
+    expect(r.ports.activate).not.toHaveBeenCalled();
+    expect(r.drafts.release).not.toHaveBeenCalled();
+    expect(r.admission.release).not.toHaveBeenCalled();
+    if (lease && "release" in lease && typeof lease.release === "function")
+      expect(lease.release).not.toHaveBeenCalled();
+    if (port === "prepareDrafts") expect(r.ports.prepareAdmission).not.toHaveBeenCalled();
+    await r.updates.reconsider();
+    await r.updates.approve(r.id);
+    expect(r.ports.download).toHaveBeenCalledOnce();
+  });
+  it.each([
+    { guard: "drafts", validation: "valid" },
+    { guard: "admission", validation: "valid" },
+    { guard: "drafts", validation: "refused" },
+    { guard: "admission", validation: "refused" },
+  ] as const)(
+    "rechecks the $guard lease after $validation asynchronous validation before activation or release",
+    async ({ guard, validation }) => {
+      const r = rig();
+      r.ports.revalidate = vi.fn(async () => {
+        Object.assign(guard === "drafts" ? r.drafts : r.admission, { release: undefined });
+        return validation;
+      });
+      expect((await r.updates.approve(r.id)).phase).toBe("recovery-required");
+      expect(r.ports.activate).not.toHaveBeenCalled();
+      if (guard === "drafts") expect(r.admission.release).not.toHaveBeenCalled();
+      else expect(r.drafts.release).not.toHaveBeenCalled();
+    },
+  );
   it.each(["prepareDrafts", "prepareAdmission", "revalidate"] as const)(
     "retains guards and stops on unknown %s",
     async (port) => {
