@@ -4,6 +4,13 @@ Experiment contract, written before paired runs. Base: verified remote main
 `d7546ce6bcaf51f194aade26de2cd9a432cd7073`, including #512 and #511. The
 credential-admin optimization is already shipped. #509 owns CI reporting/workflows.
 
+The integration refresh includes reviewed main
+`27bec3276dfc98e89e16a1c68b8dc51d1d3d6a7b` (#515 and #516). Those updates change
+only the lockfile and ESLint tooling manifest; the reviewed retry code is unchanged.
+All timing and validation packets below retain their pre-refresh provenance. The
+new lockfile changes the candidate key; no performance sample is claimed for the
+refreshed tree, and no historical evidence packet is replaced.
+
 ## Boundary and preservation
 
 Only the retry harness, a new test-only compiler helper, dedicated regression and
@@ -182,7 +189,8 @@ processes, IPC/SIGKILL/retry and deadlines remain unchanged.
 
 The revised source snapshot is local commit
 `de9ad86b6ebbd346b60d6a69170ada3497e34dc0`, measured from a clean worktree against
-the same verified main. Its 120 input hashes match the final publication sources;
+the same verified main. Its 120 input hashes match reviewed publication
+`4fa0636da2240b7433f4f9c70d88a69d40c03a85`, before the integration refresh;
 the local commit identity is provenance, not a remote checkout ref. New raw packets
 are kept separately under `evidence/review-fix/`; no old sample is pooled or replaced.
 
@@ -200,7 +208,7 @@ observed 75 distinct fresh worker PIDs, 21 SIGKILL exits and 54 normal exits:
 retain the scheduling/observer/cache limitations above and do not establish
 whole-CI speedup or isolated process/compilation time.
 
-Current validation passed **40/40 focused cases on Node 24.21.0 and 22.23.3**,
+Pre-refresh validation passed **40/40 focused cases on Node 24.21.0 and 22.23.3**,
 zero failures/skips (25 original + 15 regressions). Whole typecheck, lint, formatting
 and design freshness passed serially on Node 24. The separate regression-only run
 passed 15/15. New Node 22/24 closure checks retain **120 matching input hashes** and
