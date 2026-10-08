@@ -34,6 +34,18 @@ candidate content revision. Concurrent writes and refused/lost acknowledgements
 retain drafts and block retry. Successful save does not claim activation; editing
 during save retains the newer draft and requires reconciliation.
 
+Current source visibility is fenced independently of content revision and write
+authority. A same-revision source withdrawal hides source and inherited draft
+variants from editing/export, retains their private in-memory edits, and invalidates
+outstanding validation/preview/save responses. Restoring access still requires
+reconciliation before continuing. Export checks current visibility at activation.
+
+Selection, pack and fixture changes invalidate preview output and pending replies.
+A replacement preview clears previous output before its result or failure arrives.
+This preview-only invalidation does not cancel a pending source save. Cancelling a
+selected draft variant restores a valid saved selection through both button and
+keyboard palette flows.
+
 ## Explicit provisional contracts and remaining integration
 
 Every interface in `model.ts` is an app-local injected proposal. None is a
@@ -94,3 +106,12 @@ fixture boundaries, keyboard palette editing/save/cancel and both-theme markup.
 Native layout, real parser/renderer adapters, actual template assignment,
 generation activation, physical macOS and end-to-end runtime acceptance are not
 established by these injected tests.
+
+Review correction evidence: the ten new editor regressions fail against reviewed
+head `682abb37f2cc5fe7b3d8fdaff886e476f23e2d27` (10 prior editor cases pass).
+The corrected slice has 50 authoring tests plus seven existing core template/pack
+tests passing with at most two workers on Node 24.21.0 / pnpm 12.4.2. Additional
+controller regressions cover inherited variant visibility, withheld-source preview
+refusal, late validation after withholding, and pending-save survival when preview
+inputs change. This correction does not adapt the provisional save/publication
+ports to the separate shared configuration-launch declaration.

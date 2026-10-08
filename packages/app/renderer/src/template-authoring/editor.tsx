@@ -39,10 +39,21 @@ function parseFixtures(text: string): FixtureInputs | undefined {
 /** Independent surface; the integrator supplies discovery, target feeds and draft retention. */
 export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthoringEditorProps): JSX.Element {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
-  const [selected, setSelected] = useState(state.base.assets[0]?.key ?? "");
+  const [selection, setSelected] = useState(state.base.assets[0]?.key ?? "");
   const [pack, setPack] = useState("");
   const [fixtureText, setFixtureText] = useState('{"values":{},"artifacts":{}}');
   const [importText, setImportText] = useState("");
+  const created = state.edits.filter((edit) => !state.base.assets.some((entry) => entry.key === edit.key));
+  const selected =
+    state.base.assets.some((entry) => entry.key === selection) || created.some((entry) => entry.key === selection)
+      ? selection
+      : (state.base.assets[0]?.key ?? created[0]?.key ?? "");
+  useEffect(() => {
+    if (selection !== selected) {
+      controller.invalidatePreview();
+      setSelected(selected);
+    }
+  }, [controller, selected, selection]);
   const asset = state.base.assets.find((entry) => entry.key === selected);
   const previewId = asset?.id ?? state.variants?.find((entry) => entry.key === selected)?.id;
   const source = controller.exportSource(selected);
@@ -51,7 +62,6 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
   const errors = [...catalogErrors(state.base.assets), ...(state.review?.errors ?? []), ...(state.errors ?? [])];
   const writeReason = state.blocked ?? state.base.writeReason;
   const publicationReason = controller.publicationReason();
-  const created = state.edits.filter((edit) => !state.base.assets.some((entry) => entry.key === edit.key));
   const keyboard = useKeyboard();
   useEffect(() => {
     const unregister = [
@@ -97,7 +107,14 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
       </Text>
       <ConfigField label="Template" path="template.id">
         {(control) => (
-          <select {...control} value={selected} onChange={(event) => setSelected(event.target.value)}>
+          <select
+            {...control}
+            value={selected}
+            onChange={(event) => {
+              controller.invalidatePreview();
+              setSelected(event.target.value);
+            }}
+          >
             {state.base.assets.map((entry) => (
               <option key={entry.key} value={entry.key}>
                 {entry.id}
@@ -122,7 +139,16 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
         path="templatePack"
         help="Tries pack/template ID, then the base ID. Partials always use exact IDs."
       >
-        {(control) => <input {...control} value={pack} onChange={(event) => setPack(event.target.value)} />}
+        {(control) => (
+          <input
+            {...control}
+            value={pack}
+            onChange={(event) => {
+              controller.invalidatePreview();
+              setPack(event.target.value);
+            }}
+          />
+        )}
       </ConfigField>
       {resolved && (
         <Text style="caption">
@@ -186,7 +212,8 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
         <Button
           disabled={source === undefined}
           onClick={() => {
-            if (source !== undefined) onExport(selected, source);
+            const currentSource = controller.exportSource(selected);
+            if (currentSource !== undefined) onExport(selected, currentSource);
           }}
         >
           Export source
@@ -201,11 +228,18 @@ export function TemplateAuthoringEditor({ controller, onExport }: TemplateAuthor
           : {})}
       >
         {(control) => (
-          <textarea {...control} value={fixtureText} onChange={(event) => setFixtureText(event.target.value)} />
+          <textarea
+            {...control}
+            value={fixtureText}
+            onChange={(event) => {
+              controller.invalidatePreview();
+              setFixtureText(event.target.value);
+            }}
+          />
         )}
       </ConfigField>
       <Button
-        disabled={!previewId || !fixtures || state.busy || writeReason !== undefined}
+        disabled={!previewId || source === undefined || !fixtures || state.busy || writeReason !== undefined}
         onClick={() => {
           if (previewId && fixtures)
             void controller.preview(previewId, asset ? pack || undefined : undefined, fixtures);

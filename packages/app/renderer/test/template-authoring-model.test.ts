@@ -105,6 +105,68 @@ describe("template catalog and source", () => {
 });
 
 describe("reviewed template publication", () => {
+  it("does not cancel a pending source save when only preview inputs are invalidated", async () => {
+    const pending = deferred<Awaited<ReturnType<NonNullable<AuthoringPorts["publish"]>>>>();
+    const { controller, base } = setup({ publish: () => pending.promise });
+    controller.edit("sdlc/review", "reviewed");
+    await controller.validate();
+    const publication = controller.publish();
+    controller.invalidatePreview();
+    expect(controller.getSnapshot().busy).toBe(true);
+    pending.resolve({
+      status: "saved",
+      candidateRevision: review.candidateRevision,
+      snapshot: { ...base, revision: "r2" },
+    });
+    await publication;
+    expect(controller.getSnapshot().base.revision).toBe("r2");
+    expect(controller.getSnapshot().edits).toEqual([]);
+    expect(controller.getSnapshot().blocked).toBeUndefined();
+  });
+
+  it("withholds derived variants and keeps their source draft when the origin is no longer readable", async () => {
+    const { controller, base } = setup({
+      variant: async () => ({ key: "new-variant", text: "Retained variant draft" }),
+    });
+    await controller.createVariant("sdlc/review", "house");
+    controller.observe({
+      ...base,
+      assets: base.assets.map((asset) =>
+        asset.key === "sdlc/review" ? { ...asset, source: { state: "withheld" as const } } : asset,
+      ),
+    });
+    expect(controller.exportSource("new-variant")).toBeUndefined();
+    expect(controller.edit("new-variant", "forbidden")).toBe(false);
+    expect(controller.getSnapshot().edits).toEqual([{ key: "new-variant", text: "Retained variant draft" }]);
+    expect(controller.getSnapshot().blocked).toContain("Source access changed");
+  });
+
+  it("refuses previews of initially withheld source without calling the adapter", async () => {
+    const { ports, base } = setup();
+    const preview = vi.fn<AuthoringPorts["preview"]>(ports.preview);
+    const controller = new TemplateAuthoringController(
+      { ...base, assets: base.assets.map((asset) => ({ ...asset, source: { state: "withheld" as const } })) },
+      { ...ports, preview },
+    );
+    await controller.preview("sdlc/review", "strict", { values: {}, artifacts: {} });
+    expect(preview).not.toHaveBeenCalled();
+  });
+
+  it("does not attach validation after source withholding at the same revision", async () => {
+    const pending = deferred<typeof review>();
+    const { controller, base } = setup({ validate: () => pending.promise });
+    controller.edit("sdlc/review", "Retained hidden source");
+    const validation = controller.validate();
+    controller.observe({
+      ...base,
+      assets: base.assets.map((asset) => ({ ...asset, source: { state: "withheld" as const } })),
+    });
+    pending.resolve(review);
+    await validation;
+    expect(controller.getSnapshot().review).toBeUndefined();
+    expect(controller.getSnapshot().edits).toEqual([{ key: "sdlc/review", text: "Retained hidden source" }]);
+    expect(controller.getSnapshot().busy).toBe(false);
+  });
   it("sends one publication for double activation and does not discard while pending", async () => {
     const pending = deferred<Awaited<ReturnType<NonNullable<AuthoringPorts["publish"]>>>>();
     const publish = vi.fn(() => pending.promise);

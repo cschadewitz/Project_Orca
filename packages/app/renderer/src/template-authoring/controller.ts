@@ -10,6 +10,7 @@ import {
   type FixtureInputs,
   type PromptPreview,
   type SourceEdit,
+  resolveTemplate,
 } from "./model.js";
 
 export interface AuthoringState {
@@ -30,13 +31,18 @@ export class TemplateAuthoringController {
   private state: AuthoringState;
   private listeners = new Set<() => void>();
   private operation = 0;
-  private created = new Set<string>();
+  private created = new Map<string, string>();
+  private readable: Set<string>;
+  private pendingPreview: number | undefined;
 
   constructor(
     base: AuthoringSnapshot,
     readonly ports: AuthoringPorts,
   ) {
     this.state = { base, edits: [], sequence: 0, busy: false };
+    this.readable = new Set(
+      base.assets.filter((asset) => asset.source.state === "available").map((asset) => asset.key),
+    );
   }
 
   getSnapshot = (): AuthoringState => this.state;
@@ -65,6 +71,7 @@ export class TemplateAuthoringController {
     if (
       this.state.blocked ||
       this.state.base.writeReason ||
+      !this.canRead(key) ||
       (asset?.source.state !== "available" && !this.created.has(key))
     )
       return false;
@@ -85,12 +92,29 @@ export class TemplateAuthoringController {
   }
 
   exportSource(key: string): string | undefined {
+    if (!this.canRead(key)) return undefined;
     const asset = this.state.base.assets.find((entry) => entry.key === key);
     return asset === undefined
       ? this.created.has(key)
         ? this.state.edits.find((edit) => edit.key === key)?.text
         : undefined
       : exportSource(asset, this.state.edits);
+  }
+
+  private canRead(key: string): boolean {
+    return this.readable.has(this.created.get(key) ?? key);
+  }
+
+  /** Preview controls have their own lifetime; invalidating them never cancels a source save. */
+  invalidatePreview(): void {
+    const { preview: _preview, ...rest } = this.state;
+    if (this.pendingPreview === this.operation) {
+      this.operation += 1;
+      this.pendingPreview = undefined;
+      this.update({ ...rest, busy: false });
+    } else {
+      this.update(rest);
+    }
   }
 
   discard(): void {
@@ -110,22 +134,39 @@ export class TemplateAuthoringController {
   /** Invoked by the parent target/generation feed. Old acknowledgements become inert. */
   observe(snapshot: AuthoringSnapshot): void {
     const base = this.state.base;
-    if (
-      !sameTarget(base.target, snapshot.target) ||
-      base.revision !== snapshot.revision ||
-      base.generation !== snapshot.generation
-    ) {
+    // Read visibility is current authority and can change without any content/write fence.
+    const sameIdentity = sameTarget(base.target, snapshot.target);
+    const nextReadable = new Set(
+      snapshot.assets.filter((asset) => asset.source.state === "available").map((asset) => asset.key),
+    );
+    const visibilityChanged =
+      sameIdentity &&
+      (this.readable.size !== nextReadable.size || [...this.readable].some((key) => !nextReadable.has(key)));
+    if (sameIdentity) this.readable = nextReadable;
+    if (!sameIdentity || base.revision !== snapshot.revision || base.generation !== snapshot.generation) {
       this.operation += 1;
+      this.pendingPreview = undefined;
       const { review: _review, preview: _preview, ...rest } = this.state;
       this.update({
         ...rest,
         busy: false,
         blocked: "The target, source revision, or active generation changed. Reconcile this draft before publishing.",
       });
-    } else if (snapshot.writeReason !== base.writeReason) {
+    } else if (visibilityChanged || snapshot.writeReason !== base.writeReason) {
       this.operation += 1;
+      this.pendingPreview = undefined;
       const { review: _review, preview: _preview, ...rest } = this.state;
-      this.update({ ...rest, base: snapshot, busy: false });
+      this.update({
+        ...rest,
+        base: snapshot,
+        busy: false,
+        ...(visibilityChanged
+          ? {
+              blocked:
+                "Source access changed. Retained edits stay private; restore access and reconcile before continuing.",
+            }
+          : {}),
+      });
     }
   }
 
@@ -177,8 +218,14 @@ export class TemplateAuthoringController {
   }
 
   async preview(id: string, pack: string | undefined, fixtures: FixtureInputs): Promise<void> {
+    const asset = resolveTemplate(this.state.base.assets, id, pack);
+    const variant = this.state.variants?.find((entry) => entry.id === id);
+    if (!(asset && this.canRead(asset.key)) && !(variant && this.canRead(variant.key))) return;
     const request = this.begin();
     if (!request) return;
+    this.pendingPreview = request.ticket;
+    const { preview: _preview, ...rest } = this.state;
+    this.update(rest);
     try {
       const preview = await this.ports.preview(request.candidate, id, pack, fixtures);
       if (this.current(request.ticket, request.candidate)) this.update({ ...this.state, preview });
@@ -186,6 +233,7 @@ export class TemplateAuthoringController {
       if (this.current(request.ticket, request.candidate))
         this.update({ ...this.state, message: "Preview failed. Check the template and exact-ID partial references." });
     } finally {
+      if (this.pendingPreview === request.ticket) this.pendingPreview = undefined;
       this.finish(request.ticket);
     }
   }
@@ -204,7 +252,7 @@ export class TemplateAuthoringController {
         this.update({ ...this.state, message: "That pack variant already exists." });
         return;
       }
-      this.created.add(variant.key);
+      this.created.set(variant.key, asset.key);
       this.update({
         ...this.state,
         variants: [...(this.state.variants ?? []), { key: variant.key, id: `${pack}/${asset.id}` }],
@@ -267,6 +315,9 @@ export class TemplateAuthoringController {
       }
       if (this.current(request.ticket, request.candidate)) {
         this.created.clear();
+        this.readable = new Set(
+          result.snapshot.assets.filter((asset) => asset.source.state === "available").map((asset) => asset.key),
+        );
         this.update({
           base: result.snapshot,
           edits: [],

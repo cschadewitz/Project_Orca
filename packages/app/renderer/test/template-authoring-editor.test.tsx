@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TemplateAuthoringEditor } from "../src/template-authoring/editor.js";
 import { TemplateAuthoringController } from "../src/template-authoring/controller.js";
-import type { AuthoringPorts, AuthoringSnapshot } from "../src/template-authoring/model.js";
+import type { AuthoringPorts, AuthoringSnapshot, PromptPreview } from "../src/template-authoring/model.js";
 import { CommandPalette } from "../src/palette/command-palette.js";
 import { useCommandPalette } from "../src/palette/use-command-palette.js";
 import { harness, stubMatchMedia } from "./harness.js";
@@ -77,6 +77,38 @@ afterEach(() => {
 
 const sourceControl = () => screen.getByRole<HTMLTextAreaElement>("textbox", { name: /Template source/ });
 
+function pendingPreview() {
+  let resolve!: (result: PromptPreview) => void;
+  const promise = new Promise<PromptPreview>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+const oldPreview: PromptPreview = {
+  requestedId: "sdlc/review",
+  resolvedId: "sdlc/review",
+  fallback: false,
+  partialIds: [],
+  text: "Previously authorized prompt",
+};
+
+function changePreviewControl(control: "selection" | "pack" | "fixtures") {
+  if (control === "selection")
+    fireEvent.change(screen.getByRole("combobox", { name: /^Template/ }), { target: { value: "design" } });
+  if (control === "pack")
+    fireEvent.change(screen.getByRole("textbox", { name: /^Pack/ }), { target: { value: "strict" } });
+  if (control === "fixtures")
+    fireEvent.change(screen.getByRole("textbox", { name: /Preview fixtures/ }), {
+      target: { value: '{"values":{"sample":"changed"},"artifacts":{}}' },
+    });
+}
+
+const twoAssets: AuthoringSnapshot = {
+  ...base,
+  assets: [...base.assets, { ...base.assets[0]!, key: "design", id: "sdlc/design" }],
+};
+
 async function paletteCommand(label: string) {
   sourceControl().focus();
   fireEvent.keyDown(window, { key: "k", code: "KeyK", metaKey: true });
@@ -88,6 +120,95 @@ async function paletteCommand(label: string) {
 }
 
 describe("template authoring editor", () => {
+  it("honors same-revision source withholding, retains the hidden draft and ignores its pending preview", async () => {
+    const pending = pendingPreview();
+    const preview = vi.fn<AuthoringPorts["preview"]>(() => pending.promise);
+    const { controller, onExport } = mount({ preview });
+    fireEvent.change(sourceControl(), { target: { value: "Retained private draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview prompt" }));
+    act(() => controller.observe({ ...base, assets: [{ ...base.assets[0]!, source: { state: "withheld" } }] }));
+    expect(sourceControl().value).toBe("");
+    expect(sourceControl().readOnly).toBe(true);
+    expect(controller.getSnapshot().edits).toEqual([{ key: "review", text: "Retained private draft" }]);
+    expect(controller.exportSource("review")).toBeUndefined();
+    expect(controller.edit("review", "forbidden")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Export source" }));
+    expect(onExport).not.toHaveBeenCalled();
+    await act(async () => {
+      pending.resolve(oldPreview);
+      await pending.promise;
+    });
+    expect(screen.queryByLabelText("Rendered prompt")).toBeNull();
+    expect(controller.getSnapshot().preview).toBeUndefined();
+    expect(controller.getSnapshot().busy).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Preview prompt" }));
+    expect(preview).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["selection", "pack", "fixtures"] as const)("discards a pending preview when %s changes", async (control) => {
+    const pending = pendingPreview();
+    const { controller } = mount({ preview: () => pending.promise }, twoAssets);
+    fireEvent.click(screen.getByRole("button", { name: "Preview prompt" }));
+    changePreviewControl(control);
+    await act(async () => {
+      pending.resolve(oldPreview);
+      await pending.promise;
+    });
+    expect(screen.queryByLabelText("Rendered prompt")).toBeNull();
+    expect(controller.getSnapshot().preview).toBeUndefined();
+    expect(controller.getSnapshot().busy).toBe(false);
+  });
+
+  it.each(["selection", "pack", "fixtures"] as const)(
+    "clears completed preview output when %s changes",
+    async (control) => {
+      mount({}, twoAssets);
+      fireEvent.click(screen.getByRole("button", { name: "Preview prompt" }));
+      await screen.findByLabelText("Rendered prompt");
+      changePreviewControl(control);
+      expect(screen.queryByLabelText("Rendered prompt")).toBeNull();
+    },
+  );
+
+  it("clears previous output before a replacement preview and keeps it cleared on failure", async () => {
+    let reject!: (error: Error) => void;
+    const failed = new Promise<PromptPreview>((_resolve, fail) => {
+      reject = fail;
+    });
+    const preview = vi.fn<AuthoringPorts["preview"]>().mockResolvedValueOnce(oldPreview).mockReturnValueOnce(failed);
+    mount({ preview });
+    fireEvent.click(screen.getByRole("button", { name: "Preview prompt" }));
+    await screen.findByLabelText("Rendered prompt");
+    fireEvent.click(screen.getByRole("button", { name: "Preview prompt" }));
+    expect(screen.queryByLabelText("Rendered prompt")).toBeNull();
+    await act(async () => {
+      reject(new Error("private-preview-payload"));
+      await failed.catch(() => undefined);
+    });
+    expect(screen.queryByLabelText("Rendered prompt")).toBeNull();
+    expect(screen.getByText(/Preview failed/)).toBeTruthy();
+    expect(document.body.textContent).not.toContain("private-preview-payload");
+  });
+
+  it.each(["button", "palette"] as const)(
+    "restores saved selection when a selected variant is cancelled through the %s",
+    async (flow) => {
+      mount({
+        variant: async () => ({ key: "house-review", text: source.replace("sdlc/review", "house/sdlc/review") }),
+      });
+      fireEvent.change(screen.getByRole("textbox", { name: /^Pack/ }), { target: { value: "house" } });
+      fireEvent.click(screen.getByRole("button", { name: "Create pack variant" }));
+      await screen.findByRole("option", { name: "house-review (draft variant)" });
+      fireEvent.change(screen.getByRole("combobox", { name: /^Template/ }), { target: { value: "house-review" } });
+      if (flow === "palette") await paletteCommand("Cancel template edits");
+      else fireEvent.click(screen.getByRole("button", { name: "Cancel edits" }));
+      expect(screen.getByRole<HTMLSelectElement>("combobox", { name: /^Template/ }).value).toBe("review");
+      expect(screen.queryByRole("option", { name: "house-review (draft variant)" })).toBeNull();
+      expect(sourceControl().value).toBe(source);
+      expect(sourceControl().readOnly).toBe(false);
+      expect(screen.queryByText(/Source is unavailable or protected/)).toBeNull();
+    },
+  );
   it("creates and previews an editable variant before publication with the same fixture inputs", async () => {
     const { preview, publish } = mount({
       variant: async () => ({ key: "house-review", text: source.replace("sdlc/review", "house/sdlc/review") }),
