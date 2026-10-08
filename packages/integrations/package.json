@@ -30,6 +30,6 @@
     "@agentclientprotocol/sdk": "^1.7.0",
     "zod": "^4.6.5",
     "@orca/protocol": "workspace:*",
-    "@modelcontextprotocol/server": "2.2.0"
+    "@modelcontextprotocol/server": "2.3.0"
   }
 }

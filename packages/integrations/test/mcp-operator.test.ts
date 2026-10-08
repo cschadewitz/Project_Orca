@@ -299,6 +299,69 @@ describe("authenticated HTTP backend and transport", () => {
     expect((await client.listTools()).tools.some((t) => t.name === "discover_orca")).toBe(true);
     expect(output(await client.callTool({ name: "discover_orca", arguments: {} }))).toContain("verified-caller");
   });
+  it("isolates repeated and overlapping HTTP requests from different bearer callers", async () => {
+    const entered = new Set<string>();
+    let release!: () => void;
+    const overlap = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let hold = false;
+    const fetcher: typeof fetch = async (_url, init) => {
+      const authorization = new Headers(init?.headers).get("authorization");
+      const principalId = authorization === "Bearer alice" ? "alice" : authorization === "Bearer bob" ? "bob" : null;
+      if (!principalId) return new Response(null, { status: 401 });
+      const call = JSON.parse(String(init?.body)) as { id: string; method: string };
+      if (hold) {
+        entered.add(principalId);
+        if (entered.size === 2) release();
+        await overlap;
+      }
+      return Response.json({ kind: "response", id: call.id, ok: true, result: { ...discovery(), principalId } });
+    };
+    const handler = createOperatorHttpHandler({
+      daemonEndpoint: "http://127.0.0.1:9999",
+      origin: "https://orca.example",
+      fetch: fetcher,
+    });
+    const clients = ["alice", "bob"].map((principalId) => {
+      const client = new Client({ name: principalId, version: "1" });
+      const transport = new StreamableHTTPClientTransport(new URL("https://orca.example/mcp"), {
+        requestInit: { headers: { Authorization: `Bearer ${principalId}` } },
+        fetch: async (url, init) => handler(new Request(url, init)),
+      });
+      cleanup.push(() => client.close());
+      return { client, transport, principalId };
+    });
+    try {
+      for (const { client, transport, principalId } of clients) {
+        await client.connect(transport);
+        for (let request = 0; request < 3; request++) {
+          expect(output(await client.callTool({ name: "discover_orca", arguments: {} }))).toContain(principalId);
+        }
+      }
+      hold = true;
+      const results = await Promise.all(
+        clients.map(({ client }) => client.callTool({ name: "discover_orca", arguments: {} })),
+      );
+      expect(entered).toEqual(new Set(["alice", "bob"]));
+      for (const [index, result] of results.entries()) {
+        const other = clients[1 - index]!.principalId;
+        expect(output(result)).toContain(clients[index]!.principalId);
+        expect(output(result)).not.toContain(other);
+      }
+      hold = false;
+      const refused = await handler(
+        new Request("https://orca.example/mcp", {
+          method: "POST",
+          headers: { Authorization: "Bearer revoked" },
+          body: "malformed",
+        }),
+      );
+      expect(refused.status).toBe(401);
+    } finally {
+      release();
+    }
+  });
 });
 
 it("keeps shared-service retry receipts distinct from flat runs.admit wire receipts", () => {
