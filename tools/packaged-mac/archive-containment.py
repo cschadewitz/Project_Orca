@@ -110,7 +110,7 @@ def preflight(stream, size, limits):
     require(cd_size <= limits.central_bytes, "ZIP central directory byte limit")
     require(offset + cd_size == size - len(tail) + pos, "ZIP central directory boundary mismatch")
     stream.seek(0)
-    return count, offset
+    return count, offset, cd_size
 
 
 def canonical(name):
@@ -133,9 +133,25 @@ def check_extra(data, info):
                     "ambiguous Unicode path extra field")
 
 
+def check_central_records(stream, infos, offset, size):
+    """Account for every byte of the directory, including record metadata."""
+    cursor, end = offset, offset + size
+    for info in infos:
+        stream.seek(cursor)
+        header = stream.read(46)
+        require(len(header) == 46 and header[:4] == b"PK\x01\x02", "invalid central record")
+        name_size, extra_size, comment_size, disk = struct.unpack_from("<4H", header, 28)
+        cursor += 46 + name_size + extra_size + comment_size
+        require(disk == 0 and cursor <= end, "split/truncated central record")
+        encoded = info.orig_filename.encode("utf-8" if info.flag_bits & 0x800 else "cp437")
+        require(name_size == len(encoded) and stream.read(name_size) == encoded,
+                "central record name mismatch")
+    require(cursor == end, "unaccounted central directory bytes")
+
+
 def check_local_headers(stream, entries, central_offset):
-    """Bind local names/flags/methods and ranges to the bounded central index."""
-    ranges = []
+    """Require contiguous indexed records from byte zero to the directory."""
+    ranges, payload_offsets = [], {}
     for info in entries.values():
         require(0 <= info.header_offset < central_offset, "invalid local header offset")
         stream.seek(info.header_offset)
@@ -149,6 +165,7 @@ def check_local_headers(stream, entries, central_offset):
         encoded = info.orig_filename.encode("utf-8" if flags & 0x800 else "cp437")
         require(name_size == len(encoded) and stream.read(name_size) == encoded, "local/central member names differ")
         check_extra(stream.read(extra_size), info)
+        payload_offsets[info.filename.rstrip("/")] = info.header_offset + 30 + name_size + extra_size
         if not flags & 8:  # Streaming writers use a post-payload data descriptor.
             require((crc, compressed, uncompressed) == (info.CRC, info.compress_size, info.file_size),
                     "local/central CRC or size mismatch")
@@ -163,6 +180,61 @@ def check_local_headers(stream, entries, central_offset):
         ranges.append((info.header_offset, end))
     ranges.sort()
     require(all(a[1] <= b[0] for a, b in zip(ranges, ranges[1:])), "overlapping ZIP member ranges")
+    require(ranges[0][0] == 0 and ranges[-1][1] == central_offset
+            and all(a[1] == b[0] for a, b in zip(ranges, ranges[1:])),
+            "unaccounted ZIP prefix/gap or unindexed local record")
+    return payload_offsets
+
+
+def payload_chunks(stream, info, offset, budget):
+    """Hash/CRC callers see complete payloads, never ZipExtFile-sized prefixes.
+
+    Read only the indexed compressed range. Raw DEFLATE output is capped on every
+    decoder call; one excess output byte is sufficient to reject forged lengths.
+    No unbounded flush is used. Stream EOF and unused input are independent checks.
+    """
+    stored = info.compress_type == zipfile.ZIP_STORED
+    require(not stored or info.compress_size == info.file_size, "stored payload size mismatch")
+    decoder = None if stored else zlib.decompressobj(-15)
+    stream.seek(offset)
+    remaining, actual, crc = info.compress_size, 0, 0
+    while remaining:
+        read_size = min(64 * 1024, remaining)
+        if stored:
+            read_size = min(read_size, budget - actual + 1, info.file_size - actual + 1)
+        raw = stream.read(read_size)
+        require(bool(raw), "truncated compressed payload")
+        remaining -= len(raw)
+        pending = raw
+        while pending:
+            capacity = min(64 * 1024, budget - actual + 1, info.file_size - actual + 1)
+            chunk = pending if stored else decoder.decompress(pending, capacity)
+            pending = b"" if stored else decoder.unconsumed_tail
+            actual += len(chunk)
+            require(actual <= budget, "actual payload resource byte limit")
+            require(actual <= info.file_size, "actual payload size mismatch")
+            crc = zlib.crc32(chunk, crc)
+            if chunk:
+                yield chunk
+            if decoder is not None:
+                require(not decoder.unused_data and (not decoder.eof or remaining == 0),
+                        "unused/trailing compressed payload bytes")
+    if decoder is not None:
+        # Drain any output buffered when a max_length boundary met the input end.
+        while True:
+            capacity = min(64 * 1024, budget - actual + 1, info.file_size - actual + 1)
+            chunk = decoder.decompress(b"", capacity)
+            if not chunk:
+                break
+            actual += len(chunk)
+            require(actual <= budget, "actual payload resource byte limit")
+            require(actual <= info.file_size, "actual payload size mismatch")
+            crc = zlib.crc32(chunk, crc)
+            yield chunk
+        require(decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail,
+                "unterminated or unused DEFLATE payload")
+    require(actual == info.file_size, "actual payload size mismatch")
+    require(crc == info.CRC, "full payload CRC mismatch")
 
 
 def index_members(archive, limits):
@@ -181,6 +253,8 @@ def index_members(archive, limits):
         require(not info.flag_bits & (1 | 64), "encrypted ZIP is unsupported")
         require(info.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED),
                 "unsupported ZIP compression")
+        supported_flags = 0x800 | 8 | (6 if info.compress_type == zipfile.ZIP_DEFLATED else 0)
+        require(not info.flag_bits & ~supported_flags, "unsupported ZIP flags")
         mode = stat.S_IFMT(info.external_attr >> 16) if info.create_system == 3 else 0
         kind = "directory" if info.is_dir() else "file"
         if mode == stat.S_IFLNK:
@@ -283,12 +357,13 @@ def bound_binary_plist(data):
 
 
 def inspect_zip(stream, size, manifest, limits):
-    count, offset = preflight(stream, size, limits)
+    count, offset, central_size = preflight(stream, size, limits)
     with zipfile.ZipFile(stream) as archive:
         require(len(archive.infolist()) == count and archive.start_dir == offset,
                 "ZIP member count or prepended data mismatch")
         entries, nodes = index_members(archive, limits)
-        check_local_headers(stream, entries, offset)
+        check_central_records(stream, archive.infolist(), offset, central_size)
+        payload_offsets = check_local_headers(stream, entries, offset)
         daemon = APP + "/Contents/Resources/" + manifest["identity"]["daemon"]["path"]
         for name in (IDENTITY, PLIST, daemon):
             require(name in entries and nodes[name] == "file", f"missing/nonregular required member: {name}")
@@ -297,18 +372,18 @@ def inspect_zip(stream, size, manifest, limits):
         for name, info in entries.items():
             digest, chunks, actual = hashlib.sha256(), [], 0
             capture = name in (IDENTITY, PLIST) or nodes[name] == "link"
-            with archive.open(info) as member:
-                while True:
-                    chunk = member.read(64 * 1024)
-                    if not chunk:
-                        break
-                    actual += len(chunk)
-                    actual_total += len(chunk)
-                    require(actual <= min(info.file_size, limits.member_bytes)
-                            and actual_total <= limits.total_bytes, "actual decompression byte limit")
-                    digest.update(chunk)
-                    if capture:
-                        chunks.append(chunk)
+            budget = min(limits.member_bytes, limits.total_bytes - actual_total,
+                         max(1, info.compress_size) * limits.ratio)
+            if name in (IDENTITY, PLIST):
+                budget = min(budget, limits.metadata_bytes)
+            if nodes[name] == "link":
+                budget = min(budget, limits.link_bytes)
+            for chunk in payload_chunks(stream, info, payload_offsets[name], budget):
+                actual += len(chunk)
+                actual_total += len(chunk)
+                digest.update(chunk)
+                if capture:
+                    chunks.append(chunk)
             require(actual == info.file_size, f"member size mismatch: {name}")
             digests[name] = digest.hexdigest()
             if capture:

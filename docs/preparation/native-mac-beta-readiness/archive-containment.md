@@ -67,9 +67,16 @@ directory ancestors:
 The contract requires root `ORCA.app`. Wrappers, alternate root apps and root
 case variants fail; nested Electron helper apps are allowed. Bounded `__MACOSX`
 metadata is permitted alongside the app. All members, including unused resources
-and AppleDouble metadata, are streamed to EOF with CRC/size checks. Local headers,
-data descriptors, compression methods/flags and non-overlapping byte ranges must
-agree with the central index. Unicode path extra fields must agree with the actual
+and AppleDouble metadata, are streamed with full payload CRC/size checks. Stored
+members require equal compressed/uncompressed lengths. Raw DEFLATE decoding requires
+terminal stream EOF with no unused compressed bytes; forged prefix sizes/CRCs,
+unterminated streams and concatenated/trailing compressed data fail. Local headers,
+signed or unsigned data descriptors and supported compression methods/flags must
+agree with the central index. Indexed record ranges must completely cover byte zero
+through the central directory, whose records must also account for every declared
+directory byte. Unindexed records, prefixes and interior/final gaps fail, even when
+all offsets and the external archive hash have been consistently adjusted. Unicode
+path extra fields must agree with the actual
 member name in both local and central metadata; they cannot select another path.
 XML and binary plists are supported. Binary object tables and object byte ranges
 are checked before parsing, preventing aliased/overlapping objects from amplifying
@@ -96,11 +103,17 @@ ceilings to exercise boundaries without creating huge inputs.
 | Decompression read buffer | 64 KiB; only bounded identity/plist/link payloads retained |
 
 This deliberately supports single-volume ordinary stored/deflated ZIPs. ZIP64,
-encrypted/split archives, other compression methods, prepended/trailing data and
-malformed or overlapping metadata are refused. A candidate needing a broader
+encrypted/split archives, unsupported flags, other compression methods,
+prepended/trailing data, unindexed records, padding gaps, and malformed or overlapping
+metadata are refused. Signed and unsigned streaming data descriptors, reordered
+central entries and bounded comments are supported; record order need not match
+directory order. A candidate needing a broader
 container subset requires another reviewed increment, not larger ad hoc flags.
-Advertised sizes/ratios are checked before decompression; actual streamed sizes
-and cumulative bytes are checked during reads. No extraction is performed.
+Advertised sizes/ratios are checked before decompression. Every decoder output is
+capped by the remaining member/total/metadata/link/ratio budget and expected size,
+with at most one excess output byte to detect a violated ceiling. CRC and hash cover
+the complete successful payload. No `ZipExtFile` truncation or unbounded decoder
+flush is used. No extraction is performed.
 
 Names reject absolute/drive paths, backslashes, empty/`.`/`..` components, NUL,
 control characters and invalid Unicode. Duplicate members and file/directory
@@ -153,9 +166,18 @@ PYTHONDONTWRITEBYTECODE=1 node_modules/.bin/vitest run \
 git diff --check
 ```
 
-At implementation: Python 3.12.14 / Node 24.19.0; 37 new Python containment tests,
-37 existing Python validator tests and seven existing producer/validator regressions
-pass without skips. The synthetic cases cover valid layouts/links, spaces/non-ASCII,
+At the corrected implementation: Python 3.12.14 / Node 24.19.0; all 46 containment
+tests pass without skips. The original 37 containment tests passed at
+`81431d64dd221398771d9bbac36606af4bb91a60`, but
+[independent review 5450824960](https://github.com/cschadewitz/Project_Orca/pull/541#pullrequestreview-5450824960)
+reproduced eight false passes from forged payload lengths/terminal streams and
+unindexed record gaps. The correction adds an independent synthetic record writer
+and deterministic regressions for both blockers, including consistently rebound
+archive hashes and explicit actual-budget checks. Unsupported ambiguous framing is
+rejected; valid descriptors, empty payloads and decoder chunk boundaries still pass.
+The 37 unchanged Python validator and seven unchanged producer/validator regressions
+passed at the original head and are not rerun for this correction. The synthetic
+cases cover valid layouts/links, spaces/non-ASCII,
 duplicate/case/normalization ambiguity, wrong roots, resource substitutions, traversal,
 link escape/cycles, malformed/truncated/CRC-invalid archives, local-header/Unicode
 path overrides, data descriptors and decompression/index limits. Python 3.9 syntax,

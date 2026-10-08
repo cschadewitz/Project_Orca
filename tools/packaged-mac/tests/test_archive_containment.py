@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 import plistlib
+import random
 import stat
 import struct
 import subprocess
@@ -15,6 +16,7 @@ import tempfile
 import unittest
 import warnings
 import zipfile
+import zlib
 
 
 REPO = Path(__file__).resolve().parents[3]
@@ -73,6 +75,55 @@ class ContainmentTests(unittest.TestCase):
     def change_member(self, name, data=None, kind=None):
         self.members = [(n, d if data is None else data, k if kind is None else kind)
                         if n == name else (n, d, k) for n, d, k in self.members]
+
+    def raw_zip(self, records=None, indexed=None, prefix=b"", gaps=None, comment=b""):
+        """Independent record writer: permit malicious lengths, streams and gaps.
+
+        Every call rebinds the external digest/size; only the inner framing/payload
+        checks can reject the forged records. This never writes extracted members.
+        """
+        if records is None:
+            records = [{"name": n, "data": d} for n, d, _ in self.members]
+        body, central = bytearray(prefix), []
+        for i, record in enumerate(records):
+            body.extend((gaps or {}).get(i, b""))
+            offset = len(body)
+            name = record["name"].encode("utf-8")
+            data = record["data"]
+            claimed = record.get("claimed", data)
+            method = record.get("method", zipfile.ZIP_STORED)
+            if method == zipfile.ZIP_DEFLATED:
+                compressor = zlib.compressobj(wbits=-15)
+                encoded = compressor.compress(data) + compressor.flush()
+            else:
+                encoded = data
+            encoded = record.get("encoded", encoded)
+            descriptor = record.get("descriptor", False)
+            flags = 0x800 | (8 if descriptor else 0)
+            crc, compressed, uncompressed = zlib.crc32(claimed), len(encoded), len(claimed)
+            body.extend(struct.pack("<4s5H3I2H", b"PK\x03\x04", 20, flags, method, 0, 0,
+                                    0 if descriptor else crc, 0 if descriptor else compressed,
+                                    0 if descriptor else uncompressed, len(name), 0))
+            body.extend(name + encoded)
+            if descriptor:
+                body.extend((b"PK\x07\x08" if descriptor == "signed" else b"")
+                            + struct.pack("<3I", crc, compressed, uncompressed))
+            header = struct.pack("<4s6H3I5H2I", b"PK\x01\x02", (3 << 8) | 20, 20, flags,
+                                 method, 0, 0, crc, compressed, uncompressed, len(name), 0, 0, 0, 0,
+                                 (stat.S_IFREG | 0o644) << 16, offset)
+            central.append(header + name)
+        body.extend((gaps or {}).get(len(records), b""))
+        central_offset = len(body)
+        selected = list(range(len(records))) if indexed is None else indexed
+        directory = b"".join(central[i] for i in selected)
+        body.extend(directory)
+        body.extend(struct.pack("<4s4H2IH", b"PK\x05\x06", 0, 0, len(selected), len(selected),
+                                len(directory), central_offset, len(comment)) + comment)
+        self.zip_path.write_bytes(body)
+        self.bind_zip()
+
+    def raw_records(self):
+        return [{"name": n, "data": d} for n, d, _ in self.members]
 
     def check(self, **kwargs):
         return containment.validate_archive(self.root, self.build_id, self.source_commit, **kwargs)
@@ -412,6 +463,114 @@ class ContainmentTests(unittest.TestCase):
         self.zip_path.write_bytes(changed)
         self.bind_zip()
         self.fails("invalid ZIP data descriptor")
+
+    def test_forged_daemon_prefix_size_and_crc_refused_for_both_methods(self):
+        for method in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            with self.subTest(method=method):
+                records = self.raw_records()
+                original = records[2]["data"]
+                records[2].update(data=original + b"synthetic unverified substitution", claimed=original, method=method)
+                self.raw_zip(records)
+                self.fails("stored payload size mismatch|actual payload size mismatch")
+                result = self.cli(*self.fixture_args())
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn("PASS", result.stdout)
+
+    def test_forged_identity_prefix_does_not_bypass_metadata_budget(self):
+        records = self.raw_records()
+        original = records[0]["data"]
+        records[0].update(data=original + b" " * 8192, claimed=original, method=zipfile.ZIP_DEFLATED)
+        self.raw_zip(records)
+        self.fails("actual payload size mismatch", limits=replace(containment.Limits(), metadata_bytes=4000))
+
+    def test_deflate_missing_terminal_block_is_refused_despite_expected_output(self):
+        records = self.raw_records()
+        compressor = zlib.compressobj(wbits=-15)
+        encoded = compressor.compress(records[2]["data"]) + compressor.flush()
+        self.assertEqual(encoded[0] & 1, 1)  # Deterministic single final block.
+        unterminated = bytes([encoded[0] & ~1]) + encoded[1:]
+        decoder = zlib.decompressobj(-15)
+        self.assertEqual(decoder.decompress(unterminated), records[2]["data"])
+        self.assertFalse(decoder.eof)
+        records[2].update(method=zipfile.ZIP_DEFLATED, encoded=unterminated)
+        self.raw_zip(records)
+        self.fails("unterminated.*DEFLATE")
+
+    def test_deflate_trailing_bytes_concatenation_and_short_output_are_refused(self):
+        records = self.raw_records()
+        data = records[2]["data"]
+        compressor = zlib.compressobj(wbits=-15)
+        encoded = compressor.compress(data) + compressor.flush()
+        for payload in (encoded + b"hidden synthetic bytes", encoded + encoded, encoded[:-1]):
+            with self.subTest(payload_size=len(payload)):
+                records[2].update(method=zipfile.ZIP_DEFLATED, encoded=payload)
+                self.raw_zip(records)
+                self.fails("unused/trailing|unterminated|actual payload size mismatch")
+
+    def test_forged_unused_resource_size_does_not_bypass_full_crc_or_total_checks(self):
+        records = self.raw_records() + [{"name": "ORCA.app/Contents/Resources/unused",
+                                      "data": b"prefix" + b"x" * 131072, "claimed": b"prefix",
+                                      "method": zipfile.ZIP_DEFLATED}]
+        self.raw_zip(records)
+        limits = replace(containment.Limits(), total_bytes=sum(len(r.get("claimed", r["data"])) for r in records))
+        self.fails("actual payload resource byte limit|actual payload size mismatch", limits=limits)
+
+    def test_raw_decoder_enforces_all_actual_budgets_with_bounded_output(self):
+        # Exercise resource processing directly as well as early declared-size checks.
+        data = b"a" * 131072
+        compressor = zlib.compressobj(wbits=-15)
+        encoded = compressor.compress(data) + compressor.flush()
+        for method, payload in ((zipfile.ZIP_STORED, data), (zipfile.ZIP_DEFLATED, encoded)):
+            with self.subTest(method=method):
+                info = zipfile.ZipInfo("bounded-fixture")
+                info.compress_type, info.compress_size, info.file_size = method, len(payload), len(data)
+                info.CRC = zlib.crc32(data)
+                for budget in (0, 4096, 65536, len(data) - 1):
+                    seen = 0
+                    with self.assertRaisesRegex(containment.InvalidArchive, "actual payload resource byte limit"):
+                        for chunk in containment.payload_chunks(io.BytesIO(payload), info, 0, budget):
+                            self.assertLessEqual(len(chunk), 65536)
+                            seen += len(chunk)
+                    self.assertLessEqual(seen, budget)
+
+    def test_adjusted_prefix_and_unindexed_records_cannot_bypass_index(self):
+        original = self.raw_records()
+        for prefix in (b"synthetic prefix", b"PK\x03\x04synthetic padding"):
+            with self.subTest(prefix=prefix):
+                self.raw_zip(prefix=prefix)
+                self.fails("unaccounted ZIP prefix/gap")
+        for name in (original[2]["name"], "../outside-synthetic"):
+            for position in (0, 1, 3):
+                with self.subTest(name=name, position=position):
+                    records = original.copy()
+                    records.insert(position, {"name": name, "data": b"unindexed synthetic substitution"})
+                    self.raw_zip(records, indexed=[i for i in range(4) if i != position])
+                    self.fails("unaccounted ZIP prefix/gap")
+                    result = self.cli(*self.fixture_args())
+                    self.assertEqual(result.returncode, 1)
+                    self.assertNotIn("Traceback", result.stderr)
+
+    def test_interior_padding_and_last_gap_are_unsupported(self):
+        for position in (1, 3):
+            with self.subTest(position=position):
+                self.raw_zip(gaps={position: b"synthetic unaccounted padding"})
+                self.fails("unaccounted ZIP prefix/gap")
+
+    def test_complete_supported_records_allow_reordered_index_and_descriptors(self):
+        generator = random.Random(388)
+        incompressible = bytes(generator.getrandbits(8) for _ in range(131072))
+        for method in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            for descriptor in (False, "signed", "unsigned"):
+                with self.subTest(method=method, descriptor=descriptor):
+                    records = self.raw_records() + [
+                        {"name": "ORCA.app/Contents/Resources/chunk-boundary", "data": b"a" * 131072},
+                        {"name": "ORCA.app/Contents/Resources/empty", "data": b""},
+                        {"name": "ORCA.app/Contents/Resources/input-boundary", "data": incompressible}]
+                    for record in records:
+                        record.update(method=method, descriptor=descriptor)
+                    self.raw_zip(records, indexed=[5, 4, 1, 3, 0, 2], comment=b"bounded synthetic comment")
+                    result = self.check()
+                    self.assertEqual(result["uncompressedBytes"], sum(len(r["data"]) for r in records))
 
     def test_fixed_limits_cover_archive_central_count_member_total_and_metadata(self):
         with zipfile.ZipFile(self.zip_path) as archive:
