@@ -26,11 +26,103 @@ platform and architecture.
 The repository's current `.orca-release.json` has a tag/SHA and compatibility
 epochs; it does not establish this complete dependency evidence. Existing managed
 release staging and packaged daemon builds do not produce or distribute the new
-attestation. Choosing a reviewed producer and independent pin delivery path is an
-explicit integration decision before shipped defaults can be enabled. This slice
-introduces no signer, credential, deployment, environment-variable trust shortcut,
-or automatic release migration. Source trees and unverified installations remain
-unsupported for restoration.
+attestation. The bounded [candidate producer](#candidate-production-and-independent-approval)
+is a separate local composition tool; its output does not approve itself. Choosing
+the independent approval authority and startup pin delivery path remains an explicit
+integration decision before shipped defaults can be enabled. This introduces no
+signer, credential, deployment, environment-variable trust shortcut, or automatic
+release migration. Source trees and unverified installations remain unsupported
+for restoration.
+
+## Candidate production and independent approval
+
+Follow-on baseline: draft [#558](https://github.com/cschadewitz/Project_Orca/pull/558)
+at `a56692c51eb7b99ca9941772dc71dde847004fd3`. Its source and acceptance evidence
+remain unchanged. [`tools/plugin-release.js`](../../tools/plugin-release.js) reuses
+the exact lockfile-installed esbuild dependency used by
+[`build-daemon.js`](../../packages/app/scripts/build-daemon.js), plus the existing
+tooling TypeScript parser. It deliberately cannot inherit the daemon's native
+externals or runtime `require` shim. Managed staging and desktop workflows do not
+invoke it automatically.
+
+The smallest supported candidate profile is reviewed JavaScript ESM plus inlined
+JSON, with literal static/dynamic import edges and a narrow Node builtin allowlist.
+Each input must be a regular file of at most 16 MiB; total input per plugin is at
+most 128 MiB. Every plugin builds to one `.mjs`, without chunks or source maps.
+Input and emitted-output syntax checks refuse computed/glob imports, known runtime
+loaders/evaluation, CommonJS, native inputs, unsupported builtin facilities and
+unresolved packages. Any bundler warning refuses. The output graph may contain
+only explicitly listed allowlisted Node builtin edges. This profile is deliberately
+more restrictive than the verifier's generic builtin format.
+
+The plan is strict JSON with an ordered `plugins` array. Each item has exactly
+`entry` (an absolute built `.js`/`.mjs` entry path), `id` (a unique lowercase slug)
+and positive integer `schemaVersion`. Paths/specs are generated as
+`plugins/<id>.mjs` and `./plugins/<id>.mjs`. Plugins are never imported or executed
+during production. All bundles finish before a new destination directory is created;
+an existing destination refuses rather than replacing an approved installation.
+
+Example local candidate generation, with an independently reviewed plan:
+
+```json
+{
+  "plugins": [
+    { "entry": "/absolute/reviewed-build/example.mjs", "id": "example", "schemaVersion": 1 }
+  ]
+}
+```
+
+```sh
+node tools/plugin-release.js --plan /absolute/reviewed-plan.json --out /absolute/new-candidate-directory
+```
+
+The tool writes `plugin-release.json` and its ordered bundles, using the build
+process's exact Node/platform/architecture. Its only success output is
+`{ "candidateManifestSha256": "...", "approved": false }`. It provides no
+trusted `InstalledPluginRelease` reference, modifies no config, and installs,
+signs, publishes and launches nothing. Repeating the build with the same source
+layout, dependencies, runtime and pinned tooling produces identical bytes; the
+tests check separate absolute source roots. An imported dependency change changes
+the bundle and manifest digests. General reproducible-build certification is not
+claimed across different toolchains, layouts or platforms.
+
+These syntax/graph checks are **not semantic closure proof or a hostile-JavaScript
+sandbox**. A reviewed producer must still inspect the entire source/dependency
+composition for indirect/obfuscated loaders, native facilities, downloads and
+behavior-bearing file access outside the bundle. A matching candidate digest says
+which bytes were produced; it cannot decide that this source review occurred or
+authorize its own attestation. An arbitrary generated candidate is unapproved.
+
+### Exact remaining security/product decision
+
+No existing approved trust authority or delivery route was found. The concrete
+decision is: **who approves the complete JEV-free source/dependency composition,
+runtime and resulting manifest digest, and which independently maintained startup
+component is authorized to carry that literal digest?** The existing managed
+launcher obtains release paths through `ORCA_RELEASE` and `.orca-release.json`;
+neither is the independent plugin authority. The ordinary CLI `serve` command
+does not supply `BootstrapOptions.installedPluginRelease`.
+
+Minimal recommendation for the parent-owned next slice: approve one reviewed,
+owned JEV-free test release for actual-Cal acceptance, and a separately reviewed,
+operator-owned launcher outside its replaceable plugin files. That launcher should
+contain the literal approved manifest digest, concrete installation root and
+manifest path, then pass the reference directly to daemon/bootstrap composition.
+Do not obtain the pin from candidate output at startup, YAML, RPC, an environment
+variable, plugin metadata, or a manifest beside the bundle. No new signer/key is
+needed for this bounded operator-reviewed authority, but choosing it is still an
+explicit approval decision. The launcher wiring and any real installation/launch
+remain unimplemented pending that decision; no production pin is silently injected.
+
+[`tools/test/plugin-release.test.js`](../../tools/test/plugin-release.test.js)
+exercises the actual producer, installed verifier and production bootstrap. Its
+isolated ESM package dependency is synthetic, and its approved pins come only from
+the test harness. It checks dependency tampering, identity changes, deterministic
+bytes, missing pins, pre-import refusal, retained admitted values and unsupported
+closure forms. This is executable producer/verifier plumbing, not approval of a
+real release or a deployed daemon, fresh-process actual-Cal resume, or provider
+acceptance. #558's existing fresh-process evidence is preserved separately. #394's
+production approval/pin integration and #396's actual-Cal proof remain open.
 
 ## Attestation format
 
