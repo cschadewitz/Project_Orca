@@ -44,6 +44,13 @@ PRs can reduce. Future non-exempt inventory drift deliberately restores full unt
 a separately reviewed certificate refresh; broad runtime/test-only eligibility is
 not enabled. The graph's completeness claim still covers only the named island.
 
+The refreshed certificate audits implementation `7f442836cb1a013cf868daf19fc97507353b729e`
+with inventory hash `29aae59456aec50749a82113af042041271e146c54c9fb3f8492e27bd66df5f9`.
+Selector version **1.1.2** includes execution/evidence source in its identity.
+The earlier certificate and acceptance records below are historical, not the current
+activation certificate. The enablement PR's full run and first new live consumer
+remain parent-controlled acceptance checks; local probes do not fabricate those results.
+
 The advisory consumer reads the source job API to distinguish full `Test` from
 `Test selected files`. A reduced Node 22 report is **selected_verified**, never a
 full Node 22 baseline; acceptance also requires Node 24 **compared** against full
