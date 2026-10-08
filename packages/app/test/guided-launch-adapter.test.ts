@@ -72,7 +72,8 @@ function fixture() {
     },
   };
   const fetcher: typeof fetch = async (_input, init) => {
-    const request = JSON.parse(String(init?.body)) as { id: number; method: string; params: Record<string, unknown> };
+    if (typeof init?.body !== "string") throw new Error("Expected a JSON request body");
+    const request = JSON.parse(init.body) as { id: number; method: string; params: Record<string, unknown> };
     const credential = new Headers(init?.headers).get("authorization")?.replace("Bearer ", "") ?? "";
     calls.push({ ...request, token: credential });
     const identity = target.identity!;
