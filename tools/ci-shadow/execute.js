@@ -1,4 +1,4 @@
-/** Enforce the reviewed PR selection on Node 22; Node 24 retains full coverage. */
+/** Enforce exact-candidate selected PR tests on both Nodes; main retains full coverage. */
 import { spawnSync } from "node:child_process";
 import { appendFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -9,8 +9,9 @@ import { git } from "./git.js";
 import { createPlan, validateExecution, validatePlan } from "./selector.js";
 
 export function executionPlan(input, event, node, manifest) {
-  const plan = createPlan({ ...input, forceFull: event !== "pull_request" || node !== 22 }, manifest);
-  validatePlan(plan, { ...input, forceFull: event !== "pull_request" || node !== 22 }, manifest);
+  const forceFull = event !== "pull_request" || ![22, 24].includes(node);
+  const plan = createPlan({ ...input, forceFull }, manifest);
+  validatePlan(plan, { ...input, forceFull }, manifest);
   if (event === "pull_request") {
     const parents = git(input.repo, ["show", "-s", "--format=%P", input.candidate]).toString().trim().split(" ");
     if (!isDeepStrictEqual(parents, [input.base, input.head])) throw new Error("candidate_parents_mismatch");
@@ -18,7 +19,8 @@ export function executionPlan(input, event, node, manifest) {
   if (git(input.repo, ["rev-parse", "HEAD"]).toString().trim() !== input.candidate)
     throw new Error("checkout_candidate_mismatch");
   // Even an advisory docs plan cannot skip a test job admitted by the existing classifier.
-  const mode = event === "pull_request" && node === 22 && plan.wouldRun.tier === "targeted" ? "targeted" : "full";
+  const mode =
+    event === "pull_request" && [22, 24].includes(node) && plan.wouldRun.tier === "targeted" ? "targeted" : "full";
   return { plan, mode };
 }
 
@@ -39,9 +41,17 @@ function candidateCheckout(repo, candidate) {
   git(repo, ["diff", "--exit-code", candidate, "--"]);
 }
 
-export function runSelected(input, artifact, reportPath, workers, run = spawnSync, manifest) {
+export function runSelected(
+  input,
+  artifact,
+  reportPath,
+  workers,
+  run = spawnSync,
+  manifest,
+  node = Number(process.versions.node.split(".")[0]),
+) {
   if (!/^[12]$/.test(String(workers))) throw new Error("invalid_worker_bound");
-  const { plan, mode } = executionPlan(input, "pull_request", 22, manifest);
+  const { plan, mode } = executionPlan(input, "pull_request", node, manifest);
   if (mode !== "targeted") throw new Error("selection_no_longer_eligible");
   validatePlan(readJSON(artifact), input, manifest);
   const candidate = plan.identities.candidate;
@@ -65,7 +75,7 @@ export function runSelected(input, artifact, reportPath, workers, run = spawnSyn
   if (result.error || result.status !== 0) throw new Error("selected_process_failed");
   // Clean HEAD movement is still an identity change, including a same-tree commit.
   candidateCheckout(input.repo, candidate);
-  const accepted = selectedResult(plan, readJSON(reportPath, 32 * 1024 * 1024), input.repo);
+  const accepted = selectedResult(plan, readJSON(reportPath, 32 * 1024 * 1024), input.repo, node);
   candidateCheckout(input.repo, candidate);
   return accepted;
 }
@@ -99,7 +109,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     }
     appendFileSync(process.env.GITHUB_OUTPUT, `mode=${selection}\n`);
   } else if (mode === "run") {
-    if (process.versions.node.split(".")[0] !== "22" || process.env.ORCA_MCP_REQUIRE_PRODUCTION !== "1")
+    if (
+      ![22, 24].includes(Number(process.versions.node.split(".")[0])) ||
+      Number(process.env.SHADOW_NODE) !== Number(process.versions.node.split(".")[0]) ||
+      process.env.ORCA_MCP_REQUIRE_PRODUCTION !== "1"
+    )
       throw new Error("selected_runtime_or_production_requirement_mismatch");
     runSelected(input, artifact, join(temp, "full-suite.json"), process.env.VITEST_MAX_WORKERS);
   } else throw new Error("invalid_execution_command");

@@ -1,83 +1,103 @@
-# SHA-bound shadow selection (#509)
+# SHA-bound PR selection and advisory evidence (#509)
 
 This implements [#509](https://github.com/cschadewitz/Project_Orca/issues/509).
-The reviewed selector now reduces eligible PR tests on Node 22; Node 24 still runs
-the complete suite with unchanged coverage thresholds on the same candidate.
-A separate read-only workflow compares the actual execution evidence.
-Required check names, test timeouts, worker limits, production fixtures, runtime,
-release and deployment behavior remain unchanged. The separate [#510](https://github.com/cschadewitz/Project_Orca/issues/510)
-fixture optimization owns its production fixture changes.
+Casey authorized practical pre-beta reductions on **both Node 22 and 24**, including
+ordinary documentation and affected feature packages. The current policy supersedes
+the earlier two-literal island certificate described in the historical sections below.
+Required check names, worker limits, serial matrix, retry acceptance, test assertions
+and timeouts, credentials, release/deployment behavior and production fixtures stay
+unchanged. The separate [#510](https://github.com/cschadewitz/Project_Orca/issues/510)
+worker continues to own fixture optimization.
 
-## Enforced PR execution
+## Current PR execution
 
-Casey explicitly authorized activation after #520's first genuine live comparison
-at main `983b824adba26b0d26cfca747e5c303d03a397c6`. The enablement branch starts at
-verified main `65606fbce827cba914a67b999b1a47c0aab2797a`.
+The preparation branch starts from main `65606fbce827cba914a67b999b1a47c0aab2797a`.
+Selector **1.2.0** uses the versioned `packagePolicy` in `ownership.v1.json`:
 
-- Only `pull_request` Node 22 jobs with a completely recomputed **targeted** plan
-  may run `Test selected files`. Eligibility remains the two exact time-formatting
-  leaves below and the existing positive literal/structure/capability invariants.
-  The selected set is the entire app Vitest domain plus union-graph consumers and
-  directly modified tests. This is a real reduced invocation, not a full-mode flag.
-- Node 24 always runs full coverage. Main pushes, critical/mixed/unknown changes,
-  stale inventory/source, changed discovery, ambiguous identities and selector
-  errors retain full testing. Every PR/main event admits the check matrix, including
-  Markdown, consumed documentation, unknown inputs, renames and deletions. There is
-  no docs-only bypass: classification cannot discard a rename's old path or assume
-  Markdown has no consumer. Even an advisory docs plan executes full Node 22 tests.
-- Exact event base/head/candidate SHAs are required. A PR candidate must have
-  exactly the ordered parents `[base, head]`, and checkout HEAD must equal candidate.
-  The checkout has full history and retains no Git credentials. No PR code runs in
-  the privileged `workflow_run` consumer: candidate source is immutable Git data.
-- Build, production-required environment, bounded workers, CLI/ACP retry acceptance
-  with no skips, and compiled smoke stay mandatory on both Nodes. Whole-repository
-  statics and every global/app coverage ratchet stay unchanged on Node 24.
-- Immediately before selected execution, the plan is recomputed and fully validated,
-  HEAD and tracked source must match the immutable candidate before execution,
-  before accepting reports and after report validation; a clean commit move also
-  fails. Any old result is removed. Vitest gets
-  argument-array paths, without a shell. A green process is insufficient: fresh
-  JSON must contain exactly all selected files, with passing nonempty assertions and
-  no failure, skip or todo. Missing, duplicate or additional files fail the job.
+- Supported package source/test files and renderer CSS select **whole package test
+  domains plus downstream consumers**, using the union of base/candidate static
+  imports, workspace dependencies, TypeScript references and existing explicit
+  non-import edges. New/deleted tests inside eligible packages use candidate discovery;
+  removed files still seed base-graph consumers. This is a conservative package policy,
+  not a claim that static imports prove arbitrary hidden dependencies.
+- Core, store, protocol and testing infrastructure changes retain full checks.
+  Security/credential/auth boundaries, workflow/build/discovery metadata, executable
+  templates, examples, preparation contracts, unknown inputs, unresolved imports,
+  dynamic loading, filesystem readers, subprocesses and environment-driven inputs
+  retain full checks. Import aliases for filesystem/process APIs cannot evade the
+  non-import trigger. Broad source/test eligibility replaces the literal-only gate;
+  the historical frozen whole-repository inventory no longer disables unrelated
+  feature selection merely because code changed.
+- Recognized `changelog.d/*.{added,changed,fixed,store}.md` inputs select the actual
+  changelog test file; they are consumed inputs, not ordinary prose. Changes to the
+  changelog consumer itself remain full. They can accompany affected package changes.
+- The positive inventory in `ordinary-docs.v1.json` covers existing narrative root,
+  reference, architecture, ADR, design and research pages. It excludes the consumed
+  daemon permission matrix, all preparation/measurement/session scopes, executable
+  templates, release fragments and unclassified Markdown. Only modifications to
+  inventoried existing regular files qualify as prose-only. Both rename paths,
+  deletions, additions, mode changes, mixed changes and missing identities fail closed.
+  The entire non-prose Git inventory must be identical between exact base/candidate:
+  new/changed readers, globs, classifiers, consumer definitions and inventories cannot
+  take the prose shortcut in the same PR. Reviewers adding a future consumer must remove
+  any newly consumed prose path from the positive inventory; that maintenance obligation
+  is explicit rather than a claim of automatic semantic detection of arbitrary readers.
+- Ordinary prose runs UTF-8/LF/whitespace/fence and local **file-target** link checks on
+  both named matrix jobs without dependency installation or runtime suites. Remote links
+  and heading fragments are outside this check. Missing classification runs runtime
+  checks; failed classification cannot turn the named checks into green skipped jobs.
+- Every code lane keeps build-before-tests, production-required environment, bounded
+  workers, mandatory CLI/ACP retry acceptance with every assertion passing, compiled
+  CLI smoke and Node 24 whole-repository typecheck/lint/format/design checks.
+- Eligible PRs run the exact selected files on both Nodes **without global coverage**.
+  Full/fallback PRs and every main push keep the complete suite and unchanged global/app
+  coverage ratchets. This accepts a pre-beta tradeoff: an omitted-test failure or global
+  coverage regression may be detected on main after merge. Partial tests do not prove
+  global coverage or equivalence with omitted tests; no measured runtime saving is claimed.
 
-The old frozen inventory no longer matched current main and made all real proposals
-full. This PR explicitly refreshes the whole inventory certificate after its final
-workflow/reporting changes; it does not declare an unknown graph complete. Its own
-old-base implementation change takes full. Subsequent same-certificate literal-only
-PRs can reduce. Future non-exempt inventory drift deliberately restores full until
-a separately reviewed certificate refresh; broad runtime/test-only eligibility is
-not enabled. The graph's completeness claim still covers only the named island.
+Exact full event base/head/candidate SHAs remain mandatory. PR candidates must have
+ordered parents `[base, head]` and checkout HEAD must equal candidate. Full history is
+fetched with Git credentials disabled. The plan is independently recomputed before
+execution; HEAD/tracked source are checked before running and before/after result
+acceptance. Old reports are removed. Argument-array file paths invoke Vitest without
+a shell. Fresh JSON must contain every selected file exactly once with passing,
+nonempty assertions and no failures, skips or todos. Missing/stale/duplicate/extra
+results fail the job. Reports bind the actual Node major and candidate.
 
-The refreshed certificate audits implementation `f7fed3d6e89c5ea342a1fa88ebde15026b2450c9`
-with inventory hash `f3f0e561ec2bbcf85a904e3d164e410357e3322cb3aa17cf59fe61b3ee9bed06`.
-Selector version **1.1.2** includes execution/evidence source in its identity.
-The earlier certificate and acceptance records below are historical, not the current
-activation certificate. The enablement PR's full run and first new live consumer
-remain parent-controlled acceptance checks; local probes do not fabricate those results.
+The three intentional opt-in skips retain their exact assertion/hash and unchanged-blob
+policy in full reports. Selected execution omits those unchanged opt-ins: the two retry
+cases run independently on both Nodes; the provider-live test remains outside credential-free
+CI. A changed opt-in source forces full so new assertions cannot disappear behind this rule.
 
-The advisory consumer reads the source job API to distinguish full `Test` from
-`Test selected files`. A reduced Node 22 report is **selected_verified**, never a
-full Node 22 baseline; acceptance also requires Node 24 **compared** against full
-discovery for exactly the same run/attempt/base/head/candidate. The artifact's legacy
-`ci-full-evidence-*` name/schema does not imply full execution: `execution` in the
-comparison explicitly states `selected` or `full`. The three reviewed intentional
-full-suite skips remain exact-name/hash and unchanged-blob checks. Selected execution
-allows none. Browser/native lanes remain unknown, outside this CI workflow.
+## Reporting, adoption and rollback
 
-To adopt the new workflow on an existing PR, merge or rebase the merged enablement
-main into its head, then push normally. That `synchronize` event creates a new run
-with the new workflow and exact new merge candidate. Rerunning an old run reuses its
-old workflow; base movement alone also leaves head-to-candidate workflow/selector
-changes that force full. No synthetic PR or manual dispatch is needed. Unrelated
-runtime PRs still take full. The parent owns cancellation, merge and controlled
-resumption; this implementation does not dispatch or poll CI.
+The read-only default-branch `workflow_run` consumer parses candidate Git objects and
+untrusted artifacts; it never executes PR code. Source/runner parity, immutable identities,
+run attempt, required step outcomes and exact report discovery remain independently checked.
+A selected lane is **selected_verified**, a prose lane **docs_verified**, and only genuine
+full execution is **compared**. Missing, failed, stale and cancelled evidence remains explicit.
+`fullBaseline` is **not_run** when both lanes are selected or prose; it never invents
+same-candidate full-suite evidence. Browser/native runners remain unknown.
 
-Rollback: change the Node 22 full `Test` condition back to `matrix.node != 24` and
-remove/disable `Test selected files` through an ordinary reviewed workflow PR. Main
-and Node 24 already remain full. No branch protection, host or credential change is
-needed. No measured latency saving or broad activation evidence is claimed.
+Existing PRs need the merged workflow/selector main incorporated in their heads before
+selection is active. A normal synchronize push then creates a fresh workflow and merge
+candidate; rerunning an old run retains its old workflow/candidate. This implementation
+PR itself takes full because it changes selector/workflow source. Preparation publication
+uses skip-CI; the parent owns independent review, controlled CI resumption and any merge.
+Run `37728976418` at `d0b699ab7c03fb854b414d2f1c6844cdc1d09d26` validates the previous
+`aaa6a7322595d0bdc2e83d29b92185f510a3f0e2` source tree, not this policy.
 
-## Owned implementation and limits
+Rollback is an ordinary workflow PR that disables selected/prose shortcuts and restores
+full Node 22 testing/full Node 24 coverage on every PR. No required-check migration,
+branch protection, host or credential changes are involved. Nightly/release/pilot remain
+later scope. There has been no new dispatch or merge.
+
+## Historical island foundation and limits
+
+The following records describe the earlier bounded island/reporting work. Frozen hashes,
+literal restrictions and past activation statements are historical; the policy above is
+current. The island regression tests remain as historical algorithm coverage alongside
+new package-policy and positive-doc tests.
 
 The implementation lives in `tools/ci-shadow/`, its tests in
 `tools/test/ci-shadow-selection.test.js` and `tools/test/ci-shadow/golden.v1.json`,
@@ -362,11 +382,12 @@ Nightly, release parity, freshness, platform adapters and pilot are later #509 w
 
 ## Existing authority and remaining integration gates
 
-The current full contract remains build-before-tests on Node 22/24, explicit
+The full/fallback PR and main contract remains build-before-tests on Node 22/24, explicit
 CLI/ACP retry acceptance with no skips, `ORCA_MCP_REQUIRE_PRODUCTION=1`, emitted
 CLI demo, Node 24 whole-repository typecheck/lint/format/design freshness and full
 coverage with unchanged global/app ratchets. Worker bounds and serial matrix stay
-unchanged. Partial coverage would not replace full coverage. Existing checks
+unchanged. Selected PRs defer full coverage to main under the current pre-beta policy above;
+partial results are never reported as global coverage. Existing checks
 `check (node 22)` and `check (node 24)` remain unchanged. Branch-protection/ruleset
 reads returned `Forbidden` in this environment; actual required-check settings
 are unverified. No migration is implied.

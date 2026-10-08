@@ -94,10 +94,12 @@ const raw = () => ({
   ],
 });
 
-const selectedJob = () => ({
-  ...job(22),
+const selectedJob = (node = 22) => ({
+  ...job(node),
   steps: [
-    ...job(22).steps.map((step) => (step.name === "Test" ? { ...step, conclusion: "skipped" } : step)),
+    ...job(node).steps.map((step) =>
+      step.name === (node === 24 ? "Test with coverage" : "Test") ? { ...step, conclusion: "skipped" } : step,
+    ),
     { name: "Plan test execution", conclusion: "success" },
     { name: "Test selected files", conclusion: "success" },
   ],
@@ -106,7 +108,7 @@ const selectedPlan = () => ({
   ...plan([ordinary]),
   graphs: [{ complete: true }, { complete: true, discoveredVitestFiles: discovered }],
 });
-const selectedEvidence = () => ({ ...evidence(), suite: { success: true, files: [file(ordinary)] } });
+const selectedEvidence = (node = 22) => ({ ...evidence(node), suite: { success: true, files: [file(ordinary)] } });
 
 it("authenticates reduced Node 22 separately alongside genuine same-candidate full Node 24", () => {
   const result = compare(selectedEvidence(), selectedJob(), selectedPlan());
@@ -143,7 +145,7 @@ it.each([
 });
 
 it.each(["missing", "failed", "stale", "cancelled"])(
-  "does not accept a selected comparison without full Node 24: %s",
+  "verifies selected execution without claiming an absent full baseline: %s",
   (kind) => {
     const baseline = evidence(24);
     const baselineJob = job(24);
@@ -158,10 +160,63 @@ it.each(["missing", "failed", "stale", "cancelled"])(
       },
       { repo, trusted: candidate, source },
     );
-    expect(result.lanes[0].status).toBe("unknown");
-    expect(result.lanes[0].reasons).toContain("same_candidate_full_baseline_not_proven");
+    expect(result.lanes[0].status).toBe("selected_verified");
+    expect(result.fullBaseline).toMatchObject({ status: "not_run", nodes: [] });
   },
 );
+
+it("verifies selected Node 24 without claiming full/global coverage or omitted-test equivalence", () => {
+  const result = compareFullEvidence(
+    selectedPlan(),
+    {
+      22: { evidence: selectedEvidence(22), job: selectedJob(22) },
+      24: { evidence: selectedEvidence(24), job: selectedJob(24) },
+    },
+    { repo, trusted: candidate, source },
+  );
+  expect(result.lanes.map((lane) => lane.status)).toEqual(["selected_verified", "selected_verified"]);
+  expect(result.fullBaseline).toMatchObject({ status: "not_run", nodes: [] });
+  const wrongRuntime = selectedEvidence(22);
+  const stale = compareFullEvidence(
+    selectedPlan(),
+    {
+      24: { evidence: wrongRuntime, job: selectedJob(24) },
+    },
+    { repo, trusted: candidate, source },
+  );
+  expect(stale.lanes[1].reasons).toContain("stale_or_malformed_evidence");
+});
+
+it.each([22, 24])("requires explicit successful documentation execution on Node %s", (node) => {
+  const p = { ...plan([]), wouldRun: { ...plan([]).wouldRun, tier: "docs" } };
+  const e = { ...evidence(node), suite: null, retry: null };
+  const j = {
+    conclusion: "success",
+    steps: [
+      { name: "Check ordinary documentation", conclusion: "success" },
+      ...[
+        "Build",
+        "Test",
+        "Test selected files",
+        "Test with coverage",
+        "Retry admission acceptance (CLI and ACP)",
+        "Smoke test the compiled build",
+      ].map((name) => ({ name, conclusion: "skipped" })),
+    ],
+  };
+  const check = () =>
+    compareFullEvidence(p, { [node]: { evidence: e, job: j } }, { repo, trusted: candidate, source }).lanes[
+      node === 22 ? 0 : 1
+    ];
+  expect(check()).toMatchObject({ status: "docs_verified", execution: "docs" });
+  j.steps[0].conclusion = "failure";
+  expect(check().status).toBe("unknown");
+  j.steps[0].conclusion = "skipped";
+  expect(check().status).toBe("unknown");
+  j.steps[0].conclusion = "success";
+  e.suite = evidence(node).suite;
+  expect(check().status).toBe("unknown");
+});
 
 it("normalizes actual Vitest fields and strips messages, titles, metadata and absolute checkout paths", () => {
   const normalized = normalizeVitest(raw(), root);
@@ -577,7 +632,7 @@ it("keeps existing full checks and limits while isolating workflow_run from cand
     'ORCA_RETRY_INTEGRATION: "1"',
     "pnpm install --frozen-lockfile",
     "node packages/cli/dist/main.js demo",
-    "needs.changes.outputs.code == 'true'",
+    "needs.changes.outputs.code != 'false'",
   ])
     expect(ci).toContain(invariant);
   expect(ci.match(/--reporter=default --reporter=json/g)).toHaveLength(3);

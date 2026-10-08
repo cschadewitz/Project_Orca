@@ -66,14 +66,16 @@ step uses at most two workers (one where Node reports at most two available CPUs
 including the full suite and coverage. This limits contention for subprocess-heavy
 tests such as the demo while retaining their existing assertions and 60-second bounds.
 
-PRs and main pushes always admit the CI check matrix. Markdown can be consumed by
-tests, and renames/deletions can hide code or change discovery, so documentation
-never skips verification; see the [admission step](../.github/workflows/ci.yml).
-The reviewed selector reduces Node 22 PR testing only for its proven time-formatting
-island. Node 24 retains the complete coverage suite with unchanged thresholds, and
-main/unknown/critical changes retain full testing. #520's merged read-only reporting
-consumer compares actual selected/full execution against the same candidate; see
-[selection safety and workflow adoption](ci-shadow-selection.md#enforced-pr-execution).
+PRs and main pushes admit both named CI matrix checks. Audited ordinary prose runs
+lightweight text/local-file-link checks; consumed or unknown Markdown, structural changes
+and mixed inputs retain necessary runtime checks. Supported package source/test changes
+select whole affected package domains and downstream consumers on both Node 22 and 24.
+Core/store/protocol/testing, security, configuration, non-import dependency triggers and
+missing graph evidence retain full testing. Every code lane still builds, runs mandatory
+no-skip retry acceptance and compiled smoke, with statics on Node 24.
+Eligible PRs defer global coverage to main; every main push and full/fallback PR retains
+unchanged global/app coverage thresholds. Partial selection is not full-suite/coverage
+proof. See [selection policy and reporting](ci-shadow-selection.md#current-pr-execution).
 Desktop packaging, App smoke/type proof
 and native UI projects are manual/reusable workflows, not automatic PR proof. Their
 Linux jobs still include homelab routing; inspect the actual workflow before dispatch.

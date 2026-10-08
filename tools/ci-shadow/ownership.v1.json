@@ -320,8 +320,7 @@
     "node24:build-before-tests",
     "node24:retry-cli-acp-no-skips",
     "node24:selected-exact-files",
-    "node24:compiled-cli-demo",
-    "same-candidate:authoritative-full-shadow-baseline"
+    "node24:compiled-cli-demo"
   ],
   "fullRiskRules": [
     {
@@ -360,5 +359,21 @@
       "owner": "CI, toolchain, build and test discovery",
       "reason": "build_discovery_or_workflow"
     }
-  ]
+  ],
+  "packagePolicy": {
+    "version": 1,
+    "description": "Pre-beta conservative package-domain selection using union import/workspace/reference consumers; not a proof of arbitrary hidden dependencies. Full fallback for global/unknown/security/non-import changes.",
+    "fullPatterns": [
+      "^packages/(core|store|protocol|testing)/",
+      "^packages/.*/(?:auth|security|credentials|permissions|keychain|tokens)(?:/|\\.)",
+      "^packages/app/src/(main|preload)/",
+      "(?:^|/)(?:package\\.json|pnpm-lock\\.yaml|pnpm-workspace\\.yaml|mise\\.toml)$",
+      "(?:tsconfig|vite|vitest|playwright).*\\.(?:json|ts|js)$",
+      "^\\.github/",
+      "^tools/",
+      "^templates/",
+      "^examples/",
+      "^docs/preparation/"
+    ]
+  }
 }

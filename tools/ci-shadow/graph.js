@@ -13,6 +13,8 @@ export const TOOL_PATHS = [
   "tools/ci-shadow/cli.js",
   "tools/ci-shadow/execute.js",
   "tools/ci-shadow/evidence.js",
+  "tools/ci-shadow/docs.js",
+  "tools/ci-shadow/ordinary-docs.v1.json",
   "tools/ci-shadow/plan.schema.v1.json",
 ];
 
@@ -270,6 +272,15 @@ export function coveredInventory(files, manifest) {
 
 export function validateManifest(manifest) {
   if (
+    manifest.packagePolicy &&
+    (manifest.packagePolicy.version !== 1 ||
+      !Array.isArray(manifest.packagePolicy.fullPatterns) ||
+      !manifest.packagePolicy.fullPatterns.length ||
+      manifest.packagePolicy.fullPatterns.some((pattern) => typeof pattern !== "string"))
+  )
+    throw new Error("invalid_package_policy");
+  for (const pattern of manifest.packagePolicy?.fullPatterns ?? []) new RegExp(pattern);
+  if (
     manifest.schemaVersion !== 1 ||
     manifest.graphVersion !== 1 ||
     !/^[a-f0-9]{64}$/.test(manifest.reviewedInventoryHash) ||
@@ -450,7 +461,7 @@ export function graph(snapshot, manifest) {
   }
   const inventoryHash = coveredInventory(files, manifest);
   const complete =
-    inventoryHash === manifest.reviewedInventoryHash &&
+    (manifest.packagePolicy || inventoryHash === manifest.reviewedInventoryHash) &&
     tests.length > 0 &&
     gaps.length === 0 &&
     [...files.values()].every((entry) => validPath(entry.path) && ["100644", "100755"].includes(entry.mode));

@@ -1,8 +1,5 @@
-# Lint, test and build PRs/main on both supported Nodes. Only proven PRs reduce Node 22;
-# Node 24 retains full coverage and main/unknown/critical changes retain full testing.
-#
-# Every PR/main event admits the check matrix. Markdown can be consumed by tests,
-# and renames/deletions can hide code or alter discovery; there is no docs-only bypass.
+# Full main verification and conservative affected-package PR testing on both Nodes.
+# Audited ordinary prose retains named matrix verdicts with lightweight documentation checks.
 name: CI
 
 on:
@@ -25,18 +22,24 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
     steps:
-      # Admission cannot depend on filename extensions, a partial consumed-doc allowlist,
-      # only one side of a rename, or available diff/base data. Selection happens below.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
       - name: Classify
         id: classify
-        run: |
-          echo "All changes require verification; documentation and structural changes cannot skip the matrix"
-          echo "code=true" >> "$GITHUB_OUTPUT"
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node tools/ci-shadow/docs.js
 
   check:
     name: check (node ${{ matrix.node }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -108,13 +111,15 @@ jobs:
 
       # CI typechecks and lints the Electron app but never launches it, so skip the
       # ~100 MB binary that electron's postinstall would otherwise fetch.
-      - run: pnpm install --frozen-lockfile
+      - if: needs.changes.outputs.code != 'false'
+        run: pnpm install --frozen-lockfile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
-      # Only reviewed, complete PR proposals reduce Node 22. Node 24 and main stay full.
+      # Exact-candidate affected-package proposals reduce both Nodes. Main and unknowns stay full.
       - name: Plan test execution
         id: selection
+        if: needs.changes.outputs.code != 'false'
         env:
           SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
           SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -127,32 +132,41 @@ jobs:
       # smoke below. TypeScript's result is independent of the Node version running it, so
       # doing the same standalone typecheck twice buys no additional compatibility signal.
       - name: Typecheck
-        if: matrix.node == 24
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24
         run: pnpm run typecheck
 
       # tokens.css and tokens.ts are committed so nothing needs a build to read a token;
       # this fails when someone edited tokens.json and forgot to regenerate them.
       - name: Design tokens are current
-        if: matrix.node == 24
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24
         run: pnpm run design:check
 
       # Style and lint are Node-version independent, so one leg is enough: running them on
       # both would annotate the same finding twice on the PR.
       - name: Format
-        if: matrix.node == 24
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24
         run: pnpm run format:check
 
       - name: Lint
-        if: matrix.node == 24
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24
         run: pnpm run lint
+
+      - name: Check ordinary documentation
+        if: needs.changes.outputs.code == 'false'
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node tools/ci-shadow/check-docs.js
 
       # Production MCP acceptance launches the emitted daemon and MCP entry points.
       - name: Build
+        if: needs.changes.outputs.code != 'false'
         run: pnpm run build
 
       # These two opt-in cases are skipped by the ordinary suite. Run them against the
       # merged runtime on both supported Nodes and reject a green result with skips.
       - name: Retry admission acceptance (CLI and ACP)
+        if: needs.changes.outputs.code != 'false'
         timeout-minutes: 3
         env:
           ORCA_RETRY_INTEGRATION: "1"
@@ -188,11 +202,10 @@ jobs:
           console.log(`Retry acceptance: ${report.numPassedTests} tests passed in both named files; none skipped`);
           NODE
 
-      # Coverage is measured on one leg for the same reason, and because instrumenting
-      # slows the suite down. Thresholds live in vitest.config.ts, so this fails here
-      # exactly when it fails locally.
+      # Full/fallback PRs and every main push retain global/app coverage ratchets.
+      # Selected PRs do not produce or claim global coverage; main catches regressions.
       - name: Test
-        if: matrix.node != 24 && steps.selection.outputs.mode != 'targeted'
+        if: needs.changes.outputs.code != 'false' && matrix.node != 24 && steps.selection.outputs.mode != 'targeted'
         # Explicit `run` forwards reporter flags to Vitest; pnpm's `test` shortcut
         # otherwise interprets --reporter as a pnpm option before any script args.
         run: pnpm run test --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
@@ -200,15 +213,16 @@ jobs:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       - name: Test selected files
-        if: matrix.node == 22 && steps.selection.outputs.mode == 'targeted'
+        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode == 'targeted'
         run: node tools/ci-shadow/execute.js run
         env:
           SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
           SHADOW_HEAD: ${{ github.event.pull_request.head.sha }}
+          SHADOW_NODE: ${{ matrix.node }}
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       - name: Test with coverage
-        if: matrix.node == 24
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24 && steps.selection.outputs.mode != 'targeted'
         run: pnpm run test:coverage --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
@@ -238,6 +252,7 @@ jobs:
       # vitest resolves @orca/* to packages/*/src via aliases, so it never exercises the
       # emitted dist graph. This catches broken exports maps and missing project references.
       - name: Smoke test the compiled build
+        if: needs.changes.outputs.code != 'false'
         run: node packages/cli/dist/main.js demo
 
       # Retain actual full/selected suite evidence; job steps authenticate execution mode.

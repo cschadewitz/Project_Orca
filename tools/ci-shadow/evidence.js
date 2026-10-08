@@ -180,22 +180,48 @@ export function compareLane(plan, evidence, { repo, trusted, node, job, source }
     return result;
   }
   // Genuine process outcomes come from GitHub's job API, separately from the artifact.
+  if (plan.wouldRun.tier === "docs" && source.event === "pull_request") {
+    const step = job?.steps?.filter((entry) => entry.name === "Check ordinary documentation") ?? [];
+    const runtime =
+      job?.steps?.filter((entry) =>
+        [
+          "Build",
+          "Test",
+          "Test selected files",
+          "Test with coverage",
+          "Retry admission acceptance (CLI and ACP)",
+          "Smoke test the compiled build",
+        ].includes(entry.name),
+      ) ?? [];
+    if (
+      step.length !== 1 ||
+      step[0].conclusion !== "success" ||
+      runtime.length !== 6 ||
+      runtime.some((entry) => entry.conclusion !== "skipped") ||
+      evidence.suite !== null ||
+      evidence.retry !== null
+    )
+      add("ordinary_docs_execution_not_proven");
+    result.execution = "docs";
+    if (!result.reasons.length) result.status = "docs_verified";
+    return result;
+  }
   const required = [
     "Build",
     "Retry admission acceptance (CLI and ACP)",
-    node === 24 ? "Test with coverage" : selected ? "Test selected files" : "Test",
+    selected ? "Test selected files" : node === 24 ? "Test with coverage" : "Test",
     "Smoke test the compiled build",
   ];
   if (selected) {
     required.push("Plan test execution");
-    const fullSteps = job.steps.filter((step) => step.name === "Test");
+    const fullSteps = job.steps.filter((step) => step.name === (node === 24 ? "Test with coverage" : "Test"));
     if (
-      node !== 22 ||
       source.event !== "pull_request" ||
       plan.wouldRun.tier !== "targeted" ||
       !plan.graphs.every((entry) => entry.complete) ||
       fullSteps.length !== 1 ||
-      fullSteps[0].conclusion !== "skipped"
+      fullSteps[0].conclusion !== "skipped" ||
+      job.steps.some((step) => ["Test", "Test with coverage"].includes(step.name) && step.conclusion !== "skipped")
     )
       add("unproven_or_ambiguous_reduced_execution");
   }
@@ -258,12 +284,8 @@ export function compareFullEvidence(plan, lanes, input) {
   const compared = [22, 24].map((node) =>
     compareLane(plan, lanes[node]?.evidence, { ...input, node, job: lanes[node]?.job }),
   );
-  // A reduced Node 22 result is never mislabeled as a full Node 22 baseline.
-  // Its live comparison is accepted only alongside genuine same-candidate Node 24 full evidence.
-  if (compared[0].execution === "selected" && compared[1].status !== "compared") {
-    if (compared[0].status !== "cancelled") compared[0].status = "unknown";
-    compared[0].reasons.push("same_candidate_full_baseline_not_proven");
-  }
+  // Selected execution can be verified without claiming evidence about omitted tests.
+  const baseline = compared.filter((lane) => lane.status === "compared").map((lane) => lane.node);
   return {
     artifact: "orca-ci-shadow-comparison",
     schemaVersion: 1,
@@ -278,6 +300,13 @@ export function compareFullEvidence(plan, lanes, input) {
       discovered: plan.graphs[1].discoveredVitestFiles.length,
     },
     lanes: compared,
+    fullBaseline: {
+      status: baseline.length ? "available" : "not_run",
+      nodes: baseline,
+      reason: baseline.length
+        ? "genuine_same_candidate_full_evidence"
+        : "selected_or_docs_execution_does_not_prove_omitted_tests",
+    },
     // CI never runs these browser/native lanes. Do not infer their verdicts from Vitest.
     separateRunners: plan.wouldRun.runners.map((runner) => ({
       id: runner.id,

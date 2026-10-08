@@ -13,6 +13,8 @@ import { executionPlan, runSelected, selectedResult } from "../ci-shadow/execute
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const goldens = JSON.parse(readFileSync(new URL("./ci-shadow/golden.v1.json", import.meta.url), "utf8"));
 const ownedManifest = loadManifest();
+// Preserve historical island regressions alongside the separate package-policy suite.
+delete ownedManifest.packagePolicy;
 let directory;
 let base;
 let manifest;
@@ -126,14 +128,14 @@ const selectedRaw = (paths, root = directory) => ({
   })),
 });
 
-it("enforces a useful exact-file PR path while Node 24/main remain full", () => {
+it("enforces a useful exact-file PR path on both Nodes while main remains full", () => {
   const input = eligibleCandidate();
   const result = executionPlan(input, "pull_request", 22, manifest);
   expect(result.mode).toBe("targeted");
   expect(result.plan.graphs.every((entry) => entry.complete)).toBe(true);
   expect(result.plan.wouldRun.vitestFiles.length).toBeLessThan(result.plan.graphs[1].discoveredVitestFiles.length);
   expect(result.plan.wouldRun.vitestFiles).toContain(manifest.islands[0].paths[1]);
-  expect(executionPlan(input, "pull_request", 24, manifest).mode).toBe("full");
+  expect(executionPlan(input, "pull_request", 24, manifest).mode).toBe("targeted");
   expect(executionPlan(input, "push", 22, manifest).mode).toBe("full");
   expect(executionPlan(input, "unknown", 22, manifest).mode).toBe("full");
   const artifact = join(tmpdir(), `orca-selection-${input.candidate}.json`);

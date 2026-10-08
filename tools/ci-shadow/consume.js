@@ -287,7 +287,8 @@ export function summary(comparison) {
         (lane) =>
           `Node ${lane.node}: **${lane.status}**; ${lane.intentionalSkips.length} explicitly recorded intentional skips; ${lane.omittedFailures.length} omitted failures.`,
       ),
-      "Browser/native runners: unknown (outside the CI workflow). Selected execution is labeled separately; Node 24 remains the full same-candidate baseline.",
+      `Full same-candidate baseline: **${comparison.fullBaseline?.status ?? "unknown"}**.`,
+      "Browser/native runners: unknown (outside the CI workflow). Selected execution is partial on either Node; a full baseline is reported only when actually run on this candidate.",
     ].join("\n\n") + "\n"
   );
 }

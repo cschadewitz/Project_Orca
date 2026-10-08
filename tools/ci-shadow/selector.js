@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { changes, digest, hash, identities, sorted, snapshot, validPath } from "./git.js";
 import { consumers, graph, imports, MANIFEST_PATH, TOOL_PATHS, validateManifest } from "./graph.js";
+import { docsOnly, loadDocs } from "./docs.js";
+import { INTENTIONAL_SKIPS } from "./evidence.js";
 
 export const ARTIFACT = "orca-ci-shadow-plan";
 export const SCHEMA_VERSION = 1;
-export const SELECTOR_VERSION = "1.1.2";
+export const SELECTOR_VERSION = "1.2.0";
 export const loadManifest = () =>
   validateManifest(JSON.parse(readFileSync(new URL("./ownership.v1.json", import.meta.url), "utf8")));
 export const selectorIdentity = (manifest) => ({
@@ -19,6 +21,57 @@ export const selectorIdentity = (manifest) => ({
 });
 
 function pathRisk(path, record, snapshots, manifest) {
+  if (manifest.packagePolicy) {
+    const reasons = [];
+    const ordinary = loadDocs().paths.includes(path);
+    if (!validPath(path)) reasons.push("malformed_path");
+    if (ordinary)
+      return {
+        path,
+        tier: record.status === "M" ? "docs" : "full",
+        reasons: [record.status === "M" ? "inventoried_ordinary_prose" : "structural_prose_change"],
+      };
+    if (manifest.packagePolicy.fullPatterns.some((pattern) => new RegExp(pattern).test(path)))
+      reasons.push("shared_security_configuration_or_non_import_input");
+    const releaseFragment = /^changelog\.d\/.+\.(?:added|changed|fixed|store)\.md$/.test(path);
+    const owner = /^packages\/([^/]+)\/(?:src|test|renderer)\/.+\.(?:[cm]?[jt]sx?|css)$/.exec(path)?.[1];
+    if (!owner || !snapshots.every((snap) => snap.files.has(`packages/${owner}/package.json`)))
+      if (!releaseFragment || !snapshots.every((snap) => snap.files.has("tools/test/changelog.test.js")))
+        reasons.push("unknown_or_non_package_source");
+    for (const snap of snapshots) {
+      const entry = snap.files.get(path);
+      if (entry && !["100644", "100755"].includes(entry.mode)) reasons.push("structural_mode_change");
+      // Import edges cannot explain file discovery, subprocess commands, dynamic loading,
+      // environment-driven registries or runtime input readers. Preserve full checks.
+      let dependencies = [];
+      if (entry?.text) {
+        try {
+          dependencies = imports(entry.text, path).dependencies;
+        } catch {
+          reasons.push("source_parse_error");
+        }
+      }
+      if (
+        entry?.text &&
+        (dependencies.some((specifier) =>
+          /^(?:node:)?(?:fs|child_process|worker_threads|vm)(?:\/|$)/.test(specifier),
+        ) ||
+          /\b(?:readFile\w*|readdir\w*|glob\w*|execFile\w*|spawn\w*|require)\s*\(|\bimport\s*\(|\bprocess\s*\.\s*env\b/.test(
+            entry.text,
+          ))
+      )
+        reasons.push("non_import_dependency_trigger");
+    }
+    return {
+      path,
+      tier: reasons.length ? "full" : "targeted",
+      reasons: sorted(
+        reasons.length
+          ? reasons
+          : [releaseFragment ? "consumed_release_fragment_changelog_tests" : "affected_package_domain_and_consumers"],
+      ),
+    };
+  }
   const reasons = [];
   if (!validPath(path)) reasons.push("malformed_path");
   if (/\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$/.test(path) && record.status !== "M")
@@ -92,7 +145,8 @@ export function createPlan({ repo, base, head, candidate, forceFull = false }, m
   if (forceFull) reasons.push("force_full");
   if (!records.length) reasons.push("empty_change_set");
   if (graphs.some((entry) => !entry.complete)) reasons.push("unreviewed_or_incomplete_graph");
-  if (!isDeepStrictEqual(graphs[0].tests, graphs[1].tests)) reasons.push("discovery_inventory_changed");
+  if (!manifest.packagePolicy && !isDeepStrictEqual(graphs[0].tests, graphs[1].tests))
+    reasons.push("discovery_inventory_changed");
   if (!graphs[1].tests.length) reasons.push("empty_test_discovery");
   for (const snap of snaps) {
     try {
@@ -113,6 +167,11 @@ export function createPlan({ repo, base, head, candidate, forceFull = false }, m
     const paths = sorted([record.path, record.oldPath].filter((path) => path !== null));
     const risks = paths.map((path) => pathRisk(path, record, snaps, manifest));
     const reachable = consumers(graphs, paths);
+    if (
+      manifest.packagePolicy &&
+      paths.some((path) => /^changelog\.d\/.+\.(?:added|changed|fixed|store)\.md$/.test(path))
+    )
+      reachable.push("file:tools/test/changelog.test.js");
     return {
       ...record,
       risks,
@@ -128,18 +187,36 @@ export function createPlan({ repo, base, head, candidate, forceFull = false }, m
       : classified.some((record) => record.risks.some((risk) => risk.tier === "targeted"))
         ? "targeted"
         : "docs";
+  if (manifest.packagePolicy && tier === "docs" && !docsOnly({ repo, base, head, candidate })) {
+    reasons.push("ordinary_docs_or_unchanged_consumers_not_proven");
+    tier = "full";
+  }
+  if (
+    manifest.packagePolicy &&
+    tier === "targeted" &&
+    INTENTIONAL_SKIPS.some(({ path }) => snaps[0].files.get(path)?.oid !== snaps[1].files.get(path)?.oid)
+  ) {
+    reasons.push("intentional_skip_source_changed");
+    tier = "full";
+  }
   let vitestFiles =
     tier === "full"
       ? graphs[1].tests
       : tier === "targeted"
         ? sorted([
-            ...graphs[1].tests.filter((path) => path.startsWith("packages/app/")),
+            ...(manifest.packagePolicy ? [] : graphs[1].tests.filter((path) => path.startsWith("packages/app/"))),
             ...classified.flatMap((record) =>
               record.consumers.filter((node) => node.startsWith("file:")).map((node) => node.slice(5)),
             ),
             ...records.map((record) => record.path).filter((path) => graphs[1].tests.includes(path)),
           ])
         : [];
+  // Retry opt-ins run independently on both Nodes; provider-live is outside credential-free CI.
+  // Changed skip sources force full above, so new assertions cannot disappear behind this policy.
+  if (manifest.packagePolicy && tier === "targeted")
+    vitestFiles = vitestFiles.filter(
+      (path) => graphs[1].tests.includes(path) && !INTENTIONAL_SKIPS.some((skip) => skip.path === path),
+    );
   const missing = vitestFiles.filter((path) => !graphs[1].tests.includes(path));
   if (missing.length || (tier === "targeted" && !vitestFiles.length)) {
     reasons.push("selected_file_missing_from_candidate_discovery");
@@ -161,7 +238,7 @@ export function createPlan({ repo, base, head, candidate, forceFull = false }, m
       hash,
       inventoryHash,
       complete,
-      scope: "reviewed-islands-only",
+      scope: manifest.packagePolicy ? "conservative-package-domains" : "reviewed-islands-only",
       discoveredVitestFiles: tests,
       gaps,
     })),
