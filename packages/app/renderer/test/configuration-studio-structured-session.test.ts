@@ -144,6 +144,118 @@ describe("exact candidate validation, review, save and activation", () => {
 });
 
 describe("draft retention and optimistic fences", () => {
+  it("does not attach an earlier save's indexed diagnostics to a newer reordered draft", async () => {
+    const f = fixture();
+    await f.session.validate();
+    f.safeErrors.mockClear();
+    const hold = deferred<BridgeResult<ConfigSetResult>>();
+    f.set.mockReturnValueOnce(hold.promise);
+    const saving = f.session.save();
+    f.session.edit([{ kind: "move", path: ["hosts"], from: 1, to: 0 }]);
+    hold.resolve({
+      ok: false,
+      error: {
+        code: "CONFIG_INVALID",
+        message: "old candidate error",
+        details: { errors: [{ path: "hosts.0.id", message: "old candidate error" }] },
+      },
+    });
+    await saving;
+    expect(f.session.snapshot()).toMatchObject({ sequence: 2, errors: [] });
+    expect(f.session.snapshot().edits).toHaveLength(3);
+    expect(f.safeErrors).not.toHaveBeenCalled();
+  });
+  it("retains authorized field/reference diagnostics from an invalid apply without activating", async () => {
+    const f = fixture();
+    await f.session.validate();
+    await f.session.save();
+    f.safeErrors.mockClear();
+    f.apply.mockResolvedValueOnce({
+      ok: true,
+      result: {
+        outcome: "invalid",
+        status: { ...generation, state: "invalid" },
+        validation: { errors: [{ path: "hosts.0.id", message: "synthetic private error" }] },
+      },
+    });
+    await f.session.apply();
+    expect(f.session.snapshot()).toMatchObject({
+      phase: "saved",
+      applyOutcome: "invalid",
+      errors: [{ path: ["hosts", 0, "id"], message: "This host is referenced by agents[0].host." }],
+    });
+    expect(f.safeErrors).toHaveBeenCalledWith([{ path: "hosts.0.id", message: "synthetic private error" }]);
+    expect(JSON.stringify(f.session.snapshot())).not.toContain("synthetic private error");
+    await f.session.apply();
+    expect(f.apply).toHaveBeenCalledTimes(1);
+  });
+  it("does not attach an earlier invalid apply's diagnostics to edits made while it was outstanding", async () => {
+    const f = fixture();
+    await f.session.validate();
+    await f.session.save();
+    f.safeErrors.mockClear();
+    const hold = deferred<BridgeResult<ConfigApplyResult>>();
+    f.apply.mockReturnValueOnce(hold.promise);
+    const applying = f.session.apply();
+    f.session.edit([{ kind: "move", path: ["hosts"], from: 1, to: 0 }]);
+    hold.resolve({
+      ok: true,
+      result: {
+        outcome: "invalid",
+        status: { ...generation, state: "invalid" },
+        validation: { errors: [{ path: "hosts.0.id", message: "old private diagnostic" }] },
+      },
+    });
+    await applying;
+    expect(f.session.snapshot()).toMatchObject({ phase: "editing", errors: [], applyOutcome: "invalid" });
+    expect(f.safeErrors).not.toHaveBeenCalled();
+    expect(f.session.snapshot().edits).toHaveLength(1);
+  });
+  it("still freezes a stale save after newer edits without placing old field diagnostics", async () => {
+    const f = fixture();
+    await f.session.validate();
+    f.safeErrors.mockClear();
+    const hold = deferred<BridgeResult<ConfigSetResult>>();
+    f.set.mockReturnValueOnce(hold.promise);
+    const saving = f.session.save();
+    f.session.edit([{ kind: "move", path: ["hosts"], from: 1, to: 0 }]);
+    hold.resolve({
+      ok: false,
+      error: {
+        code: "CONFIG_STALE",
+        message: "private old response",
+        details: { errors: [{ path: "hosts.0.id", message: "old diagnostic" }] },
+      },
+    });
+    await saving;
+    expect(f.session.snapshot()).toMatchObject({ phase: "blocked", errors: [] });
+    expect(f.session.snapshot().edits).toHaveLength(3);
+    expect(f.safeErrors).not.toHaveBeenCalled();
+    expect(f.session.edit([])).toBe(false);
+    await f.session.validate();
+    expect(f.set).toHaveBeenCalledTimes(2);
+  });
+  it.each([false, true])("rejects late validation after authority revocation (diagnostics: %s)", async (diagnostic) => {
+    const f = fixture();
+    const hold = deferred<BridgeResult<ConfigSetResult>>();
+    f.set.mockReturnValueOnce(hold.promise);
+    const validating = f.session.validate();
+    await vi.waitFor(() => expect(f.set).toHaveBeenCalledTimes(1));
+    f.access.mockReturnValue({ allowed: false, reason: "Authority revoked" });
+    hold.resolve({
+      ok: true,
+      result: {
+        ...acknowledgement(false).result,
+        validation: { errors: diagnostic ? [{ path: "hosts.0.id", message: "revoked diagnostic" }] : [] },
+      },
+    });
+    await validating;
+    expect(f.session.snapshot()).toMatchObject({ phase: "blocked", message: "Authority revoked", errors: [] });
+    expect(f.safeErrors).not.toHaveBeenCalled();
+    expect(f.session.confirmPolicy(1)).toBe(false);
+    await f.session.save();
+    expect(f.set).toHaveBeenCalledTimes(1);
+  });
   it("places sanitized daemon save-refusal reference errors and requires a new review", async () => {
     const f = fixture();
     await f.session.validate();

@@ -127,12 +127,17 @@ export class StructuredEditorSession {
     }
     return true;
   }
-  private failure(code: string, saving: boolean, error?: ProtocolError): void {
+  private failure(code: string, saving: boolean, candidateSequence: number, error?: ProtocolError): void {
     this.review = undefined;
     if (code === "CONFIG_STALE") {
       this.frozen = true;
       this.block("Configuration changed. Retain this draft and reconcile before a new review.");
     } else if (code === "CONFIG_INVALID") {
+      if (candidateSequence !== this.sequence) {
+        this.errors = [];
+        this.block("Earlier candidate refused. Newer edits retained; validate and review them again.");
+        return;
+      }
       const errors = ConfigValidationErrorSchema.array().safeParse(error?.details?.["errors"]);
       this.errors = errors.success ? this.ports.safeErrors(errors.data) : [];
       this.block("Validation refused. Draft retained; resolve the reported fields and review again.");
@@ -170,8 +175,9 @@ export class StructuredEditorSession {
         validateOnly: true,
       });
       if (!this.live(operation) || candidate.draftSequence !== this.sequence) return;
+      if (!this.allowed("validate", candidate)) return;
       if (!result.ok) {
-        this.failure(result.error.code, false, result.error);
+        this.failure(result.error.code, false, candidate.draftSequence, result.error);
         return;
       }
       if (
@@ -230,7 +236,7 @@ export class StructuredEditorSession {
       });
       if (!this.live(operation)) return;
       if (!result.ok) {
-        this.failure(result.error.code, true, result.error);
+        this.failure(result.error.code, true, candidate.draftSequence, result.error);
         return;
       }
       const document: ConfigDocumentView = result.result.document;
@@ -240,7 +246,7 @@ export class StructuredEditorSession {
         document.revision !== review.revision ||
         document.text !== review.text
       ) {
-        this.failure("UNEXPECTED_ACK", true);
+        this.failure("UNEXPECTED_ACK", true, candidate.draftSequence);
         return;
       }
       this.review = undefined;
@@ -257,7 +263,7 @@ export class StructuredEditorSession {
       this.phase = "saved";
       this.message = "Saved. Activation requires an explicit guarded apply.";
     } catch {
-      if (this.live(operation)) this.failure("RESPONSE_LOST", true);
+      if (this.live(operation)) this.failure("RESPONSE_LOST", true, candidate.draftSequence);
     } finally {
       if (this.live(operation)) this.busy = false;
     }
@@ -273,7 +279,7 @@ export class StructuredEditorSession {
       const result = await this.ports.apply({ expectedRevision: saved.revision, expectedGeneration: saved.generation });
       if (!this.live(operation)) return;
       if (!result.ok) {
-        this.failure(result.error.code, true, result.error);
+        this.failure(result.error.code, true, candidate.draftSequence, result.error);
         return;
       }
       const active = result.result.outcome === "applied" || result.result.outcome === "unchanged";
@@ -284,15 +290,17 @@ export class StructuredEditorSession {
           result.result.status.state !== "active" ||
           result.result.validation.errors.length > 0)
       ) {
-        this.failure("UNEXPECTED_ACK", true);
+        this.failure("UNEXPECTED_ACK", true, candidate.draftSequence);
         return;
       }
       this.applyOutcome = result.result.outcome;
+      this.errors =
+        candidate.draftSequence === this.sequence ? this.ports.safeErrors(result.result.validation.errors) : [];
       this.phase = this.edits.length > 0 ? "editing" : active ? "active" : "saved";
       this.message = `Apply outcome: ${result.result.outcome}.`;
       this.saved = undefined; // Any next attempt needs fresh authoritative generations.
     } catch {
-      if (this.live(operation)) this.failure("RESPONSE_LOST", true);
+      if (this.live(operation)) this.failure("RESPONSE_LOST", true, candidate.draftSequence);
     } finally {
       if (this.live(operation)) this.busy = false;
     }

@@ -113,4 +113,15 @@ describe("authoritative creation and unions", () => {
       { kind: "set", path: ["host", "type"], value: "local" },
     ]);
   });
+  it("does not switch from an active branch with unavailable input metadata", () => {
+    const local = variant.branches.local!;
+    expect(
+      switchVariant(
+        { ...variant, branches: { ...variant.branches, local: { ...local, acceptsAbsent: "metadata-unavailable" } } },
+        { type: "local", command: "old" },
+        ["host"],
+        "remote",
+      ),
+    ).toBeUndefined();
+  });
 });

@@ -176,6 +176,40 @@ describe.each(THEMES)("structured forms in %s", (theme) => {
 });
 
 describe("authority, redaction, validation and keyboard boundaries", () => {
+  it.each([
+    { visibility: "withheld" as const },
+    { visibility: "metadata-unavailable" as const },
+    { acceptsAbsent: "metadata-unavailable" as const },
+    { acceptsNull: "metadata-unavailable" as const },
+  ])("gates the active union branch before reading its descendants: %j", (gate) => {
+    // Original review #545 repro: a safe child must not bypass its ancestor's gate.
+    const form = renderForm(
+      {
+        ...meta,
+        kind: "union",
+        discriminator: "type",
+        branches: {
+          private: { ...meta, ...gate, kind: "object", fields: { payload: scalar() } },
+        },
+      },
+      { type: "private", payload: "SYNTHETIC_PRIVATE_VALUE" },
+    );
+    expect(form.container.querySelector("input")).toBeNull();
+    expect(form.container.textContent).not.toContain("SYNTHETIC_PRIVATE_VALUE");
+    expect(form.onEdit).not.toHaveBeenCalled();
+  });
+  it("returns focus to a remaining record entry and then the new-key flow after deletion", () => {
+    const form = renderForm({ ...meta, kind: "record", value: scalar() }, { first: "a", second: "b" });
+    const first = screen.getByRole("button", { name: "Delete fixture.first" });
+    first.focus();
+    fireEvent.click(first);
+    expect(document.activeElement).toBe(input("second"));
+    const second = screen.getByRole("button", { name: "Delete fixture.second" });
+    second.focus();
+    fireEvent.click(second);
+    expect(form.current()).toEqual({});
+    expect(document.activeElement).toBe(screen.getByLabelText(/^New Fixture key/));
+  });
   it("places authorized field errors using ConfigField accessibility wiring", () => {
     const form = renderForm(
       object({ host: scalar() }),

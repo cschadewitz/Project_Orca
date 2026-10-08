@@ -108,9 +108,18 @@ function defaultHelp(shape: FieldShape): string {
   return "No default.";
 }
 
-export function StructuredForm(form: StructuredFormProps): JSX.Element {
-  const { shape, path, label, value } = form;
-  const displayPath = pathLabel(path);
+/** Ancestors and descendants obey the same gate; unavailable metadata cannot authorize a read. */
+function unavailable(shape: FieldShape): boolean {
+  return (
+    shape.visibility !== "non-secret" ||
+    shape.kind === "unsupported" ||
+    typeof shape.acceptsAbsent !== "boolean" ||
+    typeof shape.acceptsNull !== "boolean"
+  );
+}
+
+function UnavailableField({ form }: { form: StructuredFormProps }): JSX.Element {
+  const { shape, path, label } = form;
   if (shape.visibility !== "non-secret")
     return (
       <div>
@@ -118,18 +127,19 @@ export function StructuredForm(form: StructuredFormProps): JSX.Element {
         <Text style="caption">Value withheld. Authorized raw editing is separate.</Text>
       </div>
     );
-  if (
-    shape.kind === "unsupported" ||
-    shape.acceptsAbsent === "metadata-unavailable" ||
-    shape.acceptsNull === "metadata-unavailable"
-  )
-    return (
-      <div>
-        <Text style="label-strong">{label}</Text>
-        <Text style="caption">Structured editing unavailable for this metadata.</Text>
-        {form.onShowRaw && <Button onClick={() => form.onShowRaw?.(path)}>Open authorized raw view</Button>}
-      </div>
-    );
+  return (
+    <div>
+      <Text style="label-strong">{label}</Text>
+      <Text style="caption">Structured editing unavailable for this metadata.</Text>
+      {form.onShowRaw && <Button onClick={() => form.onShowRaw?.(path)}>Open authorized raw view</Button>}
+    </div>
+  );
+}
+
+export function StructuredForm(form: StructuredFormProps): JSX.Element {
+  const { shape, path, label, value } = form;
+  const displayPath = pathLabel(path);
+  if (unavailable(shape)) return <UnavailableField form={form} />;
   const error = form.errors.find((error) => samePath(error.path, path))?.message;
   const child = (
     childShape: FieldShape,
@@ -357,27 +367,57 @@ function RecordEntries({
   shape: Extract<FieldShape, { kind: "record" }>;
 }): JSX.Element {
   const [key, setKey] = useState("");
+  const root = useRef<HTMLDivElement>(null);
+  const keyInput = useRef<HTMLInputElement>(null);
+  const pendingFocus = useRef<string | null | undefined>(undefined);
   const { value, path, label } = form;
   const issue = recordKeyError(key, value);
+  const editableKeys = Object.keys(isObject(value) ? value : {}).filter(
+    (entryKey) => recordKeyError(entryKey, {}) === undefined,
+  );
+  const deletionForm: StructuredFormProps = {
+    ...form,
+    onEdit: (edits) => {
+      const deleted = edits[0]?.path.at(-1);
+      const index = typeof deleted === "string" ? editableKeys.indexOf(deleted) : -1;
+      pendingFocus.current = editableKeys[index + 1] ?? editableKeys[index - 1] ?? null;
+      form.onEdit(edits);
+    },
+  };
+  useLayoutEffect(() => {
+    const destination = pendingFocus.current;
+    if (destination === undefined) return;
+    pendingFocus.current = undefined;
+    const row = [...(root.current?.querySelectorAll<HTMLElement>(":scope > [data-record-entry]") ?? [])].find(
+      (row) => row.dataset.recordEntry === destination,
+    );
+    const control =
+      row?.querySelector<HTMLInputElement>("input") ??
+      row?.querySelector<HTMLButtonElement>("button") ??
+      keyInput.current;
+    control?.focus();
+  }, [value]);
   return (
-    <>
+    <div ref={root}>
       {Object.entries(isObject(value) ? value : {}).map(([entryKey, entry]) => (
-        <Card key={entryKey} eyebrow={entryKey}>
-          {recordKeyError(entryKey, {}) === undefined ? (
-            <StructuredForm {...form} shape={shape.value} value={entry} path={[...path, entryKey]} label={entryKey} />
-          ) : (
-            <Text style="caption">This key requires authorized raw editing.</Text>
-          )}
-          {recordKeyError(entryKey, {}) === undefined && (
-            <Action
-              edits={[{ kind: "remove", path: [...path, entryKey] }]}
-              form={form}
-              aria-label={`Delete ${pathLabel([...path, entryKey])}`}
-            >
-              Delete entry
-            </Action>
-          )}
-        </Card>
+        <div key={entryKey} data-record-entry={entryKey}>
+          <Card eyebrow={entryKey}>
+            {recordKeyError(entryKey, {}) === undefined ? (
+              <StructuredForm {...form} shape={shape.value} value={entry} path={[...path, entryKey]} label={entryKey} />
+            ) : (
+              <Text style="caption">This key requires authorized raw editing.</Text>
+            )}
+            {recordKeyError(entryKey, {}) === undefined && (
+              <Action
+                edits={[{ kind: "remove", path: [...path, entryKey] }]}
+                form={deletionForm}
+                aria-label={`Delete ${pathLabel([...path, entryKey])}`}
+              >
+                Delete entry
+              </Action>
+            )}
+          </Card>
+        </div>
       ))}
       <ConfigField
         label={`New ${label} key`}
@@ -387,6 +427,7 @@ function RecordEntries({
         {(control) => (
           <input
             {...control}
+            ref={keyInput}
             className={`orca-input ${textClass("mono-body")}`}
             value={key}
             onChange={(event) => setKey(event.target.value)}
@@ -405,7 +446,7 @@ function RecordEntries({
           Add key
         </Button>
       )}
-    </>
+    </div>
   );
 }
 
@@ -457,22 +498,26 @@ function Union({
         </Card>
       )}
       {branch?.kind === "object" && isObject(form.value) ? (
-        Object.entries(branch.fields)
-          .filter(([key]) => key !== shape.discriminator)
-          .map(([key, field]) => (
-            <StructuredForm
-              {...form}
-              key={key}
-              shape={field}
-              value={
-                Object.hasOwn(form.value as Record<string, unknown>, key)
-                  ? (form.value as Record<string, unknown>)[key]
-                  : undefined
-              }
-              path={[...form.path, key]}
-              label={key}
-            />
-          ))
+        unavailable(branch) ? (
+          <UnavailableField form={{ ...form, shape: branch }} />
+        ) : (
+          Object.entries(branch.fields)
+            .filter(([key]) => key !== shape.discriminator)
+            .map(([key, field]) => (
+              <StructuredForm
+                {...form}
+                key={key}
+                shape={field}
+                value={
+                  Object.hasOwn(form.value as Record<string, unknown>, key)
+                    ? (form.value as Record<string, unknown>)[key]
+                    : undefined
+                }
+                path={[...form.path, key]}
+                label={key}
+              />
+            ))
+        )
       ) : (
         <Text style="caption">Select a supported variant before editing its fields.</Text>
       )}

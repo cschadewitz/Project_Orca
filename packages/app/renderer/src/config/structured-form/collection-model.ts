@@ -123,6 +123,7 @@ export function switchVariant(
     next.acceptsAbsent === "metadata-unavailable" ||
     next.acceptsNull === "metadata-unavailable" ||
     (old !== undefined && old.visibility !== "non-secret") ||
+    (old !== undefined && (typeof old.acceptsAbsent !== "boolean" || typeof old.acceptsNull !== "boolean")) ||
     (value !== undefined && value !== null && old?.kind !== "object")
   )
     return undefined;
