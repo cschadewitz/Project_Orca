@@ -18,6 +18,8 @@ import {
 } from "@orca/core";
 import type { WorkflowVersionStore } from "@orca/store";
 import { workflowRevision, type StartRunOptions } from "./orchestrator.js";
+import type { NodeExecutorRegistry } from "./executors/types.js";
+import { PluginRestorationRecordsSchema, pluginRestorationRefusal, type PluginRestorationRecord } from "./plugin.js";
 
 export interface LaunchSelection {
   purpose: "workflow" | "request";
@@ -63,6 +65,8 @@ export const GenerationSnapshotSchema = z.object({
   runtimeHosts: z.array(z.string()).optional(),
   effectiveAgents: z.array(AgentSpecSchema).optional(),
   effectiveRoles: z.record(z.string(), z.string()).optional(),
+  /** Protected inputs only. No descriptor fields are included in public provenance. */
+  pluginRestoration: PluginRestorationRecordsSchema.optional(),
 });
 export type GenerationSnapshot = z.infer<typeof GenerationSnapshotSchema>;
 export interface GenerationStore {
@@ -70,6 +74,8 @@ export interface GenerationStore {
   putGeneration(id: string, snapshot: GenerationSnapshot): Promise<void>;
 }
 export interface GenerationAssets {
+  executors?: NodeExecutorRegistry;
+  pluginRestoration?: PluginRestorationRecord[];
   /** Resolved built-in provider inputs, kept only in the protected generation. */
   workspaceInputs?: { configDir: string; keplerTaskDir?: string };
   /** Executable plugin hosts are held by this provider, never written to the snapshot. */
@@ -90,6 +96,7 @@ export interface GenerationMaterial {
   readonly agents: AgentRegistry;
   readonly workflows: WorkflowRegistry;
   readonly templates: TemplateRegistry;
+  readonly executors?: NodeExecutorRegistry;
 }
 /** The integration binds these operations to the existing orchestrator, never to an RPC caller. */
 export interface GenerationAdmission {
@@ -135,6 +142,7 @@ export class ConfigurationGenerations {
   private active: GenerationMaterial | undefined;
   private boot: GenerationSnapshot | undefined;
   private readonly runtimeBindings = new Map<string, AgentRegistry>();
+  private readonly runtimeExecutors = new Map<string, NodeExecutorRegistry>();
   private readonly listeners = new Set<(status: GenerationStatus, workflows: WorkflowChange[]) => void>();
   constructor(
     private readonly options: {
@@ -143,6 +151,8 @@ export class ConfigurationGenerations {
       loadAssets(config: OrcaConfig): Promise<GenerationAssets>;
       admission: GenerationAdmission;
       validateCustomNode?: NonNullable<Parameters<typeof validateWorkflow>[1]>["validateCustomNode"];
+      /** Trusted loader: isolated candidate, only recorded non-secret inputs, never current registrations. */
+      restorePluginExecutors?: (snapshot: GenerationSnapshot) => Promise<NodeExecutorRegistry>;
     },
   ) {}
 
@@ -410,10 +420,48 @@ export class ConfigurationGenerations {
       }),
     );
     if (new Set(definitions.map((def) => def.id)).size !== definitions.length) throw unavailable();
-    return this.material(parsed.data, definitions);
+    const snapshot = parsed.data;
+    let executors: NodeExecutorRegistry | undefined;
+    if (snapshot.pluginRestoration && !this.runtimeBindings.has(snapshot.runtimeBinding!)) {
+      // A partially validated descriptor must never reach a restoration factory.
+      if (
+        !snapshot.runtimeBinding ||
+        !snapshot.effectiveAgents ||
+        !snapshot.effectiveRoles ||
+        snapshot.runtimeHosts?.length !== snapshot.config.hosts.length ||
+        !isDeepStrictEqual([...snapshot.runtimeHosts].sort(), snapshot.config.hosts.map((host) => host.id).sort()) ||
+        !isDeepStrictEqual(
+          snapshot.pluginRestoration.map((record) => record.spec),
+          snapshot.config.plugins,
+        ) ||
+        !this.options.restorePluginExecutors
+      )
+        throw unavailable();
+      executors = await this.options.restorePluginExecutors(snapshot);
+      const candidate = this.material(snapshot, definitions, executors);
+      for (const def of definitions) {
+        let validation;
+        try {
+          validation = validateWorkflow(def, {
+            hasTemplate: (id) => snapshot.templates.some((template) => template.id === id),
+            hasWorkflow: (id) => definitions.some((workflow) => workflow.id === id),
+            hasAgent: (selector) => candidate.agents.canResolve(selector),
+            validateCustomNode: (node) =>
+              executors!.get(node.type)
+                ? executors!.validateNode(node)
+                : { errors: [{ message: "recorded custom executor is unavailable" }] },
+          });
+        } catch {
+          throw unavailable();
+        }
+        if (!validation.ok) throw unavailable();
+      }
+      return candidate;
+    }
+    return this.material(snapshot, definitions, executors);
   }
   /**
-   * Plugin restoration contract. A binding from this provider's lifetime is used as is. Another
+   * Legacy declarative compatibility. A binding from this provider's lifetime is used as is. Another
    * provider's binding is restored onto this boot's hosts only when the loader reported the same
    * runtime digest and the plugin list, configured hosts and host ids all match; agent specs and
    * role mappings still come from the recorded snapshot. Anything else is not restorable.
@@ -434,14 +482,23 @@ export class ConfigurationGenerations {
       return undefined;
     return this.runtimeBindings.get(boot.runtimeBinding);
   }
-  private material(snapshot: GenerationSnapshot, definitions: WorkflowDefinition[]): GenerationMaterial {
+  private material(
+    snapshot: GenerationSnapshot,
+    definitions: WorkflowDefinition[],
+    restoredExecutors?: NodeExecutorRegistry,
+  ): GenerationMaterial {
     // Compatibility is symmetric: an older unbound generation must not pick up newly
     // installed executors, host mutations or plan callbacks from the current bootstrap.
-    if (this.boot?.runtimeBootstrapBound && snapshot.runtimeBinding !== this.boot.runtimeBinding) throw unavailable();
-    const runtimeAgents = snapshot.runtimeBinding ? this.runtimeAgents(snapshot) : undefined;
+    if (this.boot?.runtimeBootstrapBound && snapshot.runtimeBinding !== this.boot.runtimeBinding && !restoredExecutors)
+      throw pluginRestorationRefusal("legacy_generation");
+    const runtimeAgents = restoredExecutors
+      ? AgentRegistry.fromConfig(snapshot.config)
+      : snapshot.runtimeBinding
+        ? this.runtimeAgents(snapshot)
+        : undefined;
     if (snapshot.config.plugins.length && !snapshot.runtimeBinding) throw unavailable();
     if (snapshot.runtimeBinding && (!runtimeAgents || !snapshot.effectiveAgents || !snapshot.effectiveRoles))
-      throw unavailable();
+      throw pluginRestorationRefusal("legacy_generation");
     frozen(snapshot);
     const agents = snapshot.runtimeBinding ? new AgentRegistry() : AgentRegistry.fromConfig(snapshot.config);
     if (snapshot.runtimeBinding) {
@@ -460,6 +517,9 @@ export class ConfigurationGenerations {
       agents: readonlyRegistry(agents, ["addHost", "addAgent", "mapRole"]),
       workflows,
       templates,
+      ...((restoredExecutors ?? this.runtimeExecutors.get(snapshot.runtimeBinding!))
+        ? { executors: restoredExecutors ?? this.runtimeExecutors.get(snapshot.runtimeBinding!)! }
+        : {}),
     });
   }
   private async prepare(
@@ -479,6 +539,7 @@ export class ConfigurationGenerations {
       const runtimeAgents = new AgentRegistry();
       for (const host of loaded.agents.listHosts()) runtimeAgents.addHost(host);
       this.runtimeBindings.set(runtimeBinding, runtimeAgents);
+      if (loaded.executors) this.runtimeExecutors.set(runtimeBinding, loaded.executors);
     }
     const material = this.material(
       {
@@ -486,6 +547,7 @@ export class ConfigurationGenerations {
         savedRevision,
         config: structuredClone(config),
         ...(loaded.workspaceInputs ? { workspaceInputs: structuredClone(loaded.workspaceInputs) } : {}),
+        ...(loaded.pluginRestoration ? { pluginRestoration: structuredClone(loaded.pluginRestoration) } : {}),
         ...(loaded.agents
           ? {
               runtimeBinding,

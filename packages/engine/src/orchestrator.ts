@@ -1550,7 +1550,7 @@ export class Orchestrator {
   }
 
   private async executeStep(rc: RunContext, step: StepRun, node: NodeDef): Promise<StepOutcome> {
-    const executor = this.executors.get(node.type);
+    const executor = (this.contextGenerations.get(rc)?.executors ?? this.executors).get(node.type);
     if (!executor)
       return {
         kind: "failed",
