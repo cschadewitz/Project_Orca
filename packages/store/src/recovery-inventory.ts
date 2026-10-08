@@ -104,6 +104,7 @@ export async function inventoryRecoveryRoots(
   const reasons = new Set<RecoveryReason>();
   const roots: RecoveryRoot[] = [];
   const observed = new Map<string, string>();
+  let enumeration: RecoveryManifest["enumeration"] = "incomplete";
   let entryCount = 0,
     totalBytes = 0;
   const checkAccess = (info: BigIntStats) => {
@@ -244,6 +245,7 @@ export async function inventoryRecoveryRoots(
     }
     for (const [path, before] of observed)
       if (signature(await lstat(path, { bigint: true })) !== before) refuse("OBSERVATION_CHANGED");
+    enumeration = "complete";
   } catch (error) {
     reasons.add(error instanceof Refusal ? error.reason : "READ_FAILED");
   }
@@ -254,6 +256,7 @@ export async function inventoryRecoveryRoots(
     roots,
     references: plan.references,
     external: plan.external,
+    enumeration,
     observation: [...reasons].some((reason) => reason !== "ACL_UNVERIFIED") ? "failed" : "unchanged",
     reasons: [...reasons],
   };

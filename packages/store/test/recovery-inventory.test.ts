@@ -210,3 +210,62 @@ it("refuses a false credential absence declaration before opening its subtree", 
   expect(reasons(result)).toContain("COMPONENT_MISSING");
   if (result.ok) expect(result.manifest.roots[3]!.entries.some((entry) => entry.path.startsWith("auth"))).toBe(false);
 });
+
+it.each(["maxFileBytes", "maxEntries"] as const)(
+  "withholds coverage when %s aborts before an unclassified durable entry is recorded",
+  async (budget) => {
+    const f = await fixture(),
+      app = f.plan.roots[2]!;
+    await rm(join(app.path, "preferences.json"));
+    await rm(join(app.path, "admission-intents.enc"));
+    for (const component of app.components) component.state = "absent";
+    await writeFile(join(app.path, "future-journal"), "synthetic-unclassified-durable-data", { mode: 0o600 });
+    const plan = { ...f.plan, roots: [app], references: [] },
+      before = await observe(plan);
+    const inventory = await inventoryRecoveryRoots(plan, { [budget]: 0 });
+    expect(inventory.ok).toBe(true);
+    if (!inventory.ok) throw new Error("EXPECTED_MANIFEST");
+    expect(inventory.manifest.roots[0]!.entries).toEqual([]);
+    expect(inventory.manifest.enumeration).toBe("incomplete");
+    expect(inventory.manifest.reasons).toContain("RESOURCE_LIMIT");
+    const json = JSON.stringify(inventory.manifest);
+    const result = validateRecoveryManifest(json, { expectedCandidateRef: CANDIDATE, observedJson: json });
+    expect(result.structuralValidity.status).toBe("passed");
+    expect(result.coverage).toEqual({ status: "unknown", reasons: ["COMPONENT_UNKNOWN"] });
+    expect(result.integrity.status).toBe("failed");
+    expect(result.writerConsistency.status).toBe("unknown");
+    expect(result.recoveryEligibility.status).toBe("unavailable");
+    expect(JSON.stringify(result).includes(f.base)).toBe(false);
+    expect(JSON.stringify(await observe(plan)) === JSON.stringify(before)).toBe(true);
+  },
+);
+
+it("compares genuine root access evidence even when both modes satisfy owner-only checks", async () => {
+  if (process.platform === "win32") return;
+  const f = await fixture(),
+    before = await observe(f.plan),
+    root = f.plan.roots[0]!.path;
+  await chmod(root, 0o500);
+  try {
+    const after = await observe(f.plan);
+    expect(before.roots[0]!.access.mode).toBe(0o700);
+    expect(after.roots[0]!.access.mode).toBe(0o500);
+    expect(after.enumeration).toBe("complete");
+    expect(after.reasons).toEqual([]);
+    expect(JSON.stringify(after.roots[0]!.entries) === JSON.stringify(before.roots[0]!.entries)).toBe(true);
+    const result = validateRecoveryManifest(JSON.stringify(before), {
+      expectedCandidateRef: CANDIDATE,
+      observedJson: JSON.stringify(after),
+    });
+    expect(result.structuralValidity.status).toBe("passed");
+    expect(result.coverage.status).toBe("passed");
+    expect(result.integrity.reasons).toContain("DIGEST_MISMATCH");
+    expect(result.integrity.status).toBe("failed");
+    expect(result.writerConsistency.status).toBe("unknown");
+    expect(result.recoveryEligibility.status).toBe("unavailable");
+    expect(JSON.stringify(result).includes(f.base)).toBe(false);
+  } finally {
+    // Only this test's fresh synthetic root is changed; restore its mode for test cleanup.
+    await chmod(root, 0o700);
+  }
+});

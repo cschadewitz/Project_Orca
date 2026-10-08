@@ -48,6 +48,7 @@ export function validateRecoveryManifest(
   };
   if (!parsed.valid) return result;
   const manifest = parsed.manifest;
+  let incompleteEnumeration = manifest.enumeration === "incomplete";
   const structural: RecoveryReason[] = [],
     coverage: RecoveryReason[] = [],
     integrity: RecoveryReason[] = [];
@@ -154,12 +155,15 @@ export function validateRecoveryManifest(
   integrity.push(...manifest.reasons);
   if (evidence.observedJson !== undefined) {
     const observed = parseRecoveryManifest(evidence.observedJson);
+    if (observed.valid && observed.manifest.enumeration === "incomplete") incompleteEnumeration = true;
     if (!observed.valid || !matchesObservation(manifest, observed.manifest)) integrity.push("DIGEST_MISMATCH");
     else if (observed.manifest.observation !== "unchanged" || observed.manifest.reasons.length)
       integrity.push(...observed.manifest.reasons, "OBSERVATION_CHANGED");
   } else integrity.push("INTEGRITY_UNVERIFIED");
   result.structuralValidity = conclusion(structural.length ? "failed" : "passed", structural);
   const hardCoverage = coverage.filter((reason) => reason !== "EXTERNAL_UNVERIFIED");
+  // Named-component declarations cannot establish coverage of entries an aborted scan never reached.
+  if (incompleteEnumeration) coverage.push("COMPONENT_UNKNOWN");
   result.coverage = conclusion(hardCoverage.length ? "failed" : coverage.length ? "unknown" : "passed", coverage);
   result.integrity = conclusion(
     integrity.some((reason) => !["INTEGRITY_UNVERIFIED", "ACL_UNVERIFIED"].includes(reason))
@@ -186,6 +190,7 @@ function matchesObservation(a: RecoveryManifest, b: RecoveryManifest): boolean {
       !observed ||
       root.role !== observed.role ||
       root.observedIdentity !== observed.observedIdentity ||
+      !same(root.access, observed.access) ||
       root.entries.length !== observed.entries.length
     )
       return false;

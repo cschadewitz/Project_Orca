@@ -34,6 +34,7 @@ function manifest(): RecoveryManifest {
       { id: "workspace", kind: "workspace", state: "not-applicable" },
       { id: "credentials", kind: "credential", state: "not-applicable" },
     ],
+    enumeration: "complete",
     observation: "unchanged",
     reasons: [],
   };
@@ -177,3 +178,47 @@ it("refuses failed observations with no reasons and impossible parent topology",
   });
   expect(validate(value).structuralValidity.reasons).toContain("PATH_UNSAFE");
 });
+
+it("withholds coverage for either incomplete input or incomplete comparison evidence", () => {
+  const complete = manifest(),
+    incomplete = manifest();
+  incomplete.enumeration = "incomplete";
+  for (const [input, observed] of [
+    [incomplete, complete],
+    [complete, incomplete],
+  ]) {
+    const result = validateRecoveryManifest(JSON.stringify(input), {
+      expectedCandidateRef: complete.candidateRef,
+      observedJson: JSON.stringify(observed),
+    });
+    expect(result.coverage).toEqual({ status: "unknown", reasons: ["COMPONENT_UNKNOWN"] });
+    expect(result.writerConsistency.status).toBe("unknown");
+    expect(result.recoveryEligibility.status).toBe("unavailable");
+  }
+  const failedAccess = manifest();
+  failedAccess.observation = "failed";
+  failedAccess.reasons = ["ACCESS_UNSAFE"];
+  expect(validate(failedAccess).coverage.status).toBe("passed");
+  expect(validate(failedAccess).integrity.status).toBe("failed");
+  incomplete.roots[0]!.components.pop();
+  expect(validate(incomplete).coverage.status).toBe("failed");
+});
+
+it.each(["mode", "uid", "gid", "acl"] as const)(
+  "compares root %s evidence independently of unchanged entries",
+  (field) => {
+    const before = manifest(),
+      after = manifest(),
+      root = after.roots[0]!;
+    if (field === "acl") root.access.acl = "unverified";
+    else root.access[field] = field === "mode" ? 0o500 : 1;
+    const result = validateRecoveryManifest(JSON.stringify(before), {
+      expectedCandidateRef: before.candidateRef,
+      observedJson: JSON.stringify(after),
+    });
+    expect(result.coverage.status).toBe("passed");
+    expect(result.integrity).toEqual({ status: "failed", reasons: ["DIGEST_MISMATCH"] });
+    expect(result.writerConsistency.status).toBe("unknown");
+    expect(result.recoveryEligibility.status).toBe("unavailable");
+  },
+);

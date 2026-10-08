@@ -71,13 +71,21 @@ Version 1 is a strict bounded local inventory envelope: candidate reference, roo
 with role/expected and observed identity, component declarations, relative file or
 directory entries (size, SHA-256 for files, inode/device identity, POSIX mode/UID/GID,
 ACL status), explicit required references, external dependency classification,
-observation outcome and stable reasons. Entries and component/reference candidate
-bindings must match the manifest candidate. Plugin generation content is kept opaque;
+enumeration completion, observation outcome and stable reasons. `enumeration` is
+`complete` only after every supplied owned root is traversed and final metadata checks
+finish; an aborted traversal is `incomplete` even if all named components are declared
+absent. Incomplete enumeration withholds coverage using `COMPONENT_UNKNOWN`; already
+observed missing/unclassified components still fail coverage. Enumeration is separate
+from access/identity failures, which can coexist with a complete traversal. This required
+field remains internal to the unmerged version-1 envelope. Entries and
+component/reference candidate bindings must match the manifest candidate. Plugin generation content is kept opaque;
 no descriptors are invented and no callbacks are reconstructed.
 
 Parsing accepts a bounded JSON string, strips no unknown fields, and returns only
 closed reason codes on errors. Pure validation returns separate structural validity,
 coverage, integrity, semantic readability, writer consistency and recovery eligibility.
+Integrity comparison includes each root's POSIX mode, UID, GID and ACL evidence as well
+as entry contents/access. Different safe root modes still fail evidence comparison.
 Digest verification compares manifest entries against a separately observed manifest;
 a digest in an unobserved manifest is a claim, not an integrity check. Semantic read
 evidence is supplied separately and explicitly bound to candidate and root; it is
@@ -134,10 +142,17 @@ access, consent, channel and trust policy are unchosen. Native signed Mac upgrad
 old-to-new Keychain/permissions continuity, all-writer fencing, compatibility of all
 writes and the separately reviewed supported restore procedure remain live gates.
 
-Local verification (Node 24.21.0/pnpm 12.4.2, Linux): 52 new recovery cases plus
+Initial verification (Node 24.21.0/pnpm 12.4.2, Linux): 52 new recovery cases plus
 20 adjacent protected-read/continuation cases pass with two Vitest workers;
 workspace and renderer typecheck, full lint/CSS checks, and scoped formatting pass.
 The broader protected-execution test run has one unchanged environmental failure:
 its legacy-workflow-directory expectation is 0755, but this environment's inherited
 0077 umask creates 0700. Reproduced alone; no existing tests or process/host defaults
 were changed. Full suite/build, CI, native Mac/Keychain and live recovery were not run.
+
+Review correction verification: 60 recovery cases pass across the three owned suites
+with two Vitest workers, including deterministic aborted-enumeration and genuine
+0700-to-0500 root-mode regressions plus all root access fields. Workspace/renderer
+typecheck, scoped ESLint/Prettier and diff checks pass. Earlier legacy readability
+and encryption assertions passed; the unchanged 0755-versus-0700 assertion is the
+only legacy failure. No legacy test or process/host permission default was modified.

@@ -147,6 +147,7 @@ export const RecoveryManifestSchema = z.strictObject({
   external: z
     .array(z.strictObject({ id: token, kind: z.enum(["workspace", "credential"]), state: classification }))
     .max(64),
+  enumeration: z.enum(["complete", "incomplete"]),
   observation: z.enum(["unchanged", "failed"]),
   reasons: z.array(z.enum(RECOVERY_REASONS)).max(RECOVERY_REASONS.length),
 });
