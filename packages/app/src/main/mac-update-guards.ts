@@ -18,21 +18,48 @@ export class MacUpdateGuards {
     return this.drafts.valid();
   }
 
-  /** Legacy maintenance.ready covers RPC lifetimes only. It cannot prove that
-   * acknowledged attached execution or a live callback is idle. Until the daemon
-   * exposes an authoritative atomic idle fence, refuse without issuing maintenance.
-   * In particular, do not fence first and discover missing proof after the response.
+  /** Only the additive, authenticated proof method can acquire runtime admission.
+   * Missing proof sends no maintenance request. Lost/mismatched responses retain
+   * the local target reservation; cleanup never targets a replacement daemon.
    */
-  async prepareAdmission(target: MacUpdateTarget, _token: string): Promise<MacPreparation<MacAdmissionLease>> {
+  async prepareAdmission(target: MacUpdateTarget, token: string): Promise<MacPreparation<MacAdmissionLease>> {
+    if (!this.drafts.valid()) return { outcome: "blocked", blocker: "window-unavailable" };
     try {
       const owned = await this.workspace.captureMacUpdateTarget(target);
       if (!owned) return { outcome: "blocked", blocker: "identity" };
-      try {
-        if (!owned.check()) return { outcome: "blocked", blocker: "identity" };
-        return { outcome: "blocked", blocker: "activity" };
-      } finally {
+      if (!owned.check() || !owned.maintenanceRuntime) {
         owned.release();
+        return { outcome: "blocked", blocker: owned.maintenanceRuntime ? "identity" : "activity" };
       }
+      const rpc = owned.maintenanceRuntime;
+      const matches = (result: import("@orca/protocol").RuntimeMaintenanceResult) =>
+        result.target.workspaceId === target.workspaceId && result.target.instanceId === target.instanceId;
+      const prepared = await rpc("prepare", token);
+      if (!matches(prepared)) return { outcome: "unknown" };
+      if (prepared.outcome === "blocked") {
+        owned.release();
+        return { outcome: "blocked", blocker: "activity" };
+      }
+      if (prepared.outcome !== "held" || !owned.check() || !this.drafts.valid()) return { outcome: "unknown" };
+      let releasing = false;
+      return {
+        outcome: "ready",
+        lease: {
+          target: owned.target,
+          release: async () => {
+            if (releasing || !owned.check()) return "unknown";
+            releasing = true;
+            try {
+              const released = await rpc("resume", token);
+              if (!matches(released) || released.outcome !== "released" || !owned.check()) return "unknown";
+              owned.release();
+              return "released";
+            } catch {
+              return "unknown";
+            }
+          },
+        },
+      };
     } catch {
       return { outcome: "unknown" };
     }

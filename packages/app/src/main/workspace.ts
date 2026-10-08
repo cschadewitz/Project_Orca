@@ -12,7 +12,14 @@
  */
 import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
-import { isCompatible, PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
+import {
+  MAINTENANCE_RUNTIME_METHOD,
+  RuntimeMaintenanceResultSchema,
+  type RuntimeMaintenanceResult,
+  isCompatible,
+  PROTOCOL_VERSION,
+  type HelloResult,
+} from "@orca/protocol";
 import { resolve, join } from "node:path";
 import { DaemonClient as AuthenticatedClient } from "../client/daemon-client.js";
 import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
@@ -132,6 +139,7 @@ export class Workspace {
         readonly target: Readonly<MacUpdateTarget>;
         check(): boolean;
         release(): void;
+        maintenanceRuntime?: (action: "prepare" | "resume", token: string) => Promise<RuntimeMaintenanceResult>;
       }
     | undefined
   > {
@@ -199,7 +207,36 @@ export class Workspace {
       )
         return undefined;
       captured = true;
-      return { target, check, release };
+      return {
+        target,
+        check,
+        release,
+        ...(hello.methods?.includes(MAINTENANCE_RUNTIME_METHOD)
+          ? {
+              maintenanceRuntime: async (action: "prepare" | "resume", token: string) => {
+                if (!check()) throw new Error("Owned update target changed");
+                const result = await authenticated.call(
+                  MAINTENANCE_RUNTIME_METHOD,
+                  {
+                    action,
+                    token,
+                    target: { workspaceId: target.workspaceId, instanceId: target.instanceId, processId: daemon.pid },
+                  },
+                  RuntimeMaintenanceResultSchema,
+                  false,
+                );
+                if (
+                  !check() ||
+                  result.target.workspaceId !== target.workspaceId ||
+                  result.target.instanceId !== target.instanceId ||
+                  result.target.processId !== daemon.pid
+                )
+                  throw new Error("Owned runtime proof target changed");
+                return result;
+              },
+            }
+          : {}),
+      };
     } finally {
       // No remote boundary was changed: releasing this local reservation is safe even
       // when the hello result is lost or refused. Never resume an unverified daemon.
