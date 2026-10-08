@@ -143,6 +143,61 @@ export type ConfigFieldDescription = z.infer<typeof ConfigFieldDescriptionSchema
 export const ConfigSchemaDescriptionSchema = z.array(ConfigFieldDescriptionSchema);
 export type ConfigSchemaDescription = z.infer<typeof ConfigSchemaDescriptionSchema>;
 
+/** Rich input structure supplements the legacy flat descriptor; never infer it from required. */
+export interface ConfigFieldMetadata {
+  acceptsAbsent: boolean | "metadata-unavailable";
+  acceptsNull: boolean | "metadata-unavailable";
+  default:
+    | { state: "none" }
+    | { state: "available"; value: unknown }
+    | { state: "withheld" }
+    | { state: "metadata-unavailable" };
+}
+export type ConfigFieldShape = ConfigFieldMetadata &
+  (
+    | { kind: "scalar"; field: ConfigFieldDescription }
+    | { kind: "object"; fields: Record<string, ConfigFieldShape> }
+    | { kind: "array"; item: ConfigFieldShape }
+    | { kind: "record"; value: ConfigFieldShape }
+    | { kind: "union"; discriminator: string; branches: Record<string, ConfigFieldShape> }
+    | { kind: "unsupported"; reason: "opaque" | "metadata-unavailable" }
+  );
+const FieldMetadataShape = {
+  acceptsAbsent: z.union([z.boolean(), z.literal("metadata-unavailable")]),
+  acceptsNull: z.union([z.boolean(), z.literal("metadata-unavailable")]),
+  default: z.discriminatedUnion("state", [
+    z.object({ state: z.literal("none") }),
+    z.object({ state: z.literal("available"), value: z.unknown() }),
+    z.object({ state: z.literal("withheld") }),
+    z.object({ state: z.literal("metadata-unavailable") }),
+  ]),
+};
+export const ConfigFieldShapeSchema: z.ZodType<ConfigFieldShape> = z.lazy(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ ...FieldMetadataShape, kind: z.literal("scalar"), field: ConfigFieldDescriptionSchema }),
+    z.object({
+      ...FieldMetadataShape,
+      kind: z.literal("object"),
+      fields: z.record(z.string(), ConfigFieldShapeSchema),
+    }),
+    z.object({ ...FieldMetadataShape, kind: z.literal("array"), item: ConfigFieldShapeSchema }),
+    z.object({ ...FieldMetadataShape, kind: z.literal("record"), value: ConfigFieldShapeSchema }),
+    z.object({
+      ...FieldMetadataShape,
+      kind: z.literal("union"),
+      discriminator: z.string().min(1),
+      branches: z.record(z.string(), ConfigFieldShapeSchema),
+    }),
+    z.object({
+      ...FieldMetadataShape,
+      kind: z.literal("unsupported"),
+      reason: z.enum(["opaque", "metadata-unavailable"]),
+    }),
+  ]),
+);
+export const ConfigFormSchemaSchema = z.object({ version: z.literal(1), root: ConfigFieldShapeSchema });
+export type ConfigFormSchema = z.infer<typeof ConfigFormSchemaSchema>;
+
 /**
  * Where an effective rule came from. The two documents, plus `default` — the built-in rules
  * `@orca/agents` appends last (#140). `default` is *not* a `ConfigDocument`: there is no file
@@ -218,11 +273,43 @@ export const ConfigGetResultSchema = z.object({
   config: ConfigDocumentViewSchema,
   permissions: ConfigDocumentViewSchema,
   schema: ConfigSchemaDescriptionSchema,
+  formSchema: ConfigFormSchemaSchema.optional(),
   effective: ConfigEffectivePolicySchema,
   generation: ConfigGenerationStatusSchema.optional(),
   asOf: z.string(),
 });
 export type ConfigGetResult = z.infer<typeof ConfigGetResultSchema>;
+
+/** Literal tuple paths: a string key containing dots/brackets/numerals is never an index. */
+export const ConfigEditPathSchema = z
+  .array(z.union([z.string().min(1), z.number().int().nonnegative()]))
+  .min(1)
+  .max(64)
+  .refine(
+    (path) => path.every((key) => typeof key !== "string" || !["__proto__", "prototype", "constructor"].includes(key)),
+    "unsafe configuration key",
+  );
+export const ConfigEditIntentSchema = z.discriminatedUnion("kind", [
+  z
+    .object({ kind: z.literal("set"), path: ConfigEditPathSchema, value: z.unknown() })
+    .refine((edit) => Object.hasOwn(edit, "value") && edit.value !== undefined, "set requires an explicit value"),
+  z.object({ kind: z.literal("remove"), path: ConfigEditPathSchema }),
+  z
+    .object({
+      kind: z.literal("insert"),
+      path: ConfigEditPathSchema,
+      index: z.number().int().nonnegative(),
+      value: z.unknown(),
+    })
+    .refine((edit) => Object.hasOwn(edit, "value") && edit.value !== undefined, "insert requires an explicit value"),
+  z.object({
+    kind: z.literal("move"),
+    path: ConfigEditPathSchema,
+    from: z.number().int().nonnegative(),
+    to: z.number().int().nonnegative(),
+  }),
+]);
+export type ConfigEditIntent = z.infer<typeof ConfigEditIntentSchema>;
 
 /**
  * One field-level edit. `path` is dotted with numeric array indices (`hosts.1.transport`)
@@ -265,12 +352,18 @@ export const ConfigSetParamsSchema = z
     text: z.string().optional(),
     /** Or apply these field edits to the existing document, comments and all. */
     patch: z.array(ConfigPatchEntrySchema).optional(),
+    /** Rich form operations lowered against the exact revision, preserving retained source spans. */
+    edits: z.array(ConfigEditIntentSchema).max(1000).optional(),
     /** Validate and report, write nothing. */
     validateOnly: z.boolean().optional(),
   })
-  .refine((p) => (p.text === undefined) !== (p.patch === undefined), {
-    message: "exactly one of 'text' and 'patch': they are different writes, not two spellings of one",
-  });
+  .refine((p) => [p.text, p.patch, p.edits].filter((value) => value !== undefined).length === 1, {
+    message: "exactly one of 'text', 'patch' and 'edits': they are different writes, not two spellings of one",
+  })
+  .refine(
+    (p) => p.edits === undefined || p.document === "config",
+    "structured operations apply only to the config document",
+  );
 export type ConfigSetParams = z.infer<typeof ConfigSetParamsSchema>;
 
 /** A schema failure, keyed by the dotted path a form places it at (`hosts[1].transport`). */
