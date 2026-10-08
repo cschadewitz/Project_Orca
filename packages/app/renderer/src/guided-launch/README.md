@@ -70,5 +70,18 @@ daemon. Sensitive and undeclared inputs are withheld from preview. Request selec
 only injected authorized choices; direct commands support no overrides. No completion
 percentage, ETA, cost or automatic publication is claimed.
 
+Protected reads publish a busy latch through controller state so controls cannot drift
+from the draft while a restore is pending. Empty reads retain the current draft and review;
+target changes fence late results. Input controls update their local text only after the
+controller accepts the edit. A current unresolved launch must be recovered before restoring
+another launch.
+
+Preview disclosure is captured with the exact review and sensitivity remains monotonic
+through this controller session, including nested sensitive fields. Restored draft and
+command values are conservatively withheld because the current protected-store seam does
+not verify their original sensitivity metadata. New schema flags cannot downgrade that
+protection. These local safeguards do not establish protected persistence or extend the
+shared wire contract.
+
 Dedicated source/DOM tests cover these local boundaries. They do not establish actual-daemon,
 OS keychain/process restart, cross-client, Electron, packaged or physical acceptance.

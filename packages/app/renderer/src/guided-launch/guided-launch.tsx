@@ -15,12 +15,14 @@ function InputField({
   vars,
   onChange,
   locked,
+  protectedValue,
 }: {
   name: string;
   field: WorkflowInputDeclarationView;
   vars: Record<string, unknown>;
-  onChange: (vars: Record<string, unknown>) => void;
+  onChange: (vars: Record<string, unknown>) => boolean;
   locked: boolean;
+  protectedValue: boolean;
 }): JSX.Element {
   const present = Object.hasOwn(vars, name);
   const value = vars[name];
@@ -39,17 +41,19 @@ function InputField({
           <input
             {...control}
             className="orca-input orca-text-mono-id"
-            type={inputSensitive(field) ? "password" : "text"}
+            type={protectedValue || inputSensitive(field) ? "password" : "text"}
             value={text}
             disabled={locked || !supported}
             autoComplete="off"
             onChange={(event) => {
+              if (locked) return;
               const raw = event.target.value;
-              setText(raw);
               const parsed = parseInput(field, raw);
-              setError(parsed.ok ? undefined : parsed.message);
               // Invalid text must invalidate the old review/value, never silently submit the prior value.
-              onChange({ ...vars, [name]: parsed.ok ? parsed.value : undefined });
+              if (onChange({ ...vars, [name]: parsed.ok ? parsed.value : undefined })) {
+                setText(raw);
+                setError(parsed.ok ? undefined : parsed.message);
+              }
             }}
           />
           <Button
@@ -58,9 +62,10 @@ function InputField({
             onClick={() => {
               const next = { ...vars };
               delete next[name];
-              setText("");
-              setError(undefined);
-              onChange(next);
+              if (onChange(next)) {
+                setText("");
+                setError(undefined);
+              }
             }}
           >
             Omit value
@@ -70,9 +75,10 @@ function InputField({
               disabled={locked}
               disabledReason="The original launch intent is retained."
               onClick={() => {
-                setText("null");
-                setError(undefined);
-                onChange({ ...vars, [name]: null });
+                if (onChange({ ...vars, [name]: null })) {
+                  setText("null");
+                  setError(undefined);
+                }
               }}
             >
               Use null
@@ -81,7 +87,7 @@ function InputField({
           {!supported && <Text style="caption">This input type requires an updated editor.</Text>}
           <Text style="caption">
             {present ? "Explicit value" : "Omitted"}
-            {inputSensitive(field) ? "; value withheld from preview" : ""}
+            {protectedValue || inputSensitive(field) ? "; value withheld from preview" : ""}
           </Text>
         </>
       )}
@@ -108,10 +114,11 @@ export function GuidedLaunch({
   onClose,
 }: GuidedLaunchProps): JSX.Element {
   const state = useSyncExternalStore(controller.subscribe, controller.read);
-  const { draft, context } = state;
+  const { draft, context, review } = state;
   const workflow = context.workflows.find((w) => w.id === draft.workflowId);
   const selectedRoot = context.roots.find((root) => root.id === draft.rootId);
   const locked =
+    state.busy ||
     state.intent !== undefined ||
     state.unresolvedReview !== undefined ||
     ["checking", "submitting", "recovering"].includes(state.phase);
@@ -224,6 +231,7 @@ export function GuidedLaunch({
           vars={draft.vars}
           onChange={(vars) => edit({ ...draft, vars })}
           locked={locked}
+          protectedValue={state.withheldInputs.includes(name)}
         />
       ))}
       {undeclared.map((name) => (
@@ -257,23 +265,23 @@ export function GuidedLaunch({
         ))}
         <Text style="caption">Publication is unavailable. Admission does not prove task completion.</Text>
       </Card>
-      {state.review !== undefined && (
+      {review !== undefined && (
         <Card eyebrow="Launch preview">
           <Text style="mono-id">
-            {state.review.workflowId} / {state.review.workflowVersion} / {state.review.workflowRevision}
+            {review.workflowId} / {review.workflowVersion} / {review.workflowRevision}
           </Text>
           <Text style="mono-id">
-            Root {state.review.rootId} / {state.review.rootRevision}
+            Root {review.rootId} / {review.rootRevision}
           </Text>
-          {Object.entries(state.review.command.params.vars ?? {}).map(([name, value]) => (
+          {Object.entries(review.command.params.vars ?? {}).map(([name, value]) => (
             <Text key={name} style="mono-id">
               {name}:{" "}
-              {workflow?.inputSchema?.fields[name] === undefined || inputSensitive(workflow.inputSchema.fields[name])
-                ? "Withheld"
-                : JSON.stringify(value)}
+              {review.visibleInputs?.includes(name) && !state.withheldInputs.includes(name)
+                ? JSON.stringify(value)
+                : "Withheld"}
             </Text>
           ))}
-          {state.review.warnings.map((issue, index) => (
+          {review.warnings.map((issue, index) => (
             <Text key={index} style="caption">
               {issue.path}: {issue.message}
             </Text>
@@ -312,7 +320,7 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.submit();
           }}
-          disabled={state.phase !== "review" || invalid}
+          disabled={state.busy || state.phase !== "review" || invalid}
           disabledReason="Validate and review the exact command before launching."
         >
           Launch
@@ -322,7 +330,7 @@ export function GuidedLaunch({
             onClick={() => {
               void controller.recover();
             }}
-            disabled={["submitting", "checking"].includes(state.phase)}
+            disabled={state.busy || ["submitting", "checking"].includes(state.phase)}
             disabledReason="The launch is pending."
           >
             Recover original launch
@@ -332,7 +340,7 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.reviewTarget();
           }}
-          disabled={["checking", "submitting"].includes(state.phase)}
+          disabled={state.busy || ["checking", "submitting"].includes(state.phase)}
           disabledReason="Pending work remains on its original target."
         >
           Review target
@@ -341,6 +349,8 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.saveDraft();
           }}
+          disabled={state.busy}
+          disabledReason="A launch operation or protected read is pending."
         >
           Save protected draft
         </Button>
@@ -348,6 +358,8 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.restore();
           }}
+          disabled={state.busy}
+          disabledReason="A launch operation or protected read is pending."
         >
           Restore protected launch
         </Button>
@@ -355,6 +367,8 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.loadDraft();
           }}
+          disabled={state.busy}
+          disabledReason="A launch operation or protected read is pending."
         >
           Restore protected draft
         </Button>
@@ -362,6 +376,8 @@ export function GuidedLaunch({
           onClick={() => {
             void controller.newWork();
           }}
+          disabled={state.busy}
+          disabledReason="A launch operation or protected read is pending."
         >
           Start explicit new work
         </Button>

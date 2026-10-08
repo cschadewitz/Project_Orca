@@ -68,6 +68,8 @@ export interface LaunchReview {
   generation: string;
   command: LaunchCommand;
   warnings: ValidationResultView["warnings"];
+  /** Names proven non-sensitive by this exact review's metadata, never by a later schema. */
+  visibleInputs?: readonly string[];
   checkout?: CheckoutEvidence;
 }
 /** Opaque handle to the main owner's protected, exact-command intent. No renderer ledger/key. */
@@ -140,6 +142,10 @@ export interface LaunchState {
   draft: LaunchDraft;
   sequence: number;
   inputEpoch: number;
+  /** Includes protected reads and confirmations even when the visible phase does not change. */
+  busy: boolean;
+  /** Session protection is monotonic; unclassified restored input names are always withheld. */
+  withheldInputs: readonly string[];
   phase: "editing" | "checking" | "review" | "submitting" | "recovering" | "admitted" | "blocked";
   message: string;
   errors: ValidationResultView["errors"];

@@ -1,6 +1,7 @@
 /** Guided launch state machine with immutable review, target fences and opaque protected intents. */
 import { RequestsSubmitParamsSchema, RunsAdmitParamsSchema } from "@orca/protocol";
 import { LaunchPortFailure } from "./contracts.js";
+import { inputSensitive } from "./input-model.js";
 import type {
   LaunchContext,
   LaunchDraft,
@@ -45,11 +46,28 @@ function jsonValue(value: unknown): boolean {
     Object.values(value).every(jsonValue)
   );
 }
+function protectedInputs(context: LaunchContext, draft: LaunchDraft, previous: readonly string[] = []): string[] {
+  const fields = context.workflows.find((workflow) => workflow.id === draft.workflowId)?.inputSchema?.fields ?? {};
+  return [
+    ...new Set([
+      ...previous,
+      ...Object.entries(fields)
+        .filter(([, field]) => inputSensitive(field))
+        .map(([name]) => name),
+      ...Object.keys(draft.vars).filter((name) => !Object.hasOwn(fields, name)),
+    ]),
+  ];
+}
 /** No connection, persistence or retry implementation: all effects go through the shared owner. */
 export class GuidedLaunchController {
   private state: LaunchState;
   private listeners = new Set<() => void>();
-  private pending = false;
+  private get pending(): boolean {
+    return this.state.busy;
+  }
+  private set pending(value: boolean) {
+    this.update({ busy: value });
+  }
   private fence = 0;
   constructor(
     context: LaunchContext,
@@ -62,6 +80,8 @@ export class GuidedLaunchController {
       draft: structuredClone(draft),
       sequence: 0,
       inputEpoch: 0,
+      busy: false,
+      withheldInputs: protectedInputs(context, draft),
       phase: "editing",
       message: "",
       errors: [],
@@ -84,15 +104,19 @@ export class GuidedLaunchController {
   }
   contextChanged(context: LaunchContext): void {
     this.fence += 1;
-    this.update({ context: structuredClone(context), review: undefined });
+    this.update({
+      context: structuredClone(context),
+      review: undefined,
+      withheldInputs: protectedInputs(context, this.state.draft, this.state.withheldInputs),
+    });
     this.block(
       sameLaunchTarget(context.target, this.state.draftTarget)
         ? "Configuration or connection changed. Review the draft again."
         : "Target changed. Return to the original target to recover pending work, or explicitly review this draft for the new target.",
     );
   }
-  edit(draft: LaunchDraft): void {
-    if (this.pending || this.state.intent !== undefined || this.state.unresolvedReview !== undefined) return;
+  edit(draft: LaunchDraft): boolean {
+    if (this.pending || this.state.intent !== undefined || this.state.unresolvedReview !== undefined) return false;
     this.fence += 1;
     this.update({
       draft: structuredClone(draft),
@@ -101,7 +125,9 @@ export class GuidedLaunchController {
       review: undefined,
       errors: [],
       message: "",
+      withheldInputs: protectedInputs(this.state.context, draft, this.state.withheldInputs),
     });
+    return true;
   }
   /** Explicit target review can transfer only an unsent draft. Pending intents never transfer. */
   reviewTarget(): void {
@@ -223,6 +249,9 @@ export class GuidedLaunchController {
         generation: context.activeGeneration,
         command,
         warnings: result.validation.warnings,
+        visibleInputs: Object.keys(workflow.inputSchema?.fields ?? {}).filter(
+          (name) => !this.state.withheldInputs.includes(name),
+        ),
         ...(result.checkout === undefined ? {} : { checkout: result.checkout }),
       };
       this.update({
@@ -416,13 +445,19 @@ export class GuidedLaunchController {
     const target = this.state.draftTarget;
     const fence = this.fence;
     this.pending = true;
+    this.update({ message: "Reading the protected draft. Editing is paused until the read finishes." });
     try {
       const draft = await this.ports.drafts.load(target);
-      if (draft === undefined || fence !== this.fence) return;
+      if (fence !== this.fence) return;
+      if (draft === undefined) {
+        this.update({ message: "No protected draft was found. Your current draft is retained." });
+        return;
+      }
       this.update({
         draft: structuredClone(draft),
         sequence: this.state.sequence + 1,
         inputEpoch: this.state.inputEpoch + 1,
+        withheldInputs: [...new Set([...this.state.withheldInputs, ...Object.keys(draft.vars)])],
         review: undefined,
         phase: "editing",
         message: "Protected draft restored. Review target, configuration and inputs before launching.",
@@ -435,6 +470,10 @@ export class GuidedLaunchController {
   }
   async restore(): Promise<void> {
     if (this.pending || this.state.intent !== undefined) return;
+    if (this.state.unresolvedReview !== undefined) {
+      this.block("The current launch intent is unresolved. Recover it before restoring another protected launch.");
+      return;
+    }
     if (this.ports.restore === undefined) {
       this.block("Protected guided-launch restart recovery is unavailable.");
       return;
@@ -442,9 +481,14 @@ export class GuidedLaunchController {
     const target = this.state.context.target;
     const fence = this.fence;
     this.pending = true;
+    this.update({ message: "Reading the protected launch. Editing is paused until the read finishes." });
     try {
       const saved = await this.ports.restore(target);
-      if (fence !== this.fence || saved === undefined) return;
+      if (fence !== this.fence) return;
+      if (saved === undefined) {
+        this.update({ message: "No protected launch was found. Your current draft is retained." });
+        return;
+      }
       if (!sameScope(saved.review.target, target)) {
         this.block("The saved intent belongs to another target or principal.");
         return;
@@ -454,6 +498,13 @@ export class GuidedLaunchController {
         draftTarget: structuredClone(target),
         sequence: saved.review.draftSequence,
         inputEpoch: this.state.inputEpoch + 1,
+        withheldInputs: [
+          ...new Set([
+            ...this.state.withheldInputs,
+            ...Object.keys(saved.draft.vars),
+            ...Object.keys(saved.review.command.params.vars ?? {}),
+          ]),
+        ],
         review: structuredClone(saved.review),
         intent: saved.intent,
         unresolvedReview: undefined,
