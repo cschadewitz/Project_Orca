@@ -86,7 +86,13 @@ function editSequence(text: string, node: YAMLSeq, edit: ConfigEditIntent, remov
     if (moved === undefined) return refuse();
     chunks.splice(edit.to, 0, moved);
   } else return refuse();
-  return splice(text, starts[0]!, end, chunks.length ? chunks.join("") : " ".repeat(indent) + "[]\n");
+  // The last source chunk may end at EOF without a newline. Once moved/inserted
+  // before another chunk it needs a boundary, otherwise YAML merges valid values.
+  let replacement = chunks.length
+    ? chunks.map((chunk, index) => (index < chunks.length - 1 && !chunk.endsWith("\n") ? chunk + "\n" : chunk)).join("")
+    : " ".repeat(indent) + "[]\n";
+  if (end === text.length && !text.endsWith("\n")) replacement = replacement.replace(/\r?\n$/, "");
+  return splice(text, starts[0]!, end, replacement);
 }
 
 function appendMap(text: string, node: YAMLMap, key: string, value: unknown): string {
@@ -150,7 +156,13 @@ function apply(text: string, edit: ConfigEditIntent): string {
     const to =
       next?.srcToken?.start[0]?.offset ??
       (next && isScalar(next.key) ? lineStart(text, range(next.key)[0]) : range(parent)[2]);
-    return splice(text, from, to, "");
+    // Empty mapping is present {}, not a missing parent or YAML null. Collection
+    // header/leading comments and sibling bytes stay outside this pair's span.
+    const replacement =
+      parent.items.length === 1
+        ? " ".repeat(parent.srcToken.indent) + "{}" + (text.slice(from, to).endsWith("\n") ? "\n" : "")
+        : "";
+    return splice(text, from, to, replacement);
   }
   const node = resolve(root, edit.path);
   if (!node) {

@@ -79,4 +79,28 @@ describe("authoritative rich configuration metadata", () => {
       expect(describeFormNode(schema)).toMatchObject({ kind: "unsupported", visibility: "metadata-unavailable" });
     expect(describeFormNode(z.string().catch("fallback")).acceptsAbsent).toBe("metadata-unavailable");
   });
+
+  it("fails closed for prefault/coercion rather than guessing input acceptance", () => {
+    const prefault = z.string().min(2).prefault("");
+    expect(prefault.safeParse(undefined).success).toBe(false);
+    const coerced = z.coerce.string();
+    expect(coerced.safeParse(undefined).success).toBe(true);
+    expect(coerced.safeParse(null).success).toBe(true);
+    for (const schema of [prefault, coerced, z.coerce.number(), z.record(z.coerce.string(), z.string())]) {
+      expect(describeFormNode(schema)).toMatchObject({
+        kind: "unsupported",
+        visibility: "metadata-unavailable",
+        acceptsAbsent: "metadata-unavailable",
+        acceptsNull: "metadata-unavailable",
+      });
+    }
+    let calls = 0;
+    describeFormNode(
+      z.string().prefault(() => {
+        calls += 1;
+        return "factory";
+      }),
+    );
+    expect(calls).toBe(0);
+  });
 });

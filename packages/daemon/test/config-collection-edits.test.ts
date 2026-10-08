@@ -19,6 +19,35 @@ hosts:
 roles: { builder: a }
 `;
 describe("comment-preserving ordered collection lowering", () => {
+  it.each(["", " # retained comment"])("keeps separate EOF list items during moves and appends (%s)", (comment) => {
+    const source = `workflows:\n  - a\n  - b${comment}`;
+    const moved = lowerConfigEdits(source, [{ kind: "move", path: ["workflows"], from: 1, to: 0 }]);
+    const appended = lowerConfigEdits(source, [{ kind: "insert", path: ["workflows"], index: 2, value: "c" }]);
+    expect(parse(moved)).toEqual({ workflows: ["b", "a"] });
+    expect(parse(appended)).toEqual({ workflows: ["a", "b", "c"] });
+    expect(moved.endsWith("\n")).toBe(false);
+    expect(appended.endsWith("\n")).toBe(false);
+    if (comment) {
+      expect(moved).toContain(comment);
+      expect(appended).toContain(comment);
+    }
+  });
+
+  it.each(["", "\n"])("retains an explicit empty record and collection/sibling comments (%j)", (ending) => {
+    const source = `roles: # collection header\n  # collection lead\n  builder: a\n# sibling\nstoreDir: custom${ending}`;
+    const edited = lowerConfigEdits(source, [{ kind: "remove", path: ["roles", "builder"] }]);
+    expect(parse(edited)).toEqual({ roles: {}, storeDir: "custom" });
+    expect(edited.startsWith("roles: # collection header\n  # collection lead\n")).toBe(true);
+    expect(edited.slice(edited.indexOf("# sibling"))).toBe(source.slice(source.indexOf("# sibling")));
+    expect(edited.endsWith("\n")).toBe(Boolean(ending));
+  });
+
+  it.each(["", "\n"])("keeps a sole EOF mapping present as {} (%j)", (ending) => {
+    const edited = lowerConfigEdits(`roles:\n  builder: a${ending}`, [{ kind: "remove", path: ["roles", "builder"] }]);
+    expect(parse(edited)).toEqual({ roles: {} });
+    expect(edited.endsWith("\n")).toBe(Boolean(ending));
+  });
+
   it("moves original element bytes and their comments without replacing the parent array", () => {
     const moved = lowerConfigEdits(source, [{ kind: "move", path: ["hosts"], from: 1, to: 0 }]);
     const a = "  - id: a # end a\n    type: local\n    extension: 'untouched a'\n";

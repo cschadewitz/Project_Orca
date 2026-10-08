@@ -18,6 +18,7 @@ interface Node {
     values?: readonly unknown[];
     defaultValue?: unknown;
     checks?: readonly unknown[];
+    coerce?: boolean;
   };
   description?: string;
 }
@@ -37,11 +38,11 @@ function acceptance(node: Node, value: "absent" | "null", seen = new Set<Node>()
   if (seen.has(node)) return unknown;
   seen = new Set(seen).add(node);
   const { type, innerType, options } = node.def;
+  if (type === "prefault" || node.def.coerce) return unknown;
   if (type === "optional" && value === "absent") return true;
-  if ((type === "default" || type === "prefault") && value === "absent") return true;
+  if (type === "default" && value === "absent") return true;
   if (type === "nullable" && value === "null") return true;
-  if (["optional", "nullable", "default", "prefault"].includes(type) && innerType)
-    return acceptance(innerType, value, seen);
+  if (["optional", "nullable", "default"].includes(type) && innerType) return acceptance(innerType, value, seen);
   if (type === "union") {
     const values = (options ?? []).map((option) => acceptance(option, value, seen));
     return values.includes(true) ? true : values.includes(unknown) ? unknown : false;
@@ -57,10 +58,10 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
   let node = source;
   let defaultState: ConfigFieldMetadata["default"] = { state: "none" };
   const wrappers = new Set<Node>();
-  while (["optional", "nullable", "default", "prefault"].includes(node.def.type) && node.def.innerType) {
+  while (["optional", "nullable", "default"].includes(node.def.type) && node.def.innerType) {
     if (wrappers.has(node)) break;
     wrappers.add(node);
-    if ((node.def.type === "default" || node.def.type === "prefault") && defaultState.state === "none") {
+    if (node.def.type === "default" && defaultState.state === "none") {
       // Factory defaults are withheld: reading Zod's getter would execute the factory.
       // Literal defaults have the same getter, so conservatively withhold both until
       // an audited pure value source exists. Presence remains distinct from no default.
@@ -76,14 +77,16 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
   };
   const unsupported = (): ConfigFieldShape => ({
     ...meta,
+    acceptsAbsent: unknown,
+    acceptsNull: unknown,
     visibility: "metadata-unavailable",
     kind: "unsupported",
     reason: "opaque",
-    ...(["pipe", "catch", "custom"].includes(node.def.type)
+    ...(["pipe", "catch", "custom", "prefault"].includes(node.def.type)
       ? { default: { state: "metadata-unavailable" as const } }
       : {}),
   });
-  if (seen.has(node) || wrappers.has(node)) return unsupported();
+  if (seen.has(node) || wrappers.has(node) || node.def.coerce) return unsupported();
   const nested = new Set(seen).add(node);
   const child = (n: Node, p: string) => walk(n, p, nested);
   switch (node.def.type) {
@@ -99,7 +102,10 @@ function walk(source: Node, path: string, seen: Set<Node>): ConfigFieldShape {
       return node.def.element ? { ...meta, kind: "array", item: child(node.def.element, `${path}[]`) } : unsupported();
     case "record":
       // Constrained/enum/opaque key schemas cannot be described as arbitrary record keys.
-      return node.def.valueType && node.def.keyType?.def.type === "string" && !node.def.keyType.def.checks?.length
+      return node.def.valueType &&
+        node.def.keyType?.def.type === "string" &&
+        !node.def.keyType.def.checks?.length &&
+        !node.def.keyType.def.coerce
         ? { ...meta, kind: "record", value: child(node.def.valueType, `${path}.<key>`) }
         : unsupported();
     case "union": {
