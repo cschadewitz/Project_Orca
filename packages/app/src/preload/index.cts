@@ -127,6 +127,16 @@ const bridge: OrcaBridge = {
       };
     },
   },
+  guidedLaunch: {
+    snapshot: () => call("orca:guidedLaunch.snapshot"),
+    preflight: (params) => call("orca:guidedLaunch.preflight", params),
+    submit: (review) => call("orca:guidedLaunch.submit", review),
+    retained: () => call("orca:guidedLaunch.retained"),
+    load: (id) => call("orca:guidedLaunch.load", id),
+    resolve: (review) => call("orca:guidedLaunch.resolve", review),
+    recover: (params) => call("orca:guidedLaunch.recover", params),
+    abandon: (id) => call("orca:guidedLaunch.abandon", id),
+  },
   operator: { preflight: (params) => call("orca:operator.preflight", params) },
   diagnostics: {
     status: () => diagnosticCall("status"),

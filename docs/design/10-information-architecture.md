@@ -106,6 +106,7 @@ orca://gate/91c4                       attention surface, that gate focused, ans
 orca://item/auth-sso-epic              plan, that work item, explanation panel open
 orca://plan?mode=deps&focus=auth-sso   plan in the dependency graph, that node selected (#171)
 orca://artifact/spec.md@v3?run=7f3a2c  the docked panel, that artifact, version 3
+orca://launch                          guided launch on Config, including setup/recovery
 orca://workflow/ai-sdlc                workflow viewer, no run overlaid
 orca://workflow/ai-sdlc?run=7f3a2c     workflow viewer with that run overlaid
 orca://agent/claude-local              agents, that agent's card

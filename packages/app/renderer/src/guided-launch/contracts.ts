@@ -119,6 +119,8 @@ export interface LaunchPorts {
   retain?: (review: LaunchReview) => Promise<LaunchIntent>;
   /** Canonical shared owner can retain and submit atomically; a lost handle remains ambiguous. */
   launch?: (review: LaunchReview) => Promise<{ intent: LaunchIntent; response: LaunchResult }>;
+  /** Lookup must match the complete frozen review in protected main storage; never infer by workflow. */
+  resolveIntent?: (review: LaunchReview) => Promise<LaunchIntent | undefined>;
   /** Must use the captured target, current authority and retained exact retry key/command. */
   submit?: (intent: LaunchIntent) => Promise<LaunchInitialResult>;
   recover(intent: LaunchIntent): Promise<LaunchResult>;

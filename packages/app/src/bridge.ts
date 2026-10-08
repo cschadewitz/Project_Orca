@@ -18,7 +18,14 @@ import type { DiagnosticsBridge } from "./diagnostics-contract.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 import type { MacUpdateCommand, MacUpdateView } from "./mac-update-contract.js";
-import type { PreflightParams, PreflightResult } from "./configuration-launch-contract.js";
+import type {
+  CheckoutEvidence,
+  LaunchReview,
+  LaunchResponse,
+  RetainedLaunch,
+  PreflightParams,
+  PreflightResult,
+} from "./configuration-launch-contract.js";
 
 import type { ConnectionState } from "@orca/design";
 import type {
@@ -200,11 +207,24 @@ export interface AlertActivation {
   item?: AlertItem;
 }
 
+import type { GuidedLaunchSnapshot, ProtectedGuidedLaunch } from "./guided-launch-bridge.js";
 export interface OrcaBridge {
   macUpdates?: {
     read(): MacUpdateView;
     act(command: MacUpdateCommand): Promise<BridgeResult<MacUpdateView>>;
     subscribe(listener: (state: MacUpdateView) => void): () => void;
+  };
+  guidedLaunch?: {
+    snapshot(): Promise<BridgeResult<GuidedLaunchSnapshot>>;
+    preflight(
+      params: PreflightParams,
+    ): Promise<BridgeResult<{ preflight: PreflightResult; checkout: CheckoutEvidence }>>;
+    submit(review: LaunchReview): Promise<BridgeResult<{ intent: RetainedLaunch; response: LaunchResponse }>>;
+    retained(): Promise<BridgeResult<readonly RetainedLaunch[]>>;
+    load(id: string): Promise<BridgeResult<ProtectedGuidedLaunch>>;
+    resolve(review: LaunchReview): Promise<BridgeResult<RetainedLaunch | undefined>>;
+    recover(params: { id: string; action: "inspect" | "reconcile" }): Promise<BridgeResult<LaunchResponse>>;
+    abandon(id: string): Promise<BridgeResult<{ abandoned: boolean }>>;
   };
   diagnostics?: DiagnosticsBridge;
   /** Coherent launch reads; absence is an ordinary unavailable app seam. */
