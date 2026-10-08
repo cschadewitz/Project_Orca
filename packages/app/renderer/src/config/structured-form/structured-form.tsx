@@ -298,7 +298,8 @@ function Scalar({
     const edits: EditIntent[] = [{ kind: "set", path, value }];
     if (form.access(edits).allowed) form.onEdit(edits);
   };
-  const readable = value === undefined || value === null ? "" : String(value);
+  const readable =
+    typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? String(value) : "";
   const editAccess = form.access([
     {
       kind: "set",

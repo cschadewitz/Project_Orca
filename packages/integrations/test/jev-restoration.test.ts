@@ -70,7 +70,7 @@ function runtime(executor: NodeExecutor, yaml = WORKFLOW, stores: Stores = memor
 }
 function fakeHttp() {
   const http = vi.fn<typeof fetch>(async (_url, init) => {
-    const request = JSON.parse(String(init?.body)) as { model: string };
+    const request = JSON.parse(typeof init?.body === "string" ? init.body : "") as { model: string };
     return Response.json({ model: request.model, answers: { accepted: { type: "noul", noul: 0.93 } } });
   });
   vi.stubGlobal("fetch", http);
@@ -122,7 +122,10 @@ describe("JEV restoration adapter", () => {
       WORKFLOW.replace("    type: custom:jev-eval", "    type: custom:jev-eval\n    model: jev-3.0.0"),
     ).startAndRun({ workflowId: "restore" });
     expect(
-      http.mock.calls.map(([url, init]) => [url, (JSON.parse(String(init?.body)) as { model: string }).model]),
+      http.mock.calls.map(([url, init]) => [
+        url,
+        (JSON.parse(typeof init?.body === "string" ? init.body : "") as { model: string }).model,
+      ]),
     ).toEqual([
       ["https://original.example/v1/systemone", "jev-1.13.0"],
       ["https://new.example/v1/systemone", "jev-2.0.0"],

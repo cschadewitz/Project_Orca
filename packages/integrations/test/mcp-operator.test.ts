@@ -310,7 +310,7 @@ describe("authenticated HTTP backend and transport", () => {
       const authorization = new Headers(init?.headers).get("authorization");
       const principalId = authorization === "Bearer alice" ? "alice" : authorization === "Bearer bob" ? "bob" : null;
       if (!principalId) return new Response(null, { status: 401 });
-      const call = JSON.parse(String(init?.body)) as { id: string; method: string };
+      const call = JSON.parse(typeof init?.body === "string" ? init.body : "") as { id: string; method: string };
       if (hold) {
         entered.add(principalId);
         if (entered.size === 2) release();

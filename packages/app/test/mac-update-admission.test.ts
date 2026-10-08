@@ -121,7 +121,10 @@ it.each(["lost", "pid", "instance", "proof"] as const)(
     const original = globalThis.fetch;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
       const response = await original(...args);
-      const input = JSON.parse(String(args[1]?.body)) as { method: string; params: { action?: string } };
+      const input = JSON.parse(typeof args[1]?.body === "string" ? args[1].body : "") as {
+        method: string;
+        params: { action?: string };
+      };
       if (input.method !== "maintenance.runtime" || input.params.action !== "prepare") return response;
       const envelope = (await response.json()) as {
         result: { target: { processId: number; instanceId: string }; proof: string };
@@ -148,7 +151,10 @@ it("retains the local target after a lost resume acknowledgement and never retri
   const resume = vi.fn();
   vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
     const response = await original(...args);
-    const input = JSON.parse(String(args[1]?.body)) as { method: string; params: { action?: string } };
+    const input = JSON.parse(typeof args[1]?.body === "string" ? args[1].body : "") as {
+      method: string;
+      params: { action?: string };
+    };
     if (input.method === "maintenance.runtime" && input.params.action === "resume") {
       resume();
       received.release();

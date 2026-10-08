@@ -152,7 +152,10 @@ export async function macUpdateRehearsal(
     let releaseFailure = false;
     const actualFetch = globalThis.fetch;
     const transport: typeof fetch = async (input, init) => {
-      const request = JSON.parse(String(init?.body)) as { method: string; params: { action?: string } };
+      const request = JSON.parse(typeof init?.body === "string" ? init.body : "") as {
+        method: string;
+        params: { action?: string };
+      };
       if (request.method !== "maintenance.runtime") return actualFetch(input, init);
       const action = request.params.action!;
       runtimeEvents.push({ action });
