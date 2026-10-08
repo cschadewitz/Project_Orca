@@ -18,11 +18,8 @@ export function configReferenceErrors(config: OrcaConfig): ConfigValidationError
         path: `agents[${index}].hostId`,
         message: "Selected host is not configured; retain the referenced host or explicitly update this agent.",
       });
-    if (agent.defaultModel && !agent.models?.some((model) => model.id === agent.defaultModel))
-      errors.push({
-        path: `agents[${index}].defaultModel`,
-        message: "Default model must be one of this agent's declared models.",
-      });
+    // Model availability is session-dependent. The runtime validates offered models,
+    // using configured declarations only when the session has no model option.
   });
   for (const [role, id] of Object.entries(config.roles))
     if (!agents.has(id))
