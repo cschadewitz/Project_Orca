@@ -1,8 +1,21 @@
 # Development
 
+For a read-only orientation, use the [documentation index](README.md),
+[architecture](ARCHITECTURE.md) and [current capability ledger](ROADMAP.md).
+No local setup or provider credentials are needed to review the source/evidence map.
+The commands below are contributor recipes, not native beta installation instructions.
+
+## Toolchain and command effects
+
+`package.json` supports Node >=22 and pins pnpm 12.4.2; `mise.toml` selects Node 24
+and pnpm 12. The 7 October cloud reconciliation used Node 24.21.0/pnpm 12.4.2.
+Use a frozen install for ordinary setup; do not regenerate the lockfile to make a
+documentation check pass. `pnpm install` runs the existing dependency policy/build
+hooks and may download Electron, so it is a dependency/setup action, not a prose check.
+
 ```bash
-mise install                 # Node 24 + pnpm 12 (any Node >= 22 works)
-pnpm install
+mise install                 # Node 24 + pnpm 12; installs tools
+pnpm install --frozen-lockfile
 pnpm run typecheck           # tsc --noEmit over every package + tests, then again over the
                               # renderer (packages/app/renderer/tsconfig.json) with JSX/DOM lib
                               # a plain Node package never needs
@@ -47,10 +60,46 @@ HTTP/WebSocket daemon and a synthetic workflow; the ACP case uses an in-process 
 and file-backed claims. Neither needs a provider credential. These cases do not prove
 Electron keychain restart or the full cross-client key lifecycle in #331.
 
-The two Node CI jobs run sequentially on the shared self-hosted runners. Every Vitest
+Current `ci.yml` routes its jobs to standard `ubuntu-24.04` hosted runners (#525).
+The two Node jobs still run sequentially. Every Vitest
 step uses at most two workers (one where Node reports at most two available CPUs),
 including the full suite and coverage. This limits contention for subprocess-heavy
 tests such as the demo while retaining their existing assertions and 60-second bounds.
+
+PRs and main pushes start CI; its classifier skips runtime jobs for prose-only
+changes. Files ending in `.js`, `.mjs`, `.cjs` or `.jsx` under `docs/` and prompt
+templates count as code; see the [classifier](../.github/workflows/ci.yml).
+The shadow selector is advisory and cannot replace the full checks; #520's reporting
+consumer remains a separate unmerged slice. Desktop packaging, App smoke/type proof
+and native UI projects are manual/reusable workflows, not automatic PR proof. Their
+Linux jobs still include homelab routing; inspect the actual workflow before dispatch.
+The owner requires a fresh CPU/RAM/load check before any new homelab job. This
+documentation audit dispatches none. [Releasing](RELEASING.md) and
+[shadow selection](ci-shadow-selection.md) record release/parity/activation limits.
+
+## Documentation-only review
+
+For a prose-only change, inspect the final path diff, use `git diff --check`, and
+validate relative files/fragments, command names/flags and source claims in the
+changed documents. `.prettierignore` excludes Markdown and frozen `Current_State/`;
+a Prettier success does not validate prose. Check UTF-8, LF, final newline,
+trailing whitespace and balanced fences separately. Keep dated recipes and their
+source pins distinct from current instructions. The
+[7 October audit](reviews/2026-10-07-living-docs.md) records the broader inventory
+and checks used for the current reconciliation.
+
+Run runtime checks when executable docs, templates or behavior change, or when a
+specific unresolved concern requires them. A prose correction does not require
+duplicating a broad suite or dispatching platform workflows. Report checks actually
+run and jobs skipped; the PR template's general checklist is not proof of execution.
+
+`format` and `lint:fix` write files; `design:build`/`design:fonts` generate assets.
+`demo`, `serve`, app start/dev/smoke, agent ping and real-agent run/submit launch
+processes and can write workspace/store data. `answer`, resume/cancel, claims release,
+leases break, config apply and credential commands mutate operator state. Release,
+service, feed and signing recipes affect external installations. Review their exact
+target and authorization before using them; check command syntax without executing
+live/provider/host steps for a documentation review.
 
 ### Desktop workflow bundle probe
 
@@ -354,8 +403,9 @@ job summary, and uploads `coverage/` as an artifact — including when the thres
 fail, which is when the numbers are worth reading.
 
 CI skips the whole typecheck/lint/test/build matrix when a push or PR changes only
-documentation: `docs/**` and any Markdown outside `templates/` (the prompt templates are
-Markdown but the engine loads them, so they count as code). A small `changes` job diffs
+documentation: `docs/**` except files ending in `.js`, `.mjs`, `.cjs` or `.jsx`, and
+any Markdown outside `templates/` (the prompt templates are Markdown but the engine
+loads them, so they count as code). A small `changes` job diffs
 against the merge base and gates the matrix with a job-level `if`, so a docs-only PR still
 shows a green check rather than none — see the comments in `.github/workflows/ci.yml`.
 
@@ -485,11 +535,13 @@ replaced the app's placeholder surface glyphs with designed ones, changing `#typ
 Windows proof passes at the v0.5.2 implementation checkout; Linux and macOS still require
 their own runner verdicts. See "Screenshot baselines" below for the review procedure.
 
-Run it with `pnpm run build && pnpm run app:smoke`; on a headless box,
-`xvfb-run -a pnpm run app:smoke`, and in a container without unprivileged user namespaces
-also set `ORCA_SMOKE_NO_SANDBOX=1`. That is the *OS* sandbox and is unrelated to
-`webPreferences.sandbox: true`, which stays on everywhere and is one of the things the test
-checks.
+Run it with `pnpm run build && pnpm run app:smoke`; on a headless Linux box,
+use `xvfb-run -a pnpm run app:smoke`. Linux needs `xvfb-run` and unprivileged user
+namespaces for Chromium's OS sandbox, as checked by the
+[App smoke workflow](../.github/workflows/app-smoke.yml). If that prerequisite is
+unavailable, report the blocker or use a suitable sandbox-preserving environment.
+Keep the OS sandbox enabled. The separate `webPreferences.sandbox: true` renderer
+setting also stays enabled and is checked by the test.
 
 The audit needs a workspace `orca demo` does not leave behind — it runs the program to
 completion, so there is no gate waiting, no failed run and one host, and three of the

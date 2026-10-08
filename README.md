@@ -18,6 +18,13 @@ Kepler, Zed or any ACP client can drive it like a single agent (proxy mode).
 T3 Code is *not* an ACP client today, so neither direction of the T3 Code
 integration works yet — it is groundwork (see `docs/INTEGRATIONS.md`).
 
+For an observing developer, start with the [documentation index](docs/README.md),
+[architecture](docs/ARCHITECTURE.md) and [capability ledger](docs/ROADMAP.md).
+The [7 October reconciliation](docs/reviews/2026-10-07-living-docs.md) records the
+source pin, evidence classes and remaining acceptance. Reading these needs no
+provider credential or running environment. Repository access is for insight;
+it does not require a collaborator to install ORCA or make code changes.
+
 ```
                     ┌──────────────────────────── ORCA ─────────────────────────────┐
   Request ───────▶  │ program workflow: decompose → plan (deps, risks, decisions)    │
@@ -34,8 +41,8 @@ integration works yet — it is groundwork (see `docs/INTEGRATIONS.md`).
 ## Quick start
 
 ```bash
-mise install            # Node 24 + pnpm 12 (any Node >= 22 works)
-pnpm install
+mise install            # Node 24 + pnpm 12; Node 22 is the supported floor
+pnpm install --frozen-lockfile
 pnpm test               # unit + end-to-end tests (scripted ACP agent, no LLM needed)
 pnpm run orca validate --mermaid        # validate + draw the shipped workflows
 pnpm run demo --dir /tmp/orca-demo      # full program run with scripted agents; prints the run tree (without --dir/--keep the temp workspace is removed afterwards)
@@ -48,11 +55,15 @@ runs can be driven from there:
 
 ```bash
 pnpm run orca --config /tmp/orca-demo/orca.config.yaml run ai-sdlc --var 'workItem={"slug":"x","title":"X","description":"Implement X"}'
-pnpm run orca --config /tmp/orca-demo/orca.config.yaml runs        # runs, status <runId>, events <runId>
-pnpm run orca answer <requestId> approve   # when a run pauses at a human gate (default humanInput mode)
-pnpm run orca claims                       # who owns which work item; `claims release <id>` frees a dead run's
-pnpm run orca leases                       # who is interpreting which run; `leases break <runId>` frees a dead one's
+pnpm run orca --config /tmp/orca-demo/orca.config.yaml runs
+pnpm run orca --config /tmp/orca-demo/orca.config.yaml claims
+pnpm run orca --config /tmp/orca-demo/orca.config.yaml leases
 ```
+
+These commands create/use a disposable scripted workspace. Choose a new `--dir`;
+the demo changes files and runs agents there. Gate answers, claim release and lease
+break are operator mutations; inspect the exact workspace and owner before using
+them. [Development](docs/DEVELOPMENT.md) separates checks from runtime and host actions.
 
 A run's selections are flags, not config edits: `--agent <role>=<agentId>` and
 `--model <agentId>=<modelId>` (both repeatable; a bare `--model <modelId>` when the run uses
@@ -85,9 +96,20 @@ where the grants live) and **Config** (`orca.config.yaml` as a form over the
 schema the daemon describes, beside the raw file, with the permission sidecar as
 its second document). Every write the daemon serves is in the command palette —
 answer, cancel, resume, start a run, waive, decide, reopen, update a risk,
-release a claim. Saved main configuration takes effect on the **next** `orca serve`; permission
-sidecars are reread on each agent permission ask. This does not preserve a live agent
-session across a parked gate (#237).
+release a claim. Saving and activating are separate: [config apply](docs/configuration-generations.md)
+uses exact revision/generation guards; reloadable roles, program defaults and assets
+affect new launches, while agent/host/provider changes require restart. Permission
+sidecars are reread on each agent permission ask. [Live permission callbacks](docs/live-input-continuity.md)
+retain the original callback only while its owning process/session/turn and lease remain
+valid; durable workflow gates park and resume separately. No automatic session recovery
+across daemon restart is promised.
+
+`orca serve` defaults to authenticated token mode. The source app can use
+`ORCA_DAEMON_TOKEN_FILE` for that workspace; [daemon connections](docs/daemon-connection.md)
+explain endpoint precedence, current authority and target/draft isolation. Remote
+connections require explicit credentials and HTTPS. The [inbound MCP operator](docs/mcp-operator.md)
+lets an authorized assistant inspect, preflight and operate supported work through the
+same daemon services; it is distinct from MCP servers offered to downstream agents.
 
 To run **inside Kepler / Zed / any ACP client**, register `orca acp` as an agent
 command; prompts sent to it become Requests and progress streams back as ACP
@@ -117,6 +139,7 @@ crash is picked up with `orca resume <runId>`.
 | `packages/app` | The Electron desktop app: `tsc`-built main and preload, a React renderer bundled by Vite. Imports only `protocol` and `design`; everything it knows about ORCA comes over the wire from a daemon. |
 | `packages/design` | The design system as code: token sources (`tokens.json`, `semantics.json`), the generator, the generated `css/tokens.css` and `src/tokens.ts`, the CSS component layer, and the contrast tests. |
 | `packages/testing` | A deterministic scripted ACP agent used by tests and the demo. |
+| `packages/maintenance-mcp` | Independent read-only maintenance contract and refusal-only preparation; it is not an activated host-management service. |
 | `workflows/` | Shipped workflow definitions: `ai-sdlc.yaml`, `program.yaml`, `plan-resume.yaml`. |
 | `templates/` | Prompt templates per SDLC stage and program step (decompose, assess‑risks, decide, summary). |
 | `docs/` | Architecture, data model, planning, workflow authoring, integrations, extensibility, ADRs. `docs/design/` is the desktop app's brand book, UI rules and surface specs. |
@@ -136,9 +159,11 @@ templates, the long‑term planning layer (dependencies across requests, risk ma
 matrices, explainable scheduling) and the CLI are implemented and tested end‑to‑end against a
 real ACP subprocess.
 
-`orca serve` (protocol 1.8) is a writer, not a reader: it answers the run, workflow, config
-and plan reads, drives runs, edits the configuration and the permission sidecar, and pushes
-ten notifications over `WS /socket`; `--read-only` omits run/config/plan write methods from the handshake so
+Current `main` uses **protocol 2.0** and **store epoch `operator-journals-v4`**;
+the root package/release version remains **0.6.0**. Version equality does not prove that
+a deployed binary contains current main. Upgrade protocol clients and daemon together.
+`orca serve` answers authorized run, workflow, config and plan reads, drives runs,
+edits configuration and pushes notifications over `WS /socket`; `--read-only` omits run/config/plan write methods from the handshake so
 a client can hide unavailable controls (ADR 0008). Supervisor maintenance admission is
 separate and remains available in read-only mode. The Electron
 app is the configuration and monitoring surface over it — five surfaces, all with content,
@@ -147,8 +172,13 @@ under a file lock (#196); this is not a
 transaction across plan documents and their journal, nor cross-process push observation.
 
 See the [current capability ledger and roadmap](docs/ROADMAP.md) for implemented behavior,
-limitations and issue dependencies. Agent/model selection and all five Plan modes shipped
-in v0.6.0. Configuration activation, session continuity, general daemon authentication,
-workflow editing, T3 Code's WebSocket transport and capacity-aware scheduling remain planned.
+limitations and issue owners. Authenticated HTTP/WS, typed inputs, generation-bound
+admission, durable retries, live permission continuity, protected human revisions and
+production MCP composition are implemented on main. Their remaining actual-client,
+deployment and native acceptance is recorded separately. Structured collection editing,
+guided app launch, workflow editing, T3 Code transport and capacity-aware scheduling remain
+follow-ups. Windows NSIS and managed Debian update mechanisms exist; main has no Mac
+update driver. Signed Apple Silicon delivery, native N-to-N+1 recovery and physical
+beta journeys remain gates, and can progress alongside MCP acceptance.
 The [historical architecture review](Current_State/README.md) preserves an earlier snapshot;
 its [dated reconciliation](Current_State/addenda/2026-10-01-main-reconciliation.md) maps the findings to current code.
