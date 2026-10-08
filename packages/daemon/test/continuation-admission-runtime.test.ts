@@ -1,3 +1,4 @@
+import { RuntimeActivity } from "../src/runtime-activity.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,7 +33,7 @@ const faults = {
   limit: () => new OrcaError("RETRY_LIMIT", "limit"),
 };
 /** Real file stores, registered claims, generation capture and interpreter. Only credential runtime is a labelled fixture. */
-async function fixture() {
+async function fixture(runtimeActivity?: RuntimeActivity) {
   const dir = await mkdtemp(join(tmpdir(), "orca-continuation-runtime-"));
   dirs.push(dir);
   const stores = fileStores(dir);
@@ -121,6 +122,7 @@ edges:
   const boot = (defaultScheduler = false, orchestrator = orc) => {
     const retries = new FileRetryClaimStore({ storeDir: dir, execution: stores.execution, faults });
     return new ContinuationAdmissionModel({
+      runtimeActivity,
       claims: new RegisteredRetryClaims(retries, faults),
       orchestrator,
       locators: new FileContinuationLocatorStore({ storeDir: dir, execution: stores.execution, retries }),
@@ -134,6 +136,7 @@ edges:
           }),
     });
   };
+  if (runtimeActivity) orc.runtimeActivity = runtimeActivity;
   const model = boot();
   const token = await model.expectedBoundary(runId, access);
   if (!token) throw new Error("missing boundary");
@@ -810,4 +813,28 @@ it("uses terminal history when the execution wrapper rejects after completion", 
   expect((await f.orc.getState(f.runId)).run.status).toBe("completed");
   expect(await f.model.inspect(receipt.continuationId, f.access)).toMatchObject({ state: "settled" });
   expect(f.effects).toHaveBeenCalledTimes(1);
+});
+
+it("holds runtime activity from queued continuation admission through detached settlement", async () => {
+  const activity = new RuntimeActivity();
+  const f = await fixture(activity);
+  activity.bind(
+    () => ({ available: true, active: f.orc.attachedExecutionCount ? ["execution"] : [] }),
+    () => false,
+  );
+  const receipt = await f.admit();
+  expect(receipt.state).toBe("accepted");
+  expect(activity.prepare("owner")).toEqual({ held: false, active: ["continuation"] });
+  f.dispatch();
+  try {
+    await f.entered.wait;
+    expect(activity.prepare("owner").held).toBe(false);
+    expect(activity.snapshot().active).toEqual(expect.arrayContaining(["continuation", "execution"]));
+  } finally {
+    f.finish.release();
+    await f.model.drain();
+  }
+  expect(activity.prepare("owner")).toEqual({ held: true, active: [] });
+  expect(() => activity.enter("continuation")).toThrow("closed");
+  activity.resume("owner");
 });

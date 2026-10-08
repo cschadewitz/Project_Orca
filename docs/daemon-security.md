@@ -214,6 +214,7 @@ that the two match. A method that is missing from the table is refused with
 | `subscribe` | any authenticated principal | a run-scoped stream needs `runs.read` and the run; each notification is checked separately | — |
 | `unsubscribe` | any authenticated principal | only the caller's own connection's subscriptions | — |
 | `maintenance` | `daemon.maintenance` | workspace-wide | mutation |
+| `maintenance.runtime` | `daemon.maintenance` | exact workspace/instance/PID | mutation |
 
 `hello` is not a substitute for per-resource authorization. It reports which methods a
 principal may call, but each call is still checked against the specific resource it names.
