@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "graphVersion": 1,
-  "reviewedCommit": "7f442836cb1a013cf868daf19fc97507353b729e",
-  "reviewedInventoryHash": "29aae59456aec50749a82113af042041271e146c54c9fb3f8492e27bd66df5f9",
+  "reviewedCommit": "fd336c55000a8554bd5741bd8518c27df2ed2649",
+  "reviewedInventoryHash": "47843eb5631d9f00944ce1446b5edb2b4312eb48aa022ecf634cf076e3782c54",
   "coverage": "Frozen Git inventory and conservative app-domain consumers cover only the named renderer presentation island. Static import edges outside it are a lower bound, not whole-repository proof.",
   "prosePaths": ["docs/ci-shadow-selection.md"],
   "islands": [
