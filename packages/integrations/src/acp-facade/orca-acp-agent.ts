@@ -28,6 +28,7 @@ import type { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { stdioAcpStream } from "@orca/agents";
 import {
+  admissionRetryFaults,
   isOrcaError,
   newId,
   type OrcaEvent,
@@ -169,7 +170,17 @@ export class OrcaAcpAgent {
         const s = this.sessions.get(ctx.params.sessionId);
         if (s?.active) await this.opts.orchestrator.cancel(s.active.runId, "cancelled by client");
       })
-      .onRequest(acp.methods.agent.session.prompt, (ctx) => this.prompt(ctx));
+      .onRequest(acp.methods.agent.session.prompt, async (ctx) => {
+        try {
+          return await this.prompt(ctx);
+        } catch (error) {
+          if (!isOrcaError(error, "RETRY_CONFLICT")) throw error;
+          // The SDK otherwise keeps only Error.message. Preserve the domain code
+          // with the shared safe reason, never the thrown message/details or key.
+          const conflict = admissionRetryFaults.conflict();
+          throw acp.RequestError.internalError({ code: conflict.code, details: conflict.message });
+        }
+      });
   }
 
   private initializeResponse(): acp.InitializeResponse {

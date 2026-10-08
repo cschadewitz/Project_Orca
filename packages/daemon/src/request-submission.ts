@@ -1,4 +1,5 @@
 /** Request adapter. Method registration and transport pre-validation authorization are shared wiring. */
+import type { RuntimeActivity } from "./runtime-activity.js";
 import type { RetryOptions, RetryResult } from "../../core/src/model/admission-retry.js";
 import {
   OrcaError,
@@ -54,8 +55,16 @@ export function submissionAuthority(opts: {
 }
 
 export class RequestSubmissionModel {
+  get runtimeActivity() {
+    return this.opts.runtimeActivity;
+  }
+  get executionOrchestrator() {
+    return this.opts.orchestrator;
+  }
   constructor(
     private readonly opts: {
+      runtimeActivity?: RuntimeActivity | undefined;
+      orchestrator?: import("@orca/engine").Orchestrator | undefined;
       service: SubmissionService & {
         submit(
           command: SubmissionCommand,
@@ -124,6 +133,7 @@ export class RequestSubmissionModel {
       // and reconcile the admission to resume an accepted root whose worker never started.
       // Recovery carries the caller's verified resume authority; the original sealed actor
       // may name a bootstrap credential invalidated by the daemon restart.
+      const release = this.opts.runtimeActivity?.enter("dispatch");
       setImmediate(() => {
         void executeAcceptedSubmission(
           this.opts.service,
@@ -134,7 +144,9 @@ export class RequestSubmissionModel {
             if (!this.opts.shouldDispatch || (await this.opts.shouldDispatch(runId)))
               await this.opts.execute(runId, executionAuthority);
           },
-        ).catch(() => this.opts.executionFailed(result.runId));
+        )
+          .catch(() => this.opts.executionFailed(result.runId))
+          .finally(() => release?.());
       });
     }
     return result;

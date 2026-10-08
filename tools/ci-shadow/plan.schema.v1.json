@@ -45,7 +45,7 @@
       "additionalProperties": false,
       "properties": {
         "version": {
-          "const": "1.1.1"
+          "const": "1.2.0"
         },
         "hash": {
           "type": "string",
@@ -90,7 +90,7 @@
             "type": "boolean"
           },
           "scope": {
-            "const": "reviewed-islands-only"
+            "enum": ["reviewed-islands-only", "conservative-package-domains"]
           },
           "discoveredVitestFiles": {
             "type": "array",
