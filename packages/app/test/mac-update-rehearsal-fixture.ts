@@ -1,4 +1,4 @@
-/** Test-only pre-restart composition; real updater/runtime components, disposable state and OS ports. */
+/** Test-only guarded composition, optionally bound to the reviewed fresh-process restart fixture. */
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -19,6 +19,7 @@ import { MacUpdateWindows } from "../src/main/mac-update-windows.js";
 import { MacUpdateGuards } from "../src/main/mac-update-guards.js";
 import { MacUpdates, type MacUpdatePorts, type MacUpdateTarget } from "../src/main/mac-updates.js";
 import { MacCandidateSession } from "../src/main/mac-update-candidates.js";
+import type { restartFixture } from "./mac-restart-fixture.js";
 import {
   downloadMacCandidate,
   type MacCandidateBinding,
@@ -84,17 +85,28 @@ export interface MacUpdateRehearsal extends Pick<
   afterPrepare(hook: () => Promise<void>): void;
   failRelease(): void;
   runtimeEvents: { action: string; outcome?: string }[];
+  admissionTokens: string[];
+  ownerHeld(): boolean;
   present(): string;
   discard(): Promise<void>;
   statePreserved(): Promise<boolean>;
   downloadEntries(): Promise<string[]>;
 }
-export async function macUpdateRehearsal(): Promise<MacUpdateRehearsal> {
+type ProcessRehearsal = Omit<MacUpdateRehearsal, "runtime">;
+export function macUpdateRehearsal(): Promise<MacUpdateRehearsal>;
+export function macUpdateRehearsal(
+  processFixture: Awaited<ReturnType<typeof restartFixture>>,
+): Promise<ProcessRehearsal>;
+export async function macUpdateRehearsal(
+  processFixture?: Awaited<ReturnType<typeof restartFixture>>,
+): Promise<ProcessRehearsal> {
   const root = await mkdtemp(join(tmpdir(), "orca-mac-update-rehearsal-"));
-  const f = await runtimeMaintenanceFixture().catch(async (error: unknown) => {
-    await rm(root, { recursive: true, force: true });
-    throw error;
-  });
+  const f = await (processFixture ? Promise.resolve(undefined) : runtimeMaintenanceFixture()).catch(
+    async (error: unknown) => {
+      await rm(root, { recursive: true, force: true });
+      throw error;
+    },
+  );
   const releases: (() => void)[] = [];
   let workspace: Workspace | undefined;
   let restoreTransport: (() => void) | undefined;
@@ -109,25 +121,29 @@ export async function macUpdateRehearsal(): Promise<MacUpdateRehearsal> {
       await workspace?.close();
     } finally {
       try {
-        await f.close();
+        await f?.close();
       } finally {
         await rm(root, { recursive: true, force: true });
       }
     }
   };
   try {
+    const dir = processFixture?.workspace ?? f!.dir;
+    const identity = processFixture?.old.ready.target ?? f!.identity;
+    const url = processFixture?.old.ready.url ?? f!.daemon.url;
+    const pid = processFixture?.old.ready.target.processId ?? process.pid;
     const downloadRoot = join(root, "downloads");
     await mkdir(downloadRoot, { mode: 0o700 });
     const preserved = new Map<string, Buffer>([
-      [join(f.dir, "flow.yaml"), await readFile(join(f.dir, "flow.yaml"))],
+      [join(dir, "flow.yaml"), await readFile(join(dir, "flow.yaml"))],
       [join(root, "preferences.json"), Buffer.from('{"density":"compact"}\n')],
       [join(root, "draft.txt"), Buffer.from("Synthetic unsent user draft\n")],
-      [join(f.dir, ".orca", "rehearsal-protected-state"), Buffer.from("Synthetic retained state\n")],
+      [join(dir, ".orca", "rehearsal-protected-state"), Buffer.from("Synthetic retained state\n")],
     ]);
     for (const [path, bytes] of preserved) await writeFile(path, bytes, { mode: 0o600 });
-    const tokenFile = join(root, "owner.token");
+    const tokenFile = processFixture?.old.ready.tokenFile ?? join(root, "owner.token");
     // Only the existing fixture's ephemeral in-memory authentication. No host credentials.
-    await writeFile(tokenFile, f.owner.token, { mode: 0o600 });
+    if (f) await writeFile(tokenFile, f.owner.token, { mode: 0o600 });
     const stop = vi.fn(async () => {});
     const runtimeEvents: { action: string; outcome?: string }[] = [];
     let proofFault: ProofFault | undefined;
@@ -165,7 +181,7 @@ export async function macUpdateRehearsal(): Promise<MacUpdateRehearsal> {
     restoreTransport = () => transportSpy.mockRestore();
     workspace = new Workspace({
       findEntry: () => "disposable-in-process-rehearsal",
-      start: async () => ({ url: f.daemon.url, pid: process.pid, tokenFile, stop }),
+      start: async () => ({ url, pid, tokenFile, stop }),
       client: (url) =>
         new DaemonClient(url, transport, {
           requireAuthentication: true,
@@ -175,18 +191,22 @@ export async function macUpdateRehearsal(): Promise<MacUpdateRehearsal> {
       onSwitch: () => {},
       onSnapshot: () => {},
       onDaemonGone: () => {},
-      defaultUrl: f.daemon.url,
-      defaultPath: () => f.dir,
+      defaultUrl: url,
+      defaultPath: () => dir,
     });
     await workspace.connect();
     workspace.observeHello(workspace.client, {
-      identity: f.identity,
-      processId: process.pid,
+      identity,
+      processId: pid,
       protocol: PROTOCOL_VERSION,
       orcaVersion: "fixture",
       capabilities: [],
     });
-    const target = Object.freeze({ ...f.identity, epoch: workspace.connectionTarget.epoch });
+    const target = Object.freeze({
+      workspaceId: identity.workspaceId,
+      instanceId: identity.instanceId,
+      epoch: workspace.connectionTarget.epoch,
+    });
     const ipc = new EventEmitter();
     const all: BrowserWindow[] = [];
     const created = vi.fn();
@@ -278,22 +298,28 @@ export async function macUpdateRehearsal(): Promise<MacUpdateRehearsal> {
     const a = makeWindow(1);
     const b = makeWindow(2, false);
     const guards = new MacUpdateGuards(workspace, windows);
-    const manifest = readMacManifest(await readFile(new URL("delivery/native-mac-artifact.json", artifacts)));
+    const manifest = readMacManifest(
+      processFixture?.manifestBytes ?? (await readFile(new URL("delivery/native-mac-artifact.json", artifacts))),
+    );
     // Synthetic candidate-shaped data, identical to the reviewed candidate test approach.
     manifest.kind = "candidate";
     manifest.signing.teamId = "Q2FP9UY5T4";
-    const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+    const bytes = processFixture
+      ? Buffer.from(processFixture.manifestBytes)
+      : Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
     const binding: MacCandidateBinding = freezeMacMetadata({
       manifest,
       source: "https://delivery.invalid/rehearsal/",
-      candidate: {
+      candidate: processFixture?.candidate ?? {
         manifestSha256: sha256(bytes),
         channel: "synthetic-beta",
         compatibilityPlanId: "synthetic-compatibility",
         recoveryPlanId: "synthetic-recovery-reference",
       },
     });
-    const identityBytes = await readFile(new URL("ORCA.app/Contents/Resources/orca-build.json", artifacts));
+    const identityBytes = await readFile(
+      processFixture?.identityPath ?? new URL("ORCA.app/Contents/Resources/orca-build.json", artifacts),
+    );
     const files = new Map<string, Buffer>();
     for (const record of [...manifest.artifacts, ...manifest.evidence])
       files.set(record.path, await readFile(new URL(`delivery/${record.path}`, artifacts)));
@@ -356,17 +382,33 @@ export async function macUpdateRehearsal(): Promise<MacUpdateRehearsal> {
       return result.outcome === "verified" ? ("verified" as const) : ("failed" as const);
     });
     const prepareDrafts = vi.fn(() => guards.prepareDrafts());
+    const admissionTokens: string[] = [];
+    let admissionReady = false;
     const updates = new MacUpdates({
       download,
       prepareDrafts,
-      prepareAdmission: (target, token) => guards.prepareAdmission(target, token),
+      prepareAdmission: async (target, token) => {
+        admissionTokens.push(token);
+        const result = await guards.prepareAdmission(target, token);
+        admissionReady = result.outcome === "ready";
+        return result;
+      },
       revalidate,
       activate,
     });
     const session = new MacCandidateSession(ports);
     const result = {
-      call: f.call,
-      runtime: f.runtime,
+      call:
+        f?.call ??
+        (async (method: string, params: unknown = {}) => {
+          const response = await actualFetch(`${url}/rpc`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${await readFile(tokenFile, "utf8")}` },
+            body: JSON.stringify({ kind: "request", id: 1, method, params }),
+          });
+          return (await response.json()) as import("@orca/protocol").ResponseMessage;
+        }),
+      ...(f ? { runtime: f.runtime } : {}),
       close,
       workspace,
       target,
@@ -408,6 +450,14 @@ export async function macUpdateRehearsal(): Promise<MacUpdateRehearsal> {
         releaseFailure = true;
       },
       runtimeEvents,
+      admissionTokens,
+      ownerHeld: () =>
+        !closed &&
+        admissionReady &&
+        guards.draftsValid() &&
+        workspace!.connectionTarget.epoch === target.epoch &&
+        workspace!.connectionTarget.identity?.workspaceId === target.workspaceId &&
+        workspace!.connectionTarget.identity.instanceId === target.instanceId,
       present: () => {
         const id = updates.present(binding.candidate, target);
         if (!id) throw new Error("Rehearsal offer unavailable");

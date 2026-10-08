@@ -1,11 +1,16 @@
-/** Coherent pre-restart rehearsal; faults cross real consent, preload, window and runtime ownership. */
-import { readFile } from "node:fs/promises";
+/** Coherent guarded and closed-restart rehearsal; no native installation or admission reopening. */
+import { readFile, writeFile } from "node:fs/promises";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MacNativeInspection } from "../src/main/mac-candidate-download.js";
+import { RuntimeMaintenanceResultSchema, type RuntimeMaintenanceParams } from "@orca/protocol";
+import { z } from "zod";
+import { MacRestartVerification, MacUpdateOwnedStop, type MacRestartProcess } from "../src/main/mac-update-restart.js";
+import { restartFixture } from "./mac-restart-fixture.js";
 import { macUpdateRehearsal, barrier, type ProofFault } from "./mac-update-rehearsal-fixture.js";
 
 const fixtures: Awaited<ReturnType<typeof macUpdateRehearsal>>[] = [];
+const restartClosers: (() => Promise<void>)[] = [];
 async function fixture() {
   const f = await macUpdateRehearsal();
   fixtures.push(f);
@@ -13,18 +18,222 @@ async function fixture() {
 }
 afterEach(async () => {
   vi.useRealTimers();
-  for (const f of fixtures.splice(0).reverse()) {
-    try {
-      expect(f.activate).not.toHaveBeenCalled();
-      expect(f.stop).not.toHaveBeenCalled();
-      expect(await f.statePreserved()).toBe(true);
-      await f.discard();
-      expect(await f.downloadEntries()).toEqual([]);
-    } finally {
-      await f.close();
+  try {
+    for (const f of fixtures.splice(0).reverse()) {
+      try {
+        expect(f.activate).not.toHaveBeenCalled();
+        expect(f.stop).not.toHaveBeenCalled();
+        expect(await f.statePreserved()).toBe(true);
+        await f.discard();
+        expect(await f.downloadEntries()).toEqual([]);
+      } finally {
+        await f.close();
+      }
     }
+  } finally {
+    for (const close of restartClosers.splice(0).reverse()) await close();
   }
 });
+
+async function restartRehearsal(options: Parameters<typeof restartFixture>[0] = {}) {
+  const r = await restartFixture(options);
+  restartClosers.push(r.cleanup);
+  const f = await macUpdateRehearsal(r);
+  fixtures.push(f);
+  const approval = f.updates.approve(f.present());
+  await f.validated.promise;
+  expect(f.ownerHeld()).toBe(true);
+  expect(f.binding.candidate).toEqual(r.candidate);
+  expect(f.bytes).toEqual(r.manifestBytes);
+  expect(f.a.frozen()).toBe(true);
+  const check = () => f.ownerHeld() && r.ports.check();
+  const proof = vi.fn(async (target: RuntimeMaintenanceParams["target"], signal: AbortSignal) =>
+    r.old.client.call(
+      "maintenance.runtime",
+      {
+        action: "prepare",
+        token: f.admissionTokens.at(-1)!,
+        target,
+      },
+      RuntimeMaintenanceResultSchema,
+      false,
+      signal,
+      false,
+    ),
+  );
+  const stop = () => new MacUpdateOwnedStop(r.old.child.child, r.old.ready.target, { check, proof }, 10_000);
+  const start = vi.fn(r.ports.startClosed);
+  const verifier = () => new MacRestartVerification({ check, startClosed: start }, 10_000);
+  return {
+    r,
+    f,
+    proof,
+    stop,
+    start,
+    verifier,
+    finish: async () => {
+      f.finishValidation.release();
+      expect((await approval).phase).toBe("recovery-required");
+    },
+  };
+}
+const signal = () => new AbortController().signal;
+async function replacementStillClosed(r: Awaited<ReturnType<typeof restartFixture>>) {
+  const next = r.replacement();
+  if (!next) throw new Error("No owned replacement");
+  expect(next.ready.admissionClosedFromBootstrap).toBe(true);
+  expect(next.reopened).toBe(false);
+  await expect(
+    next.client.call("runs.start", { workflowId: "flow" }, z.unknown(), false, signal(), false),
+  ).rejects.toThrow("closed");
+}
+
+it("extends approved downloaded bytes and both real guards through one owned stop to a fresh verified-closed replacement", async () => {
+  const h = await restartRehearsal();
+  try {
+    const controller = h.stop();
+    expect(await readFile(`${h.f.owned[0]!.directory}/native-mac-artifact.json`)).toEqual(h.r.manifestBytes);
+    const peer = h.stop();
+    const [stopped, joined] = await Promise.all([controller.stop(signal()), peer.stop(signal())]);
+    expect(stopped.outcome).toBe("stopped");
+    if (stopped.outcome !== "stopped" || joined.outcome !== "stopped") throw new Error("Expected one clean owned stop");
+    expect(joined.receipt).toBe(stopped.receipt);
+    expect(h.proof).toHaveBeenCalledOnce();
+    expect(h.r.old.child.signals).toEqual(["SIGTERM"]);
+    expect(await h.r.old.child.closed).toEqual({ code: 0, signal: null });
+    const verifier = h.verifier();
+    const result = await verifier.verify(h.r.request(stopped.receipt), signal());
+    expect(result).toMatchObject({
+      outcome: "verified-closed",
+      startup: {
+        manifestSha256: h.f.binding.candidate.manifestSha256,
+        scope: "startup-only",
+        target: h.r.replacement()!.ready.target,
+      },
+    });
+    expect(h.r.replacement()!.ready.target.processId).not.toBe(stopped.receipt.target.processId);
+    expect(h.r.replacement()!.ready.target.instanceId).not.toBe(stopped.receipt.target.instanceId);
+    expect(h.r.replacement()!.ready.target.workspaceId).toBe(stopped.receipt.target.workspaceId);
+    await replacementStillClosed(h.r);
+    expect((await verifier.recheck(signal())).outcome).toBe("verified-closed");
+    await replacementStillClosed(h.r);
+    expect(await h.verifier().verify(h.r.request(stopped.receipt), signal())).toEqual({
+      outcome: "refused",
+      reason: "ownership",
+    });
+    expect(h.start).toHaveBeenCalledOnce();
+    expect(h.f.ownerHeld()).toBe(true);
+    expect(h.f.windows.active).toBe(true);
+    expect(h.f.runtimeEvents.map((event) => event.action)).toEqual(["prepare"]);
+  } finally {
+    await h.finish();
+  }
+});
+
+it("a replaced document refuses the integrated stop without signalling or releasing the authentic old fence", async () => {
+  const h = await restartRehearsal();
+  try {
+    h.f.a.replace();
+    expect(await h.stop().stop(signal())).toEqual({ outcome: "refused" });
+    expect(h.proof).not.toHaveBeenCalled();
+    expect(h.r.old.child.signals).toEqual([]);
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.f.windows.active).toBe(true);
+    await expect(
+      h.r.old.client.call("runs.start", { workflowId: "flow" }, z.unknown(), false, signal(), false),
+    ).rejects.toThrow("closed");
+  } finally {
+    await h.finish();
+  }
+});
+
+it("lost authentic stop proof seals cross-controller ownership while both composed guards stay held", async () => {
+  const h = await restartRehearsal();
+  try {
+    const original = h.proof.getMockImplementation()!;
+    h.proof.mockImplementationOnce(async (...args) => {
+      await original(...args);
+      throw new Error("Synthetic lost stop proof response");
+    });
+    const result = await h.stop().stop(signal());
+    expect(result).toEqual({ outcome: "unknown" });
+    expect(await h.stop().stop(signal())).toEqual(result);
+    expect(h.proof).toHaveBeenCalledOnce();
+    expect(h.r.old.child.signals).toEqual([]);
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.f.ownerHeld()).toBe(true);
+    await expect(
+      h.r.old.client.call("runs.start", { workflowId: "flow" }, z.unknown(), false, signal(), false),
+    ).rejects.toThrow("closed");
+  } finally {
+    await h.finish();
+  }
+});
+
+it("cancellation after the owned SIGTERM cannot mint a receipt or retry when the disposable old child stays alive", async () => {
+  const h = await restartRehearsal({ ignoreOldTerm: true });
+  try {
+    const abort = new AbortController();
+    const pending = h.stop().stop(abort.signal);
+    await h.r.old.child.signalled();
+    abort.abort();
+    expect(await pending).toEqual({ outcome: "unknown" });
+    expect(await h.stop().stop(signal())).toEqual({ outcome: "unknown" });
+    expect(h.r.old.child.child.exitCode).toBe(null);
+    expect(h.r.old.child.signals).toEqual(["SIGTERM"]);
+    expect(h.proof).toHaveBeenCalledOnce();
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.f.ownerHeld()).toBe(true);
+  } finally {
+    await h.finish();
+  }
+});
+
+it.each(["image", "identity", "lost-final-hello", "lost-launch"] as const)(
+  "the integrated replacement stays closed and never relaunches after %s failure",
+  async (fault) => {
+    const h = await restartRehearsal();
+    try {
+      const stopped = await h.stop().stop(signal());
+      if (stopped.outcome !== "stopped") throw new Error("Expected clean owned stop");
+      if (fault === "image") await writeFile(h.r.appPath, "Synthetic changed image");
+      const original = h.start.getMockImplementation()!;
+      let helloReads = 0;
+      h.start.mockImplementation(async (...args) => {
+        const launched = await original(...args);
+        if (fault === "lost-launch") throw new Error("Synthetic lost response after actual closed launch");
+        if (launched.outcome !== "started") return launched;
+        const managed = launched.process;
+        const process: MacRestartProcess = {
+          ...managed,
+          hello: async (signal) => {
+            const hello = (await managed.hello(signal)) as Record<string, unknown>;
+            helloReads++;
+            if (fault === "lost-final-hello" && helloReads === 2)
+              throw new Error("Synthetic lost final authenticated observation");
+            return fault === "identity" ? { ...hello, processId: Number(hello.processId) + 1 } : hello;
+          },
+        };
+        return { ...launched, process };
+      });
+      const verifier = h.verifier();
+      const result = await verifier.verify(h.r.request(stopped.receipt), signal());
+      expect(result).toEqual(
+        fault === "image" || fault === "identity" ? { outcome: "refused", reason: fault } : { outcome: "unknown" },
+      );
+      expect(await verifier.recheck(signal())).toEqual(result);
+      expect(await verifier.verify(h.r.request(stopped.receipt), signal())).toEqual(result);
+      expect(h.start).toHaveBeenCalledOnce();
+      if (fault === "lost-final-hello") expect(helloReads).toBe(2);
+      await replacementStillClosed(h.r);
+      expect(h.f.ownerHeld()).toBe(true);
+      expect(h.f.windows.active).toBe(true);
+      expect(h.f.runtimeEvents.map((event) => event.action)).toEqual(["prepare"]);
+    } finally {
+      await h.finish();
+    }
+  },
+);
 
 it("waits for a real pending live callback before reaching pre-restart validation without cancelling it", async () => {
   const f = await fixture();

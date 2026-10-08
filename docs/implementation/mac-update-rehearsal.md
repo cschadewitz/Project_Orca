@@ -1,19 +1,24 @@
-# Isolated Mac updater pre-restart rehearsal (#387)
+# Isolated guarded and closed-restart Mac updater rehearsal (#387)
 
-This dependent test-only slice starts at stable reviewed #537
+The initial test-only slice started at stable reviewed #537
 `78af5c8683b46e88d5230c0b5a47fc9988ecd836`. It does not refresh, rebase or change
 #530 (`16da467644ed2c9c9ab9ce0effcd22604b6dbda6`), #533
 (`b56bf3bcb3bc04b1eff554a405c4bb67c76ea56e`), #535
 (`03b4ea7572f0a355f14022d2f703ca40d6c2fab5`) or #536
 (`a53cb4dda168399f700ea586257533504fb0e097`). The supplied main reference is
 `983b824adba26b0d26cfca747e5c303d03a397c6`; it is not merged here.
+The focused restart extension incorporates independently cleared #539 at
+`e41d93d5e7cea26126d2446243a6672d1b04e4eb` (review5450811477) through prerequisite
+merge `6f3ced9fad705d54fafd2923ac2544d815cb6957`. Its six source/test/fixture/handoff/
+changelog files remain byte-for-byte unchanged. The dependent PR is retargeted to
+that reviewed restart branch, so its authored diff remains exactly four new files.
 Read the [coordinator](mac-updater-coordinator.md), [guards](mac-update-guards.md),
 [window binding](mac-update-window-binding.md), [runtime admission](mac-update-runtime-admission.md)
 and [candidate](mac-update-candidates.md) handoffs alongside their actual source.
 
 Only two new app test/fixture files, this handoff and a changelog fragment are owned
 by this slice. Existing production files, exports, manifests, lockfile, other workers'
-tests and fixtures, restart implementation and recovery inventory/contracts are untouched.
+tests and fixtures, the reviewed restart files and recovery inventory/contracts are untouched.
 
 ## Composition and evidence
 
@@ -39,7 +44,7 @@ reserved and new window requests remain deferred. Revalidation deliberately retu
 `recovery-required` with both guards retained. This is an exercised pre-restart
 checkpoint, not an assertion of complete update readiness.
 
-[The 16 cases](../../packages/app/test/mac-update-rehearsal.test.ts) also cover:
+[The 16 pre-restart cases](../../packages/app/test/mac-update-rehearsal.test.ts) also cover:
 
 - An actual pending live callback plus a synchronous dispatch reservation prevents
   readiness. The updater never cancels or answers the callback; its disposable source
@@ -69,10 +74,67 @@ checkpoint, not an assertion of complete update readiness.
 
 Every case checks that activation and managed-process stop were not called, then
 compares synthetic retained state, draft, preferences and workflow bytes before
-removing owned downloads. Cleanup closes only the disposable in-process daemon and
-removes its temporary roots; it never resumes admission or stops/kills a host app.
+removing owned downloads. Cleanup closes only the owned disposable in-process or fresh-child daemon
+and removes its temporary roots; it never resumes admission or stops/kills a host app.
 The preserved sentinel files are cleanup evidence, not a complete protected-state
 inventory, snapshot consistency or recovery proof.
+
+## Reviewed restart extension
+
+The existing four-file scope now also consumes the real `MacUpdateOwnedStop` and
+`MacRestartVerification`, using the unchanged
+[restartFixture](../../packages/app/test/mac-restart-fixture.ts) and its compiled
+[fresh-process source daemon](../../packages/app/test/fixtures/mac-restart-daemon.ts).
+No new fixture path or competing restart API is needed. The optional process fixture
+composition routes the same candidate/download/coordinator/window/admission path to
+that fixture's actual old child, authenticated token file and canonical workspace.
+The manifest bytes and candidate references are exactly the restart fixture's,
+including its inspected/emitted daemon hash, and the owned downloaded manifest is
+compared byte-for-byte with them.
+
+After actual approval/download and both real leases reach the revalidation checkpoint,
+a surviving test supervisor invokes the reviewed stop with the captured child and
+fresh runtime-v1 proof using the coordinator's actual admission owner token. Local
+ownership checks include the held draft boundary, unchanged target/epoch, positive
+lease acquisition and the fixture's existing reservation. Concurrent stop controllers
+share one proof, one SIGTERM, one clean close and the same private receipt.
+The reviewed verifier consumes that receipt once and starts a fresh child from the
+exact resource daemon bytes. Initial/final image, authenticated hello, store and
+bootstrap-fence observations must match the same approved candidate/workspace while
+PID and boot UUID differ from the stopped target.
+
+The positive terminal restart result is **`verified-closed`, `scope: startup-only`**.
+Actual RPC admission is refused immediately after verification and after fresh
+recheck; receipt replay cannot start another process. No fixture `simulateReopen`
+call is used. Native activation and full-state recovery are still absent: the
+coordinator's unavailable revalidation gate is settled as unknown during test
+completion, leaving its conservative recovery-required state and guard ownership.
+A positive restart receipt is never fed back as a valid whole-state/native update
+receipt. This tests coherent component composition under a surviving supervisor;
+production coordinator activation, UI/app replacement and reconnect wiring remain
+separate missing seams.
+
+Eight additional integration schedules cover:
+
+- The positive shared-stop/one-receipt/fresh-identity/verified-closed lifecycle.
+- Document replacement after admission makes the stop refuse without signalling;
+  the old authentic fence stays held.
+- Lost actual same-owner stop proof seals all controllers without a signal or launch.
+- Cancellation after one SIGTERM to an ignoring disposable child cannot mint a receipt,
+  retry or force-kill; bounded owned IPC cleanup later closes only that fixture child.
+- Changed synthetic app bytes and mismatching actual hello PID produce known startup
+  refusals. Lost final authenticated hello and a lost response after actual closed
+  launch produce unknown. Recheck/verify cannot return cached success or relaunch,
+  and the replacement remains closed in every case.
+
+The restart fixture's whole-app comparison, sealed identity/resource witnesses and
+store-epoch/work classification are synthetic supported-owner ports, as documented
+in [its handoff](mac-update-restart.md). They are not a signed Mac image, native
+acceptance, a production epoch reader or full-state restoration. Actual startup
+uses the existing legacy initial-maintenance token before server admission; runtime-v1
+adoption and production fence acknowledgements are still missing source seams.
+Only these owned disposable children receive SIGTERM/cleanup IPC. No installed app,
+host daemon, host credential, provider, admission reopening or recovery contract is touched.
 
 ## Visible integration gap and mocked boundaries
 
@@ -150,19 +212,19 @@ PATH=/workspace/.orca-tools/node_modules/.bin:/opt/codex/cua_node/bin:$PATH \
 git diff --check
 ```
 
-Final local evidence: **16 rehearsal cases pass, zero skips**, full root/renderer
+Final local evidence: **24 combined rehearsal cases pass, zero skips**, full root/renderer
 TypeScript, full ESLint/CSS token check, repository format check and whitespace pass.
 No redundant full suite, coverage or renderer/native build was run. No manual CI
 workflow was dispatched or polled; the parent owns independent exact-head review and CI.
 The dependent PR records its exact published head and base.
 
-Restart remains **pending**. Parent supplied draft #539 at
-`e3e666ec72a0558cfb67296927871f97c178198f`, based on the same #537 head. Parent later
-reported an independent P2 finding in cross-controller stop/receipt ownership;
-the original author owns the correction. That stop behavior is not accepted here.
-The draft is not imported, extended or counted as a
-restart pass. Parent will supply the exact reviewed restart head/contract for one
-focused extension. Recovery inventory/manifest/validation remains separately owned.
+The stale-ACK correction was published separately at
+`c32ee15a2963a9b8171d39776751e2f4d3a7a56a` before importing/consuming reviewed restart.
+The PR records the later extension commit and exact dependency head so the reviewer
+can assess them separately. The original #539 cross-controller stop/receipt P2 was
+corrected and cleared at `e41d93d`; only that accepted source is consumed here.
+Independent review of this combined rehearsal remains a parent-owned gate. Recovery
+inventory/manifest/validation remains separately owned.
 
 Production offers, approval IPC, staging, installation and recovery remain disabled.
 Signed physical Apple Silicon N→N+1, ordinary-exit/relaunch behavior, native engine
