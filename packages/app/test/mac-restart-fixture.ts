@@ -1,12 +1,11 @@
 /** Synthetic app resources and fresh compiled source children; no installed image, signature, recovery or provider. */
 import { fork, type ChildProcess } from "node:child_process";
 import { readFile, writeFile, mkdtemp, mkdir, rm, realpath } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { buildSync } from "esbuild";
+import { compiledSourceFixture } from "./compiled-source-fixture.js";
 import {
   HelloResultSchema,
   MaintenanceResultSchema,
@@ -25,6 +24,13 @@ import {
   type MacRestartPorts,
 } from "../src/main/mac-update-restart.js";
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
+const compiledDaemon = compiledSourceFixture(repo, "packages/app/test/fixtures/mac-restart-daemon.ts", [
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "tsconfig.json",
+  "tsconfig.base.json",
+]);
 type RuntimeMaintenanceTarget = RuntimeMaintenanceParams["target"];
 const fixture = new URL("../../../tools/deploy/tests/native-mac/fixtures/valid/", import.meta.url);
 interface Ready {
@@ -120,32 +126,9 @@ export async function restartFixture(options: { ignoreOldTerm?: boolean } = {}) 
       "id: flow\nname: Flow\nversion: '1'\nstart: s\nnodes: {s: {type: start}, e: {type: end}}\nedges: [{from: s, to: e}]\n",
     );
     const entry = join(root, "daemon-source.mjs");
-    const result = buildSync({
-      absWorkingDir: repo,
-      entryPoints: ["packages/app/test/fixtures/mac-restart-daemon.ts"],
-      outfile: entry,
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      target: `node${process.versions.node}`,
-      tsconfig: join(repo, "tsconfig.json"),
-      banner: {
-        js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
-      },
-      external: ["bufferutil", "utf-8-validate"],
-      metafile: true,
-      logLevel: "silent",
-    });
-    const controls = [
-      "package.json",
-      "pnpm-lock.yaml",
-      "pnpm-workspace.yaml",
-      "tsconfig.json",
-      "tsconfig.base.json",
-      ...Object.keys(result.metafile.inputs),
-    ];
-    const inputs = new Map(controls.map((path) => [resolve(repo, path), sha256(readFileSync(resolve(repo, path)))]));
-    const daemonBytes = await readFile(entry);
+    const compiled = compiledDaemon();
+    const daemonBytes = Buffer.from(compiled.source);
+    await writeFile(entry, daemonBytes);
     const manifest = readMacManifest(await readFile(new URL("delivery/native-mac-artifact.json", fixture)));
     manifest.kind = "candidate";
     manifest.signing.teamId = "Q2FP9UY5T4";
@@ -176,11 +159,10 @@ export async function restartFixture(options: { ignoreOldTerm?: boolean } = {}) 
     await writeFile(storeEpochPath, manifest.identity.storeEpoch);
     const workspaceId = randomUUID();
     const launch = async (closed: boolean, ignoreTerm = false) => {
-      for (const [path, digest] of inputs)
-        if (sha256(await readFile(path)) !== digest) throw new Error("Synthetic source changed before fresh process");
-      if (sha256(await readFile(entry)) !== sha256(daemonBytes)) throw new Error("Synthetic child binary changed");
+      compiled.assertCurrent();
+      if (sha256(await readFile(entry)) !== compiled.digest) throw new Error("Synthetic child binary changed");
       const selectedEntry = closed ? daemonPath : entry;
-      if (sha256(await readFile(selectedEntry)) !== sha256(daemonBytes))
+      if (sha256(await readFile(selectedEntry)) !== compiled.digest)
         throw new Error("Synthetic selected daemon bytes changed");
       const fenceId = randomUUID();
       const token = closed ? randomUUID() : undefined;
