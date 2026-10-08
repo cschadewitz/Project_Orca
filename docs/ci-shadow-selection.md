@@ -21,7 +21,10 @@ verified main `65606fbce827cba914a67b999b1a47c0aab2797a`.
   directly modified tests. This is a real reduced invocation, not a full-mode flag.
 - Node 24 always runs full coverage. Main pushes, critical/mixed/unknown changes,
   stale inventory/source, changed discovery, ambiguous identities and selector
-  errors retain full testing. The original prose classifier/job skips are retained;
+  errors retain full testing. Prose job skips require Markdown outside runtime
+  templates and consumed preparation contracts; JSON, Python, shell and other
+  non-document inputs retain full checks. This prevents the classifier bypassing
+  unknown/consumed full fallback;
   an advisory docs plan cannot skip an admitted runtime job.
 - Exact event base/head/candidate SHAs are required. A PR candidate must have
   exactly the ordered parents `[base, head]`, and checkout HEAD must equal candidate.
@@ -31,7 +34,9 @@ verified main `65606fbce827cba914a67b999b1a47c0aab2797a`.
   with no skips, and compiled smoke stay mandatory on both Nodes. Whole-repository
   statics and every global/app coverage ratchet stay unchanged on Node 24.
 - Immediately before selected execution, the plan is recomputed and fully validated,
-  tracked source must match candidate, and any old result is removed. Vitest gets
+  HEAD and tracked source must match the immutable candidate before execution,
+  before accepting reports and after report validation; a clean commit move also
+  fails. Any old result is removed. Vitest gets
   argument-array paths, without a shell. A green process is insufficient: fresh
   JSON must contain exactly all selected files, with passing nonempty assertions and
   no failure, skip or todo. Missing, duplicate or additional files fail the job.

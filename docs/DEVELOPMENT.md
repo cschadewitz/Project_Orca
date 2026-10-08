@@ -66,9 +66,10 @@ step uses at most two workers (one where Node reports at most two available CPUs
 including the full suite and coverage. This limits contention for subprocess-heavy
 tests such as the demo while retaining their existing assertions and 60-second bounds.
 
-PRs and main pushes start CI; its classifier skips runtime jobs for prose-only
-changes. Files ending in `.js`, `.mjs`, `.cjs` or `.jsx` under `docs/` and prompt
-templates count as code; see the [classifier](../.github/workflows/ci.yml).
+PRs and main pushes start CI; its classifier skips runtime jobs only for Markdown
+outside `templates/` and consumed `docs/preparation/` inputs. JSON fixtures, Python,
+shell, YAML, logs and other non-Markdown docs inputs count as code and retain full
+verification; see the [classifier](../.github/workflows/ci.yml).
 The reviewed selector reduces Node 22 PR testing only for its proven time-formatting
 island. Node 24 retains the complete coverage suite with unchanged thresholds, and
 main/unknown/critical changes retain full testing. #520's merged read-only reporting

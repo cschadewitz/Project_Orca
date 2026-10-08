@@ -173,10 +173,45 @@ it("enforces a useful exact-file PR path while Node 24/main remain full", () => 
     write(manifest.islands[0].paths[0], readFileSync(join(directory, manifest.islands[0].paths[0]), "utf8") + "\n");
     expect(() => runSelected(input, artifact, reportPath, 2, execute, manifest)).toThrow();
   } finally {
+    command("reset", "--hard", input.candidate);
     rmSync(artifact, { force: true });
     rmSync(reportPath, { force: true });
   }
 });
+
+it.each(["different_tree", "same_tree"])(
+  "rejects a fresh passing report after execution moves to a clean %s commit",
+  (kind) => {
+    const input = eligibleCandidate();
+    const { plan } = executionPlan(input, "pull_request", 22, manifest);
+    expect(plan.wouldRun.tier).toBe("targeted");
+    const artifact = join(tmpdir(), `orca-moved-selection-${input.candidate}.json`);
+    const reportPath = join(tmpdir(), `orca-moved-result-${input.candidate}.json`);
+    writeFileSync(artifact, JSON.stringify(plan));
+    try {
+      let calls = 0;
+      const execute = () => {
+        calls++;
+        writeFileSync(reportPath, JSON.stringify(selectedRaw(plan.wouldRun.vitestFiles)));
+        if (kind === "different_tree") {
+          const path = manifest.islands[0].paths[0];
+          write(path, wording(path, readFileSync(join(directory, path), "utf8")));
+          save();
+        } else command("commit", "--allow-empty", "-qm", "Clean same-tree HEAD move");
+        expect(command("status", "--porcelain")).toBe("");
+        expect(command("rev-parse", "HEAD")).not.toBe(input.candidate);
+        return { status: 0 };
+      };
+      expect(() => runSelected(input, artifact, reportPath, 2, execute, manifest)).toThrow(
+        "checkout_candidate_mismatch",
+      );
+      expect(calls).toBe(1);
+    } finally {
+      rmSync(artifact, { force: true });
+      rmSync(reportPath, { force: true });
+    }
+  },
+);
 
 it("cannot reduce a head-only checkout or a candidate with swapped parents", () => {
   const input = eligibleCandidate();

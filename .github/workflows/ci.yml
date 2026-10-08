@@ -33,10 +33,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Documentation is `docs/**` except JavaScript, and Markdown outside `templates/`.
-      # Executable documentation validators need lint and tests just like other tooling.
-      # Prompt templates are Markdown too, but the engine loads them and the tests and the
-      # `demo` smoke test read them, so they count as code. Anything else counts as code.
+      # Only Markdown outside runtime templates and consumed preparation contracts is prose.
+      # JSON fixtures and unknown scripts/data under docs still need the full checks.
+      # Never let the job classifier bypass the selector's conservative full fallback.
       # When the base commit is unknown (first push of a branch, or a force-push that
       # rewrote it away) the job errs on the side of running everything.
       - name: Classify
@@ -51,7 +50,7 @@ jobs:
             exit 0
           fi
           code_paths=$(git diff --name-only "$BASE...$HEAD" \
-            | awk '/^docs\/.*\.(js|mjs|cjs|jsx)$/ || (!/^docs\// && !(/\.md$/ && !/^templates\//))')
+            | awk '/^docs\/preparation\// || !(/\.md$/ && !/^templates\//)')
           if [ -n "$code_paths" ]; then
             echo "code changed:"; printf '  %s\n' $code_paths
             echo "code=true" >> "$GITHUB_OUTPUT"
