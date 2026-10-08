@@ -7,6 +7,7 @@ import type { GuidedLaunchSnapshot } from "../../src/guided-launch-bridge.js";
 import type { LaunchReview, RetainedLaunch } from "../../src/configuration-launch-contract.js";
 import type { DaemonTargetSnapshot } from "../../src/daemon-connection.js";
 import type { DiagnosticsStatus } from "../../src/diagnostics-contract.js";
+import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_TASK } from "../../src/first-run-sample.js";
 import { hasUpdateDrafts } from "../src/update-drafts.js";
 import { launchUrl, resolveRoute } from "../src/route-table.js";
 import { fakeBridge } from "./fake-bridge.js";
@@ -17,7 +18,9 @@ afterEach(() => {
   cleanup();
   while (teardown.length) teardown.pop()?.();
 });
-function setup({ disconnected = false, lose = false, prepared = false } = {}) {
+function setup({ disconnected = false, lose = false, prepared = false, sample = false } = {}) {
+  const workflowId = sample ? FIRST_RUN_SAMPLE.id : "safe-fixture";
+  const workflowRevision = sample ? FIRST_RUN_SAMPLE.revision : "digest-1";
   const fake = fakeBridge({ deepLink: "orca://config" });
   const bridge = fake.bridge;
   let target: DaemonTargetSnapshot = {
@@ -65,10 +68,10 @@ function setup({ disconnected = false, lose = false, prepared = false } = {}) {
       ? []
       : [
           {
-            id: "safe-fixture",
+            id: workflowId,
             name: "Safe fixture",
             version: "1",
-            revision: "digest-1",
+            revision: workflowRevision,
             inputSchema: {
               fields: {
                 task: { type: "string", required: true },
@@ -85,7 +88,7 @@ function setup({ disconnected = false, lose = false, prepared = false } = {}) {
   const intent = (): RetainedLaunch => ({
     intentId: "opaque-exact-intent",
     target: retainedReview?.target ?? snapshot().target,
-    workflowId: "safe-fixture",
+    workflowId,
     mode: retainedReview?.command.mode ?? "direct",
     operationId: "operation-original",
     admissionId: "admission-original",
@@ -114,9 +117,9 @@ function setup({ disconnected = false, lose = false, prepared = false } = {}) {
         checkout: snapshot().checkout,
         preflight: {
           target: params.target,
-          workflowId: "safe-fixture",
+          workflowId,
           workflowVersion: "1",
-          expectedWorkflowRevision: "digest-1",
+          expectedWorkflowRevision: workflowRevision,
           expectedConfigGeneration: "generation-1",
           validation: { ok: true, errors: [], warnings: [] },
           asOf: "2026-10-08T00:00:00Z",
@@ -221,6 +224,37 @@ async function preview() {
   await screen.findByRole("checkbox", { name: /I reviewed the configured permission policy/ });
 }
 describe("mounted guided launch route", () => {
+  it("selects the exact smoke-check task without launching and still requires explicit permission review", async () => {
+    const f = setup({ sample: true, prepared: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Launch work" }));
+    await screen.findByRole("heading", { name: "Launch work" });
+    const choose = screen.getByRole("button", { name: "Choose harmless launch smoke check" });
+    await waitFor(() => expect(choose.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(choose);
+    expect(screen.getByLabelText<HTMLInputElement>(/^task/).value).toBe(FIRST_RUN_SAMPLE_TASK);
+    expect(f.guided.preflight).not.toHaveBeenCalled();
+    expect(f.guided.submit).not.toHaveBeenCalled();
+    await preview();
+    expect(f.guided.preflight.mock.calls[0]![0]).toMatchObject({
+      purpose: "workflow",
+      workflowId: FIRST_RUN_SAMPLE.id,
+      vars: { task: FIRST_RUN_SAMPLE_TASK },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+    expect(f.guided.submit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /I reviewed/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+    await waitFor(() => expect(f.guided.submit).toHaveBeenCalledTimes(1));
+    expect(f.review()).toMatchObject({
+      workflowId: FIRST_RUN_SAMPLE.id,
+      workflowVersion: FIRST_RUN_SAMPLE.version,
+      expectedWorkflowRevision: FIRST_RUN_SAMPLE.revision,
+      command: { mode: "direct", params: { vars: { task: FIRST_RUN_SAMPLE_TASK } } },
+    });
+    expect(
+      screen.getByRole("button", { name: "Choose harmless launch smoke check" }).getAttribute("aria-disabled"),
+    ).toBe("true");
+  });
   it("keeps diagnostics mounted and typed drafts protected across Config/launch navigation, with per-preview permission review", async () => {
     const f = setup({ prepared: true });
     const diagnostics = await screen.findByRole("region", { name: "Local diagnostics" });

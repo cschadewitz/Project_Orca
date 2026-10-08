@@ -1,7 +1,7 @@
 /** Real client/schema/journal composition over synthetic HTTP and a temporary prepared Git checkout. */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ import type { DaemonTargetSnapshot } from "../src/daemon-connection.js";
 import { DaemonClient } from "../src/client/daemon-client.js";
 import { AdmissionIntents, type IntentEncryption } from "../src/main/admission-intents.js";
 import { GuidedLaunchAdapter } from "../src/main/guided-launch-adapter.js";
+import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES, FIRST_RUN_SAMPLE_TASK } from "../src/first-run-sample.js";
 import { observePreparedCheckout } from "../src/main/guided-checkout.js";
 
 const dirs: string[] = [];
@@ -19,7 +20,13 @@ afterEach(() => {
   vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
-function fixture() {
+function fixture(options: { workflowId?: string; workflowRevision?: string } = {}) {
+  const workflowId = options.workflowId ?? "safe-fixture";
+  const workflowRevision = options.workflowRevision ?? "digest-1";
+  const vars =
+    workflowId === FIRST_RUN_SAMPLE.id
+      ? { task: FIRST_RUN_SAMPLE_TASK }
+      : { task: "private task needle", count: 0, enabled: false, nullable: null };
   const dir = mkdtempSync(join(tmpdir(), "orca-launch-adapter-"));
   dirs.push(dir);
   const git = (...args: string[]) =>
@@ -37,6 +44,10 @@ function fixture() {
     "-m",
     "fixture",
   );
+  if (workflowId === FIRST_RUN_SAMPLE.id) {
+    mkdirSync(join(dir, "first-run"));
+    for (const [name, text] of Object.entries(FIRST_RUN_SAMPLE_FILES)) writeFileSync(join(dir, name), text);
+  }
   let target: DaemonTargetSnapshot = {
     epoch: 1,
     source: "bundled",
@@ -72,7 +83,8 @@ function fixture() {
     },
   };
   const fetcher: typeof fetch = async (_input, init) => {
-    const request = JSON.parse(String(init?.body)) as { id: number; method: string; params: Record<string, unknown> };
+    if (typeof init?.body !== "string") throw new Error("Expected a JSON request body");
+    const request = JSON.parse(init.body) as { id: number; method: string; params: Record<string, unknown> };
     const credential = new Headers(init?.headers).get("authorization")?.replace("Bearer ", "") ?? "";
     calls.push({ ...request, token: credential });
     const identity = target.identity!;
@@ -109,13 +121,13 @@ function fixture() {
       result = { ...config, generation: { ...config.generation, activeGeneration: generation } };
     } else if (request.method === "workflows.list")
       result = {
-        workflows: [{ id: "safe-fixture", name: "Safe fixture", version: "1", nodeCount: 2 }],
+        workflows: [{ id: workflowId, name: "Safe fixture", version: "1", nodeCount: 2 }],
         asOf: "2026-10-08T00:00:00Z",
       };
     else if (request.method === "workflows.get")
       result = {
         workflow: {
-          id: "safe-fixture",
+          id: workflowId,
           name: "Safe fixture",
           version: "1",
           start: "start",
@@ -135,9 +147,9 @@ function fixture() {
     else if (request.method === "operator.preflight")
       result = {
         target: identity,
-        workflowId: "safe-fixture",
+        workflowId,
         workflowVersion: "1",
-        expectedWorkflowRevision: "digest-1",
+        expectedWorkflowRevision: workflowRevision,
         expectedConfigGeneration: generation,
         validation: { ok: true, errors: [], warnings: [] },
         asOf: "2026-10-08T00:00:00Z",
@@ -215,15 +227,15 @@ function fixture() {
     const observed = await adapter.preflight({
       target: target.identity!,
       purpose: mode === "direct" ? "workflow" : "request",
-      workflowId: "safe-fixture",
-      vars: { task: "private task needle", count: 0, enabled: false, nullable: null },
+      workflowId,
+      vars,
     });
     const params = {
-      workflowId: "safe-fixture",
+      workflowId,
       workflowVersion: "1",
-      expectedWorkflowRevision: "digest-1",
+      expectedWorkflowRevision: workflowRevision,
       expectedConfigGeneration: generation,
-      vars: { task: "private task needle", count: 0, enabled: false, nullable: null },
+      vars,
     };
     return {
       target: { ...target.identity!, epoch: target.epoch },
@@ -381,5 +393,42 @@ describe("production guided launch composition", () => {
         principalId: "alice",
       }),
     ).toMatchObject({ state: "unavailable" });
+  });
+});
+
+describe("reserved harmless first-run sample binding", () => {
+  it("refuses changed instruction bytes after review before retaining or sending", async () => {
+    const f = fixture({ workflowId: FIRST_RUN_SAMPLE.id, workflowRevision: FIRST_RUN_SAMPLE.revision });
+    const review = await f.review();
+    writeFileSync(join(f.dir, "first-run/instruction.md"), "different instructions");
+    await expect(f.adapter.controller.submit(review)).rejects.toThrow();
+    expect(f.calls.some((call) => call.method === "operator.admitRun")).toBe(false);
+    expect(await f.adapter.controller.retained()).toEqual([]);
+  });
+  it("omits a same-ID sample with a different digest and refuses preflight", async () => {
+    const f = fixture({ workflowId: FIRST_RUN_SAMPLE.id });
+    expect((await f.adapter.snapshot()).workflows).toEqual([]);
+    await expect(f.review()).rejects.toThrow("cannot verify");
+    expect(f.calls.some((call) => call.method === "operator.admitRun")).toBe(false);
+  });
+  it("retains only the exact direct sample task and refuses Request or altered inputs", async () => {
+    const f = fixture({ workflowId: FIRST_RUN_SAMPLE.id, workflowRevision: FIRST_RUN_SAMPLE.revision });
+    const review = await f.review();
+    if (review.command.mode !== "direct") throw new Error("Expected a direct sample review");
+    const changed: LaunchReview = {
+      ...review,
+      command: { mode: "direct" as const, params: { ...review.command.params, vars: { task: "other task" } } },
+    };
+    await expect(f.adapter.controller.submit(changed)).rejects.toThrow("cannot verify");
+    await expect(f.review("request")).rejects.toThrow("cannot verify");
+    expect(
+      f.calls.some((call) => call.method === "operator.admitRun" || call.method === "operator.submitRequest"),
+    ).toBe(false);
+    const result = await f.adapter.controller.submit(review);
+    expect(result.response).toMatchObject({
+      kind: "retry",
+      receipt: { state: "resolved", result: { state: "accepted" } },
+    });
+    expect(f.calls.find((call) => call.method === "operator.admitRun")!.params.command).toEqual(review.command.params);
   });
 });

@@ -24,6 +24,8 @@ import { AdmissionIntents } from "./admission-intents.js";
 import { GuidedLaunchController, type GuidedIntentConnection } from "./guided-launch.js";
 import { canonicalGuidedValue, parseGuidedReview } from "./guided-intent-contract.js";
 import { observePreparedCheckout } from "./guided-checkout.js";
+import { verifyFirstRunSampleAssets } from "./first-run/sample-assets.js";
+import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_TASK } from "../first-run-sample.js";
 
 export interface GuidedConnectionCapture {
   client: DaemonClient;
@@ -139,6 +141,13 @@ export class GuidedLaunchAdapter {
             preflight.workflowVersion !== read.workflow.version
           )
             refuse();
+          if (
+            item.id === FIRST_RUN_SAMPLE.id &&
+            (read.workflow.version !== FIRST_RUN_SAMPLE.version ||
+              preflight.expectedWorkflowRevision !== FIRST_RUN_SAMPLE.revision)
+          )
+            refuse();
+          if (item.id === FIRST_RUN_SAMPLE.id) await verifyFirstRunSampleAssets(current.captured.workspace.path);
           workflows.push({
             id: item.id,
             name: read.workflow.name,
@@ -190,6 +199,14 @@ export class GuidedLaunchAdapter {
       OperatorPreflightResultSchema,
       false,
     );
+    if (
+      params.workflowId === FIRST_RUN_SAMPLE.id &&
+      (params.purpose !== "workflow" ||
+        result.workflowVersion !== FIRST_RUN_SAMPLE.version ||
+        result.expectedWorkflowRevision !== FIRST_RUN_SAMPLE.revision)
+    )
+      refuse();
+    if (params.workflowId === FIRST_RUN_SAMPLE.id) await verifyFirstRunSampleAssets(current.captured.workspace.path);
     const checkout = await this.checkout(current, result.expectedConfigGeneration);
     current.captured.assertCurrent();
     return { preflight: result, checkout };
@@ -221,6 +238,16 @@ export class GuidedLaunchAdapter {
       target: { ...found.target, epoch: captured.target.epoch },
       assertCurrent: () => captured.assertCurrent(),
       verifyReview: async (review) => {
+        if (
+          review.workflowId === FIRST_RUN_SAMPLE.id &&
+          (review.command.mode !== "direct" ||
+            review.workflowVersion !== FIRST_RUN_SAMPLE.version ||
+            review.expectedWorkflowRevision !== FIRST_RUN_SAMPLE.revision ||
+            canonicalGuidedValue(review.command.params.vars ?? {}) !==
+              canonicalGuidedValue({ task: FIRST_RUN_SAMPLE_TASK }))
+        )
+          refuse();
+        if (review.workflowId === FIRST_RUN_SAMPLE.id) await verifyFirstRunSampleAssets(captured.workspace.path);
         if (review.command.mode === "request" && review.command.params.overrides !== undefined) refuse();
         const check = await captured.client.call(
           "operator.preflight",
