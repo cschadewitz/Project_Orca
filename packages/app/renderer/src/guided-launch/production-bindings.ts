@@ -13,6 +13,7 @@ import type {
 import { LaunchPortFailure } from "./contracts.js";
 import { sameLaunchTarget } from "./controller.js";
 import { sharedLaunchResult, sharedLaunchReview, sharedSubmission } from "./shared-bindings.js";
+import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_ASSETS } from "../../../src/first-run-sample.js";
 
 export const CONFIGURED_ROOT = "configured-project";
 export function unwrap<T>(value: BridgeResult<T>): T {
@@ -49,13 +50,20 @@ export function launchContext(snapshot: GuidedLaunchSnapshot): LaunchContext {
     ],
     workflows: snapshot.workflows.map((workflow) => ({
       ...workflow,
-      modes,
+      modes: workflow.id === FIRST_RUN_SAMPLE.id ? modes.filter((mode) => mode === "direct") : modes,
       rootIds: [CONFIGURED_ROOT],
       provenance: [
         `Registered workflow ${workflow.id} / ${workflow.version}`,
         `Revision ${workflow.revision}`,
         `Active configuration ${snapshot.activeGeneration}.`,
-        "Detailed agent, model and instruction provenance is unavailable here; review the workflow and Config.",
+        ...(workflow.id === FIRST_RUN_SAMPLE.id &&
+        workflow.version === FIRST_RUN_SAMPLE.version &&
+        workflow.revision === FIRST_RUN_SAMPLE.revision
+          ? [
+              "Agent-free launch smoke check; coding-fix and real-agent acceptance remain separate.",
+              `Task ${FIRST_RUN_SAMPLE_ASSETS.task.revision}; instruction ${FIRST_RUN_SAMPLE_ASSETS.instruction.revision}; result ${FIRST_RUN_SAMPLE_ASSETS.result.revision}.`,
+            ]
+          : ["Detailed agent, model and instruction provenance is unavailable here; review the workflow and Config."]),
       ],
     })),
   };

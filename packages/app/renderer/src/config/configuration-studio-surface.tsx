@@ -18,6 +18,7 @@ import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
 import { agentPolicies } from "./config-model.js";
 import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
+import { FirstRunSection } from "../first-run/first-run-section.js";
 
 export function ConfigurationStudioSurface({
   connection,
@@ -104,6 +105,7 @@ export function ConfigurationStudioSurface({
         }
       />
       <div className="orca-config__body">
+        <FirstRunSection key="first-run" />
         <DiagnosticsSection key="diagnostics" />
         {launch ? (
           launch
