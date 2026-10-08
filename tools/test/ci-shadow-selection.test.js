@@ -8,10 +8,13 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { canonical, digest, git, parseChanges, snapshot, validPath } from "../ci-shadow/git.js";
 import { consumers, coveredInventory, graph, imports, MANIFEST_PATH, TOOL_PATHS } from "../ci-shadow/graph.js";
 import { createPlan, loadManifest, validateExecution, validatePlan } from "../ci-shadow/selector.js";
+import { executionPlan, runSelected, selectedResult } from "../ci-shadow/execute.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const goldens = JSON.parse(readFileSync(new URL("./ci-shadow/golden.v1.json", import.meta.url), "utf8"));
 const ownedManifest = loadManifest();
+// Preserve historical island regressions alongside the separate package-policy suite.
+delete ownedManifest.packagePolicy;
 let directory;
 let base;
 let manifest;
@@ -100,6 +103,157 @@ beforeAll(() => {
 
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
+const eligibleCandidate = () => {
+  reset();
+  const path = manifest.islands[0].paths[1];
+  write(path, wording(path, readFileSync(join(directory, path), "utf8")));
+  const head = save();
+  const candidate = git(directory, ["commit-tree", `${head}^{tree}`, "-p", base, "-p", head], "Selection candidate\n")
+    .toString()
+    .trim();
+  command("checkout", "-q", "--detach", candidate);
+  return { repo: directory, base, head, candidate };
+};
+const selectedRaw = (paths, root = directory) => ({
+  success: true,
+  numTotalTests: paths.length,
+  numPassedTests: paths.length,
+  numFailedTests: 0,
+  numPendingTests: 0,
+  numTodoTests: 0,
+  testResults: paths.map((path) => ({
+    name: join(root, path),
+    status: "passed",
+    assertionResults: [{ status: "passed", fullName: "selected assertion" }],
+  })),
+});
+
+it("enforces a useful exact-file PR path on both Nodes while main remains full", () => {
+  const input = eligibleCandidate();
+  const result = executionPlan(input, "pull_request", 22, manifest);
+  expect(result.mode).toBe("targeted");
+  expect(result.plan.graphs.every((entry) => entry.complete)).toBe(true);
+  expect(result.plan.wouldRun.vitestFiles.length).toBeLessThan(result.plan.graphs[1].discoveredVitestFiles.length);
+  expect(result.plan.wouldRun.vitestFiles).toContain(manifest.islands[0].paths[1]);
+  expect(executionPlan(input, "pull_request", 24, manifest).mode).toBe("targeted");
+  expect(executionPlan(input, "push", 22, manifest).mode).toBe("full");
+  expect(executionPlan(input, "unknown", 22, manifest).mode).toBe("full");
+  const artifact = join(tmpdir(), `orca-selection-${input.candidate}.json`);
+  const reportPath = join(tmpdir(), `orca-selection-result-${input.candidate}.json`);
+  writeFileSync(artifact, JSON.stringify(result.plan));
+  try {
+    let calls = 0;
+    const execute = (binary, args, options) => {
+      calls++;
+      expect(binary).toBe("pnpm");
+      expect(args.slice(0, 3)).toEqual(["exec", "vitest", "run"]);
+      expect(args.slice(3, 3 + result.plan.wouldRun.vitestFiles.length)).toEqual(result.plan.wouldRun.vitestFiles);
+      expect(args).toContain("--maxWorkers=2");
+      expect(options.cwd).toBe(directory);
+      expect(options.shell).toBeUndefined();
+      writeFileSync(reportPath, JSON.stringify(selectedRaw(result.plan.wouldRun.vitestFiles)));
+      return { status: 0 };
+    };
+    expect(runSelected(input, artifact, reportPath, 2, execute, manifest).selectedFilesPassed).toBe(
+      result.plan.wouldRun.vitestFiles.length,
+    );
+    expect(calls).toBe(1);
+    const tampered = structuredClone(result.plan);
+    tampered.wouldRun.vitestFiles.pop();
+    writeFileSync(artifact, JSON.stringify(tampered));
+    expect(() => runSelected(input, artifact, reportPath, 2, execute, manifest)).toThrow(
+      "stale_mismatched_or_modified_plan",
+    );
+    expect(calls).toBe(1);
+    expect(() => runSelected(input, artifact, reportPath, 3, execute, manifest)).toThrow("invalid_worker_bound");
+    writeFileSync(artifact, JSON.stringify(result.plan));
+    // A status-zero runner that writes nothing cannot reuse the preceding passing report.
+    expect(() => runSelected(input, artifact, reportPath, 2, () => ({ status: 0 }), manifest)).toThrow();
+    expect(() => runSelected(input, artifact, reportPath, 2, () => ({ status: 1 }), manifest)).toThrow(
+      "selected_process_failed",
+    );
+    write(manifest.islands[0].paths[0], readFileSync(join(directory, manifest.islands[0].paths[0]), "utf8") + "\n");
+    expect(() => runSelected(input, artifact, reportPath, 2, execute, manifest)).toThrow();
+  } finally {
+    command("reset", "--hard", input.candidate);
+    rmSync(artifact, { force: true });
+    rmSync(reportPath, { force: true });
+  }
+});
+
+it.each(["different_tree", "same_tree"])(
+  "rejects a fresh passing report after execution moves to a clean %s commit",
+  (kind) => {
+    const input = eligibleCandidate();
+    const { plan } = executionPlan(input, "pull_request", 22, manifest);
+    expect(plan.wouldRun.tier).toBe("targeted");
+    const artifact = join(tmpdir(), `orca-moved-selection-${input.candidate}.json`);
+    const reportPath = join(tmpdir(), `orca-moved-result-${input.candidate}.json`);
+    writeFileSync(artifact, JSON.stringify(plan));
+    try {
+      let calls = 0;
+      const execute = () => {
+        calls++;
+        writeFileSync(reportPath, JSON.stringify(selectedRaw(plan.wouldRun.vitestFiles)));
+        if (kind === "different_tree") {
+          const path = manifest.islands[0].paths[0];
+          write(path, wording(path, readFileSync(join(directory, path), "utf8")));
+          save();
+        } else command("commit", "--allow-empty", "-qm", "Clean same-tree HEAD move");
+        expect(command("status", "--porcelain")).toBe("");
+        expect(command("rev-parse", "HEAD")).not.toBe(input.candidate);
+        return { status: 0 };
+      };
+      expect(() => runSelected(input, artifact, reportPath, 2, execute, manifest)).toThrow(
+        "checkout_candidate_mismatch",
+      );
+      expect(calls).toBe(1);
+    } finally {
+      rmSync(artifact, { force: true });
+      rmSync(reportPath, { force: true });
+    }
+  },
+);
+
+it("cannot reduce a head-only checkout or a candidate with swapped parents", () => {
+  const input = eligibleCandidate();
+  expect(() => executionPlan({ ...input, candidate: input.head }, "pull_request", 22, manifest)).toThrow(
+    "candidate_parents_mismatch",
+  );
+  const swapped = git(
+    directory,
+    ["commit-tree", `${input.head}^{tree}`, "-p", input.head, "-p", base],
+    "Wrong candidate\n",
+  )
+    .toString()
+    .trim();
+  expect(() => executionPlan({ ...input, candidate: swapped }, "pull_request", 22, manifest)).toThrow(
+    "candidate_parents_mismatch",
+  );
+  command("checkout", "-q", "--detach", input.head);
+  expect(() => executionPlan(input, "pull_request", 22, manifest)).toThrow("checkout_candidate_mismatch");
+});
+
+it.each(["missing", "extra", "duplicate", "failed", "skipped", "todo", "empty", "wrong_path", "bad_totals"])(
+  "rejects selected execution report %s even if the process exits green",
+  (kind) => {
+    const paths = ["packages/app/renderer/test/format-time.test.tsx"];
+    const result = { identities: { candidate: "a".repeat(40) }, wouldRun: { vitestFiles: paths } };
+    const raw = selectedRaw(paths, "/selected");
+    if (kind === "missing") raw.testResults = [];
+    if (kind === "extra" || kind === "duplicate")
+      raw.testResults.push({
+        ...raw.testResults[0],
+        name: kind === "extra" ? "/selected/extra.test.ts" : raw.testResults[0].name,
+      });
+    if (["failed", "skipped", "todo"].includes(kind)) raw.testResults[0].assertionResults[0].status = kind;
+    if (kind === "empty") raw.testResults[0].assertionResults = [];
+    if (kind === "wrong_path") raw.testResults[0].name = "/selected/other.test.ts";
+    if (kind === "bad_totals") raw.numPassedTests++;
+    expect(() => selectedResult(result, raw, "/selected")).toThrow();
+  },
+);
+
 it.each(goldens)("golden: $label", ({ path, status, tier, reason }) => {
   reset();
   if (status === "D") rmSync(join(directory, path));
@@ -125,6 +279,16 @@ it.each(goldens)("golden: $label", ({ path, status, tier, reason }) => {
     expect(result.wouldRun.vitestFiles).toContain("packages/app/renderer/test/extra.test.ts");
     expect(result.wouldRun.runners.map((runner) => runner.id)).toContain("resources-browser");
   }
+});
+
+it("takes full when the reviewed format-time test is renamed to Markdown and discovery shrinks", () => {
+  reset();
+  command("mv", "packages/app/renderer/test/format-time.test.tsx", "packages/app/renderer/test/format-time.md");
+  const result = plan(save());
+  expect(result.wouldRun.tier).toBe("full");
+  expect(result.graphs[1].discoveredVitestFiles.length).toBe(result.graphs[0].discoveredVitestFiles.length - 1);
+  expect(result.wouldRun.reasonCodes).toContain("discovery_inventory_changed");
+  expect(result.wouldRun.vitestFiles).toEqual(result.graphs[1].discoveredVitestFiles);
 });
 
 it("pins all identities, emits deterministic plans, and recomputes their entire contents", () => {

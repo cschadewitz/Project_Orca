@@ -14,6 +14,7 @@ import {
   AGENT_METHODS,
   CONTROL_METHODS,
   HELLO_METHOD,
+  MAINTENANCE_RUNTIME_METHOD,
   NOTIFICATION_METHODS,
   PLAN_READ_METHODS,
   READ_METHODS,
@@ -67,6 +68,7 @@ describe("the operation inventory", () => {
   it("covers every method the protocol declares and the daemon answers, and nothing else", () => {
     const declared = new Set<string>([
       HELLO_METHOD,
+      MAINTENANCE_RUNTIME_METHOD,
       ...OPERATOR_METHODS,
       ...Object.keys(OperatorMutationContracts),
       "runs.admit",

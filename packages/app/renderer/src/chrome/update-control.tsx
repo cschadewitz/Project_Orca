@@ -5,6 +5,9 @@ import { useKeyboard } from "../keyboard-context.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { hasUpdateDrafts } from "../update-drafts.js";
 import { Button } from "../ui/index.js";
+// Restoration belongs to the guarded root in this renderer document, not to a
+// component subscription. The preload owns which lease may send prepare/release.
+const priorInert = new WeakMap<HTMLElement, boolean>();
 export function UpdateControl(): JSX.Element | null {
   const [state, setState] = useState(() => window.orca.updates.read());
   const keyboard = useKeyboard();
@@ -14,8 +17,16 @@ export function UpdateControl(): JSX.Element | null {
     () =>
       window.orca.updates.prepare((locked) => {
         const root = document.querySelector<HTMLElement>(".orca-window");
-        if (root) root.inert = locked;
-        return !hasUpdateDrafts();
+        if (!root) return false;
+        if (locked) {
+          if (!priorInert.has(root)) priorInert.set(root, Boolean(root.inert));
+          root.inert = true;
+          return priorInert.get(root) === false && !hasUpdateDrafts();
+        }
+        const previous = priorInert.get(root);
+        if (previous !== undefined) root.inert = previous;
+        priorInert.delete(root);
+        return true;
       }),
     [],
   );

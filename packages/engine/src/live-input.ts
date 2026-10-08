@@ -76,7 +76,18 @@ function unavailable(state: LiveInputState): OrcaError {
   return new OrcaError("RUN_STATE", `live permission callback is ${state}`, { liveInputState: state });
 }
 
+/** Internal daemon activity gate, with no authority/grant or durable state semantics. */
+export interface ExecutionActivity {
+  enter(reason: "execution" | "callback" | "renewal" | "dispatch" | "continuation" | "recovery"): () => void;
+}
 export class LiveHumanInput implements HumanInputPort {
+  runtimeActivity?: ExecutionActivity;
+  get pendingCount(): number {
+    return this.pending.size;
+  }
+  get available(): boolean {
+    return !this.closed;
+  }
   private readonly pending = new Map<string, Pending>();
   private readonly invalidations = new Set<(target: LiveDecisionTarget) => void>();
   private readonly observationIncarnation = randomUUID();
@@ -104,6 +115,7 @@ export class LiveHumanInput implements HumanInputPort {
     if (this.closed || binding.signal.aborted || query.signal?.aborted) return Promise.resolve(undefined);
     if (binding.identity.instanceId !== this.instanceId) return Promise.reject(unavailable("owner-unavailable"));
     if (this.pending.has(query.requestId)) return Promise.reject(unavailable("accepting"));
+    const release = this.runtimeActivity?.enter("callback");
     return new Promise((resolve, reject) => {
       const expire = () => {
         entry.dispose(true);
@@ -121,6 +133,7 @@ export class LiveHumanInput implements HumanInputPort {
           if (removed) {
             this.pending.delete(query.requestId);
             this.observationCounter++;
+            release?.();
           }
           binding.signal.removeEventListener("abort", expire);
           query.signal?.removeEventListener("abort", expire);
@@ -160,6 +173,18 @@ export class LiveHumanInput implements HumanInputPort {
     command: LiveAnswer,
     authority: LiveAnswerAuthority,
     /** Standing writes happen after durable acceptance under the very same lease. */
+    afterAnswer?: () => Promise<void>,
+  ): Promise<{ answerRecorded: true; delivered: boolean }> {
+    const release = this.runtimeActivity?.enter("callback");
+    try {
+      return await this.performAnswer(command, authority, afterAnswer);
+    } finally {
+      release?.();
+    }
+  }
+  private async performAnswer(
+    command: LiveAnswer,
+    authority: LiveAnswerAuthority,
     afterAnswer?: () => Promise<void>,
   ): Promise<{ answerRecorded: true; delivered: boolean }> {
     // Snapshot the command across awaits; caller mutation must not substitute another target/choice.

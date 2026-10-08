@@ -12,7 +12,18 @@
  */
 import { daemonEndpoint, type DaemonTargetSnapshot } from "../daemon-connection.js";
 import { ConnectionRefusal, type ConnectionCandidate } from "./connection-target.js";
-import type { HelloResult } from "@orca/protocol";
+import {
+  MAINTENANCE_RUNTIME_METHOD,
+  RuntimeMaintenanceResultSchema,
+  type RuntimeMaintenanceResult,
+  isCompatible,
+  PROTOCOL_VERSION,
+  type HelloResult,
+} from "@orca/protocol";
+import { resolve, join } from "node:path";
+import { DaemonClient as AuthenticatedClient } from "../client/daemon-client.js";
+import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
+import type { MacUpdateTarget } from "./mac-updates.js";
 import type { WorkspaceSnapshot, WorkspaceSource } from "../bridge.js";
 import type { DaemonClient } from "../client/daemon-client.js";
 import type { DaemonSubscription } from "../client/subscription.js";
@@ -116,6 +127,122 @@ export class Workspace {
   /** Keep a live bundled daemon running when the UI leaves it; switching is not cancellation. */
   private parkedDefault: BundledDaemon | undefined;
   private candidates = new Set<BundledDaemon>();
+  private connectionPreparations = new Set<symbol>();
+  private macUpdateHold: symbol | undefined;
+
+  /** Capture a locally owned target without sending maintenance or stopping any process.
+   * The reservation fences connection changes through authentication and subsequent checks.
+   * It does not certify idle execution, authorize installation or reopen remote admission.
+   */
+  async captureMacUpdateTarget(expected: MacUpdateTarget): Promise<
+    | {
+        readonly target: Readonly<MacUpdateTarget>;
+        check(): boolean;
+        release(): void;
+        maintenanceRuntime?: (action: "prepare" | "resume", token: string) => Promise<RuntimeMaintenanceResult>;
+      }
+    | undefined
+  > {
+    const daemon = this.daemon;
+    const client = this.clientNow;
+    const identity = this.identity;
+    const epoch = this.epoch;
+    if (
+      this.closed ||
+      this.updating ||
+      this.macUpdateHold ||
+      this.pending ||
+      this.connectionPreparations.size ||
+      this.candidates.size ||
+      this.parkedDefault ||
+      this.source !== "bundled" ||
+      this.target.readOnly ||
+      !daemon ||
+      !identity ||
+      !Number.isSafeInteger(daemon.pid) ||
+      !daemon.pid ||
+      daemon.pid < 1 ||
+      !daemon.tokenFile ||
+      !isLoopbackDaemon(daemon.url) ||
+      daemonEndpoint(daemon.url) !== this.endpoint() ||
+      expected.epoch !== epoch ||
+      expected.workspaceId !== identity.workspaceId ||
+      expected.instanceId !== identity.instanceId
+    )
+      return undefined;
+    const hold = Symbol("mac-update-target");
+    this.macUpdateHold = hold;
+    const target = Object.freeze({ epoch, workspaceId: identity.workspaceId, instanceId: identity.instanceId });
+    const check = () =>
+      this.macUpdateHold === hold &&
+      !this.closed &&
+      !this.pending &&
+      !this.updating &&
+      !this.parkedDefault &&
+      !this.connectionPreparations.size &&
+      this.daemon === daemon &&
+      this.clientNow === client &&
+      this.epoch === epoch &&
+      this.identity?.workspaceId === target.workspaceId &&
+      this.identity.instanceId === target.instanceId &&
+      this.source === "bundled" &&
+      !this.target.readOnly;
+    const release = () => {
+      if (this.macUpdateHold === hold) this.macUpdateHold = undefined;
+    };
+    let captured = false;
+    try {
+      const authenticated = new AuthenticatedClient(daemon.url, fetch, {
+        auth: new LocalDaemonToken({ url: daemon.url, tokenFile: daemon.tokenFile, env: {} }),
+        requireAuthentication: true,
+      });
+      const hello = await authenticated.hello("orca-app/mac-update-guard", false);
+      if (
+        !check() ||
+        hello.processId !== daemon.pid ||
+        hello.identity?.workspaceId !== target.workspaceId ||
+        hello.identity.instanceId !== target.instanceId ||
+        !isCompatible(PROTOCOL_VERSION, hello.protocol) ||
+        hello.storeDir !== join(resolve(this.target.path), ".orca")
+      )
+        return undefined;
+      captured = true;
+      return {
+        target,
+        check,
+        release,
+        ...(hello.methods?.includes(MAINTENANCE_RUNTIME_METHOD)
+          ? {
+              maintenanceRuntime: async (action: "prepare" | "resume", token: string) => {
+                if (!check()) throw new Error("Owned update target changed");
+                const result = await authenticated.call(
+                  MAINTENANCE_RUNTIME_METHOD,
+                  {
+                    action,
+                    token,
+                    target: { workspaceId: target.workspaceId, instanceId: target.instanceId, processId: daemon.pid },
+                  },
+                  RuntimeMaintenanceResultSchema,
+                  false,
+                );
+                if (
+                  !check() ||
+                  result.target.workspaceId !== target.workspaceId ||
+                  result.target.instanceId !== target.instanceId ||
+                  result.target.processId !== daemon.pid
+                )
+                  throw new Error("Owned runtime proof target changed");
+                return result;
+              },
+            }
+          : {}),
+      };
+    } finally {
+      // No remote boundary was changed: releasing this local reservation is safe even
+      // when the hello result is lost or refused. Never resume an unverified daemon.
+      if (!captured) release();
+    }
+  }
 
   get connectionTarget(): DaemonTargetSnapshot {
     return {
@@ -166,7 +293,34 @@ export class Workspace {
 
   /** Prepare without stopping the current daemon or opening a replacement stream. */
   async prepareConnection(url: string | null, source: "saved" | "env" = "saved"): Promise<ConnectionCandidate> {
-    if (this.updating || this.closed || this.pending) throw new Error("Workspace is busy");
+    if (this.macUpdateHold) throw new Error("Workspace is busy");
+    const ticket = Symbol("connection-preparation");
+    this.connectionPreparations.add(ticket);
+    try {
+      const candidate = await this.makeConnection(url, source);
+      return {
+        ...candidate,
+        activate: (hello) => {
+          candidate.check?.();
+          candidate.activate(hello);
+          this.connectionPreparations.delete(ticket);
+        },
+        dispose: async () => {
+          try {
+            await candidate.dispose();
+          } finally {
+            this.connectionPreparations.delete(ticket);
+          }
+        },
+      };
+    } catch (error) {
+      this.connectionPreparations.delete(ticket);
+      throw error;
+    }
+  }
+
+  private async makeConnection(url: string | null, source: "saved" | "env"): Promise<ConnectionCandidate> {
+    if (this.updating || this.macUpdateHold || this.closed || this.pending) throw new Error("Workspace is busy");
     if (source === "env" && (!this.deps.explicitUrl || url !== daemonEndpoint(this.deps.explicitUrl)))
       throw new Error("The environment return must use the launch-pinned daemon");
     if (
@@ -219,7 +373,8 @@ export class Workspace {
       client,
       check: () => {
         this.assertEpoch(epoch);
-        if (this.closed || this.updating || this.pending) throw new Error("Workspace changed while connecting");
+        if (this.closed || this.updating || this.macUpdateHold || this.pending)
+          throw new Error("Workspace changed while connecting");
       },
       dispose: async () => {
         if (daemon) this.candidates.delete(daemon);
@@ -263,6 +418,7 @@ export class Workspace {
   }
 
   async prepareUpdate(token: string): Promise<void> {
+    if (this.macUpdateHold) throw new Error("Workspace is busy");
     if (this.parkedDefault) throw new Error("Return to the bundled daemon before updating the app");
     this.updating = true;
     try {
@@ -326,6 +482,7 @@ export class Workspace {
 
   /** The first connection, from `whenReady`. Never rejects — see `switchTo`. */
   connect(): Promise<void> {
+    if (this.macUpdateHold) return Promise.reject(new Error("Workspace is busy"));
     return this.switchTo(this.target);
   }
 
@@ -335,7 +492,7 @@ export class Workspace {
    * window that silently did nothing.
    */
   async open(path: string): Promise<WorkspaceSnapshot> {
-    if (this.updating) throw new Error("Update restart is in progress");
+    if (this.updating || this.macUpdateHold) throw new Error("Update restart is in progress");
     if (!this.deps.findEntry()) throw new NoBundledDaemonError(path);
     await this.switchTo({ path, readOnly: true, source: "chosen" });
     return this.snapshot;
@@ -343,7 +500,7 @@ export class Workspace {
 
   /** The banner's **Connect to a daemon**: back to the daemon the app would have used. */
   async connectLive(): Promise<WorkspaceSnapshot> {
-    if (this.updating) throw new Error("Update restart is in progress");
+    if (this.updating || this.macUpdateHold) throw new Error("Update restart is in progress");
     const { explicitUrl, defaultPath } = this.deps;
     await this.switchTo({ path: defaultPath(), readOnly: false, source: explicitUrl ? "env" : "default" });
     return this.snapshot;
