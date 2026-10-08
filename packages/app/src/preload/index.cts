@@ -99,6 +99,7 @@ function forwardMacDraft(_event: unknown, value: unknown): void {
 ipcRenderer.on("orca:macUpdate.prepare", forwardMacDraft);
 
 const bridge: OrcaBridge = {
+  operator: { preflight: (params) => call("orca:operator.preflight", params) },
   admissionIntents: {
     start: (workflowId) => call("orca:admissionIntents.start", workflowId),
     list: () => call("orca:admissionIntents.list"),
@@ -201,11 +202,13 @@ const bridge: OrcaBridge = {
   workflows: {
     list: (params = {}) => call("orca:workflows.list", params),
     get: (params) => call("orca:workflows.get", params),
+    validateInputs: (params) => call("orca:workflows.validateInputs", params),
   },
   agents: { list: (params = {}) => call("orca:agents.list", params) },
   config: {
     get: (params = {}) => call("orca:config.get", params),
     set: (params) => call("orca:config.set", params),
+    apply: (params) => call("orca:config.apply", params),
   },
   notifications: {
     // The one channel the main process pushes on rather than answers on. Each renderer
