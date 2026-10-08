@@ -17,6 +17,7 @@
 import type { DiagnosticsBridge } from "./diagnostics-contract.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
+import type { PreflightParams, PreflightResult } from "./configuration-launch-contract.js";
 
 import type { ConnectionState } from "@orca/design";
 import type {
@@ -32,6 +33,8 @@ import type {
   ClaimsReleaseResult,
   ConfigGetParams,
   ConfigGetResult,
+  ConfigApplyParams,
+  ConfigApplyResult,
   ConfigSetParams,
   ConfigSetResult,
   DaemonCapability,
@@ -84,6 +87,8 @@ import type {
   WorkflowsGetResult,
   WorkflowsListParams,
   WorkflowsListResult,
+  WorkflowsValidateInputsParams,
+  WorkflowsValidateInputsResult,
 } from "@orca/protocol";
 import type { Preferences, PreferencesPatch } from "./preferences/schema.js";
 
@@ -196,6 +201,10 @@ export interface AlertActivation {
 
 export interface OrcaBridge {
   diagnostics?: DiagnosticsBridge;
+  /** Coherent launch reads; absence is an ordinary unavailable app seam. */
+  operator?: {
+    preflight(params: PreflightParams): Promise<BridgeResult<PreflightResult>>;
+  };
   /** Durable palette intent ownership lives in main, never renderer memory or localStorage. */
   admissionIntents?: {
     start(workflowId: string): Promise<BridgeResult<{ runId: string }>>;
@@ -339,6 +348,7 @@ export interface OrcaBridge {
      * answers `WORKFLOW_NOT_FOUND` rather than a graph that is not the one that ran.
      */
     get: (params: WorkflowsGetParams) => Promise<BridgeResult<WorkflowsGetResult>>;
+    validateInputs?: (params: WorkflowsValidateInputsParams) => Promise<BridgeResult<WorkflowsValidateInputsResult>>;
   };
   agents: {
     /**
@@ -375,6 +385,8 @@ export interface OrcaBridge {
      * `useWritability()` first rather than finding out by failing.
      */
     set: (params: ConfigSetParams) => Promise<BridgeResult<ConfigSetResult>>;
+    /** Saved and active remain separate guarded operations. */
+    apply?: (params: ConfigApplyParams) => Promise<BridgeResult<ConfigApplyResult>>;
   };
   notifications: {
     /**

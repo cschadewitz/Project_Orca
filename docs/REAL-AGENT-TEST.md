@@ -1,11 +1,20 @@
 # Running ORCA against a real ACP agent
 
+**Historical host recipe and observations, 18–19 September 2026.** Preserve the
+commands, paths, adapter versions and run evidence below as that record. They are
+not current contributor setup, proof of present host health, or a native beta guide;
+not every proposed run was executed. Do not replay install/auth/SSH/provider commands
+just to validate these docs. Start at [Development](DEVELOPMENT.md) for current
+source setup, [Integrations](INTEGRATIONS.md) for supported boundaries and the
+[current evidence map](reviews/2026-10-07-living-docs.md) for later acceptance.
+
 How this machine was set up to drive ORCA with **Claude Code as a real ACP agent**, and how to
 reach that install from **Kepler on your desktop**. This is the setup half of issue #98 (*Run
 ORCA end-to-end with a real ACP agent*); the run commands for its steps 2–3 are here too, so the
 test itself is a copy-paste away once the agent is authenticated.
 
-Everything below was executed on this box on 2026-09-18.
+The setup was recorded on this box on 2026-09-18; section 10 distinguishes
+executed runs from prepared commands, including the 2026-09-19 Kepler run.
 
 ## 0. Where things live
 

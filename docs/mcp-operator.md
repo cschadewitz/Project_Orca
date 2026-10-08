@@ -44,6 +44,17 @@ and protected pending revision text remain unsupported by these tools.
 The schemas can carry a 64 KiB revision payload, but the complete serialized MCP command still
 has a 64 KiB transport ceiling, including its envelope and JSON escaping.
 
+## Proposed host-resource read (#491)
+
+The injected-source draft adds `get_daemon_resources` → `operator.hostResources` with
+only the discovered `target` parameter. It returns #495's shared v1 host snapshot.
+**The separate `host.telemetry.read` permission is a proposal requiring review.** No
+preset includes it, and the normal CLI composition does not mount the operation or a
+collector. Caller-visible workstream summaries additionally require `runs.read` and a
+bounded authorized source; aggregate counts from a host snapshot are discarded.
+See [the access-policy proposal](host-resource-access-policy.md) for the bounds, exact
+fixture pin, ownership split and remaining production/actual-agent integration gaps.
+
 ## Local setup on current main
 
 Use Node 22 or 24, build ORCA, and use an **already approved, explicit ORCA credential**:
@@ -83,8 +94,11 @@ are created per HTTP request so MCP session identifiers cannot retain another ca
 identity. Remote HTTP errors do not include credential or backend diagnostic text.
 
 The reference client uses `StreamableHTTPClientTransport` from
-`@modelcontextprotocol/client` 2.2.0 with `requestInit.headers.Authorization`. SDK 2.2.0 is
-pinned; this follows the [official SDK serving API](https://ts.sdk.modelcontextprotocol.io/v2/).
+`@modelcontextprotocol/client` 2.2.0 with `requestInit.headers.Authorization`. The server SDK
+is pinned to 2.3.0; this follows the [official SDK serving API](https://ts.sdk.modelcontextprotocol.io/v2/).
+The server and HTTP handler are constructed afresh for each request, as required by 2.3.0's
+refusal of reconnecting an active server or reusing a stateless transport. Repeated requests
+and concurrent clients retain their own bearer-bound backend; no shared session holds authority.
 The tests exercise the SDK's real Fetch handler, reference HTTP client, stdio framing, and
 a real token-authenticated loopback daemon. They do **not** demonstrate TLS termination,
 Tailscale reachability, OAuth compatibility, a private tunnel or actual-Cal tool availability.

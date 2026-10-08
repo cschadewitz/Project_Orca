@@ -147,4 +147,5 @@ export const OPERATOR_METHODS = [
   "operator.config",
   "operator.preflight",
   "operator.artifact",
+  "operator.hostResources",
 ] as const;

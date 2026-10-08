@@ -13,6 +13,7 @@ import {
   PendingRevisionTargetSchema,
   PendingRevisionSummarySchema,
   PendingRevisionsDiscoverySchema,
+  RuntimeMaintenanceTargetSchema,
   type PendingRevisionSummary,
   type PendingRevisionTarget,
 } from "@orca/protocol";
@@ -56,11 +57,17 @@ import {
   type ResponseMessage,
 } from "@orca/protocol";
 import { methodsFor, type MethodContext, type MethodTable } from "./methods.js";
+import type { daemonExecutionRuntime } from "./execution-runtime.js";
 import { Maintenance } from "./maintenance.js";
 import { attachSocket } from "./socket.js";
 import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
 import { directAdmissionAuthority } from "./admission-retry.js";
 import { holds } from "./auth/principal.js";
+import {
+  HostResourceReadModel,
+  resourceResponseForPublication,
+  type HostResourceReadSource,
+} from "./operator-host-resources.js";
 import { authForbidden } from "./auth/errors.js";
 import { submissionAuthority } from "./request-submission.js";
 import { revisionAccess } from "./revision-input.js";
@@ -70,6 +77,9 @@ import type { ResourceResolver } from "./auth/resources.js";
 import { TransportGate, validateDeployment, type Admission, type DaemonAuthOptions } from "./auth/transport.js";
 
 export interface DaemonOptions extends MethodContext {
+  runtimeIdle?: ReturnType<typeof daemonExecutionRuntime> | undefined;
+  /** Opt-in contract seam only. Normal CLI composition does not install a resource collector. */
+  hostResourceSource?: HostResourceReadSource;
   /** Installed protected evidence reader; never a callback that attaches execution. */
   admissionExecutionSource?: ((runId: string) => Promise<AdmissionExecutionView | undefined>) | undefined;
   /** Actual protected runtime and registered retry services; never a placeholder capability. */
@@ -114,6 +124,7 @@ export interface DaemonHandle {
   url: string;
   /** The WebSocket URL, when this daemon was given an engine feed to subscribe to. */
   socketUrl?: string | undefined;
+  /** Stop transports and await dispatched method handlers, including disconnected callers. */
   close: () => Promise<void>;
   /** Bounded startup sweep; resolves only the original sealed credential, never a process owner. */
   recoverContinuations?: (() => Promise<void>) | undefined;
@@ -135,7 +146,7 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   res.writeHead(status, { "content-type": "application/json", ...headers });
-  res.end(JSON.stringify(body));
+  res.end(JSON.stringify(resourceResponseForPublication(body)));
 }
 
 /** The response to a refused admission: the same envelope a method failure has, with a status. */
@@ -220,10 +231,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const identity = opts.identity ?? (opts.workspaceId ? createDaemonIdentity(opts.workspaceId) : undefined);
   if (identity && opts.workspaceId && identity.workspaceId !== opts.workspaceId)
     throw new OrcaError("CONFIG_INVALID", "daemon identity does not match its workspace");
+  const runtimeTarget = RuntimeMaintenanceTargetSchema.safeParse({ ...identity, processId: process.pid });
+  const runtime = auth.mode === "token" && runtimeTarget.success ? opts.runtimeIdle : undefined;
+  const maintenance = new Maintenance(
+    opts.maintenanceToken,
+    opts.admissionFile,
+    runtime && identity ? { activity: runtime.activity, target: { ...identity, processId: process.pid } } : undefined,
+  );
   const ctx: MethodContext = {
     ...(identity ? { identity } : {}),
     processId: process.pid,
-    maintenance: new Maintenance(opts.maintenanceToken, opts.admissionFile),
+    maintenance,
     orcaVersion: opts.orcaVersion,
     storeDir: opts.storeDir,
     capabilities: opts.capabilities,
@@ -241,6 +259,59 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     agents: opts.agents,
     config: opts.config,
   };
+  const boundOrchestrator = runtime?.orchestrator;
+  const boundModels = {
+    requests: ctx.requestSubmissions,
+    admissions: ctx.admissionRetries,
+    continuations: ctx.continuationAdmissions,
+    control: ctx.control,
+  };
+  if (runtime)
+    runtime.activity.bind(
+      () => {
+        const orchestrator = runtime.orchestrator;
+        const requests = ctx.requestSubmissions;
+        const admissions = ctx.admissionRetries;
+        const continuations = ctx.continuationAdmissions;
+        const available =
+          runtime.available &&
+          runtime.orchestrator === boundOrchestrator &&
+          runtime.workspaceId === identity?.workspaceId &&
+          runtime.port.instanceId === identity?.instanceId &&
+          auth.mode === "token" &&
+          runtime.matchesAuthentication(auth.credentials, auth.ownership) &&
+          ctx.source === orchestrator &&
+          ctx.requestSubmissions === boundModels.requests &&
+          ctx.admissionRetries === boundModels.admissions &&
+          ctx.continuationAdmissions === boundModels.continuations &&
+          ctx.control === boundModels.control &&
+          orchestrator.runtimeActivity === runtime.activity &&
+          orchestrator.liveInput === runtime &&
+          ctx.liveInputs === runtime.port &&
+          runtime.port.runtimeActivity === runtime.activity &&
+          !!requests &&
+          requests.runtimeActivity === runtime.activity &&
+          requests.executionOrchestrator === orchestrator &&
+          !!admissions &&
+          admissions.runtimeActivity === runtime.activity &&
+          admissions.executionOrchestrator === orchestrator &&
+          !!continuations &&
+          continuations.runtimeActivity === runtime.activity &&
+          continuations.executionOrchestrator === orchestrator &&
+          continuations.executionRuntime === runtime &&
+          ctx.control?.executionOrchestrator === orchestrator;
+        return {
+          available,
+          active: [
+            ...(orchestrator.attachedExecutionCount ? ["execution" as const] : []),
+            ...(runtime.port.pendingCount ? ["callback" as const] : []),
+            ...(runtime.originCount || orchestrator.leaseActivityCount ? ["renewal" as const] : []),
+            ...(continuations?.taskCount ? ["continuation" as const] : []),
+          ],
+        };
+      },
+      () => maintenance.admissionClosed(),
+    );
   // A daemon without a store serves `hello` alone, and says so in `hello.methods`: a read
   // method it cannot answer is an unknown method, not a method that fails.
   const authorizer = new Authorizer(
@@ -551,6 +622,46 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       };
     };
   }
+  if (opts.hostResourceSource && identity && auth.mode === "token") {
+    const resources = new HostResourceReadModel(identity, opts.hostResourceSource);
+    ctx.hostResourceRead = (params, invocation) => {
+      const binding = principalOf(invocation);
+      const credentialId = binding?.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      return resources.read(params, {
+        current: () => {
+          const latest = auth.credentials.current(credentialId);
+          if (!latest.ok) throw authInvalid();
+          if (latest.principal.id !== binding.principal.id || latest.principal.credentialId !== credentialId)
+            throw authForbidden();
+          return latest.principal;
+        },
+        allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
+      });
+    };
+    // A host-only mount still needs authenticated discovery; no unrelated run sources are implied.
+    if (!opts.operatorSources)
+      ctx.operatorReads = {
+        methods: ["operator.discover"],
+        model: async (invocation) =>
+          new OperatorReadModel({
+            target: identity,
+            protocol: PROTOCOL_VERSION,
+            orcaVersion: ctx.orcaVersion,
+            current: async () => {
+              const binding = principalOf(invocation);
+              if (!binding?.principal.credentialId) throw authRequired();
+              const latest = auth.credentials.current(binding.principal.credentialId);
+              if (!latest.ok) throw authInvalid();
+              if (latest.principal.id !== binding.principal.id) throw authForbidden();
+              return latest.principal;
+            },
+            allowsRun: (principal, runId) => authorizer.runs.allows(principal, runId),
+            collections: {},
+            operations: (principal) => authorizer.permittedMethods(principal, Object.keys(methods)),
+          }),
+      };
+  }
   if (opts.operatorSources && identity && auth.mode === "token") {
     const sources = opts.operatorSources;
     const cursorKey = randomBytes(32);
@@ -782,7 +893,29 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const gate = new TransportGate(auth, host, authorizer);
   // The guard is outermost: a caller is authorized before maintenance admission is consulted,
   // so an unauthorized caller cannot even learn that an update is in progress.
-  const methods = authorizer.guard(opts.methods ? ctx.maintenance!.wrap(opts.methods) : methodsFor(ctx));
+  const guarded = authorizer.guard(opts.methods ? ctx.maintenance!.wrap(opts.methods) : methodsFor(ctx));
+  const pending = new Set<Promise<unknown>>();
+  let closing: Promise<void> | undefined;
+  const methods: MethodTable = Object.fromEntries(
+    Object.entries(guarded).map(([name, method]) => [
+      name,
+      {
+        params: method.params,
+        handle: (params: unknown, invocation: MethodContext) => {
+          if (closing) throw new OrcaError("RUN_STATE", "The daemon is closing");
+          // Register before entering any asynchronous authority or application work.
+          // A caller disconnect does not cancel an admitted durable operation.
+          const operation = Promise.resolve().then(() => method.handle(params, invocation));
+          pending.add(operation);
+          void operation.then(
+            () => pending.delete(operation),
+            () => pending.delete(operation),
+          );
+          return operation;
+        },
+      },
+    ]),
+  );
   const server: Server = createServer((req, res) => {
     void (async () => {
       const path = (req.url ?? "").split("?")[0];
@@ -840,6 +973,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const recoverContinuations =
     continuationModel && ctx.submissionWorkspaceId && auth.mode === "token"
       ? async () => {
+          // Timer recovery must not enter behind a runtime admission fence.
+          if (maintenance.admissionClosed()) return;
           await continuationModel.recoverBatch(async (entry) => {
             const credentialId = entry.actor?.credentialId;
             if (!credentialId || entry.workspaceId !== ctx.submissionWorkspaceId) return undefined;
@@ -868,14 +1003,22 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     url,
     ...(recoverContinuations ? { recoverContinuations } : {}),
     ...(detachSocket ? { socketUrl: socketUrlFor(url) } : {}),
-    close: async () => {
-      // Sockets first: an open upgraded connection is not an HTTP connection, so
-      // `closeAllConnections` does not reach it and `server.close` would wait on it forever.
-      await detachSocket?.();
-      await new Promise<void>((resolve, reject) => {
-        server.close((e) => (e ? reject(e) : resolve()));
-        server.closeAllConnections();
+    close: () => {
+      closing ??= Promise.resolve().then(async () => {
+        // Automatic admission attachment verifies durable receipts outside the
+        // RPC handler. Fence it now and retain its reads through settlement.
+        const admissionsStopped = opts.admissionRetries?.close();
+        // Stop accepting HTTP immediately; upgraded connections need separate closure.
+        const stopped = new Promise<void>((resolve, reject) => {
+          server.close((e) => (e ? reject(e) : resolve()));
+          server.closeAllConnections();
+        });
+        await Promise.all([stopped, detachSocket?.()]);
+        // Handler rejection still settles its work. Dispatch retains the original error.
+        await Promise.allSettled(pending);
+        await admissionsStopped;
       });
+      return closing;
     },
   };
 }

@@ -1,6 +1,8 @@
 /** Shared production contracts; no adapter-local receipt or retry state. */
 import { z } from "zod";
 import {
+  OperatorHostResourcesParamsSchema,
+  OperatorHostResourcesResultSchema,
   OperatorTargetSchema as target,
   OperatorPageParamsSchema,
   OperatorBoundaryPageResultSchema,
@@ -15,6 +17,12 @@ import {
 
 /** Explicit private-daemon adapter endpoints. Each delegates to one shared application service. */
 export const MCP_OPERATIONS = {
+  hostResources: {
+    method: "operator.hostResources",
+    input: OperatorHostResourcesParamsSchema,
+    output: OperatorHostResourcesResultSchema,
+    write: false,
+  },
   discover: { method: "operator.discover", input: z.strictObject({}), output: OperatorDiscoverySchema, write: false },
   page: {
     method: "operator.page",

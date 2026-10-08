@@ -1,4 +1,8 @@
 /**
+ * The Config surface dispatches authoritative daemon targets to ConfigurationStudioSurface:
+ * rich controls, daemon lowering, exact reviewed Save and separate guarded Apply.
+ * The description below covers the retained legacy preview/older-bridge surface.
+ *
  * The Config surface: how the system is wired, in one place
  * (docs/design/10-information-architecture.md).
  *
@@ -51,6 +55,7 @@ import { agentPolicies, buildSections, fieldPaths, patchFrom, placeErrors } from
 import { useConfig } from "./config-context.js";
 import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
 import "./config.css";
+import { ConfigurationStudioSurface } from "./configuration-studio-surface.js";
 
 export interface ConfigSurfaceProps {
   /** Whether the daemon is answering. A screen nobody is updating says so rather than lying. */
@@ -67,6 +72,13 @@ export interface ConfigSurfaceProps {
 type View = "form" | "raw";
 
 export function ConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Element {
+  const feed = useConfig();
+  if (window.orca.daemonConnection || (feed.state.phase === "ready" && feed.state.data.formSchema !== undefined))
+    return <ConfigurationStudioSurface connection={connection} {...(open ? { open } : {})} />;
+  return <LegacyConfigSurface connection={connection} {...(open ? { open } : {})} />;
+}
+
+function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Element {
   useSurfaceDensity();
   const feed = useConfig();
   const writability = useWritability();

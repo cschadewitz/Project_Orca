@@ -4,6 +4,13 @@ For setup, tests and code conventions, read [Development](docs/DEVELOPMENT.md).
 Agents also start at [AGENTS.md](AGENTS.md). This guide describes how to turn a
 request into useful GitHub issues without duplicating work or promising a release.
 
+An invited observing developer can begin with the [documentation index](docs/README.md)
+and [capability ledger](docs/ROADMAP.md) without installing tools or using private
+credentials. Repository collaboration access does not itself request code changes,
+host operation, credential changes or additional invitations. For a docs-only PR,
+follow [scoped documentation validation](docs/DEVELOPMENT.md#documentation-only-review)
+and distinguish source, review, CI, deployed and native evidence.
+
 ## Inventory before creating
 
 1. Search open issues and pull requests for the outcome, affected area and likely

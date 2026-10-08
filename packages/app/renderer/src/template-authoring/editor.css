@@ -1,0 +1,16 @@
+.orca-template-authoring {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.orca-template-authoring textarea {
+  width: 100%;
+  min-height: var(--control-lg);
+}
+
+.orca-template-authoring pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

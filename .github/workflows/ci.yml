@@ -1,9 +1,5 @@
-# Lint, test and build every PR and every push to main, on each supported Node version.
-#
-# Docs-only changes skip all of that: the `changes` job diffs the push or PR against its
-# merge base and the `check` matrix only runs when something other than documentation
-# moved. This is a job-level `if` rather than `paths-ignore` on the trigger so a docs-only
-# PR still gets a (green, skipped) check run, which is what a required status check needs.
+# Full main verification and conservative affected-package PR testing on both Nodes.
+# Audited ordinary prose retains named matrix verdicts with lightweight documentation checks.
 name: CI
 
 on:
@@ -22,50 +18,32 @@ concurrency:
 jobs:
   changes:
     name: classify changes
-    runs-on: [self-hosted, linux, x64, homelab]
+    runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.classify.outputs.code }}
     steps:
       - uses: actions/checkout@v7
         with:
-          # Three-dot diff below needs the merge base, so the full history.
           fetch-depth: 0
-
-      # Documentation is `docs/**` except JavaScript, and Markdown outside `templates/`.
-      # Executable documentation validators need lint and tests just like other tooling.
-      # Prompt templates are Markdown too, but the engine loads them and the tests and the
-      # `demo` smoke test read them, so they count as code. Anything else counts as code.
-      # When the base commit is unknown (first push of a branch, or a force-push that
-      # rewrote it away) the job errs on the side of running everything.
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
       - name: Classify
         id: classify
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            echo "base commit unavailable; treating the change as code"
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          code_paths=$(git diff --name-only "$BASE...$HEAD" \
-            | awk '/^docs\/.*\.(js|mjs|cjs|jsx)$/ || (!/^docs\// && !(/\.md$/ && !/^templates\//))')
-          if [ -n "$code_paths" ]; then
-            echo "code changed:"; printf '  %s\n' $code_paths
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "docs-only change; skipping the check matrix"
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node tools/ci-shadow/docs.js
 
   check:
     name: check (node ${{ matrix.node }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: [self-hosted, linux, x64, homelab]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
-      # These self-hosted runners share resources. Do not overlap the two full suites:
+      # Do not overlap the two jobs or their subprocess-heavy suites:
       # the demo launches 24 scripted ACP children and has a fixed 60s operation bound.
       max-parallel: 1
       matrix:
@@ -73,6 +51,10 @@ jobs:
         node: [22, 24]
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Selection recomputes the exact base/head/candidate union from immutable objects.
+          fetch-depth: 0
+          persist-credentials: false
 
       # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
       # resolve the store path. Version comes from package.json packageManager.
@@ -82,6 +64,37 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
+
+      # Capture identities before candidate test code runs. Reports remain untrusted data
+      # for the read-only default-branch workflow_run consumer, never admission outputs.
+      - name: Initialize advisory evidence
+        continue-on-error: true
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SHADOW_NODE: ${{ matrix.node }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-shadow-evidence"
+          rm -f "$RUNNER_TEMP/full-suite.json" "$RUNNER_TEMP/retry-acceptance.json" \
+            "$RUNNER_TEMP/ci-shadow-identity.json" "$RUNNER_TEMP/ci-shadow-evidence/evidence.json" \
+            "$RUNNER_TEMP/ci-shadow-evidence/evidence.json.tmp"
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const env = process.env;
+          const candidate = execFileSync('git', ['--no-replace-objects', 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          // Push comparison uses the immutable first parent, not an unauthenticated
+          // workflow_run "before" field. All existing push checks still run as before.
+          const base = env.GITHUB_EVENT_NAME === 'push'
+            ? execFileSync('git', ['--no-replace-objects', 'rev-parse', 'HEAD^1'], { encoding: 'utf8' }).trim()
+            : env.SHADOW_BASE;
+          writeFileSync(join(env.RUNNER_TEMP, 'ci-shadow-identity.json'), JSON.stringify({
+            repository: env.GITHUB_REPOSITORY, runId: Number(env.GITHUB_RUN_ID),
+            attempt: Number(env.GITHUB_RUN_ATTEMPT), event: env.GITHUB_EVENT_NAME,
+            base, head: env.SHADOW_HEAD, candidate, node: Number(env.SHADOW_NODE),
+          }));
+          NODE
 
       # Bound every Vitest invocation, not just retry acceptance. Preserve the default
       # of one worker on small runners rather than increasing their concurrency to two.
@@ -98,40 +111,62 @@ jobs:
 
       # CI typechecks and lints the Electron app but never launches it, so skip the
       # ~100 MB binary that electron's postinstall would otherwise fetch.
-      - run: pnpm install --frozen-lockfile
+      - if: needs.changes.outputs.code != 'false'
+        run: pnpm install --frozen-lockfile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      # Exact-candidate affected-package proposals reduce both Nodes. Main and unknowns stay full.
+      - name: Plan test execution
+        id: selection
+        if: needs.changes.outputs.code != 'false'
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SHADOW_NODE: ${{ matrix.node }}
+        run: |
+          rm -f "$RUNNER_TEMP/ci-selection-plan.json" "$RUNNER_TEMP/ci-selection-plan.json.tmp"
+          node tools/ci-shadow/execute.js plan
 
       # The Node 22 leg proves runtime compatibility through the tests, build and compiled
       # smoke below. TypeScript's result is independent of the Node version running it, so
       # doing the same standalone typecheck twice buys no additional compatibility signal.
       - name: Typecheck
-        if: matrix.node == 24
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24
         run: pnpm run typecheck
 
       # tokens.css and tokens.ts are committed so nothing needs a build to read a token;
       # this fails when someone edited tokens.json and forgot to regenerate them.
       - name: Design tokens are current
-        if: matrix.node == 24
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24
         run: pnpm run design:check
 
       # Style and lint are Node-version independent, so one leg is enough: running them on
       # both would annotate the same finding twice on the PR.
       - name: Format
-        if: matrix.node == 24
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24
         run: pnpm run format:check
 
       - name: Lint
-        if: matrix.node == 24
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24
         run: pnpm run lint
+
+      - name: Check ordinary documentation
+        if: needs.changes.outputs.code == 'false'
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node tools/ci-shadow/check-docs.js
 
       # Production MCP acceptance launches the emitted daemon and MCP entry points.
       - name: Build
+        if: needs.changes.outputs.code != 'false'
         run: pnpm run build
 
       # These two opt-in cases are skipped by the ordinary suite. Run them against the
       # merged runtime on both supported Nodes and reject a green result with skips.
       - name: Retry admission acceptance (CLI and ACP)
+        if: needs.changes.outputs.code != 'false'
         timeout-minutes: 3
         env:
           ORCA_RETRY_INTEGRATION: "1"
@@ -167,18 +202,28 @@ jobs:
           console.log(`Retry acceptance: ${report.numPassedTests} tests passed in both named files; none skipped`);
           NODE
 
-      # Coverage is measured on one leg for the same reason, and because instrumenting
-      # slows the suite down. Thresholds live in vitest.config.ts, so this fails here
-      # exactly when it fails locally.
+      # Full/fallback PRs and every main push retain global/app coverage ratchets.
+      # Selected PRs do not produce or claim global coverage; main catches regressions.
       - name: Test
-        if: matrix.node != 24
-        run: pnpm test
+        if: needs.changes.outputs.code != 'false' && matrix.node != 24 && steps.selection.outputs.mode != 'targeted'
+        # Explicit `run` forwards reporter flags to Vitest; pnpm's `test` shortcut
+        # otherwise interprets --reporter as a pnpm option before any script args.
+        run: pnpm run test --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
+      - name: Test selected files
+        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode == 'targeted'
+        run: node tools/ci-shadow/execute.js run
+        env:
+          SHADOW_BASE: ${{ github.event.pull_request.base.sha }}
+          SHADOW_HEAD: ${{ github.event.pull_request.head.sha }}
+          SHADOW_NODE: ${{ matrix.node }}
+          ORCA_MCP_REQUIRE_PRODUCTION: "1"
+
       - name: Test with coverage
-        if: matrix.node == 24
-        run: pnpm run test:coverage
+        if: needs.changes.outputs.code != 'false' && matrix.node == 24 && steps.selection.outputs.mode != 'targeted'
+        run: pnpm run test:coverage --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
@@ -207,4 +252,23 @@ jobs:
       # vitest resolves @orca/* to packages/*/src via aliases, so it never exercises the
       # emitted dist graph. This catches broken exports maps and missing project references.
       - name: Smoke test the compiled build
+        if: needs.changes.outputs.code != 'false'
         run: node packages/cli/dist/main.js demo
+
+      # Retain actual full/selected suite evidence; job steps authenticate execution mode.
+      # Always retain sanitized failure/missing-result evidence. Failure here cannot
+      # mask or override any existing step, job, coverage or required-check outcome.
+      - name: Record advisory full-suite evidence
+        if: always()
+        continue-on-error: true
+        run: node tools/ci-shadow/record.js
+
+      - name: Upload advisory full-suite evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-full-evidence-${{ github.run_id }}-${{ github.run_attempt }}-node-${{ matrix.node }}
+          path: ${{ runner.temp }}/ci-shadow-evidence/evidence.json
+          if-no-files-found: warn
+          retention-days: 7

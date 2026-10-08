@@ -1,0 +1,55 @@
+/* Resource cards are bounded facts, not rows. Their containing stack owns the only scroller. */
+.orca-resources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  color: var(--ink-primary);
+}
+.orca-resources p,
+.orca-resources h2,
+.orca-resources h3,
+.orca-resources dl,
+.orca-resources dd {
+  margin: 0;
+}
+.orca-resources__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.orca-resources__header > div {
+  flex: 1;
+}
+.orca-resources__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 38ch), 1fr));
+  gap: var(--space-3);
+  align-items: stretch;
+}
+.orca-resources .orca-card,
+.orca-resources__warnings,
+.orca-resources__note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.orca-resources__metric > .orca-card {
+  box-sizing: border-box;
+  height: 100%;
+}
+.orca-resources__identity {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 38ch), 1fr));
+  gap: var(--space-3);
+  width: 100%;
+}
+.orca-resources__identity dd,
+.orca-resources__note p {
+  overflow-wrap: anywhere;
+}
+.orca-resources__value {
+  padding-block: var(--space-1);
+}

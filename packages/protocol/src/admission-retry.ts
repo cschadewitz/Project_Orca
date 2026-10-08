@@ -44,6 +44,16 @@ export const AdmissionInProgressSchema = z.strictObject({
 });
 export type RunsAdmitResult = DirectAdmissionResult & { operationId: string };
 export type AdmissionRetryResult = RetryResult<unknown>;
+/** Recovery preserves the outer envelope; callers validate its nested result by retained kind. */
+export const AdmissionRetryResultSchema = z.discriminatedUnion("state", [
+  AdmissionInProgressSchema,
+  z.strictObject({
+    state: z.literal("resolved"),
+    operationId: z.string().min(1),
+    replayed: z.boolean(),
+    result: z.unknown(),
+  }),
+]);
 
 /** Called once per explicit user intent; the caller retains this object across transport retries. */
 export function newAdmissionIntent(idempotencyKey: string = globalThis.crypto.randomUUID()): Readonly<RetryOptions> {

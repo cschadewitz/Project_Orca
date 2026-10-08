@@ -242,6 +242,9 @@ export interface ConfigAnnouncer {
  * Four drive a run; `claims.release` takes a work item back from one.
  */
 export class ControlModel {
+  get executionOrchestrator() {
+    return this.orc;
+  }
   private readonly orc: Orchestrator;
   private readonly reads: ReadModel;
   private readonly permissionsFile: string | undefined;

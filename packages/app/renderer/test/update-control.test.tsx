@@ -62,3 +62,41 @@ it.each(["light", "dark"] as const)("offers explicit actions and protects drafts
     h.dispose();
   }
 });
+
+it.each(["missing root", "prior inert"] as const)("requires an available owned interaction freeze: %s", (mode) => {
+  const fake = installBridge({ platform: "darwin" });
+  const h = harness("darwin");
+  let prepare!: (locked: boolean) => boolean;
+  fake.bridge.updates = {
+    read: () => ({ phase: "unavailable", current: "fixture" }),
+    act: vi.fn(),
+    subscribe: () => () => {},
+    prepare: (listener) => {
+      prepare = listener;
+      return () => {};
+    },
+  };
+  const mounted = render(
+    <h.Providers>
+      {mode === "missing root" ? (
+        <UpdateControl />
+      ) : (
+        <div className="orca-window">
+          <UpdateControl />
+        </div>
+      )}
+    </h.Providers>,
+  );
+  try {
+    const root = document.querySelector<HTMLElement>(".orca-window");
+    if (root) root.inert = true;
+    expect(prepare(true)).toBe(false);
+    expect(prepare(true)).toBe(false);
+    expect(prepare(false)).toBe(mode !== "missing root");
+    if (root) expect(root.inert).toBe(true);
+    expect(screen.queryByRole("button")).toBeNull();
+  } finally {
+    mounted.unmount();
+    h.dispose();
+  }
+});

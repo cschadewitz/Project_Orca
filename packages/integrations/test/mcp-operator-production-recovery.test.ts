@@ -1,6 +1,9 @@
 /** Durable receipts across response loss, real process restart and concurrent production writers. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { hostname } from "node:os";
+import { join } from "node:path";
 import { OperatorMutationContracts, OPERATOR_MAX_RESULT_BYTES } from "@orca/protocol";
+import { journalCrashBarrier } from "./journal-crash-barrier.js";
 import {
   ProductionFixture,
   accepted,
@@ -169,6 +172,9 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
   });
 
   it("R04 loses a combined answer/continuation acknowledgement and recovers its durable correlation after restart", async (ctx) => {
+    const crash = journalCrashBarrier(f.dir);
+    await f.stop();
+    await f.boot(crash.preload);
     const originalPeer = await f.connect(transport);
     await f.requireProduction(ctx, originalPeer);
     const { runId } = await f.start(originalPeer);
@@ -187,9 +193,26 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
     await refused(peer, "continue_run", params, "AGENT_TRANSPORT");
     expect(proxy.count()).toBe(1);
     const first = resolved(OperatorMutationContracts["operator.continueRun"].result.parse(proxy.dropped()));
+    // Random SIGKILL can leave an empty journal mutex, which production correctly
+    // refuses to break. Select the supported dead-owner boundary without waiting
+    // for workflow settlement or changing any journal/recovery implementation.
+    await crash.arm(join(f.dir, "state/runs", `${runId}.jsonl.lock`));
+    const observation = f
+      .rpc("operator.continuation", { target: originalPeer.target, continuationId: first.result.continuationId })
+      .then(
+        () => "replied",
+        () => "interrupted",
+      );
+    expect(await crash.publishedOwner()).toMatchObject({ pid: f.daemon.pid, host: hostname() });
+    expect(await crash.ownerPresent()).toBe(true);
     await f.stop(f.daemon, "SIGKILL");
+    expect(f.daemon.signalCode).toBe("SIGKILL");
+    expect(await observation).toBe("interrupted");
+    expect(await crash.ownerPresent()).toBe(true);
     await f.boot();
     const restarted = await f.connect(transport);
+    expect(restarted.target.instanceId).not.toBe(originalPeer.target.instanceId);
+    expect(restarted.target.workspaceId).toBe(originalPeer.target.workspaceId);
     const replay = resolved(
       await f.mutation(restarted, "operator.continueRun", { ...params, target: restarted.target }),
     );
@@ -198,6 +221,7 @@ describe.each(transports)("compiled production recovery via %s", (transport) => 
       operationId: first.operationId,
       result: { continuationId: first.result.continuationId, runId },
     });
+    expect(await crash.ownerPresent()).toBe(false);
     const lookup = { target: restarted.target, continuationId: first.result.continuationId };
     const identity = { continuationId: first.result.continuationId, operationId: first.operationId, runId };
     const inspected = await until(

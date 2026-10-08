@@ -11,6 +11,19 @@
  */
 import { RevisionResultSchema, PendingRevisionViewSchema } from "@orca/protocol";
 import { MaintenanceResultSchema, type MaintenanceParams, type MaintenanceResult } from "@orca/protocol";
+import {
+  ConfigApplyResultSchema,
+  ConfigApplyParamsSchema,
+  WorkflowsValidateInputsResultSchema,
+  WorkflowsValidateInputsParamsSchema,
+  OperatorPreflightResultSchema,
+  OperatorPreflightParamsSchema,
+  type ConfigApplyParams,
+  type ConfigApplyResult,
+  type WorkflowsValidateInputsParams,
+  type WorkflowsValidateInputsResult,
+} from "@orca/protocol";
+import type { PreflightParams, PreflightResult } from "../configuration-launch-contract.js";
 
 import {
   AGENTS_LIST_METHOD,
@@ -338,6 +351,22 @@ export class DaemonClient {
    */
   configGet(params: Params<ConfigGetParams> = {}): Promise<ConfigGetResult> {
     return this.call(CONFIG_GET_METHOD, params, ConfigGetResultSchema);
+  }
+
+  configApply(params: ConfigApplyParams): Promise<ConfigApplyResult> {
+    return this.call("config.apply", ConfigApplyParamsSchema.parse(params), ConfigApplyResultSchema);
+  }
+
+  workflowsValidateInputs(params: WorkflowsValidateInputsParams): Promise<WorkflowsValidateInputsResult> {
+    return this.call(
+      "workflows.validateInputs",
+      WorkflowsValidateInputsParamsSchema.parse(params),
+      WorkflowsValidateInputsResultSchema,
+    );
+  }
+
+  operatorPreflight(params: PreflightParams): Promise<PreflightResult> {
+    return this.call("operator.preflight", OperatorPreflightParamsSchema.parse(params), OperatorPreflightResultSchema);
   }
 
   /* ---------- the plan reads (#169): what is coming and why it is not moving ---------- */

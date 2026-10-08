@@ -1,0 +1,396 @@
+{
+  "schemaVersion": 1,
+  "graphVersion": 1,
+  "reviewedCommit": "f7fed3d6e89c5ea342a1fa88ebde15026b2450c9",
+  "reviewedInventoryHash": "f3f0e561ec2bbcf85a904e3d164e410357e3322cb3aa17cf59fe61b3ee9bed06",
+  "coverage": "Frozen Git inventory and conservative app-domain consumers cover only the named renderer presentation island. Static import edges outside it are a lower bound, not whole-repository proof.",
+  "prosePaths": ["docs/ci-shadow-selection.md"],
+  "islands": [
+    {
+      "id": "renderer-time-presentation",
+      "owner": "app renderer presentation",
+      "risk": "pure time wording only; authority, transport, persistence and discovery are excluded",
+      "paths": ["packages/app/renderer/src/ui/format-time.ts", "packages/app/renderer/test/format-time.test.tsx"],
+      "dependencies": {
+        "packages/app/renderer/src/ui/format-time.ts": [],
+        "packages/app/renderer/test/format-time.test.tsx": ["../src/ui/format-time.js", "vitest"]
+      },
+      "ambientReferences": {
+        "packages/app/renderer/src/ui/format-time.ts": ["Date", "Math", "undefined"],
+        "packages/app/renderer/test/format-time.test.tsx": ["Date", "undefined"]
+      },
+      "importBindings": {
+        "packages/app/renderer/src/ui/format-time.ts": [],
+        "packages/app/renderer/test/format-time.test.tsx": [
+          "../src/ui/format-time.js::value::named::formatAbsolute::formatAbsolute",
+          "../src/ui/format-time.js::value::named::formatDuration::formatDuration",
+          "../src/ui/format-time.js::value::named::formatRelative::formatRelative",
+          "vitest::value::named::describe::describe",
+          "vitest::value::named::expect::expect",
+          "vitest::value::named::it::it"
+        ]
+      },
+      "callTargets": {
+        "packages/app/renderer/src/ui/format-time.ts": [
+          "Math.abs",
+          "Math.floor",
+          "Math.max",
+          "Math.round",
+          "a.getDate",
+          "a.getFullYear",
+          "a.getMonth",
+          "at.getTime",
+          "at.toLocaleDateString",
+          "at.toLocaleTimeString",
+          "b.getDate",
+          "b.getFullYear",
+          "b.getMonth",
+          "formatDuration",
+          "new:Date",
+          "now.getTime",
+          "pair",
+          "sameDay",
+          "syntax:BinaryExpression.toFixed"
+        ],
+        "packages/app/renderer/test/format-time.test.tsx": [
+          "ago",
+          "describe",
+          "expect",
+          "expect().not.toBe",
+          "expect().toBe",
+          "expect().toContain",
+          "expect().toHaveLength",
+          "formatAbsolute",
+          "formatDuration",
+          "formatDuration().split",
+          "formatRelative",
+          "it",
+          "it.each",
+          "it.each()",
+          "new:Date",
+          "now.getTime"
+        ]
+      },
+      "memberReferences": {
+        "packages/app/renderer/src/ui/format-time.ts": [
+          "Math.abs",
+          "Math.floor",
+          "Math.max",
+          "Math.round",
+          "a.getDate",
+          "a.getFullYear",
+          "a.getMonth",
+          "at.getTime",
+          "at.toLocaleDateString",
+          "at.toLocaleTimeString",
+          "b.getDate",
+          "b.getFullYear",
+          "b.getMonth",
+          "now.getTime",
+          "syntax:BinaryExpression.toFixed"
+        ],
+        "packages/app/renderer/test/format-time.test.tsx": [
+          "expect().not",
+          "expect().not.toBe",
+          "expect().toBe",
+          "expect().toContain",
+          "expect().toHaveLength",
+          "formatDuration().split",
+          "it.each",
+          "now.getTime"
+        ]
+      },
+      "structureHashes": {
+        "packages/app/renderer/src/ui/format-time.ts": "55b11abf8cd71d26deafed5bba9af5b333494e5e25f1594e7bb1732b41cb5b2a",
+        "packages/app/renderer/test/format-time.test.tsx": "a43811efd54086500092848570ae01dc051fb1d5b5df1956b8e4e40d45e5145e"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "file:docs/preparation/trusted-prepared-roots/fixtures/synthetic-v1.json",
+      "to": "file:docs/preparation/trusted-prepared-roots/contract.test.mjs",
+      "kind": "filesystem-fixture",
+      "evidence": "contract.test.mjs readFileSync(new URL('./fixtures/synthetic-v1.json', import.meta.url))"
+    },
+    {
+      "from": "file:docs/preparation/trusted-prepared-roots/contract.test.mjs",
+      "to": "file:tools/test/trusted-prepared-roots.test.js",
+      "kind": "standalone-contract-import",
+      "evidence": "Vitest wrapper imports defineContractTests"
+    },
+    {
+      "from": "package:cli",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-subprocess",
+      "evidence": "ProductionFixture spawns packages/cli/dist/main.js; emitted daemon/store/runtime dependencies follow workspace and TS references"
+    },
+    {
+      "from": "package:daemon",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-subprocess",
+      "evidence": "ProductionFixture starts emitted CLI serve; the compiled daemon runtime follows CLI workspace/TypeScript references, while credential administration uses the separate bootstrap edge."
+    },
+    {
+      "from": "package:integrations",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-subprocess",
+      "evidence": "ProductionFixture HTTP child imports packages/integrations/dist/mcp/transport.js and stdio starts the emitted CLI mcp entrypoint"
+    },
+    {
+      "from": "package:testing",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-subprocess",
+      "evidence": "ProductionFixture config uses packages/testing/dist/scripted-agent/main.js"
+    },
+    {
+      "from": "file:templates/program/assess-risks.md",
+      "to": "package:cli",
+      "kind": "runtime-template",
+      "evidence": "Compiled CLI demo exercises program workflow templates; all templates force full"
+    },
+    {
+      "from": "file:packages/app/renderer/src/resources/resource-model.ts",
+      "to": "runner:resources-browser",
+      "kind": "playwright-vite-route",
+      "evidence": "resources-browser.spec.ts navigates dev-only #resources route through preview/resources.tsx"
+    },
+    {
+      "from": "file:packages/protocol/src/host-resource-fixtures.ts",
+      "to": "runner:resources-browser",
+      "kind": "shared-protocol-browser-fixture",
+      "evidence": "resource-model and preview consume shared protocol fixtures"
+    },
+    {
+      "from": "file:packages/app/src/preferences/schema.ts",
+      "to": "runner:resources-browser",
+      "kind": "playwright-preferences",
+      "evidence": "resources-browser.spec.ts imports DEFAULT_PREFERENCES"
+    },
+    {
+      "from": "file:packages/app/vite.config.ts",
+      "to": "runner:resources-browser",
+      "kind": "playwright-vite-config",
+      "evidence": "resources-browser.config.ts webServer invokes app Vite"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:resources-browser",
+      "kind": "browser-domain-superset",
+      "evidence": "All renderer changes conservatively affect the standalone browser runner"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:app-smoke",
+      "kind": "platform",
+      "evidence": "Linux built Electron smoke consumes renderer, bridge, authenticated demo daemon"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:type-proof",
+      "kind": "platform",
+      "evidence": "Linux/macOS/Windows dev renderer font proof"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:admission-intents",
+      "kind": "platform",
+      "evidence": "macOS/Windows native encrypted intent restart acceptance"
+    },
+    {
+      "from": "domain:renderer",
+      "to": "runner:revision-workflow",
+      "kind": "platform",
+      "evidence": "macOS/Windows production revision UI/restart acceptance"
+    },
+    {
+      "from": "file:packages/daemon/src/auth/bootstrap.ts",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-credential-admin",
+      "evidence": "Reviewed #512 fixture admin subprocess imports emitted daemon/dist/auth/bootstrap.js; source mapping preserves openAuthDirectory issue/revoke dependency."
+    },
+    {
+      "from": "package:daemon",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.test.ts",
+      "kind": "compiled-subprocess-identity-regression",
+      "evidence": "Reviewed #512 regression directly execFile-imports emitted daemon/dist/index.js and daemon/dist/auth/bootstrap.js, then verifies distinct completed credential-admin processes and real revocation."
+    },
+    {
+      "from": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "to": "file:packages/integrations/test/mcp-operator-production-fixture.ts",
+      "kind": "compiled-stdio-diagnostic-preload",
+      "evidence": "Reviewed #519 optional fixture observer encodes transportObserverSource as a data URL --import in the emitted CLI MCP child; ordinary connections retain existing arguments."
+    },
+    {
+      "from": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.test.ts",
+      "kind": "subprocess-diagnostic-preload",
+      "evidence": "Reviewed #519 regression runs the same observer source through child --import, including actual socket/abort/503 requests."
+    },
+    {
+      "from": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.test.ts",
+      "kind": "subprocess-typescript-helper",
+      "evidence": "Reviewed #519 FIFO cleanup regression imports the helper source URL through an isolated Node --import tsx child; this dependency lives inside generated child code."
+    },
+    {
+      "from": "file:packages/store/src/admission-retry-store.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "kind": "filesystem-lock-evidence",
+      "evidence": "Reviewed #519 diagnostics read bounded owner metadata for the retry catalog and original operation lock roles produced by this store; no durable record or secret is emitted."
+    },
+    {
+      "from": "file:packages/store/src/jsonl-log.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "kind": "filesystem-lock-evidence",
+      "evidence": "Reviewed #519 diagnostics read bounded owner metadata for the original run event journal lock roles produced by this store; no durable record or secret is emitted."
+    },
+    {
+      "from": "file:packages/store/src/lease-store.ts",
+      "to": "file:packages/integrations/test/mcp-replay-diagnostics.ts",
+      "kind": "filesystem-lock-evidence",
+      "evidence": "Reviewed #519 diagnostics read bounded owner metadata for the run lease mutation lock roles produced by this store; no durable record or secret is emitted."
+    }
+  ],
+  "runners": [
+    {
+      "id": "resources-browser",
+      "config": "packages/app/renderer/test/resources-browser.config.ts",
+      "files": ["packages/app/renderer/test/resources-browser.spec.ts"],
+      "project": null,
+      "platforms": ["linux"],
+      "runtime": "Chromium + Vite"
+    },
+    {
+      "id": "app-smoke",
+      "config": "packages/app/test/smoke/playwright.config.ts",
+      "files": ["packages/app/test/smoke/app-shell.spec.ts"],
+      "project": "smoke",
+      "platforms": ["linux"],
+      "runtime": "built Electron + daemon"
+    },
+    {
+      "id": "type-proof",
+      "config": "packages/app/test/smoke/playwright.config.ts",
+      "files": ["packages/app/test/smoke/type-proof.spec.ts"],
+      "project": "type-proof",
+      "platforms": ["linux", "macos", "windows"],
+      "runtime": "Electron + Vite + fonts"
+    },
+    {
+      "id": "admission-intents",
+      "config": "packages/app/test/smoke/playwright.config.ts",
+      "files": ["packages/app/test/smoke/admission-intents.spec.ts"],
+      "project": "admission-intents",
+      "platforms": ["macos", "windows"],
+      "runtime": "built Electron + daemon + native encryption"
+    },
+    {
+      "id": "revision-workflow",
+      "config": "packages/app/test/smoke/playwright.config.ts",
+      "files": ["packages/app/test/smoke/revision-workflow.spec.ts"],
+      "project": "revision-workflow",
+      "platforms": ["macos", "windows"],
+      "runtime": "built Electron + daemon + protected persistence"
+    }
+  ],
+  "fullChecks": [
+    "node22:build-before-tests",
+    "node22:retry-cli-acp-no-skips",
+    "node22:full-suite-production-required",
+    "node22:compiled-cli-demo",
+    "node24:typecheck",
+    "node24:lint",
+    "node24:format",
+    "node24:design-current",
+    "node24:build-before-tests",
+    "node24:retry-cli-acp-no-skips",
+    "node24:full-coverage-production-required-unchanged-ratchets",
+    "node24:compiled-cli-demo"
+  ],
+  "targetedChecks": [
+    "node22:build-before-tests",
+    "node22:retry-cli-acp-no-skips",
+    "node22:selected-exact-files",
+    "node22:compiled-cli-demo",
+    "node24:typecheck",
+    "node24:lint",
+    "node24:format",
+    "node24:design-current",
+    "node24:build-before-tests",
+    "node24:retry-cli-acp-no-skips",
+    "node24:selected-exact-files",
+    "node24:compiled-cli-demo"
+  ],
+  "fullRiskRules": [
+    {
+      "id": "shared-runtime",
+      "pattern": "^packages/(core|store|agents|engine|daemon|integrations|cli|protocol|testing|maintenance-mcp)/",
+      "owner": "runtime, protocol and authority",
+      "reason": "shared_or_sensitive_package"
+    },
+    {
+      "id": "app-authority",
+      "pattern": "^packages/app/(src|scripts)/",
+      "owner": "app main/preload, authority and build",
+      "reason": "app_authority_or_build"
+    },
+    {
+      "id": "shared-design",
+      "pattern": "^packages/design/",
+      "owner": "design tokens and shared semantics",
+      "reason": "shared_design"
+    },
+    {
+      "id": "contracts",
+      "pattern": "^docs/preparation/",
+      "owner": "contract schemas, executable validators and filesystem fixtures",
+      "reason": "consumer_backed_or_sensitive_contract"
+    },
+    {
+      "id": "templates",
+      "pattern": "^templates/",
+      "owner": "runtime workflow and prompt consumers",
+      "reason": "runtime_template"
+    },
+    {
+      "id": "configuration",
+      "pattern": "^\\.github/|(?:^|/)(?:package\\.json|pnpm-lock\\.yaml|pnpm-workspace\\.yaml|mise\\.toml)|(?:tsconfig|vite|vitest|playwright).*\\.(?:json|ts|js)$",
+      "owner": "CI, toolchain, build and test discovery",
+      "reason": "build_discovery_or_workflow"
+    }
+  ],
+  "packagePolicy": {
+    "version": 1,
+    "description": "Pre-beta conservative package-domain selection using union import/workspace/reference consumers; not a proof of arbitrary hidden dependencies. Full fallback for global/unknown/security/non-import changes.",
+    "fullPatterns": [
+      "^packages/(core|store|protocol|testing)/",
+      "^packages/.*/(?:auth|security|credentials|permissions|keychain|tokens)(?:/|\\.)",
+      "^packages/app/src/(main|preload)/",
+      "(?:^|/)(?:package\\.json|pnpm-lock\\.yaml|pnpm-workspace\\.yaml|mise\\.toml)$",
+      "(?:tsconfig|vite|vitest|playwright).*\\.(?:json|ts|js)$",
+      "^\\.github/",
+      "^tools/",
+      "^templates/",
+      "^examples/",
+      "^docs/preparation/"
+    ],
+    "documentationInputs": [
+      {
+        "path": "packages/app/renderer/src/config/structured-form/README.md",
+        "owner": "app",
+        "evidence": "Narrative integration handoff inspected at PR545 a893ee4bb5be0f47a83d75b6084be435bb2148c1; selects whole app domain, never prose-only."
+      },
+      {
+        "path": "packages/app/renderer/src/guided-launch/README.md",
+        "owner": "app",
+        "evidence": "Narrative integration handoff inspected at PR548 3380e2a681fa7343c8c6e9d5701e0405f4d2c61c; selects whole app domain, unresolved shared declarations still force full."
+      },
+      {
+        "path": "packages/engine/test/restoration-acceptance/README.md",
+        "owner": "engine",
+        "evidence": "Narrative fixture handoff inspected at PR547 40ea81433a13d528f9e4bf24e7c88902b9e7512a; selects engine and downstream domains, never prose-only."
+      }
+    ]
+  }
+}

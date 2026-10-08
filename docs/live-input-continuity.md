@@ -1,5 +1,11 @@
 # Live permission callbacks (#237)
 
+**Current reading, 7 October 2026:** these owner-local callback lifetimes are
+implemented in the combined protocol **2.0** runtime. Protocol 1.10 and feature-only
+validation below are original integration checkpoints. Durable gates, expired
+callbacks and process/session restoration retain the distinct limits described here;
+see the [capability ledger](ROADMAP.md) for remaining actual-client/native acceptance.
+
 The combined runtime wires owner-local live permissions through engine, daemon and app.
 [237-live-input-integration.patch](patches/237-live-input-integration.patch) is retained
 as a historical handoff against preparation baseline

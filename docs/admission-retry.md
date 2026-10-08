@@ -253,3 +253,12 @@ smoke requires accessible Keychain and consistent app identity. Preserve the sam
 user-data and keychain between restart attempts. Existing daemon-RPC smoke fixtures
 bypass the palette journal and cannot substitute for that explicit scenario. See
 [Electron safeStorage](https://www.electronjs.org/docs/latest/api/safe-storage).
+
+An accepted keyed replay can survive retry-catalog acquisition contention. Only when
+the catalog mutex times out before its callback runs, the file store performs a
+read-only lookup using the existing protected salt and scoped-key mapping. It must
+find a validated accepted record; missing, invalid or unfinished records retain the
+original timeout. The lookup never creates, repairs or recovers catalog state. The
+engine still reauthorizes, compares canonical intent, acquires the original operation
+mutex, reloads the record and validates the durable receipt. Operation-mutex
+contention retains the existing `in-progress` response.

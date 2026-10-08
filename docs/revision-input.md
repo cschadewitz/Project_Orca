@@ -1,5 +1,11 @@
 # Explicit human revision input (#356)
 
+**Current reading, 7 October 2026:** protected revision, app controls and production
+operator composition are implemented on main. Reserved patches/checkpoint wiring
+below preserve the original handoff; do not reapply them. Current protocol is **2.0**,
+store epoch **`operator-journals-v4`**. See [operator integration](runtime-operator-integration.md)
+and the [capability ledger](ROADMAP.md) for dated validation and current limits.
+
 This is the feature handoff against preparation commit
 `9058fa8935ae4c999293727c005031eec93114be`. It implements the allocated revision
 contracts, service, journal projection, delivery accounting, authenticated authority,

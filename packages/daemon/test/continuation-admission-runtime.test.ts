@@ -1,3 +1,4 @@
+import { RuntimeActivity } from "../src/runtime-activity.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,14 +33,14 @@ const faults = {
   limit: () => new OrcaError("RETRY_LIMIT", "limit"),
 };
 /** Real file stores, registered claims, generation capture and interpreter. Only credential runtime is a labelled fixture. */
-async function fixture() {
+async function fixture(runtimeActivity?: RuntimeActivity) {
   const dir = await mkdtemp(join(tmpdir(), "orca-continuation-runtime-"));
   dirs.push(dir);
   const stores = fileStores(dir);
   const finish = latch(),
     entered = latch();
   const effects = vi.fn();
-  let wrapperActive = false;
+  let activeWrappers = 0;
   const definition = parseWorkflow(`
 id: continuation
 name: Continuation
@@ -59,7 +60,7 @@ edges:
   const executors = builtinExecutors().register({
     type: "custom:work",
     execute: async () => {
-      effects(wrapperActive);
+      effects(activeWrappers > 0);
       entered.release();
       await finish.wait;
       return completed();
@@ -109,20 +110,21 @@ edges:
     checkResumeAuthority: vi.fn(async () => {}),
     // Fixture isolates wrapper lifetime; production credential/revocation binding is tested separately.
     withResumeAuthority: vi.fn(async (_runId, _authority, operation) => {
-      wrapperActive = true;
+      activeWrappers++;
       try {
         return await operation();
       } finally {
-        wrapperActive = false;
+        activeWrappers--;
       }
     }) as ContinuationConstructor["executionRuntime"]["withResumeAuthority"],
   };
   const scheduled: (() => void)[] = [];
-  const boot = (defaultScheduler = false) => {
+  const boot = (defaultScheduler = false, orchestrator = orc) => {
     const retries = new FileRetryClaimStore({ storeDir: dir, execution: stores.execution, faults });
     return new ContinuationAdmissionModel({
+      runtimeActivity,
       claims: new RegisteredRetryClaims(retries, faults),
-      orchestrator: orc,
+      orchestrator,
       locators: new FileContinuationLocatorStore({ storeDir: dir, execution: stores.execution, retries }),
       executionRuntime,
       ...(defaultScheduler
@@ -134,6 +136,7 @@ edges:
           }),
     });
   };
+  if (runtimeActivity) orc.runtimeActivity = runtimeActivity;
   const model = boot();
   const token = await model.expectedBoundary(runId, access);
   if (!token) throw new Error("missing boundary");
@@ -159,6 +162,19 @@ edges:
     command,
     model,
     boot,
+    otherOrchestrator: () => {
+      const other = new Orchestrator({
+        stores: fileStores(dir),
+        executors,
+        agents: orc.agents,
+        workflows: orc.workflows,
+        templates: orc.templates,
+        workspaceProvider: new LocalWorkspaceProvider(dir),
+        humanInput: new PausingHumanInput(),
+      });
+      other.generations = generations;
+      return other;
+    },
     token,
     runId,
     admit,
@@ -166,7 +182,7 @@ edges:
     finish,
     effects,
     executionRuntime,
-    wrapperActive: () => wrapperActive,
+    wrapperActive: () => activeWrappers > 0,
     principal: (value: Principal) => {
       principal = value;
     },
@@ -354,6 +370,39 @@ it("refuses competing run ownership without writing a receipt transition or disp
   }
 });
 
+it("preserves accepted intent when a real lease incumbent releases before the refusal is handled", async () => {
+  const f = await fixture();
+  const receipt = await f.admit();
+  const lease = await f.stores.leases.acquire({ resource: `run:${f.runId}`, holder: "other-interpreter" });
+  const acquire = f.stores.leases.acquire.bind(f.stores.leases);
+  const intercepted = vi.spyOn(f.stores.leases, "acquire").mockImplementationOnce(async (...args) => {
+    expect(args[0].holder).toBe(f.orc.leaseHolder);
+    const incumbent = await acquire(...args); // The actual file lease refuses execution.
+    expect(incumbent.holder).toBe("other-interpreter");
+    await f.stores.leases.release(lease); // Publication would now be able to take its fence.
+    return incumbent;
+  });
+  try {
+    await expect(f.model.reconcile(receipt.continuationId, f.access)).rejects.toMatchObject({ code: "RUN_LEASED" });
+    expect(await f.stores.leases.get(`run:${f.runId}`)).toBeUndefined();
+    expect(await f.model.inspect(receipt.continuationId, f.access)).toEqual(receipt);
+    expect(await f.stores.events.readRange(f.runId, { types: ["continuation.recorded"], limit: 10 })).toHaveLength(1);
+    expect(f.effects).not.toHaveBeenCalled();
+    intercepted.mockRestore();
+    expect(await f.model.reconcile(receipt.continuationId, f.access)).toEqual(receipt);
+    await f.entered.wait;
+    f.finish.release();
+    await f.model.drain();
+    expect(await f.model.inspect(receipt.continuationId, f.access)).toEqual({ ...receipt, state: "settled" });
+    expect(f.effects).toHaveBeenCalledTimes(1);
+  } finally {
+    intercepted.mockRestore();
+    await f.stores.leases.release(lease);
+    f.finish.release();
+    await f.model.drain();
+  }
+});
+
 it("strictly validates sealed entries before returning receipt fields", async () => {
   const f = await fixture();
   const receipt = await f.admit();
@@ -387,6 +436,119 @@ it("schedules production reconciliation after durable admission without awaiting
   f.finish.release();
   await f.model.drain();
   expect((await f.model.inspect(receipt.continuationId, f.access)).state).toBe("settled");
+});
+
+it.each(["same", "separate"] as const)(
+  "preserves the winning receipt when a %s-model scheduled replay loses before execution lease acquisition",
+  async (instance) => {
+    const f = await fixture();
+    const loser = instance === "same" ? f.model : f.boot();
+    const reserved = latch(),
+      releaseReservation = latch(),
+      replayFinished = latch();
+    const outcomes: unknown[] = [];
+    const summary = f.orc.getSummary.bind(f.orc);
+    // attachContinuation has reserved its running slot when it requests this summary.
+    vi.spyOn(f.orc, "getSummary").mockImplementationOnce(async (...args) => {
+      reserved.release();
+      await releaseReservation.wait;
+      return summary(...args);
+    });
+    for (const model of new Set([f.model, loser])) {
+      const reconcile = model.reconcile.bind(model);
+      vi.spyOn(model, "reconcile").mockImplementation(async (...args) => {
+        try {
+          const result = await reconcile(...args);
+          outcomes.push(result);
+          return result;
+        } catch (error) {
+          outcomes.push(error);
+          throw error;
+        } finally {
+          replayFinished.release();
+        }
+      });
+    }
+    try {
+      const receipt = await f.admit();
+      expect(await f.admit(loser)).toEqual(receipt);
+      f.dispatch(); // Both retained-key responses schedule real reconciliation.
+      await reserved.wait;
+      await replayFinished.wait; // The winner remains behind the pre-lease barrier.
+      expect(await f.stores.leases.get(`run:${f.runId}`)).toBeUndefined();
+      const before = await f.stores.events.readRange(f.runId, { types: ["continuation.recorded"], limit: 10 });
+      expect(before.map((event) => event.type === "continuation.recorded" && event.payload.state)).toEqual([
+        "accepted",
+      ]);
+      expect(outcomes).toEqual([expect.objectContaining({ code: "RUN_LEASED" })]);
+      expect(await f.model.inspect(receipt.continuationId, f.access)).toEqual(receipt);
+      expect(f.effects).not.toHaveBeenCalled();
+      releaseReservation.release();
+      await f.entered.wait;
+      f.finish.release();
+      await f.model.drain();
+      await loser.drain();
+      expect(await f.model.inspect(receipt.continuationId, f.access)).toEqual({ ...receipt, state: "settled" });
+      const events = await executionEvents(await f.stores.events.read(f.runId), f.stores.execution);
+      const markers = events.filter((event) => event.type === "continuation.recorded");
+      expect(markers.map((event) => event.payload.continuationId)).toEqual(Array(3).fill(receipt.continuationId));
+      expect(markers.map((event) => event.payload.state)).toEqual(["accepted", "accepted", "settled"]);
+      expect(markers.filter((event) => event.payload.decision)).toHaveLength(1);
+      expect(events.filter((event) => event.type === "run.resumed")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "run.completed")).toHaveLength(1);
+      expect(f.effects).toHaveBeenCalledExactlyOnceWith(true);
+      const lastSeq = await f.stores.events.lastSeq(f.runId);
+      await expect(f.model.admit(f.command, { idempotencyKey: "fresh-terminal" }, f.access)).rejects.toMatchObject({
+        code: "CONTINUATION_STALE",
+      });
+      expect(await f.stores.events.lastSeq(f.runId)).toBe(lastSeq);
+    } finally {
+      releaseReservation.release();
+      f.finish.release();
+      await f.model.drain();
+      await loser.drain();
+    }
+  },
+);
+
+it("separate interpreters contend on the real execution lease without changing the winning receipt", async () => {
+  const f = await fixture();
+  const other = f.otherOrchestrator();
+  const loser = f.boot(false, other);
+  const reserved = latch(),
+    releaseReservation = latch();
+  const summary = other.getSummary.bind(other);
+  vi.spyOn(other, "getSummary").mockImplementationOnce(async (...args) => {
+    const paused = await summary(...args);
+    reserved.release();
+    await releaseReservation.wait;
+    return paused;
+  });
+  try {
+    const receipt = await f.admit();
+    const acquire = vi.spyOn(other.stores.leases, "acquire");
+    const replay = expect(loser.reconcile(receipt.continuationId, f.access)).rejects.toMatchObject({
+      code: "RUN_LEASED",
+    });
+    await reserved.wait; // The separate interpreter has read dispatch=needed and a paused summary.
+    await f.model.reconcile(receipt.continuationId, f.access);
+    await f.entered.wait;
+    releaseReservation.release();
+    await replay;
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({ holder: other.leaseHolder }));
+    expect(await f.model.inspect(receipt.continuationId, f.access)).toEqual(receipt);
+    expect(await f.stores.events.readRange(f.runId, { types: ["continuation.recorded"], limit: 10 })).toHaveLength(2);
+    f.finish.release();
+    await f.model.drain();
+    await loser.drain();
+    expect(await loser.reconcile(receipt.continuationId, f.access)).toEqual({ ...receipt, state: "settled" });
+    expect(f.effects).toHaveBeenCalledTimes(1);
+  } finally {
+    releaseReservation.release();
+    f.finish.release();
+    await f.model.drain();
+    await loser.drain();
+  }
 });
 
 it("startup discovery blocks missing credentials, then recovers the same intent with original current authority", async () => {
@@ -651,4 +813,28 @@ it("uses terminal history when the execution wrapper rejects after completion", 
   expect((await f.orc.getState(f.runId)).run.status).toBe("completed");
   expect(await f.model.inspect(receipt.continuationId, f.access)).toMatchObject({ state: "settled" });
   expect(f.effects).toHaveBeenCalledTimes(1);
+});
+
+it("holds runtime activity from queued continuation admission through detached settlement", async () => {
+  const activity = new RuntimeActivity();
+  const f = await fixture(activity);
+  activity.bind(
+    () => ({ available: true, active: f.orc.attachedExecutionCount ? ["execution"] : [] }),
+    () => false,
+  );
+  const receipt = await f.admit();
+  expect(receipt.state).toBe("accepted");
+  expect(activity.prepare("owner")).toEqual({ held: false, active: ["continuation"] });
+  f.dispatch();
+  try {
+    await f.entered.wait;
+    expect(activity.prepare("owner").held).toBe(false);
+    expect(activity.snapshot().active).toEqual(expect.arrayContaining(["continuation", "execution"]));
+  } finally {
+    f.finish.release();
+    await f.model.drain();
+  }
+  expect(activity.prepare("owner")).toEqual({ held: true, active: [] });
+  expect(() => activity.enter("continuation")).toThrow("closed");
+  activity.resume("owner");
 });

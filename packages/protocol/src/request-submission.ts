@@ -15,3 +15,37 @@ export type RequestsAdmissionParams = z.infer<typeof RequestsAdmissionParamsSche
 export type RequestsSubmitResult = SubmissionResult;
 export type RequestsAdmissionResult = SubmissionResult;
 export type RequestsAdmissionsResult = { admissions: SubmissionResult[] };
+
+type FailureCode = Extract<SubmissionResult, { state: "recoverable-failure" }>["failure"]["code"];
+/** Runtime receipt validation for app clients; preserves Request identity on every state. */
+export const RequestsSubmitResultSchema = z
+  .discriminatedUnion("state", [
+    z.strictObject({ state: z.literal("prepared"), admissionId: z.string().min(1), requestId: z.string().min(1) }),
+    z.strictObject({
+      state: z.literal("accepted"),
+      admissionId: z.string().min(1),
+      requestId: z.string().min(1),
+      runId: z.string().min(1),
+    }),
+    z.strictObject({
+      state: z.literal("recoverable-failure"),
+      admissionId: z.string().min(1),
+      requestId: z.string().min(1),
+      runId: z.string().min(1).optional(),
+      failure: z.strictObject({
+        code: z.custom<FailureCode>((v) => typeof v === "string"),
+        message: z.string(),
+        recovery: z.literal("reconcile"),
+      }),
+    }),
+  ])
+  .transform((receipt): SubmissionResult => {
+    if (receipt.state !== "recoverable-failure") return receipt;
+    return {
+      state: receipt.state,
+      admissionId: receipt.admissionId,
+      requestId: receipt.requestId,
+      failure: receipt.failure,
+      ...(receipt.runId === undefined ? {} : { runId: receipt.runId }),
+    };
+  });
