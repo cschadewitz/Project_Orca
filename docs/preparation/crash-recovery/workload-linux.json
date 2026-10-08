@@ -1,0 +1,37 @@
+{
+  "runtimeSha": "602c97e2faf4f5b9e62fe14f5ba40d48c981f5b5",
+  "recordedAtUtc": "2026-10-04T08:44:40.989680+00:00",
+  "platform": "Linux x64, Node 24.21.0, disposable filesystem, synthetic protected keys and boot clock",
+  "command": "TMPDIR=<private disposable directory> mise exec -- node --expose-gc --import tsx packages/app/test/recovery-preparation/workload-cli.ts",
+  "workload": "Recovered maximum prior ciphertext + 8192 new events + current checkpoint replacement + held exact current preview + explicit local Save",
+  "concurrentChecks": "TypeScript and renderer build ran during this probe; timings are observations, not native acceptance",
+  "limits": {
+    "reportBytes": 1048576,
+    "eventCount": 8192,
+    "retainedBytes": 4194304,
+    "stagingBytes": 1048576,
+    "controlledPayloadBytes": 8388608,
+    "managedAndExternalReviewGateBytes": 33554432
+  },
+  "observations": {
+    "offeredEvents": 8192,
+    "retainedEvents": 8192,
+    "omissions": 0,
+    "serializedBytes": 974807,
+    "managedIncrementBytes": 24353099,
+    "rssIncrementBytes": 36548608,
+    "payloadPeak": 5242880,
+    "retainedPeak": 2927141,
+    "stagingPeak": 974807,
+    "checkpointMs": 252.50883399999998,
+    "delayPeakMs": 79.16354700000011,
+    "method": "Linux main process; idle baseline after GC; 1 ms samples plus operation/batch boundaries; heapUsed+external, arrayBuffers not double-counted; no renderer/native/power-loss proof"
+  },
+  "limitations": [
+    "Samples are operation boundaries and a 1 ms timer, not continuous allocation instrumentation or an allocator proof.",
+    "The main-process managed/external sample stays below 32 MiB; combined main/renderer/native memory gate remains unmeasured.",
+    "RSS is separately reported and is not the managed/external gate.",
+    "79.16 ms observed peak event-loop delay exceeds the 4 ms work-chunk target; responsiveness and paired-execution acceptance remain open.",
+    "No macOS, Windows, protected-provider, adversarial-native-path, network-observation or power-loss acceptance."
+  ]
+}

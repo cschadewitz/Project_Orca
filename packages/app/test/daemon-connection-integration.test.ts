@@ -1,6 +1,6 @@
 /** Applied-patch regression: invoke the real main IPC handlers with Electron at the boundary. */
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
@@ -15,7 +15,9 @@ const shell = vi.hoisted(() => ({
   userData: "",
   workspace: undefined as Workspace | undefined,
   handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
+  rendererEvents: new Map<string, () => void>(),
   events: undefined as EventEmitter | undefined,
+  webContents: undefined as { id: number; mainFrame: object } | undefined,
   ready: true,
   hasWindow: true,
   nativeEnabled: true,
@@ -26,6 +28,8 @@ const shell = vi.hoisted(() => ({
   badge: vi.fn(),
   notificationShow: vi.fn(),
   notificationClose: vi.fn(),
+  keyWrap: vi.fn(async () => Buffer.alloc(0)),
+  keyUnwrap: vi.fn(async () => ""),
 }));
 vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
@@ -33,12 +37,17 @@ vi.mock("electron", async () => {
   shell.events = events;
   const contentEvents = new EventEmitter();
   const webContents = {
-    on: contentEvents.on.bind(contentEvents),
     isDestroyed: () => false,
     isLoadingMainFrame: () => false,
     setWindowOpenHandler: vi.fn(),
     id: 1,
     mainFrame: {},
+    on: (event: string, listener: () => void) => {
+      contentEvents.on(event, listener);
+      shell.rendererEvents.set(event, () => {
+        contentEvents.emit(event);
+      });
+    },
     send: (channel: string, value: unknown) => {
       shell.sent(channel, value);
       if (channel === "orca:macUpdate.prepare")
@@ -55,6 +64,7 @@ vi.mock("electron", async () => {
         );
     },
   };
+  shell.webContents = webContents;
   const window = Object.assign(new EventEmitter(), {
     isDestroyed: () => false,
     isFocused: () => true,
@@ -67,7 +77,12 @@ vi.mock("electron", async () => {
     loadFile: vi.fn(),
   });
   return {
-    safeStorage: { isEncryptionAvailable: () => false },
+    safeStorage: {
+      isEncryptionAvailable: () => false,
+      isAsyncEncryptionAvailable: async () => false,
+      encryptStringAsync: shell.keyWrap,
+      decryptStringAsync: shell.keyUnwrap,
+    },
     app: {
       getPath: (name: string) => (name === "userData" ? shell.userData : "/launch-workspace"),
       requestSingleInstanceLock: () => true,
@@ -88,6 +103,9 @@ vi.mock("electron", async () => {
       }
       static getFocusedWindow() {
         return this.getAllWindows()[0];
+      }
+      static fromWebContents(sender: unknown) {
+        return sender === webContents ? this.getAllWindows()[0] : undefined;
       }
     },
     ipcMain: Object.assign(events, {
@@ -131,6 +149,7 @@ beforeEach(() => {
   vi.resetModules();
   shell.events?.removeAllListeners();
   shell.handlers.clear();
+  shell.rendererEvents.clear();
   shell.workspace = undefined;
   shell.ready = true;
   shell.hasWindow = true;
@@ -141,6 +160,171 @@ beforeEach(() => {
   shell.badge.mockClear();
   shell.notificationShow.mockClear();
   shell.notificationClose.mockClear();
+  shell.keyWrap.mockClear();
+  shell.keyUnwrap.mockClear();
+});
+
+it("dispatches verified opt-out before diagnostics initialization while opt-in waits", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-diagnostics-revocation-ipc-"));
+  shell.userData = directory;
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const initialize = vi.spyOn(RecoveryController.prototype, "initialize").mockReturnValue(waiting);
+  const revoked = vi.spyOn(RecoveryController.prototype, "revokeAuthority");
+  const choices = vi.spyOn(RecoveryController.prototype, "setEnabled");
+  await import("../src/main/index.js");
+  const sender = shell.webContents!;
+  const event = { sender, senderFrame: sender.mainFrame };
+  const epoch = shell.workspace!.connectionTarget.epoch;
+  const invoke = (enabled: boolean) =>
+    shell.handlers.get("orca:diagnostics.setEnabled")!(event, { enabled, scopeVersion: 1 }, epoch);
+  const off = invoke(false);
+  expect(revoked).toHaveBeenCalledOnce();
+  expect(initialize).not.toHaveBeenCalled();
+  // The shipping native adapter refuses persistence; logical revocation still
+  // occurs immediately and the cleanup failure remains visible.
+  expect(await off).toMatchObject({ ok: false, code: "cleanup_pending" });
+  const on = invoke(true);
+  expect(initialize).toHaveBeenCalledOnce();
+  expect(choices).toHaveBeenCalledTimes(1);
+  release();
+  await on;
+  expect(choices).toHaveBeenCalledTimes(2);
+  expect(await readdir(directory)).toEqual([]);
+});
+
+it("a verified newer Off fences an older Enable waiting at the main initialization boundary", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-diagnostics-consent-ipc-"));
+  shell.userData = directory;
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.spyOn(RecoveryController.prototype, "initialize").mockReturnValue(waiting);
+  const choices = vi.spyOn(RecoveryController.prototype, "setEnabled");
+  await import("../src/main/index.js");
+  const sender = shell.webContents!;
+  const event = { sender, senderFrame: sender.mainFrame };
+  const epoch = shell.workspace!.connectionTarget.epoch;
+  const invoke = (enabled: boolean) =>
+    shell.handlers.get("orca:diagnostics.setEnabled")!(event, { enabled, scopeVersion: 1 }, epoch);
+  const enabling = invoke(true);
+  expect(choices).not.toHaveBeenCalled();
+  await invoke(false);
+  release();
+  expect(await enabling).toEqual({ ok: false, code: "stale_preview" });
+  expect(choices).toHaveBeenCalledTimes(1);
+  expect(choices).toHaveBeenCalledWith(false, 1);
+  expect(await readdir(directory)).toEqual([]);
+});
+
+it("renderer-process-gone fences a preview waiting at main initialization without a reload", async () => {
+  const { DaemonClient } = await import("../src/client/daemon-client.js");
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  directory = await mkdtemp(join(tmpdir(), "orca-renderer-loss-ipc-"));
+  shell.userData = directory;
+  vi.stubEnv("ORCA_DAEMON_URL", "http://localhost:9999");
+  vi.spyOn(DaemonClient.prototype, "subscribe").mockReturnValue({ close: vi.fn() } as unknown as DaemonSubscription);
+  await import("../src/main/index.js");
+  const workspace = shell.workspace!;
+  await workspace.connect();
+  shell.hasWindow = false;
+  await shell.handlers.get("orca:workspace.open")!({}, {}, workspace.connectionTarget.epoch);
+  expect(shell.createWindow).toHaveBeenCalledOnce();
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.spyOn(RecoveryController.prototype, "initialize").mockReturnValue(waiting);
+  const prepare = vi.spyOn(RecoveryController.prototype, "preparePreview");
+  const disposed = vi.spyOn(RecoveryController.prototype, "rendererDisposed");
+  const sender = shell.webContents!;
+  const preparing = shell.handlers.get("orca:diagnostics.preparePreview")!(
+    { sender, senderFrame: sender.mainFrame },
+    { source: "previous" },
+    workspace.connectionTarget.epoch,
+  );
+  shell.rendererEvents.get("render-process-gone")!();
+  expect(disposed).toHaveBeenCalledOnce();
+  release();
+  expect(await preparing).toEqual({ ok: false, code: "stale_preview" });
+  expect(prepare).not.toHaveBeenCalled();
+});
+
+it("permits old-target preview disposal only from the current window document without initializing diagnostics", async () => {
+  directory = await mkdtemp(join(tmpdir(), "orca-diagnostics-disposal-ipc-"));
+  shell.userData = directory;
+  vi.stubEnv("ORCA_DAEMON_URL", "http://localhost:9999");
+  const { RecoveryController } = await import("../src/main/diagnostics/recovery-controller.js");
+  const initialize = vi.spyOn(RecoveryController.prototype, "initialize");
+  const choices = vi.spyOn(RecoveryController.prototype, "setEnabled");
+  await import("../src/main/index.js");
+  const workspace = shell.workspace!;
+  const oldEpoch = workspace.connectionTarget.epoch;
+  const hello: Awaited<ReturnType<DaemonClient["hello"]>> = {
+    protocol: PROTOCOL_VERSION,
+    orcaVersion: "test",
+    capabilities: [],
+    identity: { workspaceId: "synthetic-workspace", instanceId: "synthetic-boot-a" },
+  };
+  workspace.observeHello(workspace.client, hello);
+  workspace.observeHello(workspace.client, {
+    ...hello,
+    identity: { ...hello.identity!, instanceId: "synthetic-boot-b" },
+  });
+  const currentEpoch = workspace.connectionTarget.epoch;
+  expect(currentEpoch).toBeGreaterThan(oldEpoch);
+  const sender = shell.webContents!;
+  const event = { sender, senderFrame: sender.mainFrame };
+  const handle = "00000000-0000-4000-8000-000000000001";
+  const token = "00000000-0000-4000-8000-000000000002";
+  const invoke = (method: string, params: unknown, epoch = oldEpoch, caller: unknown = event) =>
+    shell.handlers.get(`orca:diagnostics.${method}`)!(caller, params, epoch);
+
+  expect(await invoke("closePreview", { handle })).toMatchObject({
+    ok: true,
+    value: { enabled: false, productionEnabled: false },
+  });
+  for (const [method, params] of [
+    ["status", undefined],
+    ["setEnabled", { enabled: false, scopeVersion: 1 }],
+    ["preparePreview", { source: "current" }],
+    ["save", { handle, destinationToken: token }],
+  ] as const) {
+    expect(await invoke(method, params)).toEqual({ ok: false, code: "stale_preview" });
+  }
+  expect(
+    await invoke("closePreview", { handle }, currentEpoch, {
+      sender: { id: sender.id, mainFrame: sender.mainFrame },
+      senderFrame: sender.mainFrame,
+    }),
+  ).toEqual({ ok: false, code: "stale_preview" });
+  expect(
+    await invoke("closePreview", { handle }, currentEpoch, {
+      sender,
+      senderFrame: {},
+    }),
+  ).toEqual({ ok: false, code: "stale_preview" });
+  expect(await invoke("closePreview", { handle: "invalid-handle" })).toEqual({ ok: false, code: "refused" });
+  expect(initialize).not.toHaveBeenCalled();
+  expect(choices).not.toHaveBeenCalled();
+  expect(shell.keyWrap).not.toHaveBeenCalled();
+  expect(shell.keyUnwrap).not.toHaveBeenCalled();
+  expect(await readdir(directory)).toEqual([]);
+
+  // Exercise normal default-off status too; shipping adapters must create no key or capture files.
+  expect(await invoke("status", undefined, currentEpoch)).toMatchObject({
+    ok: true,
+    value: { enabled: false, productionEnabled: false },
+  });
+  expect(initialize).toHaveBeenCalledOnce();
+  expect(shell.keyWrap).not.toHaveBeenCalled();
+  expect(shell.keyUnwrap).not.toHaveBeenCalled();
+  expect(await readdir(directory)).toEqual([]);
 });
 afterEach(async () => {
   await shell.workspace?.close();

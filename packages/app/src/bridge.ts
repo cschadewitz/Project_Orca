@@ -14,6 +14,7 @@
  * says so. `alerts.update` is the one call in the other direction with nothing to answer:
  * it states what is waiting, and the main process has no verdict to give back.
  */
+import type { DiagnosticsBridge } from "./diagnostics-contract.js";
 import type { DaemonConnectionBridge } from "./daemon-connection.js";
 import type { UpdateAction, UpdateSnapshot } from "./update-contract.js";
 import type { PreflightParams, PreflightResult } from "./configuration-launch-contract.js";
@@ -199,6 +200,7 @@ export interface AlertActivation {
 }
 
 export interface OrcaBridge {
+  diagnostics?: DiagnosticsBridge;
   /** Coherent launch reads; absence is an ordinary unavailable app seam. */
   operator?: {
     preflight(params: PreflightParams): Promise<BridgeResult<PreflightResult>>;

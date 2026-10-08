@@ -6,7 +6,7 @@ import subprocess
 import sys
 import unittest
 
-from validate import MAX_BYTES, ROOT, Rejected, export_bytes, read_bundle, validate_bytes
+from validate import MAX_BYTES, ONE_SHOT_MAX_BYTES, ROOT, Rejected, export_bytes, read_bundle, validate_bytes
 
 
 class ContractTests(unittest.TestCase):
@@ -82,7 +82,8 @@ class ContractTests(unittest.TestCase):
         raw = export_bytes(self.base)
         # The framing ceiling is checked before decoding; noncanonical whitespace
         # at exactly the ceiling reaches the serialization check, one byte more does not.
-        self.assert_rejected(raw + b" " * (MAX_BYTES - len(raw)), "noncanonical_bytes")
+        self.assert_rejected(raw + b" " * (ONE_SHOT_MAX_BYTES - len(raw)), "noncanonical_bytes")
+        self.assert_rejected(raw + b" " * (ONE_SHOT_MAX_BYTES - len(raw) + 1), "byte_limit")
         self.assert_rejected(raw + b" " * (MAX_BYTES - len(raw) + 1), "byte_limit")
         self.assert_rejected(b"\xff", "invalid_json")
         self.assert_rejected(b"[" * 2000 + b"]" * 2000, "nesting_limit")
@@ -93,9 +94,12 @@ class ContractTests(unittest.TestCase):
 
     def test_event_ceiling_order_and_aliases(self):
         event = {"offsetMs": 0, "phase": "unknown", "code": "unknown", "entityAlias": "unknown"}
-        for mode, ceiling in (("one_shot", 32), ("rolling_snapshot", 256)):
+        for mode, ceiling in (("one_shot", 32), ("rolling_snapshot", 8192)):
             candidate = copy.deepcopy(self.base)
             candidate.update(mode=mode, events=[event] * ceiling)
+            if mode == "rolling_snapshot":
+                candidate["coverage"] = dict(requestedWindowMs=300000, observedWindowMs=0,
+                                             retainedWindowMs=0, capacityLimited=False)
             validate_bytes(export_bytes(candidate))
             candidate["events"].append(event)
             self.assert_rejected(export_bytes(candidate), "schema")
@@ -107,6 +111,23 @@ class ContractTests(unittest.TestCase):
         validate_bytes(export_bytes(candidate))
         candidate["entities"].append({"alias": "e65", "kind": "run"})
         self.assert_rejected(export_bytes(candidate), "schema")
+
+    def test_rolling_coverage_and_coordinated_profile(self):
+        candidate = read_bundle(ROOT / "fixtures/valid/rolling.json")
+        candidate["events"] = [dict(candidate["events"][0], code="startup_exited_before_handshake",
+                                    phase="startup")] * 3000
+        # Above BOTH old limits: every retained event still fits the new complete report.
+        raw = export_bytes(candidate)
+        self.assertGreater(len(raw), ONE_SHOT_MAX_BYTES)
+        validate_bytes(raw)
+        self.assert_rejected(raw + b" " * (MAX_BYTES - len(raw)), "noncanonical_bytes")
+        self.assert_rejected(raw + b" " * (MAX_BYTES - len(raw) + 1), "byte_limit")
+        for field in ("observedWindowMs", "retainedWindowMs"):
+            changed = copy.deepcopy(candidate)
+            changed["coverage"][field] -= 1
+            self.assert_rejected(export_bytes(changed), "coverage")
+        candidate["coverage"]["requestedWindowMs"] = 60000
+        self.assert_rejected(export_bytes(candidate), "coverage")
 
     def test_observation_absence(self):
         for value in (False, "unknown"):

@@ -30,6 +30,7 @@ import type {
   WorkspaceSnapshot,
 } from "../bridge.js";
 import type { UpdateSnapshot } from "../update-contract.js";
+import type { DiagnosticsResult, DiagnosticsStatus } from "../diagnostics-contract.js";
 import type { Preferences } from "../preferences/schema.js";
 import type { NotificationMessage } from "@orca/protocol";
 
@@ -44,6 +45,15 @@ let targetEpoch = (ipcRenderer.sendSync("orca:daemon.read") as DaemonTargetSnaps
 
 const call = <T,>(channel: string, params?: unknown): Promise<BridgeResult<T>> =>
   ipcRenderer.invoke(channel, params, targetEpoch) as Promise<BridgeResult<T>>;
+
+/** Diagnostics never waits for hello and never returns exception text. */
+const diagnosticCall = async <T,>(method: string, params?: unknown): Promise<DiagnosticsResult<T>> => {
+  try {
+    return (await ipcRenderer.invoke(`orca:diagnostics.${method}`, params, targetEpoch)) as DiagnosticsResult<T>;
+  } catch {
+    return { ok: false, code: "unavailable" };
+  }
+};
 
 /** Ownership survives renderer subscription replacement within this document. */
 let updateGuardListener: ((locked: boolean) => boolean) | undefined;
@@ -100,6 +110,25 @@ ipcRenderer.on("orca:macUpdate.prepare", forwardMacDraft);
 
 const bridge: OrcaBridge = {
   operator: { preflight: (params) => call("orca:operator.preflight", params) },
+  diagnostics: {
+    status: () => diagnosticCall("status"),
+    setEnabled: (enabled, scopeVersion) => diagnosticCall("setEnabled", { enabled, scopeVersion }),
+    setMinutes: (minutes) => diagnosticCall("setMinutes", { minutes }),
+    preparePreview: (source) => diagnosticCall("preparePreview", { source }),
+    closePreview: (handle) => diagnosticCall("closePreview", { handle }),
+    chooseDestination: (handle) => diagnosticCall("chooseDestination", { handle }),
+    save: (handle, destinationToken) => diagnosticCall("save", { handle, destinationToken }),
+    discardPrevious: () => diagnosticCall("discardPrevious"),
+    retryCleanup: () => diagnosticCall("retryCleanup"),
+    acknowledgeUnknown: (operationHandle) => diagnosticCall("acknowledgeUnknown", { operationHandle }),
+    subscribe: (listener) => {
+      const forward = (_event: unknown, status: DiagnosticsStatus) => listener(status);
+      ipcRenderer.on("orca:diagnostics.changed", forward);
+      return () => {
+        ipcRenderer.off("orca:diagnostics.changed", forward);
+      };
+    },
+  },
   admissionIntents: {
     start: (workflowId) => call("orca:admissionIntents.start", workflowId),
     list: () => call("orca:admissionIntents.list"),

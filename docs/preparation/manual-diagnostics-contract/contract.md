@@ -28,7 +28,7 @@ schema version. The schema identifier is a local URN, not a fetch endpoint.
 | `snapshot.protectedState` | `available`, `unavailable`, `unknown` | Explicit typed observation already produced by normal execution; never open/decrypt/test keys for diagnostics |
 | `evidence.handshake`, `evidence.admissionObservation`, `evidence.resumeObservation`, `evidence.protectedStateObservation` | Boolean or `unknown` | `true`: a safe current observation is available; `false`: producer knows none is available in scope; `unknown`: cannot establish presence. Never probes excluded files. Presence does not mean success |
 | `entities` | Array of 0–64 closed `{alias, kind}` objects | In-memory remapping only; `kind` is `run`, `step`, `admission`; alias is `e1`–`e64` (1–3 characters), unique across all kinds in this bundle |
-| `events` | Array of 0–256 closed events; one-shot maximum 32 | Only safe events after relevant consent, in nondecreasing `offsetMs` order; no raw event-store scan |
+| `events` | Array of 0–8,192 closed rolling events; one-shot maximum 32 | Only safe events after relevant consent, in nondecreasing `offsetMs` order; no raw event-store scan |
 | `events[].offsetMs` | Integer 0–86,400,000, no larger than `windowMs` | Monotonic milliseconds relative to beginning of represented window; not persisted wall-clock dates |
 | `events[].phase`, `events[].code` | Fixed enums in [failure mapping](failure-mapping.md) and schema | Phase/code combinations checked by schema; phase `unknown` only permits code `unknown` |
 | `events[].entityAlias` | `unknown` or `e1`–`e64` | Must refer to an entry in `entities`. Unavailable identity is `unknown`; overflow drops events instead of exporting original IDs |
@@ -53,28 +53,25 @@ at the producer boundary, but neither the map nor IDs enter retention/export. Ro
 storage uses its own random, retention-scoped references and remaps again per export.
 No correlation with another report is promised or required.
 
-## Proposed budgets (not policy approval or measurements)
+## Reconciled rolling implementation budgets
 
-| Resource | Exact proposed ceiling | Overflow/failure behavior |
+The [accepted recovery contract](../crash-recovery/integration-contract.md) and decisions 1–9 govern this disabled rolling slice. One-shot remains a separate unimplemented proposal with 256 KiB, 32 events and 60 seconds; this change grants no one-shot consent or producer expansion.
+
+| Resource | Accepted rolling bound | Behavior |
 | --- | --- | --- |
-| Export file and candidate parser input | 262,144 bytes (256 KiB), uncompressed, including all JSON whitespace and final LF | Reject before parsing beyond limit; never compress/archive to bypass it |
-| One-shot | 32 safe events, at most 60,000 ms from explicit consent, one immutable snapshot | No pre-consent history. Ends on snapshot, cancel, error or deadline; no automatic repeated sampling |
-| Rolling | 2,097,152 bytes (2 MiB) total diagnostic storage, including metadata, ciphertext, encryption overhead and temporary diagnostic files; at most 2,048 safe events | Reserve housekeeping space inside ceiling; evict oldest safe events/drop new observations with visible budget omissions. If enforcement is uncertain, stop capture |
-| Rolling time | 86,400,000 ms (24 hours) maximum per consent session and per retained event | Expire and revoke key. Restart is off and discards old buffer; no automatic carryover |
-| Export from rolling | Latest at most 256 eligible safe events within preceding 24 hours | Deterministic newest-window selection, oldest-first serialization; omission count for excluded eligible events |
-| One safe event | At most 512 serialized ASCII bytes before retention | Reject oversized safe observation; never truncate strings to make them look safe |
-| JSON nesting | At most 12 simultaneous object/array containers, checked before parsing | Reject independently of the parser's implementation limit; braces inside strings do not count |
-| Aliases | 64 in an export; at most 2,048 retention-local references in rolling storage | Bound map as well as array; drop safe events and count budget omissions |
-| Preparation/projection/validation/scan | One 2,000 ms total active deadline per attempt; input also byte/event bounded | Abort and revoke one-shot grant on exception/hang; no export/raw fallback. UI time spent reading is excluded |
-| Ready preview | Maximum 600,000 ms (10 minutes), also bounded by consent/session expiry | Invalidate bytes and return to fresh consent; suspend/resume uncertainty invalidates |
-| Attempts | One preparation at a time, no queued auto-retries | Retry is a fresh user action with fresh disclosure/consent |
+| Complete rolling report/parser input | 1,048,576 bytes, including canonical JSON and final LF; 8,192 events independently | Evict oldest observations when either bound wins; show omissions, never silently truncate preview/save |
+| Lookback | 1–15 whole minutes, default 5 | Expire outside the live horizon; no resurrection on increasing the setting |
+| Recovery | Current and one prior main/full-app crash session, same boot, strictly less than 24 hours from snapshot origin | Refuse uncertain/rebooted/expired age; no power-loss guarantee; cleanup on next run |
+| Consent | Persistent current-scope actual explicit opt-in, default off | Off immediately revokes authority; durable disabled setting precedes completed opt-out; keep failed cleanup visible |
+| Encrypted owned files | 4 MiB aggregate; three bounded checkpoint slots, 64 KiB control/keys, 16 entries | Charge replacement and remnants before allocating; pause on unknown/unsafe/uncleanable state |
+| Explicit Save | One private plaintext staging slot at most 1 MiB; 5 MiB aggregate unsaved owned files | Same-filesystem native no-replace only; no uploads, fallback, overwrite or user-export deletion |
+| Cleanup/ack metadata | 8 KiB including replacement inside control allowance | Content-free; one current operation and latest unknown summary/olderUnknowns; remove acknowledged summaries on opt-out after cleanup |
+| Controlled binary payload | 8 MiB reservations | Reserve before work; timeouts hold charges until settlement |
+| Measured memory gate | 32 MiB incremental managed/external memory | Measure separately; serialized byte caps do not establish heap/RSS bounds |
+| Preparation/preview/checkpoint | 2 seconds preparation, 5 minutes nonrenewing preview, approximately 5 seconds checkpoint target | Recovery preview cannot outlive original retention; disclose missing/delayed checkpoint tail |
+| One event | At most 512 serialized bytes, closed phase/code pairs only | Reject arbitrary objects/content before retention |
 
-The 256 KiB/2 MiB/24-hour figures originate as #416 proposals. All rows above, including
-new event/deadline caps and conservative restart behavior, require D1/D2 review before
-capture is enabled. Fixture validation enforces only bundle-shape/byte/event/window
-ceilings. It does not measure worker CPU/memory, deadlines, disk usage or retention.
-Resource isolation must keep diagnostics off execution locks/queues. Drop diagnostics
-under load; never block, cancel or mutate runs to meet these budgets.
+Production capture stays off pending independent/native acceptance. This table records policy and engineering limits, not measurements or physical/native acceptance.
 
 ## Serialization and exact bytes
 

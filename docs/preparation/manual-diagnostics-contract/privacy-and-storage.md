@@ -24,7 +24,7 @@ nor protection against a fully compromised machine.
 | Daemon RPC/audit projection leaks private fields | Current authentication and resource authorization remain in force; narrowly reviewed safe local projection; no whole RPC/error forwarding | Unauthorized, revoked, read-only and foreign-resource fixtures; never bypass via direct store reads |
 | Small cohort metadata identifies a tester | Explicit warning; no wall time, hardware model, hostname, stable user/project IDs or private revision | Review with target-like participant; versions and relative timings still acknowledge residual correlation |
 | Diagnostic fault changes work or exhausts resources | Separate bounded worker/queue/storage; no execution locks, retries, repairs or control RPCs; deadline and backpressure | Fault/hang/disk/load injection plus unchanged execution oracle |
-| Crash/restart leaks buffer or extends consent | Off at startup; private encrypted minimized buffer only, expiry check before every access; orphan cleanup and key revocation | Crash/restart/sleep/clock tests with actual files and keys |
+| Crash/restart leaks buffer or extends consent | Persistent explicit current-scope opt-in defaults off; private encrypted minimized buffer only, expiry check before every access; orphan cleanup and key revocation | Crash/restart/sleep/clock tests with actual files and keys |
 | Other user reads diagnostic cache/export | Owner-only creation, verified POSIX permissions or Windows DACL; refuse unsupported destination | Two-account tests, inherited ACL denial, symlink/reparse/race probes on both platforms |
 | Cached plaintext or temporary save survives cancellation | Do not persist raw or pre-allowlist data; bound preview in memory; operation-owned temporary files with cleanup state | Cancel/opt-out/crash-at-each-write tests; inspect temp/cache/export locations |
 | File saved into a synced folder is replicated | Show complete local destination and sync warning before final save; no implicit upload/share | UI test plus network observation of ORCA; do not claim control over external sync clients |
@@ -62,19 +62,19 @@ cases without a network fallback. Neither this contract nor Casey's request is t
    allowance needs a documented platform requirement and D4 approval. Reject unverified
    FAT/network/synced-provider semantics, reparse points and unsafe ownership/races;
    test deny rules, inherited ACLs, another ordinary account and a relocated directory.
-6. Use operation-owned, exclusively created temporary files in a validated destination,
-   owner-only from their first byte, and atomic non-overwriting publication. Saved export
-   is deliberately readable JSON; confirm its access policy before publication. File mode
-   or DACL verification failure is an export failure, never a reason to save publicly.
-   An existing filename returns to destination selection instead of overwriting it.
-7. Scope rolling consent to this app session; keep protected retention state and a key
-   handle, but do not re-enable on restart. Use monotonic elapsed time that includes sleep;
-   discontinuity/uncertainty expires data. Wall-clock changes cannot prolong retention.
-   At 24 hours stop capture, invalidate previews, revoke diagnostic key and purge files.
-   No new grant is implied by deleting old entries or exporting a report.
+6. Use one private app-owned plaintext staging slot only after explicit final Save,
+   with durable content-free intent/identity before plaintext and same-filesystem native
+   no-replace publication. Refuse unsupported destinations; no destination-adjacent or
+   copy/delete fallback. Preserve previous user exports. Failed cleanup may leave plaintext;
+   show that honestly and block new Saves until safely resolved.
+7. Remember actual explicit rolling opt-in for the approved scope across restarts;
+   invalid/missing scope is off. Use same-boot suspend-inclusive elapsed age with no
+   wall-clock fallback, strict snapshot-origin 24-hour recovery limit and five-minute
+   default configurable lookback. Clean exit revokes/removes current checkpoint; preserve
+   one eligible prior crash candidate until original expiry/discard. Reopening never renews age.
 8. Opt-out stops acquisition first, invalidates all preparation/save grants, revokes the
-   diagnostic key, then removes owned rolling/temp artifacts. Restart performs the same
-   cleanup before a new opt-in. Never delete a user-selected exported file automatically.
+   diagnostic key, then removes owned rolling/temp artifacts. A disabled/invalid setting forces startup cleanup; valid unchanged opt-in may recover
+   one prior crash candidate. Never delete a user-selected exported file automatically.
    Display “Deletion incomplete” when cleanup/key revocation is blocked and keep capture
    off; retry cleanup only for owned diagnostics. Do not claim deletion succeeded simply
    because a key was removed, or key revocation succeeded because deletion was attempted.

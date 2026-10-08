@@ -12,7 +12,8 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parent
-MAX_BYTES = 262144  # Unapproved review profile; see contract.md.
+MAX_BYTES = 1048576  # Revised unapproved volatile profile; see pretrigger-buffer.md.
+ONE_SHOT_MAX_BYTES = 262144
 MAX_DEPTH = 12
 SCHEMA = json.loads((ROOT / "schema-v1.json").read_text(encoding="utf-8"))
 Draft202012Validator.check_schema(SCHEMA)
@@ -78,6 +79,8 @@ def validate_bytes(raw):
         raise
     except (ValueError, UnicodeError, RecursionError):
         raise Rejected("invalid_json") from None
+    if isinstance(bundle, dict) and bundle.get("mode") == "one_shot" and len(raw) > ONE_SHOT_MAX_BYTES:
+        raise Rejected("byte_limit")
     # Do not format a ValidationError: it includes rejected values and source paths.
     if next(VALIDATOR.iter_errors(bundle), None) is not None:
         raise Rejected("schema")
@@ -93,6 +96,13 @@ def validate_bytes(raw):
         previous = event["offsetMs"]
         if event["entityAlias"] != "unknown" and event["entityAlias"] not in aliases:
             raise Rejected("dangling_alias")
+    if bundle["mode"] == "rolling_snapshot":
+        coverage = bundle["coverage"]
+        retained = bundle["windowMs"] - bundle["events"][0]["offsetMs"] if bundle["events"] else 0
+        if (coverage["observedWindowMs"] != bundle["windowMs"]
+                or coverage["observedWindowMs"] > coverage["requestedWindowMs"]
+                or coverage["retainedWindowMs"] != retained):
+            raise Rejected("coverage")
     evidence = bundle["evidence"]
     for field, presence in (
         ("admission", "admissionObservation"),

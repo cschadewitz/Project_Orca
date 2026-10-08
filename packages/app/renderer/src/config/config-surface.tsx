@@ -53,6 +53,7 @@ import { PreferencesSection } from "./preferences-section.js";
 import { RawView } from "./raw-view.js";
 import { agentPolicies, buildSections, fieldPaths, patchFrom, placeErrors } from "./config-model.js";
 import { useConfig } from "./config-context.js";
+import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
 import "./config.css";
 import { ConfigurationStudioSurface } from "./configuration-studio-surface.js";
 
@@ -133,7 +134,10 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
   if (feed.state.phase === "loading") {
     return (
       <Surface>
-        <StateView kind="loading" title="Loading the configuration" />
+        <div key="config-body" className="orca-config__body">
+          <StateView kind="loading" title="Loading the configuration" />
+          <DiagnosticsSection key="diagnostics" />
+        </div>
       </Surface>
     );
   }
@@ -142,21 +146,24 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
     const error = feed.state.error;
     return (
       <Surface>
-        {live ? (
-          <StateView
-            kind="error"
-            title="Could not read the configuration"
-            body={`${error.code}: ${error.message}`}
-            action={{ label: "Try again", onClick: feed.reload }}
-          />
-        ) : (
-          <StateView
-            kind="disconnected"
-            title="No daemon to read the configuration from"
-            body="Start one with orca serve, then try again."
-            action={{ label: "Try again", onClick: feed.reload }}
-          />
-        )}
+        <div key="config-body" className="orca-config__body">
+          {live ? (
+            <StateView
+              kind="error"
+              title="Could not read the configuration"
+              body={`${error.code}: ${error.message}`}
+              action={{ label: "Try again", onClick: feed.reload }}
+            />
+          ) : (
+            <StateView
+              kind="disconnected"
+              title="No daemon to read the configuration from"
+              body="Start one with orca serve, then try again."
+              action={{ label: "Try again", onClick: feed.reload }}
+            />
+          )}
+          <DiagnosticsSection key="diagnostics" />
+        </div>
       </Surface>
     );
   }
@@ -201,63 +208,66 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
       )}
 
       {/* Last-known values dim; the labels around them do not (40-connection-states.md). */}
-      <div className={`orca-config__body${live ? "" : " orca-stale-value"}`}>
-        {/* Visible, and not a live region (RULES.md rule 11). The first error's sentence is
+      <div key="config-body" className="orca-config__body">
+        <DiagnosticsSection key="diagnostics" />
+        <div className={`orca-config__form${live ? "" : " orca-stale-value"}`}>
+          {/* Visible, and not a live region (RULES.md rule 11). The first error's sentence is
             announced once by `use-config.ts` when the Validate or the Save comes back; a
             second region repeating the list would interrupt with what is already on screen
             and under the person's own cursor. */}
-        {placed.unplaced.length > 0 && (
-          <div className="orca-config__unplaced">
-            <Text style="label-strong">The daemon reported errors that belong to no field on this form:</Text>
-            <ul>
-              {placed.unplaced.map((error) => (
-                <li key={`${error.path}:${error.message}`} className={textClass("caption")}>
-                  {error.path === "" ? error.message : `${error.path}: ${error.message}`}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+          {placed.unplaced.length > 0 && (
+            <div className="orca-config__unplaced">
+              <Text style="label-strong">The daemon reported errors that belong to no field on this form:</Text>
+              <ul>
+                {placed.unplaced.map((error) => (
+                  <li key={`${error.path}:${error.message}`} className={textClass("caption")}>
+                    {error.path === "" ? error.message : `${error.path}: ${error.message}`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
-        {view === "form" ? (
-          <ConfigForm
-            sections={sections}
-            edits={edits}
-            errors={placed.byPath}
-            {...(canSet ? { onChange: (path, value) => feed.setField("config", path, value) } : {})}
-            onShowRaw={showRaw}
-          />
-        ) : (
-          <RawView
-            path={config.path}
-            text={rawText}
-            label="orca.config.yaml"
-            /* `orca://config` names this document, and landing on a document means being
+          {view === "form" ? (
+            <ConfigForm
+              sections={sections}
+              edits={edits}
+              errors={placed.byPath}
+              {...(canSet ? { onChange: (path, value) => feed.setField("config", path, value) } : {})}
+              onShowRaw={showRaw}
+            />
+          ) : (
+            <RawView
+              path={config.path}
+              text={rawText}
+              label="orca.config.yaml"
+              /* `orca://config` names this document, and landing on a document means being
                in it — the same promise `orca://config/permissions` keeps below. */
-            autoFocus={open === "config"}
-            {...(target === undefined ? {} : { target })}
-            {...(canSet ? { onChange: (text: string) => feed.setText("config", text) } : {})}
+              autoFocus={open === "config"}
+              {...(target === undefined ? {} : { target })}
+              {...(canSet ? { onChange: (text: string) => feed.setText("config", text) } : {})}
+            />
+          )}
+
+          <PermissionsView policies={policies} live={live} path={permissions.path} exists={permissions.exists} />
+          {/* Read-only in this issue: #176 is where a grant is edited or removed. */}
+          <RawView
+            path={permissions.path}
+            text={permissions.text}
+            label="orca.permissions.json"
+            autoFocus={open === "permissions"}
           />
-        )}
 
-        <PermissionsView policies={policies} live={live} path={permissions.path} exists={permissions.exists} />
-        {/* Read-only in this issue: #176 is where a grant is edited or removed. */}
-        <RawView
-          path={permissions.path}
-          text={permissions.text}
-          label="orca.permissions.json"
-          autoFocus={open === "permissions"}
-        />
+          <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
 
-        <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
-
-        {/* Said on the screen that writes the file, because it is the thing a person is
+          {/* Said on the screen that writes the file, because it is the thing a person is
             most likely to assume wrongly: `orca serve` reads the configuration once, at
             boot, and the daemon answering right now is running on what it read then. */}
-        <Text style="caption">
-          A saved configuration takes effect on the next orca serve — the running daemon keeps the configuration it
-          booted with.
-        </Text>
+          <Text style="caption">
+            A saved configuration takes effect on the next orca serve — the running daemon keeps the configuration it
+            booted with.
+          </Text>
+        </div>
       </div>
 
       {/* Absent where there is nothing to send to — file mode, a `--read-only` daemon, a
@@ -298,7 +308,8 @@ function Surface({ children }: { children: ReactNode }): JSX.Element {
   return (
     <div className="orca-config" data-surface="config" {...scopeProps("config")}>
       {window.orca.daemonConnection && <ConnectionSource bridge={window.orca.daemonConnection} />}
-      {children}
+      {/* Keep the keyed local section mounted when loading has one child and ready has several. */}
+      <>{children}</>
     </div>
   );
 }

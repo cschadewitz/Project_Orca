@@ -17,6 +17,7 @@ import { RawView } from "./raw-view.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
 import { agentPolicies } from "./config-model.js";
+import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
 
 export function ConfigurationStudioSurface({
   connection,
@@ -93,6 +94,7 @@ export function ConfigurationStudioSurface({
         }
       />
       <div className="orca-config__body">
+        <DiagnosticsSection key="diagnostics" />
         {!data ? (
           feed.state.phase === "error" ? (
             <StateView
