@@ -299,7 +299,9 @@ export function GuidedLaunch({
           Original target {state.draftTarget.endpointId} / {state.draftTarget.workspaceId} /{" "}
           {"operationId" in state.result ? `Operation ${state.result.operationId} / ` : ""}
           {receipt === undefined ? "In progress" : `Admission ${receipt.admissionId} / ${receipt.state}`}
-          {receipt !== undefined && "requestId" in receipt ? ` / Request ${receipt.requestId}` : ""}
+          {receipt !== undefined && "requestId" in receipt && typeof receipt.requestId === "string"
+            ? ` / Request ${receipt.requestId}`
+            : ""}
           {receipt?.state === "accepted" ? ` / run ${receipt.runId}` : ""}
         </Text>
       )}

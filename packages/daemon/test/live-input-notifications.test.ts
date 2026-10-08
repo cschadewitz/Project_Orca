@@ -122,7 +122,9 @@ async function client(url: string, token: string) {
   let id = 0;
   const closed = new Promise<number>((resolve) => ws.on("close", resolve));
   ws.on("message", (data) => {
-    const message = JSON.parse(String(data)) as {
+    const message = JSON.parse(
+      (Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data)).toString("utf8"),
+    ) as {
       kind: string;
       method: string;
       params?: unknown;

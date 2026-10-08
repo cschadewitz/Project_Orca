@@ -10,6 +10,7 @@
  */
 import { INLINE_SEP } from "../orchestrator.js";
 import {
+  coerceWorkflowString,
   evaluateVars,
   succeeded,
   type BranchSkipReason,
@@ -416,7 +417,7 @@ async function forEachBranches(ctx: StepContext, fe: ParallelForEach): Promise<{
     const str = async (expr: string | undefined): Promise<string | undefined> => {
       if (!expr) return undefined;
       const v = await ctx.evaluate(expr, scope);
-      return v === undefined || v === null || v === "" ? undefined : String(v);
+      return v === undefined || v === null || v === "" ? undefined : coerceWorkflowString(v);
     };
     const key = (await str(fe.key)) ?? String(i);
     const deps = fe.dependsOn ? await ctx.evaluate(fe.dependsOn, scope) : [];

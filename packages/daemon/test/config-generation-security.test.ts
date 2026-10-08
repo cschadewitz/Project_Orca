@@ -69,7 +69,18 @@ for (const readOnly of [false, true])
           error: { code: "AUTH_FORBIDDEN" },
         });
         const answer = new Promise<unknown>((resolve) =>
-          socket.once("message", (bytes) => resolve(JSON.parse(String(bytes)))),
+          socket.once("message", (bytes) =>
+            resolve(
+              JSON.parse(
+                (Array.isArray(bytes)
+                  ? Buffer.concat(bytes)
+                  : Buffer.isBuffer(bytes)
+                    ? bytes
+                    : Buffer.from(bytes)
+                ).toString("utf8"),
+              ),
+            ),
+          ),
         );
         socket.send(JSON.stringify({ kind: "request", id: 1, method: "config.apply", params: { secret: "canary" } }));
         expect(await answer).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });

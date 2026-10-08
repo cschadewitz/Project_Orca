@@ -2,6 +2,7 @@
  * Evaluator for the expression language. Sandboxed: no prototype access, no
  * assignment, no user-defined functions; only the whitelisted built-ins below.
  */
+import { coerceWorkflowString } from "./coerce.js";
 import { OrcaError } from "../errors.js";
 import type { Expr } from "./ast.js";
 import { parseExpression } from "./parser.js";
@@ -22,15 +23,15 @@ export const BUILTIN_FUNCTIONS: Record<string, ExprFunction> = {
   str: (x) => (x === undefined || x === null ? "" : typeof x === "string" ? x : JSON.stringify(x)),
   num: (x) => Number(x),
   bool: (x) => truthy(x),
-  lower: (s) => String(s ?? "").toLowerCase(),
-  upper: (s) => String(s ?? "").toUpperCase(),
-  trim: (s) => String(s ?? "").trim(),
+  lower: (s) => coerceWorkflowString(s ?? "").toLowerCase(),
+  upper: (s) => coerceWorkflowString(s ?? "").toUpperCase(),
+  trim: (s) => coerceWorkflowString(s ?? "").trim(),
   json: (x) => JSON.stringify(x),
   keys: (o) => (o && typeof o === "object" ? Object.keys(o) : []),
   values: (o) => (o && typeof o === "object" ? Object.values(o) : []),
   first: (a) => (Array.isArray(a) ? a[0] : undefined),
   last: (a) => (Array.isArray(a) ? a[a.length - 1] : undefined),
-  join: (a, sep) => (Array.isArray(a) ? a.map(String).join(String(sep ?? ",")) : ""),
+  join: (a, sep) => (Array.isArray(a) ? a.map(String).join(coerceWorkflowString(sep ?? ",")) : ""),
   count: (a, pred) => {
     if (!Array.isArray(a)) return 0;
     if (pred === undefined) return a.length;
@@ -122,7 +123,7 @@ function evalAst(e: Expr, ctx: unknown, fns: Record<string, ExprFunction>): unkn
           return (l as number) >= (r as number);
         case "+":
           return typeof l === "string" || typeof r === "string"
-            ? String(l ?? "") + String(r ?? "")
+            ? coerceWorkflowString(l ?? "") + coerceWorkflowString(r ?? "")
             : Number(l) + Number(r);
         case "-":
           return Number(l) - Number(r);
@@ -147,11 +148,11 @@ function evalAst(e: Expr, ctx: unknown, fns: Record<string, ExprFunction>): unkn
               ? l.includes(String(r))
               : false;
         case "matches":
-          return new RegExp(String(r)).test(String(l ?? ""));
+          return new RegExp(String(r)).test(coerceWorkflowString(l ?? ""));
         case "startsWith":
-          return String(l ?? "").startsWith(String(r));
+          return coerceWorkflowString(l ?? "").startsWith(String(r));
         case "endsWith":
-          return String(l ?? "").endsWith(String(r));
+          return coerceWorkflowString(l ?? "").endsWith(String(r));
       }
       throw new OrcaError("EXPRESSION_EVAL", `unknown operator ${e.op}`);
     }

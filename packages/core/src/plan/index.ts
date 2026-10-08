@@ -5,3 +5,4 @@ export * from "./decision-matrix.js";
 export * from "./schedule.js";
 export * from "./signals.js";
 export * from "./mermaid.js";
+export * from "./journal-summary.js";

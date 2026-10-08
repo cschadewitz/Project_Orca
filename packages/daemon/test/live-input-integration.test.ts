@@ -332,7 +332,13 @@ it.each(["http", "socket"] as const)(
       });
       const result = new Promise<{ ok: boolean; error?: { code: string }; result?: unknown }>((resolve, reject) => {
         ws.once("message", (data) =>
-          resolve(JSON.parse(String(data)) as { ok: boolean; error?: { code: string }; result?: unknown }),
+          resolve(
+            JSON.parse(
+              (Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data)).toString(
+                "utf8",
+              ),
+            ) as { ok: boolean; error?: { code: string }; result?: unknown },
+          ),
         );
         ws.once("error", reject);
       });

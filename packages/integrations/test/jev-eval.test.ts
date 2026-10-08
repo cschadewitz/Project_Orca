@@ -317,7 +317,7 @@ describe("custom:jev-eval", () => {
   it("keeps the credential out of the artifact, the result and the error", async () => {
     const seen: { url: string; init: RequestInit }[] = [];
     const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
-      seen.push({ url: String(url), init: init! });
+      seen.push({ url: url instanceof Request ? url.url : String(url), init: init! });
       return new Response(JSON.stringify(GOOD_ANSWERS), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -351,7 +351,7 @@ describe("JevHttpProvider", () => {
     const p = new JevHttpProvider({
       apiKey: "k",
       fetch: async (url: string | URL | Request, init?: RequestInit) => {
-        captured = { url: String(url), init: init! };
+        captured = { url: url instanceof Request ? url.url : String(url), init: init! };
         return new Response('{"answers":{}}', { status: 200 });
       },
     });

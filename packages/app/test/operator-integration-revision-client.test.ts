@@ -80,7 +80,7 @@ const methods = [
 
 function transport(result: unknown, ok = true) {
   return vi.fn<typeof fetch>(async (_url, init) => {
-    const request = RequestMessageSchema.parse(JSON.parse(String(init?.body)));
+    const request = RequestMessageSchema.parse(JSON.parse(typeof init?.body === "string" ? init.body : ""));
     return new Response(
       JSON.stringify({ kind: "response", id: request.id, ok, ...(ok ? { result } : { error: result }) }),
       { headers: { "content-type": "application/json" } },
@@ -100,7 +100,12 @@ describe("operator revision bridge client", () => {
       expect(url).toBe("http://127.0.0.1:6722/rpc");
       expect(init).toMatchObject({ method: "POST", redirect: "manual" });
       expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
-      expect(JSON.parse(String(init?.body))).toEqual({ kind: "request", id: 1, method, params });
+      expect(JSON.parse(typeof init?.body === "string" ? init.body : "")).toEqual({
+        kind: "request",
+        id: 1,
+        method,
+        params,
+      });
     },
   );
 

@@ -98,7 +98,8 @@ interface FieldProps extends Omit<ConfigFormProps, "sections"> {
 }
 
 /** What a value reads as in a text box. `undefined` is an empty box, not the word "undefined". */
-const asText = (value: unknown): string => (value === undefined || value === null ? "" : String(value));
+const asText = (value: unknown): string =>
+  typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? String(value) : "";
 
 function Field({ node, edits, errors, onChange, onShowRaw }: FieldProps): JSX.Element {
   const edited = edits.has(node.path);
@@ -165,7 +166,7 @@ function Field({ node, edits, errors, onChange, onShowRaw }: FieldProps): JSX.El
             type={node.kind === "number" ? "number" : "text"}
             value={asText(value)}
             readOnly={readOnly}
-            placeholder={node.default === undefined ? "" : String(node.default)}
+            placeholder={asText(node.default)}
             onChange={(event) => {
               const text = event.target.value;
               /* An empty box deletes the key rather than writing an empty string: a cleared

@@ -10,6 +10,18 @@ const ctx = {
 };
 
 describe("expression language", () => {
+  it("preserves explicit workflow string coercion independently of event display", () => {
+    const values = { object: { a: 1 }, array: [1, null, "Two"], absent: null };
+    expect(evaluateExpression("lower(object)", values)).toBe("[object object]");
+    expect(evaluateExpression("upper(array)", values)).toBe("1,,TWO");
+    expect(evaluateExpression("trim(absent)", values)).toBe("");
+    expect(evaluateExpression("'value=' + object", values)).toBe("value=[object Object]");
+    expect(evaluateExpression("object startsWith '[object'", values)).toBe(true);
+    expect(evaluateExpression("object endsWith 'Object]'", values)).toBe(true);
+    expect(evaluateExpression("object matches 'Object'", values)).toBe(true);
+    expect(evaluateExpression("join([1, 2], object)", values)).toBe("1[object Object]2");
+    expect(evaluateExpression("str(object)", values)).toBe('{"a":1}');
+  });
   it("evaluates comparisons and logic", () => {
     expect(evaluateCondition("choice == 'approve'", ctx)).toBe(true);
     expect(evaluateCondition("vars.buildAttempt < vars.maxBuildAttempts && choice != 'reject'", ctx)).toBe(true);

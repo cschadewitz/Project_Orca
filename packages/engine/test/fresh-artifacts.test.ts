@@ -64,7 +64,8 @@ edges:
           cancellations++;
         },
         prompt: async (input) => {
-          const text = String(input);
+          if (typeof input !== "string") throw new Error("expected a text prompt");
+          const text = input;
           prompts.push(text);
           const path = parseDeliverablesBlock(text)[0]!.path;
           paths.push(path);

@@ -77,7 +77,7 @@ it("preserves enriched output through both private RPC and MCP consumers", async
     endpoint: "https://daemon",
     credential: async () => "token",
     fetch: async (_url, init) => {
-      const request = JSON.parse(String(init?.body)) as { id: string; method: string };
+      const request = JSON.parse(typeof init?.body === "string" ? init.body : "") as { id: string; method: string };
       return Response.json({
         kind: "response",
         id: request.id,
@@ -172,7 +172,7 @@ it("bounds authenticated HTTP request bodies before tool execution", async () =>
   const fetcher = vi.fn<typeof fetch>(async (_url, init) =>
     Response.json({
       kind: "response",
-      id: (JSON.parse(String(init?.body)) as { id: string }).id,
+      id: (JSON.parse(typeof init?.body === "string" ? init.body : "") as { id: string }).id,
       ok: true,
       result: discovery(),
     }),
@@ -230,7 +230,7 @@ it("refuses oversized private commands before fetching and preserves stable back
   const fetcher = vi.fn<typeof fetch>(async (_url, init) =>
     Response.json({
       kind: "response",
-      id: (JSON.parse(String(init?.body)) as { id: string }).id,
+      id: (JSON.parse(typeof init?.body === "string" ? init.body : "") as { id: string }).id,
       ok: false,
       error: { code: "RUN_STATE", message: "PRIVATE", details: { secret: "PRIVATE" } },
     }),

@@ -81,6 +81,14 @@ const input = (label: string): HTMLInputElement =>
   screen.getByLabelText<HTMLInputElement>(new RegExp(`^${label}fixture`));
 
 describe.each(THEMES)("structured forms in %s", (theme) => {
+  it.each([{}, ["PRIVATE_SCALAR_CONTENT"]])("does not coerce malformed scalar %j into display text", (value) => {
+    const form = renderForm(scalar(), value);
+    expect(input("Fixture").value).toBe("");
+    expect(form.current()).toBe(value);
+    expect(form.onEdit).not.toHaveBeenCalled();
+    expect(form.container.textContent).not.toContain("PRIVATE_SCALAR_CONTENT");
+  });
+
   it("creates empty host/agent collections and role bindings without unused defaults", () => {
     installDesignSystem();
     setTheme(theme);

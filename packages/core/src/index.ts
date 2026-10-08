@@ -28,3 +28,5 @@ export * from "./model/admission-retry.js";
 
 export * from "./model/revision-input.js";
 export * from "./model/continuation-admission.js";
+
+export * from "./events/event-payload.js";

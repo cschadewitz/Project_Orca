@@ -27,7 +27,8 @@ vi.mock("node:fs/promises", async (original) => {
       return actual.rm(...args);
     },
     writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
-      if (String(args[0]).endsWith("/native-mac-artifact.json")) await filesystemFaults.writeGate?.();
+      if (typeof args[0] === "string" && args[0].endsWith("/native-mac-artifact.json"))
+        await filesystemFaults.writeGate?.();
       return actual.writeFile(...args);
     },
   };

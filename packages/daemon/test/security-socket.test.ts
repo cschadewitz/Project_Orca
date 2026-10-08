@@ -28,7 +28,13 @@ class Client {
 
   constructor(readonly ws: WebSocket) {
     ws.on("message", (data) => {
-      this.frames.push(JSON.parse(String(data)) as Frame);
+      this.frames.push(
+        JSON.parse(
+          (Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data)).toString(
+            "utf8",
+          ),
+        ) as Frame,
+      );
       for (const wake of this.waiters.splice(0)) wake();
     });
     this.closed = new Promise((resolve) => ws.on("close", (code) => resolve(code)));

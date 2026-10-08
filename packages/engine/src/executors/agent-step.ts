@@ -11,6 +11,7 @@
 import { isAbsolute } from "node:path";
 import type { AgentSession, HostFileSystem, SessionUpdateEvent } from "@orca/agents";
 import {
+  coerceWorkflowString,
   describeError,
   evaluateVars,
   OrcaError,
@@ -104,8 +105,8 @@ export function validateArtifact(spec: ArtifactSpec, data: Record<string, unknow
   }
   for (const [f, allowed] of Object.entries(v.fieldValues ?? {})) {
     const val = artifactFieldGet(data, f);
-    if (val !== undefined && !allowed.includes(String(val)))
-      return `front matter field '${f}' must be one of ${allowed.join(", ")} (got '${String(val)}')`;
+    if (val !== undefined && !allowed.includes(coerceWorkflowString(val)))
+      return `front matter field '${f}' must be one of ${allowed.join(", ")} (got '${coerceWorkflowString(val)}')`;
   }
   if (v.minBodyLength !== undefined && body.trim().length < v.minBodyLength)
     return `body shorter than ${v.minBodyLength} characters`;
