@@ -1,15 +1,17 @@
 /** Header update action, also discoverable through the keyboard command registry. */
-import { useCallback, useEffect, useLayoutEffect, useState, useRef, type JSX } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, type JSX } from "react";
 import type { UpdateAction } from "../../../src/update-contract.js";
 import { useKeyboard } from "../keyboard-context.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { hasUpdateDrafts } from "../update-drafts.js";
 import { Button } from "../ui/index.js";
+// Restoration belongs to the guarded root in this renderer document, not to a
+// component subscription. The preload owns which lease may send prepare/release.
+const priorInert = new WeakMap<HTMLElement, boolean>();
 export function UpdateControl(): JSX.Element | null {
   const [state, setState] = useState(() => window.orca.updates.read());
   const keyboard = useKeyboard();
   const announce = useAnnounce();
-  const priorInert = useRef<boolean | undefined>(undefined);
   useEffect(() => window.orca.updates.subscribe(setState), []);
   useLayoutEffect(
     () =>
@@ -17,12 +19,13 @@ export function UpdateControl(): JSX.Element | null {
         const root = document.querySelector<HTMLElement>(".orca-window");
         if (!root) return false;
         if (locked) {
-          if (priorInert.current === undefined) priorInert.current = Boolean(root.inert);
+          if (!priorInert.has(root)) priorInert.set(root, Boolean(root.inert));
           root.inert = true;
-          return !priorInert.current && !hasUpdateDrafts();
+          return priorInert.get(root) === false && !hasUpdateDrafts();
         }
-        if (priorInert.current !== undefined) root.inert = priorInert.current;
-        priorInert.current = undefined;
+        const previous = priorInert.get(root);
+        if (previous !== undefined) root.inert = previous;
+        priorInert.delete(root);
         return true;
       }),
     [],
