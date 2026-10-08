@@ -2,8 +2,10 @@
 
 **Guide draft awaiting a tested candidate.** This is versioned source for #389's
 existing Project Orca Hub. It is not a download page, invitation or tested UI walkthrough.
-The coordinator must fill in the tested candidate and actual control names before
-publishing. No contributor commands are part of the intended tester journey.
+The coordinator must fill in the tested candidate and final integrated control names
+before publishing. Current source labels were audited on 2026-10-08 at main
+`db579fb7ac9cfce2e4e6901713088a80602311da`; this is not a packaged UI or hardware pass.
+No contributor commands are part of the intended tester journey.
 
 ## Get the agreed version
 
@@ -34,6 +36,17 @@ where the candidate stores local preferences, execution history and outputs; tho
 are awaiting the tested first-run contract. Do not move/delete journals or reset keys to
 resolve a setup problem.
 
+The current app's **File → Open a store…** opens existing history in read-only mode.
+It does not create the writable sample workspace. If that is the only folder-opening
+route you can find, stop this setup step and ask the coordinator for the integrated
+first-run candidate. Do not use your home folder as a substitute.
+
+The bottom bar names the connection state, such as **connected**, **file mode**, or
+**disconnected**. **Connect to a daemon…** opens connection settings, with **Use the
+bundled daemon** and **Cancel**. The native beta should use its bundled local daemon;
+you should not need to fill in **Daemon URL** or paste credentials. Those controls
+alone do not prove the intended workspace was selected or that it is safe to write.
+
 ## Try the harmless sample first
 
 Run the candidate's supplied scripted sample before adding provider credentials or
@@ -52,6 +65,14 @@ Cancel through the tested app control when needed and wait for confirmed cancell
 Partial edits may remain. An uncertain result is a reason to stop, not to submit again.
 A deliberate new attempt needs its own disposable copy and identity; it must not reuse
 the earlier result as proof of success.
+
+The current command palette opens with **⌘K** and contains **Start or recover a run**.
+That action reuses retained intent and uses the chosen workflow's defaults; it is not
+the completed guided first-run flow. If the tested instructions require **Preview
+launch**, **Launch**, or **Recover original launch** and those controls are absent,
+mark the walkthrough blocked. Do not use the palette as an improvised sample launcher.
+**Abandon retained run intent** does not cancel existing work and must not be used as
+a recovery shortcut for an uncertain result.
 
 ## Use a real agent only by agreement
 
@@ -89,6 +110,12 @@ Export does not upload or share. Sharing is a separate choice of recipient and d
 and recipient copies cannot be recalled. If diagnostics are unavailable, a short text
 report is enough; do not substitute raw logs, screenshots, prompts, code or agent output.
 
+Current source calls this section **Local diagnostics**, with **Keep off** and
+**Enable local diagnostics**. It currently states that production capture is unavailable;
+enabling the setting does not prove diagnostics were collected. The completed guide must
+match the native-validated preview/destination/**Save**/**Cancel** controls. Do not enable
+capture or export merely to complete an instruction that the candidate cannot support.
+
 Send optional feedback to Casey through the private contact supplied for your session.
 Use the [short tester guide](../beta-feedback/tester-guide.md) and
 [report template](../beta-feedback/report-template.md). If the support destination was
@@ -108,3 +135,9 @@ hidden coaching under #390's separately agreed physical session. Record hints an
 instructions, revise the prose and preserve blocked/fail outcomes. Signed N-to-N+1,
 protected-key recovery and manual diagnostic privacy remain hard acceptance gates.
 Publishing a guide alone completes none of #385/#386/#388/#390/#416.
+
+The app integration owner supplies the final dedicated workspace route, workflow ID/
+version/digest, harmless sample and launch/recovery controls through root. Existing
+offline `beta-first-job-v1` and the source controller's synthetic fixtures do not supply
+a packaged sample. The current UI/source bindings and remaining publication fields are
+listed in the [candidate execution packet](candidate-execution.md).

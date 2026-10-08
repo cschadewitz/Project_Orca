@@ -51,3 +51,31 @@ They are source evidence only. The CLI's Linux blocker is an actual local result
 all synthetic macOS versions/builds are invented, not supported-matrix evidence.
 See the [current readiness ledger](../../docs/preparation/native-mac-beta-readiness/readiness.md)
 for owner-required native gates.
+
+## Source-bound staging plan
+
+`node tools/packaged-mac/packaging-plan.js --source-commit <full-clean-SHA>`
+prints an **unexecuted unsigned staging plan** using the existing #467 clean-source
+reader. It selects exact source/version/lock/protocol/store-epoch facts, requires the
+ordinary Mac policy to remain literal `identity: null` / `notarize: false`, and checks
+clean selected source again before returning. Missing or changed source/policy refuses
+with exit 2 and a closed code. This assumes a trusted quiescent checkout, not a hostile
+concurrent writer. No subprocess for a plan step is invoked; only the reused source
+reader's bounded-output Git reads run. There is no `--run` or candidate mode.
+
+The plan lists native executor preflight, frozen installation, build, daemon bundle,
+authenticated standalone probe and an explicit Mac arm64 **directory** package with
+`--publish never`. It does not add a target-array overlay, create DMG/ZIP, load/import
+signing credentials, derive a beta version/plist policy, or insert fixture identity
+into a candidate. The source's root version is recorded, not assigned as today's beta.
+All steps remain `not-run`; signed candidate status remains blocked, with named gaps.
+Tests run its exact argument vector through the locked builder's actual CLI parser,
+target normalizer and configuration validator without calling the build function.
+
+Root coordinates any later Mac execution, exact tested source and approved tooling/
+account/scratch setup. Commands are structured argument vectors, not a shell script:
+use each exact vector from the repository root after authorization. Do not concatenate
+untrusted values into shell commands. The staging package is not for invited-user
+distribution or Gatekeeper acceptance. For signing sequence, native read-only checks,
+both format oracles and Casey's timed action list, use the
+[candidate execution packet](../../docs/preparation/native-mac-beta-readiness/candidate-execution.md).
