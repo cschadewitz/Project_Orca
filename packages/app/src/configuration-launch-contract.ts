@@ -159,48 +159,133 @@ export interface LaunchNavigation {
 
 export interface TemplateAsset {
   readonly id: string;
-  readonly sourceId: string;
+  /** Authorized opaque source identity; never an arbitrary renderer-supplied path. */
+  readonly key: string;
   readonly revision: string;
-  readonly text: string;
+  /** Existing front-matter label, not immutable lookup identity. */
+  readonly version: string;
+  readonly requires: readonly string[];
+  readonly partials: readonly string[];
   readonly metadata: Readonly<Record<string, unknown>>;
   readonly usedBy: readonly { workflowId: string; nodeId: string }[];
+  readonly source: { state: "available"; text: string } | { state: "withheld" };
 }
+export interface TemplateAuthoringSnapshot {
+  readonly target: EditorTarget;
+  readonly catalogRevision: string;
+  /** Config-file revision for the existing config.apply command. */
+  readonly configRevision: string;
+  readonly generation: string;
+  readonly assets: readonly TemplateAsset[];
+  readonly write: { state: "available" } | { state: "unavailable"; reason: string };
+}
+/** Initial binding saves exactly one source; no sequential emulation of an atomic batch. */
 export interface TemplateCandidate {
   readonly target: EditorTarget;
-  readonly sourceId?: string;
-  readonly expectedRevision: string;
+  readonly key: string;
+  readonly expectedSourceRevision: string;
+  readonly expectedCatalogRevision: string;
+  readonly expectedConfigGeneration: string;
   readonly draftSequence: number;
-  readonly id: string;
   readonly text: string;
 }
-export interface TemplatePreview {
+export interface TemplateReviewFence {
   readonly target: EditorTarget;
   readonly draftSequence: number;
-  readonly expectedRevision: string;
+  readonly key: string;
+  readonly expectedSourceRevision: string;
+  readonly expectedCatalogRevision: string;
   readonly candidateRevision: string;
   readonly expectedConfigGeneration: string;
-  readonly errors: readonly { path: string; message: string }[];
-  readonly rendered?: string;
-  readonly resolution: readonly {
-    requestedId: string;
-    resolvedId: string;
-    kind: "base" | "pack" | "partial";
-    fallback: boolean;
-  }[];
-  readonly changes: readonly { path: string; kind: "added" | "removed" | "changed" }[];
+}
+export interface TemplateDiagnostic {
+  readonly key?: string;
+  readonly code: "duplicate-id" | "missing-id" | "front-matter" | "reference" | "compatibility" | "invalid";
+  readonly message: string;
+}
+export interface TemplateReview extends TemplateReviewFence {
+  readonly errors: readonly TemplateDiagnostic[];
+  /** Empty errors never establish compatibility. */
+  readonly compatibility: "compatible" | "incompatible" | "unavailable";
+  readonly changes: readonly string[];
+}
+export interface TemplatePreview extends TemplateReview {
+  /** A missing renderer result cannot be presented as a successful empty prompt. */
+  readonly prompt:
+    | { state: "unavailable"; reason: string }
+    | {
+        state: "rendered";
+        text: string;
+        resolution: readonly {
+          requestedId: string;
+          resolvedId: string;
+          kind: "base" | "pack" | "partial";
+          fallback: boolean;
+        }[];
+      };
+}
+export interface TemplateFixtureInputs {
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly artifacts: Readonly<Record<string, string>>;
+}
+export interface TemplateSaveReceipt extends TemplateReviewFence {
+  readonly status: "saved";
+  readonly sourceRevision: string;
+  /** Source save does not activate configuration; generation is unchanged. */
+  readonly snapshot: TemplateAuthoringSnapshot;
+}
+export type TemplateSaveResult =
+  | TemplateSaveReceipt
+  | { status: "conflict" | "invalid" | "denied" | "uncertain"; errors: readonly TemplateDiagnostic[] };
+export interface TemplatePublicationReview extends TemplateReviewFence {
+  readonly saved: TemplateSaveReceipt;
+  readonly compatibility: "compatible" | "incompatible" | "unavailable";
+  readonly errors: readonly TemplateDiagnostic[];
+  /** The adapter additionally verifies exact saved catalog/content before forwarding. */
+  readonly apply: ConfigApplyParams;
+}
+export type TemplateHistory =
+  | { state: "unavailable"; reason: string }
+  | {
+      state: "available";
+      target: EditorTarget;
+      key: string;
+      catalogRevision: string;
+      entries: readonly { revision: string; generation?: string; at: string }[];
+    };
+export type TemplateVariant =
+  | { state: "unsupported"; reason: string }
+  | {
+      state: "derived";
+      target: EditorTarget;
+      expectedCatalogRevision: string;
+      expectedConfigGeneration: string;
+      /** Service-allocated opaque new source key; no file write or activation. */
+      key: string;
+      text: string;
+    };
+export interface TemplateVariantRequest {
+  readonly target: EditorTarget;
+  readonly key: string;
+  readonly expectedSourceRevision: string;
+  readonly expectedCatalogRevision: string;
+  readonly expectedConfigGeneration: string;
+  readonly pack: string;
 }
 export interface TemplateAuthoringPorts {
-  list(): Promise<readonly TemplateAsset[]>;
-  read(sourceId: string): Promise<TemplateAsset>;
+  read(): Promise<TemplateAuthoringSnapshot>;
+  validate(candidate: TemplateCandidate): Promise<TemplateReview>;
   preview(
     candidate: TemplateCandidate,
-    fixture: {
-      values: Readonly<Record<string, unknown>>;
-      artifacts: readonly { kind: string; body: string }[];
-      pack?: string;
-    },
+    id: string,
+    pack: string | undefined,
+    fixtures: TemplateFixtureInputs,
   ): Promise<TemplatePreview>;
-  save(candidate: TemplateCandidate, review: TemplatePreview): Promise<TemplateAsset>;
-  publish(review: TemplatePreview): Promise<ConfigApplyResult>;
-  history(sourceId: string): Promise<readonly { revision: string; generation: string; at: string }[]>;
+  /** Both mutation ports stay absent until authoritative guarded services exist. */
+  save?: (candidate: TemplateCandidate, review: TemplateReview) => Promise<TemplateSaveResult>;
+  publicationReview?: (saved: TemplateSaveReceipt) => Promise<TemplatePublicationReview>;
+  publish?: (review: TemplatePublicationReview) => Promise<ConfigApplyResult>;
+  history?: (key: string, snapshot: TemplateAuthoringSnapshot) => Promise<TemplateHistory>;
+  /** Accepted parser and source-range edits preserve comments/unknown metadata. */
+  variant?: (request: TemplateVariantRequest) => Promise<TemplateVariant>;
 }
