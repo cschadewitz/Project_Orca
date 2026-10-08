@@ -19,7 +19,7 @@ import type {
 } from "./contracts.js";
 import { LaunchPortFailure } from "./contracts.js";
 
-export const SHARED_LAUNCH_DECLARATION_SHA = "4cc995c517f0ebe7b1e24d7c417b1d1ea80259ff";
+export const SHARED_LAUNCH_DECLARATION_SHA = "703c422aef6df7b0af008ec53349cab3e711f2f5";
 export function editorTarget(target: LaunchTarget): EditorTarget {
   return { workspaceId: target.workspaceId, instanceId: target.instanceId, epoch: target.epoch };
 }

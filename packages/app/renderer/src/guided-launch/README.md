@@ -2,12 +2,14 @@
 
 This isolated #334 slice starts from main `65606fbce827cba914a67b999b1a47c0aab2797a`
 and the reviewed #440 packet `4aa142e870c9cedcd4d26108d975c0f7c7f4619a`.
+Final delivery incorporates main `10834758e49a5e84b9ac06e3bca85f87be923dac`
+and the protected-restore corrections at `b12a8642e5a1f2284b09a341ed6048c54f125be8`.
 It is not registered in the shell and does not add RPCs, persistence, provider discovery,
 workspace provisioning or publication behavior.
 
 `GuidedLaunchController` consumes `LaunchPorts`; `GuidedLaunch` composes shared UI primitives.
 Canonical `EditorTarget`, command and preflight types come from #542 declaration commit
-`4cc995c517f0ebe7b1e24d7c417b1d1ea80259ff`. The remaining UI projection, draft and optional
+`703c422aef6df7b0af008ec53349cab3e711f2f5`. The remaining UI projection, draft and optional
 two-phase retention interfaces are explicit local seams. `shared-bindings.ts` maps canonical
 checkout evidence, coherent reads, atomic submission and all response/recovery kinds without
 adding wire properties. The dedicated fixtures are synthetic, not the accepted sample or a
