@@ -54,6 +54,13 @@ function rig(options: Partial<WorkspaceDeps> = {}) {
     onDaemonGone: () => {},
     defaultPath: () => undefined,
     defaultUrl: "http://127.0.0.1:6722",
+    // Existing unit cases model an in-memory process; durable filesystem behavior has its own tests.
+    reserveFirstRunOwnership: () => ({
+      check: () => {},
+      attach: () => {},
+      verify: () => {},
+      complete: () => exited,
+    }),
     ...options,
   });
   return { workspace, start, stop, client, subscribe, exited: () => exited };
@@ -178,7 +185,7 @@ it("uncertain ordinary candidate cleanup keeps ownership reserved and prohibits 
   const f = rig();
   f.stop.mockImplementation(async () => {});
   const candidate = await f.workspace.prepareFirstRunConnection("/selected");
-  await expect(candidate.dispose()).rejects.toThrow("exit is unconfirmed");
+  await expect(candidate.dispose()).rejects.toThrow("ownership requires reconciliation");
   await expect(f.workspace.prepareFirstRunConnection("/selected")).rejects.toThrow("busy");
   await expect(f.workspace.prepareUpdate("token")).rejects.toThrow("busy");
   expect(f.start).toHaveBeenCalledOnce();
@@ -248,7 +255,7 @@ it.skipIf(typeof process.getuid !== "function")(
         stopTimeoutMs: 1000,
       }),
     );
-    const workspace = new Workspace({
+    const workspaceDeps: WorkspaceDeps = {
       findEntry: () => entry,
       start,
       client: (url, options) =>
@@ -262,9 +269,10 @@ it.skipIf(typeof process.getuid !== "function")(
       onDaemonGone: () => {},
       defaultPath: () => undefined,
       defaultUrl: "http://127.0.0.1:6722",
-    });
+    };
+    const workspace = new Workspace(workspaceDeps);
     ownerState.workspace = workspace;
-    const owner = workspace;
+    let owner = workspace;
     const deps = {
       home,
       receiptPath: join(root, "profile", "selection.json"),
@@ -300,6 +308,21 @@ it.skipIf(typeof process.getuid !== "function")(
       assertCurrent: () => owner.assertEpoch(epoch),
     });
     expect(connectExplicit).toHaveBeenCalledOnce();
+    // A recreated app cannot launch a rival while the original real child is alive.
+    const rival = new Workspace(workspaceDeps);
+    await expect(rival.prepareFirstRunConnection(selected)).rejects.toThrow("reconciliation");
+    expect(start).toHaveBeenCalledOnce();
+    await rival.close();
+    // Ordinary, positively observed direct-child termination records a terminal marker.
+    await owner.close();
+    owner = new Workspace(workspaceDeps);
+    ownerState.workspace = owner;
+    await new FirstRunSetup(deps).connect(() => owner.assertEpoch(0));
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(owner.currentFirstRun(selected)).toBe(true);
+    expect((await owner.client.hello("first-run-recreated", false)).processId).not.toBe(
+      (await start.mock.results[0]!.value).pid,
+    );
   },
   30_000,
 );

@@ -1,6 +1,7 @@
 /** Dedicated first-run provisioning. Native selections are reviewed, identity-fenced and never overwritten. */
 import { randomUUID, createHash } from "node:crypto";
 import { lstat, mkdir, open, readFile, rename } from "node:fs/promises";
+import { FirstRunOwnershipRefusal } from "./ownership.js";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { FirstRunReview, FirstRunStatus } from "../../first-run-contract.js";
@@ -253,6 +254,7 @@ export class FirstRunSetup {
         activated = true;
         return this.prepared(receipt);
       } catch (error) {
+        if (error instanceof FirstRunOwnershipRefusal) throw error;
         throw new Error(
           "The selected local daemon could not verify its writable workspace. Check the bundled runtime and access, then retry. No alternate daemon was connected.",
           { cause: error },
